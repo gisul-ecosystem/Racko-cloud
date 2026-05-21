@@ -4,6 +4,12 @@ import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { nodeNameParamSchema, vmQuerySchema } from './proxmox.validation';
+import { getActiveAlerts, getAlertHistory } from './proxmox.service';
+import type { Response, Request, NextFunction } from 'express';
+
+function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
+  res.status(statusCode).json({ success: true, message, ...(data !== undefined && { data }) });
+}
 
 // WEBSOCKET_SLOT: real-time node status updates via WebSocket/SSE
 
@@ -52,6 +58,29 @@ router.get('/storage', (req, res, next) => {
 // Optional query params (Zod validated): ?node= ?status= ?type=
 router.get('/vms', validateRequest(vmQuerySchema), (req, res, next) => {
   proxmoxController.getAllVMs(req, res, next);
+});
+
+// ─── Alert routes (super_admin only) ─────────────────────────────────────────
+
+// GET /api/v1/proxmox/alerts — active alerts
+router.get('/alerts', requireRole('super_admin'), async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const alerts = await getActiveAlerts();
+    success(res, 'Active alerts retrieved.', { alerts, total: alerts.length });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/v1/proxmox/alerts/history — alert history
+router.get('/alerts/history', requireRole('super_admin'), async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const limit = Math.min(parseInt((req.query['limit'] as string) ?? '50', 10) || 50, 100);
+    const alerts = await getAlertHistory(limit);
+    success(res, 'Alert history retrieved.', { alerts, total: alerts.length });
+  } catch (error) {
+    next(error);
+  }
 });
 
 export default router;

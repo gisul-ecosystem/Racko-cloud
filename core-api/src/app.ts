@@ -14,6 +14,8 @@ import { globalErrorHandler, notFoundHandler } from './middleware/error.middlewa
 import authRoutes from './modules/auth/auth.routes';
 import userRoutes from './modules/user/user.routes';
 import proxmoxRoutes from './modules/proxmox/proxmox.routes';
+import vmRoutes from './modules/vm/vm.routes';
+import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 
 const app = express();
 
@@ -119,6 +121,10 @@ app.get('/health', (_req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
+app.use('/api/v1/vms', vmRoutes);
+
+// Start node monitoring (runs in background — never blocks startup)
+startNodeMonitoring();
 
 // 404 handler
 app.use(notFoundHandler);

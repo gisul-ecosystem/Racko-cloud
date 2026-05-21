@@ -14,6 +14,7 @@ import {
   setAccessToken,
   clearAccessToken,
   ApiError,
+  SESSION_EXPIRED_EVENT,
 } from '../lib/apiClient';
 
 export type UserRole = 'super_admin' | 'admin';
@@ -101,6 +102,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setState({ user: null, isLoading: false, isAuthenticated: false });
     router.push('/login');
   }, [router]);
+
+  // Listen for session-expiry events fired by apiClient when refresh fails mid-operation
+  useEffect(() => {
+    const handler = () => handleLogout();
+    window.addEventListener(SESSION_EXPIRED_EVENT, handler);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handler);
+  }, [handleLogout]);
 
   // On mount: attempt to restore session from HttpOnly cookie
   useEffect(() => {
