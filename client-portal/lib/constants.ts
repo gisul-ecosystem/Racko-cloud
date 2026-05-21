@@ -5,7 +5,6 @@ export const NAV_LINKS: NavItem[] = [
   { label: "Solutions", href: "/solutions", hasDropdown: false },
   { label: "Industries", href: "/industries", hasDropdown: true },
   { label: "Platform", href: "/platform", hasDropdown: false },
-  { label: "Resources", href: "/resources", hasDropdown: false },
   { label: "Company", href: "/company", hasDropdown: true },
 ];
 

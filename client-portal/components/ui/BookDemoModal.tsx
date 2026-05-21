@@ -126,8 +126,35 @@ export default function BookDemoModal() {
   }, [isOpen, closeModal]);
 
   const setField = (field: keyof Omit<FormData, "productInterest">, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    setErrors((prev) => ({ ...prev, [field]: undefined }));
+    // Phone field: only allow valid characters
+    if (field === "phone") {
+      // Strip invalid characters - only allow +, digits, spaces, and hyphens
+      const sanitized = value.replace(/[^+0-9\s\-]/g, "");
+      
+      // Prevent multiple + signs or + not at the start
+      const cleaned = sanitized.replace(/\+/g, (match, offset) => offset === 0 ? match : "");
+      
+      // Limit length to 15 characters (excluding spaces and hyphens)
+      const digitsOnly = cleaned.replace(/[\s\-]/g, "");
+      if (digitsOnly.length > 15) {
+        return; // Don't update if exceeds max length
+      }
+      
+      setFormData((prev) => ({ ...prev, [field]: cleaned }));
+      
+      // Validate
+      const trimmed = cleaned.trim();
+      if (trimmed.length === 0) {
+        setErrors((prev) => ({ ...prev, phone: undefined }));
+      } else if (digitsOnly.length < 7) {
+        setErrors((prev) => ({ ...prev, phone: "Please enter a valid phone number." }));
+      } else {
+        setErrors((prev) => ({ ...prev, phone: undefined }));
+      }
+    } else {
+      setFormData((prev) => ({ ...prev, [field]: value }));
+      setErrors((prev) => ({ ...prev, [field]: undefined }));
+    }
   };
 
   const toggleProductInterest = (id: string) => {
@@ -150,6 +177,9 @@ export default function BookDemoModal() {
       if (!formData.email.trim()) nextErrors.email = "Work email is required.";
       if (formData.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(formData.email)) {
         nextErrors.email = "Please enter a valid email address.";
+      }
+      if (formData.phone.trim() && !/^[+]?[0-9\s\-]{7,15}$/.test(formData.phone.trim())) {
+        nextErrors.phone = "Please enter a valid phone number.";
       }
     }
 
@@ -298,10 +328,11 @@ export default function BookDemoModal() {
                               input={
                                 <input
                                   type="tel"
-                                  className={inputBase}
+                                  className={`${inputBase} ${errors.phone ? "border-[rgba(239,68,68,0.6)]" : ""}`}
                                   placeholder="+91 or international"
                                   value={formData.phone}
                                   onChange={(e) => setField("phone", e.target.value)}
+                                  inputMode="numeric"
                                 />
                               }
                             />
@@ -643,7 +674,7 @@ function CustomSelect({
       </button>
 
       {isOpen ? (
-        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-[120] overflow-hidden rounded-[6px] border border-[rgba(255,255,255,0.12)] bg-[#1A1A1A] shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
+        <div className="absolute left-0 right-0 top-[calc(100%+4px)] z-[120] max-h-[240px] overflow-y-auto overflow-x-hidden rounded-[6px] border border-[rgba(255,255,255,0.12)] bg-[#1A1A1A] shadow-[0_8px_24px_rgba(0,0,0,0.5)]">
           {options.map((option, index) => {
             const isSelected = value === option.value;
             return (

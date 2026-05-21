@@ -33,6 +33,39 @@ export async function POST(request: Request) {
     message,
   } = body;
 
+  // Server-side validation for phone number
+  if (phone && typeof phone === "string" && phone.trim()) {
+    const trimmedPhone = phone.trim();
+    
+    // Check format: optional +, then digits/spaces/hyphens only
+    const phoneRegex = /^[+]?[0-9\s\-]+$/;
+    if (!phoneRegex.test(trimmedPhone)) {
+      return NextResponse.json(
+        { error: "Invalid phone number format. Only numbers, spaces, hyphens, and optional + are allowed." },
+        { status: 400 }
+      );
+    }
+    
+    // Extract only digits (excluding + at start)
+    const digitsOnly = trimmedPhone.replace(/^[+]/, "").replace(/[\s\-]/g, "");
+    
+    // Check length: 7-15 digits
+    if (digitsOnly.length < 7 || digitsOnly.length > 15) {
+      return NextResponse.json(
+        { error: "Phone number must contain between 7 and 15 digits." },
+        { status: 400 }
+      );
+    }
+    
+    // Ensure it's all numeric after removing formatting
+    if (!/^\d+$/.test(digitsOnly)) {
+      return NextResponse.json(
+        { error: "Invalid phone number format." },
+        { status: 400 }
+      );
+    }
+  }
+
   const resend = getResend();
   const notificationEmail = process.env.NOTIFICATION_EMAIL?.trim();
 

@@ -43,7 +43,6 @@ function navItemIsActive(pathname: string, label: string, href: string): boolean
   if (label === "Solutions") return pathname.startsWith("/solutions");
   if (label === "Industries") return pathname.startsWith("/industries");
   if (label === "Platform") return pathname.startsWith("/platform");
-  if (label === "Resources") return pathname.startsWith("/resources");
   if (label === "Company") return pathname.startsWith("/company");
   return pathname.startsWith(href);
 }

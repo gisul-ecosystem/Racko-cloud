@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { FormEvent, useState } from "react";
+import CustomSelect from "@/components/ui/CustomSelect";
 
 type FormState = {
   name: string;
@@ -12,7 +13,7 @@ type FormState = {
   industry: string;
   currentInfrastructure: string;
   priorityWorkload: string;
-  goal: string;
+  goals: string[];
   message: string;
   consent: boolean;
 };
@@ -26,7 +27,7 @@ const initialFormState: FormState = {
   industry: "",
   currentInfrastructure: "",
   priorityWorkload: "",
-  goal: "",
+  goals: [],
   message: "",
   consent: false,
 };
@@ -112,7 +113,7 @@ export default function AssessmentPageContent() {
           companySize: "Via Assessment Form",
           industry: form.industry,
           productInterest,
-          goal: form.goal,
+          goal: form.goals.join(", "),
           date: "Via Assessment Form",
           timeSlot: "To be confirmed",
           message: form.message,
@@ -297,70 +298,36 @@ export default function AssessmentPageContent() {
               </div>
 
               <div className="mb-5 grid grid-cols-1 gap-4 md:grid-cols-2">
-                <div>
-                  <label className={labelClassName} htmlFor="role">
-                    ROLE
-                  </label>
-                  <select
-                    id="role"
-                    className={inputClassName}
-                    value={form.role}
-                    onChange={(e) => updateField("role", e.target.value)}
-                    required
-                  >
-                    <option value="" disabled>
-                      Select role
-                    </option>
-                    {roleOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <div>
-                  <label className={labelClassName} htmlFor="industry">
-                    INDUSTRY
-                  </label>
-                  <select
-                    id="industry"
-                    className={inputClassName}
-                    value={form.industry}
-                    onChange={(e) => updateField("industry", e.target.value)}
-                    required
-                  >
-                    <option value="" disabled>
-                      Select industry
-                    </option>
-                    {industryOptions.map((option) => (
-                      <option key={option} value={option}>
-                        {option}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                <CustomSelect
+                  label="ROLE"
+                  id="role"
+                  value={form.role}
+                  onChange={(value) => updateField("role", value)}
+                  options={roleOptions}
+                  placeholder="Select role"
+                  required
+                />
+                <CustomSelect
+                  label="INDUSTRY"
+                  id="industry"
+                  value={form.industry}
+                  onChange={(value) => updateField("industry", value)}
+                  options={industryOptions}
+                  placeholder="Select industry"
+                  required
+                />
               </div>
 
               <div className="mb-5">
-                <label className={labelClassName} htmlFor="currentInfrastructure">
-                  CURRENT INFRASTRUCTURE
-                </label>
-                <select
+                <CustomSelect
+                  label="CURRENT INFRASTRUCTURE"
                   id="currentInfrastructure"
-                  className={inputClassName}
                   value={form.currentInfrastructure}
-                  onChange={(e) => updateField("currentInfrastructure", e.target.value)}
+                  onChange={(value) => updateField("currentInfrastructure", value)}
+                  options={infrastructureOptions}
+                  placeholder="Select infrastructure"
                   required
-                >
-                  <option value="" disabled>
-                    Select infrastructure
-                  </option>
-                  {infrastructureOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
+                />
               </div>
 
               <div className="mb-5">
@@ -379,25 +346,43 @@ export default function AssessmentPageContent() {
               </div>
 
               <div className="mb-5">
-                <label className={labelClassName} htmlFor="goal">
-                  GOAL
+                <label className={labelClassName} htmlFor="goals">
+                  GOALS (SELECT ALL THAT APPLY)
                 </label>
-                <select
-                  id="goal"
-                  className={inputClassName}
-                  value={form.goal}
-                  onChange={(e) => updateField("goal", e.target.value)}
-                  required
-                >
-                  <option value="" disabled>
-                    Select goal
-                  </option>
-                  {goalOptions.map((option) => (
-                    <option key={option} value={option}>
-                      {option}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex flex-wrap gap-2">
+                  {goalOptions.map((option) => {
+                    const isSelected = form.goals.includes(option);
+                    return (
+                      <button
+                        key={option}
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          const currentGoals = [...form.goals];
+                          if (currentGoals.includes(option)) {
+                            const newGoals = currentGoals.filter((g) => g !== option);
+                            setForm((prev) => ({ ...prev, goals: newGoals }));
+                          } else {
+                            const newGoals = [...currentGoals, option];
+                            setForm((prev) => ({ ...prev, goals: newGoals }));
+                          }
+                        }}
+                        className={`rounded-[4px] border px-3 py-2 font-sans text-[13px] transition-all duration-150 ${
+                          isSelected
+                            ? "border-crimson-500 bg-[rgba(185,28,28,0.15)] text-white"
+                            : "border-[rgba(255,255,255,0.1)] bg-[rgba(255,255,255,0.04)] text-[#6B6B6B] hover:border-[rgba(255,255,255,0.2)] hover:text-white"
+                        }`}
+                      >
+                        {option}
+                      </button>
+                    );
+                  })}
+                </div>
+                {form.goals.length === 0 && (
+                  <p className="mt-2 font-sans text-[12px] text-[#3D3D3D]">
+                    Please select at least one goal
+                  </p>
+                )}
               </div>
 
               <div className="mb-5">
@@ -430,9 +415,9 @@ export default function AssessmentPageContent() {
 
               <button
                 type="submit"
-                disabled={!form.consent || isSubmitting}
+                disabled={!form.consent || form.goals.length === 0 || isSubmitting}
                 className={`mt-2 w-full rounded-[4px] border-0 px-4 py-3.5 font-mono text-[12px] font-medium uppercase tracking-[0.08em] text-white transition-colors duration-150 ${
-                  !form.consent || isSubmitting
+                  !form.consent || form.goals.length === 0 || isSubmitting
                     ? "cursor-not-allowed bg-[rgba(185,28,28,0.3)]"
                     : "bg-crimson-500 hover:bg-crimson-400"
                 }`}

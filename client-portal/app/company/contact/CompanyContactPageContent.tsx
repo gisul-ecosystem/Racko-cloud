@@ -15,6 +15,10 @@ type FormState = {
   message: string;
 };
 
+type FormErrors = {
+  phone?: string;
+};
+
 const INITIAL_FORM: FormState = {
   name: "",
   email: "",
@@ -31,17 +35,53 @@ export default function CompanyContactPageContent() {
   const { openModal } = useDemoModal();
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [submitted, setSubmitted] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
 
   const setField = (field: keyof FormState, value: string) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    // Phone field: only allow valid characters
+    if (field === "phone") {
+      // Strip invalid characters - only allow +, digits, spaces, and hyphens
+      const sanitized = value.replace(/[^+0-9\s\-]/g, "");
+      
+      // Prevent multiple + signs or + not at the start
+      const cleaned = sanitized.replace(/\+/g, (match, offset) => offset === 0 ? match : "");
+      
+      // Limit length to 15 characters (excluding spaces and hyphens)
+      const digitsOnly = cleaned.replace(/[\s\-]/g, "");
+      if (digitsOnly.length > 15) {
+        return; // Don't update if exceeds max length
+      }
+      
+      setForm((prev) => ({ ...prev, [field]: cleaned }));
+      
+      // Validate
+      const trimmed = cleaned.trim();
+      if (trimmed.length === 0) {
+        setErrors({ phone: undefined });
+      } else if (digitsOnly.length < 7) {
+        setErrors({ phone: "Please enter a valid phone number." });
+      } else {
+        setErrors({ phone: undefined });
+      }
+    } else {
+      setForm((prev) => ({ ...prev, [field]: value }));
+    }
   };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    
+    // Validate phone if provided
+    if (form.phone.trim() && !/^[+]?[0-9\s\-]{7,15}$/.test(form.phone.trim())) {
+      setErrors({ phone: "Please enter a valid phone number." });
+      return;
+    }
+    
     // eslint-disable-next-line no-console
     console.log("Contact form submitted:", form);
     setSubmitted(true);
     setForm(INITIAL_FORM);
+    setErrors({});
   };
 
   return (
@@ -167,11 +207,15 @@ export default function CompanyContactPageContent() {
                     </label>
                     <input
                       type="tel"
-                      className={INPUT_BASE}
+                      className={`${INPUT_BASE} ${errors.phone ? "border-[rgba(239,68,68,0.6)]" : ""}`}
                       placeholder="+91 or international"
                       value={form.phone}
                       onChange={(e) => setField("phone", e.target.value)}
+                      inputMode="numeric"
                     />
+                    {errors.phone ? (
+                      <p className="mt-1 text-[11px] text-[#EF4444]">{errors.phone}</p>
+                    ) : null}
                   </div>
                   <div>
                     <label className="mb-1.5 block font-mono text-[9px] uppercase tracking-[0.06em] text-[#6B6B6B]">

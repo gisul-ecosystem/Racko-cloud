@@ -136,11 +136,16 @@ export default function ProductsPage() {
             <div className="grid grid-cols-1 gap-px sm:grid-cols-2 lg:grid-cols-3">
               {PRODUCTS.map((product) => {
                 const Icon = product.Icon;
+                const isManagedOps = product.num === "10";
                 return (
                   <Link
                     key={product.href}
                     href={product.href}
-                    className="group relative block bg-[#111111] px-8 py-9 transition-colors duration-200 hover:bg-[#161616]"
+                    className={`group relative block px-8 py-9 transition-colors duration-200 ${
+                      isManagedOps 
+                        ? "bg-[#0A0A0A] hover:bg-[#0E0E0E]" 
+                        : "bg-[#111111] hover:bg-[#161616]"
+                    }`}
                   >
                     <div
                       className="pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r from-transparent via-[#B91C1C] to-transparent opacity-0 transition-opacity duration-200 group-hover:opacity-100"
