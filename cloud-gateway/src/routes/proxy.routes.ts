@@ -1,0 +1,88 @@
+import { Router, type Request, type Response, type NextFunction } from 'express';
+import { createProxyMiddleware } from 'http-proxy-middleware';
+import { authMiddleware } from '../middleware/auth.middleware';
+import { verifyMiddleware } from '../middleware/verify.middleware';
+import { authRateLimiter } from '../middleware/rateLimit.middleware';
+import { loginSlowDown } from '../middleware/slowDown.middleware';
+import { config } from '../config';
+import { ForbiddenError } from '../utils/errors';
+import type { AuthenticatedRequest } from '../types';
+
+const router = Router();
+
+// Single proxy instance — full path is preserved because all routes are
+// mounted with their complete path (no prefix stripping by Express)
+const coreApiProxy = createProxyMiddleware({
+  target: config.CORE_API_URL,
+  changeOrigin: true,
+  timeout: config.REQUEST_TIMEOUT_MS,
+  // Strip Domain from Set-Cookie so the browser accepts cookies from localhost:8000
+  cookieDomainRewrite: { '*': '' },
+  // Ensure cookie path is always /
+  cookiePathRewrite: { '*': '/' },
+  on: {
+    proxyRes: (proxyRes) => {
+      const setCookie = proxyRes.headers['set-cookie'];
+      if (setCookie) {
+        proxyRes.headers['set-cookie'] = setCookie.map((cookie) =>
+          cookie
+            // Remove Domain attribute entirely
+            .replace(/;\s*Domain=[^;]*/gi, '')
+            // Normalise Path to /
+            .replace(/;\s*Path=[^;]*/gi, '; Path=/')
+        );
+      }
+    },
+    error: (_err, _req, res) => {
+      (res as Response).status(502).json({
+        success: false,
+        message: 'Service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
+  },
+});
+
+// Role guard middleware factory
+function requireRole(...roles: string[]) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const authReq = req as AuthenticatedRequest;
+    if (!authReq.user || !roles.includes(authReq.user.role)) {
+      return next(new ForbiddenError('Insufficient permissions.'));
+    }
+    next();
+  };
+}
+
+// ─── PUBLIC ROUTES (no auth required) ────────────────────────────────────────
+router.post('/api/v1/auth/register', authRateLimiter, coreApiProxy);
+router.post('/api/v1/auth/login', authRateLimiter, loginSlowDown, coreApiProxy);
+router.post('/api/v1/auth/verify-email', authRateLimiter, coreApiProxy);
+router.post('/api/v1/auth/refresh', coreApiProxy);
+
+// ─── PROTECTED AUTH ROUTES ────────────────────────────────────────────────────
+router.post('/api/v1/auth/logout', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/auth/me', authMiddleware, verifyMiddleware, coreApiProxy);
+
+// ─── INTERNAL ROUTE (gateway → core-api only) ────────────────────────────────
+// Note: validate is called internally by verifyMiddleware, not by clients
+router.post('/api/v1/auth/validate', coreApiProxy);
+
+// ─── USER ROUTES (super_admin only) ──────────────────────────────────────────
+router.get('/api/v1/users', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/users/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.patch('/api/v1/users/:id/active', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+
+// ─── PROXMOX ROUTES (super_admin only) ───────────────────────────────────────
+router.get('/api/v1/proxmox/overview', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/proxmox/cluster', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/proxmox/nodes', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/proxmox/nodes/:nodeName', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/proxmox/storage', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/proxmox/vms', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+
+// ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
+// Any other /api/v1/* route requires auth + verify
+router.use('/api/v1', authMiddleware, verifyMiddleware, coreApiProxy);
+
+export default router;
