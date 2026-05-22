@@ -222,7 +222,7 @@ export default function CompanyContactPageContent() {
                       SUBJECT
                     </label>
                     <select
-                      className={INPUT_BASE}
+                      className={`${INPUT_BASE} [&>option]:bg-black [&>option]:text-white`}
                       value={form.subject}
                       onChange={(e) => setField("subject", e.target.value)}
                     >

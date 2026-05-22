@@ -14,7 +14,7 @@ interface FormData {
   date: string;
   timeSlot: string;
   industry: string;
-  goal: string;
+  goal: string[];
   productInterest: string[];
 }
 
@@ -27,7 +27,7 @@ const initialForm: FormData = {
   date: "",
   timeSlot: "",
   industry: "",
-  goal: "",
+  goal: [],
   productInterest: [],
 };
 
@@ -169,6 +169,18 @@ export default function BookDemoModal() {
     });
   };
 
+  const toggleGoal = (value: string) => {
+    setFormData((prev) => {
+      const has = prev.goal.includes(value);
+      return {
+        ...prev,
+        goal: has
+          ? prev.goal.filter((x) => x !== value)
+          : [...prev.goal, value],
+      };
+    });
+  };
+
   const validateCurrentStep = () => {
     const nextErrors: Errors = {};
 
@@ -187,7 +199,7 @@ export default function BookDemoModal() {
       if (!formData.company.trim()) nextErrors.company = "Company name is required.";
       if (!formData.companySize) nextErrors.companySize = "Please select your company size.";
       if (!formData.industry) nextErrors.industry = "Please select your industry.";
-      if (!formData.goal) nextErrors.goal = "Please select your primary goal.";
+      if (formData.goal.length === 0) nextErrors.goal = "Please select at least one goal.";
     }
 
     if (step === 3) {
@@ -213,7 +225,10 @@ export default function BookDemoModal() {
       const response = await fetch("/api/book-meet", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          goal: formData.goal.join(", "),
+        }),
       });
 
       if (!response.ok) throw new Error("Failed");
@@ -414,14 +429,33 @@ export default function BookDemoModal() {
                             </div>
                           </div>
 
-                          <CustomSelect
-                            label="Goal"
-                            value={formData.goal}
-                            onChange={(val) => setField("goal", val)}
-                            placeholder="Select goal"
-                            error={errors.goal}
-                            options={goalOptions}
-                          />
+                          <div className="mb-3.5">
+                            <label className="mb-2 block font-mono text-[9px] uppercase tracking-[0.06em] text-[#A1A1A1]">
+                              GOAL
+                            </label>
+                            <div className="flex flex-wrap gap-2">
+                              {goalOptions.map((opt) => {
+                                const selected = formData.goal.includes(opt.value);
+                                return (
+                                  <button
+                                    key={opt.value}
+                                    type="button"
+                                    onClick={() => toggleGoal(opt.value)}
+                                    className={`rounded-full border px-3 py-2 text-left font-mono text-[10px] font-medium transition-colors duration-150 ${
+                                      selected
+                                        ? "border-[#B91C1C] bg-[rgba(185,28,28,0.1)] text-white"
+                                        : "border-[rgba(255,255,255,0.14)] bg-[rgba(255,255,255,0.05)] text-[#9CA3AF] hover:border-[rgba(255,255,255,0.22)] hover:text-[#D1D5DB]"
+                                    }`}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                            {errors.goal ? (
+                              <p className="mt-1 text-[11px] text-[#EF4444]">{errors.goal}</p>
+                            ) : null}
+                          </div>
 
                           <div className="mt-2 rounded-[6px] border border-[rgba(185,28,28,0.15)] bg-[rgba(185,28,28,0.06)] px-3.5 py-2.5 font-sans text-[12px] leading-[1.6] text-[#A1A1A1]">
                             Our infrastructure specialist will review your profile before the

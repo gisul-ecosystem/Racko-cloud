@@ -18,6 +18,10 @@ type FormState = {
   consent: boolean;
 };
 
+type FormErrors = {
+  phone?: string;
+};
+
 const initialFormState: FormState = {
   name: "",
   company: "",
@@ -84,14 +88,51 @@ export default function AssessmentPageContent() {
   const [form, setForm] = useState<FormState>(initialFormState);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [errors, setErrors] = useState<FormErrors>({});
 
   const updateField = <K extends keyof FormState>(field: K, value: FormState[K]) => {
-    setForm((prev) => ({ ...prev, [field]: value }));
+    // Phone field validation
+    if (field === "phone" && typeof value === "string") {
+      // Strip invalid characters - only allow +, digits, spaces, and hyphens
+      const sanitized = value.replace(/[^+0-9\s\-]/g, "");
+      
+      // Prevent multiple + signs or + not at the start
+      const cleaned = sanitized.replace(/\+/g, (match, offset) => offset === 0 ? match : "");
+      
+      // Limit length to 15 characters (excluding spaces and hyphens)
+      const digitsOnly = cleaned.replace(/[\s\-]/g, "");
+      if (digitsOnly.length > 15) {
+        return; // Don't update if exceeds max length
+      }
+      
+      setForm((prev) => ({ ...prev, [field]: cleaned as FormState[K] }));
+      
+      // Validate
+      const trimmed = cleaned.trim();
+      if (trimmed.length === 0) {
+        setErrors({ phone: undefined });
+      } else if (digitsOnly.length < 7) {
+        setErrors({ phone: "Please enter a valid phone number." });
+      } else {
+        setErrors({ phone: undefined });
+      }
+    } else {
+      setForm((prev) => ({ ...prev, [field]: value }));
+    }
   };
 
   const handleSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     if (!form.consent || isSubmitting) return;
+
+    // Validate phone if provided
+    if (form.phone.trim()) {
+      const digitsOnly = form.phone.replace(/[\s\-]/g, "");
+      if (digitsOnly.length < 7 || digitsOnly.length > 15) {
+        setErrors({ phone: "Please enter a valid phone number." });
+        return;
+      }
+    }
 
     setIsSubmitting(true);
 
@@ -289,11 +330,15 @@ export default function AssessmentPageContent() {
                     id="phone"
                     type="tel"
                     placeholder="+91 or international"
-                    className={inputClassName}
+                    className={`${inputClassName} ${errors.phone ? "border-[rgba(239,68,68,0.6)]" : ""}`}
                     value={form.phone}
                     onChange={(e) => updateField("phone", e.target.value)}
+                    inputMode="numeric"
                     required
                   />
+                  {errors.phone ? (
+                    <p className="mt-1 text-[11px] text-[#EF4444]">{errors.phone}</p>
+                  ) : null}
                 </div>
               </div>
 
