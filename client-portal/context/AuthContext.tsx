@@ -14,9 +14,10 @@ import {
   setAccessToken,
   clearAccessToken,
   ApiError,
+  SESSION_EXPIRED_EVENT,
 } from '../lib/apiClient';
 
-export type UserRole = 'super_admin' | 'admin';
+export type UserRole = 'super_admin' | 'admin' | 'user';
 
 export interface AuthUser {
   id: string;
@@ -41,7 +42,32 @@ interface AuthContextValue extends AuthState {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 const TOKEN_REFRESH_BUFFER_MS = 60 * 1000; // refresh 1 minute before expiry
-const ACCESS_TOKEN_EXPIRY_MS = 15 * 60 * 1000; // 15 minutes
+
+/**
+ * Decode a JWT payload without verifying the signature.
+ * Verification is the server's job — we just need the exp claim for scheduling.
+ */
+function getTokenExpiryMs(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]));
+    if (!payload.exp) return null;
+    return payload.exp * 1000; // exp is in seconds, convert to ms
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Calculate ms until we should refresh, given a token.
+ * Fires TOKEN_REFRESH_BUFFER_MS before the token actually expires.
+ * Falls back to 14 minutes if exp can't be read.
+ */
+function getRefreshDelay(token: string): number {
+  const expiryMs = getTokenExpiryMs(token);
+  if (!expiryMs) return 14 * 60 * 1000; // safe fallback
+  const delay = expiryMs - Date.now() - TOKEN_REFRESH_BUFFER_MS;
+  return Math.max(delay, 0);
+}
 
 interface LoginResponse {
   data: {
@@ -66,15 +92,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const scheduleTokenRefresh = useCallback(() => {
+  const scheduleTokenRefresh = useCallback((token: string) => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+
+    const delay = getRefreshDelay(token);
 
     refreshTimerRef.current = setTimeout(async () => {
       const success = await refreshToken();
       if (!success) {
         handleLogout();
       }
-    }, ACCESS_TOKEN_EXPIRY_MS - TOKEN_REFRESH_BUFFER_MS);
+    }, delay);
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshToken = useCallback(async (): Promise<boolean> => {
@@ -88,7 +116,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       if (!newToken) return false;
 
       setAccessToken(newToken);
-      scheduleTokenRefresh();
+      scheduleTokenRefresh(newToken);
       return true;
     } catch {
       return false;
@@ -101,6 +129,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setState({ user: null, isLoading: false, isAuthenticated: false });
     router.push('/login');
   }, [router]);
+
+  // Listen for session-expiry events fired by apiClient when refresh fails mid-operation
+  useEffect(() => {
+    const handler = () => handleLogout();
+    window.addEventListener(SESSION_EXPIRED_EVENT, handler);
+    return () => window.removeEventListener(SESSION_EXPIRED_EVENT, handler);
+  }, [handleLogout]);
 
   // On mount: attempt to restore session from HttpOnly cookie
   useEffect(() => {
@@ -133,7 +168,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           isAuthenticated: true,
         });
 
-        scheduleTokenRefresh();
+        scheduleTokenRefresh(token);
       } catch {
         if (!cancelled) {
           setState({ user: null, isLoading: false, isAuthenticated: false });
@@ -156,13 +191,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAccessToken(accessToken);
 
     setState({ user, isLoading: false, isAuthenticated: true });
-    scheduleTokenRefresh();
+    scheduleTokenRefresh(accessToken);
 
     // Redirect based on role
     if (user.role === 'super_admin') {
       router.push('/dashboard/super-admin');
-    } else {
+    } else if (user.role === 'admin') {
       router.push('/dashboard/admin');
+    } else {
+      router.push('/dashboard/user');
     }
   }, [router, scheduleTokenRefresh]);
 

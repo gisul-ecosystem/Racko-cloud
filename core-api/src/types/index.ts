@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 
-export type UserRole = 'super_admin' | 'admin';
+export type UserRole = 'super_admin' | 'admin' | 'user';
 
 export interface AccessTokenPayload {
   userId: string;

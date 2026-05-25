@@ -14,6 +14,9 @@ import { globalErrorHandler, notFoundHandler } from './middleware/error.middlewa
 import authRoutes from './modules/auth/auth.routes';
 import userRoutes from './modules/user/user.routes';
 import proxmoxRoutes from './modules/proxmox/proxmox.routes';
+import vmRoutes from './modules/vm/vm.routes';
+import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
+import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 
 const app = express();
 
@@ -103,7 +106,7 @@ app.use(
 // 10. Global rate limit
 const globalLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 200,
+  max: config.RATE_LIMIT_GLOBAL_MAX,
   message: { success: false, message: 'Too many requests.', code: 'RATE_LIMITED' },
   standardHeaders: true,
   legacyHeaders: false,
@@ -119,6 +122,11 @@ app.get('/health', (_req, res) => {
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
+app.use('/api/v1/vms', vmRoutes);
+app.use('/api/v1/managed-users', managedUsersRoutes);
+
+// Start node monitoring (runs in background — never blocks startup)
+startNodeMonitoring();
 
 // 404 handler
 app.use(notFoundHandler);

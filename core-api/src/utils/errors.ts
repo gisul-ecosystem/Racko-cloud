@@ -43,6 +43,14 @@ export class ConflictError extends AppError {
   }
 }
 
+export class DuplicateEmailError extends AppError {
+  public readonly email: string;
+  constructor(email: string) {
+    super(`Email already in use: ${email}`, 409, 'DUPLICATE_EMAIL');
+    this.email = email;
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message = 'Too many requests') {
     super(message, 429, 'TOO_MANY_REQUESTS');
@@ -112,5 +120,88 @@ export class ProxmoxAuthError extends AppError {
 export class ProxmoxNodeNotFoundError extends AppError {
   constructor(nodeName: string) {
     super(`Node '${nodeName}' not found.`, 404, 'PROXMOX_NODE_NOT_FOUND');
+  }
+}
+
+// ─── VM management errors ─────────────────────────────────────────────────────
+
+/**
+ * Thrown when cluster resources are insufficient to fulfill a VM creation request.
+ * HTTP 422 — includes max possible count so frontend can inform the user.
+ */
+export class InsufficientResourcesError extends AppError {
+  public readonly requestedCount: number;
+  public readonly maxPossibleCount: number;
+  public readonly bottleneck: string;
+
+  constructor(
+    message: string,
+    requestedCount: number,
+    maxPossibleCount: number,
+    bottleneck: string
+  ) {
+    super(message, 422, 'INSUFFICIENT_RESOURCES');
+    this.requestedCount = requestedCount;
+    this.maxPossibleCount = maxPossibleCount;
+    this.bottleneck = bottleneck;
+  }
+}
+
+/**
+ * Thrown when a VM record is not found in MongoDB.
+ * HTTP 404
+ */
+export class VMNotFoundError extends AppError {
+  constructor(message = 'VM not found.') {
+    super(message, 404, 'VM_NOT_FOUND');
+  }
+}
+
+/**
+ * Thrown when an admin attempts to access another admin's VM.
+ * HTTP 403
+ */
+export class VMOwnershipError extends AppError {
+  constructor(message = 'You do not have permission to access this VM.') {
+    super(message, 403, 'VM_OWNERSHIP_ERROR');
+  }
+}
+
+/**
+ * Thrown when a VM operation is invalid for the current VM state.
+ * e.g. trying to start an already running VM.
+ * HTTP 422
+ */
+export class VMOperationError extends AppError {
+  public readonly currentState: string;
+  public readonly requiredState: string;
+
+  constructor(message: string, currentState: string, requiredState: string) {
+    super(message, 422, 'VM_OPERATION_ERROR');
+    this.currentState = currentState;
+    this.requiredState = requiredState;
+  }
+}
+
+/**
+ * Thrown when a Proxmox async task exceeds the configured timeout.
+ * HTTP 504 Gateway Timeout
+ */
+export class TaskTimeoutError extends AppError {
+  public readonly upid: string;
+
+  constructor(message: string, upid: string) {
+    super(message, 504, 'TASK_TIMEOUT');
+    this.upid = upid;
+  }
+}
+
+/**
+ * Thrown when a requested Proxmox template is not found on any node.
+ * HTTP 404
+ */
+export class TemplateNotFoundError extends AppError {
+  constructor(message = 'Template not found.') {
+    super(message, 404, 'TEMPLATE_NOT_FOUND');
   }
 }

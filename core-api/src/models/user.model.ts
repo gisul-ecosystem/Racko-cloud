@@ -18,6 +18,7 @@ export interface IUser extends Document {
   emailVerificationToken?: string;
   emailVerificationExpires?: Date;
   passwordChangedAt?: Date;
+  createdBy?: mongoose.Types.ObjectId;  // admin who provisioned this user (null for self-registered)
   // MFA_SLOT: mfaEnabled: boolean (default: false)
   // MFA_SLOT: mfaSecret?: string
   createdAt: Date;
@@ -46,7 +47,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     },
     role: {
       type: String,
-      enum: ['super_admin', 'admin'],
+      enum: ['super_admin', 'admin', 'user'],
       default: 'admin',
       required: true,
     },
@@ -89,6 +90,11 @@ const userSchema = new Schema<IUser, IUserModel>(
     },
     passwordChangedAt: {
       type: Date,
+    },
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
     },
   },
   {

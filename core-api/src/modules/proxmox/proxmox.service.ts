@@ -40,34 +40,39 @@ function formatUptime(seconds: number): string {
 }
 
 function transformNode(raw: ProxmoxNodeRaw, version?: string): NodeSummary {
-  const memUsedGB = bytesToGB(raw.mem);
-  const memTotalGB = bytesToGB(raw.maxmem);
-  const diskUsedGB = bytesToGB(raw.disk);
-  const diskTotalGB = bytesToGB(raw.maxdisk);
+  const memUsedGB = bytesToGB(raw.mem ?? 0);
+  const memTotalGB = bytesToGB(raw.maxmem ?? 0);
+  const diskUsedGB = bytesToGB(raw.disk ?? 0);
+  const diskTotalGB = bytesToGB(raw.maxdisk ?? 0);
+  const cpu = raw.cpu ?? 0;
+  const maxmem = raw.maxmem ?? 0;
+  const mem = raw.mem ?? 0;
+  const maxdisk = raw.maxdisk ?? 0;
+  const disk = raw.disk ?? 0;
 
   return {
     name: raw.node,
     status: raw.status,
     cpu: {
-      used: fractionToPercent(raw.cpu),
+      used: fractionToPercent(cpu),
       total: raw.maxcpu,
-      usagePercent: fractionToPercent(raw.cpu),
+      usagePercent: fractionToPercent(cpu),
     },
     memory: {
       used: memUsedGB,
       total: memTotalGB,
       free: Math.round((memTotalGB - memUsedGB) * 100) / 100,
-      usagePercent: memTotalGB > 0 ? Math.round((raw.mem / raw.maxmem) * 10000) / 100 : 0,
+      usagePercent: maxmem > 0 ? Math.round((mem / maxmem) * 10000) / 100 : 0,
     },
     disk: {
       used: diskUsedGB,
       total: diskTotalGB,
       free: Math.round((diskTotalGB - diskUsedGB) * 100) / 100,
-      usagePercent: diskTotalGB > 0 ? Math.round((raw.disk / raw.maxdisk) * 10000) / 100 : 0,
+      usagePercent: maxdisk > 0 ? Math.round((disk / maxdisk) * 10000) / 100 : 0,
     },
     uptime: {
-      seconds: raw.uptime,
-      formatted: formatUptime(raw.uptime),
+      seconds: raw.uptime ?? 0,
+      formatted: formatUptime(raw.uptime ?? 0),
     },
     ...(version !== undefined && { proxmoxVersion: version }),
   };
@@ -299,8 +304,8 @@ export class ProxmoxService {
     const runningVMs = vms.filter((v) => v.status === 'running').length;
 
     const totalCPUCores = nodes.reduce((sum, n) => sum + n.maxcpu, 0);
-    const totalMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + n.maxmem, 0));
-    const usedMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + n.mem, 0));
+    const totalMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + (n.maxmem ?? 0), 0));
+    const usedMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + (n.mem ?? 0), 0));
     const totalStorageGB = bytesToGB(storage.reduce((sum, s) => sum + s.total, 0));
     const usedStorageGB = bytesToGB(storage.reduce((sum, s) => sum + s.used, 0));
 
@@ -368,8 +373,8 @@ export class ProxmoxService {
       runningVMs,
       stoppedVMs: rawVMs.filter((v) => v.status === 'stopped').length,
       totalCPUCores: rawNodes.reduce((sum, n) => sum + n.maxcpu, 0),
-      totalMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + n.maxmem, 0)),
-      usedMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + n.mem, 0)),
+      totalMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + (n.maxmem ?? 0), 0)),
+      usedMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + (n.mem ?? 0), 0)),
       totalStorageGB: bytesToGB(rawStorage.reduce((sum, s) => sum + s.total, 0)),
       usedStorageGB: bytesToGB(rawStorage.reduce((sum, s) => sum + s.used, 0)),
       fetchedAt: new Date().toISOString(),
@@ -388,3 +393,204 @@ export class ProxmoxService {
 }
 
 export const proxmoxService = new ProxmoxService();
+
+// ─── Node Monitoring ──────────────────────────────────────────────────────────
+// Import here to avoid circular deps — NodeAlert is a standalone model
+import { NodeAlert } from '../../models/nodeAlert.model';
+import { config } from '../../config';
+
+/**
+ * Start periodic node resource monitoring.
+ * Called once on app startup.
+ * Checks CPU, RAM, storage against configured thresholds.
+ * Creates/updates/resolves NodeAlert records.
+ *
+ * CACHE_SLOT: cache alert state in Redis to prevent duplicate alerts across restarts
+ * WEBSOCKET_SLOT: push real-time alerts to super_admin dashboard via WebSocket
+ * AUTO_EXPAND_SLOT: when storage hits critical on Ceph — trigger volume expansion
+ */
+export function startNodeMonitoring(): void {
+  logger.info('Node monitoring started', {
+    intervalMs: config.NODE_MONITOR_INTERVAL_MS,
+  });
+
+  setInterval(() => {
+    // Fire-and-forget — never crash on monitoring error
+    void runMonitoringCycle().catch((err: unknown) => {
+      logger.error('Node monitoring cycle failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }, config.NODE_MONITOR_INTERVAL_MS);
+}
+
+async function runMonitoringCycle(): Promise<void> {
+  let nodes: ProxmoxNodeRaw[];
+  try {
+    nodes = await proxmoxService.getNodes();
+  } catch (err) {
+    logger.error('Monitoring: failed to fetch nodes', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return;
+  }
+
+  const onlineNodes = nodes.filter((n) => n.status === 'online');
+  let alertsCreated = 0;
+  let alertsResolved = 0;
+
+  for (const node of onlineNodes) {
+    try {
+      await checkNodeAlerts(node);
+    } catch (err) {
+      logger.warn('Monitoring: failed to check node', {
+        node: node.node,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  logger.info('Node monitoring cycle complete', {
+    nodesChecked: onlineNodes.length,
+    alertsCreated,
+    alertsResolved,
+  });
+}
+
+async function checkNodeAlerts(node: ProxmoxNodeRaw): Promise<void> {
+  const cpuPercent = Math.round((node.cpu ?? 0) * 10000) / 100;
+  const maxmem = node.maxmem ?? 0;
+  const mem = node.mem ?? 0;
+  const ramPercent = maxmem > 0 ? Math.round((mem / maxmem) * 10000) / 100 : 0;
+
+  // Check CPU
+  await evaluateAlert(node.node, 'cpu', cpuPercent, {
+    warning: config.ALERT_CPU_WARNING,
+    critical: config.ALERT_CPU_CRITICAL,
+    full: config.ALERT_CPU_FULL,
+  });
+
+  // Check RAM
+  await evaluateAlert(node.node, 'ram', ramPercent, {
+    warning: config.ALERT_RAM_WARNING,
+    critical: config.ALERT_RAM_CRITICAL,
+    full: config.ALERT_RAM_FULL,
+  });
+
+  // Check storage pools
+  try {
+    const storageResponse = await proxmoxClient.get<{
+      data: Array<{
+        storage: string;
+        total: number;
+        used: number;
+        avail: number;
+        active: number;
+        enabled: number;
+        content: string;
+      }>;
+    }>(`/nodes/${node.node}/storage`);
+
+    const activePools = storageResponse.data.data.filter(
+      (s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images')
+    );
+
+    for (const pool of activePools) {
+      const storagePercent =
+        pool.total > 0 ? Math.round((pool.used / pool.total) * 10000) / 100 : 0;
+
+      await evaluateAlert(
+        node.node,
+        'storage',
+        storagePercent,
+        {
+          warning: config.ALERT_STORAGE_WARNING,
+          critical: config.ALERT_STORAGE_CRITICAL,
+          full: config.ALERT_STORAGE_FULL,
+        },
+        pool.storage
+      );
+    }
+  } catch (err) {
+    logger.warn('Monitoring: failed to fetch storage for node', {
+      node: node.node,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+async function evaluateAlert(
+  node: string,
+  resource: 'cpu' | 'ram' | 'storage',
+  currentPercent: number,
+  thresholds: { warning: number; critical: number; full: number },
+  storagePool?: string
+): Promise<void> {
+  // Determine severity
+  let severity: 'warning' | 'critical' | 'full' | null = null;
+  let thresholdPercent = 0;
+
+  if (currentPercent >= thresholds.full) {
+    severity = 'full';
+    thresholdPercent = thresholds.full;
+  } else if (currentPercent >= thresholds.critical) {
+    severity = 'critical';
+    thresholdPercent = thresholds.critical;
+  } else if (currentPercent >= thresholds.warning) {
+    severity = 'warning';
+    thresholdPercent = thresholds.warning;
+  }
+
+  const alertQuery: Record<string, unknown> = { node, resource, status: 'active' };
+  if (storagePool) alertQuery['storagePool'] = storagePool;
+
+  const existingAlert = await NodeAlert.findOne(alertQuery);
+
+  if (severity !== null) {
+    if (existingAlert) {
+      // Update existing active alert
+      existingAlert.currentPercent = currentPercent;
+      existingAlert.severity = severity;
+      existingAlert.thresholdPercent = thresholdPercent;
+      await existingAlert.save();
+    } else {
+      // Create new alert
+      await NodeAlert.create({
+        node,
+        resource,
+        severity,
+        currentPercent,
+        thresholdPercent,
+        status: 'active',
+        ...(storagePool && { storagePool }),
+      });
+      logger.warn('Node alert created', { node, resource, severity, currentPercent, storagePool });
+    }
+  } else if (existingAlert) {
+    // Usage dropped below threshold — resolve
+    existingAlert.status = 'resolved';
+    existingAlert.resolvedAt = new Date();
+    await existingAlert.save();
+    logger.info('Node alert resolved', { node, resource, currentPercent });
+  }
+}
+
+/**
+ * Get all active node alerts, sorted by severity then createdAt.
+ */
+export async function getActiveAlerts() {
+  const severityOrder = { full: 0, critical: 1, warning: 2 };
+  const alerts = await NodeAlert.find({ status: 'active' }).lean();
+  return alerts.sort((a, b) => {
+    const diff = severityOrder[a.severity] - severityOrder[b.severity];
+    if (diff !== 0) return diff;
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+  });
+}
+
+/**
+ * Get alert history (active + resolved), most recent first.
+ */
+export async function getAlertHistory(limit: number) {
+  return NodeAlert.find().sort({ createdAt: -1 }).limit(limit).lean();
+}

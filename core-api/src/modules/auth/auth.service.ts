@@ -10,6 +10,7 @@ import {
   generateSessionId,
   generateTokenFamily,
 } from '../../utils/crypto';
+import { parseDuration } from '../../utils/parseDuration';
 import { signAccessToken, signRefreshToken, verifyAccessToken, verifyRefreshToken } from '../../utils/jwt';
 import { generateFingerprint, getClientIp } from '../../utils/deviceFingerprint';
 import {
@@ -28,12 +29,12 @@ import {
 import type { RegisterDto, LoginDto, LoginResult, TokenValidationResult } from './auth.types';
 import type { UserRole } from '../../types';
 
-// Cookie config for refresh token
+// Cookie config for refresh token — maxAge derived from JWT_REFRESH_EXPIRES_IN env var
 const REFRESH_COOKIE_OPTIONS = {
   httpOnly: true,
   secure: config.NODE_ENV === 'production',
   sameSite: 'strict' as const,
-  maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days in ms
+  maxAge: parseDuration(config.JWT_REFRESH_EXPIRES_IN),
   path: '/',
 };
 
@@ -293,7 +294,7 @@ export class AuthService {
     });
 
     // Store hashed refresh token in DB
-    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const refreshExpiresAt = new Date(Date.now() + parseDuration(config.JWT_REFRESH_EXPIRES_IN));
     await Token.create({
       userId: user._id,
       tokenHash: hashedRefreshToken,
@@ -358,7 +359,8 @@ export class AuthService {
       throw new UnauthorizedError('Invalid or expired refresh token.');
     }
 
-    const hashedToken = hashToken(payload.tokenId);
+    // tokenId in the JWT payload is already the hashed token (set at login time)
+    const hashedToken = payload.tokenId;
 
     // REDIS_SLOT: check blacklist here before DB query
 
@@ -430,7 +432,7 @@ export class AuthService {
     // REDIS_SLOT: write to blacklist on revocation
 
     // Store new hashed refresh token (same family)
-    const refreshExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const refreshExpiresAt = new Date(Date.now() + parseDuration(config.JWT_REFRESH_EXPIRES_IN));
     await Token.create({
       userId: user._id,
       tokenHash: newHashedRefreshToken,
@@ -469,7 +471,8 @@ export class AuthService {
     if (rawRefreshToken) {
       const payload = verifyRefreshToken(rawRefreshToken);
       if (payload) {
-        const hashedToken = hashToken(payload.tokenId);
+        // tokenId in the JWT payload is already the hashed token
+        const hashedToken = payload.tokenId;
         await Token.findOneAndUpdate({ tokenHash: hashedToken }, { isRevoked: true });
 
         // REDIS_SLOT: write to blacklist on revocation

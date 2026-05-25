@@ -4,6 +4,15 @@
  * Refresh token lives in HttpOnly cookie (handled by browser automatically).
  */
 
+// Global session-expiry event — fired by apiClient when refresh fails mid-session
+export const SESSION_EXPIRED_EVENT = 'racko:session_expired';
+
+export function emitSessionExpired(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+  }
+}
+
 const API_BASE = process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'http://localhost:8000';
 
 // In-memory token store — cleared on page refresh (intentional security decision)
@@ -84,8 +93,9 @@ export async function apiRequest<T>(
       return retryRes.json() as Promise<T>;
     }
 
-    // Refresh failed — clear token and throw so AuthContext can redirect
+    // Refresh failed — clear token, fire global event, throw
     clearAccessToken();
+    emitSessionExpired();
     throw new ApiError('Session expired. Please log in again.', 401, 'SESSION_EXPIRED');
   }
 

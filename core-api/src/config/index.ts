@@ -46,6 +46,36 @@ const envSchema = z.object({
   PROXMOX_TOKEN_ID: z.string().min(1, 'PROXMOX_TOKEN_ID is required'),
   PROXMOX_TOKEN_SECRET: z.string().min(1, 'PROXMOX_TOKEN_SECRET is required'),
   PROXMOX_VERIFY_SSL: z.string().transform((val) => val === 'true').default('false'),
+  PROXMOX_REQUEST_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('30000'),
+
+  // VM Configuration
+  VM_BULK_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('10'),
+  VM_TASK_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
+  VM_TASK_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  VM_MAX_BULK_COUNT: z.string().regex(/^\d+$/).transform(Number).default('100'),
+  VM_CPU_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('4'),
+  VM_RAM_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('1.5'),
+  VM_DELETE_MAX_RETRIES: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  VM_DELETE_RETRY_BASE_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
+  VM_POLL_NETWORK_RETRY_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  VM_POLL_NETWORK_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('5000'),
+
+  // Resource Alert Thresholds
+  ALERT_CPU_WARNING: z.string().regex(/^\d+$/).transform(Number).default('70'),
+  ALERT_CPU_CRITICAL: z.string().regex(/^\d+$/).transform(Number).default('85'),
+  ALERT_CPU_FULL: z.string().regex(/^\d+$/).transform(Number).default('95'),
+  ALERT_RAM_WARNING: z.string().regex(/^\d+$/).transform(Number).default('70'),
+  ALERT_RAM_CRITICAL: z.string().regex(/^\d+$/).transform(Number).default('85'),
+  ALERT_RAM_FULL: z.string().regex(/^\d+$/).transform(Number).default('95'),
+  ALERT_STORAGE_WARNING: z.string().regex(/^\d+$/).transform(Number).default('70'),
+  ALERT_STORAGE_CRITICAL: z.string().regex(/^\d+$/).transform(Number).default('85'),
+  ALERT_STORAGE_FULL: z.string().regex(/^\d+$/).transform(Number).default('95'),
+
+  // Monitoring
+  NODE_MONITOR_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
+
+  // Rate limiting
+  RATE_LIMIT_GLOBAL_MAX: z.string().regex(/^\d+$/).transform(Number).default('2000'),
 });
 
 const parsed = envSchema.safeParse(process.env);

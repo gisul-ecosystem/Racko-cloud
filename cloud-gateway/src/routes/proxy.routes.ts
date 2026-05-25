@@ -81,6 +81,31 @@ router.get('/api/v1/proxmox/nodes/:nodeName', authMiddleware, verifyMiddleware, 
 router.get('/api/v1/proxmox/storage', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/proxmox/vms', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 
+// ─── VM ROUTES (admin + super_admin) ─────────────────────────────────────────
+router.get('/api/v1/vms/templates', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/templates/:templateId', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/admin/all', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/vms/jobs', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/jobs/:jobId', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/:vmId/status', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/:vmId/events', authMiddleware, verifyMiddleware, coreApiProxy);
+router.delete('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/start', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/stop', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/force-stop', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/restart', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/reset', authMiddleware, verifyMiddleware, coreApiProxy);
+
+// ─── MANAGED USERS ROUTES (admin + super_admin) ──────────────────────────────
+router.post('/api/v1/managed-users/single', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/managed-users/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/managed-users', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.patch('/api/v1/managed-users/:userId/active', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.delete('/api/v1/managed-users/:userId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
 router.use('/api/v1', authMiddleware, verifyMiddleware, coreApiProxy);

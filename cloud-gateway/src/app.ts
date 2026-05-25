@@ -12,7 +12,7 @@ import proxyRoutes from './routes/proxy.routes';
 
 const app = express();
 
-// ─── SECURITY MIDDLEWARE STACK (exact order) ──────────────────────────────────
+// ─── SECURITY MIDDLEWARE STACK (exact orders) ──────────────────────────────────
 
 // 1. Request ID — attach UUID to every request
 app.use(requestIdMiddleware);
