@@ -4,13 +4,13 @@
 export interface ProxmoxNodeRaw {
   node: string;
   status: 'online' | 'offline' | 'unknown';
-  cpu: number;      // CPU usage fraction 0–1
-  maxcpu: number;   // Total CPU cores
-  mem: number;      // Used memory in bytes
-  maxmem: number;   // Total memory in bytes
-  disk: number;     // Used root disk in bytes
-  maxdisk: number;  // Total root disk in bytes
-  uptime: number;   // Uptime in seconds
+  cpu: number | null;      // CPU usage fraction 0–1 (null when offline)
+  maxcpu: number;          // Total CPU cores
+  mem: number | null;      // Used memory in bytes (null when offline)
+  maxmem: number | null;   // Total memory in bytes (null when offline)
+  disk: number | null;     // Used root disk in bytes (null when offline)
+  maxdisk: number | null;  // Total root disk in bytes (null when offline)
+  uptime: number | null;   // Uptime in seconds (null when offline)
   level: string;
   type: string;
 }

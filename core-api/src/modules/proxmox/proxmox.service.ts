@@ -40,34 +40,39 @@ function formatUptime(seconds: number): string {
 }
 
 function transformNode(raw: ProxmoxNodeRaw, version?: string): NodeSummary {
-  const memUsedGB = bytesToGB(raw.mem);
-  const memTotalGB = bytesToGB(raw.maxmem);
-  const diskUsedGB = bytesToGB(raw.disk);
-  const diskTotalGB = bytesToGB(raw.maxdisk);
+  const memUsedGB = bytesToGB(raw.mem ?? 0);
+  const memTotalGB = bytesToGB(raw.maxmem ?? 0);
+  const diskUsedGB = bytesToGB(raw.disk ?? 0);
+  const diskTotalGB = bytesToGB(raw.maxdisk ?? 0);
+  const cpu = raw.cpu ?? 0;
+  const maxmem = raw.maxmem ?? 0;
+  const mem = raw.mem ?? 0;
+  const maxdisk = raw.maxdisk ?? 0;
+  const disk = raw.disk ?? 0;
 
   return {
     name: raw.node,
     status: raw.status,
     cpu: {
-      used: fractionToPercent(raw.cpu),
+      used: fractionToPercent(cpu),
       total: raw.maxcpu,
-      usagePercent: fractionToPercent(raw.cpu),
+      usagePercent: fractionToPercent(cpu),
     },
     memory: {
       used: memUsedGB,
       total: memTotalGB,
       free: Math.round((memTotalGB - memUsedGB) * 100) / 100,
-      usagePercent: memTotalGB > 0 ? Math.round((raw.mem / raw.maxmem) * 10000) / 100 : 0,
+      usagePercent: maxmem > 0 ? Math.round((mem / maxmem) * 10000) / 100 : 0,
     },
     disk: {
       used: diskUsedGB,
       total: diskTotalGB,
       free: Math.round((diskTotalGB - diskUsedGB) * 100) / 100,
-      usagePercent: diskTotalGB > 0 ? Math.round((raw.disk / raw.maxdisk) * 10000) / 100 : 0,
+      usagePercent: maxdisk > 0 ? Math.round((disk / maxdisk) * 10000) / 100 : 0,
     },
     uptime: {
-      seconds: raw.uptime,
-      formatted: formatUptime(raw.uptime),
+      seconds: raw.uptime ?? 0,
+      formatted: formatUptime(raw.uptime ?? 0),
     },
     ...(version !== undefined && { proxmoxVersion: version }),
   };
@@ -299,8 +304,8 @@ export class ProxmoxService {
     const runningVMs = vms.filter((v) => v.status === 'running').length;
 
     const totalCPUCores = nodes.reduce((sum, n) => sum + n.maxcpu, 0);
-    const totalMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + n.maxmem, 0));
-    const usedMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + n.mem, 0));
+    const totalMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + (n.maxmem ?? 0), 0));
+    const usedMemoryGB = bytesToGB(nodes.reduce((sum, n) => sum + (n.mem ?? 0), 0));
     const totalStorageGB = bytesToGB(storage.reduce((sum, s) => sum + s.total, 0));
     const usedStorageGB = bytesToGB(storage.reduce((sum, s) => sum + s.used, 0));
 
@@ -368,8 +373,8 @@ export class ProxmoxService {
       runningVMs,
       stoppedVMs: rawVMs.filter((v) => v.status === 'stopped').length,
       totalCPUCores: rawNodes.reduce((sum, n) => sum + n.maxcpu, 0),
-      totalMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + n.maxmem, 0)),
-      usedMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + n.mem, 0)),
+      totalMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + (n.maxmem ?? 0), 0)),
+      usedMemoryGB: bytesToGB(rawNodes.reduce((sum, n) => sum + (n.mem ?? 0), 0)),
       totalStorageGB: bytesToGB(rawStorage.reduce((sum, s) => sum + s.total, 0)),
       usedStorageGB: bytesToGB(rawStorage.reduce((sum, s) => sum + s.used, 0)),
       fetchedAt: new Date().toISOString(),
@@ -453,9 +458,10 @@ async function runMonitoringCycle(): Promise<void> {
 }
 
 async function checkNodeAlerts(node: ProxmoxNodeRaw): Promise<void> {
-  const cpuPercent = Math.round(node.cpu * 10000) / 100;
-  const ramPercent =
-    node.maxmem > 0 ? Math.round((node.mem / node.maxmem) * 10000) / 100 : 0;
+  const cpuPercent = Math.round((node.cpu ?? 0) * 10000) / 100;
+  const maxmem = node.maxmem ?? 0;
+  const mem = node.mem ?? 0;
+  const ramPercent = maxmem > 0 ? Math.round((mem / maxmem) * 10000) / 100 : 0;
 
   // Check CPU
   await evaluateAlert(node.node, 'cpu', cpuPercent, {

@@ -4,7 +4,7 @@ export interface IVMJob extends Document {
   _id: mongoose.Types.ObjectId;
 
   adminId: mongoose.Types.ObjectId;
-  type: 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop';
+  type: 'single_create' | 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop';
 
   // Job progress
   status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
@@ -54,7 +54,7 @@ const vmJobSchema = new Schema<IVMJob>(
     },
     type: {
       type: String,
-      enum: ['bulk_create', 'bulk_delete', 'bulk_start', 'bulk_stop'],
+      enum: ['single_create', 'bulk_create', 'bulk_delete', 'bulk_start', 'bulk_stop'],
       required: true,
     },
     status: {

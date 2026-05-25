@@ -14,9 +14,13 @@ import type { BulkVMSpec } from '../vm.types';
 // QUEUE_SLOT: replace direct async call with message queue job (RabbitMQ/BullMQ)
 // EVENT_SLOT: emit 'vm.bulk_created' event to message queue
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+/**
+ * Mutex for VMID allocation — ensures only one VM fetches a VMID at a time.
+ * This prevents duplicate IDs when multiple VMs in a batch run in parallel.
+ * Only the VMID fetch + clone POST is serialized; the actual Proxmox clone
+ * task runs asynchronously so all clones still execute in parallel.
+ */
+let vmidMutex = Promise.resolve();
 
 /**
  * Process bulk VM creation asynchronously.
@@ -75,6 +79,7 @@ export async function processBulkCreation(
       for (let i = 0; i < allocation.vmCount; i++) {
         vmSpecs.push({
           vmName: `${specs.namePrefix}-${globalIndex}`,
+          templateName: specs.templateName,
           index: globalIndex,
           node: allocation.node,
           templateId: specs.templateId,
@@ -107,24 +112,9 @@ export async function processBulkCreation(
       batchSize,
     });
 
-    // Pre-fetch ALL VMIDs sequentially upfront — never call nextid inside parallel code.
-    // Proxmox needs a small delay between calls to register each ID before the next request.
-    const vmids: number[] = [];
-    for (let i = 0; i < vmSpecs.length; i++) {
-      const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-      vmids.push(response.data.data);
-      await sleep(100); // ensure Proxmox registers each before next call
-    }
-
-    logger.info('Pre-fetched VMIDs for bulk job', {
-      jobId: jobId.toString(),
-      count: vmids.length,
-    });
-
     for (const batch of batches) {
-      const batchStartIndex = vmSpecs.indexOf(batch[0]!);
       const results = await Promise.allSettled(
-        batch.map((spec, i) => createSingleVM(spec, vmids[batchStartIndex + i]!))
+        batch.map((spec) => createSingleVM(spec))
       );
 
       for (let i = 0; i < results.length; i++) {
@@ -159,13 +149,8 @@ export async function processBulkCreation(
                 [spec.node]  // exclude the failed node
               );
 
-              // Get a fresh VMID for the rerouted VM
-              const nextIdResponse = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-              await sleep(100);
-              const newVmid = nextIdResponse.data.data;
-
               spec.node = rerouteNode.node;
-              const retryResult = await createSingleVM(spec, newVmid);
+              const retryResult = await createSingleVM(spec);
 
               await VMJob.findByIdAndUpdate(jobId, {
                 $inc: { completed: 1, pending: -1 },
@@ -268,39 +253,135 @@ export async function processBulkCreation(
 
 /**
  * Create a single VM as part of a bulk job.
- * vmid is pre-fetched by the caller — never call nextid inside parallel code.
+ * Fetches its own VMID using a mutex to prevent duplicate IDs across parallel VMs.
+ * The mutex only serializes the VMID fetch + clone POST (milliseconds).
+ * The actual Proxmox clone task runs asynchronously — all clones execute in parallel.
  * Returns the MongoDB ObjectId of the created VM.
  */
-async function createSingleVM(spec: BulkVMSpec, vmid: number): Promise<mongoose.Types.ObjectId> {
-  // Get best storage pool on target node
-  const nodeResourcesResponse = await proxmoxClient.get<{
-    data: Array<{ storage: string; avail: number; active: number; enabled: number; content: string }>;
-  }>(`/nodes/${spec.node}/storage`);
+async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId> {
+  // Select storage pool for dedicated clones only.
+  // Linked clones must use template storage — Proxmox enforces this, never send storage for them.
+  // For dedicated clones: prefer shared storage (Ceph/NFS) for live-migration support,
+  // fall back to local storage sorted by most free space.
+  let storagePool: string | undefined;
 
-  const activeStorage = nodeResourcesResponse.data.data
-    .filter((s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images'))
-    .sort((a, b) => b.avail - a.avail);
+  if (spec.cloneType === 'dedicated_storage') {
+    const nodeResourcesResponse = await proxmoxClient.get<{
+      data: Array<{ storage: string; avail: number; active: number; enabled: number; content: string; shared?: number; type?: string }>;
+    }>(`/nodes/${spec.node}/storage`);
 
-  const storagePool = activeStorage[0]?.storage;
+    const eligible = nodeResourcesResponse.data.data
+      .filter((s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images'));
 
-  // Clone template
-  const cloneBody: Record<string, unknown> = {
-    newid: vmid,
-    name: spec.vmName,
-    full: spec.cloneType === 'dedicated_storage' ? 1 : 0,
-    target: spec.node,
-  };
-  if (storagePool) cloneBody['storage'] = storagePool;
+    // Tier 1: shared storage (Ceph, NFS, etc.) — enables live migration
+    const shared = eligible.filter((s) => s.shared === 1).sort((a, b) => b.avail - a.avail);
+    // Tier 2: local storage — fallback
+    const local = eligible.filter((s) => s.shared !== 1).sort((a, b) => b.avail - a.avail);
 
-  const cloneResponse = await proxmoxClient.post<{ data: string }>(
-    `/nodes/${spec.node}/qemu/${spec.templateId}/clone`,
-    cloneBody
-  );
+    storagePool = (shared[0] ?? local[0])?.storage;
 
-  const cloneUpid = cloneResponse.data.data;
+    logger.info('[BulkVM] Storage selection', {
+      vmName: spec.vmName,
+      node: spec.node,
+      cloneType: spec.cloneType,
+      sharedPools: shared.map((s) => ({ storage: s.storage, availGb: Math.round(s.avail / 1024 / 1024 / 1024) })),
+      localPools: local.map((s) => ({ storage: s.storage, availGb: Math.round(s.avail / 1024 / 1024 / 1024) })),
+      selectedPool: storagePool ?? 'NONE — no eligible storage found',
+    });
+  }
 
-  // Poll clone task — cleanup orphan on failure
-  await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+  // Acquire mutex — fetch VMID and send clone POST atomically.
+  // This ensures no two parallel VMs get the same VMID from Proxmox.
+  let vmid!: number;
+  let cloneUpid!: string;
+
+  await new Promise<void>((resolve, reject) => {
+    vmidMutex = vmidMutex.then(async () => {
+      try {
+        const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
+        vmid = response.data.data;
+
+        logger.info('[BulkVM] Allocated VMID', { vmName: spec.vmName, vmid, node: spec.node });
+
+        const cloneBody: Record<string, unknown> = {
+          newid: vmid,
+          name: spec.vmName,
+          full: spec.cloneType === 'dedicated_storage' ? 1 : 0,
+          target: spec.node,
+        };
+        if (storagePool) cloneBody['storage'] = storagePool;
+
+        logger.info('[BulkVM] Sending clone request', {
+          vmName: spec.vmName,
+          templateId: spec.templateId,
+          vmid,
+          node: spec.node,
+          cloneBody,
+        });
+
+        const cloneResponse = await proxmoxClient.post<{ data: string }>(
+          `/nodes/${spec.node}/qemu/${spec.templateId}/clone`,
+          cloneBody
+        );
+        cloneUpid = cloneResponse.data.data;
+
+        logger.info('[BulkVM] Clone task started — releasing mutex', {
+          vmName: spec.vmName, vmid, node: spec.node, upid: cloneUpid,
+        });
+
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    });
+  });
+
+  // Poll clone task — cleanup orphan only on definitive failure, not on unknown
+  const cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+
+  if (cloneResult === 'unknown') {
+    // Network was lost during polling — we don't know if the clone succeeded.
+    // Save the VM to MongoDB as 'creating' so it's not an orphan.
+    // The reconciler will verify and update its status later.
+    logger.warn('[BulkVM] Clone task outcome unknown — saving VM as creating for reconciliation', {
+      vmName: spec.vmName,
+      vmid,
+      node: spec.node,
+      upid: cloneUpid,
+    });
+
+    const vm = await VM.create({
+      vmid,
+      node: spec.node,
+      adminId: spec.adminId,
+      name: spec.vmName,
+      description: spec.description,
+      templateId: spec.templateId,
+      templateName: spec.templateName,
+      cloneType: spec.cloneType,
+      allocatedCpu: spec.cpuCores,
+      allocatedMemoryGb: spec.memoryGb,
+      allocatedDiskGb: spec.diskGb,
+      status: 'creating',
+      proxmoxStatus: 'unknown',
+      jobId: spec.jobId,
+      haEnabled: false,
+      lastError: 'Clone task outcome unknown — connectivity lost during polling. Pending reconciliation.',
+    });
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid,
+      adminId: spec.adminId,
+      event: 'VM_CREATED',
+      status: 'unknown',
+      details: { node: spec.node, cloneType: spec.cloneType, jobId: spec.jobId.toString(), upid: cloneUpid },
+      ipAddress: 'bulk-job',
+      userAgent: 'bulk-processor',
+    });
+
+    return vm._id;
+  }
 
   // Apply config overrides if needed
   const configUpdates: Record<string, unknown> = {};
@@ -318,7 +399,15 @@ async function createSingleVM(spec: BulkVMSpec, vmid: number): Promise<mongoose.
       `/nodes/${spec.node}/qemu/${vmid}/resize`,
       { disk: 'scsi0', size: `+${extraGb}G` }
     );
-    await pollTaskWithCleanup(resizeResponse.data.data, spec.node, vmid, false);
+    const resizeResult = await pollTaskWithCleanup(resizeResponse.data.data, spec.node, vmid, false);
+    if (resizeResult === 'unknown') {
+      logger.warn('[BulkVM] Disk resize task outcome unknown — VM saved but disk size may not match requested', {
+        vmName: spec.vmName,
+        vmid,
+        node: spec.node,
+      });
+      // Continue — VM was cloned, disk resize is best-effort
+    }
   }
 
   // Save VM to MongoDB
@@ -329,7 +418,7 @@ async function createSingleVM(spec: BulkVMSpec, vmid: number): Promise<mongoose.
     name: spec.vmName,
     description: spec.description,
     templateId: spec.templateId,
-    templateName: spec.vmName, // will be updated with actual template name by caller
+    templateName: spec.templateName,
     cloneType: spec.cloneType,
     allocatedCpu: spec.cpuCores,
     allocatedMemoryGb: spec.memoryGb,

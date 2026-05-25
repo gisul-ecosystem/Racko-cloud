@@ -102,14 +102,8 @@ export default function CreateVMPage() {
       };
 
       const result = await createVM(dto);
-
-      if ('jobId' in result) {
-        addToast('success', `Bulk job started for ${count} VMs.`);
-        router.push(`/dashboard/admin/jobs/${result.jobId}`);
-      } else {
-        addToast('success', `VM "${result.vm.name}" created successfully.`);
-        router.push(`/dashboard/admin/vms/${result.vm._id}`);
-      }
+      addToast('success', count === 1 ? 'VM creation started.' : `Bulk job started for ${count} VMs.`);
+      router.push(`/dashboard/admin/jobs/${result.jobId}`);
     } catch (err) {
       const msg = err instanceof ApiError ? err.message : 'Failed to create VM.';
       addToast('error', msg);
@@ -393,7 +387,7 @@ export default function CreateVMPage() {
             {[
               { label: 'Template', value: `${selectedTemplate.name} (ID: ${selectedTemplate.vmid})` },
               { label: 'VM Name', value: count > 1 ? `${name.toLowerCase()}-1 … ${name.toLowerCase()}-${count}` : name.toLowerCase() },
-              { label: 'Count', value: count === 1 ? '1 VM (synchronous)' : `${count} VMs (bulk job)` },
+              { label: 'Count', value: count === 1 ? '1 VM (async job)' : `${count} VMs (bulk job)` },
               { label: 'Storage Type', value: cloneType === 'dedicated_storage' ? 'Dedicated (full clone)' : 'Dynamic (linked clone)' },
               { label: 'Node', value: selectedTemplate.node },
               { label: 'CPU', value: `${safeCpu} vCPU` },
@@ -408,13 +402,14 @@ export default function CreateVMPage() {
             ))}
           </div>
 
-          {count > 1 && (
-            <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg mb-5">
-              <p className="text-xs text-blue-700">
-                <strong>Bulk creation:</strong> A job will be created and you'll be redirected to track progress. VMs are created in batches of 10 in the background.
-              </p>
-            </div>
-          )}
+          <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg mb-5">
+            <p className="text-xs text-blue-700">
+              {count === 1
+                ? 'VM creation runs in the background. You\'ll be redirected to track progress.'
+                : <><strong>Bulk creation:</strong> A job will be created and you'll be redirected to track progress. VMs are created in batches of 10 in the background.</>
+              }
+            </p>
+          </div>
 
           <div className="flex items-center justify-between">
             <button

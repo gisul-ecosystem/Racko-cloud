@@ -89,7 +89,7 @@ export const templateIdParamSchema = z.object({
 export const vmListQuerySchema = z.object({
   query: z.object({
     status: z
-      .enum(['creating', 'running', 'stopped', 'paused', 'suspended', 'error', 'deleting'])
+      .enum(['creating', 'running', 'stopped', 'paused', 'suspended', 'error', 'deleting', 'delete_failed'])
       .optional(),
     cloneType: z.enum(['dedicated_storage', 'dynamic_storage']).optional(),
     node: z

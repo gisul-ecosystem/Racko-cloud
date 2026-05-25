@@ -23,8 +23,12 @@ export interface IVM extends Document {
   allocatedDiskGb: number;
 
   // Current status
-  status: 'creating' | 'running' | 'stopped' | 'paused' | 'suspended' | 'error' | 'deleting' | 'deleted';
+  status: 'creating' | 'running' | 'stopped' | 'paused' | 'suspended' | 'error' | 'deleting' | 'deleted' | 'delete_failed';
   proxmoxStatus: string;
+
+  // Deletion tracking
+  lastError?: string;
+  deleteAttempts?: number;
 
   // Network
   ipAddress?: string;
@@ -97,7 +101,7 @@ const vmSchema = new Schema<IVM>(
     },
     status: {
       type: String,
-      enum: ['creating', 'running', 'stopped', 'paused', 'suspended', 'error', 'deleting', 'deleted'],
+      enum: ['creating', 'running', 'stopped', 'paused', 'suspended', 'error', 'deleting', 'deleted', 'delete_failed'],
       default: 'creating',
       required: true,
       index: true,
@@ -105,6 +109,14 @@ const vmSchema = new Schema<IVM>(
     proxmoxStatus: {
       type: String,
       default: 'unknown',
+    },
+    lastError: {
+      type: String,
+      trim: true,
+    },
+    deleteAttempts: {
+      type: Number,
+      default: 0,
     },
     ipAddress: {
       type: String,
@@ -139,9 +151,15 @@ const vmSchema = new Schema<IVM>(
   }
 );
 
-// Compound unique index: vmid + node (same VMID can exist on different nodes in theory,
-// but Proxmox cluster VMIDs are globally unique — this enforces that at DB level too)
-vmSchema.index({ vmid: 1, node: 1 }, { unique: true });
+// Partial unique index: vmid + node, only for non-deleted VMs.
+// Deleted and delete_failed VMs are excluded so their vmid can be reused.
+vmSchema.index(
+  { vmid: 1, node: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $nin: ['deleted', 'delete_failed'] } },
+  }
+);
 
 // Default query filter: never return deleted VMs in normal queries
 vmSchema.pre(/^find/, function (this: mongoose.Query<unknown, IVM>, next) {

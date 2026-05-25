@@ -21,7 +21,7 @@ function createProxmoxClient(): AxiosInstance {
 
   const instance = axios.create({
     baseURL: `${config.PROXMOX_HOST}/api2/json`,
-    timeout: 10_000,
+    timeout: config.PROXMOX_REQUEST_TIMEOUT_MS,
     headers: {
       // Format: PVEAPIToken=<TOKEN_ID>=<TOKEN_SECRET>
       Authorization: `PVEAPIToken=${config.PROXMOX_TOKEN_ID}=${config.PROXMOX_TOKEN_SECRET}`,
@@ -40,6 +40,8 @@ function createProxmoxClient(): AxiosInstance {
         endpoint: error.config?.url,
         method: error.config?.method?.toUpperCase(),
         proxmoxMessage: error.response?.data?.message ?? error.message,
+        proxmoxErrors: error.response?.data?.errors ?? null,
+        proxmoxData: error.response?.data ?? null,
         // Deliberately omit: baseURL (contains internal IP), headers (contains token)
       });
 

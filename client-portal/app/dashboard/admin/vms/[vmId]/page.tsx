@@ -67,12 +67,13 @@ function VMEventsSection({ vmId, initialEvents }: { vmId: string; initialEvents:
       {eventsError && (
         <p className="text-xs text-red-500 mb-3">{eventsError}</p>
       )}
-        {allLoaded && events.length > 10 && (
+      {allLoaded && events.length > 10 && (
+        <div className="mb-3">
           <button onClick={() => setExpanded((v) => !v)} className="text-xs text-gray-500 hover:text-gray-700 font-medium">
             {expanded ? 'Show less' : `Show all ${events.length}`}
           </button>
-        )}
-      </div>
+        </div>
+      )}
       <div className="space-y-2">
         {displayed.map((event, i) => (
           <div key={i} className="flex items-start gap-3 py-2 border-b border-gray-50 last:border-0">

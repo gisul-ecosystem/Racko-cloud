@@ -57,12 +57,7 @@ export class VMController {
       });
 
       const result = await vmService.createVM(dto, adminId, req);
-
-      if ('jobId' in result) {
-        success(res, 'Bulk VM creation job started.', { jobId: result.jobId }, 202);
-      } else {
-        success(res, 'VM created successfully.', { vm: result.vm }, 201);
-      }
+      success(res, 'VM creation job started.', { jobId: result.jobId }, 202);
     } catch (error) {
       next(error);
     }

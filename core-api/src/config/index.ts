@@ -46,6 +46,7 @@ const envSchema = z.object({
   PROXMOX_TOKEN_ID: z.string().min(1, 'PROXMOX_TOKEN_ID is required'),
   PROXMOX_TOKEN_SECRET: z.string().min(1, 'PROXMOX_TOKEN_SECRET is required'),
   PROXMOX_VERIFY_SSL: z.string().transform((val) => val === 'true').default('false'),
+  PROXMOX_REQUEST_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('30000'),
 
   // VM Configuration
   VM_BULK_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('10'),
@@ -54,6 +55,10 @@ const envSchema = z.object({
   VM_MAX_BULK_COUNT: z.string().regex(/^\d+$/).transform(Number).default('100'),
   VM_CPU_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('4'),
   VM_RAM_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('1.5'),
+  VM_DELETE_MAX_RETRIES: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  VM_DELETE_RETRY_BASE_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
+  VM_POLL_NETWORK_RETRY_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  VM_POLL_NETWORK_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('5000'),
 
   // Resource Alert Thresholds
   ALERT_CPU_WARNING: z.string().regex(/^\d+$/).transform(Number).default('70'),

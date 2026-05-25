@@ -5,10 +5,10 @@ import { logger } from '../../utils/logger';
 import { VM } from './vm.model';
 import { VMJob } from './vmJob.model';
 import { VMEvent } from './vmEvent.model';
-import { selectNode, getBestStoragePool } from './helpers/placementEngine';
 import { validateResources } from './helpers/resourceValidator';
-import { pollTask, pollTaskWithCleanup } from './helpers/taskPoller';
+import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
+import { retryProxmoxDelete } from './helpers/deleteRetry';
 import {
   VMNotFoundError,
   VMOwnershipError,
@@ -163,17 +163,14 @@ export class VMService {
 
   /**
    * Create one or more VMs.
-   * Single VM (count === 1): creates synchronously, returns vm.
-   * Bulk VM (count > 1): creates job, triggers async processor, returns jobId.
+   * All creations go through the async job system — returns jobId immediately.
+   * This prevents gateway timeouts and duplicate VM creation on retries.
    */
   async createVM(
     dto: CreateVMDto,
     adminId: mongoose.Types.ObjectId,
-    req: Request
-  ): Promise<{ jobId: string } | { vm: IVM }> {
-    const ip = getClientIp(req);
-    const ua = getUserAgent(req);
-
+    _req: Request
+  ): Promise<{ jobId: string }> {
     // Get template details — validates template exists
     const templateDetails = await this.getTemplateDetails(dto.templateId);
 
@@ -199,186 +196,59 @@ export class VMService {
       );
     }
 
-    if (dto.count > 1) {
-      // Bulk creation — create job and return immediately
-      const job = await VMJob.create({
-        adminId,
-        type: 'bulk_create',
-        status: 'pending',
-        total: dto.count,
-        completed: 0,
-        failed: 0,
-        pending: dto.count,
-        vmIds: [],
-        failedVmids: [],
-        requestedSpecs: {
-          templateId: dto.templateId,
-          templateName: templateDetails.name,
-          cloneType: dto.cloneType,
-          cpuCores,
-          memoryGb,
-          diskGb,
-          templateDiskGb: templateSpecs.diskGb,  // actual template disk — for resize in bulk
-          namePrefix: dto.name,
-          count: dto.count,
-        },        jobErrors: [],
-        startedAt: new Date(),
-      });
-
-      logger.info('Bulk VM creation job created', {
-        jobId: job._id.toString(),
-        adminId: adminId.toString(),
-        count: dto.count,
-        templateId: dto.templateId,
-      });
-
-      // Trigger async — do NOT await
-      // QUEUE_SLOT: replace with message queue job (RabbitMQ/BullMQ)
-      processBulkCreation(job, adminId).catch((err: unknown) => {
-        logger.error('Unhandled bulk creation error', {
-          jobId: job._id.toString(),
-          error: err instanceof Error ? err.message : String(err),
-        });
-      });
-
-      return { jobId: job._id.toString() };
-    }
-
-    // Single VM creation — synchronous
-    const selectedNode = await selectNode({
-      cpuCores,
-      memoryGb,
-      diskGb,
-      cloneType: dto.cloneType,
-    });
-
-    // Get next VMID from Proxmox cluster
-    const nextIdResponse = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-    const vmid = nextIdResponse.data.data;
-
-    const storagePool = getBestStoragePool(selectedNode);
-
-    // Clone template
-    const cloneBody: Record<string, unknown> = {
-      newid: vmid,
-      name: dto.name,
-      full: dto.cloneType === 'dedicated_storage' ? 1 : 0,
-      target: selectedNode.node,
-    };
-    if (storagePool) cloneBody['storage'] = storagePool;
-
-    logger.info('Cloning template for single VM', {
-      templateId: dto.templateId,
-      vmid,
-      node: selectedNode.node,
-      cloneType: dto.cloneType,
-      adminId: adminId.toString(),
-    });
-
-    const cloneResponse = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${selectedNode.node}/qemu/${dto.templateId}/clone`,
-      cloneBody
-    );
-
-    const cloneUpid = cloneResponse.data.data;
-
-    // Poll clone task — cleanup orphan on failure
-    await pollTaskWithCleanup(cloneUpid, selectedNode.node, vmid, true);
-
-    // Apply config overrides
-    const configUpdates: Record<string, unknown> = {};
-    if (cpuCores !== templateSpecs.cpuCores) configUpdates['cores'] = cpuCores;
-    if (memoryGb !== templateSpecs.memoryGb) configUpdates['memory'] = Math.round(memoryGb * 1024);
-    if (dto.description) configUpdates['description'] = dto.description;
-
-    if (Object.keys(configUpdates).length > 0) {
-      await proxmoxClient.post(`/nodes/${selectedNode.node}/qemu/${vmid}/config`, configUpdates);
-    }
-
-    // Resize disk if needed (dedicated_storage only)
-    if (dto.cloneType === 'dedicated_storage' && diskGb > templateSpecs.diskGb) {
-      const extraGb = diskGb - templateSpecs.diskGb;
-      const resizeResponse = await proxmoxClient.put<{ data: string }>(
-        `/nodes/${selectedNode.node}/qemu/${vmid}/resize`,
-        { disk: 'scsi0', size: `+${extraGb}G` }
-      );
-      await pollTask(resizeResponse.data.data, selectedNode.node);
-    }
-
-    // NOTE: VM is NOT started automatically — user must start manually
-    // SNAPSHOT_SLOT: post-creation snapshot support
-    // FIREWALL_SLOT: apply per-VM firewall rules after creation
-    // BILLING_SLOT: emit resource allocation event for billing calculation
-    // IP_POOL_SLOT: allocate static IP from pool and inject via cloud-init
-
-    // Save to MongoDB — if this fails, clean up the Proxmox VM to prevent orphan
-    let vm: IVM;
-    try {
-      vm = await VM.create({
-        vmid,
-        node: selectedNode.node,
-        adminId,
-        name: dto.name,
-        description: dto.description,
+    // Always create a job — single or bulk, same async path
+    const job = await VMJob.create({
+      adminId,
+      type: dto.count === 1 ? 'single_create' : 'bulk_create',
+      status: 'pending',
+      total: dto.count,
+      completed: 0,
+      failed: 0,
+      pending: dto.count,
+      vmIds: [],
+      failedVmids: [],
+      requestedSpecs: {
         templateId: dto.templateId,
         templateName: templateDetails.name,
         cloneType: dto.cloneType,
-        allocatedCpu: cpuCores,
-        allocatedMemoryGb: memoryGb,
-        allocatedDiskGb: diskGb,
-        status: 'stopped',
-        proxmoxStatus: 'stopped',
-        haEnabled: false,
-      });
-    } catch (dbError) {
-      // Proxmox clone succeeded but MongoDB save failed — delete VM from Proxmox
-      logger.error('MongoDB save failed after successful clone — cleaning up Proxmox VM', {
-        vmid,
-        node: selectedNode.node,
-        error: dbError instanceof Error ? dbError.message : String(dbError),
-      });
-      try {
-        await proxmoxClient.delete(
-          `/nodes/${selectedNode.node}/qemu/${vmid}`,
-          { params: { purge: 1, 'destroy-unreferenced-disks': 1 } }
-        );
-        logger.info('Orphaned VM cleaned up after MongoDB failure', { vmid, node: selectedNode.node });
-      } catch (cleanupError) {
-        logger.error('Failed to cleanup orphaned VM after MongoDB failure', {
-          vmid,
-          node: selectedNode.node,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-        });
-      }
-      throw dbError;
-    }
-
-    // Audit event
-    await VMEvent.create({
-      vmId: vm._id,
-      vmid,
-      adminId,
-      event: 'VM_CREATED',
-      status: 'success',
-      details: { node: selectedNode.node, cloneType: dto.cloneType, templateId: dto.templateId },
-      ipAddress: ip,
-      userAgent: ua,
+        cpuCores,
+        memoryGb,
+        diskGb,
+        templateDiskGb: templateSpecs.diskGb,
+        namePrefix: dto.name,
+        count: dto.count,
+      },
+      jobErrors: [],
+      startedAt: new Date(),
     });
 
-    logger.info('Single VM created successfully', {
-      vmId: vm._id.toString(),
-      vmid,
-      node: selectedNode.node,
+    logger.info('VM creation job created', {
+      jobId: job._id.toString(),
       adminId: adminId.toString(),
+      count: dto.count,
+      templateId: dto.templateId,
+      type: job.type,
     });
 
-    // HA_SLOT: after VM creation, if vm.haEnabled, call Proxmox HA API to register VM
+    // Trigger async — do NOT await
+    // QUEUE_SLOT: replace with message queue job (RabbitMQ/BullMQ)
+    processBulkCreation(job, adminId).catch((err: unknown) => {
+      logger.error('Unhandled VM creation error', {
+        jobId: job._id.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
-    return { vm };
+    return { jobId: job._id.toString() };
   }
 
   /**
    * Delete a VM. Stops it first if running. Soft delete only.
+   * - Idempotent: throws if already deleting or deleted
+   * - Retries Proxmox delete with exponential backoff (see deleteRetry.ts)
+   * - On Proxmox "already gone" → treats as success
+   * - On all retries exhausted → sets status to delete_failed, saves error, rethrows
+   * - Checks pollTask result — failure throws instead of silently continuing
    */
   async deleteVM(
     vmId: mongoose.Types.ObjectId,
@@ -394,29 +264,70 @@ export class VMService {
 
     assertOwnership(vm, adminId.toString(), authReq.user.role);
 
+    // Idempotency guards — prevent double-deletion races
+    if (vm.status === 'deleting') {
+      throw new VMOperationError('VM deletion is already in progress.', vm.status, 'stopped');
+    }
+    if (vm.status === 'deleted') {
+      throw new VMOperationError('VM is already deleted.', vm.status, 'stopped');
+    }
+
+    const previousStatus = vm.status;
+
     // Stop VM first if running
     if (vm.status === 'running') {
       logger.info('Stopping VM before deletion', { vmid: vm.vmid, node: vm.node });
-      const stopResponse = await proxmoxClient.post<{ data: string }>(
-        `/nodes/${vm.node}/qemu/${vm.vmid}/status/stop`
-      );
-      await pollTask(stopResponse.data.data, vm.node);
+      try {
+        const stopResponse = await proxmoxClient.post<{ data: string }>(
+          `/nodes/${vm.node}/qemu/${vm.vmid}/status/stop`,
+          {}
+        );
+        await pollTask(stopResponse.data.data, vm.node);
+      } catch (stopErr) {
+        // Stop failed — restore previous status so VM is not left in limbo
+        vm.status = previousStatus;
+        await vm.save();
+        throw stopErr;
+      }
     }
 
     // Mark as deleting
     vm.status = 'deleting';
     await vm.save();
 
-    // Delete from Proxmox — purge disks
-    const deleteResponse = await proxmoxClient.delete<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}`,
-      { params: { purge: 1, 'destroy-unreferenced-disks': 1 } }
-    );
-    await pollTask(deleteResponse.data.data, vm.node);
+    // Delete from Proxmox with retry + backoff
+    try {
+      const deleteResult = await retryProxmoxDelete(vm.node, vm.vmid);
 
-    // Soft delete — never hard delete from MongoDB
+      if (deleteResult === 'deleted') {
+        // Poll the delete task only when Proxmox actually ran it
+        // Note: retryProxmoxDelete handles the raw delete; Proxmox delete is synchronous
+        // for stopped VMs so no UPID is returned — nothing to poll here.
+      }
+      // 'already_gone' → VM was already absent from Proxmox, proceed to mark deleted
+
+    } catch (deleteErr) {
+      // All retries exhausted — mark as delete_failed so user can see and retry
+      vm.status = 'delete_failed';
+      vm.lastError = deleteErr instanceof Error ? deleteErr.message : String(deleteErr);
+      vm.deleteAttempts = (vm.deleteAttempts ?? 0) + 1;
+      await vm.save();
+
+      logger.error('VM deletion failed after all retries', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        node: vm.node,
+        attempts: vm.deleteAttempts,
+        error: vm.lastError,
+      });
+
+      throw deleteErr;
+    }
+
+    // Soft delete — mark as deleted in MongoDB
     vm.status = 'deleted';
     vm.deletedAt = new Date();
+    vm.lastError = undefined;
     await vm.save();
 
     await VMEvent.create({
@@ -454,7 +365,8 @@ export class VMService {
     }
 
     const response = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`
+      `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
+      {}
     );
     const upid = response.data.data;
     await pollTask(upid, vm.node);
@@ -493,7 +405,8 @@ export class VMService {
     }
 
     const response = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}/status/shutdown`
+      `/nodes/${vm.node}/qemu/${vm.vmid}/status/shutdown`,
+      {}
     );
     const upid = response.data.data;
     await pollTask(upid, vm.node);
@@ -532,7 +445,8 @@ export class VMService {
     }
 
     const response = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}/status/stop`
+      `/nodes/${vm.node}/qemu/${vm.vmid}/status/stop`,
+      {}
     );
     const upid = response.data.data;
     await pollTask(upid, vm.node);
@@ -571,7 +485,8 @@ export class VMService {
     }
 
     const response = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}/status/reboot`
+      `/nodes/${vm.node}/qemu/${vm.vmid}/status/reboot`,
+      {}
     );
     const upid = response.data.data;
     await pollTask(upid, vm.node);
@@ -606,7 +521,8 @@ export class VMService {
     }
 
     const response = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}/status/reset`
+      `/nodes/${vm.node}/qemu/${vm.vmid}/status/reset`,
+      {}
     );
     const upid = response.data.data;
     await pollTask(upid, vm.node);

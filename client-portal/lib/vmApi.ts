@@ -188,13 +188,12 @@ export async function fetchTemplateDetails(templateId: number): Promise<Template
 
 export async function createVM(
   dto: CreateVMDto
-): Promise<{ jobId: string } | { vm: IVM }> {
-  const res = await apiRequest<ApiResponse<{ jobId?: string; vm?: IVM }>>('/api/v1/vms', {
+): Promise<{ jobId: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string }>>('/api/v1/vms', {
     method: 'POST',
     body: JSON.stringify(dto),
   });
-  if (res.data.jobId) return { jobId: res.data.jobId };
-  return { vm: res.data.vm! };
+  return { jobId: res.data.jobId! };
 }
 
 export async function fetchMyVMs(filters?: {

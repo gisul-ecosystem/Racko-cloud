@@ -253,6 +253,7 @@ export interface ProxmoxNodeRaw {
 
 export interface BulkVMSpec {
   vmName: string;
+  templateName: string;
   index: number;
   node: string;
   templateId: number;

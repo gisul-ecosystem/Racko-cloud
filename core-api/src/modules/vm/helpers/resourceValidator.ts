@@ -1,11 +1,7 @@
-import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { config } from '../../../config';
 import { ValidationError } from '../../../utils/errors';
-import type { CreateVMDto, ResourceValidationResult, TemplateSpecs, ProxmoxNodeRaw } from '../vm.types';
-
-function bytesToGb(bytes: number): number {
-  return Math.round((bytes / 1024 / 1024 / 1024) * 100) / 100;
-}
+import { fetchNodeCapacities, effectiveFreeCpu, effectiveFreeRamGb } from './nodeCapacity';
+import type { CreateVMDto, ResourceValidationResult, TemplateSpecs } from '../vm.types';
 
 /**
  * Validate that requested resources are sufficient and within platform limits.
@@ -28,19 +24,16 @@ export async function validateResources(
 ): Promise<ResourceValidationResult> {
   const count = dto.count;
 
-  // Validate count against platform max
   if (count > config.VM_MAX_BULK_COUNT) {
     throw new ValidationError(
       `Cannot create more than ${config.VM_MAX_BULK_COUNT} VMs at once.`
     );
   }
 
-  // Resolve final specs (override or template defaults)
   const cpuCores = dto.cpuCores ?? templateSpecs.cpuCores;
   const memoryGb = dto.memoryGb ?? templateSpecs.memoryGb;
   const diskGb = dto.diskGb ?? templateSpecs.diskGb;
 
-  // Validate overrides are not below template values
   if (dto.cpuCores !== undefined && dto.cpuCores < templateSpecs.cpuCores) {
     throw new ValidationError(
       `cpuCores (${dto.cpuCores}) cannot be less than template value (${templateSpecs.cpuCores}).`
@@ -57,9 +50,7 @@ export async function validateResources(
     );
   }
 
-  // Fetch all nodes dynamically — never hardcode
-  const nodesResponse = await proxmoxClient.get<{ data: ProxmoxNodeRaw[] }>('/nodes');
-  const onlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+  const onlineNodes = await fetchNodeCapacities();
 
   if (onlineNodes.length === 0) {
     return {
@@ -73,14 +64,16 @@ export async function validateResources(
 
   if (dto.cloneType === 'dynamic_storage') {
     // Linked clone: no storage reservation — only need at least 1 online node
-    // Distribute evenly across online nodes for the response
     const perNode = Math.ceil(count / onlineNodes.length);
-    const nodeAllocations = onlineNodes.map((node, idx) => ({
-      node: node.node,
-      vmCount: idx === onlineNodes.length - 1
-        ? count - perNode * (onlineNodes.length - 1)
-        : perNode,
-    })).filter((a) => a.vmCount > 0);
+    const nodeAllocations = onlineNodes
+      .map((node, idx) => ({
+        node: node.node,
+        vmCount:
+          idx === onlineNodes.length - 1
+            ? count - perNode * (onlineNodes.length - 1)
+            : perNode,
+      }))
+      .filter((a) => a.vmCount > 0);
 
     return {
       canCreate: true,
@@ -95,7 +88,6 @@ export async function validateResources(
   const totalRequiredRamGb = memoryGb * count;
   const totalRequiredCpu = cpuCores * count;
 
-  // Aggregate available resources across all online nodes
   let totalFreeStorageGb = 0;
   let totalFreeRamGb = 0;
   let totalFreeCpu = 0;
@@ -103,39 +95,19 @@ export async function validateResources(
   const nodeCapacities: Array<{ node: string; maxVms: number }> = [];
 
   for (const node of onlineNodes) {
-    // Fetch storage for this node
-    try {
-      const storageResponse = await proxmoxClient.get<{
-        data: Array<{ storage: string; avail: number; total: number; active: number; enabled: number; content: string }>;
-      }>(`/nodes/${node.node}/storage`);
+    const nodeFreeStorageGb = node.storage.freeGb;
+    const nodeFreeRamGb = effectiveFreeRamGb(node);
+    const nodeFreeCpu = effectiveFreeCpu(node);
 
-      const activeStorage = storageResponse.data.data.filter(
-        (s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images')
-      );
-      const nodeFreeStorageGb = activeStorage.reduce((sum, s) => sum + bytesToGb(s.avail), 0);
-      totalFreeStorageGb += nodeFreeStorageGb;
+    totalFreeStorageGb += nodeFreeStorageGb;
+    totalFreeRamGb += nodeFreeRamGb;
+    totalFreeCpu += nodeFreeCpu;
 
-      const effectiveRamGb = bytesToGb(node.maxmem) * config.VM_RAM_OVERCOMMIT_RATIO;
-      const usedRamGb = bytesToGb(node.mem);
-      const nodeFreeRamGb = Math.max(0, effectiveRamGb - usedRamGb);
-      totalFreeRamGb += nodeFreeRamGb;
+    const storageCapacity = diskGb > 0 ? Math.floor(nodeFreeStorageGb / diskGb) : 0;
+    const ramCapacity = memoryGb > 0 ? Math.floor(nodeFreeRamGb / memoryGb) : 0;
+    const cpuCapacity = cpuCores > 0 ? Math.floor(nodeFreeCpu / cpuCores) : 0;
 
-      const effectiveCpu = node.maxcpu * config.VM_CPU_OVERCOMMIT_RATIO;
-      const usedCpu = node.cpu * node.maxcpu;
-      const nodeFreeCpu = Math.max(0, effectiveCpu - usedCpu);
-      totalFreeCpu += nodeFreeCpu;
-
-      // Per-node capacity
-      const storageCapacity = diskGb > 0 ? Math.floor(nodeFreeStorageGb / diskGb) : 0;
-      const ramCapacity = memoryGb > 0 ? Math.floor(nodeFreeRamGb / memoryGb) : 0;
-      const cpuCapacity = cpuCores > 0 ? Math.floor(nodeFreeCpu / cpuCores) : 0;
-      const nodeMax = Math.min(storageCapacity, ramCapacity, cpuCapacity);
-
-      nodeCapacities.push({ node: node.node, maxVms: nodeMax });
-    } catch {
-      // Node storage fetch failed — skip this node for capacity calculation
-      nodeCapacities.push({ node: node.node, maxVms: 0 });
-    }
+    nodeCapacities.push({ node: node.node, maxVms: Math.min(storageCapacity, ramCapacity, cpuCapacity) });
   }
 
   const maxPossibleCount = nodeCapacities.reduce((sum, n) => sum + n.maxVms, 0);
@@ -145,7 +117,6 @@ export async function validateResources(
     totalFreeRamGb < totalRequiredRamGb ||
     totalFreeCpu < totalRequiredCpu
   ) {
-    let reason = 'Insufficient resources: ';
     const reasons: string[] = [];
     if (totalFreeStorageGb < totalRequiredStorageGb) {
       reasons.push(`storage (need ${totalRequiredStorageGb.toFixed(1)}GB, have ${totalFreeStorageGb.toFixed(1)}GB)`);
@@ -156,13 +127,12 @@ export async function validateResources(
     if (totalFreeCpu < totalRequiredCpu) {
       reasons.push(`CPU (need ${totalRequiredCpu} cores, have ${totalFreeCpu.toFixed(1)} effective cores)`);
     }
-    reason += reasons.join('; ');
 
     return {
       canCreate: false,
       requestedCount: count,
       maxPossibleCount,
-      reason,
+      reason: `Insufficient resources: ${reasons.join('; ')}`,
       nodeAllocations: [],
     };
   }
