@@ -25,7 +25,9 @@ export interface IVMJob extends Document {
     cpuCores: number;
     memoryGb: number;
     diskGb: number;
-    templateDiskGb: number;  // actual template disk size — used for resize calculation
+    templateDiskGb: number;    // actual template disk size — used for resize calculation
+    templateCpuCores: number;  // actual template CPU — used for config override check
+    templateMemoryGb: number;  // actual template RAM — used for config override check
     namePrefix: string;
     count: number;
   };
@@ -102,6 +104,8 @@ const vmJobSchema = new Schema<IVMJob>(
       memoryGb: { type: Number, required: true },
       diskGb: { type: Number, required: true },
       templateDiskGb: { type: Number, required: true },
+      templateCpuCores: { type: Number, required: true },
+      templateMemoryGb: { type: Number, required: true },
       namePrefix: { type: String, required: true },
       count: { type: Number, required: true },
     },

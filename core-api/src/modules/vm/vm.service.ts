@@ -215,6 +215,8 @@ export class VMService {
         memoryGb,
         diskGb,
         templateDiskGb: templateSpecs.diskGb,
+        templateCpuCores: templateSpecs.cpuCores,  // actual template value from Proxmox
+        templateMemoryGb: templateSpecs.memoryGb,  // actual template value from Proxmox
         namePrefix: dto.name,
         count: dto.count,
       },

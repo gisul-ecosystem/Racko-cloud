@@ -17,9 +17,10 @@ import {
 } from 'lucide-react';
 
 interface NavLink {
+  href: string;
   label: string;
   icon: React.ReactNode;
-  roles: ('admin' | 'super_admin')[];
+  roles: ('admin' | 'super_admin' | 'user')[];
 }
 
 const navLinks: NavLink[] = [
@@ -48,6 +49,12 @@ const navLinks: NavLink[] = [
     roles: ['admin'],
   },
   {
+    href: '/dashboard/admin/users',
+    label: 'Users',
+    icon: <Users className="w-4 h-4" />,
+    roles: ['admin'],
+  },
+  {
     href: '/dashboard/super-admin',
     label: 'Cluster',
     icon: <LayoutDashboard className="w-4 h-4" />,
@@ -64,6 +71,12 @@ const navLinks: NavLink[] = [
     label: 'Alerts',
     icon: <Bell className="w-4 h-4" />,
     roles: ['super_admin'],
+  },
+  {
+    href: '/dashboard/user',
+    label: 'My Dashboard',
+    icon: <LayoutDashboard className="w-4 h-4" />,
+    roles: ['user'],
   },
 ];
 
@@ -84,6 +97,12 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     if (pathname.startsWith('/dashboard/admin') && user.role === 'super_admin') {
       router.replace('/dashboard/super-admin');
     }
+    if (pathname.startsWith('/dashboard/admin') && user.role === 'user') {
+      router.replace('/dashboard/user');
+    }
+    if (pathname.startsWith('/dashboard/user') && user.role !== 'user') {
+      router.replace(user.role === 'super_admin' ? '/dashboard/super-admin' : '/dashboard/admin');
+    }
   }, [isLoading, isAuthenticated, user, pathname, router]);
 
   if (isLoading) {
@@ -96,7 +115,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   if (!isAuthenticated || !user) return null;
 
-  const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'admin' | 'super_admin'));
+  const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'admin' | 'super_admin' | 'user'));
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -106,7 +125,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         <div className="p-6 border-b border-gray-100">
           <span className="text-lg font-bold text-gray-900">Racko</span>
           <p className="text-xs text-gray-400 mt-0.5">
-            {user.role === 'super_admin' ? 'Super Admin Console' : 'Admin Console'}
+            {user.role === 'super_admin' ? 'Super Admin Console' : user.role === 'admin' ? 'Admin Console' : 'User Dashboard'}
           </p>
         </div>
 
@@ -147,9 +166,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
               <span className={`inline-block text-xs px-1.5 py-0.5 rounded font-medium mt-0.5 ${
                 user.role === 'super_admin'
                   ? 'bg-purple-100 text-purple-700'
-                  : 'bg-blue-100 text-blue-700'
+                  : user.role === 'admin'
+                  ? 'bg-blue-100 text-blue-700'
+                  : 'bg-green-100 text-green-700'
               }`}>
-                {user.role === 'super_admin' ? 'Super Admin' : 'Admin'}
+                {user.role === 'super_admin' ? 'Super Admin' : user.role === 'admin' ? 'Admin' : 'User'}
               </span>
             </div>
           </div>

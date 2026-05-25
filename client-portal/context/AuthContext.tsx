@@ -17,7 +17,7 @@ import {
   SESSION_EXPIRED_EVENT,
 } from '../lib/apiClient';
 
-export type UserRole = 'super_admin' | 'admin';
+export type UserRole = 'super_admin' | 'admin' | 'user';
 
 export interface AuthUser {
   id: string;
@@ -196,8 +196,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     // Redirect based on role
     if (user.role === 'super_admin') {
       router.push('/dashboard/super-admin');
-    } else {
+    } else if (user.role === 'admin') {
       router.push('/dashboard/admin');
+    } else {
+      router.push('/dashboard/user');
     }
   }, [router, scheduleTokenRefresh]);
 

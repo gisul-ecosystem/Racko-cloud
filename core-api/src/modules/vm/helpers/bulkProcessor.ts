@@ -88,8 +88,8 @@ export async function processBulkCreation(
           memoryGb: specs.memoryGb,
           diskGb: specs.diskGb,
           templateDiskGb: specs.templateDiskGb,  // actual template disk size from Proxmox
-          templateCpuCores: specs.cpuCores,
-          templateMemoryGb: specs.memoryGb,
+          templateCpuCores: specs.templateCpuCores,  // actual template CPU from Proxmox
+          templateMemoryGb: specs.templateMemoryGb,  // actual template RAM from Proxmox
           adminId,
           jobId,
           description: undefined,

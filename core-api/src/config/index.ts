@@ -73,6 +73,9 @@ const envSchema = z.object({
 
   // Monitoring
   NODE_MONITOR_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
+
+  // Rate limiting
+  RATE_LIMIT_GLOBAL_MAX: z.string().regex(/^\d+$/).transform(Number).default('2000'),
 });
 
 const parsed = envSchema.safeParse(process.env);

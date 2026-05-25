@@ -43,6 +43,14 @@ export class ConflictError extends AppError {
   }
 }
 
+export class DuplicateEmailError extends AppError {
+  public readonly email: string;
+  constructor(email: string) {
+    super(`Email already in use: ${email}`, 409, 'DUPLICATE_EMAIL');
+    this.email = email;
+  }
+}
+
 export class TooManyRequestsError extends AppError {
   constructor(message = 'Too many requests') {
     super(message, 429, 'TOO_MANY_REQUESTS');
