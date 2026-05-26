@@ -87,3 +87,4 @@ jobs:
             docker compose up -d --no-deps nginx
             docker compose ps
             docker image prune -f"
+            
