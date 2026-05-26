@@ -1,0 +1,178 @@
+name: Build and Deploy
+
+on:
+  push:
+    branches:
+      - dev
+  pull_request:
+    branches:
+      - main
+
+concurrency:
+  group: racko-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-push:
+    name: Build ${{ matrix.service }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - service: client-portal
+            context: client-portal
+            image_suffix: client-portal
+            needs_api_url: true
+          - service: core-api
+            context: core-api
+            image_suffix: core-api
+            needs_api_url: false
+          - service: cloud-gateway
+            context: cloud-gateway
+            image_suffix: cloud-gateway
+            needs_api_url: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Copy Dockerfile into build context
+        run: cp "Dockerfile.${{ matrix.image_suffix }}" "${{ matrix.context }}/Dockerfile"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./${{ matrix.context }}
+          file: ./${{ matrix.context }}/Dockerfile
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+          tags: |
+            ${{ secrets.DOCKERHUB_USERNAME }}/racko-${{ matrix.image_suffix }}:latest
+            ${{ secrets.DOCKERHUB_USERNAME }}/racko-${{ matrix.image_suffix }}:${{ github.sha }}
+          build-args: |
+            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+  deploy:
+    name: Deploy to production
+    runs-on: ubuntu-latest
+    needs: build-push
+    if: github.event_name == 'push' && github.ref == 'refs/heads/dev'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.VM_SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.VM_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Copy compose and nginx config to server
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh "${VM_USER}@${VM_HOST}" "mkdir -p /opt/racko-cloud/nginx/conf.d /opt/racko-cloud/certbot/www"
+          scp docker-compose.yml "${VM_USER}@${VM_HOST}:/opt/racko-cloud/docker-compose.yml"
+          scp nginx/conf.d/racko.conf "${VM_USER}@${VM_HOST}:/opt/racko-cloud/nginx/conf.d/racko.conf"
+
+      - name: Rolling restart on server
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+        run: |
+          ssh "${VM_USER}@${VM_HOST}" bash -s <<'REMOTE'
+          set -euo pipefail
+          cd /opt/racko-cloud
+
+          docker compose pull
+
+          docker compose up -d --no-deps core-api
+          sleep 10
+
+          docker compose up -d --no-deps cloud-gateway
+          sleep 10
+
+          docker compose up -d --no-deps client-portal
+          sleep 10
+
+          docker compose up -d --no-deps nginx
+
+          docker compose ps
+
+          python3 <<'PY'
+          import json
+          import subprocess
+          import sys
+
+          raw = subprocess.check_output(
+              ["docker", "compose", "ps", "--format", "json"],
+              text=True,
+          )
+          lines = [line for line in raw.splitlines() if line.strip()]
+          if not lines:
+              print("No containers reported by docker compose ps")
+              sys.exit(1)
+
+          failed = []
+          for line in lines:
+              row = json.loads(line)
+              name = row.get("Name") or row.get("Service") or "unknown"
+              state = (row.get("State") or "").lower()
+              if state != "running":
+                  failed.append(f"{name}={state!r}")
+
+          if failed:
+              print("Containers not running:", ", ".join(failed))
+              sys.exit(1)
+
+          print("All containers are running.")
+          PY
+
+          docker image prune -f
+          REMOTE
+
+  notify-failure:
+    name: Notify on failure
+    runs-on: ubuntu-latest
+    needs:
+      - build-push
+      - deploy
+    if: always() && (needs.build-push.result == 'failure' || needs.deploy.result == 'failure')
+
+    steps:
+      - name: Post failure to Slack
+        uses: slackapi/slack-github-action@v2.0.0
+        with:
+          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
+          webhook-type: incoming-webhook
+          payload: |
+            {
+              "text": "Racko-cloud workflow failed",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*Racko-cloud CI/CD failed*\n• Repo: ${{ github.repository }}\n• Ref: ${{ github.ref_name }}\n• Run: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"
+                  }
+                }
+              ]
+            }
