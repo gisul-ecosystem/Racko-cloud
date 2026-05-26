@@ -6,7 +6,7 @@ on:
       - dev
   pull_request:
     branches:
-      - main
+      - dev
 
 concurrency:
   group: racko-${{ github.workflow }}-${{ github.ref }}
@@ -73,10 +73,10 @@ jobs:
 
       - name: Deploy on server
         run: |
-          ssh -i ~/.ssh/deploy_key -T ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} << 'REMOTE'
-            set -e
+          ssh -i ~/.ssh/deploy_key -T ${{ secrets.VM_USER }}@${{ secrets.VM_HOST }} \
+            "set -e
             cd /opt/racko-cloud
-            docker login -u $DOCKER_USER -p $DOCKER_PASS
+            docker login -u '${{ secrets.DOCKERHUB_USERNAME }}' -p '${{ secrets.DOCKERHUB_TOKEN }}'
             docker compose pull
             docker compose up -d --no-deps core-api
             sleep 10
@@ -86,8 +86,4 @@ jobs:
             sleep 10
             docker compose up -d --no-deps nginx
             docker compose ps
-            docker image prune -f
-          REMOTE
-        env:
-          DOCKER_USER: ${{ secrets.DOCKERHUB_USERNAME }}
-          DOCKER_PASS: ${{ secrets.DOCKERHUB_TOKEN }}
+            docker image prune -f"
