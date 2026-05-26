@@ -60,7 +60,7 @@ jobs:
             ${{ secrets.DOCKERHUB_USERNAME }}/racko-${{ matrix.image_suffix }}:latest
             ${{ secrets.DOCKERHUB_USERNAME }}/racko-${{ matrix.image_suffix }}:${{ github.sha }}
           build-args: |
-            NEXT_PUBLIC_API_URL=${{ secrets.NEXT_PUBLIC_API_URL }}
+            NEXT_PUBLIC_GATEWAY_URL=${{ secrets.NEXT_PUBLIC_API_URL }}
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,mode=max,scope=${{ matrix.service }}
 
@@ -148,31 +148,3 @@ jobs:
 
           docker image prune -f
           REMOTE
-
-  notify-failure:
-    name: Notify on failure
-    runs-on: ubuntu-latest
-    needs:
-      - build-push
-      - deploy
-    if: always() && (needs.build-push.result == 'failure' || needs.deploy.result == 'failure')
-
-    steps:
-      - name: Post failure to Slack
-        uses: slackapi/slack-github-action@v2.0.0
-        with:
-          webhook: ${{ secrets.SLACK_WEBHOOK_URL }}
-          webhook-type: incoming-webhook
-          payload: |
-            {
-              "text": "Racko-cloud workflow failed",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*Racko-cloud CI/CD failed*\n• Repo: ${{ github.repository }}\n• Ref: ${{ github.ref_name }}\n• Run: <${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}|View workflow>"
-                  }
-                }
-              ]
-            }
