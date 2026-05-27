@@ -4,7 +4,7 @@ import { logger } from '../utils/logger';
 import { config } from '../config';
 
 /**
- * Global error handler.
+ * Global error handler. 
  * Never exposes stack traces in production.
  * Returns consistent error response shape.
  */

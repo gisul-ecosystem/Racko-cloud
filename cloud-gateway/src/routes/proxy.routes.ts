@@ -11,7 +11,7 @@ import type { AuthenticatedRequest } from '../types';
 const router = Router();
 
 // Single proxy instance — full path is preserved because all routes are
-// mounted with their complete path (no prefix stripping by Express)
+// mounted with their complete path (no prefix stripping by Express) 
 const coreApiProxy = createProxyMiddleware({
   target: config.CORE_API_URL,
   changeOrigin: true,

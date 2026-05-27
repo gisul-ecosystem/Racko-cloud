@@ -1,7 +1,7 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
-
+ 
 :root {
   --bg-950: #0A0A0A;
   --bg-900: #0E0E0E;
