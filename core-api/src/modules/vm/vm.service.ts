@@ -376,7 +376,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to start. Check Proxmox task logs.', vm.status, 'stopped');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM start outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'stopped');
+    }
 
     vm.status = 'running';
     vm.proxmoxStatus = 'running';
@@ -416,7 +423,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to stop. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM stop outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
 
     vm.status = 'stopped';
     vm.proxmoxStatus = 'stopped';
@@ -456,7 +470,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to force stop. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM force stop outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
 
     vm.status = 'stopped';
     vm.proxmoxStatus = 'stopped';
@@ -496,7 +517,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to restart. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM restart outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
 
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
@@ -532,7 +560,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to reset. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM reset outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
 
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
