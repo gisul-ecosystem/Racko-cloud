@@ -16,8 +16,20 @@ import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
 import {
   ChevronLeft, Play, Square, Zap, RotateCcw,
   RefreshCw, Trash2, Cpu, MemoryStick, HardDrive,
-  Network, Clock, Server, Activity,
+  Network, Clock, Server, Activity, Monitor,
 } from 'lucide-react';
+
+/**
+ * Best-effort protocol pick for the browser console.
+ * IVM has no os field yet — we sniff name + templateName.
+ * Defaults to 'rdp' when nothing matches, matching the backend default.
+ */
+function pickConsoleProtocol(name?: string, templateName?: string): 'rdp' | 'ssh' {
+  const haystack = `${name ?? ''} ${templateName ?? ''}`.toLowerCase();
+  if (/\b(win|windows|w10|w11|server)\b/.test(haystack)) return 'rdp';
+  if (/\b(ubuntu|debian|centos|rhel|fedora|alma|rocky|linux|alpine)\b/.test(haystack)) return 'ssh';
+  return 'rdp';
+}
 
 type PowerOp = 'start' | 'stop' | 'force-stop' | 'restart' | 'reset' | 'delete';
 
@@ -246,6 +258,31 @@ export default function VMDetailPage() {
             <RefreshCw className={`w-3.5 h-3.5 ${liveLoading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
+          {(() => {
+            const consoleProtocol = pickConsoleProtocol(vm.name, details.vm.name);
+            const consoleHref = `/dashboard/admin/vms/${vmId}/console?protocol=${consoleProtocol}`;
+            return isRunning ? (
+              <Link
+                href={consoleHref}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition"
+                title={`Open browser console (${consoleProtocol.toUpperCase()})`}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                Console
+              </Link>
+            ) : (
+              <button
+                type="button"
+                disabled
+                aria-disabled="true"
+                title="VM must be running"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-400 bg-white border border-gray-200 rounded-lg cursor-not-allowed opacity-60"
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                Console
+              </button>
+            );
+          })()}
           {isStopped && (
             <button onClick={() => setPendingOp('start')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition">
               <Play className="w-3.5 h-3.5" /> Start

@@ -1,6 +1,7 @@
 import type { Request } from 'express';
 import mongoose from 'mongoose';
 import { proxmoxClient } from '../../utils/proxmoxClient';
+import { guacamoleClient, type GuacamoleProtocol } from '../../utils/guacamoleClient';
 import { logger } from '../../utils/logger';
 import { VM } from './vm.model';
 import { VMJob } from './vmJob.model';
@@ -18,6 +19,7 @@ import {
   ForbiddenError,
   NotFoundError,
   ValidationError,
+  InternalError,
 } from '../../utils/errors';
 import { User } from '../../models/user.model';
 import type {
@@ -940,6 +942,107 @@ export class VMService {
    */
   async getMyAssignedVMs(userId: mongoose.Types.ObjectId): Promise<mongoose.FlattenMaps<IVM>[]> {
     return VM.find({ assignedTo: userId }).lean();
+  /**
+   * Open a browser-based console session for a VM via Guacamole.
+   *
+   * Looks up the VM, verifies ownership, resolves connection params, then asks
+   * guacamoleClient to upsert a Guacamole connection and mint a browser URL.
+   *
+   * NOTE (Phase 4 scaffolding):
+   * The VM model does not yet store private IP / RDP / SSH credentials.
+   * For initial testing we fall back to TEST_VM_IP / TEST_VM_USERNAME /
+   * TEST_VM_PASSWORD from env. Once vm.privateIp + encrypted credential
+   * fields land, this resolver should pull from the VM document.
+   */
+  async openConsole(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request,
+    protocolOverride?: GuacamoleProtocol
+  ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
+    const authReq = req as AuthenticatedRequest;
+
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    // Server-side state check — frontend already disables the button when
+    // not running, but the API must enforce this too.
+    if (vm.status !== 'running') {
+      throw new VMOperationError(
+        'VM must be running to open a console session.',
+        vm.status,
+        'running'
+      );
+    }
+
+    // Resolve protocol (query override > default rdp).
+    // TODO: switch default based on vm.osType once that field is populated.
+    const protocol: GuacamoleProtocol = protocolOverride ?? 'rdp';
+
+    // Resolve VM IP. Prefer real ipAddress if Proxmox has reported one,
+    // otherwise fall back to TEST_VM_IP scaffolding.
+    const testIp = process.env['TEST_VM_IP'];
+    const hostname = vm.ipAddress ?? testIp;
+    if (!hostname) {
+      throw new InternalError(
+        'VM has no IP address yet and TEST_VM_IP is not set.'
+      );
+    }
+
+    // Resolve credentials. For now, scaffolding via env.
+    const username = process.env['TEST_VM_USERNAME'];
+    const password = process.env['TEST_VM_PASSWORD'];
+    if (!username || !password) {
+      throw new InternalError(
+        'TEST_VM_USERNAME / TEST_VM_PASSWORD must be set until VM model stores credentials.'
+      );
+    }
+
+    const port = protocol === 'rdp' ? 3389 : protocol === 'ssh' ? 22 : 5900;
+
+    logger.info('VM console session requested', {
+      userId: authReq.user.userId,
+      vmId: vmId.toString(),
+      vmName: vm.name,
+      protocol,
+    });
+
+    const session = await guacamoleClient.openConsole(
+      `vm-${vmId.toString()}`,
+      protocol,
+      {
+        hostname,
+        port,
+        username,
+        password,
+        ignoreCert: true,
+        securityMode: 'any',
+      }
+    );
+
+    // Audit trail — written *after* the session is successfully minted.
+    // Same pattern as VM_STARTED / VM_STOPPED in the power-op handlers.
+    // NEVER persist VM credentials, Guacamole tokens, or the clientUrl here.
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'VM_CONSOLE_OPENED',
+      status: 'success',
+      details: {
+        protocol: session.protocol,
+        connectionId: session.connectionId,
+      },
+      ipAddress: getClientIp(req),
+      userAgent: getUserAgent(req),
+    });
+
+    return {
+      protocol: session.protocol,
+      clientUrl: session.clientUrl,
+      connectionId: session.connectionId,
+    };
   }
 }
 

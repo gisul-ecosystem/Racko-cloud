@@ -99,6 +99,7 @@ router.get('/api/v1/vms', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/status', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId/events', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/:vmId/console', authMiddleware, verifyMiddleware, coreApiProxy);
 router.delete('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/start', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/stop', authMiddleware, verifyMiddleware, coreApiProxy);

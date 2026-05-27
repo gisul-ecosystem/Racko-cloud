@@ -100,6 +100,21 @@ export const vmListQuerySchema = z.object({
   }),
 });
 
+// ─── VM console query ────────────────────────────────────────────────────────
+
+export const vmConsoleSchema = z.object({
+  params: z.object({
+    vmId: mongoObjectId,
+  }),
+  query: z.object({
+    protocol: z
+      .enum(['rdp', 'ssh', 'vnc'], {
+        invalid_type_error: 'protocol must be rdp, ssh, or vnc',
+      })
+      .optional(),
+  }),
+});
+
 // ─── Alert history query ──────────────────────────────────────────────────────
 
 export const alertHistoryQuerySchema = z.object({
