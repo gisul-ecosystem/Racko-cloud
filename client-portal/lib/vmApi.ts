@@ -36,6 +36,7 @@ export interface IVM {
   vmid: number;
   node: string;
   adminId: string;
+  assignedTo?: string | null;
   name: string;
   description?: string;
   templateId: number;
@@ -321,4 +322,46 @@ export async function fetchAlertHistory(limit = 50): Promise<NodeAlert[]> {
     `/api/v1/proxmox/alerts/history?limit=${limit}`
   );
   return res.data.alerts;
+}
+
+// ─── VM Assignment ────────────────────────────────────────────────────────────
+
+export async function fetchAvailableVMs(): Promise<IVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    '/api/v1/vms/assign/available'
+  );
+  return res.data.vms;
+}
+
+export async function fetchAssignedVMCounts(): Promise<Record<string, number>> {
+  const res = await apiRequest<ApiResponse<{ counts: Record<string, number> }>>(
+    '/api/v1/vms/assign/counts'
+  );
+  return res.data.counts;
+}
+
+export async function fetchAssignedVMsForUser(userId: string): Promise<IVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    `/api/v1/vms/assign/user/${userId}`
+  );
+  return res.data.vms;
+}
+
+export async function assignVMs(userId: string, vmIds: string[]): Promise<{ assigned: number }> {
+  const res = await apiRequest<ApiResponse<{ assigned: number }>>(
+    '/api/v1/vms/assign',
+    { method: 'POST', body: JSON.stringify({ userId, vmIds }) }
+  );
+  return res.data;
+}
+
+export async function unassignVM(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/assign/${vmId}`, { method: 'DELETE' });
+}
+
+export async function fetchMyAssignedVMs(): Promise<IVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    '/api/v1/vms/my-assigned'
+  );
+  return res.data.vms;
 }

@@ -9,6 +9,8 @@ import {
   jobIdParamSchema,
   templateIdParamSchema,
   vmListQuerySchema,
+  assignVMsSchema,
+  userIdParamSchema,
 } from './vm.validation';
 
 const router = Router();
@@ -42,6 +44,54 @@ router.get(
   requireRole('super_admin'),
   validateRequest(vmListQuerySchema),
   (req, res, next) => vmController.getAllVMsAdmin(req, res, next)
+);
+
+// ─── Assignment routes (admin only) ──────────────────────────────────────────
+// Must be defined BEFORE /:vmId to avoid param conflicts
+
+// GET /api/v1/vms/assign/available — admin's unassigned VMs
+router.get(
+  '/assign/available',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => vmController.getAvailableVMs(req, res, next)
+);
+
+// GET /api/v1/vms/assign/counts — assigned VM count per user (single aggregation)
+router.get(
+  '/assign/counts',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => vmController.getAssignedVMCounts(req, res, next)
+);
+
+// GET /api/v1/vms/assign/user/:userId — VMs assigned to a specific user
+router.get(
+  '/assign/user/:userId',
+  requireRole('admin', 'super_admin'),
+  validateRequest(userIdParamSchema),
+  (req, res, next) => vmController.getAssignedVMsForUser(req, res, next)
+);
+
+// POST /api/v1/vms/assign — bulk assign VMs to a user
+router.post(
+  '/assign',
+  requireRole('admin', 'super_admin'),
+  validateRequest(assignVMsSchema),
+  (req, res, next) => vmController.assignVMs(req, res, next)
+);
+
+// DELETE /api/v1/vms/assign/:vmId — unassign a VM
+router.delete(
+  '/assign/:vmId',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.unassignVM(req, res, next)
+);
+
+// GET /api/v1/vms/my-assigned — user sees their own assigned VMs
+router.get(
+  '/my-assigned',
+  requireRole('user'),
+  (req, res, next) => vmController.getMyAssignedVMs(req, res, next)
 );
 
 // GET /api/v1/vms/admin/alerts — handled in proxmox routes (see proxmox.routes.ts)

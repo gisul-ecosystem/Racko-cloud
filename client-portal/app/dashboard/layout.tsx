@@ -14,6 +14,7 @@ import {
   Bell,
   Users,
   MonitorCheck,
+  UserCheck,
 } from 'lucide-react';
 
 interface NavLink {
@@ -52,6 +53,12 @@ const navLinks: NavLink[] = [
     href: '/dashboard/admin/users',
     label: 'Users',
     icon: <Users className="w-4 h-4" />,
+    roles: ['admin'],
+  },
+  {
+    href: '/dashboard/admin/assign-vms',
+    label: 'Assign VMs',
+    icon: <UserCheck className="w-4 h-4" />,
     roles: ['admin'],
   },
   {

@@ -65,6 +65,15 @@ export interface ProxmoxNetworkInterface {
   'hardware-address'?: string;
 }
 
+export interface ProxmoxFsInfo {
+  name: string;         // filesystem name e.g. "C:\", "/"
+  mountpoint: string;
+  type: string;
+  'used-bytes': number;
+  'total-bytes': number;
+  disk: Array<{ 'serial-number'?: string; 'bus-type'?: string }>;
+}
+
 export interface ProxmoxStorageRaw {
   storage: string;
   type: string;

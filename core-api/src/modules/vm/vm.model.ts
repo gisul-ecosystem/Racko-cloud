@@ -37,6 +37,9 @@ export interface IVM extends Document {
   // Job tracking
   jobId?: mongoose.Types.ObjectId;
 
+  // Assignment
+  assignedTo?: mongoose.Types.ObjectId;
+
   // HA slot
   haEnabled: boolean;
   // HA_SLOT: when cluster exists, this flag triggers HA enablement
@@ -131,6 +134,12 @@ const vmSchema = new Schema<IVM>(
       ref: 'VMJob',
       index: true,
     },
+    assignedTo: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+      default: null,
+    },
     haEnabled: {
       type: Boolean,
       default: false,
@@ -160,6 +169,14 @@ vmSchema.index(
     partialFilterExpression: { status: { $nin: ['deleted', 'delete_failed'] } },
   }
 );
+
+// When a VM is soft-deleted, clear its assignedTo so no dangling references remain
+vmSchema.pre('save', function (next) {
+  if (this.isModified('status') && (this.status === 'deleted' || this.status === 'deleting')) {
+    this.assignedTo = undefined;
+  }
+  next();
+});
 
 // Default query filter: never return deleted VMs in normal queries
 vmSchema.pre(/^find/, function (this: mongoose.Query<unknown, IVM>, next) {
