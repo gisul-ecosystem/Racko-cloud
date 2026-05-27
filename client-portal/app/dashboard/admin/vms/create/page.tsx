@@ -406,7 +406,7 @@ export default function CreateVMPage() {
             <p className="text-xs text-blue-700">
               {count === 1
                 ? 'VM creation runs in the background. You\'ll be redirected to track progress.'
-                : <><strong>Bulk creation:</strong> A job will be created and you'll be redirected to track progress. VMs are created in batches of 10 in the background.</>
+                : <><strong>Bulk creation:</strong> A job will be created and you&apos;ll be redirected to track progress. VMs are created in batches of 10 in the background.</>
               }
             </p>
           </div>

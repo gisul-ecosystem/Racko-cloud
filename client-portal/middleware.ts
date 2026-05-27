@@ -31,7 +31,7 @@ export function middleware(request: NextRequest) {
 
   // Redirect authenticated users away from auth pages
   if ((pathname === '/login' || pathname === '/register') && hasSession) {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
+    return NextResponse.redirect(new URL('/dashboard/admin', request.url));
   }
 
   return NextResponse.next();
