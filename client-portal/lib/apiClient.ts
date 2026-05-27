@@ -2,7 +2,7 @@
  * API client with automatic token attachment and refresh-on-401.
  * Access token stored in memory only — never localStorage/sessionStorage.
  * Refresh token lives in HttpOnly cookie (handled by browser automatically).
- */
+ */ 
 
 // Global session-expiry event — fired by apiClient when refresh fails mid-session
 export const SESSION_EXPIRED_EVENT = 'racko:session_expired';

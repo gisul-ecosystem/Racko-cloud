@@ -942,6 +942,8 @@ export class VMService {
    */
   async getMyAssignedVMs(userId: mongoose.Types.ObjectId): Promise<mongoose.FlattenMaps<IVM>[]> {
     return VM.find({ assignedTo: userId }).lean();
+  }
+
   /**
    * Open a browser-based console session for a VM via Guacamole.
    *

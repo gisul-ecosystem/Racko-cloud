@@ -28,7 +28,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// 2. Helmet — all security headers
+// 2. Helmet — all security headers 
 app.use(
   helmet({
     contentSecurityPolicy: {
