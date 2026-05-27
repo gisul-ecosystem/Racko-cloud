@@ -76,6 +76,17 @@ const envSchema = z.object({
 
   // Rate limiting
   RATE_LIMIT_GLOBAL_MAX: z.string().regex(/^\d+$/).transform(Number).default('2000'),
+
+  // Guacamole (browser-based VM console)
+  GUACAMOLE_BASE_URL: z.string().url('GUACAMOLE_BASE_URL must be a valid URL'),
+  GUACAMOLE_PUBLIC_URL: z.string().url('GUACAMOLE_PUBLIC_URL must be a valid URL'),
+  GUACAMOLE_USERNAME: z.string().min(1, 'GUACAMOLE_USERNAME is required'),
+  GUACAMOLE_PASSWORD: z.string().min(1, 'GUACAMOLE_PASSWORD is required'),
+
+  // Test VM scaffolding — remove once VM model stores private IP + credentials
+  TEST_VM_IP: z.string().optional(),
+  TEST_VM_USERNAME: z.string().optional(),
+  TEST_VM_PASSWORD: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
