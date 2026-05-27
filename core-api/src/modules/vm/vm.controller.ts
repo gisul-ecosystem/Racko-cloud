@@ -4,6 +4,7 @@ import { vmService } from './vm.service';
 import { logger } from '../../utils/logger';
 import type { AuthenticatedRequest } from '../../types';
 import type { CreateVMDto, VMFilters } from './vm.types';
+import type { GuacamoleProtocol } from '../../utils/guacamoleClient';
 
 // Consistent response shape — matches all other modules
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
@@ -256,6 +257,29 @@ export class VMController {
 
       const events = await vmService.getVMEvents(vmId, adminId, req);
       success(res, 'VM events retrieved.', { events, total: events.length });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/:vmId/console
+   *
+   * Returns a one-shot browser URL to open a Guacamole console session for
+   * the VM. The URL points at GUACAMOLE_PUBLIC_URL — never the internal
+   * docker hostname.
+   *
+   * Query: ?protocol=rdp|ssh|vnc (default: rdp)
+   */
+  async openConsole(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const protocol = req.query['protocol'] as GuacamoleProtocol | undefined;
+
+      const session = await vmService.openConsole(vmId, adminId, req, protocol);
+      success(res, 'VM console session created.', session);
     } catch (error) {
       next(error);
     }

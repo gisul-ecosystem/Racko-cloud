@@ -9,6 +9,7 @@ import {
   jobIdParamSchema,
   templateIdParamSchema,
   vmListQuerySchema,
+  vmConsoleSchema,
 } from './vm.validation';
 
 const router = Router();
@@ -106,6 +107,14 @@ router.get(
   requireRole('admin', 'super_admin'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.getVMEvents(req, res, next)
+);
+
+// GET /api/v1/vms/:vmId/console
+router.get(
+  '/:vmId/console',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmConsoleSchema),
+  (req, res, next) => vmController.openConsole(req, res, next)
 );
 
 // DELETE /api/v1/vms/:vmId

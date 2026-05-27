@@ -10,6 +10,7 @@ export type VMEventType =
   | 'VM_RESET'
   | 'VM_SUSPENDED'
   | 'VM_RESUMED'
+  | 'VM_CONSOLE_OPENED'
   | 'VM_CREATION_FAILED'
   | 'VM_OPERATION_FAILED';
 
@@ -62,6 +63,7 @@ const vmEventSchema = new Schema<IVMEvent>(
         'VM_RESET',
         'VM_SUSPENDED',
         'VM_RESUMED',
+        'VM_CONSOLE_OPENED',
         'VM_CREATION_FAILED',
         'VM_OPERATION_FAILED',
       ],
