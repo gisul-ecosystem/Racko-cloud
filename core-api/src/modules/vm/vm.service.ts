@@ -526,6 +526,10 @@ export class VMService {
       throw new VMOperationError('VM restart outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
     }
 
+    vm.status = 'running';
+    vm.proxmoxStatus = 'running';
+    await vm.save();
+
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
       event: 'VM_RESTARTED', status: 'success',
@@ -568,6 +572,10 @@ export class VMService {
     if (pollResult === 'unknown') {
       throw new VMOperationError('VM reset outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
     }
+
+    vm.status = 'running';
+    vm.proxmoxStatus = 'running';
+    await vm.save();
 
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
