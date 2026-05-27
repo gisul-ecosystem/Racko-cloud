@@ -129,6 +129,26 @@ export const alertHistoryQuerySchema = z.object({
   }),
 });
 
+// ─── Assign VMs ───────────────────────────────────────────────────────────────
+
+export const assignVMsSchema = z.object({
+  body: z.object({
+    userId: mongoObjectId,
+    vmIds: z
+      .array(mongoObjectId)
+      .min(1, 'At least one VM must be specified')
+      .max(50, 'Cannot assign more than 50 VMs at once'),
+  }),
+});
+
+// ─── User ID param ────────────────────────────────────────────────────────────
+
+export const userIdParamSchema = z.object({
+  params: z.object({
+    userId: mongoObjectId,
+  }),
+});
+
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
 export type CreateVMInput = z.infer<typeof createVMSchema>['body'];

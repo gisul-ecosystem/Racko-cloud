@@ -303,6 +303,110 @@ export class VMController {
       next(error);
     }
   }
+
+  // ─── Assignment endpoints ───────────────────────────────────────────────────
+
+  /**
+   * GET /api/v1/vms/assign/counts
+   */
+  async getAssignedVMCounts(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const counts = await vmService.getAssignedVMCounts(adminId);
+      success(res, 'Assigned VM counts retrieved.', { counts });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/assign/available
+   */
+  async getAvailableVMs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const vms = await vmService.getAvailableVMs(adminId);
+      success(res, 'Available VMs retrieved.', { vms, total: vms.length });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/assign/user/:userId
+   */
+  async getAssignedVMsForUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const targetUserId = new mongoose.Types.ObjectId(req.params['userId'] as string);
+      const vms = await vmService.getAssignedVMsForUser(targetUserId, adminId);
+      success(res, 'Assigned VMs retrieved.', { vms, total: vms.length });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/vms/assign
+   */
+  async assignVMs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { userId, vmIds } = req.body as { userId: string; vmIds: string[] };
+      const targetUserId = new mongoose.Types.ObjectId(userId);
+      const vmObjectIds = vmIds.map((id: string) => new mongoose.Types.ObjectId(id));
+
+      logger.info('VM assignment requested', {
+        adminId: adminId.toString(),
+        targetUserId: userId,
+        count: vmIds.length,
+      });
+
+      const result = await vmService.assignVMs(vmObjectIds, targetUserId, adminId);
+      success(res, `${result.assigned} VM(s) assigned successfully.`, result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * DELETE /api/v1/vms/assign/:vmId
+   */
+  async unassignVM(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+
+      logger.info('VM unassignment requested', {
+        adminId: adminId.toString(),
+        vmId: vmId.toString(),
+      });
+
+      await vmService.unassignVM(vmId, adminId);
+      success(res, 'VM unassigned successfully.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/my-assigned — user role
+   */
+  async getMyAssignedVMs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const userId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const vms = await vmService.getMyAssignedVMs(userId);
+      success(res, 'Assigned VMs retrieved.', { vms, total: vms.length });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export const vmController = new VMController();

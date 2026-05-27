@@ -87,6 +87,13 @@ router.get('/api/v1/vms/templates/:templateId', authMiddleware, verifyMiddleware
 router.get('/api/v1/vms/admin/all', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/vms/jobs', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/jobs/:jobId', authMiddleware, verifyMiddleware, coreApiProxy);
+// Assignment routes — must be before /:vmId
+router.get('/api/v1/vms/assign/available', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/vms/assign/counts', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/vms/assign/user/:userId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/vms/assign', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.delete('/api/v1/vms/assign/:vmId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/vms/my-assigned', authMiddleware, verifyMiddleware, requireRole('user'), coreApiProxy);
 router.post('/api/v1/vms', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);

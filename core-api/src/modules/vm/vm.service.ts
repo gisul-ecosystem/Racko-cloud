@@ -16,8 +16,12 @@ import {
   VMOperationError,
   TemplateNotFoundError,
   InsufficientResourcesError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
   InternalError,
 } from '../../utils/errors';
+import { User } from '../../models/user.model';
 import type {
   CreateVMDto,
   ProxmoxTemplate,
@@ -28,6 +32,7 @@ import type {
   VMDetails,
   ProxmoxVMCurrentStatus,
   ProxmoxNetworkInterface,
+  ProxmoxFsInfo,
   ProxmoxNodeRaw,
 } from './vm.types';
 import type { IVM } from './vm.model';
@@ -373,7 +378,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to start. Check Proxmox task logs.', vm.status, 'stopped');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM start outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'stopped');
+    }
 
     vm.status = 'running';
     vm.proxmoxStatus = 'running';
@@ -413,7 +425,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to stop. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM stop outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
 
     vm.status = 'stopped';
     vm.proxmoxStatus = 'stopped';
@@ -453,7 +472,14 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to force stop. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM force stop outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
 
     vm.status = 'stopped';
     vm.proxmoxStatus = 'stopped';
@@ -493,7 +519,18 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to restart. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM restart outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
+
+    vm.status = 'running';
+    vm.proxmoxStatus = 'running';
+    await vm.save();
 
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
@@ -529,7 +566,18 @@ export class VMService {
       {}
     );
     const upid = response.data.data;
-    await pollTask(upid, vm.node);
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult === 'failed') {
+      throw new VMOperationError('VM failed to reset. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult === 'unknown') {
+      throw new VMOperationError('VM reset outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
+    }
+
+    vm.status = 'running';
+    vm.proxmoxStatus = 'running';
+    await vm.save();
 
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
@@ -559,14 +607,21 @@ export class VMService {
     );
     const live = statusResponse.data.data;
 
-    // Try to get IP from guest agent (best-effort)
-    let ipAddress = vm.ipAddress;
-    try {
-      const agentResponse = await proxmoxClient.get<{
-        data: { result: ProxmoxNetworkInterface[] };
-      }>(`/nodes/${vm.node}/qemu/${vm.vmid}/agent/network-get-interfaces`);
+    // Fire both guest agent calls in parallel — neither depends on the other.
+    // Promise.allSettled ensures one failure never blocks the other.
+    const [netResult, fsResult] = await Promise.allSettled([
+      proxmoxClient.get<{ data: { result: ProxmoxNetworkInterface[] } }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/agent/network-get-interfaces`
+      ),
+      proxmoxClient.get<{ data: { result: ProxmoxFsInfo[] } }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/agent/get-fsinfo`
+      ),
+    ]);
 
-      const interfaces = agentResponse.data.data.result ?? [];
+    // Resolve IP from guest agent, fall back to stored value
+    let ipAddress = vm.ipAddress;
+    if (netResult.status === 'fulfilled') {
+      const interfaces = netResult.value.data.data.result ?? [];
       for (const iface of interfaces) {
         if (iface.name === 'lo') continue;
         const ipv4 = iface['ip-addresses']?.find(
@@ -574,15 +629,27 @@ export class VMService {
         );
         if (ipv4) {
           ipAddress = ipv4['ip-address'];
-          // Update MongoDB if IP changed
           if (ipAddress !== vm.ipAddress) {
             await VM.findByIdAndUpdate(vmId, { ipAddress });
           }
           break;
         }
       }
-    } catch {
-      // Guest agent not available — use stored IP
+    }
+
+    // Resolve disk usage from guest agent fs-info, fall back to Proxmox status values (0 for KVM)
+    let diskUsedGb = bytesToGb(live.disk);
+    let diskAllocatedGb = bytesToGb(live.maxdisk);
+    if (fsResult.status === 'fulfilled') {
+      const filesystems = fsResult.value.data.data.result ?? [];
+      // Pick the largest filesystem — primary disk (C:\ on Windows, / on Linux)
+      const primary = filesystems
+        .filter((fs) => fs['total-bytes'] > 0)
+        .sort((a, b) => b['total-bytes'] - a['total-bytes'])[0];
+      if (primary) {
+        diskUsedGb = bytesToGb(primary['used-bytes']);
+        diskAllocatedGb = bytesToGb(primary['total-bytes']);
+      }
     }
 
     // Update proxmox status in MongoDB
@@ -605,8 +672,8 @@ export class VMService {
         usagePercent: live.maxmem > 0 ? Math.round((live.mem / live.maxmem) * 10000) / 100 : 0,
       },
       disk: {
-        usedGb: bytesToGb(live.disk),
-        allocatedGb: bytesToGb(live.maxdisk),
+        usedGb: diskUsedGb,
+        allocatedGb: diskAllocatedGb,
       },
       uptime: {
         seconds: live.uptime,
@@ -751,6 +818,130 @@ export class VMService {
     return VMEvent.find({ vmId }).sort({ createdAt: -1 }).limit(50).lean();
   }
 
+  // ─── VM Assignment ──────────────────────────────────────────────────────────
+
+  /**
+   * Get assigned VM counts for all users managed by this admin — single aggregation query.
+   * Returns a map of userId → count.
+   */
+  async getAssignedVMCounts(adminId: mongoose.Types.ObjectId): Promise<Record<string, number>> {
+    const results = await VM.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
+      { $match: { adminId, assignedTo: { $ne: null } } },
+      { $group: { _id: '$assignedTo', count: { $sum: 1 } } },
+    ]);
+
+    const map: Record<string, number> = {};
+    for (const r of results) {
+      map[r._id.toString()] = r.count;
+    }
+    return map;
+  }
+
+  /**
+   * Get all VMs owned by this admin that are not yet assigned to any user.
+   */
+  async getAvailableVMs(adminId: mongoose.Types.ObjectId): Promise<mongoose.FlattenMaps<IVM>[]> {
+    return VM.find({
+      adminId,
+      assignedTo: null,
+      status: { $nin: ['deleted', 'deleting', 'delete_failed', 'creating'] },
+    }).lean();
+  }
+
+  /**
+   * Get all VMs assigned to a specific user, scoped to this admin's VMs.
+   * Admin can only see assignments for users they created.
+   */
+  async getAssignedVMsForUser(
+    targetUserId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<mongoose.FlattenMaps<IVM>[]> {
+    // Verify the target user belongs to this admin
+    const user = await User.findById(targetUserId);
+    if (!user) throw new NotFoundError('User not found.');
+    if (!user.createdBy || user.createdBy.toString() !== adminId.toString()) {
+      throw new ForbiddenError('You can only manage users you created.');
+    }
+
+    return VM.find({ adminId, assignedTo: targetUserId }).lean();
+  }
+
+  /**
+   * Assign multiple VMs to a user.
+   * - All VMs must be owned by this admin
+   * - All VMs must be currently unassigned
+   * - Target user must be created by this admin
+   */
+  async assignVMs(
+    vmIds: mongoose.Types.ObjectId[],
+    targetUserId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<{ assigned: number }> {
+    if (vmIds.length === 0) throw new ValidationError('No VMs specified.');
+    if (vmIds.length > 50) throw new ValidationError('Cannot assign more than 50 VMs at once.');
+
+    // Verify target user belongs to this admin
+    const user = await User.findById(targetUserId);
+    if (!user) throw new NotFoundError('User not found.');
+    if (!user.createdBy || user.createdBy.toString() !== adminId.toString()) {
+      throw new ForbiddenError('You can only assign VMs to users you created.');
+    }
+
+    // Fetch all requested VMs in one query
+    const vms = await VM.find({ _id: { $in: vmIds }, adminId });
+
+    if (vms.length !== vmIds.length) {
+      throw new ForbiddenError('One or more VMs not found or do not belong to you.');
+    }
+
+    // Check none are already assigned
+    const alreadyAssigned = vms.filter((vm) => vm.assignedTo != null);
+    if (alreadyAssigned.length > 0) {
+      const names = alreadyAssigned.map((v) => v.name).join(', ');
+      throw new ValidationError(`The following VMs are already assigned: ${names}`);
+    }
+
+    await VM.updateMany(
+      { _id: { $in: vmIds }, adminId, assignedTo: null },
+      { $set: { assignedTo: targetUserId } }
+    );
+
+    logger.info('VMs assigned to user', {
+      adminId: adminId.toString(),
+      targetUserId: targetUserId.toString(),
+      vmIds: vmIds.map((id) => id.toString()),
+    });
+
+    return { assigned: vmIds.length };
+  }
+
+  /**
+   * Unassign a VM from its current user.
+   * Admin must own the VM.
+   */
+  async unassignVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<void> {
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError();
+    if (vm.adminId.toString() !== adminId.toString()) throw new VMOwnershipError();
+    if (!vm.assignedTo) throw new ValidationError('VM is not currently assigned.');
+
+    vm.assignedTo = undefined;
+    await vm.save();
+
+    logger.info('VM unassigned', {
+      adminId: adminId.toString(),
+      vmId: vmId.toString(),
+    });
+  }
+
+  /**
+   * Get all VMs assigned to the calling user (for user dashboard).
+   */
+  async getMyAssignedVMs(userId: mongoose.Types.ObjectId): Promise<mongoose.FlattenMaps<IVM>[]> {
+    return VM.find({ assignedTo: userId }).lean();
   /**
    * Open a browser-based console session for a VM via Guacamole.
    *
