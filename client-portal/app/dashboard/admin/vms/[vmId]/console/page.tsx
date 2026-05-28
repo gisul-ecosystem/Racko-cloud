@@ -86,6 +86,17 @@ export default function VMConsolePage() {
     };
   }, [fetchSession]);
 
+  // Focus the iframe once it has mounted so keyboard events reach Guacamole.
+  // Mouse events work without focus, but keydown is delivered only to the
+  // currently-focused element. Small delay lets the iframe document settle.
+  useEffect(() => {
+    if (!session) return;
+    const timer = setTimeout(() => {
+      iframeRef.current?.focus();
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [session, iframeKey]);
+
   const handleReconnect = () => {
     void fetchSession();
   };
@@ -184,7 +195,10 @@ export default function VMConsolePage() {
       </div>
 
       {/* Body */}
-      <div style={styles.body}>
+      <div
+        style={styles.body}
+        onClick={() => iframeRef.current?.focus()}
+      >
         {loading && !session && (
           <div style={styles.statusOverlay}>
             <div style={styles.spinner} />
@@ -210,6 +224,9 @@ export default function VMConsolePage() {
             style={styles.iframe}
             allow="clipboard-read; clipboard-write; fullscreen"
             allowFullScreen
+            tabIndex={0}
+            onLoad={() => iframeRef.current?.focus()}
+            onClick={() => iframeRef.current?.focus()}
           />
         )}
       </div>
