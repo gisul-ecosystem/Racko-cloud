@@ -234,7 +234,7 @@ function buildPayload(
 
   if (protocol === 'rdp') {
     parameters['ignore-cert'] = String(params.ignoreCert ?? true);
-    parameters['security'] = 'rdp';
+    parameters['security'] = params.securityMode ?? 'any';
     parameters['resize-method'] = 'display-update';
     parameters['server-layout'] = 'en-us-qwerty';
     if (params.width) parameters['width'] = String(params.width);
