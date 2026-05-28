@@ -97,16 +97,49 @@ export default function VMConsolePage() {
     return () => clearTimeout(timer);
   }, [session, iframeKey]);
 
+  // Restore iframe focus when entering or leaving fullscreen.
+  // Browsers reset focus to <body> on the fullscreen transition,
+  // which silently breaks Guacamole keyboard input.
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setTimeout(() => iframeRef.current?.focus(), 300);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+    };
+  }, []);
+
+  // Restore iframe focus when the tab becomes visible again
+  // (alt-tab / window switch / minimise + restore).
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        setTimeout(() => iframeRef.current?.focus(), 200);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, []);
+
   const handleReconnect = () => {
     void fetchSession();
   };
 
   const handleFullscreen = () => {
     const el = iframeRef.current;
-    if (!el) return;
-    if (typeof el.requestFullscreen === 'function') {
-      void el.requestFullscreen();
-    }
+    if (!el || typeof el.requestFullscreen !== 'function') return;
+    el.requestFullscreen()
+      .then(() => {
+        setTimeout(() => iframeRef.current?.focus(), 300);
+      })
+      .catch(() => {
+        // ignore — user dismissed or browser blocked
+      });
   };
 
   const handleDisconnect = () => {
