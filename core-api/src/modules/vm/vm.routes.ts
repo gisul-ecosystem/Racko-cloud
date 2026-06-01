@@ -215,4 +215,30 @@ router.post(
   (req, res, next) => vmController.resetVM(req, res, next)
 );
 
+// ─── Virtualization (Hyper-V) ─────────────────────────────────────────────────
+
+// GET /api/v1/vms/:vmId/virtualization
+router.get(
+  '/:vmId/virtualization',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.getVirtualizationStatus(req, res, next)
+);
+
+// POST /api/v1/vms/:vmId/virtualization/enable
+router.post(
+  '/:vmId/virtualization/enable',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.enableVirtualization(req, res, next)
+);
+
+// POST /api/v1/vms/:vmId/virtualization/disable
+router.post(
+  '/:vmId/virtualization/disable',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.disableVirtualization(req, res, next)
+);
+
 export default router;

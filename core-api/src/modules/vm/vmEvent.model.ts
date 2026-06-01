@@ -12,7 +12,10 @@ export type VMEventType =
   | 'VM_RESUMED'
   | 'VM_CONSOLE_OPENED'
   | 'VM_CREATION_FAILED'
-  | 'VM_OPERATION_FAILED';
+  | 'VM_OPERATION_FAILED'
+  | 'HYPERV_ENABLED'
+  | 'HYPERV_ENABLE_FAILED'
+  | 'HYPERV_DISABLED';
 
 export interface IVMEvent extends Document {
   _id: mongoose.Types.ObjectId;
@@ -66,6 +69,9 @@ const vmEventSchema = new Schema<IVMEvent>(
         'VM_CONSOLE_OPENED',
         'VM_CREATION_FAILED',
         'VM_OPERATION_FAILED',
+        'HYPERV_ENABLED',
+        'HYPERV_ENABLE_FAILED',
+        'HYPERV_DISABLED',
       ],
       required: true,
       index: true,

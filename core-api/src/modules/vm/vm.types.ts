@@ -87,6 +87,16 @@ export interface ProxmoxStorageRaw {
   node?: string;
 }
 
+// ─── Virtualization (Hyper-V) ─────────────────────────────────────────────────
+
+export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'enabled' | 'failed';
+
+export interface VirtualizationStatus {
+  enableVirtualization: boolean;
+  hyperVStatus: HyperVStatus;
+  hyperVLastError?: string;
+}
+
 // ─── Request DTOs ─────────────────────────────────────────────────────────────
 
 export interface CreateVMDto {
@@ -98,6 +108,7 @@ export interface CreateVMDto {
   memoryGb?: number;                     // optional override (must be >= template)
   diskGb?: number;                       // optional override (must be >= template)
   description?: string;
+  enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
 }
 
 export interface VMFilters {
@@ -232,6 +243,9 @@ export interface VMDetails {
     ipAddress?: string;
     macAddress?: string;
     haEnabled: boolean;
+    enableVirtualization: boolean;
+    hyperVStatus: HyperVStatus;
+    hyperVLastError?: string;
     createdAt: Date;
     updatedAt: Date;
   };
@@ -276,4 +290,5 @@ export interface BulkVMSpec {
   adminId: mongoose.Types.ObjectId;
   jobId: mongoose.Types.ObjectId;
   description?: string;
+  enableVirtualization?: boolean;
 }

@@ -31,6 +31,14 @@ export type VMStatus =
 
 export type CloneType = 'dedicated_storage' | 'dynamic_storage';
 
+export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'enabled' | 'failed';
+
+export interface VirtualizationStatus {
+  enableVirtualization: boolean;
+  hyperVStatus: HyperVStatus;
+  hyperVLastError?: string;
+}
+
 export interface IVM {
   _id: string;
   vmid: number;
@@ -51,6 +59,9 @@ export interface IVM {
   macAddress?: string;
   jobId?: string;
   haEnabled: boolean;
+  enableVirtualization?: boolean;
+  hyperVStatus?: HyperVStatus;
+  hyperVLastError?: string;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
@@ -82,6 +93,9 @@ export interface VMDetails {
     ipAddress?: string;
     macAddress?: string;
     haEnabled: boolean;
+    enableVirtualization: boolean;
+    hyperVStatus: HyperVStatus;
+    hyperVLastError?: string;
     createdAt: string;
     updatedAt: string;
   };
@@ -159,6 +173,7 @@ export interface CreateVMDto {
   memoryGb?: number;
   diskGb?: number;
   description?: string;
+  enableVirtualization?: boolean;
 }
 
 // ─── API response wrapper ─────────────────────────────────────────────────────
@@ -292,6 +307,31 @@ export async function resetVM(vmId: string): Promise<VMOperationResult> {
     { method: 'POST' }
   );
   return res.data.result;
+}
+
+// ─── Virtualization (Hyper-V) ─────────────────────────────────────────────────
+
+export async function fetchVirtualizationStatus(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization`
+  );
+  return res.data;
+}
+
+export async function enableVirtualization(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization/enable`,
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
+export async function disableVirtualization(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization/disable`,
+    { method: 'POST' }
+  );
+  return res.data;
 }
 
 // ─── Jobs ─────────────────────────────────────────────────────────────────────

@@ -162,6 +162,58 @@ export class VMController {
     }
   }
 
+  // ─── Virtualization (Hyper-V) ─────────────────────────────────────────────
+
+  /**
+   * GET /api/v1/vms/:vmId/virtualization
+   */
+  async getVirtualizationStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      const status = await vmService.getVirtualizationStatus(vmId, adminId, req);
+      success(res, 'Virtualization status retrieved.', status);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/vms/:vmId/virtualization/enable
+   */
+  async enableVirtualization(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('Virtualization enable requested', { userId: authReq.user.userId, vmId: vmId.toString() });
+      const status = await vmService.enableVirtualization(vmId, adminId, req);
+      success(res, 'Virtualization enablement started.', status, 202);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/vms/:vmId/virtualization/disable
+   */
+  async disableVirtualization(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('Virtualization disable requested', { userId: authReq.user.userId, vmId: vmId.toString() });
+      const status = await vmService.disableVirtualization(vmId, adminId, req);
+      success(res, 'Virtualization disable started.', status, 202);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   /**
    * GET /api/v1/vms/:vmId/status
    */

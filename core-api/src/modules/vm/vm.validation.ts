@@ -53,6 +53,7 @@ export const createVMSchema = z.object({
       .string()
       .max(500, 'description cannot exceed 500 characters')
       .optional(),
+    enableVirtualization: z.boolean().optional().default(false),
   }),
 });
 

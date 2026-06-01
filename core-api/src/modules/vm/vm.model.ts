@@ -44,6 +44,11 @@ export interface IVM extends Document {
   haEnabled: boolean;
   // HA_SLOT: when cluster exists, this flag triggers HA enablement
 
+  // Nested virtualization (Hyper-V inside Windows guest)
+  enableVirtualization: boolean;
+  hyperVStatus: 'disabled' | 'pending' | 'enabling' | 'enabled' | 'failed';
+  hyperVLastError?: string;
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -143,6 +148,20 @@ const vmSchema = new Schema<IVM>(
     haEnabled: {
       type: Boolean,
       default: false,
+    },
+    enableVirtualization: {
+      type: Boolean,
+      default: false,
+    },
+    hyperVStatus: {
+      type: String,
+      enum: ['disabled', 'pending', 'enabling', 'enabled', 'failed'],
+      default: 'disabled',
+    },
+    hyperVLastError: {
+      type: String,
+      trim: true,
+      default: '',
     },
     deletedAt: {
       type: Date,

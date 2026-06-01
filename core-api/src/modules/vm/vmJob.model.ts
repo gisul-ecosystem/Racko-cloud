@@ -30,6 +30,7 @@ export interface IVMJob extends Document {
     templateMemoryGb: number;  // actual template RAM — used for config override check
     namePrefix: string;
     count: number;
+    enableVirtualization?: boolean;
   };
 
   // Error details
@@ -108,6 +109,7 @@ const vmJobSchema = new Schema<IVMJob>(
       templateMemoryGb: { type: Number, required: true },
       namePrefix: { type: String, required: true },
       count: { type: Number, required: true },
+      enableVirtualization: { type: Boolean, default: false },
     },
     jobErrors: {
       type: [

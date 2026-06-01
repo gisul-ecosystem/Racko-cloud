@@ -7,10 +7,12 @@ import { useAuth } from '../../../../../context/AuthContext';
 import {
   fetchVMDetails, fetchVMStatus, fetchVMEvents, startVM, stopVM,
   forceStopVM, restartVM, resetVM, deleteVM,
-  type VMDetails, type VMLiveStatus, type VMEvent,
+  enableVirtualization, disableVirtualization,
+  type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { VMStatusBadge, CloneTypeBadge, UsageBar } from '../../../../../components/dashboard/VMStatusBadge';
+import { HyperVStatusBadge } from '../../../../../components/dashboard/HyperVStatusBadge';
 import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
 import {
@@ -125,6 +127,7 @@ export default function VMDetailPage() {
 
   const [pendingOp, setPendingOp] = useState<PowerOp | null>(null);
   const [opLoading, setOpLoading] = useState(false);
+  const [virtLoading, setVirtLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!vmId || !isAuthenticated) return;
@@ -163,6 +166,55 @@ export default function VMDetailPage() {
     const id = setInterval(() => void refreshLive(), 10_000);
     return () => clearInterval(id);
   }, [details?.vm.status, refreshLive]);
+
+  const hyperVStatus: HyperVStatus = details?.vm.hyperVStatus ?? 'disabled';
+  const isVirtInProgress = hyperVStatus === 'pending' || hyperVStatus === 'enabling';
+
+  // While Hyper-V is being applied, poll on a backoff (5s → 10s → 20s → 30s cap)
+  // and stop automatically once it reaches a terminal state (enabled/failed).
+  useEffect(() => {
+    if (!isVirtInProgress) return;
+    let cancelled = false;
+    let delay = 5_000;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (cancelled) return;
+      await load();
+      if (cancelled) return;
+      delay = Math.min(delay * 2, 30_000);
+      timer = setTimeout(() => void tick(), delay);
+    };
+    timer = setTimeout(() => void tick(), delay);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [isVirtInProgress, load]);
+
+  async function handleVirtEnable() {
+    if (!vmId) return;
+    setVirtLoading(true);
+    try {
+      await enableVirtualization(vmId);
+      addToast('success', 'Enabling virtualization. This can take a few minutes.');
+      await load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to enable virtualization.');
+    } finally {
+      setVirtLoading(false);
+    }
+  }
+
+  async function handleVirtDisable() {
+    if (!vmId) return;
+    setVirtLoading(true);
+    try {
+      await disableVirtualization(vmId);
+      addToast('success', 'Disabling virtualization. This can take a few minutes.');
+      await load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to disable virtualization.');
+    } finally {
+      setVirtLoading(false);
+    }
+  }
 
   async function handleOp(op: PowerOp) {
     if (!vmId) return;
@@ -241,9 +293,12 @@ export default function VMDetailPage() {
           <Link href="/dashboard/admin/vms" className="inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900 mb-2">
             <ChevronLeft className="w-4 h-4" /> Back to VMs
           </Link>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 flex-wrap">
             <h1 className="text-2xl font-bold text-gray-900">{vm.name}</h1>
             <VMStatusBadge status={vm.status} />
+            {(vm.enableVirtualization || hyperVStatus !== 'disabled') && (
+              <HyperVStatusBadge status={hyperVStatus} />
+            )}
           </div>
           <p className="text-gray-400 text-sm mt-0.5 font-mono">#{vm.vmid} · {vm.node}</p>
         </div>
@@ -391,6 +446,7 @@ export default function VMDetailPage() {
               { label: 'Node', value: vm.node },
               { label: 'VMID', value: <span className="font-mono">{vm.vmid}</span> },
               { label: 'HA', value: vm.haEnabled ? 'Enabled' : 'Disabled' },
+              { label: 'Virtualization', value: <HyperVStatusBadge status={hyperVStatus} /> },
               { label: 'Created', value: new Date(vm.createdAt).toLocaleDateString() },
             ].map(({ label, value }) => (
               <div key={label} className="flex items-center justify-between">
@@ -398,6 +454,39 @@ export default function VMDetailPage() {
                 <span className="text-xs text-gray-700">{value}</span>
               </div>
             ))}
+
+            {/* Virtualization actions */}
+            <div className="pt-3 border-t border-gray-50 space-y-2">
+              {hyperVStatus === 'failed' && vm.hyperVLastError && (
+                <p className="text-xs text-red-600 break-words">{vm.hyperVLastError}</p>
+              )}
+              {isVirtInProgress && (
+                <p className="text-xs text-amber-600">Applying virtualization… this can take a few minutes.</p>
+              )}
+              <div className="flex flex-wrap gap-3">
+                {!isVirtInProgress && (hyperVStatus === 'disabled' || hyperVStatus === 'failed') && (
+                  <button
+                    type="button"
+                    onClick={() => void handleVirtEnable()}
+                    disabled={virtLoading}
+                    className="text-xs font-medium text-blue-600 hover:text-blue-700 disabled:opacity-50"
+                  >
+                    {virtLoading ? 'Working…' : hyperVStatus === 'failed' ? 'Retry enable' : 'Enable virtualization'}
+                  </button>
+                )}
+                {!isVirtInProgress && hyperVStatus === 'enabled' && (
+                  <button
+                    type="button"
+                    onClick={() => void handleVirtDisable()}
+                    disabled={virtLoading}
+                    className="text-xs font-medium text-gray-600 hover:text-gray-800 disabled:opacity-50"
+                  >
+                    {virtLoading ? 'Working…' : 'Disable virtualization'}
+                  </button>
+                )}
+              </div>
+            </div>
+
             {vm.description && (
               <div className="pt-2 border-t border-gray-50">
                 <p className="text-xs text-gray-400 mb-1">Description</p>
