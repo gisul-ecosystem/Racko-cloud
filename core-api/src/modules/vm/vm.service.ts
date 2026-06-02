@@ -877,12 +877,12 @@ export class VMService {
       throw new VMOperationError('Virtualization change is already in progress.', vm.status, vm.status);
     }
 
-    // Record intent up front (mirrors enable, which sets the flag true at start)
-    // so the desired state is consistent even if the background job later fails.
+    // Do NOT set enableVirtualization: false here. The flag reflects actual state,
+    // not intent. If the background job fails, Hyper-V is still enabled inside the VM
+    // and the flag must stay true. The provisioner sets it false only on confirmed success.
     await updateHyperVStatus(vmId, 'disabling', {
       lastError: '',
       resetAttempts: true,
-      enableVirtualization: false,
     });
 
     scheduleHyperVDisable({
