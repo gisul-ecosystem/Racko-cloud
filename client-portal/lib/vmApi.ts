@@ -31,7 +31,7 @@ export type VMStatus =
 
 export type CloneType = 'dedicated_storage' | 'dynamic_storage';
 
-export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'enabled' | 'failed';
+export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'disabling' | 'enabled' | 'failed';
 
 export interface VirtualizationStatus {
   enableVirtualization: boolean;

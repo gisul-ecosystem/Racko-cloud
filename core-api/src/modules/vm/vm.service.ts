@@ -10,11 +10,9 @@ import { validateResources } from './helpers/resourceValidator';
 import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
-import {
-  isWindowsOsType,
-  provisionHyperVForVM,
-  disableHyperVForVM,
-} from './helpers/hypervProvisioner';
+import { isWindowsOsType } from './helpers/hypervProvisioner';
+import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
+import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
 import {
   VMNotFoundError,
   VMOwnershipError,
@@ -818,7 +816,7 @@ export class VMService {
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
 
-    if (vm.hyperVStatus === 'enabling') {
+    if (isHyperVInProgress(vm.hyperVStatus)) {
       throw new VMOperationError('Virtualization change is already in progress.', vm.status, vm.status);
     }
 
@@ -829,27 +827,35 @@ export class VMService {
         `/nodes/${vm.node}/qemu/${vm.vmid}/config`
       );
       osType = cfg.data.data.ostype;
-    } catch {
-      // Best-effort — fall through; provisioner will fail clearly if not Windows.
+    } catch (err) {
+      // Best-effort — log and fall through; provisioner will fail clearly if not Windows.
+      logger.warn('Could not read VM ostype for virtualization pre-check', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        node: vm.node,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
     if (osType && !isWindowsOsType(osType)) {
       throw new ValidationError('Virtualization can only be enabled on Windows VMs.');
     }
 
-    await VM.findByIdAndUpdate(vmId, { enableVirtualization: true, hyperVStatus: 'enabling', hyperVLastError: '' });
-
-    void provisionHyperVForVM({
-      vmObjectId: vm._id,
-      node: vm.node,
-      vmid: vm.vmid,
-      adminId,
-      vmName: vm.name,
-    }).catch((err: unknown) => {
-      logger.error('[HyperV] Background enable crashed', {
-        vmId: vmId.toString(),
-        error: err instanceof Error ? err.message : String(err),
-      });
+    await updateHyperVStatus(vmId, 'enabling', {
+      lastError: '',
+      resetAttempts: true,
+      enableVirtualization: true,
     });
+
+    scheduleHyperVEnable(
+      {
+        vmObjectId: vm._id,
+        node: vm.node,
+        vmid: vm.vmid,
+        adminId,
+        vmName: vm.name,
+      },
+      true
+    );
 
     return { enableVirtualization: true, hyperVStatus: 'enabling' };
   }
@@ -867,26 +873,27 @@ export class VMService {
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
 
-    if (vm.hyperVStatus === 'enabling') {
+    if (isHyperVInProgress(vm.hyperVStatus)) {
       throw new VMOperationError('Virtualization change is already in progress.', vm.status, vm.status);
     }
 
-    await VM.findByIdAndUpdate(vmId, { hyperVStatus: 'enabling', hyperVLastError: '' });
+    // Record intent up front (mirrors enable, which sets the flag true at start)
+    // so the desired state is consistent even if the background job later fails.
+    await updateHyperVStatus(vmId, 'disabling', {
+      lastError: '',
+      resetAttempts: true,
+      enableVirtualization: false,
+    });
 
-    void disableHyperVForVM({
+    scheduleHyperVDisable({
       vmObjectId: vm._id,
       node: vm.node,
       vmid: vm.vmid,
       adminId,
       vmName: vm.name,
-    }).catch((err: unknown) => {
-      logger.error('[HyperV] Background disable crashed', {
-        vmId: vmId.toString(),
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
+    }, true);
 
-    return { enableVirtualization: vm.enableVirtualization ?? false, hyperVStatus: 'enabling' };
+    return { enableVirtualization: vm.enableVirtualization ?? false, hyperVStatus: 'disabling' };
   }
 
   /**

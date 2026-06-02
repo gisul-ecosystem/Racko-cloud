@@ -7,7 +7,7 @@ import { VMJob } from '../vmJob.model';
 import { VMEvent } from '../vmEvent.model';
 import { selectNodesForBulk, selectNode } from './placementEngine';
 import { pollTaskWithCleanup } from './taskPoller';
-import { provisionHyperVForVM } from './hypervProvisioner';
+import { scheduleHyperVEnable } from './hypervQueue';
 import { ProxmoxConnectionError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
@@ -431,6 +431,8 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     haEnabled: false,
     enableVirtualization: spec.enableVirtualization ?? false,
     hyperVStatus: spec.enableVirtualization ? 'pending' : 'disabled',
+    hyperVStatusChangedAt: new Date(),
+    hyperVAttemptCount: 0,
   });
 
   // Log audit event
@@ -449,19 +451,12 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
   // Fire-and-forget so VM creation completes fast; status is tracked on the VM
   // (hyperVStatus: pending → enabling → enabled/failed) and shown/polled in the UI.
   if (spec.enableVirtualization) {
-    void provisionHyperVForVM({
+    scheduleHyperVEnable({
       vmObjectId: vm._id,
       node: spec.node,
       vmid,
       adminId: spec.adminId,
       vmName: vm.name,
-    }).catch((err: unknown) => {
-      logger.warn('[BulkVM] Background Hyper-V provisioning failed to start', {
-        vmName: spec.vmName,
-        vmid,
-        node: spec.node,
-        error: err instanceof Error ? err.message : String(err),
-      });
     });
   }
 

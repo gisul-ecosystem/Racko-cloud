@@ -45,15 +45,23 @@ function createProxmoxClient(): AxiosInstance {
         // Deliberately omit: baseURL (contains internal IP), headers (contains token)
       });
 
+      const proxmoxMessage = (): string => {
+        const data = error.response?.data;
+        if (data?.message) return data.message;
+        if (data?.errors) return Object.values(data.errors).join('; ');
+        return error.message;
+      };
+
       if (!error.response) {
-        // Network error — Proxmox unreachable
         throw new ProxmoxConnectionError(
           `Proxmox unreachable: ${error.message}`,
-          error.config?.url
+          error.config?.url,
+          0
         );
       }
 
       const { status } = error.response;
+      const detail = proxmoxMessage();
 
       if (status === 401) {
         throw new ProxmoxAuthError(
@@ -69,18 +77,7 @@ function createProxmoxClient(): AxiosInstance {
         );
       }
 
-      if (status === 500) {
-        throw new ProxmoxConnectionError(
-          `Proxmox internal error (500) on ${error.config?.url ?? 'unknown endpoint'}`,
-          error.config?.url
-        );
-      }
-
-      // All other HTTP errors — wrap as connection error
-      throw new ProxmoxConnectionError(
-        `Proxmox API returned ${status} on ${error.config?.url ?? 'unknown endpoint'}`,
-        error.config?.url
-      );
+      throw new ProxmoxConnectionError(detail, error.config?.url, status);
     }
   );
 

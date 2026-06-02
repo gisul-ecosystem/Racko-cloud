@@ -94,10 +94,26 @@ export class EmailNotVerifiedError extends AppError {
  * Client receives a safe generic message — internal IP never exposed.
  */
 export class ProxmoxConnectionError extends AppError {
-  constructor(internalMessage: string, endpoint?: string) {
+  /** Detailed message for logs and Hyper-V `hyperVLastError` — not sent as the HTTP body. */
+  public readonly internalMessage: string;
+  public readonly httpStatus: number;
+  /** Whether Hyper-V guest operations should retry (transient agent/network/5xx). */
+  public readonly isRetryable: boolean;
+
+  constructor(internalMessage: string, endpoint?: string, httpStatus = 0) {
     super('Infrastructure service temporarily unavailable.', 503, 'PROXMOX_UNAVAILABLE');
-    // Log full details internally only — never surfaced to client
-    void internalMessage;
+    this.internalMessage = internalMessage;
+    this.httpStatus = httpStatus;
+    const msg = internalMessage.toLowerCase();
+    const agentFlake =
+      /guest agent is not running|guest agent.*not available|agent exited with error/i.test(msg);
+    if (httpStatus === 0 || httpStatus >= 500 || agentFlake) {
+      this.isRetryable = true;
+    } else if (httpStatus >= 400 && httpStatus < 500) {
+      this.isRetryable = false;
+    } else {
+      this.isRetryable = true;
+    }
     void endpoint;
   }
 }

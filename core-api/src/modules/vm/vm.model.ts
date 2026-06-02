@@ -46,8 +46,15 @@ export interface IVM extends Document {
 
   // Nested virtualization (Hyper-V inside Windows guest)
   enableVirtualization: boolean;
-  hyperVStatus: 'disabled' | 'pending' | 'enabling' | 'enabled' | 'failed';
+  hyperVStatus: 'disabled' | 'pending' | 'enabling' | 'disabling' | 'enabled' | 'failed';
   hyperVLastError?: string;
+  hyperVStatusChangedAt?: Date;
+  hyperVAttemptCount: number;
+  // Lease lock: a provisioner owns the VM until this time. Prevents the sweeper
+  // (or another instance) from running a second provisioner concurrently.
+  hyperVLockedUntil?: Date;
+  // Power state captured before an enable/disable so it can be restored afterwards.
+  hyperVPrePowerState?: 'running' | 'stopped';
 
   // Timestamps
   createdAt: Date;
@@ -155,13 +162,28 @@ const vmSchema = new Schema<IVM>(
     },
     hyperVStatus: {
       type: String,
-      enum: ['disabled', 'pending', 'enabling', 'enabled', 'failed'],
+      enum: ['disabled', 'pending', 'enabling', 'disabling', 'enabled', 'failed'],
       default: 'disabled',
     },
     hyperVLastError: {
       type: String,
       trim: true,
       default: '',
+    },
+    hyperVStatusChangedAt: {
+      type: Date,
+    },
+    hyperVAttemptCount: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    hyperVLockedUntil: {
+      type: Date,
+    },
+    hyperVPrePowerState: {
+      type: String,
+      enum: ['running', 'stopped'],
     },
     deletedAt: {
       type: Date,
@@ -188,6 +210,10 @@ vmSchema.index(
     partialFilterExpression: { status: { $nin: ['deleted', 'delete_failed'] } },
   }
 );
+
+// Supports the Hyper-V sweeper, which periodically scans for stuck in-flight
+// jobs by status + status-change time (see hypervSweeper.ts).
+vmSchema.index({ hyperVStatus: 1, hyperVStatusChangedAt: 1 });
 
 // When a VM is soft-deleted, clear its assignedTo so no dangling references remain
 vmSchema.pre('save', function (next) {

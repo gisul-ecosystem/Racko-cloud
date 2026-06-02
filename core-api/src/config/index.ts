@@ -74,6 +74,29 @@ const envSchema = z.object({
   // Monitoring
   NODE_MONITOR_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
 
+  // Hyper-V / nested virtualization (Windows guests)
+  HYPERV_AGENT_READY_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  HYPERV_EXEC_DEADLINE_MS: z.string().regex(/^\d+$/).transform(Number).default('1200000'),
+  HYPERV_POST_REBOOT_SETTLE_MS: z.string().regex(/^\d+$/).transform(Number).default('20000'),
+  HYPERV_EXEC_POLL_MS: z.string().regex(/^\d+$/).transform(Number).default('3000'),
+  HYPERV_AGENT_POLL_MS: z.string().regex(/^\d+$/).transform(Number).default('5000'),
+  HYPERV_MAX_CONCURRENT: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  HYPERV_SWEEPER_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('120000'),
+  HYPERV_STUCK_PENDING_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  HYPERV_STUCK_BUFFER_MS: z.string().regex(/^\d+$/).transform(Number).default('120000'),
+  HYPERV_STUCK_INPROGRESS_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  HYPERV_MAX_SWEEPER_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  // Per-VM lease lock: a live provisioner renews `hyperVLockedUntil` on a
+  // heartbeat; a crashed one lets the lease expire so the sweeper can recover.
+  HYPERV_LOCK_LEASE_MS: z.string().regex(/^\d+$/).transform(Number).default('90000'),
+  HYPERV_LOCK_HEARTBEAT_MS: z.string().regex(/^\d+$/).transform(Number).default('30000'),
+  // Enable a second reboot after the Hyper-V feature install. Some Windows
+  // builds stage the hypervisor on the first boot and only load it on the next.
+  HYPERV_SECOND_REBOOT: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+
   // Rate limiting
   RATE_LIMIT_GLOBAL_MAX: z.string().regex(/^\d+$/).transform(Number).default('2000'),
 

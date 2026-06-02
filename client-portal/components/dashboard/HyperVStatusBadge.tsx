@@ -4,6 +4,7 @@ const config: Record<HyperVStatus, { label: string; dot: string; badge: string }
   disabled: { label: 'Virtualization Off', dot: 'bg-gray-400', badge: 'bg-gray-100 text-gray-500 border-gray-200' },
   pending:  { label: 'Virtualization Pending', dot: 'bg-amber-400', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
   enabling: { label: 'Enabling…', dot: 'bg-amber-400', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
+  disabling: { label: 'Disabling…', dot: 'bg-amber-400', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
   enabled:  { label: 'Virtualization On', dot: 'bg-green-500', badge: 'bg-green-100 text-green-700 border-green-200' },
   failed:   { label: 'Virtualization Failed', dot: 'bg-red-500', badge: 'bg-red-100 text-red-700 border-red-200' },
 };

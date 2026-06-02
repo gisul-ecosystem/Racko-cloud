@@ -17,6 +17,7 @@ import proxmoxRoutes from './modules/proxmox/proxmox.routes';
 import vmRoutes from './modules/vm/vm.routes';
 import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
+import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
 
 const app = express();
 
@@ -127,6 +128,7 @@ app.use('/api/v1/managed-users', managedUsersRoutes);
 
 // Start node monitoring (runs in background — never blocks startup)
 startNodeMonitoring();
+startHyperVSweeper();
 
 // 404 handler
 app.use(notFoundHandler);

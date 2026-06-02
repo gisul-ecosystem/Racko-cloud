@@ -168,7 +168,8 @@ export default function VMDetailPage() {
   }, [details?.vm.status, refreshLive]);
 
   const hyperVStatus: HyperVStatus = details?.vm.hyperVStatus ?? 'disabled';
-  const isVirtInProgress = hyperVStatus === 'pending' || hyperVStatus === 'enabling';
+  const isVirtInProgress =
+    hyperVStatus === 'pending' || hyperVStatus === 'enabling' || hyperVStatus === 'disabling';
 
   // While Hyper-V is being applied, poll on a backoff (5s → 10s → 20s → 30s cap)
   // and stop automatically once it reaches a terminal state (enabled/failed).
@@ -461,7 +462,11 @@ export default function VMDetailPage() {
                 <p className="text-xs text-red-600 break-words">{vm.hyperVLastError}</p>
               )}
               {isVirtInProgress && (
-                <p className="text-xs text-amber-600">Applying virtualization… this can take a few minutes.</p>
+                <p className="text-xs text-amber-600">
+                  {hyperVStatus === 'disabling'
+                    ? 'Disabling virtualization… this can take a few minutes.'
+                    : 'Applying virtualization… this can take a few minutes.'}
+                </p>
               )}
               <div className="flex flex-wrap gap-3">
                 {!isVirtInProgress && (hyperVStatus === 'disabled' || hyperVStatus === 'failed') && (

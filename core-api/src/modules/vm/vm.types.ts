@@ -89,7 +89,7 @@ export interface ProxmoxStorageRaw {
 
 // ─── Virtualization (Hyper-V) ─────────────────────────────────────────────────
 
-export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'enabled' | 'failed';
+export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'disabling' | 'enabled' | 'failed';
 
 export interface VirtualizationStatus {
   enableVirtualization: boolean;
