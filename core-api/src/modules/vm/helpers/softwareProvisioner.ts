@@ -21,11 +21,26 @@ function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-async function waitForGuestAgent(node: string, vmid: number): Promise<void> {
+async function waitForGuestAgent(node: string, vmid: number, vmObjectId?: mongoose.Types.ObjectId): Promise<void> {
   const deadline = Date.now() + config.HYPERV_AGENT_READY_TIMEOUT_MS;
   let attempt = 0;
   while (Date.now() < deadline) {
     attempt++;
+
+    // Liveness + cancellation check — abort if VM deleted or all installs cancelled
+    if (vmObjectId) {
+      const live = await VM.findById(vmObjectId).select('status softwareInstalls').lean();
+      if (!live || live.status === 'deleted' || live.status === 'deleting') {
+        throw new Error('VM has been deleted — aborting software installation.');
+      }
+      const allCancelled = live.softwareInstalls.every(
+        (s) => s.cancelled || s.status === 'installed' || s.status === 'failed'
+      );
+      if (allCancelled) {
+        throw new Error('All software installations were cancelled.');
+      }
+    }
+
     try {
       await proxmoxClient.post(`/nodes/${node}/qemu/${vmid}/agent/ping`, {});
       logger.info('[Software] guest agent ping OK', { vmid, node, attempt });
@@ -82,7 +97,9 @@ async function runPowerShell(
   node: string,
   vmid: number,
   script: string,
-  label: string
+  label: string,
+  vmObjectId?: mongoose.Types.ObjectId,
+  softwareId?: mongoose.Types.ObjectId
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   // decodeAgentOutput handles all encoding variants (UTF-16LE, UTF-8, latin1)
   const command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script];
@@ -91,7 +108,7 @@ async function runPowerShell(
   logger.info('[Software] exec begin', { vmid, node, label, script: script.slice(0, 200) });
 
   while (Date.now() < deadline) {
-    await waitForGuestAgent(node, vmid);
+    await waitForGuestAgent(node, vmid, vmObjectId);
 
     let pid: number;
     try {
@@ -113,6 +130,24 @@ async function runPowerShell(
     let polls = 0;
     while (Date.now() < deadline) {
       polls++;
+
+      // Cancellation check inside the poll loop — exit immediately if cancelled mid-install
+      if (vmObjectId) {
+        const live = await VM.findById(vmObjectId).select('status softwareInstalls').lean();
+        if (!live || live.status === 'deleted' || live.status === 'deleting') {
+          throw new Error('VM has been deleted — aborting software installation.');
+        }
+        // Check if the specific package being installed was cancelled
+        if (softwareId) {
+          const thisItem = live.softwareInstalls.find(
+            (s) => (s.softwareId as mongoose.Types.ObjectId).toString() === softwareId.toString()
+          );
+          if (thisItem?.cancelled) {
+            throw new Error('Software installation was cancelled by admin.');
+          }
+        }
+      }
+
       try {
         const s = await proxmoxClient.get<{ data: ExecStatus }>(
           `/nodes/${node}/qemu/${vmid}/agent/exec-status`,
@@ -198,7 +233,7 @@ export async function installSoftwareForVM(params: {
   // Ensure VM is running and guest agent is up
   try {
     await ensureVmRunning(node, vmid);
-    await waitForGuestAgent(node, vmid);
+    await waitForGuestAgent(node, vmid, vmObjectId);
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn('[Software] VM not ready, marking all pending as failed', { vmid, node, message });
@@ -226,11 +261,22 @@ export async function installSoftwareForVM(params: {
       continue;
     }
 
+    // Re-read cancellation state from DB (snapshot may be stale if cancel happened after provisioner started)
+    const freshVm = await VM.findById(vmObjectId).select('softwareInstalls').lean();
+    const freshItem = freshVm?.softwareInstalls.find(
+      (s) => (s.softwareId as mongoose.Types.ObjectId).toString() === softwareId.toString()
+    );
+    if (freshItem?.cancelled) {
+      logger.info('[Software] package cancelled, skipping', { vmid, node, name: item.name });
+      await setSoftwareStatus(vmObjectId, softwareId, 'failed', 'Cancelled by admin.');
+      continue;
+    }
+
     logger.info('[Software] starting install', { vmid, node, name: item.name, softwareId: softwareId.toString(), scriptLength: script.length });
     await setSoftwareStatus(vmObjectId, softwareId, 'installing');
 
     try {
-      const result = await runPowerShell(node, vmid, script, `install-${item.name}`);
+      const result = await runPowerShell(node, vmid, script, `install-${item.name}`, vmObjectId, softwareId);
 
       // 0 = success, 3010 = success + reboot required
       if (result.exitCode === 0 || result.exitCode === 3010) {

@@ -7,7 +7,7 @@ import { useAuth } from '../../../../../context/AuthContext';
 import {
   fetchVMDetails, fetchVMStatus, fetchVMEvents, startVM, stopVM,
   forceStopVM, restartVM, resetVM, deleteVM,
-  enableVirtualization, disableVirtualization,
+  enableVirtualization, disableVirtualization, cancelVirtualization, cancelSoftwareInstalls,
   type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus, type SoftwareInstallEntry,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
@@ -129,18 +129,38 @@ export default function VMDetailPage() {
   const [opLoading, setOpLoading] = useState(false);
   const [virtLoading, setVirtLoading] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isBackground = false) => {
     if (!vmId || !isAuthenticated) return;
-    setLoading(true);
-    setError(null);
+    if (!isBackground) { setLoading(true); setError(null); }
     try {
       const data = await fetchVMDetails(vmId);
-      setDetails(data);
-      if (data.liveStatus) setLiveStatus(data.liveStatus);
+
+      // Only update state if relevant fields changed — prevents re-renders on every poll tick
+      setDetails((prev) => {
+        if (prev) {
+          const prevVm = prev.vm;
+          const nextVm = data.vm;
+          const unchanged =
+            prevVm.status === nextVm.status &&
+            prevVm.hyperVStatus === nextVm.hyperVStatus &&
+            prevVm.hyperVLastError === nextVm.hyperVLastError &&
+            prevVm.updatedAt === nextVm.updatedAt &&
+            JSON.stringify(prevVm.softwareInstalls) === JSON.stringify(nextVm.softwareInstalls);
+          if (unchanged) return prev;
+        }
+        return data;
+      });
+
+      if (data.liveStatus) {
+        setLiveStatus((prev) => {
+          if (prev && JSON.stringify(prev) === JSON.stringify(data.liveStatus)) return prev;
+          return data.liveStatus ?? null;
+        });
+      }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load VM details.');
+      if (!isBackground) setError(err instanceof ApiError ? err.message : 'Failed to load VM details.');
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   }, [vmId, isAuthenticated]);
 
@@ -149,7 +169,10 @@ export default function VMDetailPage() {
     setLiveLoading(true);
     try {
       const status = await fetchVMStatus(vmId);
-      setLiveStatus(status);
+      setLiveStatus((prev) => {
+        if (prev && JSON.stringify(prev) === JSON.stringify(status)) return prev;
+        return status;
+      });
     } catch {
       // best-effort
     } finally {
@@ -184,7 +207,7 @@ export default function VMDetailPage() {
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       if (cancelled) return;
-      await load();
+      await load(true);
       if (cancelled) return;
       delay = Math.min(delay * 2, 30_000);
       timer = setTimeout(() => void tick(), delay);
@@ -201,7 +224,7 @@ export default function VMDetailPage() {
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       if (cancelled) return;
-      await load();
+      await load(true);
       if (cancelled) return;
       delay = Math.min(delay * 2, 30_000);
       timer = setTimeout(() => void tick(), delay);
@@ -235,6 +258,31 @@ export default function VMDetailPage() {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to disable virtualization.');
     } finally {
       setVirtLoading(false);
+    }
+  }
+
+  async function handleVirtCancel() {
+    if (!vmId) return;
+    setVirtLoading(true);
+    try {
+      await cancelVirtualization(vmId);
+      addToast('success', 'Virtualization operation cancelled.');
+      await load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to cancel.');
+    } finally {
+      setVirtLoading(false);
+    }
+  }
+
+  async function handleSoftwareCancel() {
+    if (!vmId) return;
+    try {
+      await cancelSoftwareInstalls(vmId);
+      addToast('success', 'Software installations cancelled.');
+      await load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to cancel installations.');
     }
   }
 
@@ -490,6 +538,16 @@ export default function VMDetailPage() {
                 </p>
               )}
               <div className="flex flex-wrap gap-3">
+                {isVirtInProgress && (
+                  <button
+                    type="button"
+                    onClick={() => void handleVirtCancel()}
+                    disabled={virtLoading}
+                    className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                  >
+                    {virtLoading ? 'Working…' : 'Cancel'}
+                  </button>
+                )}
                 {!isVirtInProgress && (hyperVStatus === 'disabled' || hyperVStatus === 'failed') && (
                   <button
                     type="button"
@@ -558,7 +616,16 @@ export default function VMDetailPage() {
             ))}
           </div>
           {vm.softwareInstalls.some((s) => s.status === 'installing' || s.status === 'pending') && (
-            <p className="text-xs text-amber-600 mt-3">Software installation in progress — this can take a few minutes.</p>
+            <div className="flex items-center justify-between mt-3">
+              <p className="text-xs text-amber-600">Software installation in progress — this can take a few minutes.</p>
+              <button
+                type="button"
+                onClick={() => void handleSoftwareCancel()}
+                className="text-xs font-medium text-red-600 hover:text-red-700"
+              >
+                Cancel installs
+              </button>
+            </div>
           )}
         </div>
       )}

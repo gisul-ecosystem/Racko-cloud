@@ -110,6 +110,8 @@ router.post('/api/v1/vms/:vmId/reset', authMiddleware, verifyMiddleware, coreApi
 router.get('/api/v1/vms/:vmId/virtualization', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/virtualization/enable', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/virtualization/disable', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/virtualization/cancel', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/software/cancel', authMiddleware, verifyMiddleware, coreApiProxy);
 
 // ─── SOFTWARE ROUTES ──────────────────────────────────────────────────────────
 router.get('/api/v1/software', authMiddleware, verifyMiddleware, coreApiProxy);

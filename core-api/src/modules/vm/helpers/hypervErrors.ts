@@ -15,6 +15,10 @@ export function classifyHyperVError(err: unknown): { message: string; retryable:
     if (/guest agent is not running/i.test(msg)) {
       return { message: 'Guest agent is not available. Ensure the VM is running and the QEMU guest agent is installed.', retryable: true };
     }
+    // VM no longer exists in Proxmox — non-retryable, abort immediately
+    if (/does not exist|no such vm|no such node|not found/i.test(msg)) {
+      return { message: `VM no longer exists on the hypervisor: ${msg}`, retryable: false };
+    }
     return { message: msg, retryable: err.isRetryable };
   }
   if (err instanceof ProxmoxAuthError) {

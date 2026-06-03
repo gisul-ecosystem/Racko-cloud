@@ -198,6 +198,40 @@ export class VMController {
   }
 
   /**
+   * POST /api/v1/vms/:vmId/virtualization/cancel
+   */
+  async cancelVirtualization(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('Virtualization cancel requested', { userId: authReq.user.userId, vmId: vmId.toString() });
+      const status = await vmService.cancelVirtualization(vmId, adminId, req);
+      success(res, 'Virtualization operation cancelled.', status);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/vms/:vmId/software/cancel
+   */
+  async cancelSoftwareInstalls(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('Software install cancel requested', { userId: authReq.user.userId, vmId: vmId.toString() });
+      await vmService.cancelSoftwareInstalls(vmId, adminId, req);
+      success(res, 'Software installations cancelled.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * POST /api/v1/vms/:vmId/virtualization/disable
    */
   async disableVirtualization(req: Request, res: Response, next: NextFunction): Promise<void> {

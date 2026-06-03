@@ -9,6 +9,7 @@ export interface SoftwareInstall {
   lastError?: string;
   installedAt?: Date;
   sweeperAttempts: number;
+  cancelled: boolean;
 }
 
 export interface IVM extends Document {
@@ -63,6 +64,7 @@ export interface IVM extends Document {
   hyperVAttemptCount: number;
   hyperVLockedUntil?: Date;
   hyperVPrePowerState?: 'running' | 'stopped';
+  hyperVCancelled: boolean;
 
   // Software installation (Windows — Chocolatey)
   softwareInstalls: SoftwareInstall[];
@@ -196,6 +198,10 @@ const vmSchema = new Schema<IVM>(
       type: String,
       enum: ['running', 'stopped'],
     },
+    hyperVCancelled: {
+      type: Boolean,
+      default: false,
+    },
     softwareInstalls: {
       type: [
         {
@@ -209,6 +215,7 @@ const vmSchema = new Schema<IVM>(
           lastError: { type: String, trim: true },
           installedAt: { type: Date },
           sweeperAttempts: { type: Number, default: 0 },
+          cancelled: { type: Boolean, default: false },
         },
       ],
       default: [],

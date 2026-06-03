@@ -305,8 +305,23 @@ export class VMService {
 
     const previousStatus = vm.status;
 
-    // Stop VM first if running
-    if (vm.status === 'running') {
+    // Check live Proxmox power state — source of truth for stop decision.
+    // DB status may be stale (e.g. delete_failed, error) while VM is still running in Proxmox.
+    let liveProxmoxStatus = 'stopped';
+    try {
+      const statusRes = await proxmoxClient.get<{ data: { status: string } }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/status/current`
+      );
+      liveProxmoxStatus = statusRes.data.data.status;
+    } catch {
+      // If we can't reach Proxmox, assume stopped and let retryProxmoxDelete handle it
+      logger.warn('Could not query live VM status before deletion — proceeding', {
+        vmId: vmId.toString(), vmid: vm.vmid, node: vm.node,
+      });
+    }
+
+    // Stop VM first if Proxmox says it's running — regardless of DB status
+    if (liveProxmoxStatus === 'running') {
       logger.info('Stopping VM before deletion', { vmid: vm.vmid, node: vm.node });
       try {
         const stopResponse = await proxmoxClient.post<{ data: string }>(
@@ -322,9 +337,19 @@ export class VMService {
       }
     }
 
-    // Mark as deleting
+    // Mark as deleting — and cancel any in-progress HyperV/software jobs
+    // so background provisioners abort on next poll cycle
     vm.status = 'deleting';
     await vm.save();
+
+    await VM.findByIdAndUpdate(vmId, {
+      $set: {
+        hyperVCancelled: true,
+        'softwareInstalls.$[el].cancelled': true,
+        'softwareInstalls.$[el].status': 'failed',
+        'softwareInstalls.$[el].lastError': 'VM deleted.',
+      },
+    }, { arrayFilters: [{ 'el.status': { $in: ['pending', 'installing'] } }] });
 
     // Delete from Proxmox with retry + backoff
     try {
@@ -864,6 +889,9 @@ export class VMService {
       enableVirtualization: true,
     });
 
+    // Reset cancellation flag so a previously cancelled op doesn't block this new one
+    await VM.findByIdAndUpdate(vmId, { $set: { hyperVCancelled: false } });
+
     scheduleHyperVEnable(
       {
         vmObjectId: vm._id,
@@ -903,6 +931,9 @@ export class VMService {
       resetAttempts: true,
     });
 
+    // Reset cancellation flag so a previously cancelled op doesn't block this new one
+    await VM.findByIdAndUpdate(vmId, { $set: { hyperVCancelled: false } });
+
     scheduleHyperVDisable({
       vmObjectId: vm._id,
       node: vm.node,
@@ -912,6 +943,65 @@ export class VMService {
     }, true);
 
     return { enableVirtualization: vm.enableVirtualization ?? false, hyperVStatus: 'disabling' };
+  }
+
+  /**
+   * Cancel an in-progress HyperV operation.
+   * Sets the cancellation flag — the provisioner detects it on next poll and aborts.
+   */
+  async cancelVirtualization(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<VirtualizationStatus> {
+    const authReq = req as AuthenticatedRequest;
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (!isHyperVInProgress(vm.hyperVStatus)) {
+      throw new VMOperationError('No virtualization operation is in progress.', vm.status, vm.status);
+    }
+
+    await VM.findByIdAndUpdate(vmId, {
+      $set: {
+        hyperVCancelled: true,
+        hyperVLastError: 'Cancelled by admin.',
+        hyperVStatus: 'failed',
+        hyperVStatusChangedAt: new Date(),
+      },
+    });
+
+    logger.info('HyperV operation cancelled', { vmId: vmId.toString(), vmid: vm.vmid });
+    return { enableVirtualization: vm.enableVirtualization ?? false, hyperVStatus: 'failed', hyperVLastError: 'Cancelled by admin.' };
+  }
+
+  /**
+   * Cancel all pending/installing software installs on a VM.
+   */
+  async cancelSoftwareInstalls(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<void> {
+    const authReq = req as AuthenticatedRequest;
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    await VM.updateOne(
+      { _id: vmId },
+      {
+        $set: {
+          'softwareInstalls.$[el].cancelled': true,
+          'softwareInstalls.$[el].status': 'failed',
+          'softwareInstalls.$[el].lastError': 'Cancelled by admin.',
+        },
+      },
+      { arrayFilters: [{ 'el.status': { $in: ['pending', 'installing'] } }] }
+    );
+
+    logger.info('Software installs cancelled', { vmId: vmId.toString(), vmid: vm.vmid });
   }
 
   /**

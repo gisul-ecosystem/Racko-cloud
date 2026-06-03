@@ -241,4 +241,20 @@ router.post(
   (req, res, next) => vmController.disableVirtualization(req, res, next)
 );
 
+// POST /api/v1/vms/:vmId/virtualization/cancel
+router.post(
+  '/:vmId/virtualization/cancel',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.cancelVirtualization(req, res, next)
+);
+
+// POST /api/v1/vms/:vmId/software/cancel
+router.post(
+  '/:vmId/software/cancel',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.cancelSoftwareInstalls(req, res, next)
+);
+
 export default router;

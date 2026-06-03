@@ -357,6 +357,18 @@ export async function disableVirtualization(vmId: string): Promise<Virtualizatio
   return res.data;
 }
 
+export async function cancelVirtualization(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization/cancel`,
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
+export async function cancelSoftwareInstalls(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/${vmId}/software/cancel`, { method: 'POST' });
+}
+
 // ─── Jobs ─────────────────────────────────────────────────────────────────────
 
 export async function fetchMyJobs(limit = 20): Promise<IVMJob[]> {
