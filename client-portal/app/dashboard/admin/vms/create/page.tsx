@@ -1,12 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../../../context/AuthContext';
 import { useTemplates, useTemplateDetails } from '../../../../../hooks/useTemplates';
 import { createVM } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
+import { isWindowsTemplate } from '../../../../../components/dashboard/HyperVStatusBadge';
 import {
   Server, ChevronRight, ChevronLeft, Check,
   Cpu, MemoryStick, HardDrive, Layers,
@@ -40,8 +41,16 @@ export default function CreateVMPage() {
   const [ramOverride, setRamOverride] = useState('');
   const [diskOverride, setDiskOverride] = useState('');
   const [description, setDescription] = useState('');
+  const [enableVirtualization, setEnableVirtualization] = useState(false);
   const [nameError, setNameError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Hyper-V is Windows-only — only show the option for Windows templates.
+  const showVirtualizationOption = isWindowsTemplate(templateDetails?.osType);
+
+  useEffect(() => {
+    if (!showVirtualizationOption) setEnableVirtualization(false);
+  }, [showVirtualizationOption]);
 
   // Validation helpers
   const minCpu = templateDetails?.cpuCores ?? 1;
@@ -99,6 +108,7 @@ export default function CreateVMPage() {
         ...(ramOverride && safeRam > minRam ? { memoryGb: safeRam } : {}),
         ...(diskOverride && safeDisk > minDisk ? { diskGb: safeDisk } : {}),
         ...(description ? { description } : {}),
+        ...(showVirtualizationOption && enableVirtualization ? { enableVirtualization: true } : {}),
       };
 
       const result = await createVM(dto);
@@ -345,6 +355,27 @@ export default function CreateVMPage() {
             </div>
           </div>
 
+          {/* Virtualization (Hyper-V) — Windows templates only */}
+          {showVirtualizationOption && (
+            <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
+              <label className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={enableVirtualization}
+                  onChange={(e) => setEnableVirtualization(e.target.checked)}
+                  className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                />
+                <span>
+                  <span className="text-sm font-medium text-gray-900">Enable virtualization (Hyper-V)</span>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Turns on Hyper-V inside this Windows VM after creation. The VM is started and
+                    rebooted automatically — this can take a few minutes. Status is shown on the VM page.
+                  </p>
+                </span>
+              </label>
+            </div>
+          )}
+
           {/* Description */}
           <div>
             <label className={labelClass}>Description <span className="text-gray-400">(optional)</span></label>
@@ -393,6 +424,9 @@ export default function CreateVMPage() {
               { label: 'CPU', value: `${safeCpu} vCPU` },
               { label: 'RAM', value: `${safeRam} GB` },
               { label: 'Disk', value: cloneType === 'dedicated_storage' ? `${safeDisk} GB` : 'Shared (dynamic)' },
+              ...(showVirtualizationOption
+                ? [{ label: 'Virtualization', value: enableVirtualization ? 'Enabled (Hyper-V)' : 'Disabled' }]
+                : []),
               ...(description ? [{ label: 'Description', value: description }] : []),
             ].map(({ label, value }) => (
               <div key={label} className="flex items-start justify-between py-2 border-b border-gray-50 last:border-0">

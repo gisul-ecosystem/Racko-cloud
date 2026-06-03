@@ -10,6 +10,9 @@ import { validateResources } from './helpers/resourceValidator';
 import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
+import { isWindowsOsType } from './helpers/hypervProvisioner';
+import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
+import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
 import {
   VMNotFoundError,
   VMOwnershipError,
@@ -30,6 +33,7 @@ import type {
   VMStatus,
   VMFilters,
   VMDetails,
+  VirtualizationStatus,
   ProxmoxVMCurrentStatus,
   ProxmoxNetworkInterface,
   ProxmoxFsInfo,
@@ -192,6 +196,12 @@ export class VMService {
     const memoryGb = dto.memoryGb ?? templateSpecs.memoryGb;
     const diskGb = dto.diskGb ?? templateSpecs.diskGb;
 
+    // Virtualization (Hyper-V) is Windows-only
+    const enableVirtualization = dto.enableVirtualization ?? false;
+    if (enableVirtualization && !isWindowsOsType(templateDetails.osType)) {
+      throw new ValidationError('Virtualization can only be enabled on Windows templates.');
+    }
+
     // Validate resources
     const validation = await validateResources(dto, templateSpecs);
     if (!validation.canCreate) {
@@ -226,6 +236,7 @@ export class VMService {
         templateMemoryGb: templateSpecs.memoryGb,  // actual template value from Proxmox
         namePrefix: dto.name,
         count: dto.count,
+        enableVirtualization,
       },
       jobErrors: [],
       startedAt: new Date(),
@@ -752,6 +763,9 @@ export class VMService {
         ipAddress: vm.ipAddress,
         macAddress: vm.macAddress,
         haEnabled: vm.haEnabled,
+        enableVirtualization: vm.enableVirtualization ?? false,
+        hyperVStatus: vm.hyperVStatus ?? 'disabled',
+        hyperVLastError: vm.hyperVLastError || undefined,
         createdAt: vm.createdAt,
         updatedAt: vm.updatedAt,
       },
@@ -763,6 +777,123 @@ export class VMService {
         details: e.details,
       })),
     };
+  }
+
+  // ─── Virtualization (Hyper-V) ───────────────────────────────────────────────
+
+  /**
+   * Get the current virtualization (Hyper-V) status of a VM.
+   */
+  async getVirtualizationStatus(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<VirtualizationStatus> {
+    const authReq = req as AuthenticatedRequest;
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    return {
+      enableVirtualization: vm.enableVirtualization ?? false,
+      hyperVStatus: vm.hyperVStatus ?? 'disabled',
+      hyperVLastError: vm.hyperVLastError || undefined,
+    };
+  }
+
+  /**
+   * Enable Hyper-V on a VM. Starts the work in the background (it boots the VM,
+   * runs PowerShell and reboots — minutes) and returns immediately with
+   * 'enabling'. The frontend polls the status until enabled/failed.
+   */
+  async enableVirtualization(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<VirtualizationStatus> {
+    const authReq = req as AuthenticatedRequest;
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (isHyperVInProgress(vm.hyperVStatus)) {
+      throw new VMOperationError('Virtualization change is already in progress.', vm.status, vm.status);
+    }
+
+    // Confirm the underlying template/guest is Windows.
+    let osType: string | undefined;
+    try {
+      const cfg = await proxmoxClient.get<{ data: { ostype?: string } }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/config`
+      );
+      osType = cfg.data.data.ostype;
+    } catch (err) {
+      // Best-effort — log and fall through; provisioner will fail clearly if not Windows.
+      logger.warn('Could not read VM ostype for virtualization pre-check', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        node: vm.node,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (osType && !isWindowsOsType(osType)) {
+      throw new ValidationError('Virtualization can only be enabled on Windows VMs.');
+    }
+
+    await updateHyperVStatus(vmId, 'enabling', {
+      lastError: '',
+      resetAttempts: true,
+      enableVirtualization: true,
+    });
+
+    scheduleHyperVEnable(
+      {
+        vmObjectId: vm._id,
+        node: vm.node,
+        vmid: vm.vmid,
+        adminId,
+        vmName: vm.name,
+      },
+      true
+    );
+
+    return { enableVirtualization: true, hyperVStatus: 'enabling' };
+  }
+
+  /**
+   * Disable Hyper-V on a VM. Background work, same pattern as enable.
+   */
+  async disableVirtualization(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<VirtualizationStatus> {
+    const authReq = req as AuthenticatedRequest;
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (isHyperVInProgress(vm.hyperVStatus)) {
+      throw new VMOperationError('Virtualization change is already in progress.', vm.status, vm.status);
+    }
+
+    // Do NOT set enableVirtualization: false here. The flag reflects actual state,
+    // not intent. If the background job fails, Hyper-V is still enabled inside the VM
+    // and the flag must stay true. The provisioner sets it false only on confirmed success.
+    await updateHyperVStatus(vmId, 'disabling', {
+      lastError: '',
+      resetAttempts: true,
+    });
+
+    scheduleHyperVDisable({
+      vmObjectId: vm._id,
+      node: vm.node,
+      vmid: vm.vmid,
+      adminId,
+      vmName: vm.name,
+    }, true);
+
+    return { enableVirtualization: vm.enableVirtualization ?? false, hyperVStatus: 'disabling' };
   }
 
   /**

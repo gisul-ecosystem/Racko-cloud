@@ -7,6 +7,7 @@ import { VMJob } from '../vmJob.model';
 import { VMEvent } from '../vmEvent.model';
 import { selectNodesForBulk, selectNode } from './placementEngine';
 import { pollTaskWithCleanup } from './taskPoller';
+import { scheduleHyperVEnable } from './hypervQueue';
 import { ProxmoxConnectionError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
@@ -93,6 +94,7 @@ export async function processBulkCreation(
           adminId,
           jobId,
           description: undefined,
+          enableVirtualization: specs.enableVirtualization ?? false,
         });
         globalIndex++;
       }
@@ -427,6 +429,10 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     proxmoxStatus: 'stopped',
     jobId: spec.jobId,
     haEnabled: false,
+    enableVirtualization: spec.enableVirtualization ?? false,
+    hyperVStatus: spec.enableVirtualization ? 'pending' : 'disabled',
+    hyperVStatusChangedAt: new Date(),
+    hyperVAttemptCount: 0,
   });
 
   // Log audit event
@@ -440,6 +446,19 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     ipAddress: 'bulk-job',
     userAgent: 'bulk-processor',
   });
+
+  // Enable Hyper-V in the background (boots VM, runs PowerShell, reboots — minutes).
+  // Fire-and-forget so VM creation completes fast; status is tracked on the VM
+  // (hyperVStatus: pending → enabling → enabled/failed) and shown/polled in the UI.
+  if (spec.enableVirtualization) {
+    scheduleHyperVEnable({
+      vmObjectId: vm._id,
+      node: spec.node,
+      vmid,
+      adminId: spec.adminId,
+      vmName: vm.name,
+    });
+  }
 
   // HA_SLOT: after VM creation, if vm.haEnabled, call Proxmox HA API to register VM
   // SNAPSHOT_SLOT: post-creation snapshot support
