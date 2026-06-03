@@ -97,6 +97,18 @@ export interface VirtualizationStatus {
   hyperVLastError?: string;
 }
 
+// ─── Software installation ────────────────────────────────────────────────────
+
+export type SoftwareInstallStatus = 'pending' | 'installing' | 'installed' | 'failed';
+
+export interface SoftwareInstallEntry {
+  softwareId: string;
+  name: string;
+  status: SoftwareInstallStatus;
+  lastError?: string;
+  installedAt?: Date;
+}
+
 // ─── Request DTOs ─────────────────────────────────────────────────────────────
 
 export interface CreateVMDto {
@@ -109,6 +121,7 @@ export interface CreateVMDto {
   diskGb?: number;                       // optional override (must be >= template)
   description?: string;
   enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
+  softwareIds?: string[];                // Windows templates only — software to install
 }
 
 export interface VMFilters {
@@ -246,6 +259,7 @@ export interface VMDetails {
     enableVirtualization: boolean;
     hyperVStatus: HyperVStatus;
     hyperVLastError?: string;
+    softwareInstalls: SoftwareInstallEntry[];
     createdAt: Date;
     updatedAt: Date;
   };
@@ -284,11 +298,12 @@ export interface BulkVMSpec {
   cpuCores: number;
   memoryGb: number;
   diskGb: number;
-  templateDiskGb: number;    // actual template disk size from Proxmox
+  templateDiskGb: number;
   templateCpuCores: number;
   templateMemoryGb: number;
   adminId: mongoose.Types.ObjectId;
   jobId: mongoose.Types.ObjectId;
   description?: string;
   enableVirtualization?: boolean;
+  softwareIds?: mongoose.Types.ObjectId[];
 }

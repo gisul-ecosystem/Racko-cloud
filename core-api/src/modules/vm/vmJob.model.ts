@@ -31,6 +31,7 @@ export interface IVMJob extends Document {
     namePrefix: string;
     count: number;
     enableVirtualization?: boolean;
+    softwareIds?: mongoose.Types.ObjectId[];
   };
 
   // Error details
@@ -110,6 +111,7 @@ const vmJobSchema = new Schema<IVMJob>(
       namePrefix: { type: String, required: true },
       count: { type: Number, required: true },
       enableVirtualization: { type: Boolean, default: false },
+      softwareIds: { type: [Schema.Types.ObjectId], ref: 'Software', default: [] },
     },
     jobErrors: {
       type: [

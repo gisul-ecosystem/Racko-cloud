@@ -43,11 +43,23 @@ function sleep(ms: number): Promise<void> {
 }
 
 /** Wait until the QEMU guest agent answers a ping (or time out). */
-async function waitForGuestAgent(node: string, vmid: number): Promise<void> {
+async function waitForGuestAgent(node: string, vmid: number, vmObjectId?: mongoose.Types.ObjectId): Promise<void> {
   const deadline = Date.now() + config.HYPERV_AGENT_READY_TIMEOUT_MS;
   let attempt = 0;
   while (Date.now() < deadline) {
     attempt++;
+
+    // Liveness + cancellation check — abort if VM deleted or cancelled
+    if (vmObjectId) {
+      const live = await VM.findById(vmObjectId).select('status hyperVCancelled').lean();
+      if (!live || live.status === 'deleted' || live.status === 'deleting') {
+        throw new Error('VM has been deleted — aborting HyperV provisioning.');
+      }
+      if (live.hyperVCancelled) {
+        throw new Error('HyperV operation was cancelled by admin.');
+      }
+    }
+
     try {
       await proxmoxClient.post(`/nodes/${node}/qemu/${vmid}/agent/ping`, {});
       logger.info('[HyperV] guest agent ping OK', { vmid, node, attempt });
@@ -173,21 +185,22 @@ async function rebootVm(node: string, vmid: number): Promise<void> {
   }
 }
 
-async function settleAfterReboot(node: string, vmid: number): Promise<void> {
+async function settleAfterReboot(node: string, vmid: number, vmObjectId: mongoose.Types.ObjectId): Promise<void> {
   logger.info('[HyperV] waiting for post-reboot settle', {
     vmid,
     node,
     ms: config.HYPERV_POST_REBOOT_SETTLE_MS,
   });
   await sleep(config.HYPERV_POST_REBOOT_SETTLE_MS);
-  await waitForGuestAgent(node, vmid);
+  await waitForGuestAgent(node, vmid, vmObjectId);
 }
 
 async function runPowerShell(
   node: string,
   vmid: number,
   script: string,
-  label: string
+  label: string,
+  vmObjectId?: mongoose.Types.ObjectId
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script];
   const deadline = Date.now() + config.HYPERV_EXEC_DEADLINE_MS;
@@ -205,7 +218,7 @@ async function runPowerShell(
     attempt++;
 
     try {
-      await waitForGuestAgent(node, vmid);
+      await waitForGuestAgent(node, vmid, vmObjectId);
     } catch (err) {
       lastError = classifyHyperVError(err).message;
       logger.warn('[HyperV] agent did not return before issuing command', {
@@ -384,7 +397,7 @@ export async function provisionHyperVForVM(params: {
   try {
     const prior = await ensureVmRunning(node, vmid);
     const prePowerState = await rememberPrePowerState(vmObjectId, prior);
-    await waitForGuestAgent(node, vmid);
+    await waitForGuestAgent(node, vmid, vmObjectId);
 
     if ((await readHyperVState(node, vmid, 'pre-check')) === 'Enabled') {
       await finalizePowerState(vmObjectId, node, vmid, prePowerState);
@@ -398,22 +411,20 @@ export async function provisionHyperVForVM(params: {
       node,
       vmid,
       "$ErrorActionPreference='Stop'; Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart | Out-Null",
-      'enable'
+      'enable',
+      vmObjectId
     );
     if (enable.exitCode !== 0 && enable.exitCode !== 3010) {
       throw new Error(enable.stderr || enable.stdout || `enable failed (exit ${enable.exitCode})`);
     }
 
     await rebootVm(node, vmid);
-    await settleAfterReboot(node, vmid);
+    await settleAfterReboot(node, vmid, vmObjectId);
 
-    // Some Windows builds stage the hypervisor on the first boot and only load
-    // it on the next; a second reboot makes the enable reliable. If the feature
-    // already reports Enabled, the extra cycle is skipped.
     if (config.HYPERV_SECOND_REBOOT && (await readHyperVState(node, vmid, 'verify-1')) !== 'Enabled') {
       logger.info('[HyperV] feature not yet enabled — performing second reboot', { vmid, node });
       await rebootVm(node, vmid);
-      await settleAfterReboot(node, vmid);
+      await settleAfterReboot(node, vmid, vmObjectId);
     }
 
     if ((await readHyperVState(node, vmid, 'verify')) !== 'Enabled') {
@@ -449,7 +460,7 @@ export async function disableHyperVForVM(params: {
   try {
     const prior = await ensureVmRunning(node, vmid);
     const prePowerState = await rememberPrePowerState(vmObjectId, prior);
-    await waitForGuestAgent(node, vmid);
+    await waitForGuestAgent(node, vmid, vmObjectId);
 
     if ((await readHyperVState(node, vmid, 'pre-check')) === 'Disabled') {
       await finalizePowerState(vmObjectId, node, vmid, prePowerState);
@@ -466,14 +477,15 @@ export async function disableHyperVForVM(params: {
       node,
       vmid,
       "$ErrorActionPreference='Stop'; Disable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -NoRestart | Out-Null",
-      'disable'
+      'disable',
+      vmObjectId
     );
     if (disable.exitCode !== 0 && disable.exitCode !== 3010) {
       throw new Error(disable.stderr || disable.stdout || `disable failed (exit ${disable.exitCode})`);
     }
 
     await rebootVm(node, vmid);
-    await settleAfterReboot(node, vmid);
+    await settleAfterReboot(node, vmid, vmObjectId);
 
     if ((await readHyperVState(node, vmid, 'verify')) !== 'Disabled') {
       throw new Error('Hyper-V did not report as disabled after reboot.');

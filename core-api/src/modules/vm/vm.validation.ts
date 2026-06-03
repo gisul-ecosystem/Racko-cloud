@@ -54,6 +54,13 @@ export const createVMSchema = z.object({
       .max(500, 'description cannot exceed 500 characters')
       .optional(),
     enableVirtualization: z.boolean().optional().default(false),
+    softwareIds: z
+      .array(
+        z.string().refine((val) => mongoose.Types.ObjectId.isValid(val), { message: 'Invalid software ID' })
+      )
+      .max(20, 'Cannot select more than 20 software packages')
+      .optional()
+      .default([]),
   }),
 });
 

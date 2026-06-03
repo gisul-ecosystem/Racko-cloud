@@ -8,6 +8,8 @@ import { VMEvent } from '../vmEvent.model';
 import { selectNodesForBulk, selectNode } from './placementEngine';
 import { pollTaskWithCleanup } from './taskPoller';
 import { scheduleHyperVEnable } from './hypervQueue';
+import { scheduleSoftwareInstall } from './softwareQueue';
+import { softwareService } from '../../software/software.service';
 import { ProxmoxConnectionError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
@@ -95,6 +97,7 @@ export async function processBulkCreation(
           jobId,
           description: undefined,
           enableVirtualization: specs.enableVirtualization ?? false,
+          softwareIds: specs.softwareIds ?? [],
         });
         globalIndex++;
       }
@@ -412,6 +415,15 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     }
   }
 
+  // Resolve software names upfront so VM document is complete from creation
+  const softwareNameMap = new Map<string, string>();
+  if ((spec.softwareIds ?? []).length > 0) {
+    const softwareDocs = await softwareService.getByIds(spec.softwareIds ?? []);
+    for (const s of softwareDocs) {
+      softwareNameMap.set(s._id.toString(), s.name);
+    }
+  }
+
   // Save VM to MongoDB
   const vm = await VM.create({
     vmid,
@@ -433,6 +445,12 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     hyperVStatus: spec.enableVirtualization ? 'pending' : 'disabled',
     hyperVStatusChangedAt: new Date(),
     hyperVAttemptCount: 0,
+    softwareInstalls: (spec.softwareIds ?? []).map((id) => ({
+      softwareId: id,
+      name: softwareNameMap.get(id.toString()) ?? id.toString(),
+      status: 'pending',
+      sweeperAttempts: 0,
+    })),
   });
 
   // Log audit event
@@ -458,6 +476,35 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
       adminId: spec.adminId,
       vmName: vm.name,
     });
+  }
+
+  // Software installation runs after HyperV (if requested) or independently.
+  // The provisioner boots the VM, waits for guest agent, bootstraps Chocolatey,
+  // and installs each package sequentially.
+  if ((spec.softwareIds ?? []).length > 0) {
+    if (spec.enableVirtualization) {
+      // Chain: HyperV finishes first, then software install runs.
+      // The HyperV provisioner calls scheduleSoftwareInstall on completion via
+      // the queue — nothing extra needed here; we just schedule as a fallback
+      // with a delay to give HyperV time to finish.
+      setTimeout(() => {
+        scheduleSoftwareInstall({
+          vmObjectId: vm._id,
+          node: spec.node,
+          vmid,
+          adminId: spec.adminId,
+          vmName: vm.name,
+        });
+      }, 15 * 60 * 1000); // 15 min buffer for HyperV to complete
+    } else {
+      scheduleSoftwareInstall({
+        vmObjectId: vm._id,
+        node: spec.node,
+        vmid,
+        adminId: spec.adminId,
+        vmName: vm.name,
+      });
+    }
   }
 
   // HA_SLOT: after VM creation, if vm.haEnabled, call Proxmox HA API to register VM

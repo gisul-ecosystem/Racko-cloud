@@ -7,8 +7,8 @@ import { useAuth } from '../../../../../context/AuthContext';
 import {
   fetchVMDetails, fetchVMStatus, fetchVMEvents, startVM, stopVM,
   forceStopVM, restartVM, resetVM, deleteVM,
-  enableVirtualization, disableVirtualization,
-  type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus,
+  enableVirtualization, disableVirtualization, cancelVirtualization, cancelSoftwareInstalls,
+  type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus, type SoftwareInstallEntry,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { VMStatusBadge, CloneTypeBadge, UsageBar } from '../../../../../components/dashboard/VMStatusBadge';
@@ -129,18 +129,38 @@ export default function VMDetailPage() {
   const [opLoading, setOpLoading] = useState(false);
   const [virtLoading, setVirtLoading] = useState(false);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (isBackground = false) => {
     if (!vmId || !isAuthenticated) return;
-    setLoading(true);
-    setError(null);
+    if (!isBackground) { setLoading(true); setError(null); }
     try {
       const data = await fetchVMDetails(vmId);
-      setDetails(data);
-      if (data.liveStatus) setLiveStatus(data.liveStatus);
+
+      // Only update state if relevant fields changed — prevents re-renders on every poll tick
+      setDetails((prev) => {
+        if (prev) {
+          const prevVm = prev.vm;
+          const nextVm = data.vm;
+          const unchanged =
+            prevVm.status === nextVm.status &&
+            prevVm.hyperVStatus === nextVm.hyperVStatus &&
+            prevVm.hyperVLastError === nextVm.hyperVLastError &&
+            prevVm.updatedAt === nextVm.updatedAt &&
+            JSON.stringify(prevVm.softwareInstalls) === JSON.stringify(nextVm.softwareInstalls);
+          if (unchanged) return prev;
+        }
+        return data;
+      });
+
+      if (data.liveStatus) {
+        setLiveStatus((prev) => {
+          if (prev && JSON.stringify(prev) === JSON.stringify(data.liveStatus)) return prev;
+          return data.liveStatus ?? null;
+        });
+      }
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load VM details.');
+      if (!isBackground) setError(err instanceof ApiError ? err.message : 'Failed to load VM details.');
     } finally {
-      setLoading(false);
+      if (!isBackground) setLoading(false);
     }
   }, [vmId, isAuthenticated]);
 
@@ -149,7 +169,10 @@ export default function VMDetailPage() {
     setLiveLoading(true);
     try {
       const status = await fetchVMStatus(vmId);
-      setLiveStatus(status);
+      setLiveStatus((prev) => {
+        if (prev && JSON.stringify(prev) === JSON.stringify(status)) return prev;
+        return status;
+      });
     } catch {
       // best-effort
     } finally {
@@ -171,6 +194,10 @@ export default function VMDetailPage() {
   const isVirtInProgress =
     hyperVStatus === 'pending' || hyperVStatus === 'enabling' || hyperVStatus === 'disabling';
 
+  const isSoftwareInProgress = details?.vm.softwareInstalls?.some(
+    (s) => s.status === 'pending' || s.status === 'installing'
+  ) ?? false;
+
   // While Hyper-V is being applied, poll on a backoff (5s → 10s → 20s → 30s cap)
   // and stop automatically once it reaches a terminal state (enabled/failed).
   useEffect(() => {
@@ -180,7 +207,7 @@ export default function VMDetailPage() {
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
       if (cancelled) return;
-      await load();
+      await load(true);
       if (cancelled) return;
       delay = Math.min(delay * 2, 30_000);
       timer = setTimeout(() => void tick(), delay);
@@ -188,6 +215,23 @@ export default function VMDetailPage() {
     timer = setTimeout(() => void tick(), delay);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [isVirtInProgress, load]);
+
+  // Poll while any software install is in progress (same backoff pattern)
+  useEffect(() => {
+    if (!isSoftwareInProgress) return;
+    let cancelled = false;
+    let delay = 10_000;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (cancelled) return;
+      await load(true);
+      if (cancelled) return;
+      delay = Math.min(delay * 2, 30_000);
+      timer = setTimeout(() => void tick(), delay);
+    };
+    timer = setTimeout(() => void tick(), delay);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [isSoftwareInProgress, load]);
 
   async function handleVirtEnable() {
     if (!vmId) return;
@@ -214,6 +258,31 @@ export default function VMDetailPage() {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to disable virtualization.');
     } finally {
       setVirtLoading(false);
+    }
+  }
+
+  async function handleVirtCancel() {
+    if (!vmId) return;
+    setVirtLoading(true);
+    try {
+      await cancelVirtualization(vmId);
+      addToast('success', 'Virtualization operation cancelled.');
+      await load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to cancel.');
+    } finally {
+      setVirtLoading(false);
+    }
+  }
+
+  async function handleSoftwareCancel() {
+    if (!vmId) return;
+    try {
+      await cancelSoftwareInstalls(vmId);
+      addToast('success', 'Software installations cancelled.');
+      await load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to cancel installations.');
     }
   }
 
@@ -469,6 +538,16 @@ export default function VMDetailPage() {
                 </p>
               )}
               <div className="flex flex-wrap gap-3">
+                {isVirtInProgress && (
+                  <button
+                    type="button"
+                    onClick={() => void handleVirtCancel()}
+                    disabled={virtLoading}
+                    className="text-xs font-medium text-red-600 hover:text-red-700 disabled:opacity-50"
+                  >
+                    {virtLoading ? 'Working…' : 'Cancel'}
+                  </button>
+                )}
                 {!isVirtInProgress && (hyperVStatus === 'disabled' || hyperVStatus === 'failed') && (
                   <button
                     type="button"
@@ -501,6 +580,55 @@ export default function VMDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Software installs */}
+      {vm.softwareInstalls && vm.softwareInstalls.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-4">
+          <h2 className="text-sm font-semibold text-gray-900 mb-4">Software</h2>
+          <div className="space-y-2">
+            {vm.softwareInstalls.map((sw, i) => (
+              <div key={i} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                <span className="text-xs font-medium text-gray-700">{sw.name}</span>
+                <div className="flex items-center gap-2">
+                  {sw.status === 'installed' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">
+                      Installed
+                    </span>
+                  )}
+                  {sw.status === 'installing' && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                      <span className="w-2.5 h-2.5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                      Installing
+                    </span>
+                  )}
+                  {sw.status === 'pending' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                      Pending
+                    </span>
+                  )}
+                  {sw.status === 'failed' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700" title={sw.lastError}>
+                      Failed
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          {vm.softwareInstalls.some((s) => s.status === 'installing' || s.status === 'pending') && (
+            <div className="flex items-center justify-between mt-3">
+              <p className="text-xs text-amber-600">Software installation in progress — this can take a few minutes.</p>
+              <button
+                type="button"
+                onClick={() => void handleSoftwareCancel()}
+                className="text-xs font-medium text-red-600 hover:text-red-700"
+              >
+                Cancel installs
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Event timeline */}
       {details.recentEvents.length > 0 && (
