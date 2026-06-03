@@ -106,6 +106,17 @@ router.post('/api/v1/vms/:vmId/stop', authMiddleware, verifyMiddleware, coreApiP
 router.post('/api/v1/vms/:vmId/force-stop', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/restart', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/reset', authMiddleware, verifyMiddleware, coreApiProxy);
+// Virtualization (Hyper-V) — previously missing, caused 404
+router.get('/api/v1/vms/:vmId/virtualization', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/virtualization/enable', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/virtualization/disable', authMiddleware, verifyMiddleware, coreApiProxy);
+
+// ─── SOFTWARE ROUTES ──────────────────────────────────────────────────────────
+router.get('/api/v1/software', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/software/all', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/software', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.patch('/api/v1/software/:softwareId', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.delete('/api/v1/software/:softwareId', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/vms/:vmId/virtualization', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/virtualization/enable', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/virtualization/disable', authMiddleware, verifyMiddleware, coreApiProxy);

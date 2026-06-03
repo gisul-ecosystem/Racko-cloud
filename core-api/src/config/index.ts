@@ -74,6 +74,13 @@ const envSchema = z.object({
   // Monitoring
   NODE_MONITOR_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
 
+  // Software installation (Windows guests — Chocolatey)
+  SOFTWARE_MAX_CONCURRENT: z.string().regex(/^\d+$/).transform(Number).default('5'),
+  SOFTWARE_SWEEPER_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  SOFTWARE_STUCK_INSTALLING_MS: z.string().regex(/^\d+$/).transform(Number).default('1200000'),
+  SOFTWARE_STUCK_PENDING_MS: z.string().regex(/^\d+$/).transform(Number).default('600000'),
+  SOFTWARE_MAX_SWEEPER_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
+
   // Hyper-V / nested virtualization (Windows guests)
   HYPERV_AGENT_READY_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
   HYPERV_EXEC_DEADLINE_MS: z.string().regex(/^\d+$/).transform(Number).default('1200000'),

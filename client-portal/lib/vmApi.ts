@@ -33,6 +33,27 @@ export type CloneType = 'dedicated_storage' | 'dynamic_storage';
 
 export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'disabling' | 'enabled' | 'failed';
 
+export type SoftwareInstallStatus = 'pending' | 'installing' | 'installed' | 'failed';
+
+export interface SoftwareInstallEntry {
+  softwareId: string;
+  name: string;
+  status: SoftwareInstallStatus;
+  lastError?: string;
+  installedAt?: string;
+}
+
+export interface SoftwareCatalogItem {
+  _id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  iconUrl?: string;
+  version?: string;
+  estimatedMinutes: number;
+  isActive: boolean;
+}
+
 export interface VirtualizationStatus {
   enableVirtualization: boolean;
   hyperVStatus: HyperVStatus;
@@ -96,6 +117,7 @@ export interface VMDetails {
     enableVirtualization: boolean;
     hyperVStatus: HyperVStatus;
     hyperVLastError?: string;
+    softwareInstalls: SoftwareInstallEntry[];
     createdAt: string;
     updatedAt: string;
   };
@@ -174,6 +196,7 @@ export interface CreateVMDto {
   diskGb?: number;
   description?: string;
   enableVirtualization?: boolean;
+  softwareIds?: string[];
 }
 
 // ─── API response wrapper ─────────────────────────────────────────────────────
@@ -404,4 +427,13 @@ export async function fetchMyAssignedVMs(): Promise<IVM[]> {
     '/api/v1/vms/my-assigned'
   );
   return res.data.vms;
+}
+
+// ─── Software catalog ─────────────────────────────────────────────────────────
+
+export async function fetchSoftwareCatalog(): Promise<SoftwareCatalogItem[]> {
+  const res = await apiRequest<ApiResponse<{ software: SoftwareCatalogItem[]; total: number }>>(
+    '/api/v1/software'
+  );
+  return res.data.software;
 }

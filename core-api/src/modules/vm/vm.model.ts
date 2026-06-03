@@ -1,5 +1,16 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
+export type SoftwareInstallStatus = 'pending' | 'installing' | 'installed' | 'failed';
+
+export interface SoftwareInstall {
+  softwareId: mongoose.Types.ObjectId;
+  name: string;
+  status: SoftwareInstallStatus;
+  lastError?: string;
+  installedAt?: Date;
+  sweeperAttempts: number;
+}
+
 export interface IVM extends Document {
   _id: mongoose.Types.ObjectId;
 
@@ -50,11 +61,11 @@ export interface IVM extends Document {
   hyperVLastError?: string;
   hyperVStatusChangedAt?: Date;
   hyperVAttemptCount: number;
-  // Lease lock: a provisioner owns the VM until this time. Prevents the sweeper
-  // (or another instance) from running a second provisioner concurrently.
   hyperVLockedUntil?: Date;
-  // Power state captured before an enable/disable so it can be restored afterwards.
   hyperVPrePowerState?: 'running' | 'stopped';
+
+  // Software installation (Windows — Chocolatey)
+  softwareInstalls: SoftwareInstall[];
 
   // Timestamps
   createdAt: Date;
@@ -184,6 +195,23 @@ const vmSchema = new Schema<IVM>(
     hyperVPrePowerState: {
       type: String,
       enum: ['running', 'stopped'],
+    },
+    softwareInstalls: {
+      type: [
+        {
+          softwareId: { type: Schema.Types.ObjectId, ref: 'Software', required: true },
+          name: { type: String, required: true, trim: true },
+          status: {
+            type: String,
+            enum: ['pending', 'installing', 'installed', 'failed'],
+            default: 'pending',
+          },
+          lastError: { type: String, trim: true },
+          installedAt: { type: Date },
+          sweeperAttempts: { type: Number, default: 0 },
+        },
+      ],
+      default: [],
     },
     deletedAt: {
       type: Date,

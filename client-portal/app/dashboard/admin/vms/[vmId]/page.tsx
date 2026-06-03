@@ -8,7 +8,7 @@ import {
   fetchVMDetails, fetchVMStatus, fetchVMEvents, startVM, stopVM,
   forceStopVM, restartVM, resetVM, deleteVM,
   enableVirtualization, disableVirtualization,
-  type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus,
+  type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus, type SoftwareInstallEntry,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { VMStatusBadge, CloneTypeBadge, UsageBar } from '../../../../../components/dashboard/VMStatusBadge';
@@ -171,6 +171,10 @@ export default function VMDetailPage() {
   const isVirtInProgress =
     hyperVStatus === 'pending' || hyperVStatus === 'enabling' || hyperVStatus === 'disabling';
 
+  const isSoftwareInProgress = details?.vm.softwareInstalls?.some(
+    (s) => s.status === 'pending' || s.status === 'installing'
+  ) ?? false;
+
   // While Hyper-V is being applied, poll on a backoff (5s → 10s → 20s → 30s cap)
   // and stop automatically once it reaches a terminal state (enabled/failed).
   useEffect(() => {
@@ -188,6 +192,23 @@ export default function VMDetailPage() {
     timer = setTimeout(() => void tick(), delay);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [isVirtInProgress, load]);
+
+  // Poll while any software install is in progress (same backoff pattern)
+  useEffect(() => {
+    if (!isSoftwareInProgress) return;
+    let cancelled = false;
+    let delay = 10_000;
+    let timer: ReturnType<typeof setTimeout>;
+    const tick = async () => {
+      if (cancelled) return;
+      await load();
+      if (cancelled) return;
+      delay = Math.min(delay * 2, 30_000);
+      timer = setTimeout(() => void tick(), delay);
+    };
+    timer = setTimeout(() => void tick(), delay);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [isSoftwareInProgress, load]);
 
   async function handleVirtEnable() {
     if (!vmId) return;
@@ -501,6 +522,46 @@ export default function VMDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Software installs */}
+      {vm.softwareInstalls && vm.softwareInstalls.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-4">
+          <h2 className="text-sm font-semibold text-gray-900 mb-4">Software</h2>
+          <div className="space-y-2">
+            {vm.softwareInstalls.map((sw, i) => (
+              <div key={i} className="flex items-center justify-between py-2 border-b border-gray-50 last:border-0">
+                <span className="text-xs font-medium text-gray-700">{sw.name}</span>
+                <div className="flex items-center gap-2">
+                  {sw.status === 'installed' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-green-50 text-green-700">
+                      Installed
+                    </span>
+                  )}
+                  {sw.status === 'installing' && (
+                    <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                      <span className="w-2.5 h-2.5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                      Installing
+                    </span>
+                  )}
+                  {sw.status === 'pending' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
+                      Pending
+                    </span>
+                  )}
+                  {sw.status === 'failed' && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 text-red-700" title={sw.lastError}>
+                      Failed
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+          {vm.softwareInstalls.some((s) => s.status === 'installing' || s.status === 'pending') && (
+            <p className="text-xs text-amber-600 mt-3">Software installation in progress — this can take a few minutes.</p>
+          )}
+        </div>
+      )}
 
       {/* Event timeline */}
       {details.recentEvents.length > 0 && (

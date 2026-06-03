@@ -16,8 +16,10 @@ import userRoutes from './modules/user/user.routes';
 import proxmoxRoutes from './modules/proxmox/proxmox.routes';
 import vmRoutes from './modules/vm/vm.routes';
 import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
+import softwareRoutes from './modules/software/software.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
+import { startSoftwareSweeper } from './modules/vm/helpers/softwareSweeper';
 
 const app = express();
 
@@ -125,10 +127,12 @@ app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
 app.use('/api/v1/vms', vmRoutes);
 app.use('/api/v1/managed-users', managedUsersRoutes);
+app.use('/api/v1/software', softwareRoutes);
 
-// Start node monitoring (runs in background — never blocks startup)
+// Start background services
 startNodeMonitoring();
 startHyperVSweeper();
+startSoftwareSweeper();
 
 // 404 handler
 app.use(notFoundHandler);

@@ -13,6 +13,7 @@ import { retryProxmoxDelete } from './helpers/deleteRetry';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
 import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
+import { softwareService } from '../software/software.service';
 import {
   VMNotFoundError,
   VMOwnershipError,
@@ -202,6 +203,15 @@ export class VMService {
       throw new ValidationError('Virtualization can only be enabled on Windows templates.');
     }
 
+    // Software installation is Windows-only (Chocolatey)
+    const softwareIds = (dto.softwareIds ?? []).map((id) => new mongoose.Types.ObjectId(id));
+    if (softwareIds.length > 0 && !isWindowsOsType(templateDetails.osType)) {
+      throw new ValidationError('Software installation is only supported on Windows templates.');
+    }
+    if (softwareIds.length > 0) {
+      await softwareService.validateIds(softwareIds);
+    }
+
     // Validate resources
     const validation = await validateResources(dto, templateSpecs);
     if (!validation.canCreate) {
@@ -237,6 +247,7 @@ export class VMService {
         namePrefix: dto.name,
         count: dto.count,
         enableVirtualization,
+        softwareIds,
       },
       jobErrors: [],
       startedAt: new Date(),
@@ -766,6 +777,13 @@ export class VMService {
         enableVirtualization: vm.enableVirtualization ?? false,
         hyperVStatus: vm.hyperVStatus ?? 'disabled',
         hyperVLastError: vm.hyperVLastError || undefined,
+        softwareInstalls: (vm.softwareInstalls ?? []).map((s) => ({
+          softwareId: s.softwareId.toString(),
+          name: s.name,
+          status: s.status,
+          lastError: s.lastError,
+          installedAt: s.installedAt,
+        })),
         createdAt: vm.createdAt,
         updatedAt: vm.updatedAt,
       },
