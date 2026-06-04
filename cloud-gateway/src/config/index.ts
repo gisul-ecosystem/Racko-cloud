@@ -17,6 +17,11 @@ const envSchema = z.object({
   // Timeouts
   REQUEST_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('10000'),
 
+  // Rate limiting
+  RATE_LIMIT_WINDOW_MS: z.string().regex(/^\d+$/).transform(Number).default('900000'),
+  RATE_LIMIT_AUTH_MAX: z.string().regex(/^\d+$/).transform(Number).default('10'),
+  RATE_LIMIT_USER_MAX: z.string().regex(/^\d+$/).transform(Number).default('500'),
+
   // Internal service secret
   INTERNAL_SERVICE_SECRET: z.string().min(64, 'INTERNAL_SERVICE_SECRET must be at least 64 characters'),
 });

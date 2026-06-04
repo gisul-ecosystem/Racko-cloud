@@ -122,7 +122,13 @@ async function runPowerShell(
       const classified = classifyHyperVError(err);
       logger.warn('[Software] exec start failed', { vmid, node, label, retryable: classified.retryable, error: classified.message });
       if (!classified.retryable) throw new Error(classified.message);
-      await sleep(config.HYPERV_EXEC_POLL_MS);
+      // QMP timeout on exec start — zombie process may hold lock, wait longer before retry
+      const isQmpTimeout = /qmp.*timeout|got timeout/i.test(classified.message);
+      const retryDelay = isQmpTimeout ? config.SOFTWARE_QMP_RETRY_DELAY_MS : config.HYPERV_EXEC_POLL_MS;
+      if (isQmpTimeout) {
+        logger.info('[Software] QMP timeout on exec start — waiting before retry to let zombie process settle', { vmid, node, label, delayMs: retryDelay });
+      }
+      await sleep(retryDelay);
       continue;
     }
 
@@ -184,6 +190,10 @@ async function runPowerShell(
     }
 
     if (!agentDropped) break;
+    // Wait before retrying after agent drop — gives any zombie Chocolatey process
+    // inside the VM time to finish or die and release file locks before we re-issue.
+    logger.info('[Software] agent dropped — waiting before retry to let zombie process settle', { vmid, node, label });
+    await sleep(config.SOFTWARE_QMP_RETRY_DELAY_MS);
   }
 
   throw new Error('Software install command did not complete within timeout.');

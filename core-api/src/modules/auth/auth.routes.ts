@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import rateLimit from 'express-rate-limit';
 import { authController } from './auth.controller';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
@@ -8,53 +7,23 @@ import { registerSchema, loginSchema, verifyEmailSchema } from './auth.validatio
 
 const router = Router();
 
-// Rate limiters per route
-const registerLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 5,
-  message: { success: false, message: 'Too many registration attempts. Try again in 1 hour.', code: 'RATE_LIMITED' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const verifyEmailLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 10,
-  message: { success: false, message: 'Too many verification attempts. Try again in 1 hour.', code: 'RATE_LIMITED' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const loginLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10,
-  message: { success: false, message: 'Too many login attempts. Try again in 15 minutes.', code: 'RATE_LIMITED' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-
-const refreshLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 30,
-  message: { success: false, message: 'Too many refresh attempts.', code: 'RATE_LIMITED' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
+// Rate limiting is handled entirely by the gateway — no per-route limiters here.
+// Core-api is not publicly exposed; all traffic goes through the gateway.
 
 // Public routes
-router.post('/register', registerLimiter, validateRequest(registerSchema), (req, res, next) => {
+router.post('/register', validateRequest(registerSchema), (req, res, next) => {
   authController.register(req, res, next);
 });
 
-router.post('/verify-email', verifyEmailLimiter, validateRequest(verifyEmailSchema), (req, res, next) => {
+router.post('/verify-email', validateRequest(verifyEmailSchema), (req, res, next) => {
   authController.verifyEmail(req, res, next);
 });
 
-router.post('/login', loginLimiter, validateRequest(loginSchema), (req, res, next) => {
+router.post('/login', validateRequest(loginSchema), (req, res, next) => {
   authController.login(req, res, next);
 });
 
-router.post('/refresh', refreshLimiter, (req, res, next) => {
+router.post('/refresh', (req, res, next) => {
   authController.refreshToken(req, res, next);
 });
 
