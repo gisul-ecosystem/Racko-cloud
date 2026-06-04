@@ -80,6 +80,7 @@ const envSchema = z.object({
   SOFTWARE_STUCK_INSTALLING_MS: z.string().regex(/^\d+$/).transform(Number).default('1200000'),
   SOFTWARE_STUCK_PENDING_MS: z.string().regex(/^\d+$/).transform(Number).default('600000'),
   SOFTWARE_MAX_SWEEPER_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  SOFTWARE_QMP_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('45000'),
 
   // Hyper-V / nested virtualization (Windows guests)
   HYPERV_AGENT_READY_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
@@ -103,9 +104,6 @@ const envSchema = z.object({
     .enum(['true', 'false'])
     .default('true')
     .transform((v) => v === 'true'),
-
-  // Rate limiting
-  RATE_LIMIT_GLOBAL_MAX: z.string().regex(/^\d+$/).transform(Number).default('2000'),
 
   // Guacamole (browser-based VM console)
   GUACAMOLE_BASE_URL: z.string().url('GUACAMOLE_BASE_URL must be a valid URL'),

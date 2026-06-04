@@ -3,7 +3,7 @@ import cors from 'cors';
 import { helmetMiddleware } from './middleware/helmet.middleware';
 import { requestIdMiddleware } from './middleware/requestId.middleware';
 import { loggerMiddleware } from './middleware/logger.middleware';
-import { globalRateLimiter } from './middleware/rateLimit.middleware';
+import { userRateLimiter } from './middleware/rateLimit.middleware';
 import { corsOptions } from './config/cors';
 import { GatewayError } from './utils/errors';
 import { logger } from './utils/logger';
@@ -26,8 +26,13 @@ app.use(cors(corsOptions));
 // 4. Morgan/logger — request logging
 app.use(loggerMiddleware);
 
-// 5. Global rate limit
-app.use(globalRateLimiter);
+// 5. User ID-based rate limit — per-user independent buckets, falls back to IP for unauthenticated requests
+// Skip rate limiting for auth token endpoints — secured by their own mechanisms, no rate limit needed
+const RATE_LIMIT_SKIP_PATHS = new Set(['/api/v1/auth/refresh', '/api/v1/auth/validate']);
+app.use((req, res, next) => {
+  if (RATE_LIMIT_SKIP_PATHS.has(req.path)) return next();
+  return userRateLimiter(req, res, next);
+});
 
 // NOTE: No body parsing on the gateway — request bodies are forwarded raw to
 // microservices. Body parsing, sanitization (mongoSanitize, hpp) and validation

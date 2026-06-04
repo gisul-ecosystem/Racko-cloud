@@ -5,7 +5,6 @@ import mongoSanitize from 'express-mongo-sanitize';
 import hpp from 'hpp';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
-import rateLimit from 'express-rate-limit';
 import { v4 as uuidv4 } from 'uuid';
 import { config } from './config';
 import { logger } from './utils/logger';
@@ -105,16 +104,6 @@ app.use(
     skip: (req) => req.path === '/health',
   })
 );
-
-// 10. Global rate limit
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: config.RATE_LIMIT_GLOBAL_MAX,
-  message: { success: false, message: 'Too many requests.', code: 'RATE_LIMITED' },
-  standardHeaders: true,
-  legacyHeaders: false,
-});
-app.use(globalLimiter);
 
 // Health check
 app.get('/health', (_req, res) => {
