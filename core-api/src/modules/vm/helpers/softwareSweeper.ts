@@ -63,7 +63,29 @@ async function sweepStuckSoftwareInstalls(): Promise<void> {
     ...pendingVms.filter((p) => !stuckVms.some((s) => s._id.equals(p._id))),
   ];
 
-  for (const vm of allVms) {
+  // VMs that have failed installs with remaining retry attempts
+  // (transient failures — VM couldn't boot, network timeout, etc.)
+  const failedVms = await VM.find({
+    softwareInstalls: {
+      $elemMatch: {
+        status: 'failed',
+        cancelled: { $ne: true },
+        sweeperAttempts: { $lt: config.SOFTWARE_MAX_SWEEPER_ATTEMPTS },
+      },
+    },
+    status: { $in: ['running', 'stopped'] },
+  })
+    .select('_id node vmid name adminId softwareInstalls')
+    .limit(SWEEP_BATCH)
+    .lean();
+
+  // Merge all, deduplicate
+  const allVmsWithFailed = [
+    ...allVms,
+    ...failedVms.filter((f) => !allVms.some((v) => v._id.equals(f._id))),
+  ];
+
+  for (const vm of allVmsWithFailed) {
     const maxAttempts = config.SOFTWARE_MAX_SWEEPER_ATTEMPTS;
 
     // Check if any package has exceeded max attempts — mark those as permanently failed
@@ -105,12 +127,32 @@ async function sweepStuckSoftwareInstalls(): Promise<void> {
       logger.info('[Software] sweeper — reset stuck installing → pending', { vmid: vm.vmid, node: vm.node });
     }
 
-    // Increment attempt count for stuck pending items under the limit
-    await VM.updateOne(
-      { _id: vm._id },
-      { $inc: { 'softwareInstalls.$[el].sweeperAttempts': 1 } },
-      { arrayFilters: [{ 'el.status': 'pending', 'el.sweeperAttempts': { $lt: maxAttempts } }] }
+    // Reset failed installs that have remaining retry attempts → pending
+    const hasRetryableFailed = vm.softwareInstalls.some(
+      (s) => s.status === 'failed' && !s.cancelled && (s.sweeperAttempts ?? 0) < maxAttempts
     );
+    if (hasRetryableFailed) {
+      await VM.updateOne(
+        { _id: vm._id },
+        {
+          $set: { 'softwareInstalls.$[el].status': 'pending', 'softwareInstalls.$[el].lastError': '' },
+          $inc: { 'softwareInstalls.$[el].sweeperAttempts': 1 },
+        },
+        { arrayFilters: [{ 'el.status': 'failed', 'el.cancelled': { $ne: true }, 'el.sweeperAttempts': { $lt: maxAttempts } }] }
+      );
+      logger.info('[Software] sweeper — reset failed → pending for retry', { vmid: vm.vmid, node: vm.node });
+    }
+
+    // Increment attempt count for originally-pending items (not ones just reset this cycle)
+    // Only applies to VMs from the pending query, not the failed query
+    const wasOriginallyPending = pendingVms.some((p) => p._id.equals(vm._id)) || stuckVms.some((s) => s._id.equals(vm._id));
+    if (wasOriginallyPending) {
+      await VM.updateOne(
+        { _id: vm._id },
+        { $inc: { 'softwareInstalls.$[el].sweeperAttempts': 1 } },
+        { arrayFilters: [{ 'el.status': 'pending', 'el.sweeperAttempts': { $lt: maxAttempts } }] }
+      );
+    }
 
     // Only re-queue if there are still retryable items
     const hasRetryable = vm.softwareInstalls.some(

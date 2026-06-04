@@ -68,7 +68,7 @@ async function ensureVmRunning(node: string, vmid: number): Promise<void> {
       `/nodes/${node}/qemu/${vmid}/status/start`,
       {}
     );
-    const deadline = Date.now() + 120_000;
+    const deadline = Date.now() + config.SOFTWARE_VM_START_TIMEOUT_MS;
     let polls = 0;
     while (Date.now() < deadline) {
       await sleep(3000);
@@ -82,7 +82,7 @@ async function ensureVmRunning(node: string, vmid: number): Promise<void> {
         return;
       }
     }
-    throw new Error(`VM did not reach running state within 120s (task ${start.data.data}).`);
+    throw new Error(`VM did not reach running state within ${config.SOFTWARE_VM_START_TIMEOUT_MS / 1000}s (task ${start.data.data}).`);
   }
 }
 
