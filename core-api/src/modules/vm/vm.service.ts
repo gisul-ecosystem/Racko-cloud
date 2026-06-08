@@ -121,6 +121,11 @@ async function startIpPolling(vm: Pick<IVM, '_id' | 'node' | 'vmid'>): Promise<v
           ipAddress: foundIp,
           attempt,
         });
+        // Give cloudbase-init a moment to finish applying the password, then flag
+        // the VM as console-ready. The frontend / openConsole gate on this flag.
+        await sleep(15_000);
+        await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
+        logger.info('VM console ready', { vmId: vmObjectId.toString(), vmid });
         return;
       }
     } catch (err) {
@@ -531,6 +536,9 @@ export class VMService {
 
     vm.status = 'running';
     vm.proxmoxStatus = 'running';
+    // Reset until the new boot resolves an IP and cloudbase-init settles. Avoids a
+    // stale "ready" flag from a previous start leaving the console enabled too early.
+    vm.consoleReady = false;
     await vm.save();
 
     // Fire-and-forget: resolve the VM's private IP in the background once the
@@ -682,7 +690,20 @@ export class VMService {
 
     vm.status = 'running';
     vm.proxmoxStatus = 'running';
+    // Disable console during the reboot — the guest agent / IP go away briefly and
+    // cloudbase-init re-runs. consoleReady is set back to true by startIpPolling.
+    vm.consoleReady = false;
     await vm.save();
+
+    // Fire-and-forget: re-resolve the private IP and re-flag console-ready once the
+    // guest agent comes back up after the reboot.
+    void startIpPolling(vm).catch((err: unknown) => {
+      logger.error('Unhandled error in IP polling', {
+        vmId: vm._id.toString(),
+        vmid: vm.vmid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
@@ -906,6 +927,7 @@ export class VMService {
         consoleUsername: vm.consoleUsername,
         consolePassword: vm.consolePassword,
         consoleProtocol: vm.consoleProtocol ?? 'rdp',
+        consoleReady: vm.consoleReady ?? false,
         haEnabled: vm.haEnabled,
         enableVirtualization: vm.enableVirtualization ?? false,
         hyperVStatus: vm.hyperVStatus ?? 'disabled',
@@ -1340,6 +1362,12 @@ export class VMService {
         'VM must be running to open a console session.',
         vm.status,
         'running'
+      );
+    }
+
+    if (!vm.consoleReady) {
+      throw new ValidationError(
+        'VM console is not ready yet. Please wait 1-2 minutes after starting the VM and try again.'
       );
     }
 
