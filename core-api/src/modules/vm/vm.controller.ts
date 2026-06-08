@@ -325,8 +325,8 @@ export class VMController {
       const jobId = new mongoose.Types.ObjectId(req.params['jobId'] as string);
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
 
-      const job = await vmService.getJobStatus(jobId, adminId, req);
-      success(res, 'Job status retrieved.', { job });
+      const { job, vms } = await vmService.getJobStatus(jobId, adminId, req);
+      success(res, 'Job status retrieved.', { job, vms });
     } catch (error) {
       next(error);
     }

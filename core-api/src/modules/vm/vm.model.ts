@@ -46,6 +46,11 @@ export interface IVM extends Document {
   ipAddress?: string;
   macAddress?: string;
 
+  // Console access (Guacamole)
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol: 'rdp' | 'ssh';
+
   // Job tracking
   jobId?: mongoose.Types.ObjectId;
 
@@ -153,6 +158,18 @@ const vmSchema = new Schema<IVM>(
     macAddress: {
       type: String,
       trim: true,
+    },
+    consoleUsername: {
+      type: String,
+      trim: true,
+    },
+    consolePassword: {
+      type: String,
+    },
+    consoleProtocol: {
+      type: String,
+      enum: ['rdp', 'ssh'],
+      default: 'rdp',
     },
     jobId: {
       type: Schema.Types.ObjectId,

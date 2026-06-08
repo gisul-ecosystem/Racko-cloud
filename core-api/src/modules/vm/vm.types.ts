@@ -120,6 +120,10 @@ export interface CreateVMDto {
   memoryGb?: number;                     // optional override (must be >= template)
   diskGb?: number;                       // optional override (must be >= template)
   description?: string;
+  consoleUsername: string;               // required — base username for browser console access
+  passwordMode: 'fixed' | 'dynamic';     // fixed: same password for all; dynamic: unique per VM
+  consolePassword?: string;              // required when passwordMode === 'fixed'
+  dynamicUsernamePrefix?: string;        // dynamic mode only — username becomes "<prefix>-<index>" per VM
   enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
   softwareIds?: string[];                // Windows templates only — software to install
 }
@@ -128,6 +132,17 @@ export interface VMFilters {
   status?: string;
   cloneType?: 'dedicated_storage' | 'dynamic_storage';
   node?: string;
+}
+
+/** Per-VM console credential summary returned alongside a job. */
+export interface JobVMCredential {
+  id: string;
+  name: string;
+  status: string;
+  ipAddress?: string;
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol: 'rdp' | 'ssh';
 }
 
 // ─── Node resource snapshot ───────────────────────────────────────────────────
@@ -255,6 +270,9 @@ export interface VMDetails {
     allocatedDiskGb: number;
     ipAddress?: string;
     macAddress?: string;
+    consoleUsername?: string;
+    consolePassword?: string;
+    consoleProtocol: 'rdp' | 'ssh';
     haEnabled: boolean;
     enableVirtualization: boolean;
     hyperVStatus: HyperVStatus;
@@ -304,6 +322,11 @@ export interface BulkVMSpec {
   adminId: mongoose.Types.ObjectId;
   jobId: mongoose.Types.ObjectId;
   description?: string;
+  consoleUsername: string;               // base username (prefix applied per VM in dynamic mode)
+  passwordMode: 'fixed' | 'dynamic';
+  consolePassword?: string;              // set when passwordMode === 'fixed'
+  dynamicUsernamePrefix?: string;        // dynamic mode only — username becomes "<prefix>-<index>"
+  consoleProtocol: 'rdp' | 'ssh';
   enableVirtualization?: boolean;
   softwareIds?: mongoose.Types.ObjectId[];
 }
