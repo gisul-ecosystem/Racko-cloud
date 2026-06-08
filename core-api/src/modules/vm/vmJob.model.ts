@@ -30,6 +30,11 @@ export interface IVMJob extends Document {
     templateMemoryGb: number;  // actual template RAM — used for config override check
     namePrefix: string;
     count: number;
+    consoleUsername: string;
+    passwordMode: 'fixed' | 'dynamic';
+    consolePassword?: string;            // set when passwordMode === 'fixed'
+    dynamicUsernamePrefix?: string;      // dynamic mode only — username becomes "<prefix>-<index>"
+    consoleProtocol: 'rdp' | 'ssh';
     enableVirtualization?: boolean;
     softwareIds?: mongoose.Types.ObjectId[];
   };
@@ -110,6 +115,11 @@ const vmJobSchema = new Schema<IVMJob>(
       templateMemoryGb: { type: Number, required: true },
       namePrefix: { type: String, required: true },
       count: { type: Number, required: true },
+      consoleUsername: { type: String, required: true },
+      passwordMode: { type: String, enum: ['fixed', 'dynamic'], required: true },
+      consolePassword: { type: String },
+      dynamicUsernamePrefix: { type: String },
+      consoleProtocol: { type: String, enum: ['rdp', 'ssh'], default: 'rdp' },
       enableVirtualization: { type: Boolean, default: false },
       softwareIds: { type: [Schema.Types.ObjectId], ref: 'Software', default: [] },
     },

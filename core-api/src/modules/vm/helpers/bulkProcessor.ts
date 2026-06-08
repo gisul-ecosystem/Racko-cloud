@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { logger } from '../../../utils/logger';
+import { generatePassword } from '../../../utils/crypto';
 import { config } from '../../../config';
 import { VM } from '../vm.model';
 import { VMJob } from '../vmJob.model';
@@ -96,6 +97,11 @@ export async function processBulkCreation(
           adminId,
           jobId,
           description: undefined,
+          consoleUsername: specs.consoleUsername,
+          passwordMode: specs.passwordMode,
+          consolePassword: specs.consolePassword,
+          dynamicUsernamePrefix: specs.dynamicUsernamePrefix,
+          consoleProtocol: specs.consoleProtocol,
           enableVirtualization: specs.enableVirtualization ?? false,
           softwareIds: specs.softwareIds ?? [],
         });
@@ -264,6 +270,17 @@ export async function processBulkCreation(
  * Returns the MongoDB ObjectId of the created VM.
  */
 async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId> {
+  // Resolve per-VM console credentials.
+  // Username: in dynamic mode with a prefix set, becomes "<prefix>-<index>"
+  // (e.g. "Admin-1", "Admin-2"); otherwise exactly what the user typed.
+  // Password: fixed → shared value from the request; dynamic → unique per VM.
+  const consoleUsername =
+    spec.passwordMode === 'dynamic' && spec.dynamicUsernamePrefix
+      ? `${spec.dynamicUsernamePrefix}-${spec.index}`
+      : spec.consoleUsername;
+  const consolePassword =
+    spec.passwordMode === 'dynamic' ? generatePassword() : (spec.consolePassword ?? '');
+
   // Select storage pool for dedicated clones only.
   // Linked clones must use template storage — Proxmox enforces this, never send storage for them.
   // For dedicated clones: prefer shared storage (Ceph/NFS) for live-migration support,
@@ -369,6 +386,9 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
       allocatedDiskGb: spec.diskGb,
       status: 'creating',
       proxmoxStatus: 'unknown',
+      consoleUsername,
+      consolePassword,
+      consoleProtocol: spec.consoleProtocol,
       jobId: spec.jobId,
       haEnabled: false,
       lastError: 'Clone task outcome unknown — connectivity lost during polling. Pending reconciliation.',
@@ -388,13 +408,29 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     return vm._id;
   }
 
-  // Apply config overrides if needed
-  const configUpdates: Record<string, unknown> = {};
+  // Inject cloud-init credentials + apply any spec overrides.
+  // ciuser/cipassword are always set so the VM uses the credentials the admin
+  // chose (or the generated per-VM password) rather than the template defaults.
+  const configUpdates: Record<string, unknown> = {
+    ciuser: consoleUsername,
+    cipassword: consolePassword,
+  };
   if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;
   if (spec.memoryGb !== spec.templateMemoryGb) configUpdates['memory'] = Math.round(spec.memoryGb * 1024);
 
-  if (Object.keys(configUpdates).length > 0) {
-    await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
+  await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
+
+  // Regenerate the cloud-init drive so the new credentials take effect.
+  // Best-effort: templates without a cloud-init drive return 404 — log and continue.
+  try {
+    await proxmoxClient.put(`/nodes/${spec.node}/qemu/${vmid}/cloudinit`, {});
+  } catch (err) {
+    logger.warn('[BulkVM] cloud-init regenerate failed — continuing', {
+      vmName: spec.vmName,
+      vmid,
+      node: spec.node,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   // Resize disk if needed (dedicated_storage only)
@@ -439,6 +475,9 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     allocatedDiskGb: spec.diskGb,
     status: 'stopped',
     proxmoxStatus: 'stopped',
+    consoleUsername,
+    consolePassword,
+    consoleProtocol: spec.consoleProtocol,
     jobId: spec.jobId,
     haEnabled: false,
     enableVirtualization: spec.enableVirtualization ?? false,

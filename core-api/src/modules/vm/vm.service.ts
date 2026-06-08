@@ -23,7 +23,6 @@ import {
   ForbiddenError,
   NotFoundError,
   ValidationError,
-  InternalError,
 } from '../../utils/errors';
 import { User } from '../../models/user.model';
 import type {
@@ -34,6 +33,7 @@ import type {
   VMStatus,
   VMFilters,
   VMDetails,
+  JobVMCredential,
   VirtualizationStatus,
   ProxmoxVMCurrentStatus,
   ProxmoxNetworkInterface,
@@ -61,6 +61,87 @@ function formatUptime(seconds: number): string {
   if (hours > 0) parts.push(`${hours}h`);
   if (minutes > 0) parts.push(`${minutes}m`);
   return parts.length > 0 ? parts.join(' ') : 'just started';
+}
+
+/**
+ * Derive the Guacamole console protocol from the template OS type.
+ * Windows guests use RDP; everything else defaults to SSH.
+ */
+function deriveConsoleProtocol(osType?: string): 'rdp' | 'ssh' {
+  const normalized = (osType ?? '').toLowerCase();
+  return normalized.includes('win') ? 'rdp' : 'ssh';
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/**
+ * Fire-and-forget poll for a VM's private IP after it starts.
+ *
+ * Waits for the guest agent to come up, then queries network-get-interfaces and
+ * stores the first address in the custnet1 range (10.100.x.x). All Proxmox/agent
+ * errors are swallowed and retried — this never throws and never blocks the
+ * caller (the start API responds immediately; the IP resolves in the background).
+ */
+async function startIpPolling(vm: Pick<IVM, '_id' | 'node' | 'vmid'>): Promise<void> {
+  const vmObjectId = vm._id;
+  const { node, vmid } = vm;
+  const maxRetries = 12;
+  const delayMs = 10_000;
+  const initialWaitMs = 15_000;
+
+  // Give the VM time to boot before the first guest-agent query.
+  await sleep(initialWaitMs);
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const res = await proxmoxClient.get<{ data: { result: ProxmoxNetworkInterface[] } }>(
+        `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
+      );
+      const interfaces = res.data.data.result ?? [];
+
+      let foundIp: string | undefined;
+      for (const iface of interfaces) {
+        if (iface.name === 'lo') continue;
+        const match = iface['ip-addresses']?.find(
+          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'].startsWith('10.100.')
+        );
+        if (match) {
+          foundIp = match['ip-address'];
+          break;
+        }
+      }
+
+      if (foundIp) {
+        await VM.findByIdAndUpdate(vmObjectId, { ipAddress: foundIp });
+        logger.info('VM private IP resolved', {
+          vmId: vmObjectId.toString(),
+          vmid,
+          ipAddress: foundIp,
+          attempt,
+        });
+        return;
+      }
+    } catch (err) {
+      // Guest agent not ready yet, VM still booting, transient Proxmox error, etc.
+      // Log and fall through to the next retry — never crash.
+      logger.warn('IP poll attempt failed — will retry', {
+        vmId: vmObjectId.toString(),
+        vmid,
+        attempt,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+
+    if (attempt < maxRetries) await sleep(delayMs);
+  }
+
+  logger.warn('VM private IP not found after all retries', {
+    vmId: vmObjectId.toString(),
+    vmid,
+    attempts: maxRetries,
+  });
 }
 
 function getClientIp(req: Request): string {
@@ -197,6 +278,10 @@ export class VMService {
     const memoryGb = dto.memoryGb ?? templateSpecs.memoryGb;
     const diskGb = dto.diskGb ?? templateSpecs.diskGb;
 
+    // Console protocol is computed server-side from the template OS type — never
+    // taken from the client. Windows → rdp, everything else → ssh.
+    const consoleProtocol = deriveConsoleProtocol(templateDetails.osType);
+
     // Virtualization (Hyper-V) is Windows-only
     const enableVirtualization = dto.enableVirtualization ?? false;
     if (enableVirtualization && !isWindowsOsType(templateDetails.osType)) {
@@ -246,6 +331,11 @@ export class VMService {
         templateMemoryGb: templateSpecs.memoryGb,  // actual template value from Proxmox
         namePrefix: dto.name,
         count: dto.count,
+        consoleUsername: dto.consoleUsername,
+        passwordMode: dto.passwordMode,
+        consolePassword: dto.passwordMode === 'fixed' ? dto.consolePassword : undefined,
+        dynamicUsernamePrefix: dto.passwordMode === 'dynamic' ? dto.dynamicUsernamePrefix : undefined,
+        consoleProtocol,
         enableVirtualization,
         softwareIds,
       },
@@ -437,6 +527,16 @@ export class VMService {
     vm.status = 'running';
     vm.proxmoxStatus = 'running';
     await vm.save();
+
+    // Fire-and-forget: resolve the VM's private IP in the background once the
+    // guest agent is up. Never awaited — the start response returns immediately.
+    void startIpPolling(vm).catch((err: unknown) => {
+      logger.error('Unhandled error in IP polling', {
+        vmId: vm._id.toString(),
+        vmid: vm.vmid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
 
     await VMEvent.create({
       vmId: vm._id, vmid: vm.vmid, adminId,
@@ -798,6 +898,9 @@ export class VMService {
         allocatedDiskGb: vm.allocatedDiskGb,
         ipAddress: vm.ipAddress,
         macAddress: vm.macAddress,
+        consoleUsername: vm.consoleUsername,
+        consolePassword: vm.consolePassword,
+        consoleProtocol: vm.consoleProtocol ?? 'rdp',
         haEnabled: vm.haEnabled,
         enableVirtualization: vm.enableVirtualization ?? false,
         hyperVStatus: vm.hyperVStatus ?? 'disabled',
@@ -1027,7 +1130,7 @@ export class VMService {
     jobId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     req: Request
-  ): Promise<IVMJob> {
+  ): Promise<{ job: IVMJob; vms: JobVMCredential[] }> {
     const authReq = req as AuthenticatedRequest;
 
     const job = await VMJob.findById(jobId);
@@ -1037,7 +1140,25 @@ export class VMService {
       throw new VMOwnershipError('You do not have permission to access this job.');
     }
 
-    return job;
+    // Include the created VMs' console credentials so the job page can show them
+    // once after creation (per-VM passwords in dynamic mode live on each VM doc).
+    const vmDocs = job.vmIds.length
+      ? await VM.find({ _id: { $in: job.vmIds } })
+          .select('name status ipAddress consoleUsername consolePassword consoleProtocol')
+          .lean()
+      : [];
+
+    const vms: JobVMCredential[] = vmDocs.map((v) => ({
+      id: v._id.toString(),
+      name: v.name,
+      status: v.status,
+      ipAddress: v.ipAddress,
+      consoleUsername: v.consoleUsername,
+      consolePassword: v.consolePassword,
+      consoleProtocol: v.consoleProtocol ?? 'rdp',
+    }));
+
+    return { job, vms };
   }
 
   /**
@@ -1217,27 +1338,22 @@ export class VMService {
       );
     }
 
-    // Resolve protocol (query override > default rdp).
-    // TODO: switch default based on vm.osType once that field is populated.
-    const protocol: GuacamoleProtocol = protocolOverride ?? 'rdp';
+    // Resolve connection params from the VM document, falling back to the
+    // TEST_VM_* env scaffolding only when a field is empty (eases transition for
+    // the legacy test VM). Query override still wins for protocol.
+    const hostname = vm.ipAddress ?? process.env['TEST_VM_IP'];
+    const username = vm.consoleUsername ?? process.env['TEST_VM_USERNAME'];
+    const password = vm.consolePassword ?? process.env['TEST_VM_PASSWORD'];
+    const protocol: GuacamoleProtocol = protocolOverride ?? vm.consoleProtocol ?? 'rdp';
 
-    // Resolve VM IP. Prefer real ipAddress if Proxmox has reported one,
-    // otherwise fall back to TEST_VM_IP scaffolding.
-    const testIp = process.env['TEST_VM_IP'];
-    const hostname = vm.ipAddress ?? testIp;
     if (!hostname) {
-      throw new InternalError(
-        'VM has no IP address yet and TEST_VM_IP is not set.'
+      throw new ValidationError(
+        'VM IP address is not available yet. The VM may still be booting. Please wait 30-60 seconds and try again.'
       );
     }
 
-    // Resolve credentials. For now, scaffolding via env.
-    const username = process.env['TEST_VM_USERNAME'];
-    const password = process.env['TEST_VM_PASSWORD'];
     if (!username || !password) {
-      throw new InternalError(
-        'TEST_VM_USERNAME / TEST_VM_PASSWORD must be set until VM model stores credentials.'
-      );
+      throw new ValidationError('VM console credentials are not available.');
     }
 
     const port = protocol === 'rdp' ? 3389 : protocol === 'ssh' ? 22 : 5900;
