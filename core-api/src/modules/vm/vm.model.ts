@@ -46,6 +46,12 @@ export interface IVM extends Document {
   ipAddress?: string;
   macAddress?: string;
 
+  // Console access (Guacamole)
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol: 'rdp' | 'ssh';
+  consoleReady: boolean;   // true only after IP is resolved + cloudbase-init grace delay
+
   // Job tracking
   jobId?: mongoose.Types.ObjectId;
 
@@ -153,6 +159,22 @@ const vmSchema = new Schema<IVM>(
     macAddress: {
       type: String,
       trim: true,
+    },
+    consoleUsername: {
+      type: String,
+      trim: true,
+    },
+    consolePassword: {
+      type: String,
+    },
+    consoleProtocol: {
+      type: String,
+      enum: ['rdp', 'ssh'],
+      default: 'rdp',
+    },
+    consoleReady: {
+      type: Boolean,
+      default: false,
     },
     jobId: {
       type: Schema.Types.ObjectId,

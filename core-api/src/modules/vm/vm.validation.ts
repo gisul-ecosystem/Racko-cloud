@@ -53,6 +53,21 @@ export const createVMSchema = z.object({
       .string()
       .max(500, 'description cannot exceed 500 characters')
       .optional(),
+    consoleUsername: z
+      .string({ required_error: 'consoleUsername is required' })
+      .trim()
+      .min(1, 'Username must be 1-20 characters, letters, numbers, hyphens and underscores only')
+      .max(20, 'Username must be 1-20 characters, letters, numbers, hyphens and underscores only')
+      .regex(/^[A-Za-z0-9_-]+$/, 'Username must be 1-20 characters, letters, numbers, hyphens and underscores only'),
+    passwordMode: z.enum(['fixed', 'dynamic'], {
+      required_error: 'passwordMode is required',
+      invalid_type_error: 'passwordMode must be fixed or dynamic',
+    }),
+    consolePassword: z
+      .string()
+      .min(1, 'Console password is required')
+      .max(256, 'Console password cannot exceed 256 characters')
+      .optional(),
     enableVirtualization: z.boolean().optional().default(false),
     softwareIds: z
       .array(
@@ -61,6 +76,16 @@ export const createVMSchema = z.object({
       .max(20, 'Cannot select more than 20 software packages')
       .optional()
       .default([]),
+  }).superRefine((data, ctx) => {
+    // Fixed password mode requires an explicit password.
+    // Dynamic mode generates one per VM server-side, so none is needed.
+    if (data.passwordMode === 'fixed' && (!data.consolePassword || data.consolePassword.length === 0)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['consolePassword'],
+        message: 'Console password is required when using a fixed password.',
+      });
+    }
   }),
 });
 

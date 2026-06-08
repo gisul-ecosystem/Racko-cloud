@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { logger } from '../../../utils/logger';
+import { generatePassword } from '../../../utils/crypto';
 import { config } from '../../../config';
 import { VM } from '../vm.model';
 import { VMJob } from '../vmJob.model';
@@ -200,6 +201,10 @@ export async function processBulkCreation(
           adminId,
           jobId,
           description: undefined,
+          consoleUsername: specs.consoleUsername,
+          passwordMode: specs.passwordMode,
+          consolePassword: specs.consolePassword,
+          consoleProtocol: specs.consoleProtocol,
           enableVirtualization: specs.enableVirtualization ?? false,
           softwareIds: specs.softwareIds ?? [],
           schedulePostCreateJobs: job.type === 'single_create',
@@ -460,6 +465,17 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     });
   }
 
+  // Resolve per-VM console credentials.
+  // Username: admin-chosen (same for all VMs in the batch); renamed from 'Admin' after boot.
+  // Password: fixed → shared value from the request; dynamic → unique per VM.
+  const consoleUsername = spec.consoleUsername;
+  const consolePassword =
+    spec.passwordMode === 'dynamic' ? generatePassword() : (spec.consolePassword ?? '');
+
+  // Select storage pool for dedicated clones only.
+  // Linked clones must use template storage — Proxmox enforces this, never send storage for them.
+  // For dedicated clones: prefer shared storage (Ceph/NFS) for live-migration support,
+  // fall back to local storage sorted by most free space.
   let storagePool: string | undefined;
 
   if (spec.cloneType === 'dedicated_storage' && !spec.softwarePreInstalled) {
@@ -575,6 +591,9 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
       allocatedDiskGb: spec.diskGb,
       status: 'creating',
       proxmoxStatus: 'unknown',
+      consoleUsername,
+      consolePassword,
+      consoleProtocol: spec.consoleProtocol,
       jobId: spec.jobId,
       haEnabled: false,
       lastError: 'Clone task outcome unknown — connectivity lost during polling. Pending reconciliation.',
@@ -601,12 +620,29 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     return vm._id;
   }
 
-  const configUpdates: Record<string, unknown> = {};
+  // Inject the cloud-init password + apply any spec overrides.
+  // We deliberately do NOT send ciuser: cloudbase-init on Windows cannot create
+  // users — it only sets the password for the template's built-in 'Admin' account.
+  // The rename to consoleUsername happens later via guest exec in startIpPolling.
+  const configUpdates: Record<string, unknown> = {
+    cipassword: consolePassword,
+  };
   if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;
   if (spec.memoryGb !== spec.templateMemoryGb) configUpdates['memory'] = Math.round(spec.memoryGb * 1024);
 
-  if (Object.keys(configUpdates).length > 0) {
-    await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
+  await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
+
+  // Regenerate the cloud-init drive so the new credentials take effect.
+  // Best-effort: templates without a cloud-init drive return 404 — log and continue.
+  try {
+    await proxmoxClient.put(`/nodes/${spec.node}/qemu/${vmid}/cloudinit`, {});
+  } catch (err) {
+    logger.warn('[BulkVM] cloud-init regenerate failed — continuing', {
+      vmName: spec.vmName,
+      vmid,
+      node: spec.node,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   if (spec.cloneType === 'dedicated_storage' && spec.diskGb > spec.templateDiskGb) {
@@ -641,6 +677,9 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     allocatedDiskGb: spec.diskGb,
     status: 'stopped',
     proxmoxStatus: 'stopped',
+    consoleUsername,
+    consolePassword,
+    consoleProtocol: spec.consoleProtocol,
     jobId: spec.jobId,
     haEnabled: false,
     enableVirtualization: spec.enableVirtualization ?? false,

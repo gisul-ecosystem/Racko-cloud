@@ -39,6 +39,7 @@ export interface ProxmoxVMConfig {
   ostype?: string;
   ide2?: string;
   sockets?: number;
+  ciuser?: string;    // cloud-init default username
 }
 
 export interface ProxmoxVMCurrentStatus {
@@ -120,6 +121,11 @@ export interface CreateVMDto {
   memoryGb?: number;                     // optional override (must be >= template)
   diskGb?: number;                       // optional override (must be >= template)
   description?: string;
+  // The template ships with a fixed 'Admin' account. cloudbase-init sets its password,
+  // then startIpPolling renames it to this username via guest exec (Windows/RDP only).
+  consoleUsername: string;               // required — Windows username (1-20, [A-Za-z0-9_-])
+  passwordMode: 'fixed' | 'dynamic';     // fixed: same password for all; dynamic: unique per VM
+  consolePassword?: string;              // required when passwordMode === 'fixed'
   enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
   softwareIds?: string[];                // Windows templates only — software to install
 }
@@ -128,6 +134,17 @@ export interface VMFilters {
   status?: string;
   cloneType?: 'dedicated_storage' | 'dynamic_storage';
   node?: string;
+}
+
+/** Per-VM console credential summary returned alongside a job. */
+export interface JobVMCredential {
+  id: string;
+  name: string;
+  status: string;
+  ipAddress?: string;
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol: 'rdp' | 'ssh';
 }
 
 // ─── Node resource snapshot ───────────────────────────────────────────────────
@@ -231,6 +248,7 @@ export interface TemplateDetails {
   diskGb: number;
   osType?: string;
   description?: string;
+  defaultUsername: string;   // cloud-init ciuser from the template config (fallback 'Admin')
 }
 
 export interface TemplateSpecs {
@@ -255,6 +273,10 @@ export interface VMDetails {
     allocatedDiskGb: number;
     ipAddress?: string;
     macAddress?: string;
+    consoleUsername?: string;
+    consolePassword?: string;
+    consoleProtocol: 'rdp' | 'ssh';
+    consoleReady: boolean;
     haEnabled: boolean;
     enableVirtualization: boolean;
     hyperVStatus: HyperVStatus;
@@ -305,6 +327,10 @@ export interface BulkVMSpec {
   adminId: mongoose.Types.ObjectId;
   jobId: mongoose.Types.ObjectId;
   description?: string;
+  consoleUsername: string;               // template's fixed cloud-init username (same for all VMs)
+  passwordMode: 'fixed' | 'dynamic';
+  consolePassword?: string;              // set when passwordMode === 'fixed'
+  consoleProtocol: 'rdp' | 'ssh';
   enableVirtualization?: boolean;
   softwareIds?: mongoose.Types.ObjectId[];
   /** Software already baked into golden template — mark installed, skip provisioner. */

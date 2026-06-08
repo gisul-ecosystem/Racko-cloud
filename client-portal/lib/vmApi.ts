@@ -23,6 +23,7 @@ export interface TemplateDetails {
   diskGb: number;
   osType?: string;
   description?: string;
+  defaultUsername: string;   // fixed cloud-init username from the template (fallback 'Admin')
 }
 
 export type VMStatus =
@@ -78,6 +79,10 @@ export interface IVM {
   proxmoxStatus: string;
   ipAddress?: string;
   macAddress?: string;
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol?: 'rdp' | 'ssh';
+  consoleReady?: boolean;
   jobId?: string;
   haEnabled: boolean;
   enableVirtualization?: boolean;
@@ -113,6 +118,10 @@ export interface VMDetails {
     allocatedDiskGb: number;
     ipAddress?: string;
     macAddress?: string;
+    consoleUsername?: string;
+    consolePassword?: string;
+    consoleProtocol?: 'rdp' | 'ssh';
+    consoleReady?: boolean;
     haEnabled: boolean;
     enableVirtualization: boolean;
     hyperVStatus: HyperVStatus;
@@ -167,6 +176,10 @@ export interface IVMJob {
     diskGb: number;
     namePrefix: string;
     count: number;
+    consoleUsername?: string;
+    passwordMode?: PasswordMode;
+    consolePassword?: string;
+    consoleProtocol?: 'rdp' | 'ssh';
   };
   jobErrors: Array<{ index: number; vmName: string; error: string; node?: string }>;
   startedAt: string;
@@ -189,6 +202,8 @@ export interface NodeAlert {
   updatedAt: string;
 }
 
+export type PasswordMode = 'fixed' | 'dynamic';
+
 export interface CreateVMDto {
   templateId: number;
   name: string;
@@ -198,8 +213,21 @@ export interface CreateVMDto {
   memoryGb?: number;
   diskGb?: number;
   description?: string;
+  consoleUsername: string;           // required — Admin account is renamed to this (Windows/RDP)
+  passwordMode: PasswordMode;
+  consolePassword?: string;          // only sent in fixed mode
   enableVirtualization?: boolean;
   softwareIds?: string[];
+}
+
+export interface JobVMCredential {
+  id: string;
+  name: string;
+  status: string;
+  ipAddress?: string;
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol: 'rdp' | 'ssh';
 }
 
 // ─── API response wrapper ─────────────────────────────────────────────────────
@@ -381,9 +409,13 @@ export async function fetchMyJobs(limit = 20): Promise<IVMJob[]> {
   return res.data.jobs;
 }
 
-export async function fetchJobStatus(jobId: string): Promise<IVMJob> {
-  const res = await apiRequest<ApiResponse<{ job: IVMJob }>>(`/api/v1/vms/jobs/${jobId}`);
-  return res.data.job;
+export async function fetchJobStatus(
+  jobId: string
+): Promise<{ job: IVMJob; vms: JobVMCredential[] }> {
+  const res = await apiRequest<ApiResponse<{ job: IVMJob; vms?: JobVMCredential[] }>>(
+    `/api/v1/vms/jobs/${jobId}`
+  );
+  return { job: res.data.job, vms: res.data.vms ?? [] };
 }
 
 // ─── Alerts ───────────────────────────────────────────────────────────────────

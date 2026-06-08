@@ -10,6 +10,14 @@ export function generateSecureToken(bytes = 32): string {
 }
 
 /**
+ * Generate a 12-character URL-safe password.
+ * 9 random bytes encode to exactly 12 base64url characters (no padding).
+ */
+export function generatePassword(): string {
+  return crypto.randomBytes(9).toString('base64url');
+}
+
+/**
  * SHA-256 hash a token for safe DB storage.
  * Never store raw tokens in the database.
  */
