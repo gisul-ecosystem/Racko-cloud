@@ -53,11 +53,6 @@ export const createVMSchema = z.object({
       .string()
       .max(500, 'description cannot exceed 500 characters')
       .optional(),
-    consoleUsername: z
-      .string({ required_error: 'consoleUsername is required' })
-      .trim()
-      .min(1, 'Console username is required')
-      .max(100, 'Console username cannot exceed 100 characters'),
     passwordMode: z.enum(['fixed', 'dynamic'], {
       required_error: 'passwordMode is required',
       invalid_type_error: 'passwordMode must be fixed or dynamic',
@@ -66,12 +61,6 @@ export const createVMSchema = z.object({
       .string()
       .min(1, 'Console password is required')
       .max(256, 'Console password cannot exceed 256 characters')
-      .optional(),
-    dynamicUsernamePrefix: z
-      .string()
-      .trim()
-      .min(1, 'Username prefix cannot be empty')
-      .max(100, 'Username prefix cannot exceed 100 characters')
       .optional(),
     enableVirtualization: z.boolean().optional().default(false),
     softwareIds: z

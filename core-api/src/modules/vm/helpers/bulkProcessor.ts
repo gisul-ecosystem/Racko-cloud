@@ -100,7 +100,6 @@ export async function processBulkCreation(
           consoleUsername: specs.consoleUsername,
           passwordMode: specs.passwordMode,
           consolePassword: specs.consolePassword,
-          dynamicUsernamePrefix: specs.dynamicUsernamePrefix,
           consoleProtocol: specs.consoleProtocol,
           enableVirtualization: specs.enableVirtualization ?? false,
           softwareIds: specs.softwareIds ?? [],
@@ -271,13 +270,9 @@ export async function processBulkCreation(
  */
 async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId> {
   // Resolve per-VM console credentials.
-  // Username: in dynamic mode with a prefix set, becomes "<prefix>-<index>"
-  // (e.g. "Admin-1", "Admin-2"); otherwise exactly what the user typed.
+  // Username: fixed by the template (cloudbase-init cannot create users) — same for every VM.
   // Password: fixed → shared value from the request; dynamic → unique per VM.
-  const consoleUsername =
-    spec.passwordMode === 'dynamic' && spec.dynamicUsernamePrefix
-      ? `${spec.dynamicUsernamePrefix}-${spec.index}`
-      : spec.consoleUsername;
+  const consoleUsername = spec.consoleUsername;
   const consolePassword =
     spec.passwordMode === 'dynamic' ? generatePassword() : (spec.consolePassword ?? '');
 
@@ -408,11 +403,11 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     return vm._id;
   }
 
-  // Inject cloud-init credentials + apply any spec overrides.
-  // ciuser/cipassword are always set so the VM uses the credentials the admin
-  // chose (or the generated per-VM password) rather than the template defaults.
+  // Inject the cloud-init password + apply any spec overrides.
+  // We deliberately do NOT send ciuser: cloudbase-init on Windows cannot create
+  // users, it can only set the password for the template's existing account.
+  // The username is fixed by the template, so we only override cipassword here.
   const configUpdates: Record<string, unknown> = {
-    ciuser: consoleUsername,
     cipassword: consolePassword,
   };
   if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;

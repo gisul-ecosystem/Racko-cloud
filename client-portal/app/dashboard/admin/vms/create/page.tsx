@@ -43,12 +43,10 @@ export default function CreateVMPage() {
   const [ramOverride, setRamOverride] = useState('');
   const [diskOverride, setDiskOverride] = useState('');
   const [description, setDescription] = useState('');
-  // Console access
-  const [consoleUsername, setConsoleUsername] = useState('');
+  // Console access — username is fixed by the template, only the password is chosen here
   const [passwordMode, setPasswordMode] = useState<PasswordMode>('fixed');
   const [consolePassword, setConsolePassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [dynamicUsernamePrefix, setDynamicUsernamePrefix] = useState('');
   const [enableVirtualization, setEnableVirtualization] = useState(false);
   const [selectedSoftwareIds, setSelectedSoftwareIds] = useState<string[]>([]);
   const [softwareCatalog, setSoftwareCatalog] = useState<SoftwareCatalogItem[]>([]);
@@ -114,9 +112,7 @@ export default function CreateVMPage() {
 
   function canProceedStep2() {
     const err = validateName(name);
-    const consoleOk =
-      consoleUsername.trim().length > 0 &&
-      (passwordMode === 'dynamic' || consolePassword.length > 0);
+    const consoleOk = passwordMode === 'dynamic' || consolePassword.length > 0;
     return !err && count >= 1 && count <= 100 &&
       !cpuError && !ramError && !diskError &&
       safeCpu >= minCpu && safeRam >= minRam && safeDisk >= minDisk &&
@@ -132,12 +128,8 @@ export default function CreateVMPage() {
         name: name.toLowerCase(),
         count,
         cloneType,
-        consoleUsername: consoleUsername.trim(),
         passwordMode,
         ...(passwordMode === 'fixed' ? { consolePassword } : {}),
-        ...(passwordMode === 'dynamic' && count > 1 && dynamicUsernamePrefix.trim()
-          ? { dynamicUsernamePrefix: dynamicUsernamePrefix.trim() }
-          : {}),
         ...(cpuOverride && safeCpu > minCpu ? { cpuCores: safeCpu } : {}),
         ...(ramOverride && safeRam > minRam ? { memoryGb: safeRam } : {}),
         ...(diskOverride && safeDisk > minDisk ? { diskGb: safeDisk } : {}),
@@ -486,18 +478,17 @@ export default function CreateVMPage() {
               <h3 className="text-sm font-semibold text-gray-900">Console Access</h3>
             </div>
 
-            {/* Username */}
+            {/* Username — fixed by the template, shown read-only */}
             <div className="mb-4">
               <label className={labelClass}>Console Username</label>
               <input
                 type="text"
-                value={consoleUsername}
-                onChange={(e) => setConsoleUsername(e.target.value)}
-                placeholder="e.g. Administrator"
-                className={inputClass}
-                autoComplete="off"
+                value={templateDetails.defaultUsername}
+                readOnly
+                disabled
+                className={`${inputClass} bg-gray-50 text-gray-500 cursor-not-allowed`}
               />
-              <p className="text-xs text-gray-400 mt-1">Username to log into the VM</p>
+              <p className="text-xs text-gray-400 mt-1">Set by the template — cannot be changed</p>
             </div>
 
             {/* Password mode cards */}
@@ -550,31 +541,13 @@ export default function CreateVMPage() {
               </div>
             )}
 
-            {/* Dynamic: info + optional prefix */}
+            {/* Dynamic: info */}
             {passwordMode === 'dynamic' && (
-              <div className="space-y-3">
-                <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg">
-                  <p className="text-xs text-blue-700">
-                    A unique secure password will be generated for each VM. You can view credentials
-                    after creation on the VM details page.
-                  </p>
-                </div>
-                {count > 1 && (
-                  <div>
-                    <label className={labelClass}>Username Prefix <span className="text-gray-400">(optional)</span></label>
-                    <input
-                      type="text"
-                      value={dynamicUsernamePrefix}
-                      onChange={(e) => setDynamicUsernamePrefix(e.target.value)}
-                      placeholder="e.g. Admin"
-                      className={inputClass}
-                      autoComplete="off"
-                    />
-                    <p className="text-xs text-gray-400 mt-1">
-                      If set, usernames become prefix-1, prefix-2, etc. Leave empty to use the same username for all VMs.
-                    </p>
-                  </div>
-                )}
+              <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                <p className="text-xs text-blue-700">
+                  A unique secure password will be generated for each VM. You can view credentials
+                  after creation on the VM details page.
+                </p>
               </div>
             )}
           </div>
@@ -614,12 +587,7 @@ export default function CreateVMPage() {
               { label: 'CPU', value: `${safeCpu} vCPU` },
               { label: 'RAM', value: `${safeRam} GB` },
               { label: 'Disk', value: cloneType === 'dedicated_storage' ? `${safeDisk} GB` : 'Shared (dynamic)' },
-              {
-                label: 'Console User',
-                value: passwordMode === 'dynamic' && count > 1 && dynamicUsernamePrefix.trim()
-                  ? `${dynamicUsernamePrefix.trim()}-1 … ${dynamicUsernamePrefix.trim()}-${count}`
-                  : consoleUsername,
-              },
+              { label: 'Console User', value: templateDetails.defaultUsername },
               { label: 'Password', value: passwordMode === 'dynamic' ? 'Auto-generated per VM' : 'Custom (set)' },
               ...(showVirtualizationOption
                 ? [{ label: 'Virtualization', value: enableVirtualization ? 'Enabled (Hyper-V)' : 'Disabled' }]

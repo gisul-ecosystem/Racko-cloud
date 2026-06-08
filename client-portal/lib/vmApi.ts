@@ -23,6 +23,7 @@ export interface TemplateDetails {
   diskGb: number;
   osType?: string;
   description?: string;
+  defaultUsername: string;   // fixed cloud-init username from the template (fallback 'Admin')
 }
 
 export type VMStatus =
@@ -173,7 +174,6 @@ export interface IVMJob {
     consoleUsername?: string;
     passwordMode?: PasswordMode;
     consolePassword?: string;
-    dynamicUsernamePrefix?: string;
     consoleProtocol?: 'rdp' | 'ssh';
   };
   jobErrors: Array<{ index: number; vmName: string; error: string; node?: string }>;
@@ -208,10 +208,9 @@ export interface CreateVMDto {
   memoryGb?: number;
   diskGb?: number;
   description?: string;
-  consoleUsername: string;
+  // Console username is fixed by the template — not sent by the client.
   passwordMode: PasswordMode;
   consolePassword?: string;          // only sent in fixed mode
-  dynamicUsernamePrefix?: string;    // only sent in dynamic mode (count > 1)
   enableVirtualization?: boolean;
   softwareIds?: string[];
 }
