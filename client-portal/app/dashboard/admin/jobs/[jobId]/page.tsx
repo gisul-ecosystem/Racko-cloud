@@ -1,10 +1,14 @@
 'use client';
 
+import { useState } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { useJobStatus } from '../../../../../hooks/useJobStatus';
-import { ChevronLeft, CheckCircle, XCircle, Clock, Loader2 } from 'lucide-react';
-import type { JobStatus } from '../../../../../lib/vmApi';
+import {
+  ChevronLeft, CheckCircle, XCircle, Clock, Loader2,
+  KeyRound, Eye, EyeOff, Copy, Check as CheckIcon, AlertTriangle,
+} from 'lucide-react';
+import type { JobStatus, JobVMCredential } from '../../../../../lib/vmApi';
 
 const statusConfig: Record<JobStatus, { label: string; color: string; icon: React.ReactNode }> = {
   pending:    { label: 'Pending',    color: 'text-gray-500',  icon: <Clock className="w-4 h-4" /> },
@@ -14,9 +18,119 @@ const statusConfig: Record<JobStatus, { label: string; color: string; icon: Reac
   failed:     { label: 'Failed',     color: 'text-red-600',   icon: <XCircle className="w-4 h-4" /> },
 };
 
+function JobCredentialsTable({ vms }: { vms: JobVMCredential[] }) {
+  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
+  const [copiedAll, setCopiedAll] = useState(false);
+  const [copiedRow, setCopiedRow] = useState<string | null>(null);
+
+  async function copy(text: string, onDone: () => void) {
+    try {
+      await navigator.clipboard.writeText(text);
+      onDone();
+    } catch {
+      // Clipboard unavailable (insecure context) — silently ignore
+    }
+  }
+
+  function copyAll() {
+    const csv = vms
+      .map((v) => `${v.name},${v.consoleUsername ?? ''},${v.consolePassword ?? ''}`)
+      .join('\n');
+    void copy(csv, () => {
+      setCopiedAll(true);
+      setTimeout(() => setCopiedAll(false), 1500);
+    });
+  }
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-4">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2">
+          <KeyRound className="w-4 h-4 text-gray-400" /> VM Credentials
+        </h2>
+        <button
+          type="button"
+          onClick={copyAll}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-gray-700 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition"
+          title="Copy all as CSV (VMName,Username,Password)"
+        >
+          {copiedAll ? <CheckIcon className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+          Copy All
+        </button>
+      </div>
+
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-left text-gray-400 border-b border-gray-100">
+              <th className="py-2 pr-3 font-medium">VM Name</th>
+              <th className="py-2 pr-3 font-medium">Username</th>
+              <th className="py-2 pr-3 font-medium">Password</th>
+              <th className="py-2 font-medium text-right">Copy</th>
+            </tr>
+          </thead>
+          <tbody>
+            {vms.map((v) => {
+              const isRevealed = revealed[v.id] ?? false;
+              const rowCsv = `${v.name},${v.consoleUsername ?? ''},${v.consolePassword ?? ''}`;
+              return (
+                <tr key={v.id} className="border-b border-gray-50 last:border-0">
+                  <td className="py-2 pr-3 font-medium text-gray-800">{v.name}</td>
+                  <td className="py-2 pr-3 font-mono text-gray-700">{v.consoleUsername || '—'}</td>
+                  <td className="py-2 pr-3 font-mono text-gray-700">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate">
+                        {v.consolePassword ? (isRevealed ? v.consolePassword : '••••••••') : '—'}
+                      </span>
+                      {v.consolePassword && (
+                        <button
+                          type="button"
+                          onClick={() => setRevealed((r) => ({ ...r, [v.id]: !isRevealed }))}
+                          className="text-gray-400 hover:text-gray-600 shrink-0"
+                          title={isRevealed ? 'Hide password' : 'Show password'}
+                          aria-label={isRevealed ? 'Hide password' : 'Show password'}
+                        >
+                          {isRevealed ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                  <td className="py-2 text-right">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        void copy(rowCsv, () => {
+                          setCopiedRow(v.id);
+                          setTimeout(() => setCopiedRow((c) => (c === v.id ? null : c)), 1500);
+                        })
+                      }
+                      className="inline-flex items-center justify-center w-7 h-7 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100 transition"
+                      title="Copy this VM's credentials"
+                      aria-label="Copy credentials"
+                    >
+                      {copiedRow === v.id ? <CheckIcon className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="mt-3 flex items-start gap-2 p-3 bg-amber-50 border border-amber-100 rounded-lg">
+        <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0 mt-0.5" />
+        <p className="text-xs text-amber-700">
+          Store these credentials safely. They are accessible from the VM details page.
+        </p>
+      </div>
+    </div>
+  );
+}
+
 export default function JobStatusPage() {
   const { jobId } = useParams<{ jobId: string }>();
-  const { job, loading, error } = useJobStatus(jobId ?? null);
+  const { job, vms, loading, error } = useJobStatus(jobId ?? null);
 
   if (loading && !job) {
     return (
@@ -127,6 +241,11 @@ export default function JobStatusPage() {
           ))}
         </div>
       </div>
+
+      {/* VM credentials — shown once VMs exist and at least some have been created */}
+      {vms.length > 0 && (job.status === 'completed' || job.completed > 0) && (
+        <JobCredentialsTable vms={vms} />
+      )}
 
       {/* Errors */}
       {job.jobErrors.length > 0 && (

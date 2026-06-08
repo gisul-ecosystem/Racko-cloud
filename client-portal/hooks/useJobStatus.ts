@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchJobStatus, type IVMJob } from '../lib/vmApi';
+import { fetchJobStatus, type IVMJob, type JobVMCredential } from '../lib/vmApi';
 import { ApiError } from '../lib/apiClient';
 
 const TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed']);
@@ -9,12 +9,14 @@ const POLL_INTERVAL_MS = 3000;
 
 interface UseJobStatusResult {
   job: IVMJob | null;
+  vms: JobVMCredential[];
   loading: boolean;
   error: string | null;
 }
 
 export function useJobStatus(jobId: string | null): UseJobStatusResult {
   const [job, setJob] = useState<IVMJob | null>(null);
+  const [vms, setVms] = useState<JobVMCredential[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -23,10 +25,11 @@ export function useJobStatus(jobId: string | null): UseJobStatusResult {
     if (!jobId) return;
     try {
       const result = await fetchJobStatus(jobId);
-      setJob(result);
+      setJob(result.job);
+      setVms(result.vms);
       setError(null);
       // Stop polling once terminal
-      if (TERMINAL_STATUSES.has(result.status)) {
+      if (TERMINAL_STATUSES.has(result.job.status)) {
         if (intervalRef.current) clearInterval(intervalRef.current);
       }
     } catch (err) {
@@ -49,5 +52,5 @@ export function useJobStatus(jobId: string | null): UseJobStatusResult {
     };
   }, [poll, jobId]);
 
-  return { job, loading, error };
+  return { job, vms, loading, error };
 }
