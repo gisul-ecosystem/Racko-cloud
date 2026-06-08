@@ -84,7 +84,9 @@ function sleep(ms: number): Promise<void> {
  * errors are swallowed and retried — this never throws and never blocks the
  * caller (the start API responds immediately; the IP resolves in the background).
  */
-async function startIpPolling(vm: Pick<IVM, '_id' | 'node' | 'vmid'>): Promise<void> {
+async function startIpPolling(
+  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'consoleProtocol' | 'consoleUsername'>
+): Promise<void> {
   const vmObjectId = vm._id;
   const { node, vmid } = vm;
   const maxRetries = 12;
@@ -126,6 +128,30 @@ async function startIpPolling(vm: Pick<IVM, '_id' | 'node' | 'vmid'>): Promise<v
         await sleep(15_000);
         await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
         logger.info('VM console ready', { vmId: vmObjectId.toString(), vmid });
+
+        // Windows/RDP only: rename the template's built-in 'Admin' account to the
+        // admin-chosen username. Best-effort — runs after consoleReady so it never
+        // blocks or delays console availability; failures are logged, never thrown.
+        if (vm.consoleProtocol === 'rdp' && vm.consoleUsername && vm.consoleUsername !== 'Admin') {
+          try {
+            await proxmoxClient.post(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
+              command: 'powershell.exe',
+              args: ['-Command', `Rename-LocalUser -Name 'Admin' -NewName '${vm.consoleUsername}'`],
+            });
+            logger.info('VM console username rename requested', {
+              vmId: vmObjectId.toString(),
+              vmid,
+              consoleUsername: vm.consoleUsername,
+            });
+          } catch (renameErr) {
+            logger.warn('VM console username rename failed — continuing', {
+              vmId: vmObjectId.toString(),
+              vmid,
+              consoleUsername: vm.consoleUsername,
+              error: renameErr instanceof Error ? renameErr.message : String(renameErr),
+            });
+          }
+        }
         return;
       }
     } catch (err) {
@@ -290,8 +316,9 @@ export class VMService {
     // taken from the client. Windows → rdp, everything else → ssh.
     const consoleProtocol = deriveConsoleProtocol(templateDetails.osType);
 
-    // Console username is fixed by the template (cloudbase-init cannot create users).
-    const consoleUsername = templateDetails.defaultUsername;
+    // Admin-chosen username. The template's 'Admin' account is renamed to this after
+    // boot (startIpPolling guest exec, Windows/RDP only); cloudbase-init sets its password.
+    const consoleUsername = dto.consoleUsername;
 
     // Virtualization (Hyper-V) is Windows-only
     const enableVirtualization = dto.enableVirtualization ?? false;
