@@ -88,7 +88,6 @@ const envSchema = z.object({
   HYPERV_MAX_CONCURRENT: z.string().regex(/^\d+$/).transform(Number).default('3'),
   HYPERV_SWEEPER_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('120000'),
   HYPERV_STUCK_PENDING_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
-  HYPERV_STUCK_BUFFER_MS: z.string().regex(/^\d+$/).transform(Number).default('120000'),
   HYPERV_STUCK_INPROGRESS_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
   HYPERV_MAX_SWEEPER_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
   // Per-VM lease lock: a live provisioner renews `hyperVLockedUntil` on a
