@@ -144,11 +144,14 @@ export interface VMOperationResult {
 
 export type JobStatus = 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
 
+export type JobPhase = 'building_golden_image' | 'cloning_vms';
+
 export interface IVMJob {
   _id: string;
   adminId: string;
   type: string;
   status: JobStatus;
+  phase?: JobPhase;
   total: number;
   completed: number;
   failed: number;

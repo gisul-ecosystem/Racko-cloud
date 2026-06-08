@@ -21,6 +21,7 @@ export interface IVMJob extends Document {
   requestedSpecs: {
     templateId: number;
     templateName: string;
+    templateNode: string;
     cloneType: 'dedicated_storage' | 'dynamic_storage';
     cpuCores: number;
     memoryGb: number;
@@ -33,6 +34,11 @@ export interface IVMJob extends Document {
     enableVirtualization?: boolean;
     softwareIds?: mongoose.Types.ObjectId[];
   };
+
+  // Golden-image bulk job progress (transient)
+  phase?: 'building_golden_image' | 'cloning_vms';
+  goldenTemplateVmid?: number;
+  goldenTemplateNode?: string;
 
   // Error details
   jobErrors: Array<{
@@ -97,6 +103,7 @@ const vmJobSchema = new Schema<IVMJob>(
     requestedSpecs: {
       templateId: { type: Number, required: true },
       templateName: { type: String, required: true },
+      templateNode: { type: String, required: true, trim: true },
       cloneType: {
         type: String,
         enum: ['dedicated_storage', 'dynamic_storage'],
@@ -113,6 +120,12 @@ const vmJobSchema = new Schema<IVMJob>(
       enableVirtualization: { type: Boolean, default: false },
       softwareIds: { type: [Schema.Types.ObjectId], ref: 'Software', default: [] },
     },
+    phase: {
+      type: String,
+      enum: ['building_golden_image', 'cloning_vms'],
+    },
+    goldenTemplateVmid: { type: Number },
+    goldenTemplateNode: { type: String, trim: true },
     jobErrors: {
       type: [
         {

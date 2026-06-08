@@ -294,6 +294,7 @@ export interface BulkVMSpec {
   index: number;
   node: string;
   templateId: number;
+  sourceTemplateId?: number;
   cloneType: 'dedicated_storage' | 'dynamic_storage';
   cpuCores: number;
   memoryGb: number;
@@ -306,4 +307,8 @@ export interface BulkVMSpec {
   description?: string;
   enableVirtualization?: boolean;
   softwareIds?: mongoose.Types.ObjectId[];
+  /** Software already baked into golden template — mark installed, skip provisioner. */
+  softwarePreInstalled?: boolean;
+  /** Run Hyper-V / software queues after clone (single-VM create only). */
+  schedulePostCreateJobs?: boolean;
 }

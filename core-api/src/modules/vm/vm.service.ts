@@ -213,7 +213,7 @@ export class VMService {
     }
 
     // Validate resources
-    const validation = await validateResources(dto, templateSpecs);
+    const validation = await validateResources(dto, templateSpecs, templateDetails.node);
     if (!validation.canCreate) {
       throw new InsufficientResourcesError(
         validation.reason ?? 'Insufficient resources.',
@@ -237,6 +237,7 @@ export class VMService {
       requestedSpecs: {
         templateId: dto.templateId,
         templateName: templateDetails.name,
+        templateNode: templateDetails.node,
         cloneType: dto.cloneType,
         cpuCores,
         memoryGb,
@@ -258,7 +259,14 @@ export class VMService {
       adminId: adminId.toString(),
       count: dto.count,
       templateId: dto.templateId,
+      templateNode: templateDetails.node,
       type: job.type,
+      path: dto.count > 1 && (dto.softwareIds?.length ?? 0) > 0
+        ? 'golden_image_bulk'
+        : dto.count === 1 && (dto.softwareIds?.length ?? 0) > 0
+          ? 'single_vm_software'
+          : 'standard_bulk',
+      softwareCount: dto.softwareIds?.length ?? 0,
     });
 
     // Trigger async — do NOT await

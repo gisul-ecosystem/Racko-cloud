@@ -20,9 +20,11 @@ import type { CreateVMDto, ResourceValidationResult, TemplateSpecs } from '../vm
  */
 export async function validateResources(
   dto: CreateVMDto,
-  templateSpecs: TemplateSpecs
+  templateSpecs: TemplateSpecs,
+  templateNode?: string
 ): Promise<ResourceValidationResult> {
   const count = dto.count;
+  const hasSoftware = (dto.softwareIds?.length ?? 0) > 0;
 
   if (count > config.VM_MAX_BULK_COUNT) {
     throw new ValidationError(
@@ -59,6 +61,72 @@ export async function validateResources(
       maxPossibleCount: 0,
       reason: 'No online nodes available in the cluster.',
       nodeAllocations: [],
+    };
+  }
+
+  // Golden-image bulk (software): all VMs clone from template on one node
+  if (count > 1 && hasSoftware && templateNode) {
+    const node = onlineNodes.find((n) => n.node === templateNode);
+    if (!node) {
+      return {
+        canCreate: false,
+        requestedCount: count,
+        maxPossibleCount: 0,
+        reason: `Template node "${templateNode}" is offline or unavailable.`,
+        nodeAllocations: [],
+      };
+    }
+
+    const storageCapacity =
+      diskGb > 0 ? Math.floor(node.storage.freeGb / diskGb) : 1;
+    const ramCapacity =
+      memoryGb > 0 ? Math.floor(effectiveFreeRamGb(node) / memoryGb) : 1;
+    const cpuCapacity =
+      cpuCores > 0 ? Math.floor(effectiveFreeCpu(node) / cpuCores) : 1;
+
+    if (dto.cloneType === 'dynamic_storage') {
+      // Linked delivery clones overcommit storage/RAM/CPU — only the golden seed
+      // (full clone, runs during software install) needs pre-flight capacity.
+      const seedFits =
+        storageCapacity >= 1 && ramCapacity >= 1 && cpuCapacity >= 1;
+
+      if (!seedFits) {
+        return {
+          canCreate: false,
+          requestedCount: count,
+          maxPossibleCount: 0,
+          reason: `Template node "${templateNode}" lacks resources for the golden seed VM (needs ${memoryGb}GB RAM, ${cpuCores} cores, ${diskGb}GB disk).`,
+          nodeAllocations: [],
+        };
+      }
+
+      return {
+        canCreate: true,
+        requestedCount: count,
+        maxPossibleCount: count,
+        nodeAllocations: [{ node: templateNode, vmCount: count }],
+      };
+    }
+
+    // dedicated_storage: seed + every delivery VM is a full clone
+    const slotsNeeded = count + 1;
+    const maxOnNode = Math.min(storageCapacity, ramCapacity, cpuCapacity);
+
+    if (maxOnNode < slotsNeeded) {
+      return {
+        canCreate: false,
+        requestedCount: count,
+        maxPossibleCount: Math.max(0, maxOnNode - 1),
+        reason: `Template node "${templateNode}" can fit at most ${Math.max(0, maxOnNode - 1)} VMs with these specs (requested ${count}, plus 1 golden seed).`,
+        nodeAllocations: [],
+      };
+    }
+
+    return {
+      canCreate: true,
+      requestedCount: count,
+      maxPossibleCount: count,
+      nodeAllocations: [{ node: templateNode, vmCount: count }],
     };
   }
 
