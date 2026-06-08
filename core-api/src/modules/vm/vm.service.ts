@@ -230,7 +230,7 @@ export class VMService {
     }
 
     const configResponse = await proxmoxClient.get<{
-      data: { cores?: number; memory?: number; scsi0?: string; ostype?: string; description?: string; name?: string };
+      data: { cores?: number; memory?: number; scsi0?: string; ostype?: string; description?: string; name?: string; ciuser?: string };
     }>(`/nodes/${template.node}/qemu/${templateId}/config`);
 
     const cfg = configResponse.data.data;
@@ -251,6 +251,9 @@ export class VMService {
       diskGb,
       osType: cfg.ostype,
       description: cfg.description,
+      // cloudbase-init can only set the password for the template's existing user.
+      // Expose that fixed username; fall back to 'Admin' when the template omits ciuser.
+      defaultUsername: cfg.ciuser?.trim() || 'Admin',
     };
   }
 
@@ -281,6 +284,9 @@ export class VMService {
     // Console protocol is computed server-side from the template OS type — never
     // taken from the client. Windows → rdp, everything else → ssh.
     const consoleProtocol = deriveConsoleProtocol(templateDetails.osType);
+
+    // Console username is fixed by the template (cloudbase-init cannot create users).
+    const consoleUsername = templateDetails.defaultUsername;
 
     // Virtualization (Hyper-V) is Windows-only
     const enableVirtualization = dto.enableVirtualization ?? false;
@@ -331,10 +337,9 @@ export class VMService {
         templateMemoryGb: templateSpecs.memoryGb,  // actual template value from Proxmox
         namePrefix: dto.name,
         count: dto.count,
-        consoleUsername: dto.consoleUsername,
+        consoleUsername,
         passwordMode: dto.passwordMode,
         consolePassword: dto.passwordMode === 'fixed' ? dto.consolePassword : undefined,
-        dynamicUsernamePrefix: dto.passwordMode === 'dynamic' ? dto.dynamicUsernamePrefix : undefined,
         consoleProtocol,
         enableVirtualization,
         softwareIds,

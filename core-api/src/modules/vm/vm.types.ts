@@ -39,6 +39,7 @@ export interface ProxmoxVMConfig {
   ostype?: string;
   ide2?: string;
   sockets?: number;
+  ciuser?: string;    // cloud-init default username
 }
 
 export interface ProxmoxVMCurrentStatus {
@@ -120,10 +121,10 @@ export interface CreateVMDto {
   memoryGb?: number;                     // optional override (must be >= template)
   diskGb?: number;                       // optional override (must be >= template)
   description?: string;
-  consoleUsername: string;               // required — base username for browser console access
+  // Console username is fixed by the template (cloudbase-init cannot create users) —
+  // it is NOT accepted from the client. Only the password is chosen here.
   passwordMode: 'fixed' | 'dynamic';     // fixed: same password for all; dynamic: unique per VM
   consolePassword?: string;              // required when passwordMode === 'fixed'
-  dynamicUsernamePrefix?: string;        // dynamic mode only — username becomes "<prefix>-<index>" per VM
   enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
   softwareIds?: string[];                // Windows templates only — software to install
 }
@@ -246,6 +247,7 @@ export interface TemplateDetails {
   diskGb: number;
   osType?: string;
   description?: string;
+  defaultUsername: string;   // cloud-init ciuser from the template config (fallback 'Admin')
 }
 
 export interface TemplateSpecs {
@@ -322,10 +324,9 @@ export interface BulkVMSpec {
   adminId: mongoose.Types.ObjectId;
   jobId: mongoose.Types.ObjectId;
   description?: string;
-  consoleUsername: string;               // base username (prefix applied per VM in dynamic mode)
+  consoleUsername: string;               // template's fixed cloud-init username (same for all VMs)
   passwordMode: 'fixed' | 'dynamic';
   consolePassword?: string;              // set when passwordMode === 'fixed'
-  dynamicUsernamePrefix?: string;        // dynamic mode only — username becomes "<prefix>-<index>"
   consoleProtocol: 'rdp' | 'ssh';
   enableVirtualization?: boolean;
   softwareIds?: mongoose.Types.ObjectId[];
