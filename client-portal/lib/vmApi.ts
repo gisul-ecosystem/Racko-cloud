@@ -210,7 +210,7 @@ export interface CreateVMDto {
   memoryGb?: number;
   diskGb?: number;
   description?: string;
-  // Console username is fixed by the template — not sent by the client.
+  consoleUsername: string;           // required — Admin account is renamed to this (Windows/RDP)
   passwordMode: PasswordMode;
   consolePassword?: string;          // only sent in fixed mode
   enableVirtualization?: boolean;

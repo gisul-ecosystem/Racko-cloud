@@ -43,7 +43,8 @@ export default function CreateVMPage() {
   const [ramOverride, setRamOverride] = useState('');
   const [diskOverride, setDiskOverride] = useState('');
   const [description, setDescription] = useState('');
-  // Console access — username is fixed by the template, only the password is chosen here
+  // Console access — the template's 'Admin' account is renamed to this username
+  const [consoleUsername, setConsoleUsername] = useState('Admin');
   const [passwordMode, setPasswordMode] = useState<PasswordMode>('fixed');
   const [consolePassword, setConsolePassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -110,9 +111,12 @@ export default function CreateVMPage() {
     return selectedTemplateId !== null && !detailsLoading;
   }
 
+  const consoleUsernameValid = /^[A-Za-z0-9_-]{1,20}$/.test(consoleUsername);
+
   function canProceedStep2() {
     const err = validateName(name);
-    const consoleOk = passwordMode === 'dynamic' || consolePassword.length > 0;
+    const consoleOk =
+      consoleUsernameValid && (passwordMode === 'dynamic' || consolePassword.length > 0);
     return !err && count >= 1 && count <= 100 &&
       !cpuError && !ramError && !diskError &&
       safeCpu >= minCpu && safeRam >= minRam && safeDisk >= minDisk &&
@@ -128,6 +132,7 @@ export default function CreateVMPage() {
         name: name.toLowerCase(),
         count,
         cloneType,
+        consoleUsername: consoleUsername.trim(),
         passwordMode,
         ...(passwordMode === 'fixed' ? { consolePassword } : {}),
         ...(cpuOverride && safeCpu > minCpu ? { cpuCores: safeCpu } : {}),
@@ -478,17 +483,25 @@ export default function CreateVMPage() {
               <h3 className="text-sm font-semibold text-gray-900">Console Access</h3>
             </div>
 
-            {/* Username — fixed by the template, shown read-only */}
+            {/* Username — the template's Admin account is renamed to this */}
             <div className="mb-4">
               <label className={labelClass}>Console Username</label>
               <input
                 type="text"
-                value={templateDetails.defaultUsername}
-                readOnly
-                disabled
-                className={`${inputClass} bg-gray-50 text-gray-500 cursor-not-allowed`}
+                value={consoleUsername}
+                onChange={(e) => setConsoleUsername(e.target.value)}
+                placeholder="Admin"
+                maxLength={20}
+                autoComplete="off"
+                className={inputClass}
               />
-              <p className="text-xs text-gray-400 mt-1">Set by the template — cannot be changed</p>
+              {consoleUsername.length > 0 && !consoleUsernameValid ? (
+                <p className="text-xs text-red-500 mt-1">
+                  Username must be 1-20 characters, letters, numbers, hyphens and underscores only
+                </p>
+              ) : (
+                <p className="text-xs text-gray-400 mt-1">The Admin account will be renamed to this username</p>
+              )}
             </div>
 
             {/* Password mode cards */}
@@ -587,7 +600,7 @@ export default function CreateVMPage() {
               { label: 'CPU', value: `${safeCpu} vCPU` },
               { label: 'RAM', value: `${safeRam} GB` },
               { label: 'Disk', value: cloneType === 'dedicated_storage' ? `${safeDisk} GB` : 'Shared (dynamic)' },
-              { label: 'Console User', value: templateDetails.defaultUsername },
+              { label: 'Console User', value: consoleUsername },
               { label: 'Password', value: passwordMode === 'dynamic' ? 'Auto-generated per VM' : 'Custom (set)' },
               ...(showVirtualizationOption
                 ? [{ label: 'Virtualization', value: enableVirtualization ? 'Enabled (Hyper-V)' : 'Disabled' }]
