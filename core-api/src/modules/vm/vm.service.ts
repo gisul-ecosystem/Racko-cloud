@@ -772,7 +772,7 @@ export class VMService {
       for (const iface of interfaces) {
         if (iface.name === 'lo') continue;
         const ipv4 = iface['ip-addresses']?.find(
-          (a) => a['ip-address-type'] === 'ipv4' && !a['ip-address'].startsWith('127.')
+          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'].startsWith('10.100.')
         );
         if (ipv4) {
           ipAddress = ipv4['ip-address'];
