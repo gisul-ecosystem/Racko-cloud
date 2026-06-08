@@ -275,6 +275,7 @@ export interface VMDetails {
     consoleUsername?: string;
     consolePassword?: string;
     consoleProtocol: 'rdp' | 'ssh';
+    consoleReady: boolean;
     haEnabled: boolean;
     enableVirtualization: boolean;
     hyperVStatus: HyperVStatus;
