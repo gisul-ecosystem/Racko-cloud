@@ -4,7 +4,7 @@ Reference for all `HYPERV_*` settings in `core-api/.env`. These control nested v
 
 All values are **milliseconds** unless noted. If a variable is omitted from `.env`, the **default** in the table below is used. After any change, **restart core-api**.
 
----
+----
 
 ## Quick copy-paste block
 
