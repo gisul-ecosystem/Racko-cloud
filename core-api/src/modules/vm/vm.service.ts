@@ -126,33 +126,6 @@ async function startIpPolling(
         // Give cloudbase-init a moment to finish applying the password.
         await sleep(15_000);
 
-        // Windows/RDP only: rename the template's built-in 'Admin' account to the
-        // admin-chosen username BEFORE flagging console-ready, so the console button
-        // never enables with a stale username. Best-effort — failures are logged,
-        // never thrown, and still fall through to consoleReady below.
-        if (vm.consoleProtocol === 'rdp' && vm.consoleUsername && vm.consoleUsername !== 'Admin') {
-          try {
-            await proxmoxClient.post(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
-              command: 'powershell.exe',
-              args: ['-Command', `Rename-LocalUser -Name 'Admin' -NewName '${vm.consoleUsername}'`],
-            });
-            logger.info('VM console username rename requested', {
-              vmId: vmObjectId.toString(),
-              vmid,
-              consoleUsername: vm.consoleUsername,
-            });
-            // Let the rename take effect before the console becomes available.
-            await sleep(5_000);
-          } catch (renameErr) {
-            logger.warn('VM console username rename failed — continuing', {
-              vmId: vmObjectId.toString(),
-              vmid,
-              consoleUsername: vm.consoleUsername,
-              error: renameErr instanceof Error ? renameErr.message : String(renameErr),
-            });
-          }
-        }
-
         // Flag the VM as console-ready. The frontend / openConsole gate on this flag.
         await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
         logger.info('VM console ready', { vmId: vmObjectId.toString(), vmid });
