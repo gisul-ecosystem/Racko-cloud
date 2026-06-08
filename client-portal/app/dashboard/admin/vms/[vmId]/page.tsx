@@ -19,7 +19,7 @@ import {
   ChevronLeft, Play, Square, Zap, RotateCcw,
   RefreshCw, Trash2, Cpu, MemoryStick, HardDrive,
   Network, Clock, Server, Activity, Monitor,
-  KeyRound, Eye, EyeOff, Copy, Check as CheckIcon,
+  KeyRound, Eye, EyeOff, Copy, Check as CheckIcon, Loader2,
 } from 'lucide-react';
 
 type PowerOp = 'start' | 'stop' | 'force-stop' | 'restart' | 'reset' | 'delete';
@@ -216,6 +216,8 @@ export default function VMDetailPage() {
           const nextVm = data.vm;
           const unchanged =
             prevVm.status === nextVm.status &&
+            prevVm.consoleReady === nextVm.consoleReady &&
+            prevVm.ipAddress === nextVm.ipAddress &&
             prevVm.hyperVStatus === nextVm.hyperVStatus &&
             prevVm.hyperVLastError === nextVm.hyperVLastError &&
             prevVm.updatedAt === nextVm.updatedAt &&
@@ -256,13 +258,15 @@ export default function VMDetailPage() {
 
   useEffect(() => { void load(); }, [load]);
 
-  // Auto-refresh live status every 10s while VM is in a transitional state
+  // Auto-refresh every 10s while VM is in a transitional state. We refresh full
+  // details (not just live status) so vm.consoleReady propagates and the Console
+  // button auto-enables once the backend flags it ready (and re-disables on restart).
   useEffect(() => {
     const transitional = new Set(['creating', 'deleting', 'running']);
     if (!details || !transitional.has(details.vm.status)) return;
-    const id = setInterval(() => void refreshLive(), 10_000);
+    const id = setInterval(() => void load(true), 10_000);
     return () => clearInterval(id);
-  }, [details?.vm.status, refreshLive]);
+  }, [details?.vm.status, load]);
 
   const hyperVStatus: HyperVStatus = details?.vm.hyperVStatus ?? 'disabled';
   const isVirtInProgress =
@@ -413,6 +417,13 @@ export default function VMDetailPage() {
   const isRunning = vm.status === 'running';
   const isStopped = vm.status === 'stopped';
 
+  // Console readiness: the backend flips vm.consoleReady to true only after the IP
+  // resolves AND a grace delay for cloudbase-init. Until then we keep the Console
+  // button disabled with a "preparing" hint. The detail poll refreshes vm.consoleReady,
+  // which drives auto-enable (and re-disables briefly during restarts).
+  const consoleReady = isRunning && vm.consoleReady === true;
+  const consolePreparing = isRunning && vm.consoleReady !== true;
+
   return (
     <div className="max-w-4xl">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
@@ -448,6 +459,7 @@ export default function VMDetailPage() {
         </div>
 
         {/* Action buttons */}
+        <div className="flex flex-col items-end gap-2">
         <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
             onClick={refreshLive}
@@ -460,16 +472,33 @@ export default function VMDetailPage() {
           {(() => {
             const consoleProtocol = vm.consoleProtocol ?? 'rdp';
             const consoleHref = `/dashboard/admin/vms/${vmId}/console?protocol=${consoleProtocol}`;
-            return isRunning ? (
-              <Link
-                href={consoleHref}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition"
-                title={`Open browser console (${consoleProtocol.toUpperCase()})`}
-              >
-                <Monitor className="w-3.5 h-3.5" />
-                Console
-              </Link>
-            ) : (
+            if (consoleReady) {
+              return (
+                <Link
+                  href={consoleHref}
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition"
+                  title={`Open browser console (${consoleProtocol.toUpperCase()})`}
+                >
+                  <Monitor className="w-3.5 h-3.5" />
+                  Console
+                </Link>
+              );
+            }
+            if (consolePreparing) {
+              return (
+                <button
+                  type="button"
+                  disabled
+                  aria-disabled="true"
+                  title="Preparing console access... This takes 1-2 minutes after first start"
+                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-400 bg-white border border-gray-200 rounded-lg cursor-not-allowed opacity-60"
+                >
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  Console
+                </button>
+              );
+            }
+            return (
               <button
                 type="button"
                 disabled
@@ -506,6 +535,12 @@ export default function VMDetailPage() {
           <button onClick={() => setPendingOp('delete')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition">
             <Trash2 className="w-3.5 h-3.5" /> Delete
           </button>
+        </div>
+        {consolePreparing && (
+          <p className="text-xs text-amber-600 max-w-[280px] text-right">
+            VM is booting and setting up credentials. Console will be available shortly.
+          </p>
+        )}
         </div>
       </div>
 

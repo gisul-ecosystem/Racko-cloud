@@ -82,6 +82,7 @@ export interface IVM {
   consoleUsername?: string;
   consolePassword?: string;
   consoleProtocol?: 'rdp' | 'ssh';
+  consoleReady?: boolean;
   jobId?: string;
   haEnabled: boolean;
   enableVirtualization?: boolean;
@@ -120,6 +121,7 @@ export interface VMDetails {
     consoleUsername?: string;
     consolePassword?: string;
     consoleProtocol?: 'rdp' | 'ssh';
+    consoleReady?: boolean;
     haEnabled: boolean;
     enableVirtualization: boolean;
     hyperVStatus: HyperVStatus;
