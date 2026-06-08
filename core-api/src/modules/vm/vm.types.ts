@@ -121,8 +121,9 @@ export interface CreateVMDto {
   memoryGb?: number;                     // optional override (must be >= template)
   diskGb?: number;                       // optional override (must be >= template)
   description?: string;
-  // Console username is fixed by the template (cloudbase-init cannot create users) —
-  // it is NOT accepted from the client. Only the password is chosen here.
+  // The template ships with a fixed 'Admin' account. cloudbase-init sets its password,
+  // then startIpPolling renames it to this username via guest exec (Windows/RDP only).
+  consoleUsername: string;               // required — Windows username (1-20, [A-Za-z0-9_-])
   passwordMode: 'fixed' | 'dynamic';     // fixed: same password for all; dynamic: unique per VM
   consolePassword?: string;              // required when passwordMode === 'fixed'
   enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
