@@ -75,13 +75,9 @@ const envSchema = z.object({
   NODE_MONITOR_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
 
   // Software installation (Windows guests — Chocolatey)
-  SOFTWARE_MAX_CONCURRENT: z.string().regex(/^\d+$/).transform(Number).default('5'),
-  SOFTWARE_SWEEPER_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
-  SOFTWARE_STUCK_INSTALLING_MS: z.string().regex(/^\d+$/).transform(Number).default('1200000'),
-  SOFTWARE_STUCK_PENDING_MS: z.string().regex(/^\d+$/).transform(Number).default('600000'),
-  SOFTWARE_MAX_SWEEPER_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
   SOFTWARE_QMP_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('45000'),
   SOFTWARE_VM_START_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  SYSPREP_SHUTDOWN_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('600000'),
 
   // Hyper-V / nested virtualization (Windows guests)
   HYPERV_AGENT_READY_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
@@ -92,7 +88,6 @@ const envSchema = z.object({
   HYPERV_MAX_CONCURRENT: z.string().regex(/^\d+$/).transform(Number).default('3'),
   HYPERV_SWEEPER_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('120000'),
   HYPERV_STUCK_PENDING_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
-  HYPERV_STUCK_BUFFER_MS: z.string().regex(/^\d+$/).transform(Number).default('120000'),
   HYPERV_STUCK_INPROGRESS_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
   HYPERV_MAX_SWEEPER_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
   // Per-VM lease lock: a live provisioner renews `hyperVLockedUntil` on a

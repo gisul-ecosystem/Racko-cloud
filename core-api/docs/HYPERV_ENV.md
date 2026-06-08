@@ -23,7 +23,7 @@ HYPERV_POST_REBOOT_SETTLE_MS=20000
 # Layer 3 — sweeper (stuck job recovery)
 HYPERV_SWEEPER_INTERVAL_MS=120000
 HYPERV_STUCK_PENDING_MS=300000
-HYPERV_STUCK_BUFFER_MS=120000
+HYPERV_STUCK_INPROGRESS_MS=300000
 HYPERV_MAX_SWEEPER_ATTEMPTS=3
 
 # Concurrency (not a retry layer)
@@ -113,7 +113,7 @@ This is the most important tuning knob for slow machines.
 
 **Suggested production tweak (slow VMs):** `1800000` (30 minutes)
 
-If you increase this, consider increasing `HYPERV_STUCK_BUFFER_MS` (Layer 3) so the sweeper does not treat long-running jobs as stuck too early.
+If you increase this, consider increasing `HYPERV_STUCK_INPROGRESS_MS` (Layer 3) so the sweeper does not treat long-running jobs as stuck too early.
 
 ---
 
@@ -169,21 +169,17 @@ A timer inside **core-api** (not Proxmox health checks) scans MongoDB for VMs wh
 
 ---
 
-### `HYPERV_STUCK_BUFFER_MS`
+### `HYPERV_STUCK_INPROGRESS_MS`
 
 | | |
 |---|---|
-| **Default** | `120000` (2 minutes) |
+| **Default** | `300000` (5 minutes) |
 | **Unit** | Milliseconds |
-| **Meaning** | Extra grace period **on top of** `HYPERV_EXEC_DEADLINE_MS` before `enabling` or `disabling` is considered stuck. |
+| **Meaning** | A VM in **`enabling`** or **`disabling`** is treated as stuck if its lock has expired (crashed provisioner) and `hyperVStatusChangedAt` is older than this. |
 
-**Effective stuck threshold for `enabling` / `disabling`:**
+A live provisioner renews its lock on a heartbeat, so in-flight jobs are not flagged until the lock is free **and** the status has been unchanged for this grace period.
 
-```
-HYPERV_EXEC_DEADLINE_MS + HYPERV_STUCK_BUFFER_MS
-```
-
-With defaults: 20 min + 2 min = **~22 minutes** after status last changed before sweeper retry #1.
+**Suggested tweak (slow VMs or long exec runs):** `900000` (15 minutes) or higher.
 
 ---
 
@@ -236,7 +232,7 @@ Bulk-created VMs wait in `pending` until a slot is free.
 | `HYPERV_POST_REBOOT_SETTLE_MS` | 20000 | 2 | Delay |
 | `HYPERV_SWEEPER_INTERVAL_MS` | 120000 | 3 | Interval |
 | `HYPERV_STUCK_PENDING_MS` | 300000 | 3 | Stuck threshold |
-| `HYPERV_STUCK_BUFFER_MS` | 120000 | 3 | Stuck threshold |
+| `HYPERV_STUCK_INPROGRESS_MS` | 300000 | 3 | Stuck threshold |
 | `HYPERV_MAX_SWEEPER_ATTEMPTS` | 3 | 3 | Retry count |
 | `HYPERV_MAX_CONCURRENT` | 3 | — | Concurrency |
 
@@ -262,7 +258,7 @@ HYPERV_AGENT_READY_TIMEOUT_MS=600000
 HYPERV_EXEC_DEADLINE_MS=1800000
 HYPERV_POST_REBOOT_SETTLE_MS=45000
 HYPERV_MAX_CONCURRENT=1
-HYPERV_STUCK_BUFFER_MS=180000
+HYPERV_STUCK_INPROGRESS_MS=900000
 ```
 
 ### Large bulk create (many Hyper-V VMs at once)

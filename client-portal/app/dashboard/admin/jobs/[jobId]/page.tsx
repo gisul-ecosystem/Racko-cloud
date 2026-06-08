@@ -184,6 +184,12 @@ export default function JobStatusPage() {
           )}
         </div>
 
+        {job.phase === 'building_golden_image' && !isTerminal && (
+          <p className="text-xs text-blue-600 mb-4">
+            Building software image — cloning will begin once the golden template is ready.
+          </p>
+        )}
+
         {/* Progress bar */}
         <div className="mb-4">
           <div className="flex justify-between text-xs text-gray-500 mb-1.5">
