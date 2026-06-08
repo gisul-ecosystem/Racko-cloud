@@ -11,9 +11,11 @@ import { isWindowsTemplate } from '../../../../../components/dashboard/HyperVSta
 import {
   Server, ChevronRight, ChevronLeft, Check,
   Cpu, MemoryStick, HardDrive, Layers,
+  KeyRound, Eye, EyeOff, Wand2, Lock,
 } from 'lucide-react';
 
 type Step = 1 | 2 | 3;
+type PasswordMode = 'fixed' | 'dynamic';
 
 const inputClass =
   'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400';
@@ -41,6 +43,12 @@ export default function CreateVMPage() {
   const [ramOverride, setRamOverride] = useState('');
   const [diskOverride, setDiskOverride] = useState('');
   const [description, setDescription] = useState('');
+  // Console access
+  const [consoleUsername, setConsoleUsername] = useState('');
+  const [passwordMode, setPasswordMode] = useState<PasswordMode>('fixed');
+  const [consolePassword, setConsolePassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [dynamicUsernamePrefix, setDynamicUsernamePrefix] = useState('');
   const [enableVirtualization, setEnableVirtualization] = useState(false);
   const [selectedSoftwareIds, setSelectedSoftwareIds] = useState<string[]>([]);
   const [softwareCatalog, setSoftwareCatalog] = useState<SoftwareCatalogItem[]>([]);
@@ -106,9 +114,13 @@ export default function CreateVMPage() {
 
   function canProceedStep2() {
     const err = validateName(name);
+    const consoleOk =
+      consoleUsername.trim().length > 0 &&
+      (passwordMode === 'dynamic' || consolePassword.length > 0);
     return !err && count >= 1 && count <= 100 &&
       !cpuError && !ramError && !diskError &&
-      safeCpu >= minCpu && safeRam >= minRam && safeDisk >= minDisk;
+      safeCpu >= minCpu && safeRam >= minRam && safeDisk >= minDisk &&
+      consoleOk;
   }
 
   async function handleSubmit() {
@@ -120,6 +132,12 @@ export default function CreateVMPage() {
         name: name.toLowerCase(),
         count,
         cloneType,
+        consoleUsername: consoleUsername.trim(),
+        passwordMode,
+        ...(passwordMode === 'fixed' ? { consolePassword } : {}),
+        ...(passwordMode === 'dynamic' && count > 1 && dynamicUsernamePrefix.trim()
+          ? { dynamicUsernamePrefix: dynamicUsernamePrefix.trim() }
+          : {}),
         ...(cpuOverride && safeCpu > minCpu ? { cpuCores: safeCpu } : {}),
         ...(ramOverride && safeRam > minRam ? { memoryGb: safeRam } : {}),
         ...(diskOverride && safeDisk > minDisk ? { diskGb: safeDisk } : {}),
@@ -461,6 +479,106 @@ export default function CreateVMPage() {
             />
           </div>
 
+          {/* Console Access */}
+          <div className="pt-2 border-t border-gray-100">
+            <div className="flex items-center gap-2 mb-3">
+              <KeyRound className="w-4 h-4 text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-900">Console Access</h3>
+            </div>
+
+            {/* Username */}
+            <div className="mb-4">
+              <label className={labelClass}>Console Username</label>
+              <input
+                type="text"
+                value={consoleUsername}
+                onChange={(e) => setConsoleUsername(e.target.value)}
+                placeholder="e.g. Administrator"
+                className={inputClass}
+                autoComplete="off"
+              />
+              <p className="text-xs text-gray-400 mt-1">Username to log into the VM</p>
+            </div>
+
+            {/* Password mode cards */}
+            <div className="grid grid-cols-2 gap-3 mb-4">
+              {([
+                { mode: 'fixed' as PasswordMode, icon: Lock, title: 'Set Password', desc: 'Use one password for all VMs' },
+                { mode: 'dynamic' as PasswordMode, icon: Wand2, title: 'Auto Generate', desc: 'Unique password per VM' },
+              ]).map(({ mode, icon: Icon, title, desc }) => (
+                <button
+                  key={mode}
+                  type="button"
+                  onClick={() => setPasswordMode(mode)}
+                  className={`px-4 py-3 rounded-xl border text-left transition-all ${
+                    passwordMode === mode
+                      ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <Icon className={`w-3.5 h-3.5 ${passwordMode === mode ? 'text-blue-600' : 'text-gray-400'}`} />
+                    <span className="text-xs font-semibold text-gray-900">{title}</span>
+                  </div>
+                  <p className="text-xs text-gray-400">{desc}</p>
+                </button>
+              ))}
+            </div>
+
+            {/* Fixed: password input */}
+            {passwordMode === 'fixed' && (
+              <div>
+                <label className={labelClass}>Console Password</label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={consolePassword}
+                    onChange={(e) => setConsolePassword(e.target.value)}
+                    placeholder="Enter password"
+                    className={`${inputClass} pr-10`}
+                    autoComplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-400 hover:text-gray-600"
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Dynamic: info + optional prefix */}
+            {passwordMode === 'dynamic' && (
+              <div className="space-y-3">
+                <div className="p-3 bg-blue-50 border border-blue-100 rounded-lg">
+                  <p className="text-xs text-blue-700">
+                    A unique secure password will be generated for each VM. You can view credentials
+                    after creation on the VM details page.
+                  </p>
+                </div>
+                {count > 1 && (
+                  <div>
+                    <label className={labelClass}>Username Prefix <span className="text-gray-400">(optional)</span></label>
+                    <input
+                      type="text"
+                      value={dynamicUsernamePrefix}
+                      onChange={(e) => setDynamicUsernamePrefix(e.target.value)}
+                      placeholder="e.g. Admin"
+                      className={inputClass}
+                      autoComplete="off"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      If set, usernames become prefix-1, prefix-2, etc. Leave empty to use the same username for all VMs.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-between pt-2">
             <button
               onClick={() => setStep(1)}
@@ -496,6 +614,13 @@ export default function CreateVMPage() {
               { label: 'CPU', value: `${safeCpu} vCPU` },
               { label: 'RAM', value: `${safeRam} GB` },
               { label: 'Disk', value: cloneType === 'dedicated_storage' ? `${safeDisk} GB` : 'Shared (dynamic)' },
+              {
+                label: 'Console User',
+                value: passwordMode === 'dynamic' && count > 1 && dynamicUsernamePrefix.trim()
+                  ? `${dynamicUsernamePrefix.trim()}-1 … ${dynamicUsernamePrefix.trim()}-${count}`
+                  : consoleUsername,
+              },
+              { label: 'Password', value: passwordMode === 'dynamic' ? 'Auto-generated per VM' : 'Custom (set)' },
               ...(showVirtualizationOption
                 ? [{ label: 'Virtualization', value: enableVirtualization ? 'Enabled (Hyper-V)' : 'Disabled' }]
                 : []),

@@ -19,19 +19,8 @@ import {
   ChevronLeft, Play, Square, Zap, RotateCcw,
   RefreshCw, Trash2, Cpu, MemoryStick, HardDrive,
   Network, Clock, Server, Activity, Monitor,
+  KeyRound, Eye, EyeOff, Copy, Check as CheckIcon,
 } from 'lucide-react';
-
-/**
- * Best-effort protocol pick for the browser console.
- * IVM has no os field yet — we sniff name + templateName.
- * Defaults to 'rdp' when nothing matches, matching the backend default.
- */
-function pickConsoleProtocol(name?: string, templateName?: string): 'rdp' | 'ssh' {
-  const haystack = `${name ?? ''} ${templateName ?? ''}`.toLowerCase();
-  if (/\b(win|windows|w10|w11|server)\b/.test(haystack)) return 'rdp';
-  if (/\b(ubuntu|debian|centos|rhel|fedora|alma|rocky|linux|alpine)\b/.test(haystack)) return 'ssh';
-  return 'rdp';
-}
 
 type PowerOp = 'start' | 'stop' | 'force-stop' | 'restart' | 'reset' | 'delete';
 
@@ -99,6 +88,91 @@ function VMEventsSection({ vmId, initialEvents }: { vmId: string; initialEvents:
             <span className="text-xs text-gray-400 shrink-0">{new Date(event.createdAt).toLocaleString()}</span>
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── Copy-to-clipboard button with transient confirmation ──────────────────
+
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(value);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        } catch {
+          // Clipboard unavailable (insecure context) — silently ignore
+        }
+      }}
+      className="inline-flex items-center justify-center w-7 h-7 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100 transition shrink-0"
+      title={`Copy ${label}`}
+      aria-label={`Copy ${label}`}
+    >
+      {copied ? <CheckIcon className="w-3.5 h-3.5 text-green-600" /> : <Copy className="w-3.5 h-3.5" />}
+    </button>
+  );
+}
+
+// ─── Console Access card — VM browser-console credentials ────────────────────
+
+function ConsoleAccessCard({
+  username,
+  password,
+  protocol,
+}: {
+  username?: string;
+  password?: string;
+  protocol?: 'rdp' | 'ssh';
+}) {
+  const [reveal, setReveal] = useState(false);
+  if (!username && !password) return null;
+
+  return (
+    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-6">
+      <h2 className="text-sm font-semibold text-gray-900 flex items-center gap-2 mb-4">
+        <KeyRound className="w-4 h-4 text-gray-400" /> Console Access
+      </h2>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-gray-400">Username</span>
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="text-xs font-mono text-gray-700 truncate">{username || '—'}</span>
+            {username && <CopyButton value={username} label="username" />}
+          </div>
+        </div>
+        <div className="flex items-center justify-between gap-3">
+          <span className="text-xs text-gray-400">Password</span>
+          <div className="flex items-center gap-1 min-w-0">
+            <span className="text-xs font-mono text-gray-700 truncate">
+              {password ? (reveal ? password : '••••••••') : '—'}
+            </span>
+            {password && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setReveal((v) => !v)}
+                  className="inline-flex items-center justify-center w-7 h-7 text-gray-400 hover:text-gray-600 rounded-md hover:bg-gray-100 transition shrink-0"
+                  title={reveal ? 'Hide password' : 'Show password'}
+                  aria-label={reveal ? 'Hide password' : 'Show password'}
+                >
+                  {reveal ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                </button>
+                <CopyButton value={password} label="password" />
+              </>
+            )}
+          </div>
+        </div>
+        <div className="flex items-center justify-between">
+          <span className="text-xs text-gray-400">Protocol</span>
+          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+            {(protocol ?? 'rdp').toUpperCase()}
+          </span>
+        </div>
       </div>
     </div>
   );
@@ -384,7 +458,7 @@ export default function VMDetailPage() {
             Refresh
           </button>
           {(() => {
-            const consoleProtocol = pickConsoleProtocol(vm.name, details.vm.name);
+            const consoleProtocol = vm.consoleProtocol ?? 'rdp';
             const consoleHref = `/dashboard/admin/vms/${vmId}/console?protocol=${consoleProtocol}`;
             return isRunning ? (
               <Link
@@ -580,6 +654,13 @@ export default function VMDetailPage() {
           </div>
         </div>
       </div>
+
+      {/* Console access credentials */}
+      <ConsoleAccessCard
+        username={vm.consoleUsername}
+        password={vm.consolePassword}
+        protocol={vm.consoleProtocol}
+      />
 
       {/* Software installs */}
       {vm.softwareInstalls && vm.softwareInstalls.length > 0 && (
