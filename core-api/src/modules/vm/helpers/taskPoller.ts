@@ -2,6 +2,7 @@ import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { logger } from '../../../utils/logger';
 import { config } from '../../../config';
 import { TaskTimeoutError, ProxmoxConnectionError } from '../../../utils/errors';
+import { retryProxmoxDelete } from './deleteRetry';
 import type { ProxmoxTaskStatus } from '../vm.types';
 
 /**
@@ -14,6 +15,11 @@ import type { ProxmoxTaskStatus } from '../vm.types';
  */
 export type PollResult = 'success' | 'failed' | 'unknown';
 
+export interface PollTaskResult {
+  result: PollResult;
+  exitstatus?: string;
+}
+
 /**
  * Poll a Proxmox async task until it completes or times out.
  *
@@ -25,7 +31,7 @@ export type PollResult = 'success' | 'failed' | 'unknown';
  * - Only return 'failed' when Proxmox explicitly reports exitstatus ≠ OK
  * - Return 'unknown' when we genuinely cannot determine the outcome
  */
-export async function pollTask(upid: string, node: string): Promise<PollResult> {
+export async function pollTask(upid: string, node: string): Promise<PollTaskResult> {
   const pollInterval = config.VM_TASK_POLL_INTERVAL_MS;
   const timeout = config.VM_TASK_TIMEOUT_MS;
   const networkRetryAttempts = config.VM_POLL_NETWORK_RETRY_ATTEMPTS;
@@ -59,7 +65,7 @@ export async function pollTask(upid: string, node: string): Promise<PollResult> 
       if (taskStatus.status === 'stopped') {
         if (taskStatus.exitstatus === 'OK') {
           logger.debug('Proxmox task completed successfully', { upid, node });
-          return 'success';
+          return { result: 'success' };
         } else {
           // Proxmox explicitly reported failure — this is a definitive result
           logger.warn('Proxmox task failed', {
@@ -67,7 +73,7 @@ export async function pollTask(upid: string, node: string): Promise<PollResult> 
             node,
             exitstatus: taskStatus.exitstatus,
           });
-          return 'failed';
+          return { result: 'failed', exitstatus: taskStatus.exitstatus };
         }
       }
 
@@ -94,7 +100,7 @@ export async function pollTask(upid: string, node: string): Promise<PollResult> 
           node,
           attempts: consecutiveNetworkErrors,
         });
-        return 'unknown';
+        return { result: 'unknown' };
       }
 
       // Wait before retrying the poll
@@ -116,30 +122,37 @@ export async function pollTaskWithCleanup(
   vmid: number,
   cleanupOnFail: boolean
 ): Promise<PollResult> {
-  const result = await pollTask(upid, node);
+  const pollOutcome = await pollTask(upid, node);
 
-  if (result === 'failed') {
+  if (pollOutcome.result === 'failed') {
+    let cleanupFailure: string | undefined;
+
     if (cleanupOnFail) {
       logger.warn('VM creation task definitively failed — cleaning up orphaned VM', { vmid, node, upid });
       try {
-        await proxmoxClient.delete(`/nodes/${node}/qemu/${vmid}`);
+        await retryProxmoxDelete(node, vmid);
         logger.info('Orphaned VM cleaned up successfully', { vmid, node });
       } catch (cleanupError) {
-        // Log but don't throw — cleanup is best-effort
-        logger.error('Failed to clean up orphaned VM', {
+        cleanupFailure =
+          cleanupError instanceof Error ? cleanupError.message : String(cleanupError);
+        logger.error('Failed to clean up orphaned VM after all purge-delete retries', {
           vmid,
           node,
-          error: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+          error: cleanupFailure,
         });
       }
     }
-    throw new ProxmoxConnectionError(
-      `Proxmox task failed for VM ${vmid} on node ${node} (upid: ${upid})`
-    );
+
+    const exitDetail = pollOutcome.exitstatus ? `: ${pollOutcome.exitstatus}` : '';
+    let failureMessage = `Proxmox task failed for VM ${vmid} on node ${node} (upid: ${upid})${exitDetail}`;
+    if (cleanupFailure) {
+      failureMessage += `; orphan cleanup failed: ${cleanupFailure}`;
+    }
+    throw new ProxmoxConnectionError(failureMessage);
   }
 
   // 'unknown' — return it so caller (createSingleVM) can handle safely
-  return result;
+  return pollOutcome.result;
 }
 
 function sleep(ms: number): Promise<void> {

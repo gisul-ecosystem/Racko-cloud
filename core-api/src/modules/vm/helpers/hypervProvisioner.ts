@@ -101,7 +101,7 @@ async function ensureVmRunning(node: string, vmid: number): Promise<'running' | 
   );
   const result = await pollTask(start.data.data, node);
   logger.info('[HyperV] start task result', { vmid, node, result });
-  if (result !== 'success') {
+  if (result.result !== 'success') {
     throw new Error('Failed to power on the VM.');
   }
   return prior;
@@ -115,7 +115,7 @@ async function stopVm(node: string, vmid: number): Promise<void> {
   );
   const result = await pollTask(stop.data.data, node);
   logger.info('[HyperV] stop task result', { vmid, node, result });
-  if (result !== 'success') {
+  if (result.result !== 'success') {
     throw new Error('VM shutdown failed.');
   }
 }
@@ -180,7 +180,7 @@ async function rebootVm(node: string, vmid: number): Promise<void> {
   );
   const result = await pollTask(reboot.data.data, node);
   logger.info('[HyperV] reboot task result', { vmid, node, result });
-  if (result !== 'success') {
+  if (result.result !== 'success') {
     throw new Error('VM reboot failed.');
   }
 }
