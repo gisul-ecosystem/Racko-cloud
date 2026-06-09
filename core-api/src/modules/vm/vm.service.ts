@@ -8,6 +8,10 @@ import { VMJob } from './vmJob.model';
 import { VMEvent } from './vmEvent.model';
 import { VmTemplate } from './vmTemplate.model';
 import { validateResources } from './helpers/resourceValidator';
+import {
+  sumProxmoxProvisionedDiskBytes,
+  sumGuestFilesystemUsedBytes,
+} from './helpers/diskMetrics';
 import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
 import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
@@ -1021,12 +1025,15 @@ export class VMService {
 
     // Fire both guest agent calls in parallel — neither depends on the other.
     // Promise.allSettled ensures one failure never blocks the other.
-    const [netResult, fsResult] = await Promise.allSettled([
+    const [netResult, fsResult, configResult] = await Promise.allSettled([
       proxmoxClient.get<{ data: { result: ProxmoxNetworkInterface[] } }>(
         `/nodes/${vm.node}/qemu/${vm.vmid}/agent/network-get-interfaces`
       ),
       proxmoxClient.get<{ data: { result: ProxmoxFsInfo[] } }>(
         `/nodes/${vm.node}/qemu/${vm.vmid}/agent/get-fsinfo`
+      ),
+      proxmoxClient.get<{ data: Record<string, unknown> }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/config`
       ),
     ]);
 
@@ -1049,19 +1056,21 @@ export class VMService {
       }
     }
 
-    // Resolve disk usage from guest agent fs-info, fall back to Proxmox status values (0 for KVM)
-    let diskUsedGb = bytesToGb(live.disk);
-    let diskAllocatedGb = bytesToGb(live.maxdisk);
+    // Allocated: sum all Proxmox virtual data disks (scsi0 + scsi1 + …).
+    let diskAllocatedGb = vm.allocatedDiskGb;
+    if (configResult.status === 'fulfilled') {
+      const provisionedBytes = sumProxmoxProvisionedDiskBytes(configResult.value.data.data);
+      if (provisionedBytes > 0) diskAllocatedGb = bytesToGb(provisionedBytes);
+    } else if (live.maxdisk > 0) {
+      diskAllocatedGb = bytesToGb(live.maxdisk);
+    }
+
+    // Used: sum in-guest usage across C:, D:, and other data volumes.
+    let diskUsedGb = live.disk > 0 ? bytesToGb(live.disk) : 0;
     if (fsResult.status === 'fulfilled') {
       const filesystems = fsResult.value.data.data.result ?? [];
-      // Pick the largest filesystem — primary disk (C:\ on Windows, / on Linux)
-      const primary = filesystems
-        .filter((fs) => fs['total-bytes'] > 0)
-        .sort((a, b) => b['total-bytes'] - a['total-bytes'])[0];
-      if (primary) {
-        diskUsedGb = bytesToGb(primary['used-bytes']);
-        diskAllocatedGb = bytesToGb(primary['total-bytes']);
-      }
+      const usedBytes = sumGuestFilesystemUsedBytes(filesystems);
+      if (usedBytes > 0) diskUsedGb = bytesToGb(usedBytes);
     }
 
     // Update proxmox status in MongoDB
