@@ -13,7 +13,7 @@ import { ApiError } from '../../lib/apiClient';
 
 const TOOLBAR_HEIGHT = 44;
 const IFRAME_LOAD_TIMEOUT_MS = 5000;
-const IFRAME_OVERLAY_FADE_MS = 300;
+const IFRAME_OVERLAY_FADE_MS = 5000;
 
 const protocolColors: Record<ConsoleProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
@@ -466,7 +466,7 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 14,
-    transition: 'opacity 5s ease',
+    transition: 'opacity 0.3s ease',
   },
   connectingTitle: {
     fontSize: 16,
