@@ -18,6 +18,7 @@ import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import softwareRoutes from './modules/software/software.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
+import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconcileSweeper';
 
 const app = express();
 
@@ -120,6 +121,7 @@ app.use('/api/v1/software', softwareRoutes);
 // Start background services
 startNodeMonitoring();
 startHyperVSweeper();
+startStorageReconcileSweeper();
 
 // 404 handler
 app.use(notFoundHandler);

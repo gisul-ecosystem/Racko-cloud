@@ -23,6 +23,8 @@ import { ApiError } from '../../../../../../lib/apiClient';
  */
 
 const TOOLBAR_HEIGHT = 44;
+const IFRAME_LOAD_TIMEOUT_MS = 5000;
+const IFRAME_OVERLAY_FADE_MS = 300;
 
 const protocolColors: Record<ConsoleProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
@@ -35,6 +37,12 @@ function parseProtocol(raw: string | null): ConsoleProtocol {
   return 'rdp';
 }
 
+function getProtocolSubtitle(p: ConsoleProtocol): string {
+  if (p === 'ssh') return 'Establishing secure SSH session';
+  if (p === 'vnc') return 'Establishing secure VNC session';
+  return 'Establishing secure RDP session';
+}
+
 export default function VMConsolePage() {
   const { vmId } = useParams<{ vmId: string }>();
   const router = useRouter();
@@ -45,9 +53,29 @@ export default function VMConsolePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [iframeKey, setIframeKey] = useState(0);
+  const [iframeLoading, setIframeLoading] = useState(false);
+  const [overlayMounted, setOverlayMounted] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const sessionRef = useRef<ConsoleSession | null>(null);
+  const iframeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearIframeTimeout = useCallback(() => {
+    if (iframeTimeoutRef.current) {
+      clearTimeout(iframeTimeoutRef.current);
+      iframeTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startIframeLoading = useCallback(() => {
+    setIframeLoading(true);
+    setOverlayMounted(true);
+    clearIframeTimeout();
+    iframeTimeoutRef.current = setTimeout(() => {
+      setIframeLoading(false);
+      iframeTimeoutRef.current = null;
+    }, IFRAME_LOAD_TIMEOUT_MS);
+  }, [clearIframeTimeout]);
 
   const fetchSession = useCallback(
     async (signal?: AbortSignal) => {
@@ -85,6 +113,27 @@ export default function VMConsolePage() {
       }
     };
   }, [fetchSession]);
+
+  // Phase 2 overlay — show while Guacamole iframe loads (or until 5s fallback).
+  useEffect(() => {
+    if (!session) return;
+    startIframeLoading();
+    return () => clearIframeTimeout();
+  }, [session, iframeKey, startIframeLoading, clearIframeTimeout]);
+
+  // Unmount overlay after fade-out completes.
+  useEffect(() => {
+    if (!iframeLoading && overlayMounted) {
+      const timer = setTimeout(() => setOverlayMounted(false), IFRAME_OVERLAY_FADE_MS);
+      return () => clearTimeout(timer);
+    }
+  }, [iframeLoading, overlayMounted]);
+
+  const handleIframeLoad = () => {
+    clearIframeTimeout();
+    setIframeLoading(false);
+    iframeRef.current?.focus();
+  };
 
   // Focus the iframe once it has mounted so keyboard events reach Guacamole.
   // Mouse events work without focus, but keydown is delivered only to the
@@ -155,6 +204,7 @@ export default function VMConsolePage() {
   };
 
   const badge = protocolColors[protocol];
+  const vmDisplayLabel = vmId ? vmId.slice(-6) : '';
 
   return (
     <div style={styles.root}>
@@ -249,18 +299,39 @@ export default function VMConsolePage() {
         )}
 
         {session && !error && (
-          <iframe
-            key={iframeKey}
-            ref={iframeRef}
-            src={session.clientUrl}
-            title={`VM console (${protocol})`}
-            style={styles.iframe}
-            allow="clipboard-read; clipboard-write; fullscreen"
-            allowFullScreen
-            tabIndex={0}
-            onLoad={() => iframeRef.current?.focus()}
-            onClick={() => iframeRef.current?.focus()}
-          />
+          <>
+            <iframe
+              key={iframeKey}
+              ref={iframeRef}
+              src={session.clientUrl}
+              title={`VM console (${protocol})`}
+              style={styles.iframe}
+              allow="clipboard-read; clipboard-write; fullscreen"
+              allowFullScreen
+              tabIndex={0}
+              onLoad={handleIframeLoad}
+              onClick={() => iframeRef.current?.focus()}
+            />
+
+            {overlayMounted && (
+              <div
+                style={{
+                  ...styles.iframeOverlay,
+                  opacity: iframeLoading ? 1 : 0,
+                  pointerEvents: iframeLoading ? 'auto' : 'none',
+                }}
+                aria-hidden={!iframeLoading}
+                aria-live="polite"
+              >
+                <div style={styles.spinner} />
+                <p style={styles.connectingTitle}>Connecting to VM...</p>
+                <p style={styles.connectingSubtitle}>{getProtocolSubtitle(protocol)}</p>
+                {vmDisplayLabel && (
+                  <p style={styles.connectingVmLabel}>VM · {vmDisplayLabel}</p>
+                )}
+              </div>
+            )}
+          </>
         )}
       </div>
 
@@ -410,5 +481,35 @@ const styles: Record<string, CSSProperties> = {
     borderRadius: 6,
     fontSize: 13,
     cursor: 'pointer',
+  },
+  iframeOverlay: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 10,
+    background: '#0A0F1E',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 14,
+    transition: 'opacity 0.3s ease',
+  },
+  connectingTitle: {
+    fontSize: 16,
+    color: '#ffffff',
+    margin: 0,
+    fontWeight: 500,
+  },
+  connectingSubtitle: {
+    fontSize: 13,
+    color: '#94a3b8',
+    margin: 0,
+  },
+  connectingVmLabel: {
+    fontSize: 11,
+    color: '#64748b',
+    margin: 0,
+    marginTop: 4,
+    fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   },
 };

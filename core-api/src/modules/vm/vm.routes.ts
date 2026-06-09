@@ -10,6 +10,7 @@ import {
   templateIdParamSchema,
   vmListQuerySchema,
   assignVMsSchema,
+  bulkDeleteVMsSchema,
   userIdParamSchema,
   vmConsoleSchema,
 } from './vm.validation';
@@ -116,6 +117,14 @@ router.get(
 );
 
 // ─── VM collection routes ─────────────────────────────────────────────────────
+
+// POST /api/v1/vms/bulk-delete — queue bulk VM deletion (background job)
+router.post(
+  '/bulk-delete',
+  requireRole('admin', 'super_admin'),
+  validateRequest(bulkDeleteVMsSchema),
+  (req, res, next) => vmController.bulkDeleteVMs(req, res, next)
+);
 
 // POST /api/v1/vms — create VM(s)
 router.post(

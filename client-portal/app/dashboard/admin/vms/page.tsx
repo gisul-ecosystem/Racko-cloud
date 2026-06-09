@@ -2,6 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../../context/AuthContext';
 import { useMyVMs } from '../../../../hooks/useVMs';
 import { VMStatusBadge, CloneTypeBadge } from '../../../../components/dashboard/VMStatusBadge';
@@ -9,7 +10,7 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
-import { startVM, stopVM, deleteVM } from '../../../../lib/vmApi';
+import { startVM, stopVM, bulkDeleteVMs } from '../../../../lib/vmApi';
 import { ApiError } from '../../../../lib/apiClient';
 import { Server, Plus, RefreshCw, Play, Square, Trash2, X } from 'lucide-react';
 import type { VMStatus, CloneType, IVM } from '../../../../lib/vmApi';
@@ -35,6 +36,7 @@ const selectClass =
 type BulkAction = 'start' | 'stop' | 'delete';
 
 export default function VMListPage() {
+  const router = useRouter();
   const { isAuthenticated } = useAuth();
   const [statusFilter, setStatusFilter] = useState('');
   const [cloneFilter, setCloneFilter] = useState('');
@@ -79,29 +81,47 @@ export default function VMListPage() {
   // Execute bulk action
   const executeBulkAction = async (action: BulkAction) => {
     setActionLoading(true);
-    const results = await Promise.allSettled(
-      selectedVMs.map((vm) => {
-        if (action === 'start') return startVM(vm._id);
-        if (action === 'stop') return stopVM(vm._id);
-        return deleteVM(vm._id);
-      })
-    );
 
-    const succeeded = results.filter((r) => r.status === 'fulfilled').length;
-    const failed = results.filter((r) => r.status === 'rejected').length;
+    try {
+      if (action === 'delete') {
+        const { jobId } = await bulkDeleteVMs(selectedVMs.map((vm) => vm._id));
+        addToast(
+          'success',
+          `Delete job started for ${selected.size} VM${selected.size !== 1 ? 's' : ''}. Track progress on the Jobs page.`
+        );
+        clearSelection();
+        refetch();
+        router.push(`/dashboard/admin/jobs/${jobId}`);
+        return;
+      }
 
-    if (failed === 0) {
-      addToast('success', `${succeeded} VM${succeeded !== 1 ? 's' : ''} ${action === 'delete' ? 'deleted' : action === 'start' ? 'started' : 'stopped'} successfully.`);
-    } else if (succeeded === 0) {
-      addToast('error', `Failed to ${action} all ${failed} VM${failed !== 1 ? 's' : ''}.`);
-    } else {
-      addToast('warning' as 'error', `${succeeded} succeeded, ${failed} failed.`);
+      const results = await Promise.allSettled(
+        selectedVMs.map((vm) => {
+          if (action === 'start') return startVM(vm._id);
+          return stopVM(vm._id);
+        })
+      );
+
+      const succeeded = results.filter((r) => r.status === 'fulfilled').length;
+      const failed = results.filter((r) => r.status === 'rejected').length;
+
+      if (failed === 0) {
+        addToast('success', `${succeeded} VM${succeeded !== 1 ? 's' : ''} ${action === 'start' ? 'started' : 'stopped'} successfully.`);
+      } else if (succeeded === 0) {
+        addToast('error', `Failed to ${action} all ${failed} VM${failed !== 1 ? 's' : ''}.`);
+      } else {
+        addToast('warning' as 'error', `${succeeded} succeeded, ${failed} failed.`);
+      }
+
+      clearSelection();
+      refetch();
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : `Failed to ${action} VMs.`;
+      addToast('error', message);
+    } finally {
+      setActionLoading(false);
+      setBulkAction(null);
     }
-
-    setActionLoading(false);
-    setBulkAction(null);
-    clearSelection();
-    refetch();
   };
 
   const bulkActionConfig = {

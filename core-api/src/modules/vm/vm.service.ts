@@ -9,7 +9,9 @@ import { VMEvent } from './vmEvent.model';
 import { validateResources } from './helpers/resourceValidator';
 import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
+import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
+import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
 import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
@@ -415,6 +417,14 @@ export class VMService {
 
     const previousStatus = vm.status;
 
+    logger.info('[VMDelete] Deletion flow started', {
+      vmId: vmId.toString(),
+      vmid: vm.vmid,
+      node: vm.node,
+      dbStatus: previousStatus,
+      vmName: vm.name,
+    });
+
     // Check live Proxmox power state — source of truth for stop decision.
     // DB status may be stale (e.g. delete_failed, error) while VM is still running in Proxmox.
     let liveProxmoxStatus = 'stopped';
@@ -423,22 +433,46 @@ export class VMService {
         `/nodes/${vm.node}/qemu/${vm.vmid}/status/current`
       );
       liveProxmoxStatus = statusRes.data.data.status;
-    } catch {
+    } catch (statusErr) {
       // If we can't reach Proxmox, assume stopped and let retryProxmoxDelete handle it
-      logger.warn('Could not query live VM status before deletion — proceeding', {
-        vmId: vmId.toString(), vmid: vm.vmid, node: vm.node,
+      logger.warn('[VMDelete] Could not query live VM status before deletion — proceeding', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        node: vm.node,
+        error: statusErr instanceof Error ? statusErr.message : String(statusErr),
       });
     }
 
+    logger.info('[VMDelete] Live Proxmox power state', {
+      vmId: vmId.toString(),
+      vmid: vm.vmid,
+      node: vm.node,
+      liveProxmoxStatus,
+    });
+
     // Stop VM first if Proxmox says it's running — regardless of DB status
     if (liveProxmoxStatus === 'running') {
-      logger.info('Stopping VM before deletion', { vmid: vm.vmid, node: vm.node });
+      logger.info('[VMDelete] Stopping VM before purge delete', { vmid: vm.vmid, node: vm.node });
       try {
         const stopResponse = await proxmoxClient.post<{ data: string }>(
           `/nodes/${vm.node}/qemu/${vm.vmid}/status/stop`,
           {}
         );
-        await pollTask(stopResponse.data.data, vm.node);
+        const stopPoll = await pollTask(stopResponse.data.data, vm.node);
+        if (stopPoll.result === 'failed') {
+          throw new VMOperationError(
+            'VM failed to stop before deletion. Check Proxmox task logs.',
+            vm.status,
+            'stopped'
+          );
+        }
+        if (stopPoll.result === 'unknown') {
+          throw new VMOperationError(
+            'VM stop outcome unknown before deletion. Try again after refreshing status.',
+            vm.status,
+            'stopped'
+          );
+        }
       } catch (stopErr) {
         // Stop failed — restore previous status so VM is not left in limbo
         vm.status = previousStatus;
@@ -463,14 +497,29 @@ export class VMService {
 
     // Delete from Proxmox with retry + backoff
     try {
+      logger.info('[VMDelete] Invoking Proxmox purge delete (purge=1, destroy-unreferenced-disks=1)', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        node: vm.node,
+      });
+
       const deleteResult = await retryProxmoxDelete(vm.node, vm.vmid);
 
-      if (deleteResult === 'deleted') {
-        // Poll the delete task only when Proxmox actually ran it
-        // Note: retryProxmoxDelete handles the raw delete; Proxmox delete is synchronous
-        // for stopped VMs so no UPID is returned — nothing to poll here.
+      logger.info('[VMDelete] Proxmox purge delete outcome', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        node: vm.node,
+        deleteResult,
+      });
+
+      if (deleteResult === 'already_gone') {
+        logger.warn('[VMDelete] VM config was already missing in Proxmox — verify no orphan LVs remain', {
+          vmId: vmId.toString(),
+          vmid: vm.vmid,
+          node: vm.node,
+          expectedLvPattern: `vm-${vm.vmid}-cloudinit`,
+        });
       }
-      // 'already_gone' → VM was already absent from Proxmox, proceed to mark deleted
 
     } catch (deleteErr) {
       // All retries exhausted — mark as delete_failed so user can see and retry
@@ -479,7 +528,7 @@ export class VMService {
       vm.deleteAttempts = (vm.deleteAttempts ?? 0) + 1;
       await vm.save();
 
-      logger.error('VM deletion failed after all retries', {
+      logger.error('[VMDelete] Proxmox purge delete failed after all retries', {
         vmId: vmId.toString(),
         vmid: vm.vmid,
         node: vm.node,
@@ -507,7 +556,91 @@ export class VMService {
       userAgent: ua,
     });
 
-    logger.info('VM deleted', { vmId: vmId.toString(), vmid: vm.vmid, node: vm.node });
+    logger.info('[VMDelete] MongoDB soft delete complete', {
+      vmId: vmId.toString(),
+      vmid: vm.vmid,
+      node: vm.node,
+      deletedAt: vm.deletedAt,
+    });
+  }
+
+  /**
+   * Queue bulk VM deletion as a background job.
+   * One API call — server processes deletes sequentially with Proxmox purge + UPID polling.
+   */
+  async bulkDeleteVMs(
+    vmIds: string[],
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ jobId: string }> {
+    const authReq = req as AuthenticatedRequest;
+    const uniqueIds = [...new Set(vmIds)].map((id) => new mongoose.Types.ObjectId(id));
+
+    if (uniqueIds.length > config.VM_MAX_BULK_COUNT) {
+      throw new ValidationError(
+        `Cannot delete more than ${config.VM_MAX_BULK_COUNT} VMs at once.`
+      );
+    }
+
+    const vms = await VM.find({ _id: { $in: uniqueIds } });
+    if (vms.length !== uniqueIds.length) {
+      throw new VMNotFoundError('One or more VMs were not found.');
+    }
+
+    for (const vm of vms) {
+      assertOwnership(vm, adminId.toString(), authReq.user.role);
+    }
+
+    const job = await VMJob.create({
+      adminId,
+      type: 'bulk_delete',
+      status: 'pending',
+      total: uniqueIds.length,
+      completed: 0,
+      failed: 0,
+      pending: uniqueIds.length,
+      vmIds: [],
+      targetVmIds: uniqueIds,
+      failedVmids: [],
+      requestedSpecs: {
+        templateId: 0,
+        templateName: 'bulk-delete',
+        templateNode: 'n/a',
+        cloneType: 'dynamic_storage',
+        cpuCores: 0,
+        memoryGb: 0,
+        diskGb: 0,
+        templateDiskGb: 0,
+        templateCpuCores: 0,
+        templateMemoryGb: 0,
+        namePrefix: 'delete',
+        count: uniqueIds.length,
+        consoleUsername: 'n/a',
+        passwordMode: 'fixed',
+        consoleProtocol: 'rdp',
+        enableVirtualization: false,
+        softwareIds: [],
+      },
+      jobErrors: [],
+      startedAt: new Date(),
+    });
+
+    logger.info('[VMDelete] Bulk delete job created', {
+      jobId: job._id.toString(),
+      adminId: adminId.toString(),
+      count: uniqueIds.length,
+    });
+
+    processBulkDeletion(job, adminId, authReq.user.role, this.deleteVM.bind(this)).catch(
+      (err: unknown) => {
+        logger.error('[VMDelete] Unhandled bulk delete job error', {
+          jobId: job._id.toString(),
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    );
+
+    return { jobId: job._id.toString() };
   }
 
   /**

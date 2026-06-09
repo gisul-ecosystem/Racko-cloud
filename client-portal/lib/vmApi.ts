@@ -155,10 +155,17 @@ export type JobStatus = 'pending' | 'processing' | 'completed' | 'partial' | 'fa
 
 export type JobPhase = 'building_golden_image' | 'cloning_vms';
 
+export type VMJobType =
+  | 'single_create'
+  | 'bulk_create'
+  | 'bulk_delete'
+  | 'bulk_start'
+  | 'bulk_stop';
+
 export interface IVMJob {
   _id: string;
   adminId: string;
-  type: string;
+  type: VMJobType;
   status: JobStatus;
   phase?: JobPhase;
   total: number;
@@ -166,6 +173,7 @@ export interface IVMJob {
   failed: number;
   pending: number;
   vmIds: string[];
+  targetVmIds?: string[];
   failedVmids: number[];
   requestedSpecs: {
     templateId: number;
@@ -319,6 +327,14 @@ export async function fetchVMEvents(vmId: string): Promise<VMEvent[]> {
 
 export async function deleteVM(vmId: string): Promise<void> {
   await apiRequest(`/api/v1/vms/${vmId}`, { method: 'DELETE' });
+}
+
+export async function bulkDeleteVMs(vmIds: string[]): Promise<{ jobId: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string }>>('/api/v1/vms/bulk-delete', {
+    method: 'POST',
+    body: JSON.stringify({ vmIds }),
+  });
+  return res.data;
 }
 
 // ─── VM power operations ──────────────────────────────────────────────────────

@@ -7,6 +7,20 @@ import { fetchMyJobs, type IVMJob, type JobStatus } from '../../../../lib/vmApi'
 import { ApiError } from '../../../../lib/apiClient';
 import { CheckCircle, XCircle, Clock, Loader2, Plus, Briefcase, RefreshCw } from 'lucide-react';
 
+function getJobSummary(job: IVMJob): { title: string; subtitle: string } {
+  if (job.type === 'bulk_delete') {
+    return {
+      title: `Delete ${job.total} VMs`,
+      subtitle: 'Bulk delete job',
+    };
+  }
+
+  return {
+    title: `${job.requestedSpecs?.namePrefix ?? 'vm'}-*`,
+    subtitle: `${job.requestedSpecs?.count ?? job.total} VMs · ${job.requestedSpecs?.templateName ?? 'Unknown template'}`,
+  };
+}
+
 const statusConfig: Record<JobStatus, { label: string; color: string; icon: React.ReactNode }> = {
   pending:    { label: 'Pending',    color: 'text-gray-500',   icon: <Clock className="w-3.5 h-3.5" /> },
   processing: { label: 'Processing', color: 'text-blue-600',   icon: <Loader2 className="w-3.5 h-3.5 animate-spin" /> },
@@ -98,6 +112,7 @@ export default function JobsListPage() {
           <div className="divide-y divide-gray-50">
             {jobs.map((job) => {
               const cfg = statusConfig[job.status];
+              const summary = getJobSummary(job);
               const pct = job.total > 0
                 ? Math.round(((job.completed + job.failed) / job.total) * 100)
                 : 0;
@@ -113,9 +128,9 @@ export default function JobsListPage() {
                   </div>
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">
-                      {job.requestedSpecs.namePrefix}-*{' '}
+                      {summary.title}{' '}
                       <span className="text-gray-400 font-normal text-xs">
-                        {job.requestedSpecs.count} VMs · {job.requestedSpecs.templateName}
+                        {summary.subtitle}
                       </span>
                     </p>
                     <div className="flex items-center gap-2 mt-1.5">

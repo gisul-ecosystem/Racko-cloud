@@ -50,6 +50,7 @@ const envSchema = z.object({
 
   // VM Configuration
   VM_BULK_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('10'),
+  VM_BULK_DELETE_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('5'),
   VM_TASK_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
   VM_TASK_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
   VM_MAX_BULK_COUNT: z.string().regex(/^\d+$/).transform(Number).default('100'),
@@ -57,6 +58,18 @@ const envSchema = z.object({
   VM_RAM_OVERCOMMIT_RATIO: z.string().regex(/^\d+(\.\d+)?$/).transform(Number).default('1.5'),
   VM_DELETE_MAX_RETRIES: z.string().regex(/^\d+$/).transform(Number).default('3'),
   VM_DELETE_RETRY_BASE_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
+  // Max concurrent qmdestroy operations per Proxmox node (0 = unlimited)
+  VM_DELETE_MAX_CONCURRENT_PER_NODE: z.string().regex(/^\d+$/).transform(Number).default('2'),
+  // Orphan cloudinit LV reconciliation (storage sweeper)
+  VM_STORAGE_RECONCILE_ENABLED: z
+    .enum(['true', 'false'])
+    .default('true')
+    .transform((v) => v === 'true'),
+  VM_STORAGE_RECONCILE_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('3600000'),
+  VM_STORAGE_RECONCILE_DRY_RUN: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
   VM_POLL_NETWORK_RETRY_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
   VM_POLL_NETWORK_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('5000'),
 
