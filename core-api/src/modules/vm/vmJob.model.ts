@@ -13,8 +13,9 @@ export interface IVMJob extends Document {
   failed: number;
   pending: number;
 
-  // VM tracking
+  // VM tracking — create jobs: successfully created VM ids; delete jobs: successfully deleted VM ids
   vmIds: mongoose.Types.ObjectId[];
+  targetVmIds?: mongoose.Types.ObjectId[];
   failedVmids: number[];
 
   // Request details stored for reference
@@ -96,6 +97,11 @@ const vmJobSchema = new Schema<IVMJob>(
       required: true,
     },
     vmIds: {
+      type: [Schema.Types.ObjectId],
+      ref: 'VM',
+      default: [],
+    },
+    targetVmIds: {
       type: [Schema.Types.ObjectId],
       ref: 'VM',
       default: [],

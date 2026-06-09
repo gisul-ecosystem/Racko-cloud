@@ -94,6 +94,7 @@ router.get('/api/v1/vms/assign/user/:userId', authMiddleware, verifyMiddleware, 
 router.post('/api/v1/vms/assign', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/vms/assign/:vmId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vms/my-assigned', authMiddleware, verifyMiddleware, requireRole('user'), coreApiProxy);
+router.post('/api/v1/vms/bulk-delete', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);

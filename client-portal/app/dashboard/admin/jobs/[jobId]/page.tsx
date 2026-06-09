@@ -168,7 +168,9 @@ export default function JobStatusPage() {
       </Link>
 
       <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Bulk Job</h1>
+        <h1 className="text-2xl font-bold text-gray-900">
+          {job.type === 'bulk_delete' ? 'Bulk Delete Job' : 'Bulk Job'}
+        </h1>
         <p className="text-gray-400 text-sm font-mono mt-0.5">{job._id}</p>
       </div>
 
@@ -212,7 +214,7 @@ export default function JobStatusPage() {
         <div className="grid grid-cols-3 gap-3">
           <div className="text-center p-3 bg-green-50 rounded-lg">
             <p className="text-xl font-bold text-green-700">{job.completed}</p>
-            <p className="text-xs text-green-600 mt-0.5">Succeeded</p>
+            <p className="text-xs text-green-600 mt-0.5">{job.type === 'bulk_delete' ? 'Deleted' : 'Succeeded'}</p>
           </div>
           <div className="text-center p-3 bg-red-50 rounded-lg">
             <p className="text-xl font-bold text-red-700">{job.failed}</p>
@@ -227,19 +229,27 @@ export default function JobStatusPage() {
 
       {/* Specs */}
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 mb-4">
-        <h2 className="text-sm font-semibold text-gray-900 mb-3">Job Specs</h2>
+        <h2 className="text-sm font-semibold text-gray-900 mb-3">Job Details</h2>
         <div className="grid grid-cols-2 gap-2">
-          {[
-            { label: 'Template', value: job.requestedSpecs.templateName },
-            { label: 'Name Prefix', value: job.requestedSpecs.namePrefix },
-            { label: 'Count', value: job.requestedSpecs.count },
-            { label: 'Clone Type', value: job.requestedSpecs.cloneType === 'dedicated_storage' ? 'Dedicated' : 'Dynamic' },
-            { label: 'CPU', value: `${job.requestedSpecs.cpuCores} vCPU` },
-            { label: 'RAM', value: `${job.requestedSpecs.memoryGb} GB` },
-            { label: 'Disk', value: `${job.requestedSpecs.diskGb} GB` },
-            { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
-            ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
-          ].map(({ label, value }) => (
+          {(job.type === 'bulk_delete'
+            ? [
+                { label: 'Operation', value: 'Delete VMs' },
+                { label: 'Total VMs', value: job.total },
+                { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
+                ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
+              ]
+            : [
+                { label: 'Template', value: job.requestedSpecs?.templateName ?? '—' },
+                { label: 'Name Prefix', value: job.requestedSpecs?.namePrefix ?? '—' },
+                { label: 'Count', value: job.requestedSpecs?.count ?? job.total },
+                { label: 'Clone Type', value: job.requestedSpecs?.cloneType === 'dedicated_storage' ? 'Dedicated' : 'Dynamic' },
+                { label: 'CPU', value: `${job.requestedSpecs?.cpuCores ?? '—'} vCPU` },
+                { label: 'RAM', value: `${job.requestedSpecs?.memoryGb ?? '—'} GB` },
+                { label: 'Disk', value: `${job.requestedSpecs?.diskGb ?? '—'} GB` },
+                { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
+                ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
+              ]
+          ).map(({ label, value }) => (
             <div key={label} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">
               <span className="text-xs text-gray-400">{label}</span>
               <span className="text-xs text-gray-700">{value}</span>
@@ -248,8 +258,8 @@ export default function JobStatusPage() {
         </div>
       </div>
 
-      {/* VM credentials — shown once VMs exist and at least some have been created */}
-      {vms.length > 0 && (job.status === 'completed' || job.completed > 0) && (
+      {/* VM credentials — create jobs only */}
+      {job.type !== 'bulk_delete' && vms.length > 0 && (job.status === 'completed' || job.completed > 0) && (
         <JobCredentialsTable vms={vms} />
       )}
 

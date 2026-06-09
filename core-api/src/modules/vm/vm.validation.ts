@@ -156,6 +156,17 @@ export const alertHistoryQuerySchema = z.object({
   }),
 });
 
+// ─── Bulk delete VMs ──────────────────────────────────────────────────────────
+
+export const bulkDeleteVMsSchema = z.object({
+  body: z.object({
+    vmIds: z
+      .array(mongoObjectId)
+      .min(1, 'At least one VM must be specified')
+      .max(100, 'Cannot delete more than 100 VMs at once'),
+  }),
+});
+
 // ─── Assign VMs ───────────────────────────────────────────────────────────────
 
 export const assignVMsSchema = z.object({
@@ -179,5 +190,6 @@ export const userIdParamSchema = z.object({
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
 export type CreateVMInput = z.infer<typeof createVMSchema>['body'];
+export type BulkDeleteVMsInput = z.infer<typeof bulkDeleteVMsSchema>['body'];
 export type VMListQuery = z.infer<typeof vmListQuerySchema>['query'];
 export type AlertHistoryQuery = z.infer<typeof alertHistoryQuerySchema>['query'];

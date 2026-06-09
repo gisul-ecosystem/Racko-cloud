@@ -65,6 +65,27 @@ export class VMController {
   }
 
   /**
+   * POST /api/v1/vms/bulk-delete
+   */
+  async bulkDeleteVMs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { vmIds } = req.body as { vmIds: string[] };
+
+      logger.info('[VMDelete] Bulk delete requested', {
+        userId: authReq.user.userId,
+        count: vmIds.length,
+      });
+
+      const result = await vmService.bulkDeleteVMs(vmIds, adminId, req);
+      success(res, 'Bulk delete job started.', { jobId: result.jobId }, 202);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * DELETE /api/v1/vms/:vmId
    */
   async deleteVM(req: Request, res: Response, next: NextFunction): Promise<void> {
@@ -73,7 +94,10 @@ export class VMController {
       const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
 
-      logger.info('VM deletion requested', { userId: authReq.user.userId, vmId: vmId.toString() });
+      logger.info('[VMDelete] API delete requested', {
+        userId: authReq.user.userId,
+        vmId: vmId.toString(),
+      });
 
       await vmService.deleteVM(vmId, adminId, req);
       success(res, 'VM deleted successfully.');
