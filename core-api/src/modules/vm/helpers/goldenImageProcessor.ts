@@ -242,7 +242,9 @@ async function cloneSeedVm(params: {
 
 async function deleteProxmoxVm(node: string, vmid: number): Promise<void> {
   try {
-    await proxmoxClient.delete(`/nodes/${node}/qemu/${vmid}`);
+    await proxmoxClient.delete(`/nodes/${node}/qemu/${vmid}`, {
+      params: { purge: 1, 'destroy-unreferenced-disks': 1 },
+    });
     logger.info('[Golden] deleted Proxmox VM/template', { vmid, node });
   } catch (err) {
     logger.warn('[Golden] failed to delete Proxmox VM/template', {
