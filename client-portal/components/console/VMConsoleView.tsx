@@ -466,7 +466,7 @@ const styles: Record<string, CSSProperties> = {
     alignItems: 'center',
     justifyContent: 'center',
     gap: 14,
-    transition: 'opacity 0.3s ease',
+    transition: 'opacity 5s ease',
   },
   connectingTitle: {
     fontSize: 16,
