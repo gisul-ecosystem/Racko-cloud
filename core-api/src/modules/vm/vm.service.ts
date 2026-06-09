@@ -84,9 +84,7 @@ function sleep(ms: number): Promise<void> {
  * errors are swallowed and retried — this never throws and never blocks the
  * caller (the start API responds immediately; the IP resolves in the background).
  */
-async function startIpPolling(
-  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'consoleProtocol' | 'consoleUsername'>
-): Promise<void> {
+async function startIpPolling(vm: Pick<IVM, '_id' | 'node' | 'vmid'>): Promise<void> {
   const vmObjectId = vm._id;
   const { node, vmid } = vm;
   const maxRetries = 12;
@@ -123,47 +121,11 @@ async function startIpPolling(
           ipAddress: foundIp,
           attempt,
         });
-        // Give cloudbase-init a moment to finish applying the password.
+        // Give cloudbase-init a moment to finish applying the password + renaming
+        // the account (ciuser handles the rename on first boot for clean templates).
         await sleep(15_000);
 
-        // Windows/RDP only: rename the template's built-in 'Admin' account to the
-        // admin-chosen username. Proxmox guest exec expects the command as an array
-        // (matching `qm guest exec` internals). Best-effort — never blocks consoleReady.
-        if (vm.consoleProtocol === 'rdp' && vm.consoleUsername && vm.consoleUsername !== 'Admin') {
-          try {
-            await sleep(30_000); // wait for cloudbase-init to fully finish
-
-            await proxmoxClient.post(
-              `/nodes/${node}/qemu/${vmid}/agent/exec`,
-              {
-                command: [
-                  'powershell.exe',
-                  '-Command',
-                  `Rename-LocalUser -Name 'Admin' -NewName '${vm.consoleUsername}'`,
-                ],
-              }
-            );
-
-            logger.info('VM console username renamed successfully', {
-              vmId: vmObjectId.toString(),
-              vmid,
-              consoleUsername: vm.consoleUsername,
-            });
-
-            await sleep(5_000); // wait for rename to take effect
-
-          } catch (err) {
-            logger.warn('VM console username rename failed — continuing', {
-              vmId: vmObjectId.toString(),
-              vmid,
-              consoleUsername: vm.consoleUsername,
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-
-        // Always set consoleReady after rename attempt (success or fail).
-        // The frontend / openConsole gate on this flag.
+        // Flag the VM as console-ready. The frontend / openConsole gate on this flag.
         await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
         logger.info('VM console ready', { vmId: vmObjectId.toString(), vmid });
         return;
@@ -330,9 +292,8 @@ export class VMService {
     // taken from the client. Windows → rdp, everything else → ssh.
     const consoleProtocol = deriveConsoleProtocol(templateDetails.osType);
 
-    // Admin-chosen username. The template's 'Admin' account is renamed to this after
-    // boot (startIpPolling guest exec, Windows/RDP only); cloudbase-init sets its password.
-    const consoleUsername = dto.consoleUsername;
+    // Console username is fixed to the template's built-in 'Admin' account.
+    const consoleUsername = 'Admin';
 
     // Virtualization (Hyper-V) is Windows-only
     const enableVirtualization = dto.enableVirtualization ?? false;

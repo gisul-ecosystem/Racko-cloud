@@ -624,11 +624,10 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     return vm._id;
   }
 
-  // Inject cloud-init credentials + apply any spec overrides. cloudbase-init uses
-  // ciuser to rename/create the console account and cipassword to set its password.
+  // Inject the cloud-init password + apply any spec overrides. cloudbase-init sets
+  // the password for the template's built-in 'Admin' account (no ciuser rename).
   const configUpdates: Record<string, unknown> = {
     cipassword: consolePassword,
-    ciuser: consoleUsername,
   };
   if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;
   if (spec.memoryGb !== spec.templateMemoryGb) configUpdates['memory'] = Math.round(spec.memoryGb * 1024);
