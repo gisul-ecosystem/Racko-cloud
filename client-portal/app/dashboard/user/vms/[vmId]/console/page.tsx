@@ -1,7 +1,7 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { VMConsoleView } from '../../../../admin/vms/[vmId]/console/page';
+import { VMConsoleView } from '../../../../../../components/console/VMConsoleView';
 
 export default function UserVMConsolePage() {
   const { vmId } = useParams<{ vmId: string }>();
