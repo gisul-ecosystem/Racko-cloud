@@ -102,3 +102,27 @@ export function resolveCloneErrorMessage(error: unknown): string {
   }
   return String(error);
 }
+
+/** LVM / cloudinit volume name collisions (not generic "already exists" errors). */
+export function isLvmConflictError(errorMsg: string): boolean {
+  const lower = errorMsg.toLowerCase();
+  if (lower.includes('lvcreate')) return true;
+  if (/vm-\d+-cloudinit/.test(lower)) return true;
+  if (lower.includes('logical volume') && lower.includes('exist')) return true;
+  if (lower.includes('cloudinit') && lower.includes('already exists')) return true;
+  return false;
+}
+
+/**
+ * Bulk clone reroute: only when Proxmox was unreachable (no HTTP response).
+ * Skips task failures, LVM conflicts, and API errors with a real status code.
+ */
+export function shouldAttemptConnectivityReroute(
+  error: unknown,
+  errorMsg: string
+): boolean {
+  if (!(error instanceof ProxmoxConnectionError)) return false;
+  if (isLvmConflictError(errorMsg)) return false;
+  if (errorMsg.includes('(upid:')) return false;
+  return error.httpStatus === 0;
+}

@@ -9,6 +9,7 @@ import {
   runSysprepAndShutdown,
 } from './softwareProvisioner';
 import { pollTaskWithCleanup } from './taskPoller';
+import { retryProxmoxDelete } from './deleteRetry';
 import {
   bulkCloneDiagLog,
   fetchSourceVmDiagnostics,
@@ -241,18 +242,8 @@ async function cloneSeedVm(params: {
 }
 
 async function deleteProxmoxVm(node: string, vmid: number): Promise<void> {
-  try {
-    await proxmoxClient.delete(`/nodes/${node}/qemu/${vmid}`, {
-      params: { purge: 1, 'destroy-unreferenced-disks': 1 },
-    });
-    logger.info('[Golden] deleted Proxmox VM/template', { vmid, node });
-  } catch (err) {
-    logger.warn('[Golden] failed to delete Proxmox VM/template', {
-      vmid,
-      node,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
+  const result = await retryProxmoxDelete(node, vmid);
+  logger.info('[Golden] deleted Proxmox VM/template', { vmid, node, outcome: result });
 }
 
 /**
@@ -501,7 +492,16 @@ export async function buildGoldenTemplate(
     });
     if (seedVmid !== undefined) {
       goldenLog('cleanup', 'deleting failed seed VM from Proxmox', { jobId, vmid: seedVmid, node });
-      await deleteProxmoxVm(node, seedVmid);
+      try {
+        await deleteProxmoxVm(node, seedVmid);
+      } catch (cleanupErr) {
+        logger.error('[Golden] failed to purge-delete seed VM after build failure', {
+          jobId,
+          vmid: seedVmid,
+          node,
+          error: cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr),
+        });
+      }
     }
     throw err;
   }
@@ -510,5 +510,14 @@ export async function buildGoldenTemplate(
 /** Delete the ephemeral golden template after bulk clones are done. */
 export async function deleteGoldenTemplate(node: string, vmid: number, jobId?: string): Promise<void> {
   goldenLog('8/8 cleanup', 'deleting ephemeral golden template', { jobId, vmid, node });
-  await deleteProxmoxVm(node, vmid);
+  try {
+    await deleteProxmoxVm(node, vmid);
+  } catch (err) {
+    logger.error('[Golden] failed to purge-delete ephemeral golden template after retries', {
+      jobId,
+      vmid,
+      node,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }

@@ -1,6 +1,7 @@
 import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { logger } from '../../../utils/logger';
 import { config } from '../../../config';
+import { ProxmoxConnectionError } from '../../../utils/errors';
 
 export type DeleteResult = 'deleted' | 'already_gone';
 
@@ -64,14 +65,20 @@ export async function retryProxmoxDelete(node: string, vmid: number): Promise<De
  * Proxmox returns HTTP 500 with message containing "does not exist" when
  * the VM config file is missing — meaning the VM is already gone.
  */
+function proxmoxErrorDetail(err: unknown): string {
+  if (err instanceof ProxmoxConnectionError) {
+    return err.internalMessage || err.message;
+  }
+  if (err instanceof Error) return err.message;
+  return String(err);
+}
+
 function isAlreadyGoneError(err: unknown): boolean {
-  if (!(err instanceof Error)) return false;
-  const msg = err.message.toLowerCase();
+  const msg = proxmoxErrorDetail(err).toLowerCase();
   return (
     msg.includes('does not exist') ||
     msg.includes('no such') ||
-    msg.includes('not found') ||
-    msg.includes('500')
+    msg.includes('not found')
   );
 }
 

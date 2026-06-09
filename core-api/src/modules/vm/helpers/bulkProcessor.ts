@@ -16,6 +16,7 @@ import {
   bulkCloneDiagLog,
   fetchSourceVmDiagnostics,
   resolveCloneErrorMessage,
+  shouldAttemptConnectivityReroute,
   summarizeDiskPlacement,
   type BulkClonePath,
 } from './cloneDiagnostics';
@@ -327,9 +328,11 @@ async function runBatchClone(
 
       const error = result.reason;
       const errorMsg = resolveCloneErrorMessage(error);
+      const tryReroute =
+        options.allowReroute && shouldAttemptConnectivityReroute(error, errorMsg);
 
-      if (options.allowReroute && error instanceof ProxmoxConnectionError) {
-        logger.warn('Node connectivity failure in bulk job — attempting reroute', {
+      if (tryReroute) {
+        logger.warn('Proxmox unreachable in bulk job — attempting reroute to another node', {
           jobId: jobId.toString(),
           vmName: spec.vmName,
           failedNode: spec.node,
