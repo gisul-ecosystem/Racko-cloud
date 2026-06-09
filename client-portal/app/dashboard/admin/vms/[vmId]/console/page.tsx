@@ -45,6 +45,9 @@ export default function VMConsolePage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [iframeKey, setIframeKey] = useState(0);
+  // Covers Guacamole's own "Connecting to Guacamole..." message with our themed
+  // overlay until the iframe loads (or a 5s fallback fires).
+  const [iframeLoaded, setIframeLoaded] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const sessionRef = useRef<ConsoleSession | null>(null);
@@ -59,6 +62,7 @@ export default function VMConsolePage() {
         if (signal?.aborted) return;
         setSession(data);
         sessionRef.current = data;
+        setIframeLoaded(false);
         setIframeKey((k) => k + 1);
       } catch (err) {
         if (signal?.aborted) return;
@@ -94,6 +98,14 @@ export default function VMConsolePage() {
     const timer = setTimeout(() => {
       iframeRef.current?.focus();
     }, 500);
+    return () => clearTimeout(timer);
+  }, [session, iframeKey]);
+
+  // Fallback: if the iframe onLoad never fires (or fires too early), hide the
+  // connecting overlay after 5s so the user is never stuck behind it.
+  useEffect(() => {
+    if (!session) return;
+    const timer = setTimeout(() => setIframeLoaded(true), 15000);
     return () => clearTimeout(timer);
   }, [session, iframeKey]);
 
@@ -258,9 +270,23 @@ export default function VMConsolePage() {
             allow="clipboard-read; clipboard-write; fullscreen"
             allowFullScreen
             tabIndex={0}
-            onLoad={() => iframeRef.current?.focus()}
+            onLoad={() => {
+              setIframeLoaded(true);
+              iframeRef.current?.focus();
+            }}
             onClick={() => iframeRef.current?.focus()}
           />
+        )}
+
+        {/* Themed overlay covering Guacamole's own connecting message */}
+        {session && !error && !iframeLoaded && (
+          <div style={styles.connectOverlay}>
+            <div style={styles.spinner} />
+            <p style={styles.connectTitle}>Connecting to VM…</p>
+            <p style={styles.connectSubtitle}>
+              Establishing secure {protocol.toUpperCase()} session
+            </p>
+          </div>
         )}
       </div>
 
@@ -390,6 +416,28 @@ const styles: Record<string, CSSProperties> = {
     animation: 'rackoSpin 0.9s linear infinite',
   },
   statusText: {
+    fontSize: 13,
+    color: '#94a3b8',
+    margin: 0,
+  },
+  connectOverlay: {
+    position: 'absolute',
+    inset: 0,
+    zIndex: 10,
+    background: '#0a0a0f',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 16,
+  },
+  connectTitle: {
+    fontSize: 16,
+    fontWeight: 600,
+    color: '#e2e8f0',
+    margin: 0,
+  },
+  connectSubtitle: {
     fontSize: 13,
     color: '#94a3b8',
     margin: 0,
