@@ -64,7 +64,7 @@ export default function UserDashboard() {
         <button
           onClick={() => void load()}
           disabled={loading}
-          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-[#B91C1C] hover:bg-[#DC2626] rounded-lg transition disabled:opacity-40"        >
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-[#B91C1C] bg-red-50 hover:bg-red-100 border border-red-100 rounded-lg transition disabled:opacity-40"          >
           <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           Refresh
         </button>
