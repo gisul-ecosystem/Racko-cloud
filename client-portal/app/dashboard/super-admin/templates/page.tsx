@@ -10,6 +10,7 @@ import { ApiError } from '../../../../lib/apiClient';
 import { Layers, RefreshCw, Save, Check } from 'lucide-react';
 
 function bytesToGb(bytes: number): number {
+  if (!Number.isFinite(bytes) || bytes <= 0) return 0;
   return Math.round((bytes / 1024 ** 3) * 10) / 10;
 }
 
