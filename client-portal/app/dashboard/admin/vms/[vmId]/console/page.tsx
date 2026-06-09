@@ -43,7 +43,12 @@ function getProtocolSubtitle(p: ConsoleProtocol): string {
   return 'Establishing secure RDP session';
 }
 
-export default function VMConsolePage() {
+export interface VMConsoleViewProps {
+  backHref: string;
+  disconnectHref: string;
+}
+
+export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) {
   const { vmId } = useParams<{ vmId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -194,13 +199,13 @@ export default function VMConsolePage() {
   const handleDisconnect = () => {
     const cached = sessionRef.current;
     if (cached) void closeConsoleSession(cached.connectionId);
-    router.push('/dashboard/admin/vms');
+    router.push(disconnectHref);
   };
 
   const handleBack = () => {
     const cached = sessionRef.current;
     if (cached) void closeConsoleSession(cached.connectionId);
-    router.push(`/dashboard/admin/vms/${vmId}`);
+    router.push(backHref);
   };
 
   const badge = protocolColors[protocol];
@@ -513,3 +518,13 @@ const styles: Record<string, CSSProperties> = {
     fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
   },
 };
+
+export default function AdminVMConsolePage() {
+  const { vmId } = useParams<{ vmId: string }>();
+  return (
+    <VMConsoleView
+      backHref={`/dashboard/admin/vms/${vmId}`}
+      disconnectHref="/dashboard/admin/vms"
+    />
+  );
+}

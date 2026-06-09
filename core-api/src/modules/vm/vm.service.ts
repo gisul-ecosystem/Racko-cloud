@@ -164,10 +164,17 @@ function getUserAgent(req: Request): string {
 }
 
 /**
- * Check VM ownership. Super admins bypass ownership check.
+ * Check VM access. Super admins bypass. Admins must own the VM.
+ * Users may only access VMs assigned to them (assignedTo).
  */
 function assertOwnership(vm: IVM, requestingUserId: string, requestingRole: string): void {
   if (requestingRole === 'super_admin') return;
+  if (requestingRole === 'user') {
+    if (!vm.assignedTo || vm.assignedTo.toString() !== requestingUserId) {
+      throw new VMOwnershipError('You do not have permission to access this VM.');
+    }
+    return;
+  }
   if (vm.adminId.toString() !== requestingUserId) {
     throw new VMOwnershipError('You do not have permission to access this VM.');
   }
@@ -1053,40 +1060,46 @@ export class VMService {
       .limit(10)
       .lean();
 
+    const isEndUser = authReq.user.role === 'user';
+
     return {
       vm: {
         id: vm._id.toString(),
         vmid: vm.vmid,
         node: vm.node,
         name: vm.name,
-        description: vm.description,
+        description: isEndUser ? undefined : vm.description,
         status: vm.status,
         cloneType: vm.cloneType,
         allocatedCpu: vm.allocatedCpu,
         allocatedMemoryGb: vm.allocatedMemoryGb,
         allocatedDiskGb: vm.allocatedDiskGb,
         ipAddress: vm.ipAddress,
-        macAddress: vm.macAddress,
-        consoleUsername: vm.consoleUsername,
-        consolePassword: vm.consolePassword,
+        macAddress: isEndUser ? undefined : vm.macAddress,
+        consoleUsername: isEndUser ? undefined : vm.consoleUsername,
+        consolePassword: isEndUser ? undefined : vm.consolePassword,
         consoleProtocol: vm.consoleProtocol ?? 'rdp',
         consoleReady: vm.consoleReady ?? false,
-        haEnabled: vm.haEnabled,
-        enableVirtualization: vm.enableVirtualization ?? false,
-        hyperVStatus: vm.hyperVStatus ?? 'disabled',
-        hyperVLastError: vm.hyperVLastError || undefined,
-        softwareInstalls: (vm.softwareInstalls ?? []).map((s) => ({
-          softwareId: s.softwareId.toString(),
-          name: s.name,
-          status: s.status,
-          lastError: s.lastError,
-          installedAt: s.installedAt,
-        })),
+        haEnabled: isEndUser ? false : vm.haEnabled,
+        enableVirtualization: isEndUser ? false : (vm.enableVirtualization ?? false),
+        hyperVStatus: isEndUser ? 'disabled' : (vm.hyperVStatus ?? 'disabled'),
+        hyperVLastError: isEndUser ? undefined : vm.hyperVLastError || undefined,
+        softwareInstalls: isEndUser
+          ? []
+          : (vm.softwareInstalls ?? []).map((s) => ({
+              softwareId: s.softwareId.toString(),
+              name: s.name,
+              status: s.status,
+              lastError: s.lastError,
+              installedAt: s.installedAt,
+            })),
         createdAt: vm.createdAt,
         updatedAt: vm.updatedAt,
       },
       liveStatus,
-      recentEvents: recentEvents.map((e) => ({
+      recentEvents: isEndUser
+        ? []
+        : recentEvents.map((e) => ({
         event: e.event,
         status: e.status,
         createdAt: e.createdAt,

@@ -147,7 +147,7 @@ router.get(
 // GET /api/v1/vms/:vmId
 router.get(
   '/:vmId',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.getVMDetails(req, res, next)
 );
@@ -155,7 +155,7 @@ router.get(
 // GET /api/v1/vms/:vmId/status
 router.get(
   '/:vmId/status',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.getVMStatus(req, res, next)
 );
@@ -171,7 +171,7 @@ router.get(
 // GET /api/v1/vms/:vmId/console
 router.get(
   '/:vmId/console',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmConsoleSchema),
   (req, res, next) => vmController.openConsole(req, res, next)
 );
@@ -187,7 +187,7 @@ router.delete(
 // POST /api/v1/vms/:vmId/start
 router.post(
   '/:vmId/start',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.startVM(req, res, next)
 );
@@ -195,7 +195,7 @@ router.post(
 // POST /api/v1/vms/:vmId/stop
 router.post(
   '/:vmId/stop',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.stopVM(req, res, next)
 );
