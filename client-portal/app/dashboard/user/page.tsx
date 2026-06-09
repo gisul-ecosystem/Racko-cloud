@@ -1,134 +1,195 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import Link from 'next/link';
 import { useAuth } from '../../../context/AuthContext';
-import { fetchMyAssignedVMs, type IVM } from '../../../lib/vmApi';
+import { fetchMyAssignedVMs, type IVM, type VMStatus } from '../../../lib/vmApi';
 import { ApiError } from '../../../lib/apiClient';
-import { Server, Cpu, MemoryStick, HardDrive, Globe } from 'lucide-react';
+import { VMStatusBadge } from '../../../components/dashboard/VMStatusBadge';
+import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
+import { ErrorState } from '../../../components/dashboard/ErrorState';
+import { Server, RefreshCw, ChevronRight } from 'lucide-react';
 
-function StatusDot({ status }: { status: string }) {
-  const map: Record<string, string> = {
-    running: 'bg-green-500',
-    stopped: 'bg-gray-400',
-    paused: 'bg-yellow-400',
-    error: 'bg-red-500',
-  };
-  return (
-    <span className={`inline-block w-2 h-2 rounded-full ${map[status] ?? 'bg-gray-400'}`} />
-  );
-}
+const STATUS_OPTIONS = [
+  { value: '', label: 'All statuses' },
+  { value: 'running', label: 'Running' },
+  { value: 'stopped', label: 'Stopped' },
+  { value: 'paused', label: 'Paused' },
+  { value: 'error', label: 'Error' },
+];
 
-function VMCard({ vm }: { vm: IVM }) {
-  return (
-    <Link
-      href={`/dashboard/user/vms/${vm._id}`}
-      className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 flex flex-col gap-4 hover:border-blue-200 hover:shadow-md transition"
-    >
-      <div className="flex items-start justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
-            <Server className="w-5 h-5 text-blue-500" />
-          </div>
-          <div>
-            <p className="font-semibold text-gray-900 text-sm">{vm.name}</p>
-            <p className="text-xs text-gray-400 mt-0.5">{vm.node}</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-1.5">
-          <StatusDot status={vm.status} />
-          <span className="text-xs text-gray-500 capitalize">{vm.status}</span>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 gap-3">
-        <div className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
-          <Cpu className="w-3.5 h-3.5 text-gray-400 mx-auto mb-1" />
-          <p className="text-sm font-semibold text-gray-900">{vm.allocatedCpu}</p>
-          <p className="text-xs text-gray-400">vCPU</p>
-        </div>
-        <div className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
-          <MemoryStick className="w-3.5 h-3.5 text-gray-400 mx-auto mb-1" />
-          <p className="text-sm font-semibold text-gray-900">{vm.allocatedMemoryGb} GB</p>
-          <p className="text-xs text-gray-400">RAM</p>
-        </div>
-        <div className="bg-gray-50 rounded-lg px-3 py-2.5 text-center">
-          <HardDrive className="w-3.5 h-3.5 text-gray-400 mx-auto mb-1" />
-          <p className="text-sm font-semibold text-gray-900">{vm.allocatedDiskGb} GB</p>
-          <p className="text-xs text-gray-400">Disk</p>
-        </div>
-      </div>
-
-      {vm.ipAddress && (
-        <div className="flex items-center gap-2 text-xs text-gray-500 border-t border-gray-100 pt-3">
-          <Globe className="w-3.5 h-3.5 text-gray-400" />
-          <span className="font-mono">{vm.ipAddress}</span>
-        </div>
-      )}
-    </Link>
-  );
-}
+const selectClass =
+  'text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-600 focus:outline-none focus:ring-2 focus:ring-[#B91C1C]';
 
 export default function UserDashboard() {
   const { user } = useAuth();
   const [vms, setVMs] = useState<IVM[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchMyAssignedVMs();
+      setVMs(result);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to load VMs.');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    async function load() {
-      try {
-        const result = await fetchMyAssignedVMs();
-        setVMs(result);
-      } catch (err) {
-        setError(err instanceof ApiError ? err.message : 'Failed to load VMs.');
-      } finally {
-        setLoading(false);
-      }
-    }
     void load();
-  }, []);
+  }, [load]);
+
+  const filteredVms = useMemo(
+    () => (statusFilter ? vms.filter((vm) => vm.status === statusFilter) : vms),
+    [vms, statusFilter]
+  );
+
+  const runningCount = useMemo(() => vms.filter((vm) => vm.status === 'running').length, [vms]);
+  const stoppedCount = useMemo(() => vms.filter((vm) => vm.status === 'stopped').length, [vms]);
 
   if (!user) return null;
 
   return (
     <div className="max-w-screen-xl">
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Welcome back</h1>
-        <p className="text-gray-500 text-sm mt-0.5">{user.email}</p>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">My VMs</h1>
+        </div>
+        <button
+          onClick={() => void load()}
+          disabled={loading}
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-white bg-[#B91C1C] hover:bg-[#DC2626] rounded-lg transition disabled:opacity-40"        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
       </div>
 
-      <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold text-gray-700">
-          {loading ? 'Loading VMs...' : `My VMs (${vms.length})`}
-        </h2>
-      </div>
+      {!loading && !error && vms.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 mb-4">
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-700 border border-gray-200">
+            {vms.length} total
+          </span>
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-green-50 text-green-700 border border-green-200">
+            {runningCount} running
+          </span>
+          <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-gray-50 text-gray-600 border border-gray-200">
+            {stoppedCount} stopped
+          </span>
+        </div>
+      )}
 
-      {loading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <div key={i} className="h-44 bg-gray-100 rounded-xl animate-pulse" />
-          ))}
-        </div>
-      ) : error ? (
-        <div className="bg-red-50 border border-red-200 rounded-xl p-6 text-sm text-red-600 text-center">
-          {error}
-        </div>
-      ) : vms.length === 0 ? (
-        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-12 text-center">
-          <div className="w-14 h-14 rounded-full bg-blue-50 flex items-center justify-center mx-auto mb-4">
-            <Server className="w-7 h-7 text-blue-500" />
+      {error && !loading && <ErrorState message={error} onRetry={() => void load()} />}
+
+      {!error && (
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between flex-wrap gap-3">
+            <p className="text-sm font-semibold text-gray-900">Virtual Machines</p>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+              className={selectClass}
+              aria-label="Filter by status"
+            >
+              {STATUS_OPTIONS.map((o) => (
+                <option key={o.value} value={o.value}>
+                  {o.label}
+                </option>
+              ))}
+            </select>
           </div>
-          <p className="text-gray-700 font-medium">No VMs assigned yet</p>
-          <p className="text-gray-400 text-sm mt-1">
-            Your administrator will assign virtual machines to your account.
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {vms.map((vm) => (
-            <VMCard key={vm._id} vm={vm} />
-          ))}
+
+          {loading ? (
+            <TableSkeleton rows={4} cols={7} />
+          ) : filteredVms.length === 0 ? (
+            <div className="p-16 text-center">
+              <div className="w-14 h-14 rounded-full bg-red-50 flex items-center justify-center mx-auto mb-4">
+                <Server className="w-7 h-7 text-[#B91C1C]" />
+              </div>
+              <p className="text-gray-700 font-medium">
+                {statusFilter ? 'No VMs match this filter' : 'No VMs assigned yet'}
+              </p>
+              <p className="text-gray-400 text-sm mt-1">
+                {statusFilter
+                  ? 'Try a different status filter.'
+                  : 'Your administrator will assign virtual machines to your account.'}
+              </p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50">
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      VM
+                    </th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      Status
+                    </th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      CPU
+                    </th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      RAM
+                    </th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      Disk
+                    </th>
+                    <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide">
+                      IP
+                    </th>
+                    <th className="text-right px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide w-24">
+                      <span className="sr-only">Actions</span>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredVms.map((vm, i) => (
+                    <tr
+                      key={vm._id}
+                      className={`border-b border-gray-50 transition-colors ${
+                        i % 2 !== 0 ? 'bg-gray-50/40 hover:bg-gray-50' : 'hover:bg-gray-50'
+                      }`}
+                    >
+                      <td className="px-4 py-3.5">
+                        <Link href={`/dashboard/user/vms/${vm._id}`} className="block group">
+                          <p className="font-medium text-gray-900 group-hover:text-[#B91C1C] transition-colors">
+                            {vm.name}
+                          </p>
+                          {vm.templateName && (
+                            <p className="text-xs text-gray-400 mt-0.5">{vm.templateName}</p>
+                          )}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <VMStatusBadge status={vm.status as VMStatus} />
+                      </td>
+                      <td className="px-4 py-3.5 text-xs text-gray-600">{vm.allocatedCpu} vCPU</td>
+                      <td className="px-4 py-3.5 text-xs text-gray-600">{vm.allocatedMemoryGb} GB</td>
+                      <td className="px-4 py-3.5 text-xs text-gray-600">{vm.allocatedDiskGb} GB</td>
+                      <td className="px-4 py-3.5 text-xs text-gray-400 font-mono">
+                        {vm.ipAddress ?? '—'}
+                      </td>
+                      <td className="px-4 py-3.5 text-right">
+                        <Link
+                          href={`/dashboard/user/vms/${vm._id}`}
+                          className="inline-flex items-center gap-0.5 text-xs font-medium text-gray-500 hover:text-[#B91C1C] transition-colors"
+                        >
+                          View
+                          <ChevronRight className="w-3.5 h-3.5" />
+                        </Link>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
         </div>
       )}
     </div>
