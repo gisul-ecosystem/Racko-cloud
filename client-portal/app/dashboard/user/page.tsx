@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Link from 'next/link';
 import { useAuth } from '../../../context/AuthContext';
 import { fetchMyAssignedVMs, type IVM } from '../../../lib/vmApi';
 import { ApiError } from '../../../lib/apiClient';
@@ -20,7 +21,10 @@ function StatusDot({ status }: { status: string }) {
 
 function VMCard({ vm }: { vm: IVM }) {
   return (
-    <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 flex flex-col gap-4">
+    <Link
+      href={`/dashboard/user/vms/${vm._id}`}
+      className="bg-white border border-gray-200 rounded-xl shadow-sm p-5 flex flex-col gap-4 hover:border-blue-200 hover:shadow-md transition"
+    >
       <div className="flex items-start justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center shrink-0">
@@ -61,7 +65,7 @@ function VMCard({ vm }: { vm: IVM }) {
           <span className="font-mono">{vm.ipAddress}</span>
         </div>
       )}
-    </div>
+    </Link>
   );
 }
 
