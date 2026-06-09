@@ -83,6 +83,8 @@ router.get('/api/v1/proxmox/vms', authMiddleware, verifyMiddleware, requireRole(
 
 // ─── VM ROUTES (admin + super_admin) ─────────────────────────────────────────
 router.get('/api/v1/vms/templates', authMiddleware, verifyMiddleware, coreApiProxy);
+router.get('/api/v1/vms/templates/catalog', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.put('/api/v1/vms/templates/selection', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/vms/templates/:templateId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/admin/all', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/vms/jobs', authMiddleware, verifyMiddleware, coreApiProxy);

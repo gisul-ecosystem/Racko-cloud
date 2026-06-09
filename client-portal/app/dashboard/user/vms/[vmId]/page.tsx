@@ -7,6 +7,7 @@ import {
   fetchVMDetails,
   startVM,
   stopVM,
+  restartVM,
   type VMDetails,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
@@ -17,6 +18,7 @@ import {
   ChevronLeft,
   Play,
   Square,
+  RotateCcw,
   Monitor,
   Loader2,
   Cpu,
@@ -26,7 +28,7 @@ import {
   Server,
 } from 'lucide-react';
 
-type PowerOp = 'start' | 'stop';
+type PowerOp = 'start' | 'stop' | 'restart';
 
 export default function UserVMDetailPage() {
   const { vmId } = useParams<{ vmId: string }>();
@@ -72,8 +74,12 @@ export default function UserVMDetailPage() {
     setOpLoading(true);
     try {
       if (op === 'start') await startVM(vmId);
-      else await stopVM(vmId);
-      addToast('success', op === 'start' ? 'VM started.' : 'VM stopped.');
+      else if (op === 'stop') await stopVM(vmId);
+      else await restartVM(vmId);
+      addToast(
+        'success',
+        op === 'start' ? 'VM started.' : op === 'stop' ? 'VM stopped.' : 'VM restarted.'
+      );
       setPendingOp(null);
       await loadDetails();
     } catch (err) {
@@ -123,14 +129,20 @@ export default function UserVMDetailPage() {
       {pendingOp && (
         <ConfirmModal
           open
-          title={pendingOp === 'start' ? 'Start VM' : 'Stop VM'}
+          title={
+            pendingOp === 'start' ? 'Start VM' : pendingOp === 'stop' ? 'Stop VM' : 'Restart VM'
+          }
           description={
             pendingOp === 'start'
               ? `Start ${vm.name}?`
-              : `Gracefully stop ${vm.name}?`
+              : pendingOp === 'stop'
+                ? `Gracefully stop ${vm.name}?`
+                : `Restart ${vm.name}? The VM will reboot.`
           }
-          confirmLabel={pendingOp === 'start' ? 'Start' : 'Stop'}
-          confirmVariant={pendingOp === 'start' ? 'warning' : 'warning'}
+          confirmLabel={
+            pendingOp === 'start' ? 'Start' : pendingOp === 'stop' ? 'Stop' : 'Restart'
+          }
+          confirmVariant="warning"
           loading={opLoading}
           onConfirm={() => void handlePowerOp(pendingOp)}
           onCancel={() => setPendingOp(null)}
@@ -231,14 +243,24 @@ export default function UserVMDetailPage() {
             </button>
           )}
           {isRunning && (
-            <button
-              type="button"
-              onClick={() => setPendingOp('stop')}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition"
-            >
-              <Square className="w-4 h-4" />
-              Stop
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setPendingOp('stop')}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition"
+              >
+                <Square className="w-4 h-4" />
+                Stop
+              </button>
+              <button
+                type="button"
+                onClick={() => setPendingOp('restart')}
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg transition"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Restart
+              </button>
+            </>
           )}
         </div>
         {consolePreparing && (

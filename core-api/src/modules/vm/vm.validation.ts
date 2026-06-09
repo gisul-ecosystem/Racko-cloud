@@ -156,6 +156,21 @@ export const alertHistoryQuerySchema = z.object({
   }),
 });
 
+// ─── Template catalog (super admin) ───────────────────────────────────────────
+
+export const templateSelectionSchema = z.object({
+  body: z.object({
+    enabledVmids: z
+      .array(
+        z
+          .number({ invalid_type_error: 'enabledVmids must be numbers' })
+          .int('enabledVmids must be integers')
+          .positive('enabledVmids must be positive')
+      )
+      .max(200, 'Cannot enable more than 200 templates at once'),
+  }),
+});
+
 // ─── Bulk delete VMs ──────────────────────────────────────────────────────────
 
 export const bulkDeleteVMsSchema = z.object({

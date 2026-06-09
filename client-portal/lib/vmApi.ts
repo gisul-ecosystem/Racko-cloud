@@ -262,6 +262,29 @@ export async function fetchTemplateDetails(templateId: number): Promise<Template
   return res.data.template;
 }
 
+export interface TemplateCatalogResponse {
+  templates: ProxmoxTemplate[];
+  enabledVmids: number[];
+}
+
+export async function fetchTemplateCatalog(): Promise<TemplateCatalogResponse> {
+  const res = await apiRequest<ApiResponse<TemplateCatalogResponse>>(
+    '/api/v1/vms/templates/catalog'
+  );
+  return res.data;
+}
+
+export async function saveTemplateSelection(enabledVmids: number[]): Promise<{ enabledCount: number }> {
+  const res = await apiRequest<ApiResponse<{ enabledCount: number }>>(
+    '/api/v1/vms/templates/selection',
+    {
+      method: 'PUT',
+      body: JSON.stringify({ enabledVmids }),
+    }
+  );
+  return res.data;
+}
+
 // ─── VM CRUD ──────────────────────────────────────────────────────────────────
 
 export async function createVM(

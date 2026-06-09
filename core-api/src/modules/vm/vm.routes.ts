@@ -11,6 +11,7 @@ import {
   vmListQuerySchema,
   assignVMsSchema,
   bulkDeleteVMsSchema,
+  templateSelectionSchema,
   userIdParamSchema,
   vmConsoleSchema,
 } from './vm.validation';
@@ -27,6 +28,21 @@ router.get(
   '/templates',
   requireRole('admin', 'super_admin'),
   (req, res, next) => vmController.getTemplates(req, res, next)
+);
+
+// GET /api/v1/vms/templates/catalog — all Proxmox templates + enabled flags (super admin)
+router.get(
+  '/templates/catalog',
+  requireRole('super_admin'),
+  (req, res, next) => vmController.getTemplateCatalog(req, res, next)
+);
+
+// PUT /api/v1/vms/templates/selection — save enabled templates (super admin)
+router.put(
+  '/templates/selection',
+  requireRole('super_admin'),
+  validateRequest(templateSelectionSchema),
+  (req, res, next) => vmController.setTemplateSelection(req, res, next)
 );
 
 // GET /api/v1/vms/templates/:templateId
@@ -211,7 +227,7 @@ router.post(
 // POST /api/v1/vms/:vmId/restart
 router.post(
   '/:vmId/restart',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.restartVM(req, res, next)
 );

@@ -6,6 +6,7 @@ import { logger } from '../../utils/logger';
 import { VM } from './vm.model';
 import { VMJob } from './vmJob.model';
 import { VMEvent } from './vmEvent.model';
+import { VmTemplate } from './vmTemplate.model';
 import { validateResources } from './helpers/resourceValidator';
 import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
@@ -180,66 +181,152 @@ function assertOwnership(vm: IVM, requestingUserId: string, requestingRole: stri
   }
 }
 
+async function fetchProxmoxTemplates(): Promise<ProxmoxTemplate[]> {
+  const nodesResponse = await proxmoxClient.get<{ data: ProxmoxNodeRaw[] }>('/nodes');
+  const onlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+
+  const results = await Promise.allSettled(
+    onlineNodes.map((node) =>
+      proxmoxClient
+        .get<{ data: Array<Omit<ProxmoxTemplate, 'node'>> }>(`/nodes/${node.node}/qemu`)
+        .then((r) =>
+          r.data.data
+            .filter((vm) => vm.template === 1)
+            .map((vm) => ({ ...vm, node: node.node }))
+        )
+    )
+  );
+
+  const allTemplates: ProxmoxTemplate[] = [];
+  const seenVmids = new Set<number>();
+
+  for (let i = 0; i < results.length; i++) {
+    const result = results[i];
+    if (result.status === 'fulfilled') {
+      for (const tpl of result.value) {
+        if (!seenVmids.has(tpl.vmid)) {
+          seenVmids.add(tpl.vmid);
+          allTemplates.push({
+            vmid: tpl.vmid,
+            name: tpl.name,
+            node: tpl.node,
+            cpu: tpl.cpu,
+            memory: tpl.memory,
+            disk: tpl.disk,
+            maxdisk: tpl.maxdisk,
+            status: tpl.status,
+            template: tpl.template,
+          });
+        }
+      }
+    } else {
+      logger.warn('Failed to fetch templates from node', {
+        node: onlineNodes[i]?.node ?? 'unknown',
+        reason: result.reason instanceof Error ? result.reason.message : String(result.reason),
+      });
+    }
+  }
+
+  return allTemplates.sort((a, b) => a.name.localeCompare(b.name));
+}
+
 export class VMService {
   /**
-   * Fetch all templates from ALL nodes dynamically.
-   * Filters template === 1, deduplicates by vmid, sorts by name.
+   * Templates enabled for VM creation (admin dashboard).
+   * Only returns templates the super admin has selected in the catalog.
    */
-  async getTemplates(): Promise<ProxmoxTemplate[]> {
-    const nodesResponse = await proxmoxClient.get<{ data: ProxmoxNodeRaw[] }>('/nodes');
-    const onlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+  async getTemplates(_req: Request): Promise<ProxmoxTemplate[]> {
+    const all = await fetchProxmoxTemplates();
+    const enabledDocs = await VmTemplate.find({ isEnabled: true }).select('vmid').lean();
+    if (enabledDocs.length === 0) return [];
 
-    const results = await Promise.allSettled(
-      onlineNodes.map((node) =>
-        proxmoxClient
-          .get<{ data: Array<Omit<ProxmoxTemplate, 'node'>> }>(`/nodes/${node.node}/qemu`)
-          .then((r) =>
-            r.data.data
-              .filter((vm) => vm.template === 1)
-              .map((vm) => ({ ...vm, node: node.node }))
-          )
-      )
-    );
+    const enabledVmids = new Set(enabledDocs.map((d) => d.vmid));
+    return all.filter((t) => enabledVmids.has(t.vmid));
+  }
 
-    const allTemplates: ProxmoxTemplate[] = [];
-    const seenVmids = new Set<number>();
+  /**
+   * Full Proxmox template list with enabled flags — super admin catalog UI.
+   */
+  async getTemplateCatalog(): Promise<{
+    templates: ProxmoxTemplate[];
+    enabledVmids: number[];
+  }> {
+    const templates = await fetchProxmoxTemplates();
+    const enabledDocs = await VmTemplate.find({ isEnabled: true }).select('vmid').lean();
+    const enabledVmids = enabledDocs.map((d) => d.vmid);
+    return { templates, enabledVmids };
+  }
 
-    for (let i = 0; i < results.length; i++) {
-      const result = results[i];
-      if (result.status === 'fulfilled') {
-        for (const tpl of result.value) {
-          if (!seenVmids.has(tpl.vmid)) {
-            seenVmids.add(tpl.vmid);
-            allTemplates.push({
-              vmid: tpl.vmid,
-              name: tpl.name,
-              node: tpl.node,
-              cpu: tpl.cpu,
-              memory: tpl.memory,
-              disk: tpl.disk,
-              maxdisk: tpl.maxdisk,
-              status: tpl.status,
-              template: tpl.template,
-            });
-          }
-        }
-      } else {
-        logger.warn('Failed to fetch templates from node', {
-          node: onlineNodes[i]?.node ?? 'unknown',
-          reason: result.reason instanceof Error ? result.reason.message : String(result.reason),
-        });
+  /**
+   * Save which Proxmox templates are offered to admins.
+   */
+  async setTemplateSelection(
+    enabledVmids: number[],
+    updatedBy: mongoose.Types.ObjectId
+  ): Promise<{ enabledCount: number }> {
+    const all = await fetchProxmoxTemplates();
+    const proxmoxVmids = new Set(all.map((t) => t.vmid));
+    const uniqueEnabled = [...new Set(enabledVmids)];
+
+    for (const vmid of uniqueEnabled) {
+      if (!proxmoxVmids.has(vmid)) {
+        throw new ValidationError(`Template ${vmid} does not exist on the cluster.`);
       }
     }
 
-    return allTemplates.sort((a, b) => a.name.localeCompare(b.name));
+    const enabledSet = new Set(uniqueEnabled);
+
+    await Promise.all(
+      all.map((tpl) =>
+        VmTemplate.findOneAndUpdate(
+          { vmid: tpl.vmid },
+          {
+            vmid: tpl.vmid,
+            name: tpl.name,
+            node: tpl.node,
+            isEnabled: enabledSet.has(tpl.vmid),
+            updatedBy,
+          },
+          { upsert: true, new: true }
+        )
+      )
+    );
+
+    await VmTemplate.updateMany(
+      { vmid: { $nin: [...proxmoxVmids] } },
+      { $set: { isEnabled: false, updatedBy } }
+    );
+
+    logger.info('VM template selection updated', {
+      updatedBy: updatedBy.toString(),
+      enabledCount: uniqueEnabled.length,
+      totalOnCluster: all.length,
+    });
+
+    return { enabledCount: uniqueEnabled.length };
+  }
+
+  private async assertTemplateEnabledForCreate(
+    templateId: number,
+    role: string
+  ): Promise<void> {
+    if (role === 'super_admin') return;
+
+    const enabled = await VmTemplate.exists({ vmid: templateId, isEnabled: true });
+    if (!enabled) {
+      throw new ValidationError('This template is not available for VM creation.');
+    }
   }
 
   /**
    * Get full config details for a specific template.
    */
-  async getTemplateDetails(templateId: number): Promise<TemplateDetails> {
-    const templates = await this.getTemplates();
-    const template = templates.find((t) => t.vmid === templateId);
+  async getTemplateDetails(templateId: number, req: Request): Promise<TemplateDetails> {
+    const authReq = req as AuthenticatedRequest;
+    await this.assertTemplateEnabledForCreate(templateId, authReq.user.role);
+
+    const all = await fetchProxmoxTemplates();
+    const template = all.find((t) => t.vmid === templateId);
 
     if (!template) {
       throw new TemplateNotFoundError(`Template ${templateId} not found.`);
@@ -281,10 +368,10 @@ export class VMService {
   async createVM(
     dto: CreateVMDto,
     adminId: mongoose.Types.ObjectId,
-    _req: Request
+    req: Request
   ): Promise<{ jobId: string }> {
-    // Get template details — validates template exists
-    const templateDetails = await this.getTemplateDetails(dto.templateId);
+    // Get template details — validates template exists and is enabled for admins
+    const templateDetails = await this.getTemplateDetails(dto.templateId, req);
 
     const templateSpecs = {
       cpuCores: templateDetails.cpuCores,
