@@ -4,6 +4,13 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { z } from 'zod';
 import { apiRequest, ApiError } from '../../../lib/apiClient';
+import { AuthBrand } from '../../../components/auth/AuthBrand';
+
+const INPUT_CLASS =
+  'w-full bg-[#1f2937] border rounded-lg px-4 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-[#B91C1C] transition';
+const BTN_PRIMARY =
+  'w-full bg-[#B91C1C] hover:bg-[#DC2626] disabled:bg-[#B91C1C]/50 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-[#B91C1C] focus:ring-offset-2 focus:ring-offset-[#111827]';
+const LINK_ACCENT = 'text-[#DC2626] hover:text-[#B91C1C] font-medium';
 
 const registerSchema = z
   .object({
@@ -103,10 +110,7 @@ export default function RegisterPage() {
               <span className="text-white font-medium">{email}</span>.
             </p>
             <p className="text-gray-500 text-xs mt-4">The link expires in 24 hours.</p>
-            <Link
-              href="/login"
-              className="inline-block mt-6 text-blue-400 hover:text-blue-300 text-sm font-medium"
-            >
+            <Link href="/login" className={`inline-block mt-6 text-sm ${LINK_ACCENT}`}>
               Back to sign in
             </Link>
           </div>
@@ -118,17 +122,14 @@ export default function RegisterPage() {
   return (
     <div className="min-h-screen bg-[#0a0f1e] flex items-center justify-center px-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <span className="text-2xl font-bold text-blue-400 tracking-tight">CloudPlatform</span>
-          <p className="text-gray-400 text-sm mt-2">Enterprise Cloud Infrastructure</p>
-        </div>
+        <AuthBrand />
 
         <div className="bg-[#111827] border border-gray-800 rounded-xl p-8">
           <div className="mb-6">
             <h1 className="text-xl font-semibold text-white">Create an account</h1>
             <p className="text-gray-400 text-sm mt-1">
               You are registering as an{' '}
-              <span className="text-blue-400 font-medium">Admin</span>
+              <span className="text-[#DC2626] font-medium">Admin</span>
             </p>
           </div>
 
@@ -144,9 +145,7 @@ export default function RegisterPage() {
                 autoComplete="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className={`w-full bg-[#1f2937] border rounded-lg px-4 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                  errors.email ? 'border-red-500' : 'border-gray-700'
-                }`}
+                className={`${INPUT_CLASS} ${errors.email ? 'border-red-500' : 'border-gray-700'}`}
                 placeholder="you@company.com"
                 disabled={isLoading}
               />
@@ -165,9 +164,7 @@ export default function RegisterPage() {
                   autoComplete="new-password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className={`w-full bg-[#1f2937] border rounded-lg px-4 py-2.5 pr-10 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                    errors.password ? 'border-red-500' : 'border-gray-700'
-                  }`}
+                  className={`${INPUT_CLASS} pr-10 ${errors.password ? 'border-red-500' : 'border-gray-700'}`}
                   placeholder="••••••••"
                   disabled={isLoading}
                 />
@@ -217,9 +214,7 @@ export default function RegisterPage() {
                 autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className={`w-full bg-[#1f2937] border rounded-lg px-4 py-2.5 text-white placeholder-gray-500 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 transition ${
-                  errors.confirmPassword ? 'border-red-500' : 'border-gray-700'
-                }`}
+                className={`${INPUT_CLASS} ${errors.confirmPassword ? 'border-red-500' : 'border-gray-700'}`}
                 placeholder="••••••••"
                 disabled={isLoading}
               />
@@ -238,7 +233,7 @@ export default function RegisterPage() {
             <button
               type="submit"
               disabled={isLoading}
-              className="w-full bg-blue-600 hover:bg-blue-500 disabled:bg-blue-800 disabled:cursor-not-allowed text-white font-semibold py-2.5 rounded-lg text-sm transition focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-[#111827]"
+              className={BTN_PRIMARY}
             >
               {isLoading ? 'Creating account...' : 'Create account'}
             </button>
@@ -246,7 +241,7 @@ export default function RegisterPage() {
 
           <p className="text-center text-sm text-gray-400 mt-6">
             Already have an account?{' '}
-            <Link href="/login" className="text-blue-400 hover:text-blue-300 font-medium">
+            <Link href="/login" className={LINK_ACCENT}>
               Sign in
             </Link>
           </p>

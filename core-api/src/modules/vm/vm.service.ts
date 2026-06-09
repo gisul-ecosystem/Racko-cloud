@@ -8,6 +8,12 @@ import { VMJob } from './vmJob.model';
 import { VMEvent } from './vmEvent.model';
 import { VmTemplate } from './vmTemplate.model';
 import { validateResources } from './helpers/resourceValidator';
+import {
+  sumProxmoxProvisionedDiskBytes,
+  sumGuestFilesystemUsedBytes,
+  getProxmoxAllocatedCores,
+  getProxmoxAllocatedMemoryMb,
+} from './helpers/diskMetrics';
 import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
 import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
@@ -1021,12 +1027,15 @@ export class VMService {
 
     // Fire both guest agent calls in parallel — neither depends on the other.
     // Promise.allSettled ensures one failure never blocks the other.
-    const [netResult, fsResult] = await Promise.allSettled([
+    const [netResult, fsResult, configResult] = await Promise.allSettled([
       proxmoxClient.get<{ data: { result: ProxmoxNetworkInterface[] } }>(
         `/nodes/${vm.node}/qemu/${vm.vmid}/agent/network-get-interfaces`
       ),
       proxmoxClient.get<{ data: { result: ProxmoxFsInfo[] } }>(
         `/nodes/${vm.node}/qemu/${vm.vmid}/agent/get-fsinfo`
+      ),
+      proxmoxClient.get<{ data: Record<string, unknown> }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/config`
       ),
     ]);
 
@@ -1049,19 +1058,30 @@ export class VMService {
       }
     }
 
-    // Resolve disk usage from guest agent fs-info, fall back to Proxmox status values (0 for KVM)
-    let diskUsedGb = bytesToGb(live.disk);
-    let diskAllocatedGb = bytesToGb(live.maxdisk);
+    let cpuAllocated = vm.allocatedCpu;
+    let memoryAllocatedGb = live.maxmem > 0 ? bytesToGb(live.maxmem) : vm.allocatedMemoryGb;
+    let diskAllocatedGb = vm.allocatedDiskGb;
+
+    if (configResult.status === 'fulfilled') {
+      const cfg = configResult.value.data.data;
+      const cores = getProxmoxAllocatedCores(cfg);
+      if (cores) cpuAllocated = cores;
+
+      const memoryMb = getProxmoxAllocatedMemoryMb(cfg);
+      if (memoryMb) memoryAllocatedGb = Math.round((memoryMb / 1024) * 100) / 100;
+
+      const provisionedBytes = sumProxmoxProvisionedDiskBytes(cfg);
+      if (provisionedBytes > 0) diskAllocatedGb = bytesToGb(provisionedBytes);
+    } else if (live.maxdisk > 0) {
+      diskAllocatedGb = bytesToGb(live.maxdisk);
+    }
+
+    // Used: sum in-guest usage across C:, D:, and other data volumes.
+    let diskUsedGb = live.disk > 0 ? bytesToGb(live.disk) : 0;
     if (fsResult.status === 'fulfilled') {
       const filesystems = fsResult.value.data.data.result ?? [];
-      // Pick the largest filesystem — primary disk (C:\ on Windows, / on Linux)
-      const primary = filesystems
-        .filter((fs) => fs['total-bytes'] > 0)
-        .sort((a, b) => b['total-bytes'] - a['total-bytes'])[0];
-      if (primary) {
-        diskUsedGb = bytesToGb(primary['used-bytes']);
-        diskAllocatedGb = bytesToGb(primary['total-bytes']);
-      }
+      const usedBytes = sumGuestFilesystemUsedBytes(filesystems);
+      if (usedBytes > 0) diskUsedGb = bytesToGb(usedBytes);
     }
 
     // Update proxmox status in MongoDB
@@ -1076,12 +1096,15 @@ export class VMService {
       status: live.status,
       cpu: {
         usagePercent: Math.round(live.cpu * 10000) / 100,
-        allocated: vm.allocatedCpu,
+        allocated: cpuAllocated,
       },
       memory: {
         usedGb: bytesToGb(live.mem),
-        allocatedGb: bytesToGb(live.maxmem),
-        usagePercent: live.maxmem > 0 ? Math.round((live.mem / live.maxmem) * 10000) / 100 : 0,
+        allocatedGb: memoryAllocatedGb,
+        usagePercent:
+          memoryAllocatedGb > 0
+            ? Math.min(100, Math.round((bytesToGb(live.mem) / memoryAllocatedGb) * 10000) / 100)
+            : 0,
       },
       disk: {
         usedGb: diskUsedGb,
