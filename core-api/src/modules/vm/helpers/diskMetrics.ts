@@ -71,3 +71,27 @@ export function sumGuestFilesystemUsedBytes(filesystems: ProxmoxFsInfo[]): numbe
     .filter(isDataFilesystem)
     .reduce((sum, fs) => sum + Math.max(0, fs['used-bytes'] ?? 0), 0);
 }
+
+function parseConfigInt(value: unknown): number | undefined {
+  if (typeof value === 'number' && Number.isFinite(value)) return value;
+  if (typeof value === 'string') {
+    const n = parseInt(value, 10);
+    return Number.isFinite(n) ? n : undefined;
+  }
+  return undefined;
+}
+
+/** vCPU count from Proxmox VM config (`sockets` × `cores`). */
+export function getProxmoxAllocatedCores(config: Record<string, unknown>): number | undefined {
+  const cores = parseConfigInt(config.cores);
+  if (!cores || cores <= 0) return undefined;
+  const sockets = parseConfigInt(config.sockets) ?? 1;
+  return cores * sockets;
+}
+
+/** Configured RAM in MB from Proxmox VM config (`memory` field). */
+export function getProxmoxAllocatedMemoryMb(config: Record<string, unknown>): number | undefined {
+  const memory = parseConfigInt(config.memory);
+  if (!memory || memory <= 0) return undefined;
+  return memory;
+}

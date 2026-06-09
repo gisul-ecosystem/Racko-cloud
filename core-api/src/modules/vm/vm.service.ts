@@ -11,6 +11,8 @@ import { validateResources } from './helpers/resourceValidator';
 import {
   sumProxmoxProvisionedDiskBytes,
   sumGuestFilesystemUsedBytes,
+  getProxmoxAllocatedCores,
+  getProxmoxAllocatedMemoryMb,
 } from './helpers/diskMetrics';
 import { pollTask } from './helpers/taskPoller';
 import { processBulkCreation } from './helpers/bulkProcessor';
@@ -1056,10 +1058,19 @@ export class VMService {
       }
     }
 
-    // Allocated: sum all Proxmox virtual data disks (scsi0 + scsi1 + …).
+    let cpuAllocated = vm.allocatedCpu;
+    let memoryAllocatedGb = live.maxmem > 0 ? bytesToGb(live.maxmem) : vm.allocatedMemoryGb;
     let diskAllocatedGb = vm.allocatedDiskGb;
+
     if (configResult.status === 'fulfilled') {
-      const provisionedBytes = sumProxmoxProvisionedDiskBytes(configResult.value.data.data);
+      const cfg = configResult.value.data.data;
+      const cores = getProxmoxAllocatedCores(cfg);
+      if (cores) cpuAllocated = cores;
+
+      const memoryMb = getProxmoxAllocatedMemoryMb(cfg);
+      if (memoryMb) memoryAllocatedGb = Math.round((memoryMb / 1024) * 100) / 100;
+
+      const provisionedBytes = sumProxmoxProvisionedDiskBytes(cfg);
       if (provisionedBytes > 0) diskAllocatedGb = bytesToGb(provisionedBytes);
     } else if (live.maxdisk > 0) {
       diskAllocatedGb = bytesToGb(live.maxdisk);
@@ -1085,12 +1096,15 @@ export class VMService {
       status: live.status,
       cpu: {
         usagePercent: Math.round(live.cpu * 10000) / 100,
-        allocated: vm.allocatedCpu,
+        allocated: cpuAllocated,
       },
       memory: {
         usedGb: bytesToGb(live.mem),
-        allocatedGb: bytesToGb(live.maxmem),
-        usagePercent: live.maxmem > 0 ? Math.round((live.mem / live.maxmem) * 10000) / 100 : 0,
+        allocatedGb: memoryAllocatedGb,
+        usagePercent:
+          memoryAllocatedGb > 0
+            ? Math.min(100, Math.round((bytesToGb(live.mem) / memoryAllocatedGb) * 10000) / 100)
+            : 0,
       },
       disk: {
         usedGb: diskUsedGb,
