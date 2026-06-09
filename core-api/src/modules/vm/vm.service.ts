@@ -28,6 +28,7 @@ import {
   ValidationError,
 } from '../../utils/errors';
 import { User } from '../../models/user.model';
+import type { ProxmoxVMRaw } from '../proxmox/proxmox.types';
 import type {
   CreateVMDto,
   ProxmoxTemplate,
@@ -188,7 +189,7 @@ async function fetchProxmoxTemplates(): Promise<ProxmoxTemplate[]> {
   const results = await Promise.allSettled(
     onlineNodes.map((node) =>
       proxmoxClient
-        .get<{ data: Array<Omit<ProxmoxTemplate, 'node'>> }>(`/nodes/${node.node}/qemu`)
+        .get<{ data: ProxmoxVMRaw[] }>(`/nodes/${node.node}/qemu`)
         .then((r) =>
           r.data.data
             .filter((vm) => vm.template === 1)
@@ -210,10 +211,11 @@ async function fetchProxmoxTemplates(): Promise<ProxmoxTemplate[]> {
             vmid: tpl.vmid,
             name: tpl.name,
             node: tpl.node,
-            cpu: tpl.cpu,
-            memory: tpl.memory,
-            disk: tpl.disk,
-            maxdisk: tpl.maxdisk,
+            // Proxmox list API: `cpus` = allocated cores, `maxmem` = RAM bytes (`cpu` is usage %).
+            cpu: tpl.cpus ?? 1,
+            memory: tpl.maxmem ?? 0,
+            disk: tpl.disk ?? 0,
+            maxdisk: tpl.maxdisk ?? 0,
             status: tpl.status,
             template: tpl.template,
           });

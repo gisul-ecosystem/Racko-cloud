@@ -6,10 +6,10 @@ export interface ProxmoxTemplate {
   vmid: number;
   name: string;
   node: string;
-  cpu: number;       // allocated cores
-  memory: number;    // bytes
-  disk: number;      // bytes
-  maxdisk: number;   // bytes
+  cpu: number;       // allocated cores (from Proxmox `cpus`)
+  memory: number;    // allocated RAM bytes (from Proxmox `maxmem`)
+  disk: number;      // used disk bytes
+  maxdisk: number;   // allocated disk bytes
   status: string;
   template: number;  // 1 = is template
 }
