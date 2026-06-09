@@ -292,9 +292,8 @@ export class VMService {
     // taken from the client. Windows → rdp, everything else → ssh.
     const consoleProtocol = deriveConsoleProtocol(templateDetails.osType);
 
-    // Admin-chosen username. The template's 'Admin' account is renamed to this after
-    // boot (startIpPolling guest exec, Windows/RDP only); cloudbase-init sets its password.
-    const consoleUsername = dto.consoleUsername;
+    // Console username is fixed to the template's built-in 'Admin' account.
+    const consoleUsername = 'Admin';
 
     // Virtualization (Hyper-V) is Windows-only
     const enableVirtualization = dto.enableVirtualization ?? false;
