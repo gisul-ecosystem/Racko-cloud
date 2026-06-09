@@ -12,8 +12,11 @@ import {
 import { ApiError } from '../../lib/apiClient';
 
 const TOOLBAR_HEIGHT = 44;
-const IFRAME_LOAD_TIMEOUT_MS = 5000;
-const IFRAME_OVERLAY_FADE_MS = 5000;
+/** Minimum time the Racko overlay stays up (iframe onLoad fires much earlier). */
+const IFRAME_OVERLAY_MIN_MS = 5000;
+/** Hard cap so a stuck iframe cannot block the console forever. */
+const IFRAME_OVERLAY_MAX_MS = 12000;
+const IFRAME_OVERLAY_FADE_MS = 300;
 
 const protocolColors: Record<ConsoleProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
@@ -53,6 +56,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const sessionRef = useRef<ConsoleSession | null>(null);
   const iframeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlayStartedAtRef = useRef(0);
 
   const clearIframeTimeout = useCallback(() => {
     if (iframeTimeoutRef.current) {
@@ -61,15 +65,23 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
     }
   }, []);
 
+  const scheduleOverlayHide = useCallback(
+    (delayMs: number) => {
+      clearIframeTimeout();
+      iframeTimeoutRef.current = setTimeout(() => {
+        setIframeLoading(false);
+        iframeTimeoutRef.current = null;
+      }, delayMs);
+    },
+    [clearIframeTimeout]
+  );
+
   const startIframeLoading = useCallback(() => {
+    overlayStartedAtRef.current = Date.now();
     setIframeLoading(true);
     setOverlayMounted(true);
-    clearIframeTimeout();
-    iframeTimeoutRef.current = setTimeout(() => {
-      setIframeLoading(false);
-      iframeTimeoutRef.current = null;
-    }, IFRAME_LOAD_TIMEOUT_MS);
-  }, [clearIframeTimeout]);
+    scheduleOverlayHide(IFRAME_OVERLAY_MAX_MS);
+  }, [scheduleOverlayHide]);
 
   const fetchSession = useCallback(
     async (signal?: AbortSignal) => {
@@ -122,8 +134,12 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   }, [iframeLoading, overlayMounted]);
 
   const handleIframeLoad = () => {
-    clearIframeTimeout();
-    setIframeLoading(false);
+    // Guacamole's HTML loads in ~1–2s; the real RDP/SSH session takes longer.
+    // Keep our overlay until the minimum duration elapses (never dismiss on load alone).
+    const elapsed = Date.now() - overlayStartedAtRef.current;
+    const remainingMin = Math.max(0, IFRAME_OVERLAY_MIN_MS - elapsed);
+    const remainingMax = Math.max(0, IFRAME_OVERLAY_MAX_MS - elapsed);
+    scheduleOverlayHide(Math.min(remainingMin, remainingMax));
     iframeRef.current?.focus();
   };
 
