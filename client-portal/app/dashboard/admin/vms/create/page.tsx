@@ -194,7 +194,9 @@ export default function CreateVMPage() {
           ) : templatesError ? (
             <p className="text-red-500 text-sm">{templatesError}</p>
           ) : templates.length === 0 ? (
-            <p className="text-gray-400 text-sm">No templates available on any node.</p>
+            <p className="text-gray-400 text-sm">
+              No templates available. Ask your super admin to enable templates under Select Templates.
+            </p>
           ) : (
             <div className="space-y-2">
               {templates.map((tpl) => {

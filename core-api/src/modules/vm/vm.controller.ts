@@ -19,7 +19,7 @@ export class VMController {
     try {
       const authReq = req as AuthenticatedRequest;
       logger.info('Templates list requested', { userId: authReq.user.userId });
-      const templates = await vmService.getTemplates();
+      const templates = await vmService.getTemplates(req);
       success(res, 'Templates retrieved.', { templates, total: templates.length });
     } catch (error) {
       next(error);
@@ -34,8 +34,38 @@ export class VMController {
       const authReq = req as AuthenticatedRequest;
       const templateId = parseInt(req.params['templateId'] as string, 10);
       logger.info('Template details requested', { userId: authReq.user.userId, templateId });
-      const template = await vmService.getTemplateDetails(templateId);
+      const template = await vmService.getTemplateDetails(templateId, req);
       success(res, 'Template details retrieved.', { template });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/templates/catalog — super admin template picker
+   */
+  async getTemplateCatalog(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      logger.info('Template catalog requested', { userId: authReq.user.userId });
+      const catalog = await vmService.getTemplateCatalog();
+      success(res, 'Template catalog retrieved.', catalog);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * PUT /api/v1/vms/templates/selection — super admin saves enabled templates
+   */
+  async setTemplateSelection(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const updatedBy = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { enabledVmids } = req.body as { enabledVmids: number[] };
+
+      const result = await vmService.setTemplateSelection(enabledVmids, updatedBy);
+      success(res, 'Template selection saved.', result);
     } catch (error) {
       next(error);
     }

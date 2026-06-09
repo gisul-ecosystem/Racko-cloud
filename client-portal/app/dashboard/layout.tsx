@@ -16,6 +16,7 @@ import {
   MonitorCheck,
   UserCheck,
   Package,
+  Layers,
 } from 'lucide-react';
 
 interface NavLink {
@@ -84,6 +85,12 @@ const navLinks: NavLink[] = [
     href: '/dashboard/super-admin/software',
     label: 'Software',
     icon: <Package className="w-4 h-4" />,
+    roles: ['super_admin'],
+  },
+  {
+    href: '/dashboard/super-admin/templates',
+    label: 'Templates',
+    icon: <Layers className="w-4 h-4" />,
     roles: ['super_admin'],
   },
   {

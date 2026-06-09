@@ -284,11 +284,12 @@ export default function JobStatusPage() {
         </div>
       )}
 
-      {/* Created VMs link */}
+      {/* Completion summary */}
       {job.vmIds.length > 0 && isTerminal && (
         <div className="bg-green-50 border border-green-100 rounded-xl p-4 flex items-center justify-between">
           <p className="text-sm text-green-700">
-            <strong>{job.vmIds.length}</strong> VM{job.vmIds.length !== 1 ? 's' : ''} created successfully.
+            <strong>{job.vmIds.length}</strong> VM{job.vmIds.length !== 1 ? 's' : ''}{' '}
+            {job.type === 'bulk_delete' ? 'deleted' : 'created'} successfully.
           </p>
           <Link
             href="/dashboard/admin/vms"
