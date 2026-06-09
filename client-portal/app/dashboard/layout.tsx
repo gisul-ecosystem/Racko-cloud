@@ -3,6 +3,7 @@
 import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useAuth } from '../../context/AuthContext';
 import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
 
@@ -138,16 +139,36 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'admin' | 'super_admin' | 'user'));
 
+  const dashboardHome =
+    user.role === 'super_admin'
+      ? '/dashboard/super-admin'
+      : user.role === 'admin'
+        ? '/dashboard/admin'
+        : '/dashboard/user';
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* Sidebar */}
       <aside className="fixed left-0 top-0 h-full w-60 bg-white border-r border-gray-200 flex flex-col shadow-sm z-30">
-        {/* Logo */}
-        <div className="p-6 border-b border-gray-100">
-          <span className="text-lg font-bold text-gray-900">Racko</span>
-          <p className="text-xs text-gray-400 mt-0.5">
-            {user.role === 'super_admin' ? 'Super Admin Console' : user.role === 'admin' ? 'Admin Console' : 'User Dashboard'}
-          </p>
+        {/* Brand */}
+        <div className="px-5 py-5 border-b border-gray-100">
+          <Link
+            href={dashboardHome}
+            className="inline-flex items-center gap-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-[#B91C1C] focus-visible:ring-offset-2 rounded-md"
+          >
+            <span className="relative h-11 w-12 shrink-0 overflow-hidden rounded-md">
+              <Image
+                src="/images/racko-logo1.png"
+                alt=""
+                width={148}
+                height={40}
+                priority
+                aria-hidden
+                className="absolute left-0 top-0 h-11 w-auto max-w-none"
+              />
+            </span>
+            <span className="text-2xl font-bold text-gray-900 tracking-tight">Racko</span>
+          </Link>
         </div>
 
         {/* Nav */}
@@ -163,11 +184,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 href={link.href}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
                   isActive
-                    ? 'bg-blue-50 text-blue-700'
+                    ? 'bg-red-50 text-[#B91C1C]'
                     : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
                 }`}
               >
-                <span className={isActive ? 'text-blue-600' : 'text-gray-400'}>
+                <span className={isActive ? 'text-[#B91C1C]' : 'text-gray-400'}>
                   {link.icon}
                 </span>
                 {link.label}
@@ -179,7 +200,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         {/* User footer */}
         <div className="p-4 border-t border-gray-100">
           <div className="flex items-center gap-3 px-2 mb-3">
-            <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold shrink-0">
+            <div className="w-8 h-8 rounded-full bg-[#B91C1C] flex items-center justify-center text-white text-xs font-bold shrink-0">
               {user.email[0]?.toUpperCase()}
             </div>
             <div className="flex-1 min-w-0">
@@ -197,8 +218,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </div>
           <button
             onClick={logout}
-            className="w-full text-xs text-gray-500 hover:text-gray-900 hover:bg-gray-50 px-3 py-2 rounded-lg transition text-left"
-          >
+            className="w-full text-xs font-medium text-white bg-[#B91C1C] hover:bg-[#DC2626] px-3 py-2 rounded-lg transition text-left"          >
             Sign out
           </button>
         </div>

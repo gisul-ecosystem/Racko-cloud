@@ -162,7 +162,6 @@ export default function UserVMDetailPage() {
             <h1 className="text-2xl font-bold text-gray-900">{vm.name}</h1>
             <VMStatusBadge status={vm.status} />
           </div>
-          <p className="text-gray-400 text-sm mt-0.5 font-mono">#{vm.vmid} · {vm.node}</p>
         </div>
       </div>
 
@@ -204,7 +203,7 @@ export default function UserVMDetailPage() {
           {consoleReady && (
             <Link
               href={consoleHref}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-white bg-[#B91C1C] hover:bg-[#DC2626] rounded-lg transition"
             >
               <Monitor className="w-4 h-4" />
               Console
@@ -236,7 +235,7 @@ export default function UserVMDetailPage() {
             <button
               type="button"
               onClick={() => setPendingOp('start')}
-              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition"
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-white bg-[#B91C1C] hover:bg-[#DC2626] rounded-lg transition"
             >
               <Play className="w-4 h-4" />
               Start
@@ -255,7 +254,7 @@ export default function UserVMDetailPage() {
               <button
                 type="button"
                 onClick={() => setPendingOp('restart')}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg transition"
+                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium text-white bg-[#B91C1C] hover:bg-[#DC2626] rounded-lg transition"
               >
                 <RotateCcw className="w-4 h-4" />
                 Restart
@@ -264,7 +263,7 @@ export default function UserVMDetailPage() {
           )}
         </div>
         {consolePreparing && (
-          <p className="text-xs text-blue-600 mt-3">
+          <p className="text-xs text-[#B91C1C] mt-3">
             VM is booting and setting up credentials. Console will be available shortly.
           </p>
         )}
