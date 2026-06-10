@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { User } from '../../models/user.model';
+import { VM } from '../vm/vm.model';
 import { logger } from '../../utils/logger';
 import { ConflictError, NotFoundError, ForbiddenError } from '../../utils/errors';
 import type {
@@ -209,12 +210,18 @@ export class ManagedUsersService {
       throw new ForbiddenError('You can only delete users you created.');
     }
 
+    const unassignResult = await VM.updateMany(
+      { assignedTo: user._id, adminId },
+      { $unset: { assignedTo: 1 } }
+    );
+
     await user.deleteOne();
 
     logger.info('Admin deleted user', {
       adminId: adminId.toString(),
       deletedUserId: targetUserId,
       email: user.email,
+      vmsUnassigned: unassignResult.modifiedCount,
     });
   }
 }

@@ -336,3 +336,30 @@ export interface BulkVMSpec {
   /** Run Hyper-V / software queues after clone (single-VM create only). */
   schedulePostCreateJobs?: boolean;
 }
+
+// ─── Bulk 1:1 VM assignment ──────────────────────────────────────────────────
+
+export interface BulkAssignPairsDto {
+  vmIds: string[];
+  mode: 'create' | 'existing';
+  emailPrefix?: string;
+  passwordMode?: 'auto' | 'shared';
+  sharedPassword?: string;
+  userIds?: string[];
+}
+
+export interface BulkAssignPairRow {
+  vmId: string;
+  vmName: string;
+  userId?: string;
+  userEmail: string;
+  password?: string;
+  status: 'assigned' | 'failed';
+  error?: string;
+}
+
+export interface BulkAssignPairsResult {
+  assigned: number;
+  failed: number;
+  pairs: BulkAssignPairRow[];
+}

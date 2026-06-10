@@ -35,6 +35,7 @@ import {
 } from '../../utils/errors';
 import { User } from '../../models/user.model';
 import type { ProxmoxVMRaw } from '../proxmox/proxmox.types';
+import { managedUsersService } from '../managedUsers/managedUsers.service';
 import type {
   CreateVMDto,
   ProxmoxTemplate,
@@ -49,6 +50,9 @@ import type {
   ProxmoxNetworkInterface,
   ProxmoxFsInfo,
   ProxmoxNodeRaw,
+  BulkAssignPairsDto,
+  BulkAssignPairsResult,
+  BulkAssignPairRow,
 } from './vm.types';
 import type { IVM } from './vm.model';
 import type { IVMJob } from './vmJob.model';
@@ -1541,10 +1545,47 @@ export class VMService {
   // ─── VM Assignment ──────────────────────────────────────────────────────────
 
   /**
+   * Clear assignedTo on VMs pointing at deleted users (orphaned assignments).
+   */
+  private async releaseOrphanedVmAssignments(adminId: mongoose.Types.ObjectId): Promise<number> {
+    const assignedVms = await VM.find({ adminId, assignedTo: { $ne: null } })
+      .select('assignedTo')
+      .lean();
+
+    if (assignedVms.length === 0) return 0;
+
+    const userIds = [...new Set(assignedVms.map((vm) => vm.assignedTo!.toString()))];
+    const existingUsers = await User.find({ _id: { $in: userIds } }).select('_id').lean();
+    const existingSet = new Set(existingUsers.map((u) => u._id.toString()));
+    const orphanedIds = userIds
+      .filter((id) => !existingSet.has(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    if (orphanedIds.length === 0) return 0;
+
+    const result = await VM.updateMany(
+      { adminId, assignedTo: { $in: orphanedIds } },
+      { $unset: { assignedTo: 1 } }
+    );
+
+    if (result.modifiedCount > 0) {
+      logger.info('Released orphaned VM assignments', {
+        adminId: adminId.toString(),
+        vmsReleased: result.modifiedCount,
+        orphanedUserIds: orphanedIds.map((id) => id.toString()),
+      });
+    }
+
+    return result.modifiedCount;
+  }
+
+  /**
    * Get assigned VM counts for all users managed by this admin — single aggregation query.
    * Returns a map of userId → count.
    */
   async getAssignedVMCounts(adminId: mongoose.Types.ObjectId): Promise<Record<string, number>> {
+    await this.releaseOrphanedVmAssignments(adminId);
+
     const results = await VM.aggregate<{ _id: mongoose.Types.ObjectId; count: number }>([
       { $match: { adminId, assignedTo: { $ne: null } } },
       { $group: { _id: '$assignedTo', count: { $sum: 1 } } },
@@ -1561,6 +1602,8 @@ export class VMService {
    * Get all VMs owned by this admin that are not yet assigned to any user.
    */
   async getAvailableVMs(adminId: mongoose.Types.ObjectId): Promise<mongoose.FlattenMaps<IVM>[]> {
+    await this.releaseOrphanedVmAssignments(adminId);
+
     return VM.find({
       adminId,
       assignedTo: null,
@@ -1633,6 +1676,131 @@ export class VMService {
     });
 
     return { assigned: vmIds.length };
+  }
+
+  /**
+   * Bulk 1:1 assign — each VM to a distinct user (create new users or use existing).
+   */
+  async bulkAssignOneToOne(
+    dto: BulkAssignPairsDto,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<BulkAssignPairsResult> {
+    const vmObjectIds = dto.vmIds.map((id) => new mongoose.Types.ObjectId(id));
+    const pairs: BulkAssignPairRow[] = [];
+
+    const vms = await VM.find({
+      _id: { $in: vmObjectIds },
+      adminId,
+      assignedTo: null,
+      status: { $nin: ['deleted', 'deleting', 'delete_failed', 'creating'] },
+    }).lean();
+
+    const vmById = new Map(vms.map((vm) => [vm._id.toString(), vm]));
+    const orderedVms = dto.vmIds.map((id) => vmById.get(id));
+
+    if (orderedVms.some((vm) => !vm)) {
+      throw new ValidationError('One or more VMs are not available for assignment.');
+    }
+
+    type UserSlot = { userId?: mongoose.Types.ObjectId; email: string; password?: string };
+
+    const userSlots: UserSlot[] = [];
+
+    if (dto.mode === 'create') {
+      const bulkResult = await managedUsersService.createBulk(
+        {
+          emailPrefix: dto.emailPrefix!,
+          count: dto.vmIds.length,
+          password: dto.passwordMode === 'shared' ? dto.sharedPassword : undefined,
+        },
+        adminId
+      );
+
+      for (const row of bulkResult.users) {
+        if (row.status !== 'created') {
+          userSlots.push({ email: row.email, password: row.password });
+          continue;
+        }
+        const user = await User.findOne({ email: row.email, createdBy: adminId }).select('_id email');
+        userSlots.push({
+          userId: user?._id,
+          email: row.email,
+          password: row.password,
+        });
+      }
+    } else {
+      const userObjectIds = dto.userIds!.map((id) => new mongoose.Types.ObjectId(id));
+      const users = await User.find({ _id: { $in: userObjectIds }, createdBy: adminId, role: 'user' }).lean();
+      const userById = new Map(users.map((u) => [u._id.toString(), u]));
+
+      for (const userId of dto.userIds!) {
+        const user = userById.get(userId);
+        if (!user) {
+          throw new ValidationError('One or more users not found or do not belong to you.');
+        }
+        userSlots.push({ userId: user._id, email: user.email });
+      }
+    }
+
+    let assigned = 0;
+    let failed = 0;
+
+    for (let i = 0; i < dto.vmIds.length; i++) {
+      const vm = orderedVms[i]!;
+      const slot = userSlots[i]!;
+
+      if (!slot.userId) {
+        pairs.push({
+          vmId: vm._id.toString(),
+          vmName: vm.name,
+          userEmail: slot.email,
+          password: slot.password,
+          status: 'failed',
+          error: 'User creation failed',
+        });
+        failed++;
+        continue;
+      }
+
+      const update = await VM.updateOne(
+        { _id: vm._id, adminId, assignedTo: null },
+        { $set: { assignedTo: slot.userId } }
+      );
+
+      if (update.modifiedCount === 0) {
+        pairs.push({
+          vmId: vm._id.toString(),
+          vmName: vm.name,
+          userId: slot.userId.toString(),
+          userEmail: slot.email,
+          password: slot.password,
+          status: 'failed',
+          error: 'VM is no longer available for assignment',
+        });
+        failed++;
+        continue;
+      }
+
+      pairs.push({
+        vmId: vm._id.toString(),
+        vmName: vm.name,
+        userId: slot.userId.toString(),
+        userEmail: slot.email,
+        password: slot.password,
+        status: 'assigned',
+      });
+      assigned++;
+    }
+
+    logger.info('Bulk 1:1 VM assignment complete', {
+      adminId: adminId.toString(),
+      mode: dto.mode,
+      assigned,
+      failed,
+      total: dto.vmIds.length,
+    });
+
+    return { assigned, failed, pairs };
   }
 
   /**

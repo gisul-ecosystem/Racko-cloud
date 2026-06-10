@@ -10,6 +10,7 @@ import {
   templateIdParamSchema,
   vmListQuerySchema,
   assignVMsSchema,
+  bulkAssignPairsSchema,
   bulkDeleteVMsSchema,
   templateSelectionSchema,
   userIdParamSchema,
@@ -95,6 +96,14 @@ router.post(
   requireRole('admin', 'super_admin'),
   validateRequest(assignVMsSchema),
   (req, res, next) => vmController.assignVMs(req, res, next)
+);
+
+// POST /api/v1/vms/assign/bulk — 1:1 bulk assign VMs to users
+router.post(
+  '/assign/bulk',
+  requireRole('admin', 'super_admin'),
+  validateRequest(bulkAssignPairsSchema),
+  (req, res, next) => vmController.bulkAssignOneToOne(req, res, next)
 );
 
 // DELETE /api/v1/vms/assign/:vmId — unassign a VM

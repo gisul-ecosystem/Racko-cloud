@@ -65,6 +65,12 @@ const navLinks: NavLink[] = [
     roles: ['admin'],
   },
   {
+    href: '/dashboard/admin/assign-vms/bulk',
+    label: 'Bulk Assign',
+    icon: <Users className="w-4 h-4" />,
+    roles: ['admin'],
+  },
+  {
     href: '/dashboard/super-admin',
     label: 'Cluster',
     icon: <LayoutDashboard className="w-4 h-4" />,

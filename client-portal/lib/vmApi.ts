@@ -516,6 +516,41 @@ export async function assignVMs(userId: string, vmIds: string[]): Promise<{ assi
   return res.data;
 }
 
+export interface BulkAssignPairRow {
+  vmId: string;
+  vmName: string;
+  userId?: string;
+  userEmail: string;
+  password?: string;
+  status: 'assigned' | 'failed';
+  error?: string;
+}
+
+export interface BulkAssignPairsResult {
+  assigned: number;
+  failed: number;
+  pairs: BulkAssignPairRow[];
+}
+
+export type BulkAssignMode = 'create' | 'existing';
+
+export interface BulkAssignPairsDto {
+  vmIds: string[];
+  mode: BulkAssignMode;
+  emailPrefix?: string;
+  passwordMode?: 'auto' | 'shared';
+  sharedPassword?: string;
+  userIds?: string[];
+}
+
+export async function bulkAssignOneToOne(dto: BulkAssignPairsDto): Promise<BulkAssignPairsResult> {
+  const res = await apiRequest<ApiResponse<BulkAssignPairsResult>>(
+    '/api/v1/vms/assign/bulk',
+    { method: 'POST', body: JSON.stringify(dto) }
+  );
+  return res.data;
+}
+
 export async function unassignVM(vmId: string): Promise<void> {
   await apiRequest(`/api/v1/vms/assign/${vmId}`, { method: 'DELETE' });
 }
