@@ -56,6 +56,7 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [errors, setErrors] = useState<FormErrors>({});
+  const [errorCode, setErrorCode] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
   const strength = getPasswordStrength(password);
@@ -63,6 +64,7 @@ export default function RegisterPage() {
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setErrors({});
+    setErrorCode(null);
 
     const result = registerSchema.safeParse({ email, password, confirmPassword });
     if (!result.success) {
@@ -85,6 +87,7 @@ export default function RegisterPage() {
       setSuccess(true);
     } catch (err) {
       if (err instanceof ApiError) {
+        setErrorCode(err.code ?? null);
         setErrors({ general: err.message });
       } else {
         setErrors({ general: 'An unexpected error occurred. Please try again.' });
@@ -106,7 +109,7 @@ export default function RegisterPage() {
             </div>
             <h2 className="text-xl font-semibold text-white mb-3">Check your email</h2>
             <p className="text-gray-400 text-sm leading-relaxed">
-              If that email isn&apos;t already registered, we&apos;ve sent a verification link to{' '}
+              We&apos;ve sent a verification link to{' '}
               <span className="text-white font-medium">{email}</span>.
             </p>
             <p className="text-gray-500 text-xs mt-4">The link expires in 24 hours.</p>
@@ -226,7 +229,12 @@ export default function RegisterPage() {
             {/* General error */}
             {errors.general && (
               <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-sm text-red-300">
-                {errors.general}
+                <p>{errors.general}</p>
+                {errorCode === 'REGISTRATION_UNAVAILABLE' && (
+                  <Link href="/login" className={`inline-block mt-2 text-xs ${LINK_ACCENT}`}>
+                    Sign in instead
+                  </Link>
+                )}
               </div>
             )}
 

@@ -197,7 +197,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (user.role === 'super_admin') {
       router.push('/dashboard/super-admin');
     } else if (user.role === 'admin') {
-      router.push('/dashboard/admin');
+      router.push('/console');
     } else {
       router.push('/dashboard/user');
     }
