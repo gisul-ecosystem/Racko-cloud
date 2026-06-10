@@ -262,9 +262,21 @@ export async function fetchTemplateDetails(templateId: number): Promise<Template
   return res.data.template;
 }
 
+export interface RemovedTemplateEntry {
+  vmid: number;
+  name: string;
+}
+
 export interface TemplateCatalogResponse {
   templates: ProxmoxTemplate[];
   enabledVmids: number[];
+  removedFromCluster?: RemovedTemplateEntry[];
+}
+
+export interface TemplateSelectionResult {
+  enabledCount: number;
+  removedFromCluster?: RemovedTemplateEntry[];
+  warning?: string;
 }
 
 export async function fetchTemplateCatalog(): Promise<TemplateCatalogResponse> {
@@ -274,8 +286,8 @@ export async function fetchTemplateCatalog(): Promise<TemplateCatalogResponse> {
   return res.data;
 }
 
-export async function saveTemplateSelection(enabledVmids: number[]): Promise<{ enabledCount: number }> {
-  const res = await apiRequest<ApiResponse<{ enabledCount: number }>>(
+export async function saveTemplateSelection(enabledVmids: number[]): Promise<TemplateSelectionResult> {
+  const res = await apiRequest<ApiResponse<TemplateSelectionResult>>(
     '/api/v1/vms/templates/selection',
     {
       method: 'PUT',

@@ -7,7 +7,20 @@ import {
   type ProxmoxTemplate,
 } from '../../../../lib/vmApi';
 import { ApiError } from '../../../../lib/apiClient';
-import { Layers, RefreshCw, Save, Check } from 'lucide-react';
+import { Layers, RefreshCw, Save, Check, AlertTriangle } from 'lucide-react';
+import type { RemovedTemplateEntry } from '../../../../lib/vmApi';
+
+function intersectWithLiveTemplates(
+  vmids: number[],
+  templates: { vmid: number }[]
+): number[] {
+  const live = new Set(templates.map((t) => t.vmid));
+  return vmids.filter((vmid) => live.has(vmid));
+}
+
+function formatRemovedTemplates(entries: RemovedTemplateEntry[]): string {
+  return entries.map((r) => `${r.name} (${r.vmid})`).join(', ');
+}
 
 function bytesToGb(bytes: number): number {
   if (!Number.isFinite(bytes) || bytes <= 0) return 0;
@@ -20,16 +33,23 @@ export default function TemplateCatalogPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
+    setWarning(null);
     setSaved(false);
     try {
       const catalog = await fetchTemplateCatalog();
       setTemplates(catalog.templates);
-      setSelected(new Set(catalog.enabledVmids));
+      setSelected(new Set(intersectWithLiveTemplates(catalog.enabledVmids, catalog.templates)));
+      if (catalog.removedFromCluster && catalog.removedFromCluster.length > 0) {
+        setWarning(
+          `${catalog.removedFromCluster.length} enabled template(s) were removed from the cluster and auto-disabled: ${formatRemovedTemplates(catalog.removedFromCluster)}.`
+        );
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load templates.');
     } finally {
@@ -63,9 +83,15 @@ export default function TemplateCatalogPage() {
   const handleSave = async () => {
     setSaving(true);
     setError(null);
+    setWarning(null);
     setSaved(false);
     try {
-      await saveTemplateSelection([...selected]);
+      const vmidsToSave = intersectWithLiveTemplates([...selected], templates);
+      const result = await saveTemplateSelection(vmidsToSave);
+      setSelected(new Set(vmidsToSave));
+      if (result.warning) {
+        setWarning(result.warning);
+      }
       setSaved(true);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to save selection.');
@@ -116,6 +142,13 @@ export default function TemplateCatalogPage() {
           </button>
         </div>
       </div>
+
+      {warning && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 rounded-xl p-4 text-sm text-amber-800 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
+          <p>{warning}</p>
+        </div>
+      )}
 
       {error && (
         <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-4 text-sm text-red-600">

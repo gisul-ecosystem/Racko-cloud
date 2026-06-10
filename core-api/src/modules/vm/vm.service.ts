@@ -238,6 +238,41 @@ async function fetchProxmoxTemplates(): Promise<ProxmoxTemplate[]> {
   return allTemplates.sort((a, b) => a.name.localeCompare(b.name));
 }
 
+export interface RemovedTemplateEntry {
+  vmid: number;
+  name: string;
+}
+
+/**
+ * Disable catalog records for templates no longer present on the cluster.
+ * Proxmox is the source of truth — stale enabled rows block saves otherwise.
+ */
+async function reconcileStaleTemplates(
+  proxmoxVmids: Set<number>,
+  updatedBy?: mongoose.Types.ObjectId
+): Promise<RemovedTemplateEntry[]> {
+  const staleDocs = await VmTemplate.find({
+    isEnabled: true,
+    vmid: { $nin: [...proxmoxVmids] },
+  })
+    .select('vmid name')
+    .lean();
+
+  if (staleDocs.length === 0) return [];
+
+  await VmTemplate.updateMany(
+    { vmid: { $nin: [...proxmoxVmids] } },
+    { $set: { isEnabled: false, ...(updatedBy ? { updatedBy } : {}) } }
+  );
+
+  logger.info('Stale VM template catalog entries auto-disabled', {
+    count: staleDocs.length,
+    vmids: staleDocs.map((d) => d.vmid),
+  });
+
+  return staleDocs.map((d) => ({ vmid: d.vmid, name: d.name }));
+}
+
 export class VMService {
   /**
    * Templates enabled for VM creation (admin dashboard).
@@ -258,11 +293,19 @@ export class VMService {
   async getTemplateCatalog(): Promise<{
     templates: ProxmoxTemplate[];
     enabledVmids: number[];
+    removedFromCluster: RemovedTemplateEntry[];
   }> {
     const templates = await fetchProxmoxTemplates();
+    const proxmoxVmids = new Set(templates.map((t) => t.vmid));
+
+    const removedFromCluster = await reconcileStaleTemplates(proxmoxVmids);
+
     const enabledDocs = await VmTemplate.find({ isEnabled: true }).select('vmid').lean();
-    const enabledVmids = enabledDocs.map((d) => d.vmid);
-    return { templates, enabledVmids };
+    const enabledVmids = enabledDocs
+      .map((d) => d.vmid)
+      .filter((vmid) => proxmoxVmids.has(vmid));
+
+    return { templates, enabledVmids, removedFromCluster };
   }
 
   /**
@@ -271,18 +314,22 @@ export class VMService {
   async setTemplateSelection(
     enabledVmids: number[],
     updatedBy: mongoose.Types.ObjectId
-  ): Promise<{ enabledCount: number }> {
+  ): Promise<{
+    enabledCount: number;
+    removedFromCluster: RemovedTemplateEntry[];
+    warning?: string;
+  }> {
     const all = await fetchProxmoxTemplates();
     const proxmoxVmids = new Set(all.map((t) => t.vmid));
-    const uniqueEnabled = [...new Set(enabledVmids)];
+    const uniqueRequested = [...new Set(enabledVmids)];
 
-    for (const vmid of uniqueEnabled) {
-      if (!proxmoxVmids.has(vmid)) {
-        throw new ValidationError(`Template ${vmid} does not exist on the cluster.`);
-      }
-    }
+    // Drop vmids not on the cluster instead of failing the whole save.
+    const validEnabled = uniqueRequested.filter((vmid) => proxmoxVmids.has(vmid));
+    const droppedFromRequest = uniqueRequested.filter((vmid) => !proxmoxVmids.has(vmid));
 
-    const enabledSet = new Set(uniqueEnabled);
+    const removedFromCluster = await reconcileStaleTemplates(proxmoxVmids, updatedBy);
+
+    const enabledSet = new Set(validEnabled);
 
     await Promise.all(
       all.map((tpl) =>
@@ -300,18 +347,36 @@ export class VMService {
       )
     );
 
-    await VmTemplate.updateMany(
-      { vmid: { $nin: [...proxmoxVmids] } },
-      { $set: { isEnabled: false, updatedBy } }
-    );
+    const removedVmids = new Set([
+      ...removedFromCluster.map((r) => r.vmid),
+      ...droppedFromRequest,
+    ]);
+    const allRemoved = [
+      ...removedFromCluster,
+      ...droppedFromRequest
+        .filter((vmid) => !removedFromCluster.some((r) => r.vmid === vmid))
+        .map((vmid) => ({ vmid, name: `vmid ${vmid}` })),
+    ];
+
+    let warning: string | undefined;
+    if (removedVmids.size > 0) {
+      const labels = allRemoved.map((r) => `${r.name} (${r.vmid})`).join(', ');
+      warning = `${removedVmids.size} template(s) no longer on the cluster and were auto-disabled: ${labels}.`;
+    }
 
     logger.info('VM template selection updated', {
       updatedBy: updatedBy.toString(),
-      enabledCount: uniqueEnabled.length,
+      enabledCount: validEnabled.length,
       totalOnCluster: all.length,
+      droppedFromRequest,
+      staleDisabled: removedFromCluster.map((r) => r.vmid),
     });
 
-    return { enabledCount: uniqueEnabled.length };
+    return {
+      enabledCount: validEnabled.length,
+      removedFromCluster: allRemoved,
+      warning,
+    };
   }
 
   private async assertTemplateEnabledForCreate(
