@@ -2,6 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export type AuditEvent =
   | 'REGISTER'
+  | 'REGISTER_FAILED'
   | 'EMAIL_VERIFICATION_SENT'
   | 'EMAIL_VERIFIED'
   | 'LOGIN_SUCCESS'
@@ -39,6 +40,7 @@ const auditLogSchema = new Schema<IAuditLog>(
       required: true,
       enum: [
         'REGISTER',
+        'REGISTER_FAILED',
         'EMAIL_VERIFICATION_SENT',
         'EMAIL_VERIFIED',
         'LOGIN_SUCCESS',

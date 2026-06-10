@@ -24,6 +24,7 @@ import {
   UnauthorizedError,
   AccountLockedError,
   EmailNotVerifiedError,
+  RegistrationUnavailableError,
   AppError,
 } from '../../utils/errors';
 import type { RegisterDto, LoginDto, LoginResult, TokenValidationResult } from './auth.types';
@@ -41,64 +42,85 @@ const REFRESH_COOKIE_OPTIONS = {
 export class AuthService {
   /**
    * Register a new admin user.
-   * Returns generic success regardless of whether email exists (prevent enumeration).
+   * Verified duplicates return 409 (counts toward gateway failed-only rate limit).
+   * Unverified duplicates resend the verification email without revealing account state.
    */
   async register(data: RegisterDto, req: Request): Promise<{ message: string }> {
     const ip = getClientIp(req);
     const userAgent = req.headers['user-agent'] ?? 'unknown';
     const fingerprint = generateFingerprint(req);
 
-    // Check if email already exists — but return same response either way
     const existingUser = await User.findOne({ email: data.email });
 
-    if (!existingUser) {
-      // Generate raw token — only hashed version stored in DB
-      const rawToken = generateSecureToken(32);
-      const hashedToken = hashToken(rawToken);
-      const expiresAt = new Date(
-        Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
-      );
-
-      const user = new User({
-        email: data.email,
-        password: data.password, // pre-save hook hashes with argon2id
-        role: 'admin',
-        isEmailVerified: false,
-        emailVerificationToken: hashedToken,
-        emailVerificationExpires: expiresAt,
-      });
-
-      await user.save();
-
-      // Send verification email with raw token
-      await sendVerificationEmail(data.email, rawToken);
-
-      // Audit log
+    if (existingUser?.isEmailVerified) {
       await AuditLog.create({
-        userId: user._id,
-        event: 'REGISTER',
+        event: 'REGISTER_FAILED',
         ipAddress: ip,
         userAgent,
         deviceFingerprint: fingerprint,
-        metadata: { email: data.email },
+        metadata: { reason: 'email_already_registered', email: data.email },
       });
+      throw new RegistrationUnavailableError();
+    }
+
+    const rawToken = generateSecureToken(32);
+    const hashedToken = hashToken(rawToken);
+    const expiresAt = new Date(
+      Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
+    );
+
+    if (existingUser && !existingUser.isEmailVerified) {
+      existingUser.emailVerificationToken = hashedToken;
+      existingUser.emailVerificationExpires = expiresAt;
+      await existingUser.save();
+
+      await sendVerificationEmail(data.email, rawToken);
 
       await AuditLog.create({
-        userId: user._id,
+        userId: existingUser._id,
         event: 'EMAIL_VERIFICATION_SENT',
         ipAddress: ip,
         userAgent,
         deviceFingerprint: fingerprint,
+        metadata: { reason: 'resend_unverified' },
       });
 
-      // EVENT_SLOT: emit 'user.registered' event to message queue
+      return { message: 'We\'ve sent a verification link to your email address.' };
     }
 
-    // Always return same message — never confirm email existence
-    return {
-      message:
-        'If that email is not already registered, you will receive a verification link shortly.',
-    };
+    const user = new User({
+      email: data.email,
+      password: data.password, // pre-save hook hashes with argon2id
+      role: 'admin',
+      isEmailVerified: false,
+      emailVerificationToken: hashedToken,
+      emailVerificationExpires: expiresAt,
+    });
+
+    await user.save();
+
+    await sendVerificationEmail(data.email, rawToken);
+
+    await AuditLog.create({
+      userId: user._id,
+      event: 'REGISTER',
+      ipAddress: ip,
+      userAgent,
+      deviceFingerprint: fingerprint,
+      metadata: { email: data.email },
+    });
+
+    await AuditLog.create({
+      userId: user._id,
+      event: 'EMAIL_VERIFICATION_SENT',
+      ipAddress: ip,
+      userAgent,
+      deviceFingerprint: fingerprint,
+    });
+
+    // EVENT_SLOT: emit 'user.registered' event to message queue
+
+    return { message: 'We\'ve sent a verification link to your email address.' };
   }
 
   /**

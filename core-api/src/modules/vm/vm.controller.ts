@@ -514,6 +514,39 @@ export class VMController {
   }
 
   /**
+   * POST /api/v1/vms/assign/bulk — 1:1 bulk assign (create users or use existing)
+   */
+  async bulkAssignOneToOne(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const body = req.body as {
+        vmIds: string[];
+        mode: 'create' | 'existing';
+        emailPrefix?: string;
+        passwordMode?: 'auto' | 'shared';
+        sharedPassword?: string;
+        userIds?: string[];
+      };
+
+      logger.info('Bulk 1:1 VM assignment requested', {
+        adminId: adminId.toString(),
+        mode: body.mode,
+        vmCount: body.vmIds.length,
+      });
+
+      const result = await vmService.bulkAssignOneToOne(body, adminId);
+      success(
+        res,
+        `${result.assigned} VM(s) assigned successfully${result.failed > 0 ? `, ${result.failed} failed` : ''}.`,
+        result
+      );
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * DELETE /api/v1/vms/assign/:vmId
    */
   async unassignVM(req: Request, res: Response, next: NextFunction): Promise<void> {

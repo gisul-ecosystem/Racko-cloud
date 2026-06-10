@@ -2,7 +2,11 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import { createProxyMiddleware } from 'http-proxy-middleware';
 import { authMiddleware } from '../middleware/auth.middleware';
 import { verifyMiddleware } from '../middleware/verify.middleware';
-import { authRateLimiter } from '../middleware/rateLimit.middleware';
+import {
+  loginFailedRateLimiter,
+  registerRateLimiter,
+  verifyEmailRateLimiter,
+} from '../middleware/rateLimit.middleware';
 import { loginSlowDown } from '../middleware/slowDown.middleware';
 import { config } from '../config';
 import { ForbiddenError } from '../utils/errors';
@@ -55,9 +59,9 @@ function requireRole(...roles: string[]) {
 }
 
 // ─── PUBLIC ROUTES (no auth required) ────────────────────────────────────────
-router.post('/api/v1/auth/register', authRateLimiter, coreApiProxy);
-router.post('/api/v1/auth/login', authRateLimiter, loginSlowDown, coreApiProxy);
-router.post('/api/v1/auth/verify-email', authRateLimiter, coreApiProxy);
+router.post('/api/v1/auth/register', registerRateLimiter, coreApiProxy);
+router.post('/api/v1/auth/login', loginFailedRateLimiter, loginSlowDown, coreApiProxy);
+router.post('/api/v1/auth/verify-email', verifyEmailRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/refresh', coreApiProxy);
 
 // ─── PROTECTED AUTH ROUTES ────────────────────────────────────────────────────
@@ -94,6 +98,7 @@ router.get('/api/v1/vms/assign/available', authMiddleware, verifyMiddleware, req
 router.get('/api/v1/vms/assign/counts', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vms/assign/user/:userId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/vms/assign', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/vms/assign/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/vms/assign/:vmId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vms/my-assigned', authMiddleware, verifyMiddleware, requireRole('user'), coreApiProxy);
 router.post('/api/v1/vms/bulk-delete', authMiddleware, verifyMiddleware, coreApiProxy);

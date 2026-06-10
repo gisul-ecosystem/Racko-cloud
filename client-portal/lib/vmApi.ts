@@ -262,9 +262,21 @@ export async function fetchTemplateDetails(templateId: number): Promise<Template
   return res.data.template;
 }
 
+export interface RemovedTemplateEntry {
+  vmid: number;
+  name: string;
+}
+
 export interface TemplateCatalogResponse {
   templates: ProxmoxTemplate[];
   enabledVmids: number[];
+  removedFromCluster?: RemovedTemplateEntry[];
+}
+
+export interface TemplateSelectionResult {
+  enabledCount: number;
+  removedFromCluster?: RemovedTemplateEntry[];
+  warning?: string;
 }
 
 export async function fetchTemplateCatalog(): Promise<TemplateCatalogResponse> {
@@ -274,8 +286,8 @@ export async function fetchTemplateCatalog(): Promise<TemplateCatalogResponse> {
   return res.data;
 }
 
-export async function saveTemplateSelection(enabledVmids: number[]): Promise<{ enabledCount: number }> {
-  const res = await apiRequest<ApiResponse<{ enabledCount: number }>>(
+export async function saveTemplateSelection(enabledVmids: number[]): Promise<TemplateSelectionResult> {
+  const res = await apiRequest<ApiResponse<TemplateSelectionResult>>(
     '/api/v1/vms/templates/selection',
     {
       method: 'PUT',
@@ -500,6 +512,41 @@ export async function assignVMs(userId: string, vmIds: string[]): Promise<{ assi
   const res = await apiRequest<ApiResponse<{ assigned: number }>>(
     '/api/v1/vms/assign',
     { method: 'POST', body: JSON.stringify({ userId, vmIds }) }
+  );
+  return res.data;
+}
+
+export interface BulkAssignPairRow {
+  vmId: string;
+  vmName: string;
+  userId?: string;
+  userEmail: string;
+  password?: string;
+  status: 'assigned' | 'failed';
+  error?: string;
+}
+
+export interface BulkAssignPairsResult {
+  assigned: number;
+  failed: number;
+  pairs: BulkAssignPairRow[];
+}
+
+export type BulkAssignMode = 'create' | 'existing';
+
+export interface BulkAssignPairsDto {
+  vmIds: string[];
+  mode: BulkAssignMode;
+  emailPrefix?: string;
+  passwordMode?: 'auto' | 'shared';
+  sharedPassword?: string;
+  userIds?: string[];
+}
+
+export async function bulkAssignOneToOne(dto: BulkAssignPairsDto): Promise<BulkAssignPairsResult> {
+  const res = await apiRequest<ApiResponse<BulkAssignPairsResult>>(
+    '/api/v1/vms/assign/bulk',
+    { method: 'POST', body: JSON.stringify(dto) }
   );
   return res.data;
 }

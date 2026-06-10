@@ -65,6 +65,12 @@ const navLinks: NavLink[] = [
     roles: ['admin'],
   },
   {
+    href: '/dashboard/admin/assign-vms/bulk',
+    label: 'Bulk Assign',
+    icon: <Users className="w-4 h-4" />,
+    roles: ['admin'],
+  },
+  {
     href: '/dashboard/super-admin',
     label: 'Cluster',
     icon: <LayoutDashboard className="w-4 h-4" />,
@@ -143,7 +149,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     user.role === 'super_admin'
       ? '/dashboard/super-admin'
       : user.role === 'admin'
-        ? '/dashboard/admin'
+        ? '/console'
         : '/dashboard/user';
 
   return (
@@ -173,6 +179,15 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Nav */}
         <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
+          {user.role === 'admin' && (
+            <Link
+              href="/console"
+              className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
+            >
+              <LayoutDashboard className="w-4 h-4 text-gray-400" />
+              All services
+            </Link>
+          )}
           {visibleLinks.map((link) => {
             // Exact match for static routes; prefix match only for dynamic segments
             const isDynamic = link.href.includes('[');

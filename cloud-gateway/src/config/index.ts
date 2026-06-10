@@ -19,7 +19,9 @@ const envSchema = z.object({
 
   // Rate limiting
   RATE_LIMIT_WINDOW_MS: z.string().regex(/^\d+$/).transform(Number).default('900000'),
-  RATE_LIMIT_AUTH_MAX: z.string().regex(/^\d+$/).transform(Number).default('10'),
+  RATE_LIMIT_LOGIN_FAILED_MAX: z.string().regex(/^\d+$/).transform(Number).default('50'),
+  RATE_LIMIT_REGISTER_MAX: z.string().regex(/^\d+$/).transform(Number).default('10'),
+  RATE_LIMIT_VERIFY_EMAIL_MAX: z.string().regex(/^\d+$/).transform(Number).default('10'),
   RATE_LIMIT_USER_MAX: z.string().regex(/^\d+$/).transform(Number).default('500'),
 
   // Internal service secret

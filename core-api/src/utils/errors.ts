@@ -43,11 +43,13 @@ export class ConflictError extends AppError {
   }
 }
 
-export class DuplicateEmailError extends AppError {
-  public readonly email: string;
-  constructor(email: string) {
-    super(`Email already in use: ${email}`, 409, 'DUPLICATE_EMAIL');
-    this.email = email;
+export class RegistrationUnavailableError extends AppError {
+  constructor() {
+    super(
+      'Sorry, we could not complete your registration right now. Please try again later or sign in if you already have an account.',
+      409,
+      'REGISTRATION_UNAVAILABLE'
+    );
   }
 }
 

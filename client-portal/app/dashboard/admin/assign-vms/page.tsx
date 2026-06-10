@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import Link from 'next/link';
 import { useAuth } from '../../../../context/AuthContext';
 import { useManagedUsers } from '../../../../hooks/useManagedUsers';
 import {
@@ -320,9 +321,17 @@ export default function AssignVMsPage() {
 
   return (
     <div className="max-w-screen-xl">
-      <div className="mb-6">
-        <h1 className="text-2xl font-bold text-gray-900">Assign VMs</h1>
-        <p className="text-gray-500 text-sm mt-0.5">Assign your virtual machines to users</p>
+      <div className="mb-6 flex items-start justify-between gap-4 flex-wrap">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Assign VMs</h1>
+          <p className="text-gray-500 text-sm mt-0.5">Assign your virtual machines to users</p>
+        </div>
+        <Link
+          href="/dashboard/admin/assign-vms/bulk"
+          className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-[#B91C1C] bg-red-50 border border-red-100 rounded-lg hover:bg-red-100 transition shrink-0"
+        >
+          Bulk assign (1:1)
+        </Link>
       </div>
 
       <div className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden">
