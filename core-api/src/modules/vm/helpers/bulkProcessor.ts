@@ -473,7 +473,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
   }
 
   // Resolve per-VM console credentials.
-  // Username: admin-chosen (same for all VMs in the batch); renamed from 'Admin' after boot.
+  // Username: from template ciuser via job specs (same for all VMs in the batch).
   // Password: fixed → shared value from the request; dynamic → unique per VM.
   const consoleUsername = spec.consoleUsername;
   const consolePassword =
@@ -628,7 +628,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
   }
 
   // Inject the cloud-init password + apply any spec overrides. cloudbase-init sets
-  // the password for the template's built-in 'Admin' account (no ciuser rename).
+  // the password for the template's built-in account (no ciuser rename).
   const configUpdates: Record<string, unknown> = {
     cipassword: consolePassword,
   };

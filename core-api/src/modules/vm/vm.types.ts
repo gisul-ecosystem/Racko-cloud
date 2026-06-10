@@ -121,7 +121,7 @@ export interface CreateVMDto {
   memoryGb?: number;                     // optional override (must be >= template)
   diskGb?: number;                       // optional override (must be >= template)
   description?: string;
-  // Console username is fixed to the template's 'Admin' account — not client-supplied.
+  // Console username is derived from the template ciuser at creation — not client-supplied.
   passwordMode: 'fixed' | 'dynamic';     // fixed: same password for all; dynamic: unique per VM
   consolePassword?: string;              // required when passwordMode === 'fixed'
   enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
