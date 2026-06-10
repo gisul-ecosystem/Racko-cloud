@@ -396,8 +396,8 @@ export class VMService {
     // taken from the client. Windows → rdp, everything else → ssh.
     const consoleProtocol = deriveConsoleProtocol(templateDetails.osType);
 
-    // Console username is fixed to the template's built-in 'Admin' account.
-    const consoleUsername = 'Admin';
+    // Console username comes from the template's cloud-init ciuser (see getTemplateDetails).
+    const consoleUsername = templateDetails.defaultUsername;
 
     // Virtualization (Hyper-V) is Windows-only
     const enableVirtualization = dto.enableVirtualization ?? false;

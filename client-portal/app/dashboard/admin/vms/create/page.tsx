@@ -43,7 +43,7 @@ export default function CreateVMPage() {
   const [ramOverride, setRamOverride] = useState('');
   const [diskOverride, setDiskOverride] = useState('');
   const [description, setDescription] = useState('');
-  // Console access — username is fixed to the template's 'Admin' account
+  // Console username comes from the selected template (cloud-init ciuser)
   const [passwordMode, setPasswordMode] = useState<PasswordMode>('fixed');
   const [consolePassword, setConsolePassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -576,7 +576,7 @@ export default function CreateVMPage() {
               { label: 'CPU', value: `${safeCpu} vCPU` },
               { label: 'RAM', value: `${safeRam} GB` },
               { label: 'Disk', value: cloneType === 'dedicated_storage' ? `${safeDisk} GB` : 'Shared (dynamic)' },
-              { label: 'Console User', value: 'Admin' },
+              { label: 'Console User', value: templateDetails.defaultUsername },
               { label: 'Password', value: passwordMode === 'dynamic' ? 'Auto-generated per VM' : 'Custom (set)' },
               ...(showVirtualizationOption
                 ? [{ label: 'Virtualization', value: enableVirtualization ? 'Enabled (Hyper-V)' : 'Disabled' }]

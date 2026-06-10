@@ -221,7 +221,7 @@ export interface CreateVMDto {
   memoryGb?: number;
   diskGb?: number;
   description?: string;
-  // Console username is fixed to the template's 'Admin' account — not client-supplied.
+  // Console username is derived from the template ciuser at creation — not client-supplied.
   passwordMode: PasswordMode;
   consolePassword?: string;          // only sent in fixed mode
   enableVirtualization?: boolean;
