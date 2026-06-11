@@ -178,8 +178,13 @@ function ConsoleAccessCard({
   );
 }
 
-const opConfig: Record<PowerOp, { label: string; variant: 'danger' | 'warning'; description: string }> = {
-  start:       { label: 'Start VM',       variant: 'warning', description: 'This will power on the VM.' },
+function startOpConfig(canResume: boolean): { label: string; variant: 'danger' | 'warning'; description: string } {
+  return canResume
+    ? { label: 'Resume VM', variant: 'warning', description: 'This will restore the VM from its hibernated state.' }
+    : { label: 'Start VM', variant: 'warning', description: 'This will power on the VM.' };
+}
+
+const opConfig: Record<Exclude<PowerOp, 'start'>, { label: string; variant: 'danger' | 'warning'; description: string }> = {
   stop:        { label: 'Stop VM',        variant: 'warning', description: 'This will gracefully shut down the VM.' },
   'force-stop':{ label: 'Force Stop',     variant: 'danger',  description: 'This will immediately kill the VM. Unsaved data may be lost.' },
   restart:     { label: 'Restart VM',     variant: 'warning', description: 'This will gracefully reboot the VM.' },
@@ -220,6 +225,7 @@ export default function VMDetailPage() {
             prevVm.ipAddress === nextVm.ipAddress &&
             prevVm.hyperVStatus === nextVm.hyperVStatus &&
             prevVm.hyperVLastError === nextVm.hyperVLastError &&
+            prevVm.canResume === nextVm.canResume &&
             prevVm.updatedAt === nextVm.updatedAt &&
             JSON.stringify(prevVm.softwareInstalls) === JSON.stringify(nextVm.softwareInstalls);
           if (unchanged) return prev;
@@ -375,8 +381,12 @@ export default function VMDetailPage() {
         return;
       }
       const fn = { start: startVM, stop: stopVM, 'force-stop': forceStopVM, restart: restartVM, reset: resetVM }[op];
-      await fn(vmId);
-      addToast('success', `VM ${op} successful.`);
+      const result = await fn(vmId);
+      if (op === 'start') {
+        addToast('success', result.operation === 'resume' ? 'VM resumed successfully.' : 'VM started successfully.');
+      } else {
+        addToast('success', `VM ${op} successful.`);
+      }
       await load();
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : `Failed to ${op} VM.`);
@@ -416,6 +426,8 @@ export default function VMDetailPage() {
   const live = liveStatus;
   const isRunning = vm.status === 'running';
   const isStopped = vm.status === 'stopped';
+  const canResume = vm.canResume === true;
+  const activeOpConfig = pendingOp === 'start' ? startOpConfig(canResume) : pendingOp ? opConfig[pendingOp] : null;
 
   // Console readiness: the backend flips vm.consoleReady to true only after the IP
   // resolves AND a grace delay for cloudbase-init. Until then we keep the Console
@@ -429,13 +441,13 @@ export default function VMDetailPage() {
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
 
       {/* Confirm modal */}
-      {pendingOp && (
+      {pendingOp && activeOpConfig && (
         <ConfirmModal
           open
-          title={opConfig[pendingOp].label}
-          description={opConfig[pendingOp].description}
-          confirmLabel={opConfig[pendingOp].label}
-          confirmVariant={opConfig[pendingOp].variant}
+          title={activeOpConfig.label}
+          description={activeOpConfig.description}
+          confirmLabel={activeOpConfig.label}
+          confirmVariant={activeOpConfig.variant}
           loading={opLoading}
           onConfirm={() => void handleOp(pendingOp)}
           onCancel={() => setPendingOp(null)}
@@ -513,7 +525,7 @@ export default function VMDetailPage() {
           })()}
           {isStopped && (
             <button onClick={() => setPendingOp('start')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition">
-              <Play className="w-3.5 h-3.5" /> Start
+              <Play className="w-3.5 h-3.5" /> {canResume ? 'Resume' : 'Start'}
             </button>
           )}
           {isRunning && (

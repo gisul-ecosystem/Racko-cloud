@@ -37,6 +37,8 @@ export interface IVM extends Document {
   // Current status
   status: 'creating' | 'running' | 'stopped' | 'paused' | 'suspended' | 'error' | 'deleting' | 'deleted' | 'delete_failed';
   proxmoxStatus: string;
+  /** True after hibernate-to-disk — start API should resume, not cold boot */
+  isHibernated: boolean;
 
   // Deletion tracking
   lastError?: string;
@@ -143,6 +145,10 @@ const vmSchema = new Schema<IVM>(
     proxmoxStatus: {
       type: String,
       default: 'unknown',
+    },
+    isHibernated: {
+      type: Boolean,
+      default: false,
     },
     lastError: {
       type: String,
