@@ -177,11 +177,6 @@ export class VMController {
       const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
 
-      logger.info('[VMHibernate] API hibernate requested', {
-        userId: authReq.user.userId,
-        vmId: vmId.toString(),
-      });
-
       const result = await vmService.hibernateVM(vmId, adminId, req);
       success(res, 'VM hibernated successfully.', { result });
     } catch (error) {

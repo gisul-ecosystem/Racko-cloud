@@ -13,10 +13,14 @@ export interface IVmAutomation extends Document {
   endDate: Date;
   timezone: string;
   isActive: boolean;
-  /** Last calendar day (YYYY-MM-DD in timezone) resume ran */
+  /** Last calendar day (YYYY-MM-DD in timezone) all VMs resumed */
   lastResumeOn?: string;
-  /** Last calendar day (YYYY-MM-DD in timezone) hibernate ran */
+  /** Last calendar day (YYYY-MM-DD in timezone) all VMs hibernated */
   lastHibernateOn?: string;
+  /** Per-VM last resume day — vmId → YYYY-MM-DD in timezone */
+  lastResumeOnByVm?: Map<string, string>;
+  /** Per-VM last hibernate day — vmId → YYYY-MM-DD in timezone */
+  lastHibernateOnByVm?: Map<string, string>;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -34,6 +38,8 @@ const vmAutomationSchema = new Schema<IVmAutomation>(
     isActive: { type: Boolean, default: true, index: true },
     lastResumeOn: { type: String },
     lastHibernateOn: { type: String },
+    lastResumeOnByVm: { type: Map, of: String, default: undefined },
+    lastHibernateOnByVm: { type: Map, of: String, default: undefined },
   },
   {
     strict: true,
