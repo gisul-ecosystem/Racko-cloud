@@ -202,6 +202,20 @@ export class VMOperationError extends AppError {
 }
 
 /**
+ * Thrown when a user tries to start/stop/restart a VM on an active automation schedule.
+ * HTTP 403
+ */
+export class AutomationPowerRestrictedError extends AppError {
+  constructor() {
+    super(
+      'This VM is on an automated lab schedule. Start, stop, and restart are managed for you.',
+      403,
+      'AUTOMATION_POWER_RESTRICTED'
+    );
+  }
+}
+
+/**
  * Thrown when a Proxmox async task exceeds the configured timeout.
  * HTTP 504 Gateway Timeout
  */

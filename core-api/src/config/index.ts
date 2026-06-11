@@ -87,6 +87,10 @@ const envSchema = z.object({
   // Monitoring
   NODE_MONITOR_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
 
+  // VM automation scheduler (hibernate / resume)
+  VM_AUTOMATION_TICK_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
+  VM_AUTOMATION_STAGGER_MS: z.string().regex(/^\d+$/).transform(Number).default('300'),
+
   // Software installation (Windows guests — Chocolatey)
   SOFTWARE_QMP_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('45000'),
   SOFTWARE_VM_START_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),

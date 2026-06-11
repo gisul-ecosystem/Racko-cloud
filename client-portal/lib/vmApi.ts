@@ -91,6 +91,13 @@ export interface IVM {
   createdAt: string;
   updatedAt: string;
   deletedAt?: string;
+  automationManaged?: boolean;
+  automationSchedule?: {
+    name: string;
+    startTime: string;
+    stopTime: string;
+    timezone: string;
+  };
 }
 
 export interface VMLiveStatus {
@@ -127,6 +134,13 @@ export interface VMDetails {
     hyperVStatus: HyperVStatus;
     hyperVLastError?: string;
     softwareInstalls: SoftwareInstallEntry[];
+    automationManaged?: boolean;
+    automationSchedule?: {
+      name: string;
+      startTime: string;
+      stopTime: string;
+      timezone: string;
+    };
     createdAt: string;
     updatedAt: string;
   };
@@ -569,4 +583,64 @@ export async function fetchSoftwareCatalog(): Promise<SoftwareCatalogItem[]> {
     '/api/v1/software'
   );
   return res.data.software;
+}
+
+// ─── VM automation (hibernate / resume schedules) ─────────────────────────────
+
+export interface VmAutomation {
+  _id: string;
+  name: string;
+  adminId: string;
+  vmIds: string[];
+  vmCount: number;
+  startTime: string;
+  stopTime: string;
+  startDate: string;
+  endDate: string;
+  timezone: string;
+  isActive: boolean;
+  lastResumeOn?: string;
+  lastHibernateOn?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateVmAutomationDto {
+  name: string;
+  vmIds: string[];
+  startTime: string;
+  stopTime: string;
+  startDate: string;
+  endDate: string;
+  timezone: string;
+}
+
+export async function fetchVmAutomations(): Promise<VmAutomation[]> {
+  const res = await apiRequest<ApiResponse<{ automations: VmAutomation[] }>>(
+    '/api/v1/vm-automations'
+  );
+  return res.data.automations;
+}
+
+export async function createVmAutomation(dto: CreateVmAutomationDto): Promise<VmAutomation> {
+  const res = await apiRequest<ApiResponse<{ automation: VmAutomation }>>(
+    '/api/v1/vm-automations',
+    { method: 'POST', body: JSON.stringify(dto) }
+  );
+  return res.data.automation;
+}
+
+export async function updateVmAutomation(
+  automationId: string,
+  patch: Partial<CreateVmAutomationDto> & { isActive?: boolean }
+): Promise<VmAutomation> {
+  const res = await apiRequest<ApiResponse<{ automation: VmAutomation }>>(
+    `/api/v1/vm-automations/${automationId}`,
+    { method: 'PATCH', body: JSON.stringify(patch) }
+  );
+  return res.data.automation;
+}
+
+export async function deleteVmAutomation(automationId: string): Promise<void> {
+  await apiRequest(`/api/v1/vm-automations/${automationId}`, { method: 'DELETE' });
 }

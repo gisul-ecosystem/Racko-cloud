@@ -16,9 +16,11 @@ import proxmoxRoutes from './modules/proxmox/proxmox.routes';
 import vmRoutes from './modules/vm/vm.routes';
 import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import softwareRoutes from './modules/software/software.routes';
+import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
 import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconcileSweeper';
+import { startVmAutomationScheduler } from './modules/vmAutomation/vmAutomationScheduler';
 
 const app = express();
 
@@ -117,11 +119,13 @@ app.use('/api/v1/proxmox', proxmoxRoutes);
 app.use('/api/v1/vms', vmRoutes);
 app.use('/api/v1/managed-users', managedUsersRoutes);
 app.use('/api/v1/software', softwareRoutes);
+app.use('/api/v1/vm-automations', vmAutomationRoutes);
 
 // Start background services
 startNodeMonitoring();
 startHyperVSweeper();
 startStorageReconcileSweeper();
+startVmAutomationScheduler();
 
 // 404 handler
 app.use(notFoundHandler);

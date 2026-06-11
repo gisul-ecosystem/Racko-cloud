@@ -280,6 +280,13 @@ export interface VMDetails {
     hyperVStatus: HyperVStatus;
     hyperVLastError?: string;
     softwareInstalls: SoftwareInstallEntry[];
+    automationManaged?: boolean;
+    automationSchedule?: {
+      name: string;
+      startTime: string;
+      stopTime: string;
+      timezone: string;
+    };
     createdAt: Date;
     updatedAt: Date;
   };
