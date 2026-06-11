@@ -111,6 +111,7 @@ router.get('/api/v1/vms/:vmId/console', authMiddleware, verifyMiddleware, coreAp
 router.delete('/api/v1/vms/:vmId', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/start', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/stop', authMiddleware, verifyMiddleware, coreApiProxy);
+router.post('/api/v1/vms/:vmId/hibernate', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/force-stop', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/restart', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/reset', authMiddleware, verifyMiddleware, coreApiProxy);

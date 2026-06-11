@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useAuth } from '../../../../../context/AuthContext';
 import {
   fetchVMDetails, fetchVMStatus, fetchVMEvents, startVM, stopVM,
-  forceStopVM, restartVM, resetVM, deleteVM,
+  forceStopVM, hibernateVM, restartVM, resetVM, deleteVM,
   enableVirtualization, disableVirtualization, cancelVirtualization, cancelSoftwareInstalls,
   type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus, type SoftwareInstallEntry,
 } from '../../../../../lib/vmApi';
@@ -16,13 +16,13 @@ import { HyperVStatusBadge } from '../../../../../components/dashboard/HyperVSta
 import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
 import {
-  ChevronLeft, Play, Square, Zap, RotateCcw,
+  ChevronLeft, Play, Square, Zap, RotateCcw, Moon,
   RefreshCw, Trash2, Cpu, MemoryStick, HardDrive,
   Network, Clock, Server, Activity, Monitor,
   KeyRound, Eye, EyeOff, Copy, Check as CheckIcon, Loader2,
 } from 'lucide-react';
 
-type PowerOp = 'start' | 'stop' | 'force-stop' | 'restart' | 'reset' | 'delete';
+type PowerOp = 'start' | 'stop' | 'hibernate' | 'force-stop' | 'restart' | 'reset' | 'delete';
 
 // ─── Events section — connects fetchVMEvents (GET /api/v1/vms/:vmId/events) ──
 
@@ -186,6 +186,7 @@ function startOpConfig(canResume: boolean): { label: string; variant: 'danger' |
 
 const opConfig: Record<Exclude<PowerOp, 'start'>, { label: string; variant: 'danger' | 'warning'; description: string }> = {
   stop:        { label: 'Stop VM',        variant: 'warning', description: 'This will gracefully shut down the VM.' },
+  hibernate:   { label: 'Hibernate VM',   variant: 'warning', description: 'This will save the VM state to disk and free CPU/RAM. Use Resume to wake it later.' },
   'force-stop':{ label: 'Force Stop',     variant: 'danger',  description: 'This will immediately kill the VM. Unsaved data may be lost.' },
   restart:     { label: 'Restart VM',     variant: 'warning', description: 'This will gracefully reboot the VM.' },
   reset:       { label: 'Reset VM',       variant: 'danger',  description: 'This will hard reset the VM. Unsaved data may be lost.' },
@@ -380,10 +381,19 @@ export default function VMDetailPage() {
         router.push('/dashboard/admin/vms');
         return;
       }
-      const fn = { start: startVM, stop: stopVM, 'force-stop': forceStopVM, restart: restartVM, reset: resetVM }[op];
+      const fn = {
+        start: startVM,
+        stop: stopVM,
+        hibernate: hibernateVM,
+        'force-stop': forceStopVM,
+        restart: restartVM,
+        reset: resetVM,
+      }[op];
       const result = await fn(vmId);
       if (op === 'start') {
         addToast('success', result.operation === 'resume' ? 'VM resumed successfully.' : 'VM started successfully.');
+      } else if (op === 'hibernate') {
+        addToast('success', 'VM hibernated successfully.');
       } else {
         addToast('success', `VM ${op} successful.`);
       }
@@ -532,6 +542,9 @@ export default function VMDetailPage() {
             <>
               <button onClick={() => setPendingOp('stop')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition">
                 <Square className="w-3.5 h-3.5" /> Stop
+              </button>
+              <button onClick={() => setPendingOp('hibernate')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg transition">
+                <Moon className="w-3.5 h-3.5" /> Hibernate
               </button>
               <button onClick={() => setPendingOp('force-stop')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 hover:bg-orange-100 rounded-lg transition">
                 <Zap className="w-3.5 h-3.5" /> Force Stop

@@ -225,6 +225,14 @@ router.post(
   (req, res, next) => vmController.stopVM(req, res, next)
 );
 
+// POST /api/v1/vms/:vmId/hibernate
+router.post(
+  '/:vmId/hibernate',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.hibernateVM(req, res, next)
+);
+
 // POST /api/v1/vms/:vmId/force-stop
 router.post(
   '/:vmId/force-stop',
