@@ -169,6 +169,27 @@ export class VMController {
   }
 
   /**
+   * POST /api/v1/vms/:vmId/hibernate
+   */
+  async hibernateVM(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('[VMHibernate] API hibernate requested', {
+        userId: authReq.user.userId,
+        vmId: vmId.toString(),
+      });
+
+      const result = await vmService.hibernateVM(vmId, adminId, req);
+      success(res, 'VM hibernated successfully.', { result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * POST /api/v1/vms/:vmId/force-stop
    */
   async forceStopVM(req: Request, res: Response, next: NextFunction): Promise<void> {

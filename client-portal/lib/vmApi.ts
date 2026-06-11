@@ -413,6 +413,14 @@ export async function forceStopVM(vmId: string): Promise<VMOperationResult> {
   return res.data.result;
 }
 
+export async function hibernateVM(vmId: string): Promise<VMOperationResult> {
+  const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
+    `/api/v1/vms/${vmId}/hibernate`,
+    { method: 'POST' }
+  );
+  return res.data.result;
+}
+
 export async function restartVM(vmId: string): Promise<VMOperationResult> {
   const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
     `/api/v1/vms/${vmId}/restart`,
