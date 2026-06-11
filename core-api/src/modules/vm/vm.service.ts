@@ -24,6 +24,12 @@ import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQue
 import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
 import { softwareService } from '../software/software.service';
 import {
+  assertUserCanPowerVm,
+  getAutomationPowerInfo,
+  getAutomationPowerInfoBatch,
+  type AutomationPowerInfo,
+} from '../vmAutomation/vmAutomationPowerGuard';
+import {
   VMNotFoundError,
   VMOwnershipError,
   VMOperationError,
@@ -829,6 +835,7 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    await assertUserCanPowerVm(vm._id, authReq.user.role);
 
     if (vm.status === 'running') {
       throw new VMOperationError('VM is already running.', vm.status, 'stopped');
@@ -889,6 +896,7 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    await assertUserCanPowerVm(vm._id, authReq.user.role);
 
     if (vm.status === 'stopped') {
       throw new VMOperationError('VM is already stopped.', vm.status, 'running');
@@ -983,6 +991,7 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    await assertUserCanPowerVm(vm._id, authReq.user.role);
 
     if (vm.status !== 'running') {
       throw new VMOperationError('VM must be running to restart.', vm.status, 'running');
@@ -1073,6 +1082,150 @@ export class VMService {
     });
 
     return { success: true, vmid: vm.vmid, node: vm.node, operation: 'reset', taskId: upid };
+  }
+
+  /**
+   * Hibernate a VM to disk (qm suspend --todisk 1). Used by automation scheduler.
+   * Idempotent — skips if VM is not running.
+   */
+  async hibernateVmAutomation(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<VMOperationResult | null> {
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    if (vm.adminId.toString() !== adminId.toString()) {
+      throw new VMOwnershipError('You do not have permission to access this VM.');
+    }
+
+    if (vm.status !== 'running') {
+      logger.info('[Automation] Hibernate skipped — VM not running', {
+        vmId: vm._id.toString(),
+        status: vm.status,
+      });
+      return null;
+    }
+
+    const response = await proxmoxClient.post<{ data: string }>(
+      `/nodes/${vm.node}/qemu/${vm.vmid}/status/suspend`,
+      { todisk: 1 }
+    );
+    const upid = response.data.data;
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult.result === 'failed') {
+      throw new VMOperationError('VM failed to hibernate. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult.result === 'unknown') {
+      throw new VMOperationError(
+        'VM hibernate outcome unknown due to a connectivity issue. Refresh to check actual status.',
+        vm.status,
+        'running'
+      );
+    }
+
+    vm.status = 'stopped';
+    vm.proxmoxStatus = 'stopped';
+    vm.consoleReady = false;
+    await vm.save();
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'VM_SUSPENDED',
+      status: 'success',
+      details: { node: vm.node, mode: 'hibernate' },
+      ipAddress: 'automation',
+      userAgent: 'vm-automation-scheduler',
+    });
+
+    return { success: true, vmid: vm.vmid, node: vm.node, operation: 'hibernate', taskId: upid };
+  }
+
+  /**
+   * Resume a hibernated VM (qm resume). Falls back to start if no hibernate state.
+   * Idempotent — skips if VM is already running.
+   */
+  async resumeVmAutomation(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<VMOperationResult | null> {
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    if (vm.adminId.toString() !== adminId.toString()) {
+      throw new VMOwnershipError('You do not have permission to access this VM.');
+    }
+
+    if (vm.status === 'running') {
+      logger.info('[Automation] Resume skipped — VM already running', { vmId: vm._id.toString() });
+      return null;
+    }
+
+    let upid: string;
+    let operation: 'resume' | 'start' = 'resume';
+
+    try {
+      const response = await proxmoxClient.post<{ data: string }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
+        {}
+      );
+      upid = response.data.data;
+    } catch (err) {
+      logger.warn('[Automation] Resume failed — falling back to start', {
+        vmId: vm._id.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+      const startResponse = await proxmoxClient.post<{ data: string }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
+        {}
+      );
+      upid = startResponse.data.data;
+      operation = 'start';
+    }
+
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult.result === 'failed') {
+      throw new VMOperationError(
+        `VM failed to ${operation}. Check Proxmox task logs.`,
+        vm.status,
+        'stopped'
+      );
+    }
+    if (pollResult.result === 'unknown') {
+      throw new VMOperationError(
+        `VM ${operation} outcome unknown due to a connectivity issue. Refresh to check actual status.`,
+        vm.status,
+        'stopped'
+      );
+    }
+
+    vm.status = 'running';
+    vm.proxmoxStatus = 'running';
+    vm.consoleReady = false;
+    await vm.save();
+
+    void startIpPolling(vm).catch((pollErr: unknown) => {
+      logger.error('Unhandled error in IP polling after automation resume', {
+        vmId: vm._id.toString(),
+        vmid: vm.vmid,
+        error: pollErr instanceof Error ? pollErr.message : String(pollErr),
+      });
+    });
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'VM_RESUMED',
+      status: 'success',
+      details: { node: vm.node, mode: operation },
+      ipAddress: 'automation',
+      userAgent: 'vm-automation-scheduler',
+    });
+
+    return { success: true, vmid: vm.vmid, node: vm.node, operation, taskId: upid };
   }
 
   /**
@@ -1242,6 +1395,7 @@ export class VMService {
       .lean();
 
     const isEndUser = authReq.user.role === 'user';
+    const automationPower = await getAutomationPowerInfo(vm._id);
 
     return {
       vm: {
@@ -1274,6 +1428,8 @@ export class VMService {
               lastError: s.lastError,
               installedAt: s.installedAt,
             })),
+        automationManaged: automationPower.automationManaged,
+        automationSchedule: automationPower.automationSchedule,
         createdAt: vm.createdAt,
         updatedAt: vm.updatedAt,
       },
@@ -1828,8 +1984,16 @@ export class VMService {
   /**
    * Get all VMs assigned to the calling user (for user dashboard).
    */
-  async getMyAssignedVMs(userId: mongoose.Types.ObjectId): Promise<mongoose.FlattenMaps<IVM>[]> {
-    return VM.find({ assignedTo: userId }).lean();
+  async getMyAssignedVMs(
+    userId: mongoose.Types.ObjectId
+  ): Promise<Array<mongoose.FlattenMaps<IVM> & AutomationPowerInfo>> {
+    const vms = await VM.find({ assignedTo: userId }).lean();
+    const powerMap = await getAutomationPowerInfoBatch(vms.map((v) => v._id));
+
+    return vms.map((vm) => ({
+      ...vm,
+      ...(powerMap.get(vm._id.toString()) ?? { automationManaged: false }),
+    }));
   }
 
   /**

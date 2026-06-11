@@ -161,9 +161,16 @@ export default function UserDashboard() {
                           <p className="font-medium text-gray-900 group-hover:text-[#B91C1C] transition-colors">
                             {vm.name}
                           </p>
-                          {vm.templateName && (
-                            <p className="text-xs text-gray-400 mt-0.5">{vm.templateName}</p>
-                          )}
+                          <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                            {vm.templateName && (
+                              <p className="text-xs text-gray-400">{vm.templateName}</p>
+                            )}
+                            {vm.automationManaged && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 text-blue-700 border border-blue-100">
+                                Scheduled lab
+                              </span>
+                            )}
+                          </div>
                         </Link>
                       </td>
                       <td className="px-4 py-3.5">

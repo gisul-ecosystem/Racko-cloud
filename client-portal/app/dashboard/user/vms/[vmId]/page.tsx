@@ -34,6 +34,7 @@ import {
   Copy,
   Check,
   Activity,
+  CalendarClock,
 } from 'lucide-react';
 
 type PowerOp = 'start' | 'stop' | 'restart';
@@ -189,6 +190,8 @@ export default function UserVMDetailPage() {
   const consolePreparing = isRunning && vm.consoleReady !== true;
   const consoleProtocol = vm.consoleProtocol ?? 'rdp';
   const consoleHref = `/dashboard/user/vms/${vmId}/console?protocol=${consoleProtocol}`;
+  const automationManaged = vm.automationManaged === true;
+  const schedule = vm.automationSchedule;
 
   return (
     <div className="max-w-4xl">
@@ -215,6 +218,19 @@ export default function UserVMDetailPage() {
           onConfirm={() => void handlePowerOp(pendingOp)}
           onCancel={() => setPendingOp(null)}
         />
+      )}
+
+      {automationManaged && schedule && (
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
+          <CalendarClock className="w-4 h-4 shrink-0 mt-0.5" />
+          <div>
+            <p className="font-medium">Scheduled lab — {schedule.name}</p>
+            <p className="text-xs text-blue-700 mt-0.5">
+              Power is managed automatically: resume at {schedule.startTime}, hibernate at{' '}
+              {schedule.stopTime} ({schedule.timezone}). Start, stop, and restart are disabled.
+            </p>
+          </div>
+        </div>
       )}
 
       {/* Header */}
@@ -261,13 +277,13 @@ export default function UserVMDetailPage() {
                 Console
               </button>
             )}
-            {isStopped && (
+            {isStopped && !automationManaged && (
               <button type="button" onClick={() => setPendingOp('start')} className={btnPrimary}>
                 <Play className="w-3.5 h-3.5" />
                 Start
               </button>
             )}
-            {isRunning && (
+            {isRunning && !automationManaged && (
               <>
                 <button type="button" onClick={() => setPendingOp('stop')} className={btnOutline}>
                   <Square className="w-3.5 h-3.5" />

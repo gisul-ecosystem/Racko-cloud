@@ -18,6 +18,7 @@ import {
   UserCheck,
   Package,
   Layers,
+  Clock,
 } from 'lucide-react';
 
 interface NavLink {
@@ -50,6 +51,12 @@ const navLinks: NavLink[] = [
     href: '/dashboard/admin/jobs',
     label: 'Jobs',
     icon: <Briefcase className="w-4 h-4" />,
+    roles: ['admin'],
+  },
+  {
+    href: '/dashboard/admin/automation',
+    label: 'Automation',
+    icon: <Clock className="w-4 h-4" />,
     roles: ['admin'],
   },
   {
