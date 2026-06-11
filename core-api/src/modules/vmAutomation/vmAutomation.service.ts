@@ -11,6 +11,14 @@ import {
   isDateInRange,
   parseDateOnlyUtc,
 } from './timezoneUtils';
+import {
+  aggregateCompletionField,
+  allVmsCompletedForDay,
+  isAutomationActionDue,
+  pendingAutomationVmIds,
+  vmActionCompletionField,
+  type VmAutomationAction,
+} from './vmAutomationCompletion';
 
 export interface CreateVmAutomationDto {
   name: string;
@@ -169,42 +177,98 @@ export class VmAutomationService {
 
       const clock = clockTimeInTimezone(now, automation.timezone);
 
-      if (clock === automation.startTime && automation.lastResumeOn !== today) {
-        await this.executeForAutomation(automation, 'resume', today);
-      } else if (clock === automation.stopTime && automation.lastHibernateOn !== today) {
-        await this.executeForAutomation(automation, 'hibernate', today);
+      if (isAutomationActionDue(automation, 'resume', clock, today)) {
+        const pending = pendingAutomationVmIds(automation, 'resume', today);
+        await this.executeForAutomation(automation, 'resume', today, pending);
+      }
+
+      if (isAutomationActionDue(automation, 'hibernate', clock, today)) {
+        const pending = pendingAutomationVmIds(automation, 'hibernate', today);
+        await this.executeForAutomation(automation, 'hibernate', today, pending);
       }
     }
   }
 
+  private async markVmActionComplete(
+    automationId: mongoose.Types.ObjectId,
+    action: VmAutomationAction,
+    vmId: mongoose.Types.ObjectId,
+    today: string
+  ): Promise<void> {
+    const mapField = vmActionCompletionField(action);
+    await VmAutomation.updateOne(
+      { _id: automationId },
+      { $set: { [`${mapField}.${vmId.toString()}`]: today } }
+    );
+  }
+
+  private async syncAggregateCompletion(
+    automationId: mongoose.Types.ObjectId,
+    action: VmAutomationAction,
+    today: string
+  ): Promise<void> {
+    const doc = await VmAutomation.findById(automationId).lean<IVmAutomation>();
+    if (!doc || !allVmsCompletedForDay(doc, action, today)) return;
+
+    const aggregateField = aggregateCompletionField(action);
+    await VmAutomation.updateOne({ _id: automationId }, { $set: { [aggregateField]: today } });
+  }
+
   private async executeForAutomation(
     automation: IVmAutomation,
-    action: 'resume' | 'hibernate',
-    today: string
+    action: VmAutomationAction,
+    today: string,
+    vmIdsToProcess: mongoose.Types.ObjectId[]
   ): Promise<void> {
     const automationId = automation._id.toString();
     const adminId = automation.adminId;
 
+    if (vmIdsToProcess.length === 0) return;
+
     logger.info('[Automation] Executing batch', {
       automationId,
       action,
-      vmCount: automation.vmIds.length,
+      vmCount: vmIdsToProcess.length,
+      totalVmCount: automation.vmIds.length,
       today,
     });
 
     const staggerMs = config.VM_AUTOMATION_STAGGER_MS;
     let successCount = 0;
+    let skipCount = 0;
+    let deferredCount = 0;
     let failCount = 0;
 
-    for (let i = 0; i < automation.vmIds.length; i++) {
-      const vmId = automation.vmIds[i];
+    for (let i = 0; i < vmIdsToProcess.length; i++) {
+      const vmId = vmIdsToProcess[i];
       try {
-        if (action === 'resume') {
-          await vmService.resumeVmAutomation(vmId, adminId);
-        } else {
-          await vmService.hibernateVmAutomation(vmId, adminId);
+        const result =
+          action === 'resume'
+            ? await vmService.resumeVmAutomation(vmId, adminId)
+            : await vmService.hibernateVmAutomation(vmId, adminId);
+
+        if (result !== null && typeof result === 'object' && 'deferred' in result) {
+          deferredCount++;
+          logger.info('[Automation] VM action deferred for retry', {
+            automationId,
+            action,
+            vmId: vmId.toString(),
+          });
+          continue;
         }
-        successCount++;
+
+        await this.markVmActionComplete(automation._id, action, vmId, today);
+
+        if (result === null) {
+          skipCount++;
+          logger.info('[Automation] VM action skipped — marked complete for day', {
+            automationId,
+            action,
+            vmId: vmId.toString(),
+          });
+        } else {
+          successCount++;
+        }
       } catch (err) {
         failCount++;
         logger.error('[Automation] VM action failed', {
@@ -215,19 +279,25 @@ export class VmAutomationService {
         });
       }
 
-      if (i < automation.vmIds.length - 1 && staggerMs > 0) {
+      if (i < vmIdsToProcess.length - 1 && staggerMs > 0) {
         await sleep(staggerMs);
       }
     }
 
-    const updateField = action === 'resume' ? 'lastResumeOn' : 'lastHibernateOn';
-    await VmAutomation.updateOne({ _id: automation._id }, { $set: { [updateField]: today } });
+    await this.syncAggregateCompletion(automation._id, action, today);
+
+    const refreshed = await VmAutomation.findById(automation._id).lean<IVmAutomation>();
 
     logger.info('[Automation] Batch complete', {
       automationId,
       action,
       successCount,
+      skipCount,
+      deferredCount,
       failCount,
+      pendingCount: refreshed
+        ? pendingAutomationVmIds(refreshed, action, today).length
+        : null,
     });
   }
 }

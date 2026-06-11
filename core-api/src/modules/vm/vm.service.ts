@@ -15,6 +15,13 @@ import {
   getProxmoxAllocatedMemoryMb,
 } from './helpers/diskMetrics';
 import { pollTask } from './helpers/taskPoller';
+import {
+  assessResumeOutcome,
+  isQmpPrelaunch,
+  planVmStatusDbSync,
+  probeProxmoxVmState,
+  waitForVmGuestReady,
+} from './helpers/proxmoxResumeVerify';
 import { processBulkCreation } from './helpers/bulkProcessor';
 import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
@@ -108,31 +115,33 @@ function sleep(ms: number): Promise<void> {
 async function probeProxmoxPowerState(
   node: string,
   vmid: number
-): Promise<{ status: string } | { error: string }> {
-  try {
-    const statusRes = await proxmoxClient.get<{ data: { status: string } }>(
-      `/nodes/${node}/qemu/${vmid}/status/current`
-    );
-    return { status: statusRes.data.data.status };
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : String(err) };
-  }
+): Promise<{ status: string; qmpstatus?: string } | { error: string }> {
+  const probe = await probeProxmoxVmState(node, vmid);
+  if ('error' in probe) return probe;
+  return { status: probe.status, qmpstatus: probe.qmpstatus };
+}
+
+interface ConsolePollOptions {
+  mode?: 'cold-start' | 'resume';
 }
 
 async function startIpPolling(
   vm: Pick<IVM, '_id' | 'node' | 'vmid'>,
-  trigger = 'unknown'
+  trigger = 'unknown',
+  options: ConsolePollOptions = {}
 ): Promise<void> {
   const vmObjectId = vm._id;
   const { node, vmid } = vm;
-  const maxRetries = 12;
-  const delayMs = 10_000;
-  const initialWaitMs = 15_000;
+  const isResume = options.mode === 'resume';
+  const maxRetries = isResume ? 8 : 12;
+  const delayMs = isResume ? 5_000 : 10_000;
+  const initialWaitMs = isResume ? 3_000 : 15_000;
+  const cloudbaseGraceMs = isResume ? 5_000 : 15_000;
 
   const dbBefore = await VM.findById(vmObjectId).select('status isHibernated consoleReady ipAddress').lean();
   const proxmoxBefore = await probeProxmoxPowerState(node, vmid);
 
-  logger.info('[VMConsolePoll] Started IP / console-ready polling', {
+  logger.debug('[VMConsolePoll] Started IP / console-ready polling', {
     vmId: vmObjectId.toString(),
     vmid,
     node,
@@ -140,6 +149,7 @@ async function startIpPolling(
     initialWaitMs,
     maxRetries,
     delayMs,
+    mode: options.mode ?? 'cold-start',
     dbStatus: dbBefore?.status,
     dbIsHibernated: dbBefore?.isHibernated,
     dbConsoleReady: dbBefore?.consoleReady,
@@ -180,7 +190,7 @@ async function startIpPolling(
 
       if (foundIp) {
         await VM.findByIdAndUpdate(vmObjectId, { ipAddress: foundIp });
-        logger.info('[VMConsolePoll] Private IP resolved — waiting cloudbase-init grace', {
+        logger.debug('[VMConsolePoll] Private IP resolved — waiting post-boot grace', {
           vmId: vmObjectId.toString(),
           vmid,
           node,
@@ -189,14 +199,13 @@ async function startIpPolling(
           ipAddress: foundIp,
           proxmoxPowerState: 'status' in proxmoxLive ? proxmoxLive.status : null,
           allIpv4Seen: seenIps,
+          cloudbaseGraceMs,
         });
-        // Give cloudbase-init a moment to finish applying the password + renaming
-        // the account (ciuser handles the rename on first boot for clean templates).
-        await sleep(15_000);
+        await sleep(cloudbaseGraceMs);
 
         // Flag the VM as console-ready. The frontend / openConsole gate on this flag.
         await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
-        logger.info('[VMConsolePoll] consoleReady=true', {
+        logger.debug('[VMConsolePoll] consoleReady=true', {
           vmId: vmObjectId.toString(),
           vmid,
           node,
@@ -914,21 +923,6 @@ export class VMService {
     audit: { ipAddress: string; userAgent: string }
   ): Promise<VMOperationResult> {
     const vmIdStr = vm._id.toString();
-    const proxmoxBefore = await probeProxmoxPowerState(vm.node, vm.vmid);
-
-    logger.info('[VMPowerOn] Starting power-on flow', {
-      vmId: vmIdStr,
-      vmid: vm.vmid,
-      node: vm.node,
-      dbStatus: vm.status,
-      dbIsHibernated: vm.isHibernated,
-      dbConsoleReady: vm.consoleReady,
-      dbIpAddress: vm.ipAddress ?? null,
-      proxmoxPowerState: 'status' in proxmoxBefore ? proxmoxBefore.status : null,
-      proxmoxProbeError: 'error' in proxmoxBefore ? proxmoxBefore.error : null,
-      triggeredBy: audit.userAgent,
-      clientIp: audit.ipAddress,
-    });
 
     let upid: string;
     let operation: 'resume' | 'start' = 'start';
@@ -943,12 +937,6 @@ export class VMService {
           {}
         );
         upid = response.data.data;
-        logger.info('[VMPowerOn] Proxmox resume API accepted', {
-          vmId: vmIdStr,
-          vmid: vm.vmid,
-          node: vm.node,
-          upid,
-        });
       } catch (err) {
         logger.warn('[VMPowerOn] Proxmox resume API failed — falling back to cold start', {
           vmId: vmIdStr,
@@ -963,12 +951,6 @@ export class VMService {
         );
         upid = startResponse.data.data;
         operation = 'start';
-        logger.info('[VMPowerOn] Proxmox cold-start fallback accepted', {
-          vmId: vmIdStr,
-          vmid: vm.vmid,
-          node: vm.node,
-          upid,
-        });
       }
     } else {
       const response = await proxmoxClient.post<{ data: string }>(
@@ -976,26 +958,10 @@ export class VMService {
         {}
       );
       upid = response.data.data;
-      logger.info('[VMPowerOn] Proxmox cold start API accepted', {
-        vmId: vmIdStr,
-        vmid: vm.vmid,
-        node: vm.node,
-        upid,
-      });
     }
 
-    const pollResult = await pollTask(upid, vm.node);
-
-    logger.info('[VMPowerOn] Proxmox task poll finished', {
-      vmId: vmIdStr,
-      vmid: vm.vmid,
-      node: vm.node,
-      operation,
-      proxmoxApiPath,
-      upid,
-      pollResult: pollResult.result,
-      exitstatus: pollResult.exitstatus ?? null,
-    });
+    let finalUpid = upid;
+    let pollResult = await pollTask(upid, vm.node);
 
     if (pollResult.result === 'failed') {
       const proxmoxAfterFail = await probeProxmoxPowerState(vm.node, vm.vmid);
@@ -1027,6 +993,52 @@ export class VMService {
       );
     }
 
+    let resumeFollowUp = false;
+    if (operation === 'resume') {
+      const assessment = await assessResumeOutcome(vm.node, vm.vmid, finalUpid);
+
+      if (assessment.needsRetry) {
+        resumeFollowUp = true;
+        logger.warn('[VMPowerOn] Incomplete resume — issuing follow-up resume', {
+          vmId: vmIdStr,
+          vmid: vm.vmid,
+          reason: assessment.reason,
+          firstUpid: finalUpid,
+        });
+
+        const retryResponse = await proxmoxClient.post<{ data: string }>(
+          `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
+          {}
+        );
+        finalUpid = retryResponse.data.data;
+        pollResult = await pollTask(finalUpid, vm.node);
+
+        if (pollResult.result !== 'success') {
+          throw new VMOperationError(
+            'VM resume did not complete after retry. Check Proxmox task logs.',
+            vm.status,
+            'stopped'
+          );
+        }
+      }
+
+      const guestReady = await waitForVmGuestReady(vm.node, vm.vmid);
+      if (!guestReady) {
+        logger.error('[VMPowerOn] Resume tasks OK but guest never became ready', {
+          vmId: vmIdStr,
+          vmid: vm.vmid,
+          node: vm.node,
+          resumeFollowUp,
+          finalUpid,
+        });
+        throw new VMOperationError(
+          'VM resume did not fully wake the guest. Try Resume again or cold-start the VM.',
+          vm.status,
+          'stopped'
+        );
+      }
+    }
+
     const proxmoxAfterTask = await probeProxmoxPowerState(vm.node, vm.vmid);
     const proxmoxLiveRunning =
       'status' in proxmoxAfterTask && proxmoxAfterTask.status === 'running';
@@ -1038,7 +1050,7 @@ export class VMService {
         node: vm.node,
         operation,
         proxmoxApiPath,
-        upid,
+        upid: finalUpid,
         proxmoxPowerState: 'status' in proxmoxAfterTask ? proxmoxAfterTask.status : null,
         proxmoxProbeError: 'error' in proxmoxAfterTask ? proxmoxAfterTask.error : null,
       });
@@ -1047,30 +1059,40 @@ export class VMService {
     vm.status = 'running';
     vm.proxmoxStatus = 'running';
     vm.isHibernated = false;
-    vm.consoleReady = false;
+    vm.consoleReady = operation === 'resume';
     await vm.save();
 
-    logger.info('[VMPowerOn] DB updated after power-on', {
+    logger.info('[VMPowerOn] Power-on complete', {
       vmId: vmIdStr,
       vmid: vm.vmid,
-      node: vm.node,
       operation,
-      dbStatus: vm.status,
-      dbIsHibernated: vm.isHibernated,
-      dbConsoleReady: vm.consoleReady,
-      proxmoxPowerState: 'status' in proxmoxAfterTask ? proxmoxAfterTask.status : null,
-      proxmoxLiveMatchesDb: proxmoxLiveRunning,
+      upid: finalUpid,
+      resumeFollowUp,
+      consoleReady: vm.consoleReady,
+      triggeredBy: audit.userAgent,
     });
 
-    const pollTrigger = `power-on:${operation}:${audit.userAgent}`;
-    void startIpPolling(vm, pollTrigger).catch((err: unknown) => {
-      logger.error('[VMConsolePoll] Unhandled error in IP polling', {
-        vmId: vmIdStr,
-        vmid: vm.vmid,
-        trigger: pollTrigger,
-        error: err instanceof Error ? err.message : String(err),
+    if (operation === 'start') {
+      const pollTrigger = `power-on:${operation}:${audit.userAgent}`;
+      void startIpPolling(vm, pollTrigger, { mode: 'cold-start' }).catch((err: unknown) => {
+        logger.error('[VMConsolePoll] Unhandled error in IP polling', {
+          vmId: vmIdStr,
+          vmid: vm.vmid,
+          trigger: pollTrigger,
+          error: err instanceof Error ? err.message : String(err),
+        });
       });
-    });
+    } else {
+      const pollTrigger = `power-on:${operation}:${audit.userAgent}`;
+      void startIpPolling(vm, pollTrigger, { mode: 'resume' }).catch((err: unknown) => {
+        logger.error('[VMConsolePoll] Unhandled error in IP polling', {
+          vmId: vmIdStr,
+          vmid: vm.vmid,
+          trigger: pollTrigger,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
 
     await VMEvent.create({
       vmId: vm._id,
@@ -1082,15 +1104,17 @@ export class VMService {
         node: vm.node,
         mode: operation,
         proxmoxApiPath,
-        upid,
+        upid: finalUpid,
+        resumeFollowUp,
         proxmoxLiveStatus: 'status' in proxmoxAfterTask ? proxmoxAfterTask.status : null,
+        proxmoxQmpStatus: 'qmpstatus' in proxmoxAfterTask ? proxmoxAfterTask.qmpstatus : null,
         proxmoxLiveMatchesDb: proxmoxLiveRunning,
       },
       ipAddress: audit.ipAddress,
       userAgent: audit.userAgent,
     });
 
-    return { success: true, vmid: vm.vmid, node: vm.node, operation, taskId: upid };
+    return { success: true, vmid: vm.vmid, node: vm.node, operation, taskId: finalUpid };
   }
 
   async startVM(
@@ -1110,16 +1134,6 @@ export class VMService {
     if (vm.status === 'running') {
       throw new VMOperationError('VM is already running.', vm.status, 'stopped');
     }
-
-    logger.info('[VMPowerOn] startVM requested', {
-      vmId: vmId.toString(),
-      vmid: vm.vmid,
-      dbStatus: vm.status,
-      dbIsHibernated: vm.isHibernated,
-      willResume: vm.isHibernated === true,
-      userId: adminId.toString(),
-      clientIp: ip,
-    });
 
     return this.powerOnStoppedVm(vm, adminId, { ipAddress: ip, userAgent: ua });
   }
@@ -1339,21 +1353,6 @@ export class VMService {
     audit: { ipAddress: string; userAgent: string }
   ): Promise<VMOperationResult> {
     const vmIdStr = vm._id.toString();
-    const proxmoxBefore = await probeProxmoxPowerState(vm.node, vm.vmid);
-
-    logger.info('[VMHibernate] Starting hibernate flow', {
-      vmId: vmIdStr,
-      vmid: vm.vmid,
-      node: vm.node,
-      dbStatus: vm.status,
-      dbIsHibernated: vm.isHibernated,
-      dbConsoleReady: vm.consoleReady,
-      dbIpAddress: vm.ipAddress ?? null,
-      proxmoxPowerState: 'status' in proxmoxBefore ? proxmoxBefore.status : null,
-      proxmoxProbeError: 'error' in proxmoxBefore ? proxmoxBefore.error : null,
-      triggeredBy: audit.userAgent,
-      clientIp: audit.ipAddress,
-    });
 
     const response = await proxmoxClient.post<{ data: string }>(
       `/nodes/${vm.node}/qemu/${vm.vmid}/status/suspend`,
@@ -1361,25 +1360,7 @@ export class VMService {
     );
     const upid = response.data.data;
 
-    logger.info('[VMHibernate] Proxmox suspend API accepted', {
-      vmId: vmIdStr,
-      vmid: vm.vmid,
-      node: vm.node,
-      upid,
-      proxmoxApiPath: 'status/suspend',
-      todisk: 1,
-    });
-
     const pollResult = await pollTask(upid, vm.node);
-
-    logger.info('[VMHibernate] Proxmox task poll finished', {
-      vmId: vmIdStr,
-      vmid: vm.vmid,
-      node: vm.node,
-      upid,
-      pollResult: pollResult.result,
-      exitstatus: pollResult.exitstatus ?? null,
-    });
 
     if (pollResult.result === 'failed') {
       const proxmoxAfterFail = await probeProxmoxPowerState(vm.node, vm.vmid);
@@ -1419,14 +1400,20 @@ export class VMService {
       (proxmoxAfterTask.status === 'stopped' || proxmoxAfterTask.status === 'paused');
 
     if (!proxmoxLiveStopped) {
-      logger.warn('[VMHibernate] Task OK but Proxmox live status is not stopped/paused', {
+      logger.error('[VMHibernate] Task OK but Proxmox is not stopped — DB unchanged', {
         vmId: vmIdStr,
         vmid: vm.vmid,
         node: vm.node,
         upid,
         proxmoxPowerState: 'status' in proxmoxAfterTask ? proxmoxAfterTask.status : null,
+        proxmoxQmpStatus: 'qmpstatus' in proxmoxAfterTask ? proxmoxAfterTask.qmpstatus : null,
         proxmoxProbeError: 'error' in proxmoxAfterTask ? proxmoxAfterTask.error : null,
       });
+      throw new VMOperationError(
+        'VM hibernate task finished but the VM is not stopped in Proxmox. Check Proxmox task logs.',
+        vm.status,
+        'running'
+      );
     }
 
     vm.status = 'stopped';
@@ -1435,18 +1422,11 @@ export class VMService {
     vm.consoleReady = false;
     await vm.save();
 
-    logger.info('[VMHibernate] DB updated after hibernate', {
+    logger.info('[VMHibernate] Hibernate complete', {
       vmId: vmIdStr,
       vmid: vm.vmid,
-      node: vm.node,
       upid,
-      dbStatus: vm.status,
-      dbIsHibernated: vm.isHibernated,
-      dbConsoleReady: vm.consoleReady,
-      dbIpAddress: vm.ipAddress ?? null,
-      proxmoxPowerState: 'status' in proxmoxAfterTask ? proxmoxAfterTask.status : null,
-      proxmoxLiveMatchesDb: proxmoxLiveStopped,
-      canResumeExpected: true,
+      triggeredBy: audit.userAgent,
     });
 
     await VMEvent.create({
@@ -1496,16 +1476,14 @@ export class VMService {
       throw new VMOperationError('VM must be running to hibernate.', vm.status, 'running');
     }
 
-    logger.info('[VMHibernate] Manual hibernate requested', {
-      vmId: vmId.toString(),
-      vmid: vm.vmid,
-      node: vm.node,
-      dbStatus: vm.status,
-      dbIsHibernated: vm.isHibernated,
-      userId: adminId.toString(),
-      userRole: authReq.user.role,
-      clientIp: ip,
-    });
+    const proxmoxProbe = await probeProxmoxVmState(vm.node, vm.vmid);
+    if (!('error' in proxmoxProbe) && isQmpPrelaunch(proxmoxProbe.qmpstatus)) {
+      throw new VMOperationError(
+        'VM is still waking from hibernate and cannot be hibernated yet.',
+        vm.status,
+        'running'
+      );
+    }
 
     return this.hibernateVmToDisk(vm, adminId, { ipAddress: ip, userAgent: ua });
   }
@@ -1517,7 +1495,7 @@ export class VMService {
   async hibernateVmAutomation(
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
-  ): Promise<VMOperationResult | null> {
+  ): Promise<VMOperationResult | null | { deferred: true }> {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     if (vm.adminId.toString() !== adminId.toString()) {
@@ -1536,13 +1514,15 @@ export class VMService {
       return null;
     }
 
-    logger.info('[VMHibernate] Automation hibernate starting', {
-      vmId: vm._id.toString(),
-      vmid: vm.vmid,
-      node: vm.node,
-      dbStatus: vm.status,
-      dbIsHibernated: vm.isHibernated,
-    });
+    const proxmoxProbe = await probeProxmoxVmState(vm.node, vm.vmid);
+    if (!('error' in proxmoxProbe) && isQmpPrelaunch(proxmoxProbe.qmpstatus)) {
+      logger.info('[VMHibernate] Automation hibernate deferred — VM in prelaunch', {
+        vmId: vm._id.toString(),
+        vmid: vm.vmid,
+        qmpstatus: proxmoxProbe.qmpstatus,
+      });
+      return { deferred: true };
+    }
 
     return this.hibernateVmToDisk(vm, adminId, {
       ipAddress: 'automation',
@@ -1565,7 +1545,6 @@ export class VMService {
     }
 
     if (vm.status === 'running') {
-      logger.info('[Automation] Resume skipped — VM already running', { vmId: vm._id.toString() });
       return null;
     }
 
@@ -1653,21 +1632,62 @@ export class VMService {
       if (usedBytes > 0) diskUsedGb = bytesToGb(usedBytes);
     }
 
-    // Update proxmox status in MongoDB
-    const mappedStatus = mapProxmoxStatus(live.status);
-    if (mappedStatus !== vm.status) {
-      logger.warn('[VMStatusSync] Overwriting DB status from Proxmox live probe', {
+    const syncPlan = planVmStatusDbSync(live, {
+      status: vm.status,
+      isHibernated: vm.isHibernated,
+    });
+
+    const statusUpdate: Record<string, unknown> = {};
+    if (live.status !== vm.proxmoxStatus) {
+      statusUpdate.proxmoxStatus = live.status;
+    }
+
+    if (!syncPlan.skipStatusSync) {
+      if (syncPlan.status !== undefined && syncPlan.status !== vm.status) {
+        statusUpdate.status = syncPlan.status;
+      }
+      if (syncPlan.isHibernated !== undefined && syncPlan.isHibernated !== vm.isHibernated) {
+        statusUpdate.isHibernated = syncPlan.isHibernated;
+      }
+    } else if (syncPlan.reason) {
+      logger.debug('[VMStatusSync] Skipped DB power sync', {
         vmId: vmId.toString(),
         vmid: vm.vmid,
-        node: vm.node,
-        dbStatusBefore: vm.status,
-        dbProxmoxStatusBefore: vm.proxmoxStatus,
+        reason: syncPlan.reason,
+        dbStatus: vm.status,
         dbIsHibernated: vm.isHibernated,
-        dbConsoleReady: vm.consoleReady,
         proxmoxLiveStatus: live.status,
-        mappedStatus,
+        proxmoxQmpStatus: live.qmpstatus ?? null,
       });
-      await VM.findByIdAndUpdate(vmId, { status: mappedStatus, proxmoxStatus: live.status });
+    }
+
+    if (Object.keys(statusUpdate).length > 0) {
+      const filter: Record<string, unknown> = { _id: vmId };
+      if (statusUpdate.status !== undefined) {
+        filter.status = vm.status;
+      }
+
+      const updated = await VM.findOneAndUpdate(filter, { $set: statusUpdate }, { new: true });
+
+      if (!updated && statusUpdate.status !== undefined) {
+        logger.debug('[VMStatusSync] Skipped — DB status changed during live probe', {
+          vmId: vmId.toString(),
+          vmid: vm.vmid,
+          dbStatusAtRead: vm.status,
+          proxmoxLiveStatus: live.status,
+          plannedStatus: syncPlan.status,
+        });
+      } else if (updated && statusUpdate.status !== undefined) {
+        logger.debug('[VMStatusSync] DB power fields updated from live probe', {
+          vmId: vmId.toString(),
+          vmid: vm.vmid,
+          dbStatusBefore: vm.status,
+          dbIsHibernatedBefore: vm.isHibernated,
+          proxmoxLiveStatus: live.status,
+          proxmoxQmpStatus: live.qmpstatus ?? null,
+          plannedStatus: syncPlan.status,
+        });
+      }
     }
 
     return {
@@ -1734,7 +1754,7 @@ export class VMService {
   ): Promise<VMDetails> {
     const authReq = req as AuthenticatedRequest;
 
-    const vm = await VM.findById(vmId);
+    let vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
 
@@ -1745,6 +1765,10 @@ export class VMService {
     } catch {
       // Live status unavailable — return stored data only
     }
+
+    // Reload after live probe — getVMStatus may have updated DB fields.
+    const freshVm = await VM.findById(vmId);
+    if (freshVm) vm = freshVm;
 
     // Get recent events
     const recentEvents = await VMEvent.find({ vmId })
@@ -2486,17 +2510,3 @@ export class VMService {
 }
 
 export const vmService = new VMService();
-
-// ─── Private helpers ──────────────────────────────────────────────────────────
-
-function mapProxmoxStatus(
-  proxmoxStatus: string
-): 'running' | 'stopped' | 'paused' | 'suspended' | 'error' {
-  switch (proxmoxStatus) {
-    case 'running': return 'running';
-    case 'stopped': return 'stopped';
-    case 'paused': return 'paused';
-    case 'suspended': return 'suspended';
-    default: return 'error';
-  }
-}
