@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useAuth } from '../../../../context/AuthContext';
 import {
   fetchMyVMs,
@@ -42,7 +42,7 @@ export default function AutomationPage() {
 
   const [vms, setVms] = useState<IVM[]>([]);
   const [automations, setAutomations] = useState<VmAutomation[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -56,23 +56,31 @@ export default function AutomationPage() {
   const [endDate, setEndDate] = useState('');
   const [timezone, setTimezone] = useState('Asia/Kolkata');
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    try {
-      const [vmList, automationList] = await Promise.all([fetchMyVMs(), fetchVmAutomations()]);
-      setVms(vmList);
-      setAutomations(automationList);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load automation data.');
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
   useEffect(() => {
-    if (isAuthenticated) void load();
-  }, [isAuthenticated, load]);
+    if (!isAuthenticated) return;
+
+    let cancelled = false;
+    setInitialLoading(true);
+    setError(null);
+
+    void Promise.all([fetchMyVMs(), fetchVmAutomations()])
+      .then(([vmList, automationList]) => {
+        if (cancelled) return;
+        setVms(vmList);
+        setAutomations(automationList);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setError(err instanceof ApiError ? err.message : 'Failed to load automation data.');
+      })
+      .finally(() => {
+        if (!cancelled) setInitialLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
 
   function toggleVm(vmId: string) {
     setSelectedVmIds((prev) => {
@@ -114,7 +122,7 @@ export default function AutomationPage() {
 
     setSubmitting(true);
     try {
-      await createVmAutomation({
+      const created = await createVmAutomation({
         name: name.trim(),
         vmIds: Array.from(selectedVmIds),
         startTime,
@@ -123,9 +131,10 @@ export default function AutomationPage() {
         endDate,
         timezone,
       });
+      setAutomations((prev) => [created, ...prev]);
       setName('');
       setSelectedVmIds(new Set());
-      await load();
+      setError(null);
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : 'Failed to create automation.');
     } finally {
@@ -135,9 +144,10 @@ export default function AutomationPage() {
 
   async function handleToggleActive(automation: VmAutomation) {
     setActionId(automation._id);
+    setError(null);
     try {
-      await updateVmAutomation(automation._id, { isActive: !automation.isActive });
-      await load();
+      const updated = await updateVmAutomation(automation._id, { isActive: !automation.isActive });
+      setAutomations((prev) => prev.map((a) => (a._id === updated._id ? updated : a)));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to update automation.');
     } finally {
@@ -148,9 +158,10 @@ export default function AutomationPage() {
   async function handleDelete(automationId: string) {
     if (!confirm('Delete this automation? Scheduled hibernate/resume will stop.')) return;
     setActionId(automationId);
+    setError(null);
     try {
       await deleteVmAutomation(automationId);
-      await load();
+      setAutomations((prev) => prev.filter((a) => a._id !== automationId));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to delete automation.');
     } finally {
@@ -158,7 +169,7 @@ export default function AutomationPage() {
     }
   }
 
-  if (loading) {
+  if (initialLoading) {
     return (
       <div className="flex items-center justify-center min-h-[40vh]">
         <Loader2 className="w-6 h-6 animate-spin text-gray-400" />
@@ -225,16 +236,26 @@ export default function AutomationPage() {
                       : 'bg-gray-50 text-gray-500 border-gray-200'
                   }`}
                 >
-                  {actionId === a._id ? '…' : a.isActive ? 'Active' : 'Paused'}
+                  {actionId === a._id ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : a.isActive ? (
+                    'Active'
+                  ) : (
+                    'Paused'
+                  )}
                 </button>
                 <button
                   type="button"
                   onClick={() => void handleDelete(a._id)}
                   disabled={actionId === a._id}
-                  className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50"
+                  className="p-2 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50"
                   aria-label="Delete automation"
                 >
-                  <Trash2 className="w-4 h-4" />
+                  {actionId === a._id ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
                 </button>
               </div>
             ))}
