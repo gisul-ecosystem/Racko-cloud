@@ -823,6 +823,90 @@ export class VMService {
   /**
    * Start a VM (graceful).
    */
+  /**
+   * Power on a stopped VM — resumes from hibernate when isHibernated, otherwise cold start.
+   */
+  private async powerOnStoppedVm(
+    vm: IVM & { _id: mongoose.Types.ObjectId; save(): Promise<unknown> },
+    adminId: mongoose.Types.ObjectId,
+    audit: { ipAddress: string; userAgent: string }
+  ): Promise<VMOperationResult> {
+    let upid: string;
+    let operation: 'resume' | 'start' = 'start';
+
+    if (vm.isHibernated) {
+      operation = 'resume';
+      try {
+        const response = await proxmoxClient.post<{ data: string }>(
+          `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
+          {}
+        );
+        upid = response.data.data;
+      } catch (err) {
+        logger.warn('Resume failed — falling back to cold start', {
+          vmId: vm._id.toString(),
+          error: err instanceof Error ? err.message : String(err),
+        });
+        const startResponse = await proxmoxClient.post<{ data: string }>(
+          `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
+          {}
+        );
+        upid = startResponse.data.data;
+        operation = 'start';
+      }
+    } else {
+      const response = await proxmoxClient.post<{ data: string }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
+        {}
+      );
+      upid = response.data.data;
+    }
+
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult.result === 'failed') {
+      throw new VMOperationError(
+        `VM failed to ${operation}. Check Proxmox task logs.`,
+        vm.status,
+        'stopped'
+      );
+    }
+    if (pollResult.result === 'unknown') {
+      throw new VMOperationError(
+        `VM ${operation} outcome unknown due to a connectivity issue. Refresh to check actual status.`,
+        vm.status,
+        'stopped'
+      );
+    }
+
+    vm.status = 'running';
+    vm.proxmoxStatus = 'running';
+    vm.isHibernated = false;
+    vm.consoleReady = false;
+    await vm.save();
+
+    void startIpPolling(vm).catch((err: unknown) => {
+      logger.error('Unhandled error in IP polling', {
+        vmId: vm._id.toString(),
+        vmid: vm.vmid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: operation === 'resume' ? 'VM_RESUMED' : 'VM_STARTED',
+      status: 'success',
+      details: { node: vm.node, mode: operation },
+      ipAddress: audit.ipAddress,
+      userAgent: audit.userAgent,
+    });
+
+    return { success: true, vmid: vm.vmid, node: vm.node, operation, taskId: upid };
+  }
+
   async startVM(
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
@@ -841,44 +925,7 @@ export class VMService {
       throw new VMOperationError('VM is already running.', vm.status, 'stopped');
     }
 
-    const response = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
-      {}
-    );
-    const upid = response.data.data;
-    const pollResult = await pollTask(upid, vm.node);
-
-    if (pollResult.result === 'failed') {
-      throw new VMOperationError('VM failed to start. Check Proxmox task logs.', vm.status, 'stopped');
-    }
-    if (pollResult.result === 'unknown') {
-      throw new VMOperationError('VM start outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'stopped');
-    }
-
-    vm.status = 'running';
-    vm.proxmoxStatus = 'running';
-    // Reset until the new boot resolves an IP and cloudbase-init settles. Avoids a
-    // stale "ready" flag from a previous start leaving the console enabled too early.
-    vm.consoleReady = false;
-    await vm.save();
-
-    // Fire-and-forget: resolve the VM's private IP in the background once the
-    // guest agent is up. Never awaited — the start response returns immediately.
-    void startIpPolling(vm).catch((err: unknown) => {
-      logger.error('Unhandled error in IP polling', {
-        vmId: vm._id.toString(),
-        vmid: vm.vmid,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    });
-
-    await VMEvent.create({
-      vmId: vm._id, vmid: vm.vmid, adminId,
-      event: 'VM_STARTED', status: 'success',
-      details: { node: vm.node }, ipAddress: ip, userAgent: ua,
-    });
-
-    return { success: true, vmid: vm.vmid, node: vm.node, operation: 'start', taskId: upid };
+    return this.powerOnStoppedVm(vm, adminId, { ipAddress: ip, userAgent: ua });
   }
 
   /**
@@ -918,6 +965,7 @@ export class VMService {
 
     vm.status = 'stopped';
     vm.proxmoxStatus = 'stopped';
+    vm.isHibernated = false;
     await vm.save();
 
     await VMEvent.create({
@@ -965,6 +1013,7 @@ export class VMService {
 
     vm.status = 'stopped';
     vm.proxmoxStatus = 'stopped';
+    vm.isHibernated = false;
     await vm.save();
 
     await VMEvent.create({
@@ -1126,6 +1175,7 @@ export class VMService {
 
     vm.status = 'stopped';
     vm.proxmoxStatus = 'stopped';
+    vm.isHibernated = true;
     vm.consoleReady = false;
     await vm.save();
 
@@ -1162,70 +1212,10 @@ export class VMService {
       return null;
     }
 
-    let upid: string;
-    let operation: 'resume' | 'start' = 'resume';
-
-    try {
-      const response = await proxmoxClient.post<{ data: string }>(
-        `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
-        {}
-      );
-      upid = response.data.data;
-    } catch (err) {
-      logger.warn('[Automation] Resume failed — falling back to start', {
-        vmId: vm._id.toString(),
-        error: err instanceof Error ? err.message : String(err),
-      });
-      const startResponse = await proxmoxClient.post<{ data: string }>(
-        `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
-        {}
-      );
-      upid = startResponse.data.data;
-      operation = 'start';
-    }
-
-    const pollResult = await pollTask(upid, vm.node);
-
-    if (pollResult.result === 'failed') {
-      throw new VMOperationError(
-        `VM failed to ${operation}. Check Proxmox task logs.`,
-        vm.status,
-        'stopped'
-      );
-    }
-    if (pollResult.result === 'unknown') {
-      throw new VMOperationError(
-        `VM ${operation} outcome unknown due to a connectivity issue. Refresh to check actual status.`,
-        vm.status,
-        'stopped'
-      );
-    }
-
-    vm.status = 'running';
-    vm.proxmoxStatus = 'running';
-    vm.consoleReady = false;
-    await vm.save();
-
-    void startIpPolling(vm).catch((pollErr: unknown) => {
-      logger.error('Unhandled error in IP polling after automation resume', {
-        vmId: vm._id.toString(),
-        vmid: vm.vmid,
-        error: pollErr instanceof Error ? pollErr.message : String(pollErr),
-      });
-    });
-
-    await VMEvent.create({
-      vmId: vm._id,
-      vmid: vm.vmid,
-      adminId,
-      event: 'VM_RESUMED',
-      status: 'success',
-      details: { node: vm.node, mode: operation },
+    return this.powerOnStoppedVm(vm, adminId, {
       ipAddress: 'automation',
       userAgent: 'vm-automation-scheduler',
     });
-
-    return { success: true, vmid: vm.vmid, node: vm.node, operation, taskId: upid };
   }
 
   /**
@@ -1430,6 +1420,7 @@ export class VMService {
             })),
         automationManaged: automationPower.automationManaged,
         automationSchedule: automationPower.automationSchedule,
+        canResume: vm.isHibernated && vm.status === 'stopped',
         createdAt: vm.createdAt,
         updatedAt: vm.updatedAt,
       },

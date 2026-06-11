@@ -141,6 +141,7 @@ export interface VMDetails {
       stopTime: string;
       timezone: string;
     };
+    canResume?: boolean;
     createdAt: string;
     updatedAt: string;
   };
