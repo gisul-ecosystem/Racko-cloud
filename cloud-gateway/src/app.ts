@@ -8,6 +8,7 @@ import { corsOptions } from './config/cors';
 import { GatewayError } from './utils/errors';
 import { logger } from './utils/logger';
 import { config } from './config';
+import cloudAutomationRoutes from './routes/cloudAutomation.routes';
 import proxyRoutes from './routes/proxy.routes';
 
 const app = express();
@@ -44,6 +45,8 @@ app.get('/health', (_req, res) => {
 });
 
 // ─── PROXY ROUTES ─────────────────────────────────────────────────────────────
+// Cloud automation (Type 1 admin APIs) — must register before core-api catch-all
+app.use(cloudAutomationRoutes);
 app.use(proxyRoutes);
 
 // ─── ERROR HANDLER ────────────────────────────────────────────────────────────
