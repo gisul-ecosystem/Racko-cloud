@@ -19,6 +19,7 @@ import {
   vmActionCompletionField,
   type VmAutomationAction,
 } from './vmAutomationCompletion';
+import { assertNoAutomationConflicts } from './vmAutomationConflict';
 
 export interface CreateVmAutomationDto {
   name: string;
@@ -107,10 +108,21 @@ export class VmAutomationService {
 
   async create(adminId: string, role: string, dto: CreateVmAutomationDto) {
     const vmObjectIds = await assertVmsAccessible(dto.vmIds, adminId, role);
+    const ownerId = new mongoose.Types.ObjectId(adminId);
+
+    await assertNoAutomationConflicts(ownerId, {
+      startTime: dto.startTime,
+      stopTime: dto.stopTime,
+      startDate: dto.startDate,
+      endDate: dto.endDate,
+      timezone: dto.timezone || 'UTC',
+      vmIds: vmObjectIds.map((id) => id.toString()),
+      isActive: true,
+    });
 
     const doc = await VmAutomation.create({
       name: dto.name,
-      adminId: new mongoose.Types.ObjectId(adminId),
+      adminId: ownerId,
       vmIds: vmObjectIds,
       startTime: dto.startTime,
       stopTime: dto.stopTime,
@@ -148,9 +160,25 @@ export class VmAutomationService {
       doc.vmIds = await assertVmsAccessible(dto.vmIds, doc.adminId.toString(), role);
     }
 
-    if (dto.startDate && dto.endDate && dto.startDate > dto.endDate) {
+    const startDateStr = doc.startDate.toISOString().slice(0, 10);
+    const endDateStr = doc.endDate.toISOString().slice(0, 10);
+    if (startDateStr > endDateStr) {
       throw new ValidationError('endDate must be on or after startDate.');
     }
+
+    await assertNoAutomationConflicts(
+      doc.adminId,
+      {
+        startTime: doc.startTime,
+        stopTime: doc.stopTime,
+        startDate: startDateStr,
+        endDate: endDateStr,
+        timezone: doc.timezone,
+        vmIds: doc.vmIds.map((id) => id.toString()),
+        isActive: doc.isActive,
+      },
+      doc._id
+    );
 
     await doc.save();
     return serializeAutomation(doc);

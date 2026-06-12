@@ -116,7 +116,7 @@ const navLinks: NavLink[] = [
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, isLoading, isAuthenticated, logout } = useAuth();
+  const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -224,32 +224,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             );
           })}
         </nav>
-
-        {/* User footer */}
-        <div className="p-4 border-t border-gray-100">
-          <div className="flex items-center gap-3 px-2 mb-3">
-            <div className="w-8 h-8 rounded-full bg-[#B91C1C] flex items-center justify-center text-white text-xs font-bold shrink-0">
-              {user.email[0]?.toUpperCase()}
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className="text-xs text-gray-900 font-medium truncate">{user.email}</p>
-              <span className={`inline-block text-xs px-1.5 py-0.5 rounded font-medium mt-0.5 ${
-                user.role === 'super_admin'
-                  ? 'bg-purple-100 text-purple-700'
-                  : user.role === 'admin'
-                  ? 'bg-blue-100 text-blue-700'
-                  : 'bg-green-100 text-green-700'
-              }`}>
-                {user.role === 'super_admin' ? 'Super Admin' : user.role === 'admin' ? 'Admin' : 'User'}
-              </span>
-            </div>
-          </div>
-          <button
-            onClick={logout}
-            className="w-full text-xs font-medium text-white bg-[#B91C1C] hover:bg-[#DC2626] px-3 py-2 rounded-lg transition text-left"          >
-            Sign out
-          </button>
-        </div>
       </aside>
 
       {/* Main content */}

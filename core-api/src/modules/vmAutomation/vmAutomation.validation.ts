@@ -22,6 +22,10 @@ export const createVmAutomationSchema = z.object({
     .refine((d) => d.startDate <= d.endDate, {
       message: 'endDate must be on or after startDate',
       path: ['endDate'],
+    })
+    .refine((d) => d.startTime < d.stopTime, {
+      message: 'startTime must be before stopTime',
+      path: ['stopTime'],
     }),
 });
 
@@ -46,6 +50,13 @@ export const updateVmAutomationSchema = z.object({
         return true;
       },
       { message: 'endDate must be on or after startDate', path: ['endDate'] }
+    )
+    .refine(
+      (d) => {
+        if (d.startTime && d.stopTime) return d.startTime < d.stopTime;
+        return true;
+      },
+      { message: 'startTime must be before stopTime', path: ['stopTime'] }
     ),
 });
 
