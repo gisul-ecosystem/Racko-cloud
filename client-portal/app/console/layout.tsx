@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
 import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
 import { ConsoleProvider, useConsoleShell } from '../../components/console/ConsoleContext';
@@ -32,6 +32,12 @@ function ConsoleShell({ children }: { children: React.ReactNode }) {
 export default function ConsoleLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
+  const pathname = usePathname();
+
+  // Elastic Servers has its own full sidebar layout — bypass the console shell
+  // (ConsoleSidebar + ConsoleTopBar) for those routes. Auth is still enforced
+  // here and re-checked in the nested elastic-servers layout.
+  const isElastic = pathname?.startsWith('/console/elastic-servers') ?? false;
 
   useEffect(() => {
     if (isLoading) return;
@@ -55,6 +61,10 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
   }
 
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
+
+  if (isElastic) {
+    return <>{children}</>;
+  }
 
   return (
     <ConsoleProvider>

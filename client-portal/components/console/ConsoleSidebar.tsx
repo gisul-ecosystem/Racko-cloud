@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { LayoutGrid } from 'lucide-react';
+import { LayoutGrid, Boxes } from 'lucide-react';
 import { useConsoleShell } from './ConsoleContext';
 
 export function ConsoleSidebar() {
@@ -53,6 +53,13 @@ export function ConsoleSidebar() {
             >
               <LayoutGrid className="h-4 w-4 shrink-0 text-[#B91C1C]" />
               Services
+            </Link>
+            <Link
+              href="/console/elastic-servers"
+              className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+            >
+              <Boxes className="h-4 w-4 shrink-0 text-gray-400" />
+              Elastic Servers
             </Link>
           </nav>
         </div>

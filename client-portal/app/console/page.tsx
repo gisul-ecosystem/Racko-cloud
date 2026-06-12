@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Server } from 'lucide-react';
+import { Server, Globe } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
+import { RecentExternalServersTable } from '../../components/console/RecentExternalServersTable';
 
 const services = [
   {
@@ -10,6 +11,15 @@ const services = [
     name: 'VPS Hosting',
     href: '/dashboard/admin',
     icon: Server,
+    description: 'Provision and manage Racko cloud virtual machines',
+    available: true,
+  },
+  {
+    id: 'elastic',
+    name: 'Elastic Server Import',
+    href: '/console/elastic-servers',
+    icon: Globe,
+    description: 'Connect to external servers from any provider via secure browser console',
     available: true,
   },
 ] as const;
@@ -20,7 +30,7 @@ export default function ConsolePage() {
       <section>
         <h1 className="mb-5 text-2xl font-bold text-gray-900">Racko.ai services</h1>
 
-        <div className="flex flex-wrap gap-4">
+        <div className="flex flex-wrap justify-center gap-6">
           {services.map((service) => {
             const Icon = service.icon;
 
@@ -28,12 +38,17 @@ export default function ConsolePage() {
               <Link
                 key={service.id}
                 href={service.href}
-                className="group flex w-36 flex-col items-center rounded-xl border border-gray-200 bg-white px-4 py-6 text-center shadow-sm transition hover:border-[#B91C1C] hover:shadow-md"
+                className="group flex h-[200px] w-[200px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-5 text-center shadow-sm transition hover:border-[#B91C1C] hover:shadow-md"
               >
                 <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] transition group-hover:bg-[#B91C1C] group-hover:text-white">
                   <Icon className="h-7 w-7" />
                 </div>
                 <span className="text-sm font-medium text-gray-900">{service.name}</span>
+                {service.description && (
+                  <span className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-gray-500">
+                    {service.description}
+                  </span>
+                )}
               </Link>
             );
           })}
@@ -41,6 +56,8 @@ export default function ConsolePage() {
       </section>
 
       <RecentResourcesTable />
+
+      <RecentExternalServersTable />
     </div>
   );
 }
