@@ -127,8 +127,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     clearAccessToken();
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     setState({ user: null, isLoading: false, isAuthenticated: false });
-    router.push('/login');
-  }, [router]);
+    // Full navigation so middleware sees the cleared refreshToken cookie
+    window.location.replace('/login');
+  }, []);
 
   // Listen for session-expiry events fired by apiClient when refresh fails mid-operation
   useEffect(() => {
@@ -205,7 +206,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async (): Promise<void> => {
     try {
-      await apiRequest('/api/v1/auth/logout', { method: 'POST' });
+      await apiRequest('/api/v1/auth/logout', {
+        method: 'POST',
+        skipAuth: true,
+      });
     } catch {
       // Proceed with local logout even if server call fails
     }

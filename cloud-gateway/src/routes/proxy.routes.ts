@@ -63,9 +63,9 @@ router.post('/api/v1/auth/register', registerRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/login', loginFailedRateLimiter, loginSlowDown, coreApiProxy);
 router.post('/api/v1/auth/verify-email', verifyEmailRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/refresh', coreApiProxy);
+router.post('/api/v1/auth/logout', coreApiProxy);
 
 // ─── PROTECTED AUTH ROUTES ────────────────────────────────────────────────────
-router.post('/api/v1/auth/logout', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/auth/me', authMiddleware, verifyMiddleware, coreApiProxy);
 
 // ─── INTERNAL ROUTE (gateway → core-api only) ────────────────────────────────

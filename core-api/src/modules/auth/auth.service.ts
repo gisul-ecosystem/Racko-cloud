@@ -39,6 +39,17 @@ const REFRESH_COOKIE_OPTIONS = {
   path: '/',
 };
 
+const REFRESH_COOKIE_CLEAR_OPTIONS = {
+  httpOnly: true,
+  secure: config.NODE_ENV === 'production',
+  sameSite: 'strict' as const,
+  path: '/',
+};
+
+function clearRefreshCookie(res: Response): void {
+  res.clearCookie('refreshToken', REFRESH_COOKIE_CLEAR_OPTIONS);
+}
+
 export class AuthService {
   /**
    * Register a new admin user.
@@ -377,7 +388,7 @@ export class AuthService {
     // Verify JWT signature
     const payload = verifyRefreshToken(rawRefreshToken);
     if (!payload) {
-      res.clearCookie('refreshToken', { path: '/' });
+      clearRefreshCookie(res);
       throw new UnauthorizedError('Invalid or expired refresh token.');
     }
 
@@ -390,7 +401,7 @@ export class AuthService {
     const tokenDoc = await Token.findOne({ tokenHash: hashedToken });
 
     if (!tokenDoc) {
-      res.clearCookie('refreshToken', { path: '/' });
+      clearRefreshCookie(res);
       throw new UnauthorizedError('Refresh token not found.');
     }
 
@@ -412,20 +423,20 @@ export class AuthService {
         metadata: { family: payload.family },
       });
 
-      res.clearCookie('refreshToken', { path: '/' });
+      clearRefreshCookie(res);
       throw new UnauthorizedError('Security alert: session invalidated. Please log in again.');
     }
 
     // Check token expiry
     if (tokenDoc.expiresAt < new Date()) {
-      res.clearCookie('refreshToken', { path: '/' });
+      clearRefreshCookie(res);
       throw new UnauthorizedError('Refresh token expired.');
     }
 
     // Verify user still exists and is active
     const user = await User.findById(payload.userId);
     if (!user || !user.isActive) {
-      res.clearCookie('refreshToken', { path: '/' });
+      clearRefreshCookie(res);
       throw new UnauthorizedError('User not found or inactive.');
     }
 
@@ -509,7 +520,7 @@ export class AuthService {
       }
     }
 
-    res.clearCookie('refreshToken', { path: '/' });
+    clearRefreshCookie(res);
     return { message: 'Logged out successfully.' };
   }
 
