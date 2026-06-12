@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { Cloud, Globe, Server } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
-import { RecentExternalServersTable } from '../../components/console/RecentExternalServersTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 
 const services = [
@@ -65,8 +64,6 @@ export default function ConsolePage() {
       </section>
 
       <RecentResourcesTable />
-
-      <RecentExternalServersTable />
     </div>
   );
 }
