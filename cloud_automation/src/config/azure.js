@@ -1,6 +1,6 @@
 const { ClientSecretCredential } = require('@azure/identity');
 const AppError = require('../utils/AppError');
-
+ 
 const REQUIRED_ENV_VARS = [
   'AZURE_CLIENT_ID',
   'AZURE_CLIENT_SECRET',
