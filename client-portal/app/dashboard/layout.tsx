@@ -148,7 +148,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     );
   }
 
-  if (!isAuthenticated || !user) return null;
+  if (!isAuthenticated || !user) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-blue-500 border-t-transparent" />
+      </div>
+    );
+  }
 
   const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'admin' | 'super_admin' | 'user'));
 

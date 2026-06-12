@@ -27,10 +27,12 @@ router.post('/refresh', (req, res, next) => {
   authController.refreshToken(req, res, next);
 });
 
-// Protected routes
-router.post('/logout', requireAuth, (req, res, next) => {
+// Cookie-only — no access token required so sign-out always clears the session
+router.post('/logout', (req, res, next) => {
   authController.logout(req, res, next);
 });
+
+// Protected routes
 
 router.get('/me', requireAuth, (req, res, next) => {
   authController.getCurrentUser(req, res, next);
