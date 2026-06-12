@@ -1,9 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { Server, Globe } from 'lucide-react';
+import { Cloud, Globe, Server } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { RecentExternalServersTable } from '../../components/console/RecentExternalServersTable';
+import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 
 const services = [
   {
@@ -20,6 +21,14 @@ const services = [
     href: '/console/elastic-servers',
     icon: Globe,
     description: 'Connect to external servers from any provider via secure browser console',
+    available: true,
+  },
+  {
+    id: AZURE_SERVICE.id,
+    name: AZURE_SERVICE.name,
+    href: AZURE_ROUTES.dashboard,
+    icon: Cloud,
+    description: AZURE_SERVICE.description,
     available: true,
   },
 ] as const;

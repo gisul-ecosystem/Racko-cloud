@@ -26,6 +26,9 @@ jobs:
           - service: cloud-gateway
             context: cloud-gateway
             image_suffix: cloud-gateway
+          - service: cloud-automation
+            context: cloud_automation
+            image_suffix: cloud-automation
 
     steps:
       - name: Checkout
@@ -76,6 +79,8 @@ jobs:
             docker login -u '${{ secrets.DOCKERHUB_USERNAME }}' -p '${{ secrets.DOCKERHUB_TOKEN }}'
             docker compose pull
             docker compose up -d --no-deps core-api
+            sleep 10
+            docker compose up -d --no-deps cloud-automation
             sleep 10
             docker compose up -d --no-deps cloud-gateway
             sleep 10
