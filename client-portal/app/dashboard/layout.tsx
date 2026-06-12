@@ -6,6 +6,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useAuth } from '../../context/AuthContext';
 import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
+import { VpsAdminShell } from '../../components/console/VpsAdminShell';
 
 import {
   LayoutDashboard,
@@ -29,54 +30,6 @@ interface NavLink {
 }
 
 const navLinks: NavLink[] = [
-  {
-    href: '/dashboard/admin',
-    label: 'Overview',
-    icon: <LayoutDashboard className="w-4 h-4" />,
-    roles: ['admin'],
-  },
-  {
-    href: '/dashboard/admin/vms',
-    label: 'My VMs',
-    icon: <Server className="w-4 h-4" />,
-    roles: ['admin'],
-  },
-  {
-    href: '/dashboard/admin/vms/create',
-    label: 'Create VM',
-    icon: <Plus className="w-4 h-4" />,
-    roles: ['admin'],
-  },
-  {
-    href: '/dashboard/admin/jobs',
-    label: 'Jobs',
-    icon: <Briefcase className="w-4 h-4" />,
-    roles: ['admin'],
-  },
-  {
-    href: '/dashboard/admin/automation',
-    label: 'Automation',
-    icon: <Clock className="w-4 h-4" />,
-    roles: ['admin'],
-  },
-  {
-    href: '/dashboard/admin/users',
-    label: 'Users',
-    icon: <Users className="w-4 h-4" />,
-    roles: ['admin'],
-  },
-  {
-    href: '/dashboard/admin/assign-vms',
-    label: 'Assign VMs',
-    icon: <UserCheck className="w-4 h-4" />,
-    roles: ['admin'],
-  },
-  {
-    href: '/dashboard/admin/assign-vms/bulk',
-    label: 'Bulk Assign',
-    icon: <Users className="w-4 h-4" />,
-    roles: ['admin'],
-  },
   {
     href: '/dashboard/super-admin',
     label: 'Cluster',
@@ -156,20 +109,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     );
   }
 
-  const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'admin' | 'super_admin' | 'user'));
+  if (user.role === 'admin') {
+    return <VpsAdminShell>{children}</VpsAdminShell>;
+  }
+
+  const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'super_admin' | 'user'));
 
   const dashboardHome =
-    user.role === 'super_admin'
-      ? '/dashboard/super-admin'
-      : user.role === 'admin'
-        ? '/console'
-        : '/dashboard/user';
+    user.role === 'super_admin' ? '/dashboard/super-admin' : '/dashboard/user';
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Sidebar */}
       <aside className="fixed left-0 top-0 h-full w-60 bg-white border-r border-gray-200 flex flex-col shadow-sm z-30">
-        {/* Brand */}
         <div className="px-5 py-5 border-b border-gray-100">
           <Link
             href={dashboardHome}
@@ -190,21 +141,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           </Link>
         </div>
 
-        {/* Nav */}
         <nav className="flex-1 p-3 space-y-0.5 overflow-y-auto">
-          {user.role === 'admin' && (
-            <Link
-              href="/console"
-              className="flex items-center gap-3 px-3 py-2.5 mb-1 rounded-lg text-sm font-medium text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
-            >
-              <LayoutDashboard className="w-4 h-4 text-gray-400" />
-              All services
-            </Link>
-          )}
           {visibleLinks.map((link) => {
-            // Exact match for static routes; prefix match only for dynamic segments
             const isDynamic = link.href.includes('[');
-            const isActive = pathname === link.href ||
+            const isActive =
+              pathname === link.href ||
               (isDynamic && pathname.startsWith(link.href.split('[')[0]!));
             return (
               <Link
@@ -226,7 +167,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </nav>
       </aside>
 
-      {/* Main content */}
       <main className="ml-60 p-8 min-h-screen">
         {user.role === 'user' && (
           <div className="mb-6 flex justify-end">

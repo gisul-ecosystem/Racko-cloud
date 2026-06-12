@@ -3,29 +3,22 @@
 import { useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
-import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
 import { ConsoleProvider, useConsoleShell } from '../../components/console/ConsoleContext';
 import { ConsoleSidebar } from '../../components/console/ConsoleSidebar';
 import { ConsoleTopBar } from '../../components/console/ConsoleTopBar';
+import { ServiceShellLayout } from '../../components/console/ServiceShellLayout';
 
 function ConsoleShell({ children }: { children: React.ReactNode }) {
   const { sidebarOpen } = useConsoleShell();
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <ConsoleSidebar />
-
-      <div
-        className={`min-h-screen transition-all duration-300 ${
-          sidebarOpen ? 'lg:ml-60' : 'lg:ml-0'
-        }`}
-      >
-        <ConsoleTopBar />
-        <main className="p-6 lg:p-8">
-          <ErrorBoundary>{children}</ErrorBoundary>
-        </main>
-      </div>
-    </div>
+    <ServiceShellLayout
+      sidebarOpen={sidebarOpen}
+      sidebar={<ConsoleSidebar />}
+      topBar={<ConsoleTopBar />}
+    >
+      {children}
+    </ServiceShellLayout>
   );
 }
 
@@ -34,10 +27,9 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
   const router = useRouter();
   const pathname = usePathname();
 
-  // Elastic Servers has its own full sidebar layout — bypass the console shell
-  // (ConsoleSidebar + ConsoleTopBar) for those routes. Auth is still enforced
-  // here and re-checked in the nested elastic-servers layout.
-  const isElastic = pathname?.startsWith('/console/elastic-servers') ?? false;
+  const usesOwnShell =
+    (pathname?.startsWith('/console/elastic-servers') ?? false) ||
+    (pathname?.startsWith('/console/azure') ?? false);
 
   useEffect(() => {
     if (isLoading) return;
@@ -62,7 +54,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
 
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
 
-  if (isElastic) {
+  if (usesOwnShell) {
     return <>{children}</>;
   }
 
