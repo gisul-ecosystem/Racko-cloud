@@ -132,6 +132,12 @@ router.get('/api/v1/vms/:vmId/virtualization', authMiddleware, verifyMiddleware,
 router.post('/api/v1/vms/:vmId/virtualization/enable', authMiddleware, verifyMiddleware, coreApiProxy);
 router.post('/api/v1/vms/:vmId/virtualization/disable', authMiddleware, verifyMiddleware, coreApiProxy);
 
+// ─── NOTIFICATION ROUTES (admin + super_admin) ───────────────────────────────
+router.get('/api/v1/notifications', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/notifications/unread-count', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.patch('/api/v1/notifications/read-all', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.patch('/api/v1/notifications/:notificationId/read', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
 // ─── VM AUTOMATION ROUTES (admin + super_admin) ─────────────────────────────
 router.get('/api/v1/vm-automations', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/vm-automations', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);

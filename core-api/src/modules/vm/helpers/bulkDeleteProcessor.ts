@@ -7,6 +7,7 @@ import { VMJob } from '../vmJob.model';
 import { VMOperationError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { UserRole } from '../../../types';
+import { notificationService } from '../../notification/notification.service';
 
 type DeleteVMFn = (
   vmId: mongoose.Types.ObjectId,
@@ -173,6 +174,7 @@ export async function processBulkDeletion(
 
   try {
     await VMJob.findByIdAndUpdate(jobId, { status: 'processing' });
+    void notificationService.notifyJobStarted(jobId);
 
     const req = buildJobRequest(adminId, role);
 
@@ -195,6 +197,7 @@ export async function processBulkDeletion(
     }
 
     await finalizeDeleteJobStatus(jobId);
+    void notificationService.notifyJobFinished(jobId);
   } catch (err) {
     logger.error('[VMDelete] Bulk delete job crashed', {
       jobId: jobId.toString(),
@@ -205,5 +208,6 @@ export async function processBulkDeletion(
       status: 'failed',
       completedAt: new Date(),
     });
+    void notificationService.notifyJobFinished(jobId);
   }
 }

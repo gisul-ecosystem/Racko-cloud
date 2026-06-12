@@ -23,6 +23,7 @@ import {
 import { ProxmoxConnectionError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
+import { notificationService } from '../../notification/notification.service';
 
 // QUEUE_SLOT: replace direct async call with message queue job (RabbitMQ/BullMQ)
 // EVENT_SLOT: emit 'vm.bulk_created' event to message queue
@@ -76,6 +77,7 @@ export async function processBulkCreation(
     });
     try {
       await VMJob.findByIdAndUpdate(jobId, { status: 'processing' });
+      void notificationService.notifyJobStarted(jobId);
       const { goldenTemplateVmid, node } = await buildGoldenTemplate(job, adminId);
 
       logger.info('[Golden] bulk job — golden template ready, starting clones', {
@@ -89,6 +91,7 @@ export async function processBulkCreation(
       await runBatchClone(jobId, vmSpecs, { allowReroute: false });
 
       await finalizeJobStatus(jobId);
+      void notificationService.notifyJobFinished(jobId);
       const finishedJob = await VMJob.findById(jobId).lean();
       logger.info('[Golden][Diag] bulk job — clone phase finished', {
         jobId: jobId.toString(),
@@ -118,6 +121,7 @@ export async function processBulkCreation(
           },
         },
       });
+      void notificationService.notifyJobFinished(jobId);
     } finally {
       const updatedJob = await VMJob.findById(jobId).lean();
       if (updatedJob?.goldenTemplateVmid && updatedJob.goldenTemplateNode) {
@@ -150,6 +154,7 @@ export async function processBulkCreation(
 
   try {
     await VMJob.findByIdAndUpdate(jobId, { status: 'processing' });
+    void notificationService.notifyJobStarted(jobId);
 
     let nodeAllocations: Array<{ node: string; vmCount: number }>;
     try {
@@ -178,6 +183,7 @@ export async function processBulkCreation(
           },
         },
       });
+      void notificationService.notifyJobFinished(jobId);
       return;
     }
 
@@ -216,6 +222,7 @@ export async function processBulkCreation(
 
     await runBatchClone(jobId, vmSpecs, { allowReroute: true });
     await finalizeJobStatus(jobId);
+    void notificationService.notifyJobFinished(jobId);
   } catch (error) {
     logger.error('Unexpected error in bulk processor', {
       jobId: jobId.toString(),
@@ -227,6 +234,7 @@ export async function processBulkCreation(
         status: 'failed',
         completedAt: new Date(),
       });
+      void notificationService.notifyJobFinished(jobId);
     } catch (updateError) {
       logger.error('Failed to update job status after bulk processor error', {
         jobId: jobId.toString(),
