@@ -2,12 +2,12 @@
 
 import Link from 'next/link';
 import { Server } from 'lucide-react';
+import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 
 const services = [
   {
     id: 'vps',
-    name: 'VPS',
-    description: 'Create and manage virtual machines, users, and assignments.',
+    name: 'VPS Hosting',
     href: '/dashboard/admin',
     icon: Server,
     available: true,
@@ -16,61 +16,31 @@ const services = [
 
 export default function ConsolePage() {
   return (
-    <div>
-      <div className="mb-8">
-        <h1 className="text-2xl font-bold text-gray-900">Services</h1>
-        <p className="text-sm text-gray-500 mt-1">
-          Select a service to open its dashboard.
-        </p>
-      </div>
+    <div className="mx-auto max-w-screen-xl space-y-8">
+      <section>
+        <h1 className="mb-5 text-2xl font-bold text-gray-900">Racko.ai services</h1>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-        {services.map((service) => {
-          const Icon = service.icon;
-          const cardClass =
-            'group relative flex flex-col rounded-xl border p-6 transition shadow-sm ' +
-            (service.available
-              ? 'bg-white border-gray-200 hover:border-[#B91C1C] hover:shadow-md cursor-pointer'
-              : 'bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed');
+        <div className="flex flex-wrap gap-4">
+          {services.map((service) => {
+            const Icon = service.icon;
 
-          const inner = (
-            <>
-              <div
-                className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 ${
-                  service.available ? 'bg-red-50 text-[#B91C1C]' : 'bg-gray-100 text-gray-400'
-                }`}
-              >
-                <Icon className="w-6 h-6" />
-              </div>
-              <h2 className="text-lg font-semibold text-gray-900">{service.name}</h2>
-              <p className="text-sm text-gray-500 mt-1 flex-1">{service.description}</p>
-              {service.available ? (
-                <span className="mt-4 text-sm font-medium text-[#B91C1C] group-hover:text-[#DC2626]">
-                  Open dashboard →
-                </span>
-              ) : (
-                <span className="mt-4 text-xs font-medium text-gray-400 uppercase tracking-wide">
-                  Coming soon
-                </span>
-              )}
-            </>
-          );
-
-          if (service.available) {
             return (
-              <Link key={service.id} href={service.href} className={cardClass}>
-                {inner}
+              <Link
+                key={service.id}
+                href={service.href}
+                className="group flex w-36 flex-col items-center rounded-xl border border-gray-200 bg-white px-4 py-6 text-center shadow-sm transition hover:border-[#B91C1C] hover:shadow-md"
+              >
+                <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] transition group-hover:bg-[#B91C1C] group-hover:text-white">
+                  <Icon className="h-7 w-7" />
+                </div>
+                <span className="text-sm font-medium text-gray-900">{service.name}</span>
               </Link>
             );
-          }
+          })}
+        </div>
+      </section>
 
-          return (
-            <div key={service.id} className={cardClass} aria-disabled>
-              {inner}
-            </div>
-          );
-        })}
-      </div>
+      <RecentResourcesTable />
     </div>
   );
 }
