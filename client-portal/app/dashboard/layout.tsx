@@ -116,7 +116,7 @@ const navLinks: NavLink[] = [
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
-  const { user, isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated, logout } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
 
@@ -228,6 +228,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Main content */}
       <main className="ml-60 p-8 min-h-screen">
+        {user.role === 'user' && (
+          <div className="mb-6 flex justify-end">
+            <button
+              type="button"
+              onClick={() => void logout()}
+              className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
+            >
+              Sign out
+            </button>
+          </div>
+        )}
         <ErrorBoundary>{children}</ErrorBoundary>
       </main>
     </div>
