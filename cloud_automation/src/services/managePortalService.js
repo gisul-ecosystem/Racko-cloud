@@ -2,7 +2,8 @@ const crypto = require('crypto');
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const adminAuthService = require('./adminAuthService');
-const { createGraphClient } = require('../provisioners/azure/userProvisioner');
+const { createGraphClient, getVerifiedDomain } = require('../provisioners/azure/userProvisioner');
+const { validateAzureEnv } = require('../config/azure');
 const {
   buildResourceGroupScope,
   createAuthorizationClient,
@@ -12,8 +13,8 @@ const {
   logAzureRoleEvent,
   roleAssignmentIdFromSeed
 } = require('../provisioners/azure/roleProvisioner');
+const { getResourceGroupNameForUser } = require('./userResourceGroupService');
 
-const FRONTEND_URL = process.env.FRONTEND_URL || '';
 const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
@@ -335,8 +336,35 @@ const validateSessionForRequest = (session, requestId) => {
   }
 };
 
+const resolveFrontendBaseUrl = () => {
+  const baseUrl = String(process.env.FRONTEND_URL || process.env.CLIENT_PORTAL_URL || '')
+    .trim()
+    .replace(/\/+$/, '');
+
+  if (!baseUrl) {
+    throw new AppError(
+      'FRONTEND_URL is not configured. Set FRONTEND_URL to the client portal base URL (for example http://localhost:3000).',
+      500
+    );
+  }
+
+  try {
+    const parsed = new URL(baseUrl);
+    if (!parsed.protocol || !parsed.host) {
+      throw new Error('invalid url');
+    }
+  } catch {
+    throw new AppError(
+      'FRONTEND_URL must be a valid absolute URL (for example http://localhost:3000).',
+      500
+    );
+  }
+
+  return baseUrl;
+};
+
 const buildManageUrl = (token) => {
-  const baseUrl = FRONTEND_URL.replace(/\/+$/, '');
+  const baseUrl = resolveFrontendBaseUrl();
   return `${baseUrl}/manage-users?token=${encodeURIComponent(token)}`;
 };
 
@@ -689,8 +717,10 @@ const listPortalUsers = async (sessionToken, requestId) => {
   };
 };
 
-const getRequestPrimaryScope = async (client, requestId) => {
-  const resourceGroupName = await getRequestResourceGroupName(requestId);
+const getRequestPrimaryScope = async (client, requestId, userId = null) => {
+  const resourceGroupName = userId
+    ? await getResourceGroupNameForUser(requestId, userId)
+    : await getRequestResourceGroupName(requestId);
 
   if (!resourceGroupName) {
     throw new AppError('Request does not have a provisioned resource group.', 400);
@@ -1001,7 +1031,7 @@ const updatePortalUserRolesCore = async ({
     customerEmail = customerEmail || request.customer_email;
     azureUserId = user.azure_user_id;
 
-    const scope = await getRequestPrimaryScope(client, requestId);
+    const scope = await getRequestPrimaryScope(client, requestId, targetUserId);
     const currentAssignments = await getPortalAssignmentsForUser(client, requestId, targetUserId);
     const { authorizationClient } = createAuthorizationClient();
 
@@ -1155,10 +1185,158 @@ const updatePortalUserRolesByOrgAdmin = async ({ adminEmail, requestId, userId, 
     auditEmail: adminEmail
   });
 
+let cachedVerifiedDomain = null;
+
+const resolveAzureVerifiedDomain = async () => {
+  const fromEnv = String(process.env.AZURE_VERIFIED_DOMAIN || '').trim();
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  if (cachedVerifiedDomain) {
+    return cachedVerifiedDomain;
+  }
+
+  const { graphClient } = createGraphClient();
+  cachedVerifiedDomain = await getVerifiedDomain(graphClient);
+  return cachedVerifiedDomain;
+};
+
+const resolveUserPrincipalName = (username, domain) => {
+  const normalized = String(username || '').trim();
+  if (!normalized) {
+    throw new AppError('Provisioned user username is missing.', 500);
+  }
+
+  if (normalized.includes('@')) {
+    return normalized;
+  }
+
+  return `${normalized}@${domain}`;
+};
+
+const buildAzurePortalDeepLink = ({ tenantDomain, subscriptionId, resourceGroupName }) => {
+  const encodedGroup = encodeURIComponent(resourceGroupName);
+  return `https://portal.azure.com/#@${tenantDomain}/resource/subscriptions/${subscriptionId}/resourceGroups/${encodedGroup}/overview`;
+};
+
+// Open Azure Portal with loginHint so the portal runs its own OAuth flow (form_post).
+// Hand-built authorize URLs can trigger AADSTS900561 (GET vs POST mismatch).
+const buildAzurePortalLaunchUrl = ({ portalRedirectUri, userPrincipalName }) => {
+  const normalizedPortalUri = String(portalRedirectUri || 'https://portal.azure.com/').trim();
+  const hashIndex = normalizedPortalUri.indexOf('#');
+  const baseWithQuery = hashIndex >= 0 ? normalizedPortalUri.slice(0, hashIndex) : normalizedPortalUri;
+  const hash = hashIndex >= 0 ? normalizedPortalUri.slice(hashIndex + 1) : '';
+
+  const launchUrl = new URL(baseWithQuery || 'https://portal.azure.com/');
+  launchUrl.searchParams.set('loginHint', userPrincipalName);
+
+  const queryString = launchUrl.searchParams.toString();
+  const suffix = queryString ? `?${queryString}` : '';
+
+  if (hash) {
+    return `${launchUrl.origin}${launchUrl.pathname}${suffix}#${hash}`;
+  }
+
+  return `${launchUrl.origin}${launchUrl.pathname}${suffix}`;
+};
+
+const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
+  const session = await requireSession(sessionToken);
+  validateSessionForRequest(session, requestId);
+
+  const userResult = await db.query(
+    `
+      SELECT
+        id,
+        username,
+        temporary_password,
+        status,
+        blocked_until,
+        COALESCE(is_deleted, false) AS is_deleted
+      FROM azure_users
+      WHERE id = $1
+        AND request_id = $2
+      LIMIT 1
+    `,
+    [userId, requestId]
+  );
+
+  const user = userResult.rows[0];
+
+  if (!user || user.is_deleted) {
+    throw new AppError('Provisioned user not found.', 404);
+  }
+
+  const normalizedStatus = String(user.status || '').trim().toLowerCase();
+  if (normalizedStatus === 'blocked' || normalizedStatus === 'disabled') {
+    throw new AppError('This user is blocked and cannot open the Azure console.', 403);
+  }
+
+  if (user.blocked_until && new Date(user.blocked_until).getTime() > Date.now()) {
+    throw new AppError('This user is temporarily blocked from Azure access.', 403);
+  }
+
+  const azureConfig = validateAzureEnv();
+  const verifiedDomain = await resolveAzureVerifiedDomain();
+  const userPrincipalName = resolveUserPrincipalName(user.username, verifiedDomain);
+  const resourceGroupName = await getResourceGroupNameForUser(requestId, user.id);
+  const portalRedirectUri = resourceGroupName
+    ? buildAzurePortalDeepLink({
+        tenantDomain: verifiedDomain,
+        subscriptionId: azureConfig.subscriptionId,
+        resourceGroupName
+      })
+    : 'https://portal.azure.com/';
+
+  const signInUrl = buildAzurePortalLaunchUrl({
+    portalRedirectUri,
+    userPrincipalName
+  });
+
+  try {
+    const auditClient = await db.connect();
+    try {
+      await recordAuditLog(auditClient, {
+        requestId,
+        customerEmail: session.customer_email,
+        actor: 'customer',
+        action: 'azure_console_launch_requested',
+        targetUserId: String(user.id),
+        details: {
+          username: user.username,
+          userPrincipalName,
+          resourceGroup: resourceGroupName
+        }
+      });
+    } finally {
+      auditClient.release();
+    }
+  } catch (auditError) {
+    logManagePortalEvent('error', 'audit_log_skipped', {
+      requestId,
+      action: 'azure_console_launch_requested',
+      reason: auditError?.message
+    });
+  }
+
+  return {
+    requestId,
+    userId: user.id,
+    username: user.username,
+    userPrincipalName,
+    temporaryPassword: user.temporary_password,
+    signInUrl,
+    portalUrl: portalRedirectUri,
+    resourceGroup: resourceGroupName
+  };
+};
+
 module.exports = {
   deletePortalUser,
   deletePortalUserByOrgAdmin,
   exchangeAccessToken,
+  getAzureConsoleLaunch,
   issueAccessPortalTokenForRequest,
   listPortalUsers,
   requireSession,

@@ -9,6 +9,7 @@ const {
 } = require('../provisioners/azure/cleanupProvisioner');
 const { getUserRoleAssignmentsForRequest } = require('./roleProvisionService');
 const { getUsersForRequest } = require('./userProvisionService');
+const { getResourceGroupNamesForCleanup } = require('./userResourceGroupService');
 
 const STATUS_EXPIRED = 'Expired';
 const STATUS_COMPLETED = 'Completed';
@@ -70,6 +71,7 @@ const getCleanupRequestForUpdate = async (client, requestId) => {
       customer_email,
       location,
       azure_resource_group_name,
+      costing_mode,
       expired,
       cleanup_completed,
       expiry_date
@@ -193,13 +195,23 @@ const cleanupRequestById = async (requestId, trigger = 'manual') => {
 
     await logCleanup(requestId, 'users_disabled', 'success');
 
-    let resourceGroupDeleted = false;
-    if (request.azure_resource_group_name) {
-      resourceGroupDeleted = await deleteResourceGroupWithRetry(
+    let resourceGroupsDeleted = 0;
+    const resourceGroupsToDelete = await getResourceGroupNamesForCleanup(
+      requestId,
+      request.costing_mode,
+      request.azure_resource_group_name
+    );
+
+    for (const resourceGroupName of resourceGroupsToDelete) {
+      const deleted = await deleteResourceGroupWithRetry(
         resourceClient,
-        request.azure_resource_group_name,
+        resourceGroupName,
         requestId
       );
+
+      if (deleted) {
+        resourceGroupsDeleted += 1;
+      }
     }
 
     await logCleanup(requestId, 'resource_group_deleted', 'success');
@@ -220,7 +232,7 @@ const cleanupRequestById = async (requestId, trigger = 'manual') => {
         status: updatedRequest.status,
         rolesRemoved,
         usersDisabled,
-        resourceGroupDeleted
+        resourceGroupsDeleted
       };
     } catch (error) {
       await finalizeClient.query('ROLLBACK');

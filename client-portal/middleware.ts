@@ -15,8 +15,13 @@ export function middleware(request: NextRequest) {
   // Check session via refreshToken cookie presence
   const hasSession = request.cookies.has('refreshToken');
 
-  // Protect console and dashboard routes
-  if (pathname.startsWith('/dashboard') || pathname.startsWith('/console')) {
+  // Protect console, dashboard, and request builder routes
+  if (
+    pathname.startsWith('/dashboard') ||
+    pathname.startsWith('/console') ||
+    pathname === '/request' ||
+    pathname.startsWith('/status/')
+  ) {
     if (!hasSession) {
       const loginUrl = new URL('/login', request.url);
       loginUrl.searchParams.set('redirect', pathname);
@@ -42,6 +47,8 @@ export const config = {
     '/dashboard/:path*',
     '/console',
     '/console/:path*',
+    '/request',
+    '/status/:path*',
     '/login',
     '/register',
   ],

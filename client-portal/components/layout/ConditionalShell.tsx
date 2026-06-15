@@ -5,7 +5,7 @@ import Navbar from './Navbar';
 import Footer from './Footer';
 import BookDemoModal from '../ui/BookDemoModal';
 
-const NO_SHELL_ROUTES = ['/dashboard', '/console', '/login', '/register', '/verify-email'];
+const NO_SHELL_ROUTES = ['/dashboard', '/console', '/login', '/register', '/verify-email', '/manage-users'];
 
 export default function ConditionalShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

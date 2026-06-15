@@ -200,6 +200,30 @@ const reviewAccessRequest = async (req, res, next) => {
   }
 };
 
+const getUserAzureCost = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const cost = await orgAdminService.getUserAzureCost(requestId, userId);
+
+    res.status(200).json({
+      success: true,
+      cost
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   login,
   listResourceGroups,
@@ -209,5 +233,6 @@ module.exports = {
   updateUserRoles,
   forceLogoutUser,
   listAccessRequests,
-  reviewAccessRequest
+  reviewAccessRequest,
+  getUserAzureCost
 };

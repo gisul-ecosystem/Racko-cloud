@@ -9,6 +9,8 @@ const {
 } = require('../provisioners/azure/userProvisioner');
 const { runWithConcurrency } = require('../utils/concurrency');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
+const { isPerUserCosting } = require('../utils/costingMode');
+const { getStagingResourceGroupForUserNumber } = require('./userResourceGroupService');
 
 const STATUS_CREATED = 'Created';
 const DEFAULT_CONCURRENCY = Math.max(1, Number(process.env.BULK_PROVISION_CONCURRENCY || 20));
@@ -24,7 +26,8 @@ const getRequestByIdForUserProvisioning = async (client, requestId) => {
       enable_daily_usage,
       daily_limit_minutes,
       usage_schedule,
-      enforce_in_azure
+      enforce_in_azure,
+      costing_mode
     FROM requests
     WHERE id = $1
     FOR UPDATE
@@ -97,9 +100,12 @@ const insertAzureUsers = async (client, requestId, createdUsers) => {
       username,
       temporary_password,
       status,
-      blocked_until
+      blocked_until,
+      user_number,
+      azure_resource_group_name,
+      azure_resource_group_id
     )
-    VALUES ($1, $2, $3, $4, $5, $6)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
   `;
 
   for (const user of createdUsers) {
@@ -109,7 +115,10 @@ const insertAzureUsers = async (client, requestId, createdUsers) => {
       user.username,
       user.temporaryPassword,
       user.status,
-      user.blockedUntil
+      user.blockedUntil,
+      user.userNumber,
+      user.resourceGroupName || null,
+      user.resourceGroupId || null
     ]);
   }
 };
@@ -182,12 +191,36 @@ const provisionUsersForRequest = async (requestId) => {
 
       const createdUser = await createGraphUserWithRetry(graphClient, payload, requestId);
 
+      let resourceGroupName = null;
+      let resourceGroupId = null;
+
+      if (isPerUserCosting(request.costing_mode)) {
+        const stagedResourceGroup = await getStagingResourceGroupForUserNumber(
+          requestId,
+          userNumber,
+          client
+        );
+
+        if (!stagedResourceGroup) {
+          throw new AppError(
+            `Per-user resource group is missing for user slot ${userNumber}. Create resource groups first.`,
+            400
+          );
+        }
+
+        resourceGroupName = stagedResourceGroup.azure_resource_group_name;
+        resourceGroupId = stagedResourceGroup.azure_resource_group_id;
+      }
+
       createdUsers.push({
         azureUserId: createdUser.id,
         username,
         temporaryPassword,
         status: initialAccess.status,
-        blockedUntil: initialAccess.blockedUntil
+        blockedUntil: initialAccess.blockedUntil,
+        userNumber,
+        resourceGroupName,
+        resourceGroupId
       });
     });
 
@@ -229,7 +262,11 @@ const getUsersForRequest = async (requestId) => {
       u.username,
       u.status,
       u.created_at,
-      r.expiry_date
+      u.user_number,
+      u.azure_resource_group_name,
+      u.azure_resource_group_id,
+      r.expiry_date,
+      r.costing_mode
     FROM azure_users u
     LEFT JOIN requests r
       ON r.id = u.request_id
@@ -245,7 +282,11 @@ const getUsersForRequest = async (requestId) => {
     username: row.username,
     status: row.status,
     createdAt: row.created_at,
-    expiryDate: row.expiry_date
+    expiryDate: row.expiry_date,
+    userNumber: row.user_number,
+    resourceGroup: row.azure_resource_group_name,
+    resourceGroupId: row.azure_resource_group_id,
+    costingMode: row.costing_mode
   }));
 };
 

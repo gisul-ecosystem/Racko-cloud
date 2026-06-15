@@ -40,20 +40,28 @@ function blockLabAndPortalRoutes(req: Request, _res: Response, next: NextFunctio
 }
 
 function rewriteCloudAutomationPath(path: string): string {
-  if (path === `${GATEWAY_PREFIX}/health`) {
+  if (path === '/health' || path === `${GATEWAY_PREFIX}/health`) {
     return '/health';
+  }
+
+  if (path.startsWith('/health/')) {
+    return path;
   }
 
   if (path.startsWith(`${GATEWAY_PREFIX}/health/`)) {
     return `/health/${path.slice(`${GATEWAY_PREFIX}/health/`.length)}`;
   }
 
+  let suffix = path;
   if (path.startsWith(GATEWAY_PREFIX)) {
-    const suffix = path.slice(GATEWAY_PREFIX.length);
-    return suffix ? `/api${suffix}` : '/api';
+    suffix = path.slice(GATEWAY_PREFIX.length);
   }
 
-  return path;
+  if (!suffix || suffix === '/') {
+    return '/api';
+  }
+
+  return `/api${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
 }
 
 const cloudAutomationProxy = createProxyMiddleware({

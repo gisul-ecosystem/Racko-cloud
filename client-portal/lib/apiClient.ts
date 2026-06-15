@@ -72,6 +72,7 @@ export async function apiRequest<T>(
     ...fetchOptions,
     headers,
     credentials: 'include',
+    cache: 'no-store',
   });
 
   // On 401, attempt token refresh once then retry
@@ -83,6 +84,7 @@ export async function apiRequest<T>(
         ...fetchOptions,
         headers,
         credentials: 'include',
+        cache: 'no-store',
       });
 
       if (!retryRes.ok) {

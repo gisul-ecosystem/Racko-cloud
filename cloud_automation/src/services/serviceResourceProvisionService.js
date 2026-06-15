@@ -1,6 +1,8 @@
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const { provisionServiceResource } = require('../provisioners/azure/serviceResourceProvisioner');
+const { isPerUserCosting } = require('../utils/costingMode');
+const { getStagingResourceGroups } = require('./userResourceGroupService');
 
 const logEvent = (event, details = {}) => {
   console.log(
@@ -19,6 +21,7 @@ const getRequestContext = async (client, requestId) => {
       SELECT
         id,
         location,
+        costing_mode,
         azure_resource_group_name,
         status
       FROM requests
@@ -113,7 +116,15 @@ const provisionServiceResourcesForRequest = async (requestId) => {
       throw new AppError('Request not found.', 404);
     }
 
-    if (!request.azure_resource_group_name) {
+    const resourceGroupNames = isPerUserCosting(request.costing_mode)
+      ? (await getStagingResourceGroups(requestId, client)).map(
+          (row) => row.azure_resource_group_name
+        )
+      : request.azure_resource_group_name
+        ? [request.azure_resource_group_name]
+        : [];
+
+    if (resourceGroupNames.length === 0) {
       throw new AppError('Resource group must be created before provisioning service instances.', 400);
     }
 
@@ -161,10 +172,21 @@ const provisionServiceResourcesForRequest = async (requestId) => {
         requestId,
         serviceId,
         serviceName: instance.service_name,
-        resourceGroupName: request.azure_resource_group_name,
+        resourceGroupName: resourceGroupNames[0],
         location: request.location,
         instanceOption: instance.instance_option
       });
+
+      for (const resourceGroupName of resourceGroupNames.slice(1)) {
+        await provisionServiceResource({
+          requestId,
+          serviceId,
+          serviceName: instance.service_name,
+          resourceGroupName,
+          location: request.location,
+          instanceOption: instance.instance_option
+        });
+      }
 
       await upsertProvisionedResource(client, {
         requestId,

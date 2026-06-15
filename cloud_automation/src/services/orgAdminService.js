@@ -5,6 +5,10 @@ const adminAuthService = require('./adminAuthService');
 const managePortalService = require('./managePortalService');
 const usageService = require('./usageService');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
+const { isPerUserCosting } = require('../utils/costingMode');
+const { getStagingResourceGroups, getResourceGroupNameForUser } = require('./userResourceGroupService');
+const { attachLiveUsageToUsers } = require('./userLiveUsageService');
+const { getResourceGroupCosts } = require('./azureCostManagementService');
 
 const mapUserUsage = (row) => {
   const access = evaluateUsageAccess({
@@ -35,6 +39,7 @@ const mapUserUsage = (row) => {
     blockedUntil: row.blocked_until,
     hasActiveSession: Number(row.active_session_count || 0) > 0,
     lastLoginAt: row.last_login_at,
+    resourceGroup: row.azure_resource_group_name || null,
     roles: row.roles || []
   };
 };
@@ -64,6 +69,7 @@ const listResourceGroups = async () => {
         r.daily_limit_minutes,
         r.usage_schedule,
         r.enforce_in_azure,
+        r.costing_mode,
         r.created_at,
         COUNT(DISTINCT au.id) FILTER (WHERE COALESCE(au.is_deleted, false) = false) AS user_count,
         COUNT(DISTINCT uus.id) FILTER (WHERE uus.logout_at IS NULL) AS active_sessions
@@ -71,6 +77,7 @@ const listResourceGroups = async () => {
       LEFT JOIN azure_users au ON au.request_id = r.id
       LEFT JOIN user_usage_sessions uus ON uus.request_id = r.id
       WHERE r.azure_resource_group_name IS NOT NULL
+         OR r.costing_mode = 'per_user'
       GROUP BY r.id
       ORDER BY r.created_at DESC
     `
@@ -80,6 +87,7 @@ const listResourceGroups = async () => {
     requestId: row.id,
     customerEmail: row.customer_email,
     resourceGroup: row.azure_resource_group_name,
+    costingMode: row.costing_mode,
     location: row.location,
     status: row.status,
     expiryDate: row.expiry_date,
@@ -108,7 +116,7 @@ const getResourceGroupDetail = async (requestId) => {
         r.daily_limit_minutes,
         r.usage_schedule,
         r.enforce_in_azure,
-        r.estimated_price,
+        r.costing_mode,
         r.created_at
       FROM requests r
       WHERE r.id = $1
@@ -134,6 +142,7 @@ const getResourceGroupDetail = async (requestId) => {
         au.used_today_minutes,
         au.blocked_until,
         au.last_reset_date,
+        au.azure_resource_group_name,
         r.expiry_date,
         r.enable_daily_usage,
         r.daily_limit_minutes,
@@ -174,6 +183,7 @@ const getResourceGroupDetail = async (requestId) => {
         au.used_today_minutes,
         au.blocked_until,
         au.last_reset_date,
+        au.azure_resource_group_name,
         r.expiry_date,
         r.enable_daily_usage,
         r.daily_limit_minutes,
@@ -183,12 +193,25 @@ const getResourceGroupDetail = async (requestId) => {
     [requestId]
   );
 
+  const perUserResourceGroups = isPerUserCosting(request.costing_mode)
+    ? await getStagingResourceGroups(requestId)
+    : [];
+
+  const mappedUsers = usersResult.rows.map(mapUserUsage);
+  const { users, liveSummary } = await attachLiveUsageToUsers(
+    requestId,
+    mappedUsers,
+    request.location
+  );
+
   return {
     request: {
       requestId: request.id,
       customerEmail: request.customer_email,
       resourceGroup: request.azure_resource_group_name,
       resourceGroupId: request.azure_resource_group_id,
+      costingMode: request.costing_mode,
+      perUserResourceGroupCount: perUserResourceGroups.length,
       location: request.location,
       status: request.status,
       expiryDate: request.expiry_date,
@@ -196,10 +219,10 @@ const getResourceGroupDetail = async (requestId) => {
       dailyLimitMinutes: Number(request.daily_limit_minutes || 0),
       usageSchedule: request.usage_schedule,
       enforceInAzure: request.enforce_in_azure === true,
-      estimatedPrice: request.estimated_price,
-      createdAt: request.created_at
+      createdAt: request.created_at,
+      liveSummary
     },
-    users: usersResult.rows.map(mapUserUsage)
+    users
   };
 };
 
@@ -359,6 +382,129 @@ const reviewAccessRequest = async ({ id, status, reviewNotes, reviewedBy }) =>
     reviewedBy
   });
 
+const getUserAzureCost = async (requestId, userId) => {
+  const requestResult = await db.query(
+    `
+      SELECT
+        r.id,
+        r.costing_mode,
+        r.created_at
+      FROM requests r
+      WHERE r.id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  const request = requestResult.rows[0];
+
+  if (!request) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  const userResult = await db.query(
+    `
+      SELECT id, username
+      FROM azure_users
+      WHERE request_id = $1
+        AND id = $2
+        AND COALESCE(is_deleted, false) = false
+      LIMIT 1
+    `,
+    [requestId, userId]
+  );
+
+  const user = userResult.rows[0];
+
+  if (!user) {
+    throw new AppError('User not found for this request.', 404);
+  }
+
+  const resourceGroup = await getResourceGroupNameForUser(requestId, userId);
+
+  if (!resourceGroup) {
+    throw new AppError('No Azure resource group is linked to this user yet.', 404);
+  }
+
+  const perUserCosting = isPerUserCosting(request.costing_mode);
+  const costs = await getResourceGroupCosts({
+    resourceGroupName: resourceGroup,
+    requestCreatedAt: request.created_at
+  });
+
+  let monthToDateCost = costs.monthToDateCost;
+  let lifetimeCost = costs.lifetimeCost;
+  let attributionMethod = 'direct';
+  let resourceGroupTotalCost = null;
+  let sharePercent = null;
+
+  if (!perUserCosting) {
+    const minutesResult = await db.query(
+      `
+        SELECT
+          uus.user_id,
+          COALESCE(
+            SUM(
+              CASE
+                WHEN uus.logout_at IS NULL
+                  THEN EXTRACT(EPOCH FROM (NOW() - uus.login_at)) / 60
+                ELSE COALESCE(
+                  uus.minutes_used,
+                  EXTRACT(EPOCH FROM (uus.logout_at - uus.login_at)) / 60
+                )
+              END
+            ),
+            0
+          ) AS total_minutes
+        FROM user_usage_sessions uus
+        WHERE uus.request_id = $1
+        GROUP BY uus.user_id
+      `,
+      [requestId]
+    );
+
+    const minutesByUser = new Map(
+      minutesResult.rows.map((row) => [Number(row.user_id), Number(row.total_minutes || 0)])
+    );
+    const userMinutes = minutesByUser.get(Number(userId)) || 0;
+    const totalMinutes = [...minutesByUser.values()].reduce((sum, value) => sum + value, 0);
+
+    resourceGroupTotalCost = {
+      monthToDateCost: costs.monthToDateCost,
+      lifetimeCost: costs.lifetimeCost
+    };
+
+    if (totalMinutes > 0 && userMinutes > 0) {
+      const ratio = userMinutes / totalMinutes;
+      monthToDateCost = Number((costs.monthToDateCost * ratio).toFixed(4));
+      lifetimeCost = Number((costs.lifetimeCost * ratio).toFixed(4));
+      sharePercent = Number((ratio * 100).toFixed(2));
+      attributionMethod = 'proportional';
+    } else {
+      monthToDateCost = 0;
+      lifetimeCost = 0;
+      sharePercent = 0;
+      attributionMethod = 'proportional';
+    }
+  }
+
+  return {
+    userId: Number(userId),
+    username: user.username,
+    resourceGroup,
+    costingMode: request.costing_mode,
+    attributionMethod,
+    monthToDateCost,
+    lifetimeCost,
+    currency: costs.currency,
+    resourceGroupTotalCost,
+    sharePercent,
+    dataFreshnessNote:
+      'Azure billing data is typically delayed by several hours and may not include the current session.',
+    queriedAt: new Date().toISOString()
+  };
+};
+
 module.exports = {
   login,
   listResourceGroups,
@@ -368,5 +514,6 @@ module.exports = {
   updateUserRoles,
   forceLogoutUser,
   listAccessRequests,
-  reviewAccessRequest
+  reviewAccessRequest,
+  getUserAzureCost
 };

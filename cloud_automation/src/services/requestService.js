@@ -1,9 +1,11 @@
 
+const AppError = require('../utils/AppError');
 const db = require('../db/postgres');
 const pricingService = require('./pricingService');
 const { assertProvisionableLocation } = require('./azureLocationService');
 const { applyTierRolesToAssignments } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
+const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 
 async function createRequest({
   customerEmail,
@@ -16,7 +18,8 @@ async function createRequest({
   endDate,
   enableDailyUsage,
   dailyLimitMinutes,
-  usageSchedule
+  usageSchedule,
+  costingMode
 }) {
 
   const client = await db.connect();
@@ -42,9 +45,7 @@ async function createRequest({
         : [];
 
     if (!incomingIds.length) {
-      throw new Error(
-        'No services selected'
-      );
+      throw new AppError('No services selected', 400);
     }
 
     let validServiceIds = [];
@@ -101,9 +102,7 @@ async function createRequest({
 
 
       if (!catalog.rows.length) {
-        throw new Error(
-          'Selected services not found'
-        );
+        throw new AppError('Selected services not found', 400);
       }
 
 
@@ -161,12 +160,8 @@ async function createRequest({
 
 
 
-    if (
-      !validServiceIds.length
-    ) {
-      throw new Error(
-        'No services resolved'
-      );
+    if (!validServiceIds.length) {
+      throw new AppError('No services resolved', 400);
     }
 
 
@@ -221,6 +216,8 @@ async function createRequest({
     // Create Request
     // ==========================
 
+    const resolvedCostingMode = normalizeCostingMode(costingMode) || COSTING_MODE_SHARED;
+
     const request =
       await client.query(
         `
@@ -242,7 +239,9 @@ async function createRequest({
 
           daily_limit_minutes,
 
-          usage_schedule
+          usage_schedule,
+
+          costing_mode
 
         )
 
@@ -256,13 +255,15 @@ async function createRequest({
           $6,
           $7,
           $8,
-          $9
+          $9,
+          $10
 
         )
 
         RETURNING
         id,
-        estimated_price
+        estimated_price,
+        costing_mode
         `,
         [
 
@@ -282,7 +283,9 @@ async function createRequest({
 
           enableDailyUsage === true && dailyLimitMinutes ? Number(dailyLimitMinutes) : null,
 
-          enableDailyUsage === true && usageSchedule ? JSON.stringify(usageSchedule) : null
+          enableDailyUsage === true && usageSchedule ? JSON.stringify(usageSchedule) : null,
+
+          resolvedCostingMode
 
         ]
       );

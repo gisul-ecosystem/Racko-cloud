@@ -32,6 +32,11 @@ router.post(
   authenticateOrgAdmin,
   orgAdminController.forceLogoutUser
 );
+router.get(
+  '/resource-groups/:requestId/users/:userId/azure-cost',
+  authenticateOrgAdmin,
+  orgAdminController.getUserAzureCost
+);
 router.get('/access-requests', authenticateOrgAdmin, orgAdminController.listAccessRequests);
 router.patch(
   '/access-requests/:id',
