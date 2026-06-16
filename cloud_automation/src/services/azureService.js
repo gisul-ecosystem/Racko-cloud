@@ -1,25 +1,15 @@
 const { ResourceManagementClient } = require('@azure/arm-resources');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
 const AppError = require('../utils/AppError');
+const {
+  extractAzureErrorDetails,
+  logAzureEvent,
+  maskIdentifier,
+  summarizeAzureEnv
+} = require('../utils/azureLogger');
 
-const logAzureEvent = (level, event, details = {}) => {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    service: 'azure-auth',
-    level,
-    event,
-    ...details
-  };
-
-  const message = JSON.stringify(entry);
-
-  if (level === 'error') {
-    console.error(message);
-    return;
-  }
-
-  console.log(message);
-};
+const LOG_SERVICE = 'azure-auth';
+const MANAGEMENT_SCOPE = 'https://management.azure.com/.default';
 
 const getAzureErrorStatus = (error) => {
   const statusCode = error?.statusCode || error?.status || error?.code;
@@ -32,15 +22,47 @@ const getAzureErrorStatus = (error) => {
 };
 
 const testAzureConnection = async () => {
+  const startedAt = Date.now();
+
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_test_started', {
+    ...summarizeAzureEnv()
+  });
+
   try {
     const azureConfig = validateAzureEnv();
 
-    logAzureEvent('info', 'azure_auth_test_started', {
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_config_loaded', {
+      tenantId: azureConfig.tenantId,
+      clientId: maskIdentifier(azureConfig.clientId),
       subscriptionId: azureConfig.subscriptionId
     });
 
     const credential = createAzureCredential(azureConfig);
+
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_token_request_started', {
+      scope: MANAGEMENT_SCOPE,
+      subscriptionId: azureConfig.subscriptionId
+    });
+
+    const tokenResponse = await credential.getToken(MANAGEMENT_SCOPE);
+
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_token_request_success', {
+      subscriptionId: azureConfig.subscriptionId,
+      tokenExpiresOn: tokenResponse?.expiresOnTimestamp
+        ? new Date(tokenResponse.expiresOnTimestamp).toISOString()
+        : null,
+      tokenLength: tokenResponse?.token ? tokenResponse.token.length : 0
+    });
+
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_arm_client_init_started', {
+      subscriptionId: azureConfig.subscriptionId
+    });
+
     const resourceClient = new ResourceManagementClient(credential, azureConfig.subscriptionId);
+
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_resource_groups_list_started', {
+      subscriptionId: azureConfig.subscriptionId
+    });
 
     let resourceGroupCount = 0;
 
@@ -48,9 +70,12 @@ const testAzureConnection = async () => {
       resourceGroupCount += 1;
     }
 
-    logAzureEvent('info', 'azure_auth_test_success', {
+    const durationMs = Date.now() - startedAt;
+
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_test_success', {
       subscriptionId: azureConfig.subscriptionId,
-      resourceGroupCount
+      resourceGroupCount,
+      durationMs
     });
 
     return {
@@ -61,13 +86,14 @@ const testAzureConnection = async () => {
   } catch (error) {
     const statusCode = getAzureErrorStatus(error);
     const subscriptionId = process.env.AZURE_SUBSCRIPTION_ID?.trim();
+    const durationMs = Date.now() - startedAt;
 
-    logAzureEvent('error', 'azure_auth_test_failed', {
+    logAzureEvent(LOG_SERVICE, 'error', 'azure_auth_test_failed', {
       subscriptionId,
       statusCode,
-      errorName: error?.name,
-      errorCode: error?.code,
-      message: error?.message
+      durationMs,
+      ...summarizeAzureEnv(),
+      ...extractAzureErrorDetails(error)
     });
 
     if (error instanceof AppError) {
