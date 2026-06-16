@@ -3,6 +3,7 @@ const { ClientSecretCredential } = require('@azure/identity');
 const db = require('../db/postgres');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const usageEnforcementService = require('./usageEnforcementService');
+const usageService = require('./usageService');
 const { resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
 
 /**
@@ -325,16 +326,31 @@ const monitorAzureSignIns = async () => {
       );
 
       if (sessionCheck.rows.length > 0) {
+        // New Azure sign-in while a DB session is still open = user logged out and back in.
+        // Close the prior stretch so used_today_minutes accumulates across sessions.
         console.log(
-          `[ACTIVE_SESSION_EXISTS] User ${user.id} already has an active session (ID: ${sessionCheck.rows[0].id}). Skipping.`
+          `[SESSION_CONTINUATION] User ${user.id} re-authenticated in Azure. ` +
+          `Closing session ${sessionCheck.rows[0].id} before starting a new one.`
         );
-        await markSignInProcessed({
-          signInId,
-          azureUserId,
-          requestId: user.request_id,
-          userId: user.id
-        });
-        continue;
+
+        try {
+          await usageService.endUsageSessionIfActive({
+            requestId: user.request_id,
+            userId: user.id
+          });
+        } catch (error) {
+          console.error(
+            `[SESSION_CONTINUATION] Failed to close prior session for user ${user.id}:`,
+            error.message
+          );
+          await markSignInProcessed({
+            signInId,
+            azureUserId,
+            requestId: user.request_id,
+            userId: user.id
+          });
+          continue;
+        }
       }
 
       // Create new session
@@ -390,7 +406,8 @@ const monitorAzureSignIns = async () => {
     // Log specific Graph API errors
     if (error.statusCode === 403) {
       console.error(
-        '[SIGNIN_MONITOR] Permission denied. Ensure the Azure app has AuditLog.Read.All and Directory.Read.All permissions with admin consent.'
+        '[SIGNIN_MONITOR] Permission denied. Ensure the Azure app has AuditLog.Read.All, ' +
+        'Directory.Read.All, User.RevokeSessions.All, and User.ReadWrite.All (application) with admin consent.'
       );
     } else if (error.statusCode === 401) {
       console.error(

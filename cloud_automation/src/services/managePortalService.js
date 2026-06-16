@@ -1355,11 +1355,68 @@ const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
   };
 };
 
+const endPortalUserUsageSession = async (sessionToken, requestId, userId) => {
+  const session = await requireSession(sessionToken);
+  validateSessionForRequest(session, requestId);
+
+  const userResult = await db.query(
+    `
+      SELECT id
+      FROM azure_users
+      WHERE id = $1
+        AND request_id = $2
+        AND COALESCE(is_deleted, false) = false
+      LIMIT 1
+    `,
+    [userId, requestId]
+  );
+
+  if (userResult.rows.length === 0) {
+    throw new AppError('Provisioned user not found.', 404);
+  }
+
+  const result = await usageService.endUsageSessionIfActive({ requestId, userId });
+
+  return {
+    requestId,
+    userId,
+    ended: Boolean(result),
+    session: result
+  };
+};
+
+const getPortalUserUsageStatus = async (sessionToken, requestId, userId) => {
+  const session = await requireSession(sessionToken);
+  validateSessionForRequest(session, requestId);
+
+  const userResult = await db.query(
+    `
+      SELECT id
+      FROM azure_users
+      WHERE id = $1
+        AND request_id = $2
+        AND COALESCE(is_deleted, false) = false
+      LIMIT 1
+    `,
+    [userId, requestId]
+  );
+
+  if (userResult.rows.length === 0) {
+    throw new AppError('Provisioned user not found.', 404);
+  }
+
+  const status = await usageService.getUsageStatus({ requestId, userId });
+
+  return status;
+};
+
 module.exports = {
   deletePortalUser,
   deletePortalUserByOrgAdmin,
   exchangeAccessToken,
+  endPortalUserUsageSession,
   getAzureConsoleLaunch,
+  getPortalUserUsageStatus,
   issueAccessPortalTokenForRequest,
   listPortalUsers,
   requireSession,
