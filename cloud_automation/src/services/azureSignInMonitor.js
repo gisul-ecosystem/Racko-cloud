@@ -133,12 +133,15 @@ const monitorAzureSignIns = async () => {
 
     const client = createGraphClient();
 
-    // Fetch latest sign-ins
-    console.log('[SIGNIN_MONITOR] Fetching latest 100 sign-ins...');
+    // Fetch recent sign-ins (time window avoids missing events when the tenant has heavy traffic)
+    const lookbackMinutes = 15;
+    const since = new Date(Date.now() - lookbackMinutes * 60 * 1000).toISOString();
+    console.log(`[SIGNIN_MONITOR] Fetching sign-ins since ${since}...`);
 
     const signIns = await client
       .api('/auditLogs/signIns')
-      .top(100)
+      .filter(`createdDateTime ge ${since}`)
+      .top(999)
       .orderby('createdDateTime desc')
       .get();
 

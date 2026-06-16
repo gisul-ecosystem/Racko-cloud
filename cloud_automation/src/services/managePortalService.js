@@ -14,6 +14,7 @@ const {
   roleAssignmentIdFromSeed
 } = require('../provisioners/azure/roleProvisioner');
 const { getResourceGroupNameForUser } = require('./userResourceGroupService');
+const usageService = require('./usageService');
 
 const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
@@ -1293,6 +1294,28 @@ const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
     portalRedirectUri,
     userPrincipalName
   });
+
+  const requestResult = await db.query(
+    `
+      SELECT enable_daily_usage
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  if (requestResult.rows[0]?.enable_daily_usage) {
+    try {
+      await usageService.startUsageSession({ requestId, userId: user.id });
+      console.log(`[CONSOLE_LAUNCH] Usage session started for user ${user.id}, request ${requestId}`);
+    } catch (sessionError) {
+      console.error(
+        `[CONSOLE_LAUNCH] Could not start usage session for user ${user.id}:`,
+        sessionError.message
+      );
+    }
+  }
 
   try {
     const auditClient = await db.connect();
