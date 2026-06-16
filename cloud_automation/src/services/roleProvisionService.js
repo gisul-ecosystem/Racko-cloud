@@ -9,12 +9,13 @@ const {
   findMatchingRoleDefinition,
   roleAssignmentIdFromSeed
 } = require('../provisioners/azure/roleProvisioner');
+const { isPerUserCosting } = require('../utils/costingMode');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 const getRequestContext = async (client, requestId) => {
   const result = await client.query(
-    `SELECT id, account_count, status, azure_resource_group_name
+    `SELECT id, account_count, status, costing_mode, azure_resource_group_name
      FROM requests WHERE id = $1`,
     [requestId]
   );
@@ -23,7 +24,7 @@ const getRequestContext = async (client, requestId) => {
 
 const getAzureUsersForRequest = async (client, requestId) => {
   const result = await client.query(
-    `SELECT id, request_id, azure_user_id, username
+    `SELECT id, request_id, azure_user_id, username, user_number, azure_resource_group_name
      FROM azure_users
      WHERE request_id = $1 AND COALESCE(is_deleted, FALSE) = FALSE
      ORDER BY username`,
@@ -162,6 +163,14 @@ const runConcurrent = async (tasks, limit) => {
   return Promise.allSettled(results);
 };
 
+const resolveUserResourceGroupName = (request, user) => {
+  if (isPerUserCosting(request.costing_mode)) {
+    return user.azure_resource_group_name;
+  }
+
+  return request.azure_resource_group_name;
+};
+
 const provisionRolesForRequest = async (requestId) => {
   try {
     const request = await getRequestContext(db, requestId);
@@ -182,7 +191,14 @@ const provisionRolesForRequest = async (requestId) => {
 
     const { authorizationClient, subscriptionId } = createAuthorizationClient();
     const { graphClient } = createGraphClient();
-    const scope = buildResourceGroupScope(subscriptionId, request.azure_resource_group_name);
+
+    if (!isPerUserCosting(request.costing_mode) && !request.azure_resource_group_name) {
+      throw new AppError('Resource group must be provisioned before assigning roles.', 400);
+    }
+
+    const defaultScope = !isPerUserCosting(request.costing_mode)
+      ? buildResourceGroupScope(subscriptionId, request.azure_resource_group_name)
+      : null;
 
     // 1. Fetch ALL existing assignments in one DB round-trip
     const userIds = users.map((u) => u.id);
@@ -193,12 +209,44 @@ const provisionRolesForRequest = async (requestId) => {
     const uniqueRoleNames = [...new Set(rbacRoles.map((r) => r.azureRole))];
 
     const roleDefMap = new Map();
-    await Promise.all(
-      uniqueRoleNames.map(async (roleName) => {
-        const def = await findMatchingRoleDefinition(authorizationClient, scope, roleName);
-        if (def) roleDefMap.set(roleName, def);
-      })
-    );
+    const scopeCache = new Map();
+
+    const resolveScopeForUser = async (user) => {
+      if (!isPerUserCosting(request.costing_mode)) {
+        return defaultScope;
+      }
+
+      const resourceGroupName = resolveUserResourceGroupName(request, user);
+      if (!resourceGroupName) {
+        throw new AppError(`Resource group is missing for user ${user.username}.`, 400);
+      }
+
+      if (!scopeCache.has(resourceGroupName)) {
+        const scope = buildResourceGroupScope(subscriptionId, resourceGroupName);
+        scopeCache.set(resourceGroupName, scope);
+
+        await Promise.all(
+          uniqueRoleNames.map(async (roleName) => {
+            const cacheKey = `${resourceGroupName}:${roleName}`;
+            if (!roleDefMap.has(cacheKey)) {
+              const def = await findMatchingRoleDefinition(authorizationClient, scope, roleName);
+              if (def) roleDefMap.set(cacheKey, def);
+            }
+          })
+        );
+      }
+
+      return scopeCache.get(resourceGroupName);
+    };
+
+    if (!isPerUserCosting(request.costing_mode)) {
+      await Promise.all(
+        uniqueRoleNames.map(async (roleName) => {
+          const def = await findMatchingRoleDefinition(authorizationClient, defaultScope, roleName);
+          if (def) roleDefMap.set(roleName, def);
+        })
+      );
+    }
 
     // 3. Build all RBAC tasks and group assignments
     const rbacTasks = [];
@@ -207,6 +255,7 @@ const provisionRolesForRequest = async (requestId) => {
 
     for (const user of users) {
       const existingRoles = existingMap.get(user.id) || new Set();
+      const scope = await resolveScopeForUser(user);
 
       for (const role of roles) {
         if (existingRoles.has(role.azureRole)) continue;
@@ -235,7 +284,9 @@ const provisionRolesForRequest = async (requestId) => {
         }
 
         // RBAC assignment
-        const definition = roleDefMap.get(role.azureRole);
+        const definition = isPerUserCosting(request.costing_mode)
+          ? roleDefMap.get(`${resolveUserResourceGroupName(request, user)}:${role.azureRole}`)
+          : roleDefMap.get(role.azureRole);
         if (!definition) continue;
 
         const assignmentId = roleAssignmentIdFromSeed(`${requestId}-${user.id}-${definition.id}`);

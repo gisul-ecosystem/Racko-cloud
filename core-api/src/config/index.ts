@@ -7,6 +7,17 @@ const envSchema = z.object({
   // MongoDB
   MONGODB_URI: z.string().min(1, 'MONGODB_URI is required'),
   MONGODB_DB_NAME: z.string().min(1, 'MONGODB_DB_NAME is required'),
+  MONGODB_DNS_SERVERS: z
+    .string()
+    .optional()
+    .transform((value) =>
+      value
+        ? value
+            .split(',')
+            .map((server) => server.trim())
+            .filter(Boolean)
+        : undefined
+    ),
 
   // JWT
   JWT_ACCESS_SECRET: z.string().min(64, 'JWT_ACCESS_SECRET must be at least 64 characters'),

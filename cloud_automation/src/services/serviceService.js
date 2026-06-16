@@ -306,6 +306,7 @@ const getServiceBundle = async () => {
 
     return {
       ...service,
+      id: Number(service.id),
       price_per_user: Number(service.price_per_user),
       active: Boolean(service.active),
       enable_role_selection: Boolean(service.enable_role_selection),
@@ -363,7 +364,10 @@ const getServiceBundle = async () => {
   }));
 
   return {
-    categories: categoriesResult.rows,
+    categories: categoriesResult.rows.map((row) => ({
+      ...row,
+      id: Number(row.id)
+    })),
     services,
     roles,
     regions,

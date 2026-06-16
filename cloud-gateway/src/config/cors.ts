@@ -10,7 +10,13 @@ export const corsOptions: CorsOptions = {
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
+  allowedHeaders: [
+    'Content-Type',
+    'Authorization',
+    'X-Request-ID',
+    'X-Access-Session',
+    'X-Org-Admin-Session',
+  ],
   exposedHeaders: ['X-Request-ID', 'Retry-After'],
   maxAge: 86400,
 };

@@ -116,9 +116,35 @@ const updateRoles = async (req, res, next) => {
   }
 };
 
+const getConsoleLaunch = async (req, res, next) => {
+  try {
+    const sessionToken = getSessionToken(req);
+    const requestId = Number(req.query.requestId || 0);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('requestId is required.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await managePortalService.getAzureConsoleLaunch(sessionToken, requestId, userId);
+
+    res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   deleteUser,
   exchangeToken,
+  getConsoleLaunch,
   getRequest,
   updateRoles
 };

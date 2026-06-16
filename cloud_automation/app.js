@@ -23,11 +23,19 @@ const adminAccessRequestRoutes = require('./src/routes/adminAccessRequestRoutes'
 const serviceRoutes = require('./src/routes/serviceRoutes');
 const jobRoutes = require('./src/routes/jobRoutes');
 const AppError = require('./src/utils/AppError');
-const { pool } = require('./src/config/database');
+const pool = require('./src/config/database');
 
 const app = express();
 
+// Dynamic provisioning/status APIs must not return 304 — clients poll for fresh data.
+app.set('etag', false);
+
 app.use(express.json());
+
+app.use((_req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 
 app.use((req, res, next) => {
   const start = process.hrtime.bigint();

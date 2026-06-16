@@ -2,6 +2,16 @@ const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const { provisionResourceGroup } = require('../provisioners/azure/resourceGroupProvisioner');
 const { assertProvisionableLocation } = require('./azureLocationService');
+const {
+  buildSharedResourceGroupName,
+  isPerUserCosting,
+  isSharedCosting
+} = require('../utils/costingMode');
+const {
+  getStagingResourceGroups,
+  provisionPerUserResourceGroups,
+  summarizePerUserResourceGroups
+} = require('./userResourceGroupService');
 
 const STATUS_COMPLETED = 'Completed';
 
@@ -30,6 +40,8 @@ const getRequestForProvisioning = async (client, requestId) => {
       id,
       status,
       location,
+      account_count,
+      costing_mode,
       azure_resource_group_id,
       azure_resource_group_name
     FROM requests
@@ -49,7 +61,7 @@ const updateProvisionedRequest = async (client, requestId, resourceGroupId, reso
       azure_resource_group_name = $2,
       status = $3
     WHERE id = $4
-    RETURNING id, status, azure_resource_group_id, azure_resource_group_name
+    RETURNING id, status, azure_resource_group_id, azure_resource_group_name, costing_mode
   `;
 
   const result = await client.query(query, [
@@ -62,11 +74,24 @@ const updateProvisionedRequest = async (client, requestId, resourceGroupId, reso
   return result.rows[0];
 };
 
+const markPerUserProvisioningComplete = async (client, requestId) => {
+  const query = `
+    UPDATE requests
+    SET status = $2
+    WHERE id = $1
+    RETURNING id, status, costing_mode
+  `;
+
+  const result = await client.query(query, [requestId, STATUS_COMPLETED]);
+  return result.rows[0];
+};
+
 const getProvisionedRequest = async (requestId) => {
   const query = `
     SELECT
       id,
       status,
+      costing_mode,
       azure_resource_group_id,
       azure_resource_group_name
     FROM requests
@@ -81,11 +106,141 @@ const getProvisionedRequest = async (requestId) => {
 
   const request = result.rows[0];
 
+  if (isPerUserCosting(request.costing_mode)) {
+    const resourceGroups = await getStagingResourceGroups(requestId);
+
+    return {
+      id: request.id,
+      status: request.status,
+      costingMode: request.costing_mode,
+      resourceGroup: summarizePerUserResourceGroups(resourceGroups),
+      resourceGroups: resourceGroups.map((row) => ({
+        userNumber: Number(row.user_number),
+        name: row.azure_resource_group_name,
+        id: row.azure_resource_group_id
+      }))
+    };
+  }
+
   return {
     id: request.id,
     status: request.status,
+    costingMode: request.costing_mode,
     resourceGroup: request.azure_resource_group_name || null,
     resourceGroupId: request.azure_resource_group_id || null
+  };
+};
+
+const provisionSharedResourceGroup = async (client, request) => {
+  if (request.azure_resource_group_name) {
+    await client.query('COMMIT');
+
+    logProvisionEvent('info', 'provision_request_reused_existing', {
+      requestId: request.id,
+      status: request.status,
+      resourceGroup: request.azure_resource_group_name,
+      costingMode: request.costing_mode
+    });
+
+    return {
+      resourceGroup: request.azure_resource_group_name,
+      costingMode: request.costing_mode
+    };
+  }
+
+  const resourceGroupName = buildSharedResourceGroupName(request.id);
+  const location = request.location.trim();
+  assertProvisionableLocation(location);
+
+  logProvisionEvent('info', 'provision_request_started', {
+    requestId: request.id,
+    status: request.status,
+    resourceGroupName,
+    location,
+    costingMode: request.costing_mode
+  });
+
+  const provisionedResourceGroup = await provisionResourceGroup({
+    requestId: request.id,
+    resourceGroupName,
+    location
+  });
+
+  await updateProvisionedRequest(
+    client,
+    request.id,
+    provisionedResourceGroup.resourceGroupId,
+    provisionedResourceGroup.resourceGroupName
+  );
+
+  await client.query('COMMIT');
+
+  logProvisionEvent('info', 'provision_request_completed', {
+    requestId: request.id,
+    resourceGroupName: provisionedResourceGroup.resourceGroupName,
+    resourceGroupId: provisionedResourceGroup.resourceGroupId,
+    costingMode: request.costing_mode
+  });
+
+  return {
+    resourceGroup: provisionedResourceGroup.resourceGroupName,
+    costingMode: request.costing_mode
+  };
+};
+
+const provisionPerUserResourceGroupsForRequest = async (client, request) => {
+  const existingGroups = await getStagingResourceGroups(request.id, client);
+  const accountCount = Number(request.account_count);
+
+  if (existingGroups.length >= accountCount && accountCount > 0) {
+    await markPerUserProvisioningComplete(client, request.id);
+    await client.query('COMMIT');
+
+    logProvisionEvent('info', 'provision_request_reused_existing', {
+      requestId: request.id,
+      status: request.status,
+      resourceGroupCount: existingGroups.length,
+      costingMode: request.costing_mode
+    });
+
+    return {
+      resourceGroup: summarizePerUserResourceGroups(existingGroups),
+      resourceGroupCount: existingGroups.length,
+      costingMode: request.costing_mode
+    };
+  }
+
+  const location = request.location.trim();
+  assertProvisionableLocation(location);
+
+  logProvisionEvent('info', 'provision_request_started', {
+    requestId: request.id,
+    status: request.status,
+    accountCount,
+    location,
+    costingMode: request.costing_mode
+  });
+
+  const resourceGroups = await provisionPerUserResourceGroups({
+    requestId: request.id,
+    accountCount,
+    location,
+    client
+  });
+
+  await markPerUserProvisioningComplete(client, request.id);
+  await client.query('COMMIT');
+
+  logProvisionEvent('info', 'provision_request_completed', {
+    requestId: request.id,
+    resourceGroupCount: resourceGroups.length,
+    costingMode: request.costing_mode
+  });
+
+  return {
+    resourceGroup: summarizePerUserResourceGroups(resourceGroups),
+    resourceGroupCount: resourceGroups.length,
+    costingMode: request.costing_mode
   };
 };
 
@@ -101,59 +256,19 @@ const provisionRequestResourceGroup = async (requestId) => {
       throw new AppError('Request not found.', 404);
     }
 
-    if (request.azure_resource_group_name) {
-      await client.query('COMMIT');
-
-      logProvisionEvent('info', 'provision_request_reused_existing', {
-        requestId,
-        status: request.status,
-        resourceGroup: request.azure_resource_group_name
-      });
-
-      return {
-        resourceGroup: request.azure_resource_group_name
-      };
-    }
-
     if (typeof request.location !== 'string' || request.location.trim().length === 0) {
       throw new AppError('Request location is missing.', 400);
     }
 
-    const resourceGroupName = `RG-CUST-${requestId}`;
-    const location = request.location.trim();
-    assertProvisionableLocation(location);
+    if (isPerUserCosting(request.costing_mode)) {
+      return provisionPerUserResourceGroupsForRequest(client, request);
+    }
 
-    logProvisionEvent('info', 'provision_request_started', {
-      requestId,
-      status: request.status,
-      resourceGroupName,
-      location
-    });
+    if (isSharedCosting(request.costing_mode)) {
+      return provisionSharedResourceGroup(client, request);
+    }
 
-    const provisionedResourceGroup = await provisionResourceGroup({
-      requestId,
-      resourceGroupName,
-      location
-    });
-
-    await updateProvisionedRequest(
-      client,
-      requestId,
-      provisionedResourceGroup.resourceGroupId,
-      provisionedResourceGroup.resourceGroupName
-    );
-
-    await client.query('COMMIT');
-
-    logProvisionEvent('info', 'provision_request_completed', {
-      requestId,
-      resourceGroupName: provisionedResourceGroup.resourceGroupName,
-      resourceGroupId: provisionedResourceGroup.resourceGroupId
-    });
-
-    return {
-      resourceGroup: provisionedResourceGroup.resourceGroupName
-    };
+    throw new AppError('Request costing mode is invalid.', 400);
   } catch (error) {
     await client.query('ROLLBACK');
 

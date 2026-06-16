@@ -421,10 +421,76 @@ const calculateEstimate = async ({
   };
 };
 
+const getHourlyRateForProvisionedResources = async (provisionedRows, location) => {
+  const activeRows = (provisionedRows || []).filter((row) =>
+    ['policy_configured', 'provisioned'].includes(String(row.status || ''))
+  );
+
+  if (activeRows.length === 0) {
+    return {
+      hourlyRate: 0,
+      resourceCount: 0,
+      resources: []
+    };
+  }
+
+  const serviceIds = activeRows.map((row) => Number(row.service_id));
+  const { services } = await loadPricingContext(serviceIds);
+  const normalizedLocation = String(location || '').trim().toLowerCase();
+  const selectedInstancesByServiceId = activeRows.reduce((accumulator, row) => {
+    accumulator[Number(row.service_id)] = String(row.instance_option || '').trim();
+    return accumulator;
+  }, {});
+
+  let hourlyTotal = 0;
+  const resources = [];
+
+  for (const row of activeRows) {
+    const serviceId = Number(row.service_id);
+    const service = services.find((entry) => Number(entry.id) === serviceId);
+
+    if (!service) {
+      continue;
+    }
+
+    const instanceOption = selectedInstancesByServiceId[serviceId] || '';
+    const filter = buildRetailFilter(service, instanceOption);
+    let infraHourly = 0;
+
+    if (filter && normalizedLocation) {
+      const items = await fetchRetailPriceItems(
+        `${filter} and armRegionName eq '${escapeODataString(normalizedLocation)}'`
+      );
+      const dailyPrice = selectLowestDailyPrice(items);
+      infraHourly = dailyPrice / 24;
+    }
+
+    const portalHourly = Math.max(0, Number(service.price_per_user || 0)) / 24;
+    const hourlyRate = infraHourly + portalHourly;
+
+    hourlyTotal += hourlyRate;
+    resources.push({
+      serviceId,
+      name: service.name,
+      instanceOption: instanceOption || null,
+      resourceType: row.resource_type,
+      resourceName: row.resource_name,
+      hourlyRate: Number(hourlyRate.toFixed(6))
+    });
+  }
+
+  return {
+    hourlyRate: Number(hourlyTotal.toFixed(6)),
+    resourceCount: resources.length,
+    resources
+  };
+};
+
 module.exports = {
   loadPricingContext,
   getServiceRegionalDailyPrices,
   getRegionalDailyPricesForServices,
   getPortalDailyFees,
-  calculateEstimate
+  calculateEstimate,
+  getHourlyRateForProvisionedResources
 };

@@ -114,7 +114,10 @@ const findProvisionedRequestId = async ({ requestId, customerEmail, serviceId })
       JOIN request_services rs ON rs.request_id = r.id
       WHERE lower(r.customer_email) = $1
         AND rs.service_id = $2
-        AND r.azure_resource_group_name IS NOT NULL
+        AND (
+          r.azure_resource_group_name IS NOT NULL
+          OR r.costing_mode = 'per_user'
+        )
       ORDER BY r.created_at DESC
       LIMIT 1
     `,
@@ -159,7 +162,7 @@ const requestHasProvisionedUsers = async (requestId) => {
 const requestHasResourceGroup = async (requestId) => {
   const result = await db.query(
     `
-      SELECT azure_resource_group_name
+      SELECT azure_resource_group_name, costing_mode
       FROM requests
       WHERE id = $1
       LIMIT 1
@@ -167,7 +170,22 @@ const requestHasResourceGroup = async (requestId) => {
     [requestId]
   );
 
-  return Boolean(String(result.rows[0]?.azure_resource_group_name || '').trim());
+  const row = result.rows[0];
+  if (!row) return false;
+
+  if (String(row.costing_mode || '').toLowerCase() === 'per_user') {
+    const staged = await db.query(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM request_user_resource_groups
+        WHERE request_id = $1
+      `,
+      [requestId]
+    );
+    return Number(staged.rows[0]?.count || 0) > 0;
+  }
+
+  return Boolean(String(row.azure_resource_group_name || '').trim());
 };
 
 const applyApprovedRolesForRequest = async (accessRequest) => {

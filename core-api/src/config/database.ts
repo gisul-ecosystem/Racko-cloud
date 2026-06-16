@@ -1,6 +1,12 @@
+import dns from 'node:dns';
 import mongoose from 'mongoose';
 import { config } from './index';
 import { logger } from '../utils/logger';
+
+if (config.MONGODB_DNS_SERVERS?.length) {
+  dns.setServers(config.MONGODB_DNS_SERVERS);
+  logger.info('Using custom MongoDB DNS servers', { servers: config.MONGODB_DNS_SERVERS });
+}
 
 const MONGODB_OPTIONS: mongoose.ConnectOptions = {
   dbName: config.MONGODB_DB_NAME,
