@@ -1,3 +1,5 @@
+import type { CatalogInstance } from '../types/catalog';
+
 export function buildInstanceSelectionsParam(
   instances: { serviceId: number; instanceOption: string }[]
 ): string | undefined {
@@ -91,9 +93,9 @@ export function normalizeServiceId(value: number | string | null | undefined): n
 }
 
 export function catalogInstancesForServices(
-  catalogInstances: { serviceId: number; option_name: string; guide?: string | { summary?: string } }[],
+  catalogInstances: CatalogInstance[],
   serviceIds: number[]
-) {
+): CatalogInstance[] {
   const idSet = new Set(serviceIds.map(normalizeServiceId).filter(Boolean));
   return catalogInstances.filter((instance) => idSet.has(normalizeServiceId(instance.serviceId)));
 }
