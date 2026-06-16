@@ -4,7 +4,7 @@ export interface IVMJob extends Document {
   _id: mongoose.Types.ObjectId;
 
   adminId: mongoose.Types.ObjectId;
-  type: 'single_create' | 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop';
+  type: 'single_create' | 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop' | 'vm_clone';
 
   // Job progress
   status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
@@ -38,6 +38,9 @@ export interface IVMJob extends Document {
     consoleProtocol: 'rdp' | 'ssh';
     enableVirtualization?: boolean;
     softwareIds?: mongoose.Types.ObjectId[];
+    // Clone job extras
+    sourceVmId?: mongoose.Types.ObjectId;
+    sourceVmName?: string;
   };
 
   // Golden-image bulk job progress (transient)
@@ -69,7 +72,7 @@ const vmJobSchema = new Schema<IVMJob>(
     },
     type: {
       type: String,
-      enum: ['single_create', 'bulk_create', 'bulk_delete', 'bulk_start', 'bulk_stop'],
+      enum: ['single_create', 'bulk_create', 'bulk_delete', 'bulk_start', 'bulk_stop', 'vm_clone'],
       required: true,
     },
     status: {
@@ -133,6 +136,9 @@ const vmJobSchema = new Schema<IVMJob>(
       consoleProtocol: { type: String, enum: ['rdp', 'ssh'], default: 'rdp' },
       enableVirtualization: { type: Boolean, default: false },
       softwareIds: { type: [Schema.Types.ObjectId], ref: 'Software', default: [] },
+      // Clone job extras
+      sourceVmId: { type: Schema.Types.ObjectId, ref: 'VM', default: null },
+      sourceVmName: { type: String, trim: true },
     },
     phase: {
       type: String,

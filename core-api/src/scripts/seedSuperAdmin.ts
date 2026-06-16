@@ -1,5 +1,5 @@
 /**
- * Super Admin Seed Script
+ * Super Admin Seed Script 
  * Run once: npx ts-node src/scripts/seedSuperAdmin.ts
  * Idempotent — skips if super_admin already exists.
  * NEVER expose this as an API endpoint.

@@ -95,6 +95,43 @@ export class VMController {
   }
 
   /**
+   * POST /api/v1/vms/:vmId/clone
+   */
+  async cloneVM(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { name } = req.body as { name: string };
+
+      logger.info('[VMClone] Clone requested', {
+        userId: authReq.user.userId,
+        sourceVmId: vmId.toString(),
+        name,
+      });
+
+      const result = await vmService.cloneVM(vmId, adminId, name, req);
+      success(res, 'VM clone job started.', { jobId: result.jobId }, 202);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/clones
+   */
+  async getClonedVMs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const vms = await vmService.getClonedVMs(adminId);
+      success(res, 'Cloned VMs retrieved.', { vms, total: vms.length });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * POST /api/v1/vms/bulk-delete
    */
   async bulkDeleteVMs(req: Request, res: Response, next: NextFunction): Promise<void> {

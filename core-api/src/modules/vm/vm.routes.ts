@@ -15,6 +15,7 @@ import {
   templateSelectionSchema,
   userIdParamSchema,
   vmConsoleSchema,
+  cloneVMSchema,
 } from './vm.validation';
 
 const router = Router();
@@ -133,6 +134,12 @@ router.get(
   (req, res, next) => vmController.listJobs(req, res, next)
 );
 
+// GET /api/v1/vms/clones — list VMs cloned from existing VMs
+router.get(
+  '/clones',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => vmController.getClonedVMs(req, res, next)
+);
 // GET /api/v1/vms/jobs/:jobId
 router.get(
   '/jobs/:jobId',
@@ -223,6 +230,14 @@ router.post(
   requireRole('admin', 'super_admin', 'user'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.stopVM(req, res, next)
+);
+
+// POST /api/v1/vms/:vmId/clone
+router.post(
+  '/:vmId/clone',
+  requireRole('admin', 'super_admin'),
+  validateRequest(cloneVMSchema),
+  (req, res, next) => vmController.cloneVM(req, res, next)
 );
 
 // POST /api/v1/vms/:vmId/hibernate

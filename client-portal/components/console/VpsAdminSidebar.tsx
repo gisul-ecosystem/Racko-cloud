@@ -6,6 +6,7 @@ import {
   Briefcase,
   ChevronLeft,
   Clock,
+  Copy,
   LayoutDashboard,
   Plus,
   Server,
@@ -34,6 +35,11 @@ const navLinks: NavLink[] = [
     href: '/dashboard/admin/vms/create',
     label: 'Create VM',
     icon: <Plus className="h-4 w-4" />,
+  },
+  {
+    href: '/dashboard/admin/clone-vms',
+    label: 'Clone VMs',
+    icon: <Copy className="h-4 w-4" />,
   },
   {
     href: '/dashboard/admin/jobs',
