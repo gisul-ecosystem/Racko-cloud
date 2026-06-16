@@ -1,7 +1,7 @@
 import type { NotificationSeverity } from './notification.model';
 
 export interface JobNotificationSnapshot {
-  type: 'single_create' | 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop';
+  type: 'single_create' | 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop' | 'vm_clone';
   status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
   total: number;
   completed: number;
@@ -26,6 +26,10 @@ function isDeleteJob(type: JobNotificationSnapshot['type']): boolean {
   return type === 'bulk_delete';
 }
 
+function isCloneJob(type: JobNotificationSnapshot['type']): boolean {
+  return type === 'vm_clone';
+}
+
 export function buildJobStartedNotification(job: JobNotificationSnapshot): JobNotificationContent {
   const total = job.total;
   const templateName = job.requestedSpecs?.templateName ?? 'template';
@@ -35,6 +39,14 @@ export function buildJobStartedNotification(job: JobNotificationSnapshot): JobNo
     return {
       title: 'VM deletion started',
       message: `Deleting ${total} VM${total === 1 ? '' : 's'}.`,
+      severity: 'info',
+    };
+  }
+
+  if (isCloneJob(job.type)) {
+    return {
+      title: 'VM clone started',
+      message: `Cloning VM "${prefix}". This may take a few minutes.`,
       severity: 'info',
     };
   }
@@ -78,6 +90,21 @@ export function buildJobFinishedNotification(job: JobNotificationSnapshot): JobN
     return {
       title: 'VM deletion failed',
       message: `Could not delete the selected VMs. ${failed} failed.`,
+      severity: 'error',
+    };
+  }
+
+  if (isCloneJob(type)) {
+    if (status === 'completed') {
+      return {
+        title: 'VM cloned',
+        message: `VM "${prefix}" cloned successfully and is ready to use.`,
+        severity: 'success',
+      };
+    }
+    return {
+      title: 'VM clone failed',
+      message: `Could not clone VM "${prefix}". Check the job for details.`,
       severity: 'error',
     };
   }

@@ -15,6 +15,13 @@ function getJobSummary(job: IVMJob): { title: string; subtitle: string } {
     };
   }
 
+  if (job.type === 'vm_clone') {
+    return {
+      title: job.requestedSpecs?.namePrefix ?? 'VM Clone',
+      subtitle: 'VM clone job',
+    };
+  }
+
   return {
     title: `${job.requestedSpecs?.namePrefix ?? 'vm'}-*`,
     subtitle: `${job.requestedSpecs?.count ?? job.total} VMs · ${job.requestedSpecs?.templateName ?? 'Unknown template'}`,

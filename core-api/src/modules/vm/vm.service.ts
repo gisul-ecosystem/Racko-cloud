@@ -24,6 +24,7 @@ import {
 } from './helpers/proxmoxResumeVerify';
 import { processBulkCreation } from './helpers/bulkProcessor';
 import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
+import { processVmClone } from './helpers/cloneProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
@@ -1233,6 +1234,96 @@ export class VMService {
     });
 
     return { success: true, vmid: vm.vmid, node: vm.node, operation: 'force-stop', taskId: upid };
+  }
+
+  /**
+   * POST /api/v1/vms/:vmId/clone
+   * Creates an async clone job and returns immediately with a jobId.
+   * The background processor handles: stop source → Proxmox clone → restart source → save VM.
+   */
+  async cloneVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    name: string,
+    req: Request
+  ): Promise<{ jobId: string }> {
+    const authReq = req as AuthenticatedRequest;
+
+    const sourceVm = await VM.findById(vmId);
+    if (!sourceVm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(sourceVm, adminId.toString(), authReq.user.role);
+
+    if (['creating', 'deleting', 'deleted', 'delete_failed'].includes(sourceVm.status)) {
+      throw new VMOperationError(
+        `Cannot clone a VM in '${sourceVm.status}' state.`,
+        sourceVm.status,
+        'stopped'
+      );
+    }
+
+    // Create the job record immediately and return — background worker does the rest
+    const job = await VMJob.create({
+      adminId,
+      type: 'vm_clone',
+      status: 'pending',
+      total: 1,
+      completed: 0,
+      failed: 0,
+      pending: 1,
+      vmIds: [],
+      failedVmids: [],
+      requestedSpecs: {
+        templateId: sourceVm.templateId,
+        templateName: sourceVm.templateName,
+        templateNode: sourceVm.node,
+        cloneType: 'dedicated_storage',
+        cpuCores: sourceVm.allocatedCpu,
+        memoryGb: sourceVm.allocatedMemoryGb,
+        diskGb: sourceVm.allocatedDiskGb,
+        templateDiskGb: sourceVm.allocatedDiskGb,
+        templateCpuCores: sourceVm.allocatedCpu,
+        templateMemoryGb: sourceVm.allocatedMemoryGb,
+        namePrefix: name,
+        count: 1,
+        consoleUsername: sourceVm.consoleUsername ?? '',
+        passwordMode: 'fixed',
+        consolePassword: sourceVm.consolePassword,
+        consoleProtocol: sourceVm.consoleProtocol,
+        sourceVmId: sourceVm._id,
+        sourceVmName: sourceVm.name,
+      },
+      jobErrors: [],
+      startedAt: new Date(),
+    });
+
+    logger.info('[VMClone] Clone job created', {
+      jobId: job._id.toString(),
+      adminId: adminId.toString(),
+      sourceVmId: vmId.toString(),
+      sourceVmid: sourceVm.vmid,
+      name,
+    });
+
+    // Fire and forget — QUEUE_SLOT: replace with message queue (RabbitMQ/BullMQ)
+    processVmClone(job, adminId).catch((err: unknown) => {
+      logger.error('[VMClone] Unhandled error in clone processor', {
+        jobId: job._id.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+
+    return { jobId: job._id.toString() };
+  }
+
+  /**
+   * GET /api/v1/vms/clones
+   * Returns all VMs that were cloned from an existing VM (isVmClone: true).
+   */
+  async getClonedVMs(adminId: mongoose.Types.ObjectId): Promise<mongoose.FlattenMaps<IVM>[]> {
+    const vms = await VM.find({ adminId, isVmClone: true })
+      .sort({ createdAt: -1 })
+      .lean();
+    return vms;
   }
 
   /**

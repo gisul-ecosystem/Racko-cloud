@@ -175,7 +175,8 @@ export type VMJobType =
   | 'bulk_create'
   | 'bulk_delete'
   | 'bulk_start'
-  | 'bulk_stop';
+  | 'bulk_stop'
+  | 'vm_clone';
 
 export interface IVMJob {
   _id: string;
@@ -592,6 +593,29 @@ export async function fetchSoftwareCatalog(): Promise<SoftwareCatalogItem[]> {
     '/api/v1/software'
   );
   return res.data.software;
+}
+
+// ─── VM Cloning ───────────────────────────────────────────────────────────────
+
+export interface ClonedVM extends IVM {
+  sourceVmId?: string;
+  sourceVmName?: string;
+  isVmClone: boolean;
+}
+
+export async function cloneVM(vmId: string, name: string): Promise<{ jobId: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string }>>(
+    `/api/v1/vms/${vmId}/clone`,
+    { method: 'POST', body: JSON.stringify({ name }) }
+  );
+  return res.data;
+}
+
+export async function fetchClonedVMs(): Promise<ClonedVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: ClonedVM[]; total: number }>>(
+    '/api/v1/vms/clones'
+  );
+  return res.data.vms;
 }
 
 // ─── VM automation (hibernate / resume schedules) ─────────────────────────────

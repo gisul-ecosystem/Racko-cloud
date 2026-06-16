@@ -2,6 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export type VMEventType =
   | 'VM_CREATED'
+  | 'VM_CLONED'
   | 'VM_DELETED'
   | 'VM_STARTED'
   | 'VM_STOPPED'
@@ -59,6 +60,7 @@ const vmEventSchema = new Schema<IVMEvent>(
       type: String,
       enum: [
         'VM_CREATED',
+        'VM_CLONED',
         'VM_DELETED',
         'VM_STARTED',
         'VM_STOPPED',
