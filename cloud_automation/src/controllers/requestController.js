@@ -35,7 +35,10 @@ const createRequest = async (req, res, next) => {
       costingMode: req.body.costingMode
     };
 
-    const result = await requestService.createRequest(payload);
+    const result = await requestService.createRequest({
+      ...payload,
+      rackoUserId: req.rackoUser?.userId
+    });
 
     res.status(201).json({
       success: true,
@@ -49,7 +52,10 @@ const createRequest = async (req, res, next) => {
 
 const getAllRequests = async (req, res, next) => {
   try {
-    const requests = await requestService.getAllRequests();
+    const requests = await requestService.getAllRequests({
+      rackoUserId: req.rackoUser.userId,
+      isSuperAdmin: req.rackoUser.isSuperAdmin
+    });
 
     res.status(200).json({
       success: true,
@@ -65,7 +71,10 @@ const getRequestById = async (req, res, next) => {
   try {
     validateRequestId(req.params.id);
 
-    const request = await requestService.getRequestById(Number(req.params.id));
+    const request = await requestService.getRequestById(Number(req.params.id), {
+      rackoUserId: req.rackoUser.userId,
+      isSuperAdmin: req.rackoUser.isSuperAdmin
+    });
 
     if (!request) {
       throw new AppError('Request not found.', 404);

@@ -4,6 +4,7 @@ const {
   getRegionalDailyPricesForServices,
   getPortalDailyFees
 } = require('./estimatePricingService');
+const { getDistinctLocations } = require('./azureCatalogSyncService');
 const AppError = require('../utils/AppError');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
@@ -70,40 +71,64 @@ const getSubscriptionLocations = async () => {
     return subscriptionLocationsCache.locations;
   }
 
-  const { accessToken, subscriptionId } = await getManagementAccessToken();
-  const response = await axios.get(
-    `https://management.azure.com/subscriptions/${subscriptionId}/locations`,
-    {
-      params: { 'api-version': '2022-12-01' },
-      headers: { Authorization: `Bearer ${accessToken}` },
-      timeout: 15000
-    }
-  );
-
-  const locations = (response.data?.value || [])
-    .map((entry) => {
-      const armRegionName = String(entry?.name || '').trim().toLowerCase();
-      const displayLocation = String(
-        entry?.regionalDisplayName || entry?.displayName || entry?.name || ''
-      ).trim();
-
-      if (!armRegionName) {
-        return null;
+  try {
+    const { accessToken, subscriptionId } = await getManagementAccessToken();
+    const response = await axios.get(
+      `https://management.azure.com/subscriptions/${subscriptionId}/locations`,
+      {
+        params: { 'api-version': '2022-12-01' },
+        headers: { Authorization: `Bearer ${accessToken}` },
+        timeout: 15000
       }
+    );
 
-      return {
-        arm_region_name: armRegionName,
-        display_location: displayLocation || armRegionName,
-        metadata: entry?.metadata || null
-      };
-    })
-    .filter((location) => location && isProvisionableLocation(location))
-    .sort((left, right) => left.display_location.localeCompare(right.display_location));
+    const locations = (response.data?.value || [])
+      .map((entry) => {
+        const armRegionName = String(entry?.name || '').trim().toLowerCase();
+        const displayLocation = String(
+          entry?.regionalDisplayName || entry?.displayName || entry?.name || ''
+        ).trim();
 
-  subscriptionLocationsCache.locations = locations;
-  subscriptionLocationsCache.expiresAt = Date.now() + CACHE_TTL_MS;
+        if (!armRegionName) {
+          return null;
+        }
 
-  return locations;
+        return {
+          arm_region_name: armRegionName,
+          display_location: displayLocation || armRegionName,
+          metadata: entry?.metadata || null
+        };
+      })
+      .filter((location) => location && isProvisionableLocation(location))
+      .sort((left, right) => left.display_location.localeCompare(right.display_location));
+
+    subscriptionLocationsCache.locations = locations;
+    subscriptionLocationsCache.expiresAt = Date.now() + CACHE_TTL_MS;
+
+    return locations;
+  } catch (error) {
+    console.warn(
+      '[AZURE_LOCATIONS] Live subscription lookup failed; falling back to catalog DB.',
+      error?.message || error
+    );
+
+    const catalogLocations = await getDistinctLocations();
+    const locations = catalogLocations
+      .filter((location) => isProvisionableLocation(location))
+      .sort((left, right) => left.display_location.localeCompare(right.display_location));
+
+    if (locations.length === 0) {
+      throw new AppError(
+        'Unable to load Azure regions. Check Azure credentials and outbound network access to login.microsoftonline.com.',
+        503
+      );
+    }
+
+    subscriptionLocationsCache.locations = locations;
+    subscriptionLocationsCache.expiresAt = Date.now() + CACHE_TTL_MS;
+
+    return locations;
+  }
 };
 
 const resolveInstanceOptionForLocation = (
@@ -173,19 +198,27 @@ const filterLocationsForSelectedInstances = async (
     return locations;
   }
 
-  const availabilityChecks = await Promise.all(
-    locations.map(async (location) => {
-      const filtered = await filterInstancesForLocation(
-        location.arm_region_name,
-        instancesToValidate,
-        servicesById
-      );
+  try {
+    const availabilityChecks = await Promise.all(
+      locations.map(async (location) => {
+        const filtered = await filterInstancesForLocation(
+          location.arm_region_name,
+          instancesToValidate,
+          servicesById
+        );
 
-      return filtered.length === instancesToValidate.length ? location : null;
-    })
-  );
+        return filtered.length === instancesToValidate.length ? location : null;
+      })
+    );
 
-  return availabilityChecks.filter(Boolean);
+    return availabilityChecks.filter(Boolean);
+  } catch (error) {
+    console.warn(
+      '[AZURE_LOCATIONS] Instance availability check failed; returning unfiltered regions.',
+      error?.message || error
+    );
+    return locations;
+  }
 };
 
 const getLocationsForSelectedServices = async (
