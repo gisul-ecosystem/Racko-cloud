@@ -141,10 +141,71 @@ const getConsoleLaunch = async (req, res, next) => {
   }
 };
 
+const endUsageSession = async (req, res, next) => {
+  try {
+    const sessionToken = getSessionToken(req);
+    const requestId = Number(req.query.requestId || req.body?.requestId || 0);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('requestId is required.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await managePortalService.endPortalUserUsageSession(
+      sessionToken,
+      requestId,
+      userId
+    );
+
+    res.status(200).json({
+      success: true,
+      message: result.ended ? 'Usage session ended.' : 'No active usage session.',
+      data: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getUsageStatus = async (req, res, next) => {
+  try {
+    const sessionToken = getSessionToken(req);
+    const requestId = Number(req.query.requestId || 0);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('requestId is required.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const status = await managePortalService.getPortalUserUsageStatus(
+      sessionToken,
+      requestId,
+      userId
+    );
+
+    res.status(200).json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   deleteUser,
+  endUsageSession,
   exchangeToken,
   getConsoleLaunch,
   getRequest,
+  getUsageStatus,
   updateRoles
 };

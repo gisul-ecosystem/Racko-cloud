@@ -183,6 +183,30 @@ async function startUsageSession({ requestId, userId }) {
 }
 
 /**
+ * End an active usage session if one exists (no error when already closed).
+ */
+async function endUsageSessionIfActive({ requestId, userId }) {
+  const activeSessionResult = await db.query(
+    `
+    SELECT id
+    FROM user_usage_sessions
+    WHERE request_id = $1
+      AND user_id = $2
+      AND logout_at IS NULL
+    ORDER BY login_at DESC
+    LIMIT 1
+    `,
+    [requestId, userId]
+  );
+
+  if (activeSessionResult.rows.length === 0) {
+    return null;
+  }
+
+  return endUsageSession({ requestId, userId });
+}
+
+/**
  * End a usage session
  */
 async function endUsageSession({ requestId, userId }) {
@@ -639,6 +663,7 @@ async function forceLogoutUser({ requestId, userId }) {
 module.exports = {
   startUsageSession,
   endUsageSession,
+  endUsageSessionIfActive,
   getUsageStatus,
   getActiveSessions,
   forceLogoutUser

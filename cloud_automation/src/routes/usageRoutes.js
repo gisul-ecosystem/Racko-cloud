@@ -7,8 +7,8 @@ const router = express.Router();
 // Start usage session - HARD ENFORCEMENT
 router.post('/start', validateUserAccess, usageController.startUsageSession);
 
-// End usage session
-router.post('/end', usageController.endUsageSession);
+// End usage session - requires access validation when requestId/userId provided
+router.post('/end', validateUserAccess, usageController.endUsageSession);
 
 // Get usage status for a specific user and request
 router.get('/status/:requestId/:userId', usageController.getUsageStatus);

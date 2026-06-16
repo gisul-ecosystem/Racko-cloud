@@ -118,6 +118,57 @@ export async function fetchManagePortalConsoleLaunch(params: {
   );
 }
 
+export interface ManagePortalUsageStatus {
+  enableDailyUsage: boolean;
+  usedMinutes: number;
+  storedUsedMinutes: number;
+  currentSessionMinutes: number;
+  remainingMinutes: number | null;
+  dailyLimitMinutes: number | null;
+  hasActiveSession: boolean;
+  blocked: boolean;
+  blockedUntil: string | null;
+  withinWindow: boolean;
+  accessMessage: string;
+}
+
+export async function fetchManagePortalUsageStatus(params: {
+  requestId: number;
+  userId: number;
+  sessionToken: string;
+}): Promise<ManagePortalUsageStatus> {
+  const payload = await manageRequest<{ success?: boolean; data?: ManagePortalUsageStatus }>(
+    `/user/${params.userId}/usage?requestId=${params.requestId}`,
+    {
+      method: 'GET',
+      sessionToken: params.sessionToken,
+    }
+  );
+
+  if (!payload.data) {
+    throw new ManagePortalError('Usage status is unavailable.', 500, 'unknown');
+  }
+
+  return payload.data;
+}
+
+export async function endManagePortalUsageSession(params: {
+  requestId: number;
+  userId: number;
+  sessionToken: string;
+}): Promise<{ ended: boolean }> {
+  const payload = await manageRequest<{ success?: boolean; data?: { ended?: boolean } }>(
+    `/user/${params.userId}/usage/end?requestId=${params.requestId}`,
+    {
+      method: 'POST',
+      sessionToken: params.sessionToken,
+      body: JSON.stringify({ requestId: params.requestId }),
+    }
+  );
+
+  return { ended: payload.data?.ended === true };
+}
+
 export async function fetchManagePortalUsers(
   requestId: number,
   sessionToken: string
