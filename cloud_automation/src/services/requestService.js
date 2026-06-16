@@ -19,7 +19,8 @@ async function createRequest({
   enableDailyUsage,
   dailyLimitMinutes,
   usageSchedule,
-  costingMode
+  costingMode,
+  rackoUserId
 }) {
 
   const client = await db.connect();
@@ -217,6 +218,7 @@ async function createRequest({
     // ==========================
 
     const resolvedCostingMode = normalizeCostingMode(costingMode) || COSTING_MODE_SHARED;
+    const resolvedRackoUserId = String(rackoUserId || '').trim() || null;
 
     const request =
       await client.query(
@@ -241,7 +243,9 @@ async function createRequest({
 
           usage_schedule,
 
-          costing_mode
+          costing_mode,
+
+          racko_user_id
 
         )
 
@@ -256,7 +260,8 @@ async function createRequest({
           $7,
           $8,
           $9,
-          $10
+          $10,
+          $11
 
         )
 
@@ -285,7 +290,9 @@ async function createRequest({
 
           enableDailyUsage === true && usageSchedule ? JSON.stringify(usageSchedule) : null,
 
-          resolvedCostingMode
+          resolvedCostingMode,
+
+          resolvedRackoUserId
 
         ]
       );
@@ -536,48 +543,64 @@ async function createRequest({
 
 
 
-async function getAllRequests(){
+async function getAllRequests({ rackoUserId, isSuperAdmin } = {}) {
+  if (isSuperAdmin) {
+    const result = await db.query(
+      `
+      SELECT *
+      FROM requests
+      ORDER BY created_at DESC
+      `
+    );
 
-const result =
-await db.query(
-`
-SELECT *
-FROM requests
-ORDER BY created_at DESC
-`
-);
+    return result.rows;
+  }
 
-return result.rows;
+  const result = await db.query(
+    `
+    SELECT *
+    FROM requests
+    WHERE racko_user_id = $1
+    ORDER BY created_at DESC
+    `,
+    [rackoUserId]
+  );
 
+  return result.rows;
 }
 
 
 
 async function getRequestById(
-requestId
-){
+  requestId,
+  { rackoUserId, isSuperAdmin } = {}
+) {
+  const request = await db.query(
+    `
+    SELECT *
+    FROM requests
+    WHERE id=$1
+    `,
+    [requestId]
+  );
 
-const request =
-await db.query(
-`
-SELECT *
-FROM requests
-WHERE id=$1
-`,
-[
-requestId
-]
-);
+  if (!request.rows.length) {
+    return null;
+  }
 
+  const row = request.rows[0];
 
+  if (
+    !isSuperAdmin &&
+    row.racko_user_id &&
+    String(row.racko_user_id) !== String(rackoUserId)
+  ) {
+    return null;
+  }
 
-if(
-!request.rows.length
-){
-
-return null;
-
-}
+  if (!isSuperAdmin && !row.racko_user_id) {
+    return null;
+  }
 
 
 
