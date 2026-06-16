@@ -22,6 +22,11 @@ export interface IVM extends Document {
   // Ownership
   adminId: mongoose.Types.ObjectId;
 
+  // Clone tracking
+  isVmClone: boolean;
+  sourceVmId?: mongoose.Types.ObjectId;
+  sourceVmName?: string;
+
   // VM details
   name: string;
   description?: string;
@@ -99,6 +104,20 @@ const vmSchema = new Schema<IVM>(
       ref: 'User',
       required: true,
       index: true,
+    },
+    isVmClone: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    sourceVmId: {
+      type: Schema.Types.ObjectId,
+      ref: 'VM',
+      default: null,
+    },
+    sourceVmName: {
+      type: String,
+      trim: true,
     },
     name: {
       type: String,

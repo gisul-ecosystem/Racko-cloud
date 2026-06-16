@@ -169,7 +169,7 @@ export default function JobStatusPage() {
 
       <div className="mb-6">
         <h1 className="text-2xl font-bold text-gray-900">
-          {job.type === 'bulk_delete' ? 'Bulk Delete Job' : 'Bulk Job'}
+          {job.type === 'bulk_delete' ? 'Bulk Delete Job' : job.type === 'vm_clone' ? 'VM Clone Job' : 'Bulk Job'}
         </h1>
         <p className="text-gray-400 text-sm font-mono mt-0.5">{job._id}</p>
       </div>
@@ -214,8 +214,7 @@ export default function JobStatusPage() {
         <div className="grid grid-cols-3 gap-3">
           <div className="text-center p-3 bg-green-50 rounded-lg">
             <p className="text-xl font-bold text-green-700">{job.completed}</p>
-            <p className="text-xs text-green-600 mt-0.5">{job.type === 'bulk_delete' ? 'Deleted' : 'Succeeded'}</p>
-          </div>
+            <p className="text-xs text-green-600 mt-0.5">{job.type === 'bulk_delete' ? 'Deleted' : 'Succeeded'}</p>          </div>
           <div className="text-center p-3 bg-red-50 rounded-lg">
             <p className="text-xl font-bold text-red-700">{job.failed}</p>
             <p className="text-xs text-red-600 mt-0.5">Failed</p>
@@ -235,6 +234,16 @@ export default function JobStatusPage() {
             ? [
                 { label: 'Operation', value: 'Delete VMs' },
                 { label: 'Total VMs', value: job.total },
+                { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
+                ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
+              ]
+            : job.type === 'vm_clone'
+            ? [
+                { label: 'Clone Name', value: job.requestedSpecs?.namePrefix ?? '—' },
+                { label: 'Source VM', value: (job.requestedSpecs as { sourceVmName?: string })?.sourceVmName ?? '—' },
+                { label: 'CPU', value: `${job.requestedSpecs?.cpuCores ?? '—'} vCPU` },
+                { label: 'RAM', value: `${job.requestedSpecs?.memoryGb ?? '—'} GB` },
+                { label: 'Disk', value: `${job.requestedSpecs?.diskGb ?? '—'} GB` },
                 { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
                 ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
               ]
@@ -259,7 +268,7 @@ export default function JobStatusPage() {
       </div>
 
       {/* VM credentials — create jobs only */}
-      {job.type !== 'bulk_delete' && vms.length > 0 && (job.status === 'completed' || job.completed > 0) && (
+      {job.type !== 'bulk_delete' && job.type !== 'vm_clone' && vms.length > 0 && (job.status === 'completed' || job.completed > 0) && (
         <JobCredentialsTable vms={vms} />
       )}
 
@@ -289,7 +298,7 @@ export default function JobStatusPage() {
         <div className="bg-green-50 border border-green-100 rounded-xl p-4 flex items-center justify-between">
           <p className="text-sm text-green-700">
             <strong>{job.vmIds.length}</strong> VM{job.vmIds.length !== 1 ? 's' : ''}{' '}
-            {job.type === 'bulk_delete' ? 'deleted' : 'created'} successfully.
+            {job.type === 'bulk_delete' ? 'deleted' : job.type === 'vm_clone' ? 'cloned' : 'created'} successfully.
           </p>
           <Link
             href="/dashboard/admin/vms"

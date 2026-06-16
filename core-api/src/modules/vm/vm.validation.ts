@@ -83,6 +83,22 @@ export const createVMSchema = z.object({
   }),
 });
 
+// ─── Clone VM ─────────────────────────────────────────────────────────────────
+
+export const cloneVMSchema = z.object({
+  params: z.object({
+    vmId: mongoObjectId,
+  }),
+  body: z.object({
+    name: z
+      .string({ required_error: 'name is required' })
+      .min(3, 'Name must be at least 3 characters')
+      .max(50, 'Name must be at most 50 characters')
+      .regex(/^[a-zA-Z0-9-]+$/, 'Only alphanumeric characters and hyphens allowed')
+      .transform((val) => val.toLowerCase()),
+  }),
+});
+
 // ─── VM ID param ──────────────────────────────────────────────────────────────
 
 export const vmIdParamSchema = z.object({
@@ -257,6 +273,7 @@ export const userIdParamSchema = z.object({
 // ─── Inferred types ───────────────────────────────────────────────────────────
 
 export type CreateVMInput = z.infer<typeof createVMSchema>['body'];
+export type CloneVMInput = z.infer<typeof cloneVMSchema>['body'];
 export type BulkDeleteVMsInput = z.infer<typeof bulkDeleteVMsSchema>['body'];
 export type VMListQuery = z.infer<typeof vmListQuerySchema>['query'];
 export type AlertHistoryQuery = z.infer<typeof alertHistoryQuerySchema>['query'];
