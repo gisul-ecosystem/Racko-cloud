@@ -151,9 +151,6 @@ export default function MyServersPage() {
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Protocol
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      VM Type
-                    </th>
                     <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Actions
                     </th>
@@ -179,7 +176,6 @@ export default function MyServersPage() {
                       <td className="px-4 py-3.5">
                         <ProtocolBadge protocol={vm.protocol} />
                       </td>
-                      <td className="px-4 py-3.5 text-gray-600">{vm.vmType}</td>
                       <td className="px-6 py-3.5">
                         <div className="flex items-center justify-end gap-2">
                           <button
