@@ -1,15 +1,15 @@
 const { ResourceManagementClient } = require('@azure/arm-resources');
-const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const { ensureAzureManagementAccess } = require('../config/azure');
 const AppError = require('../utils/AppError');
 const {
+  buildAzureNetworkErrorMessage,
   extractAzureErrorDetails,
+  isAzureNetworkError,
   logAzureEvent,
-  maskIdentifier,
   summarizeAzureEnv
 } = require('../utils/azureLogger');
 
 const LOG_SERVICE = 'azure-auth';
-const MANAGEMENT_SCOPE = 'https://management.azure.com/.default';
 
 const getAzureErrorStatus = (error) => {
   const statusCode = error?.statusCode || error?.status || error?.code;
@@ -29,39 +29,24 @@ const testAzureConnection = async () => {
   });
 
   try {
-    const azureConfig = validateAzureEnv();
-
-    logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_config_loaded', {
-      tenantId: azureConfig.tenantId,
-      clientId: maskIdentifier(azureConfig.clientId),
-      subscriptionId: azureConfig.subscriptionId
-    });
-
-    const credential = createAzureCredential(azureConfig);
-
     logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_token_request_started', {
-      scope: MANAGEMENT_SCOPE,
-      subscriptionId: azureConfig.subscriptionId
+      scope: 'https://management.azure.com/.default'
     });
 
-    const tokenResponse = await credential.getToken(MANAGEMENT_SCOPE);
+    const { credential, subscriptionId } = await ensureAzureManagementAccess();
 
     logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_token_request_success', {
-      subscriptionId: azureConfig.subscriptionId,
-      tokenExpiresOn: tokenResponse?.expiresOnTimestamp
-        ? new Date(tokenResponse.expiresOnTimestamp).toISOString()
-        : null,
-      tokenLength: tokenResponse?.token ? tokenResponse.token.length : 0
+      subscriptionId
     });
 
     logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_arm_client_init_started', {
-      subscriptionId: azureConfig.subscriptionId
+      subscriptionId
     });
 
-    const resourceClient = new ResourceManagementClient(credential, azureConfig.subscriptionId);
+    const resourceClient = new ResourceManagementClient(credential, subscriptionId);
 
     logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_resource_groups_list_started', {
-      subscriptionId: azureConfig.subscriptionId
+      subscriptionId
     });
 
     let resourceGroupCount = 0;
@@ -73,14 +58,14 @@ const testAzureConnection = async () => {
     const durationMs = Date.now() - startedAt;
 
     logAzureEvent(LOG_SERVICE, 'info', 'azure_auth_test_success', {
-      subscriptionId: azureConfig.subscriptionId,
+      subscriptionId,
       resourceGroupCount,
       durationMs
     });
 
     return {
       authenticated: true,
-      subscriptionId: azureConfig.subscriptionId,
+      subscriptionId,
       resourceGroupCount
     };
   } catch (error) {
@@ -98,6 +83,10 @@ const testAzureConnection = async () => {
 
     if (error instanceof AppError) {
       throw error;
+    }
+
+    if (isAzureNetworkError(error)) {
+      throw new AppError(buildAzureNetworkErrorMessage(), 503);
     }
 
     if (statusCode === 403) {

@@ -1,30 +1,18 @@
 const { ResourceManagementClient } = require('@azure/arm-resources');
-const { createAzureCredential, validateAzureEnv } = require('../../config/azure');
+const { ensureAzureManagementAccess, getAzureContext } = require('../../config/azure');
 const AppError = require('../../utils/AppError');
+const {
+  buildAzureNetworkErrorMessage,
+  extractAzureErrorDetails,
+  isAzureNetworkError,
+  logAzureEvent
+} = require('../../utils/azureLogger');
 
+const LOG_SERVICE = 'azure-resource-group-provisioner';
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const logAzureProvisionEvent = (level, event, details = {}) => {
-  const entry = {
-    timestamp: new Date().toISOString(),
-    service: 'azure-resource-group-provisioner',
-    level,
-    event,
-    ...details
-  };
-
-  const message = JSON.stringify(entry);
-
-  if (level === 'error') {
-    console.error(message);
-    return;
-  }
-
-  console.log(message);
-};
 
 const isRetryableError = (error) => {
   const statusCode = Number(error?.statusCode || error?.status);
@@ -53,15 +41,12 @@ const createResourceGroupWithRetry = async (resourceGroupsClient, resourceGroupN
 
       const delayMs = 500 * 2 ** (attempt - 1);
 
-      logAzureProvisionEvent('info', 'azure_rg_create_retry', {
+      logAzureEvent(LOG_SERVICE, 'info', 'azure_rg_create_retry', {
         resourceGroupName,
         location,
         attempt,
         nextDelayMs: delayMs,
-        errorName: error?.name,
-        errorCode: error?.code,
-        statusCode: error?.statusCode || error?.status,
-        message: error?.message
+        ...extractAzureErrorDetails(error)
       });
 
       await sleep(delayMs);
@@ -71,19 +56,51 @@ const createResourceGroupWithRetry = async (resourceGroupsClient, resourceGroupN
   throw lastError;
 };
 
-const provisionResourceGroup = async ({ requestId, resourceGroupName, location }) => {
-  const azureConfig = validateAzureEnv();
-  const credential = createAzureCredential(azureConfig);
-  const resourceClient = new ResourceManagementClient(credential, azureConfig.subscriptionId);
+const mapProvisionerError = (error, location) => {
+  if (error instanceof AppError) {
+    return error;
+  }
 
-  logAzureProvisionEvent('info', 'azure_rg_create_started', {
+  if (isAzureNetworkError(error)) {
+    return new AppError(buildAzureNetworkErrorMessage(), 503);
+  }
+
+  const statusCode = Number(error?.statusCode || error?.status);
+  const errorCode = String(error?.code || '');
+  const azureMessage = String(error?.message || '').trim();
+
+  if (statusCode === 401 || statusCode === 403) {
+    return new AppError('Azure authentication failed or access was denied.', 403);
+  }
+
+  if (errorCode === 'LocationNotAvailableForResourceGroup') {
+    return new AppError(
+      azureMessage ||
+        `Region '${location}' cannot be used for resource groups. Choose a production Azure region.`,
+      400
+    );
+  }
+
+  if (statusCode === 400 && azureMessage) {
+    return new AppError(azureMessage, 400);
+  }
+
+  return new AppError(azureMessage || 'Unable to create Azure resource group.', 502);
+};
+
+const provisionResourceGroup = async ({ requestId, resourceGroupName, location }) => {
+  const startedAt = Date.now();
+
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_rg_create_started', {
     requestId,
-    subscriptionId: azureConfig.subscriptionId,
     resourceGroupName,
     location
   });
 
   try {
+    const { credential, subscriptionId } = getAzureContext();
+    const resourceClient = new ResourceManagementClient(credential, subscriptionId);
+
     const response = await createResourceGroupWithRetry(
       resourceClient.resourceGroups,
       resourceGroupName,
@@ -93,59 +110,58 @@ const provisionResourceGroup = async ({ requestId, resourceGroupName, location }
     const createdResourceGroupName = response?.name || resourceGroupName;
     const createdResourceGroupId = response?.id || null;
 
-    logAzureProvisionEvent('info', 'azure_rg_create_success', {
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_rg_create_success', {
       requestId,
-      subscriptionId: azureConfig.subscriptionId,
+      subscriptionId,
       resourceGroupName: createdResourceGroupName,
       resourceGroupId: createdResourceGroupId,
-      location
+      location,
+      durationMs: Date.now() - startedAt
     });
 
     return {
       resourceGroupId: createdResourceGroupId,
       resourceGroupName: createdResourceGroupName,
-      subscriptionId: azureConfig.subscriptionId
+      subscriptionId
     };
   } catch (error) {
-    logAzureProvisionEvent('error', 'azure_rg_create_failed', {
+    logAzureEvent(LOG_SERVICE, 'error', 'azure_rg_create_failed', {
       requestId,
-      subscriptionId: azureConfig.subscriptionId,
       resourceGroupName,
       location,
-      errorName: error?.name,
-      errorCode: error?.code,
-      statusCode: error?.statusCode || error?.status,
-      message: error?.message
+      durationMs: Date.now() - startedAt,
+      ...extractAzureErrorDetails(error)
     });
 
-    if (error instanceof AppError) {
-      throw error;
-    }
+    throw mapProvisionerError(error, location);
+  }
+};
 
-    const statusCode = Number(error?.statusCode || error?.status);
-    const errorCode = String(error?.code || '');
-    const azureMessage = String(error?.message || '').trim();
+const preflightAzureManagementAccess = async ({ requestId } = {}) => {
+  const startedAt = Date.now();
 
-    if (statusCode === 401 || statusCode === 403) {
-      throw new AppError('Azure authentication failed or access was denied.', 403);
-    }
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_rg_preflight_started', { requestId });
 
-    if (errorCode === 'LocationNotAvailableForResourceGroup') {
-      throw new AppError(
-        azureMessage ||
-          `Region '${location}' cannot be used for resource groups. Choose a production Azure region.`,
-        400
-      );
-    }
+  try {
+    const { subscriptionId } = await ensureAzureManagementAccess();
 
-    if (statusCode === 400 && azureMessage) {
-      throw new AppError(azureMessage, 400);
-    }
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_rg_preflight_success', {
+      requestId,
+      subscriptionId,
+      durationMs: Date.now() - startedAt
+    });
+  } catch (error) {
+    logAzureEvent(LOG_SERVICE, 'error', 'azure_rg_preflight_failed', {
+      requestId,
+      durationMs: Date.now() - startedAt,
+      ...extractAzureErrorDetails(error)
+    });
 
-    throw new AppError(azureMessage || 'Unable to create Azure resource group.', 502);
+    throw mapProvisionerError(error);
   }
 };
 
 module.exports = {
+  preflightAzureManagementAccess,
   provisionResourceGroup
 };

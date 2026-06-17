@@ -1,6 +1,6 @@
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
-const { provisionResourceGroup } = require('../provisioners/azure/resourceGroupProvisioner');
+const { provisionResourceGroup, preflightAzureManagementAccess } = require('../provisioners/azure/resourceGroupProvisioner');
 const { assertProvisionableLocation } = require('./azureLocationService');
 const {
   buildSharedResourceGroupName,
@@ -160,6 +160,8 @@ const provisionSharedResourceGroup = async (client, request) => {
     costingMode: request.costing_mode
   });
 
+  await preflightAzureManagementAccess({ requestId: request.id });
+
   const provisionedResourceGroup = await provisionResourceGroup({
     requestId: request.id,
     resourceGroupName,
@@ -220,6 +222,8 @@ const provisionPerUserResourceGroupsForRequest = async (client, request) => {
     location,
     costingMode: request.costing_mode
   });
+
+  await preflightAzureManagementAccess({ requestId: request.id });
 
   const resourceGroups = await provisionPerUserResourceGroups({
     requestId: request.id,
