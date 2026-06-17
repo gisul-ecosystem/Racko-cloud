@@ -932,27 +932,11 @@ export class VMService {
     if (vm.isHibernated) {
       operation = 'resume';
       proxmoxApiPath = 'status/resume';
-      try {
-        const response = await proxmoxClient.post<{ data: string }>(
-          `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
-          {}
-        );
-        upid = response.data.data;
-      } catch (err) {
-        logger.warn('[VMPowerOn] Proxmox resume API failed — falling back to cold start', {
-          vmId: vmIdStr,
-          vmid: vm.vmid,
-          node: vm.node,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        proxmoxApiPath = 'status/start';
-        const startResponse = await proxmoxClient.post<{ data: string }>(
-          `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
-          {}
-        );
-        upid = startResponse.data.data;
-        operation = 'start';
-      }
+      const response = await proxmoxClient.post<{ data: string }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
+        {}
+      );
+      upid = response.data.data;
     } else {
       const response = await proxmoxClient.post<{ data: string }>(
         `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
@@ -1639,10 +1623,38 @@ export class VMService {
       return null;
     }
 
-    return this.powerOnStoppedVm(vm, adminId, {
-      ipAddress: 'automation',
-      userAgent: 'vm-automation-scheduler',
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY_MS = 5000;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this.powerOnStoppedVm(vm, adminId, {
+          ipAddress: 'automation',
+          userAgent: 'vm-automation-scheduler',
+        });
+      } catch (err) {
+        lastError = err;
+        logger.warn('[Automation] Resume attempt failed', {
+          vmId: vmId.toString(),
+          vmid: vm.vmid,
+          attempt,
+          maxRetries: MAX_RETRIES,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (attempt < MAX_RETRIES) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+      }
+    }
+
+    logger.error('[Automation] Resume failed after all retries', {
+      vmId: vmId.toString(),
+      vmid: vm.vmid,
+      maxRetries: MAX_RETRIES,
+      error: lastError instanceof Error ? lastError.message : String(lastError),
     });
+    throw lastError;
   }
 
   /**

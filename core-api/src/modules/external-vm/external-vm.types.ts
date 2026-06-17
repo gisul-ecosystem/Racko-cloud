@@ -7,7 +7,6 @@ export interface CreateExternalVMDto {
   protocol: ExternalVMProtocol;
   username?: string;
   password: string;
-  vmType?: string;
 }
 
 /** API-facing external VM shape. Password is returned DECRYPTED. */
@@ -18,7 +17,6 @@ export interface ExternalVMResponse {
   protocol: ExternalVMProtocol;
   username: string;
   password: string;
-  vmType: string;
   adminId: string;
   createdAt: string;
   updatedAt: string;

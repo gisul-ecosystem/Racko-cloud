@@ -12,7 +12,6 @@ export interface IExternalVM extends Document {
   username: string;
   /** AES-256-CBC encrypted password (encrypt/decrypt handled in the service). */
   password: string;
-  vmType: string;
 
   // Ownership
   adminId: mongoose.Types.ObjectId;
@@ -52,11 +51,6 @@ const externalVMSchema = new Schema<IExternalVM>(
     password: {
       type: String,
       required: true,
-    },
-    vmType: {
-      type: String,
-      trim: true,
-      default: 'ROOT',
     },
     adminId: {
       type: Schema.Types.ObjectId,

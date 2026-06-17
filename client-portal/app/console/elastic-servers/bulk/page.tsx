@@ -14,8 +14,7 @@ const BULK_EXAMPLE = `[
     "ip": "10.0.0.10",
     "password": "VmPassword123!",
     "protocol": "rdp",
-    "username": "Administrator",
-    "vmType": "ROOT"
+    "username": "Administrator"
   }
 ]`;
 
@@ -30,7 +29,6 @@ interface BulkEntryRaw {
   password?: string;
   protocol?: string;
   username?: string;
-  vmType?: string;
 }
 
 export default function BulkImportPage() {
@@ -74,7 +72,6 @@ export default function BulkImportPage() {
         protocol: proto,
         password: String(raw.password),
         ...(raw.username && { username: String(raw.username).trim() }),
-        ...(raw.vmType && { vmType: String(raw.vmType).trim() }),
       });
     }
 

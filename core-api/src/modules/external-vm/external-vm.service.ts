@@ -27,7 +27,6 @@ class ExternalVMService {
       protocol: doc.protocol,
       username: doc.username,
       password: decrypt(doc.password),
-      vmType: doc.vmType,
       adminId: doc.adminId.toString(),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
@@ -45,7 +44,6 @@ class ExternalVMService {
       protocol: dto.protocol,
       username: dto.username, // pre-validate hook fills protocol default when empty
       password: encrypt(dto.password),
-      vmType: dto.vmType, // schema default 'ROOT' when empty
       adminId,
     });
 
