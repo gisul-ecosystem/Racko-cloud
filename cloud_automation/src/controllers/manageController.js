@@ -34,6 +34,8 @@ const exchangeToken = async (req, res, next) => {
       requestId: result.requestId,
       customerEmail: result.customerEmail,
       admin: result.admin,
+      azureUser: result.azureUser,
+      role: result.role,
       resourceGroup: result.resourceGroup,
       sessionToken: result.sessionToken,
       expiresAt: result.expiresAt,
@@ -58,6 +60,7 @@ const getRequest = async (req, res, next) => {
     res.status(200).json({
       success: true,
       requestId: result.requestId,
+      role: result.role,
       users: result.users
     });
   } catch (error) {

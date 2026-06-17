@@ -1,4 +1,6 @@
-export interface ManagePortalRole {
+export type ManagePortalRole = 'admin' | 'user';
+
+export interface ManagePortalRoleAssignment {
   role: string;
   scope?: string | null;
 }
@@ -9,7 +11,7 @@ export interface ManagePortalUser {
   azureUserId: string | null;
   status: string;
   expiryDate: string | null;
-  roles: ManagePortalRole[];
+  roles: ManagePortalRoleAssignment[];
 }
 
 export interface ManagePortalLoginResponse {
@@ -20,16 +22,23 @@ export interface ManagePortalLoginResponse {
   sessionToken: string;
   expiresAt: string;
   userId: number | null;
+  role: ManagePortalRole;
   admin?: {
     id: string;
     username: string;
     email: string;
-  };
+  } | null;
+  azureUser?: {
+    id: number;
+    username: string;
+    azureUserId: string;
+  } | null;
 }
 
 export interface ManagePortalUsersResponse {
   success: boolean;
   requestId: number;
+  role: ManagePortalRole;
   users: ManagePortalUser[];
 }
 
@@ -40,6 +49,7 @@ export interface ManagePortalSession {
   resourceGroup: string | null;
   expiresAt: string;
   userId: number | null;
+  role: ManagePortalRole;
 }
 
 export interface ManagePortalMutationResponse {

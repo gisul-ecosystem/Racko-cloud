@@ -6,6 +6,7 @@ import { Cloud, LogOut, RefreshCw, Shield } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { useManagePortalSession } from '../../hooks/useManagePortalSession';
 import { useManagePortalUsers } from '../../hooks/useManagePortalUsers';
+import { ManageUserAccountStatus } from './ManageUserAccountStatus';
 import { ManageUserEditor } from './ManageUserEditor';
 import { ManageUsersLogin } from './ManageUsersLogin';
 import { ManageUsersSecurityNotes } from './ManageUsersSecurityNotes';
@@ -97,6 +98,18 @@ export function ManageUsersPortal() {
   }
 
   const showPortal = Boolean(session);
+  const isUser = session?.role === 'user';
+  const currentUser = isUser ? (users.find((user) => user.id === session?.userId) ?? users[0] ?? null) : null;
+
+  const portalTitle = showPortal
+    ? isUser
+      ? 'My Account'
+      : 'Manage Provisioned Users'
+    : 'Secure Access Portal';
+
+  const portalDescription = isUser
+    ? 'View your provisioned Azure account status, daily usage, and open the Azure console.'
+    : 'Review provisioned Azure users, change assigned roles, revoke access, and refresh the portal from one secure link.';
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -108,9 +121,7 @@ export function ManageUsersPortal() {
             </div>
             <div>
               <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Racko Cloud</p>
-              <h1 className="text-lg font-bold text-gray-900">
-                {showPortal ? 'Manage Provisioned Users' : 'Secure Access Portal'}
-              </h1>
+              <h1 className="text-lg font-bold text-gray-900">{portalTitle}</h1>
             </div>
           </div>
 
@@ -120,6 +131,7 @@ export function ManageUsersPortal() {
                 type="button"
                 onClick={() => {
                   clearActionFeedback();
+                  setConsoleMessage(null);
                   void refetch();
                 }}
                 disabled={loading || saving}
@@ -133,6 +145,7 @@ export function ManageUsersPortal() {
                 onClick={() => {
                   logout();
                   setSelectedUserId(null);
+                  setConsoleMessage(null);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
               >
@@ -148,10 +161,10 @@ export function ManageUsersPortal() {
         {!showPortal ? (
           <div className="space-y-8">
             <div className="mx-auto max-w-lg text-center">
-              <h2 className="text-2xl font-bold text-gray-900">Manage Provisioned Users</h2>
+              <h2 className="text-2xl font-bold text-gray-900">Manage Portal</h2>
               <p className="mt-2 text-sm text-gray-500">
-                Review provisioned Azure users, change assigned roles, revoke access, and refresh the
-                portal from one secure link.
+                Admins sign in with the temporary credentials from your email. Provisioned users sign in
+                with your Azure username or user ID and temporary password.
               </p>
             </div>
             <ManageUsersLogin
@@ -166,11 +179,8 @@ export function ManageUsersPortal() {
         ) : (
           <div className="space-y-6">
             <div>
-              <h2 className="text-2xl font-bold text-gray-900">Manage Provisioned Users</h2>
-              <p className="mt-1 text-sm text-gray-500">
-                Review provisioned Azure users, change assigned roles, revoke access, and refresh the
-                portal from one secure link.
-              </p>
+              <h2 className="text-2xl font-bold text-gray-900">{portalTitle}</h2>
+              <p className="mt-1 text-sm text-gray-500">{portalDescription}</p>
             </div>
 
             <ManageUsersSummary session={session!} />
@@ -195,7 +205,25 @@ export function ManageUsersPortal() {
                 <p className="mt-2 text-sm text-amber-800">{error}</p>
               </div>
             ) : error && !loading ? (
-              <ErrorState title="Failed to load users" message={error} onRetry={() => void refetch()} />
+              <ErrorState
+                title={isUser ? 'Failed to load account' : 'Failed to load users'}
+                message={error}
+                onRetry={() => void refetch()}
+              />
+            ) : isUser ? (
+              loading || !currentUser ? (
+                <div className="flex items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-16 shadow-sm">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[#B91C1C]" />
+                </div>
+              ) : (
+                <div className="mx-auto max-w-2xl">
+                  <ManageUserAccountStatus
+                    user={currentUser}
+                    session={session!}
+                    onConsoleMessage={setConsoleMessage}
+                  />
+                </div>
+              )
             ) : (
               <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
                 <ManageUsersTable
