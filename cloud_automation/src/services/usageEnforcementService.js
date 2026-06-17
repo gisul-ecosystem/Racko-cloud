@@ -1,6 +1,5 @@
 const { Client } = require('@microsoft/microsoft-graph-client');
-const { ClientSecretCredential } = require('@azure/identity');
-const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const { createAzureCredential } = require('../config/azure');
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const { getTodayLimitMinutes, resolveScheduleForRequest } = require('../utils/usageSchedule');
@@ -18,7 +17,7 @@ const createGraphClient = () => {
     throw new Error('Missing required Azure credentials for Graph API');
   }
 
-  const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+  const credential = createAzureCredential({ tenantId, clientId, clientSecret });
 
   const client = Client.initWithMiddleware({
     authProvider: {

@@ -1,5 +1,5 @@
 const { Client } = require('@microsoft/microsoft-graph-client');
-const { ClientSecretCredential } = require('@azure/identity');
+const { createAzureCredential } = require('../config/azure');
 const db = require('../db/postgres');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const usageEnforcementService = require('./usageEnforcementService');
@@ -20,7 +20,7 @@ const createGraphClient = () => {
     );
   }
 
-  const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+  const credential = createAzureCredential({ tenantId, clientId, clientSecret });
 
   const client = Client.initWithMiddleware({
     authProvider: {
