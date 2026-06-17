@@ -93,6 +93,7 @@ router.get('/api/v1/vms/templates/:templateId', authMiddleware, verifyMiddleware
 router.get('/api/v1/vms/admin/all', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/vms/jobs', authMiddleware, verifyMiddleware, coreApiProxy);
 router.get('/api/v1/vms/jobs/:jobId', authMiddleware, verifyMiddleware, coreApiProxy);
+router.patch('/api/v1/vms/jobs/:jobId/cancel', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vms/clones', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 // Assignment routes — must be before /:vmId
 router.get('/api/v1/vms/assign/available', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);

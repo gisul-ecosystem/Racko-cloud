@@ -7,7 +7,7 @@ export interface IVMJob extends Document {
   type: 'single_create' | 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop' | 'vm_clone';
 
   // Job progress
-  status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled';
   total: number;
   completed: number;
   failed: number;
@@ -58,6 +58,7 @@ export interface IVMJob extends Document {
 
   startedAt: Date;
   completedAt?: Date;
+  cancelledAt?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -77,7 +78,7 @@ const vmJobSchema = new Schema<IVMJob>(
     },
     status: {
       type: String,
-      enum: ['pending', 'processing', 'completed', 'partial', 'failed'],
+      enum: ['pending', 'processing', 'completed', 'partial', 'failed', 'cancelling', 'cancelled'],
       default: 'pending',
       required: true,
       index: true,
@@ -163,6 +164,9 @@ const vmJobSchema = new Schema<IVMJob>(
       default: () => new Date(),
     },
     completedAt: {
+      type: Date,
+    },
+    cancelledAt: {
       type: Date,
     },
   },

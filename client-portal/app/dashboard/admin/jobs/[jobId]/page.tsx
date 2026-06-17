@@ -6,16 +6,18 @@ import Link from 'next/link';
 import { useJobStatus } from '../../../../../hooks/useJobStatus';
 import {
   ChevronLeft, CheckCircle, XCircle, Clock, Loader2,
-  KeyRound, Eye, EyeOff, Copy, Check as CheckIcon, AlertTriangle,
+  KeyRound, Eye, EyeOff, Copy, Check as CheckIcon, AlertTriangle, Ban,
 } from 'lucide-react';
 import type { JobStatus, JobVMCredential } from '../../../../../lib/vmApi';
 
 const statusConfig: Record<JobStatus, { label: string; color: string; icon: React.ReactNode }> = {
-  pending:    { label: 'Pending',    color: 'text-gray-500',  icon: <Clock className="w-4 h-4" /> },
-  processing: { label: 'Processing', color: 'text-blue-600',  icon: <Loader2 className="w-4 h-4 animate-spin" /> },
-  completed:  { label: 'Completed',  color: 'text-green-600', icon: <CheckCircle className="w-4 h-4" /> },
-  partial:    { label: 'Partial',    color: 'text-yellow-600',icon: <CheckCircle className="w-4 h-4" /> },
-  failed:     { label: 'Failed',     color: 'text-red-600',   icon: <XCircle className="w-4 h-4" /> },
+  pending:     { label: 'Pending',     color: 'text-gray-500',   icon: <Clock className="w-4 h-4" /> },
+  processing:  { label: 'Processing',  color: 'text-blue-600',   icon: <Loader2 className="w-4 h-4 animate-spin" /> },
+  completed:   { label: 'Completed',   color: 'text-green-600',  icon: <CheckCircle className="w-4 h-4" /> },
+  partial:     { label: 'Partial',     color: 'text-yellow-600', icon: <CheckCircle className="w-4 h-4" /> },
+  failed:      { label: 'Failed',      color: 'text-red-600',    icon: <XCircle className="w-4 h-4" /> },
+  cancelling:  { label: 'Cancelling…', color: 'text-orange-500', icon: <Loader2 className="w-4 h-4 animate-spin" /> },
+  cancelled:   { label: 'Cancelled',   color: 'text-gray-500',   icon: <Ban className="w-4 h-4" /> },
 };
 
 function JobCredentialsTable({ vms }: { vms: JobVMCredential[] }) {
@@ -130,7 +132,7 @@ function JobCredentialsTable({ vms }: { vms: JobVMCredential[] }) {
 
 export default function JobStatusPage() {
   const { jobId } = useParams<{ jobId: string }>();
-  const { job, vms, loading, error } = useJobStatus(jobId ?? null);
+  const { job, vms, loading, error, cancelling, cancel } = useJobStatus(jobId ?? null);
 
   if (loading && !job) {
     return (
@@ -159,7 +161,9 @@ export default function JobStatusPage() {
 
   const cfg = statusConfig[job.status];
   const pct = job.total > 0 ? Math.round(((job.completed + job.failed) / job.total) * 100) : 0;
-  const isTerminal = ['completed', 'partial', 'failed'].includes(job.status);
+  const isTerminal = ['completed', 'partial', 'failed', 'cancelled'].includes(job.status);
+  const isCancellable = ['pending', 'processing'].includes(job.status) &&
+    ['bulk_create', 'bulk_delete', 'vm_clone'].includes(job.type);
 
   return (
     <div className="max-w-2xl">
@@ -181,9 +185,21 @@ export default function JobStatusPage() {
             {cfg.icon}
             {cfg.label}
           </div>
-          {!isTerminal && (
-            <span className="text-xs text-gray-400 animate-pulse">Auto-refreshing every 3s…</span>
-          )}
+          <div className="flex items-center gap-3">
+            {isCancellable && (
+              <button
+                onClick={() => void cancel()}
+                disabled={cancelling}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-600 bg-red-50 border border-red-200 rounded-lg hover:bg-red-100 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Ban className="w-3.5 h-3.5" />
+                {cancelling ? 'Cancelling…' : 'Cancel Job'}
+              </button>
+            )}
+            {!isTerminal && (
+              <span className="text-xs text-gray-400 animate-pulse">Auto-refreshing every 3s…</span>
+            )}
+          </div>
         </div>
 
         {job.phase === 'building_golden_image' && !isTerminal && (
@@ -236,16 +252,19 @@ export default function JobStatusPage() {
                 { label: 'Total VMs', value: job.total },
                 { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
                 ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
+                ...(job.cancelledAt ? [{ label: 'Cancelled', value: new Date(job.cancelledAt).toLocaleString() }] : []),
               ]
             : job.type === 'vm_clone'
             ? [
                 { label: 'Clone Name', value: job.requestedSpecs?.namePrefix ?? '—' },
                 { label: 'Source VM', value: (job.requestedSpecs as { sourceVmName?: string })?.sourceVmName ?? '—' },
+                { label: 'Count', value: job.requestedSpecs?.count ?? job.total },
                 { label: 'CPU', value: `${job.requestedSpecs?.cpuCores ?? '—'} vCPU` },
                 { label: 'RAM', value: `${job.requestedSpecs?.memoryGb ?? '—'} GB` },
                 { label: 'Disk', value: `${job.requestedSpecs?.diskGb ?? '—'} GB` },
                 { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
                 ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
+                ...(job.cancelledAt ? [{ label: 'Cancelled', value: new Date(job.cancelledAt).toLocaleString() }] : []),
               ]
             : [
                 { label: 'Template', value: job.requestedSpecs?.templateName ?? '—' },
@@ -257,6 +276,7 @@ export default function JobStatusPage() {
                 { label: 'Disk', value: `${job.requestedSpecs?.diskGb ?? '—'} GB` },
                 { label: 'Started', value: new Date(job.startedAt).toLocaleString() },
                 ...(job.completedAt ? [{ label: 'Completed', value: new Date(job.completedAt).toLocaleString() }] : []),
+                ...(job.cancelledAt ? [{ label: 'Cancelled', value: new Date(job.cancelledAt).toLocaleString() }] : []),
               ]
           ).map(({ label, value }) => (
             <div key={label} className="flex items-center justify-between py-1.5 border-b border-gray-50 last:border-0">

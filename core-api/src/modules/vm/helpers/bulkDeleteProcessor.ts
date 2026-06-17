@@ -8,6 +8,7 @@ import { VMOperationError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { UserRole } from '../../../types';
 import { notificationService } from '../../notification/notification.service';
+import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
 
 type DeleteVMFn = (
   vmId: mongoose.Types.ObjectId,
@@ -179,6 +180,17 @@ export async function processBulkDeletion(
     const req = buildJobRequest(adminId, role);
 
     for (const batch of batches) {
+      // Check for cancellation before starting each batch
+      if (await isCancelling(jobId)) {
+        logger.info('[VMDelete] Cancellation detected — stopping batch loop', {
+          jobId: jobId.toString(),
+          remainingBatches: batches.length - batches.indexOf(batch),
+        });
+        await finalizeCancelledJob(jobId);
+        void notificationService.notifyJobFinished(jobId);
+        return;
+      }
+
       const batchStartIndex = targetVmIds.indexOf(batch[0]!);
 
       await Promise.all(

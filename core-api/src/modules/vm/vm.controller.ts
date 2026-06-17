@@ -102,15 +102,16 @@ export class VMController {
       const authReq = req as AuthenticatedRequest;
       const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
-      const { name } = req.body as { name: string };
+      const { name, count = 1 } = req.body as { name: string; count?: number };
 
       logger.info('[VMClone] Clone requested', {
         userId: authReq.user.userId,
         sourceVmId: vmId.toString(),
         name,
+        count,
       });
 
-      const result = await vmService.cloneVM(vmId, adminId, name, req);
+      const result = await vmService.cloneVM(vmId, adminId, name, req, count);
       success(res, 'VM clone job started.', { jobId: result.jobId }, 202);
     } catch (error) {
       next(error);
@@ -434,6 +435,27 @@ export class VMController {
 
       const { job, vms } = await vmService.getJobStatus(jobId, adminId, req);
       success(res, 'Job status retrieved.', { job, vms });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/vms/jobs/:jobId/cancel
+   */
+  async cancelJob(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const jobId = new mongoose.Types.ObjectId(req.params['jobId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('[JobCancel] Cancel requested', {
+        userId: authReq.user.userId,
+        jobId: jobId.toString(),
+      });
+
+      const result = await vmService.cancelJob(jobId, adminId, req);
+      success(res, 'Job cancellation requested.', result);
     } catch (error) {
       next(error);
     }

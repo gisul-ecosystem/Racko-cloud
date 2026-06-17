@@ -96,6 +96,13 @@ export const cloneVMSchema = z.object({
       .max(50, 'Name must be at most 50 characters')
       .regex(/^[a-zA-Z0-9-]+$/, 'Only alphanumeric characters and hyphens allowed')
       .transform((val) => val.toLowerCase()),
+    count: z
+      .number()
+      .int('count must be an integer')
+      .min(1, 'count must be at least 1')
+      .max(100, 'count cannot exceed 100')
+      .optional()
+      .default(1),
   }),
 });
 
@@ -110,6 +117,14 @@ export const vmIdParamSchema = z.object({
 // ─── Job ID param ─────────────────────────────────────────────────────────────
 
 export const jobIdParamSchema = z.object({
+  params: z.object({
+    jobId: mongoObjectId,
+  }),
+});
+
+// ─── Cancel job ───────────────────────────────────────────────────────────────
+
+export const cancelJobSchema = z.object({
   params: z.object({
     jobId: mongoObjectId,
   }),

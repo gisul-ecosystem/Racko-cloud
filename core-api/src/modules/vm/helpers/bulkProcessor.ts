@@ -12,18 +12,12 @@ import { scheduleHyperVEnable } from './hypervQueue';
 import { scheduleSoftwareInstall } from './softwareQueue';
 import { softwareService } from '../../software/software.service';
 import { buildGoldenTemplate, deleteGoldenTemplate } from './goldenImageProcessor';
-import {
-  bulkCloneDiagLog,
-  fetchSourceVmDiagnostics,
-  resolveCloneErrorMessage,
-  shouldAttemptConnectivityReroute,
-  summarizeDiskPlacement,
-  type BulkClonePath,
-} from './cloneDiagnostics';
+import { bulkCloneDiagLog, fetchSourceVmDiagnostics, resolveCloneErrorMessage, shouldAttemptConnectivityReroute, summarizeDiskPlacement, type BulkClonePath, } from './cloneDiagnostics';
 import { ProxmoxConnectionError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
 import { notificationService } from '../../notification/notification.service';
+import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
 
 // QUEUE_SLOT: replace direct async call with message queue job (RabbitMQ/BullMQ)
 // EVENT_SLOT: emit 'vm.bulk_created' event to message queue
@@ -90,7 +84,11 @@ export async function processBulkCreation(
       const vmSpecs = buildVmSpecsForGoldenClone(job, adminId, node, goldenTemplateVmid);
       await runBatchClone(jobId, vmSpecs, { allowReroute: false });
 
-      await finalizeJobStatus(jobId);
+      // Skip finalize if cancel handler already set a terminal status
+      const afterGolden = await VMJob.findById(jobId).select('status').lean();
+      if (afterGolden && !['cancelled', 'cancelling'].includes(afterGolden.status)) {
+        await finalizeJobStatus(jobId);
+      }
       void notificationService.notifyJobFinished(jobId);
       const finishedJob = await VMJob.findById(jobId).lean();
       logger.info('[Golden][Diag] bulk job — clone phase finished', {
@@ -221,7 +219,11 @@ export async function processBulkCreation(
     }
 
     await runBatchClone(jobId, vmSpecs, { allowReroute: true });
-    await finalizeJobStatus(jobId);
+    // Skip finalize if cancel handler already set a terminal status
+    const afterStandard = await VMJob.findById(jobId).select('status').lean();
+    if (afterStandard && !['cancelled', 'cancelling'].includes(afterStandard.status)) {
+      await finalizeJobStatus(jobId);
+    }
     void notificationService.notifyJobFinished(jobId);
   } catch (error) {
     logger.error('Unexpected error in bulk processor', {
@@ -320,6 +322,16 @@ async function runBatchClone(
   });
 
   for (const batch of batches) {
+    // Check for cancellation before starting each batch
+    if (await isCancelling(jobId)) {
+      logger.info('[BulkJob] Cancellation detected — stopping batch loop', {
+        jobId: jobId.toString(),
+        remainingBatches: batches.length - batches.indexOf(batch),
+      });
+      await finalizeCancelledJob(jobId);
+      return;
+    }
+
     const results = await Promise.allSettled(batch.map((spec) => createSingleVM(spec)));
 
     for (let i = 0; i < results.length; i++) {
