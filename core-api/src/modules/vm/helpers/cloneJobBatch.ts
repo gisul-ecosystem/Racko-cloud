@@ -15,6 +15,7 @@ import { VMJob } from '../vmJob.model';
 import { VMEvent } from '../vmEvent.model';
 import { pollTaskWithCleanup } from './taskPoller';
 import { resolveCloneErrorMessage, shouldAttemptConnectivityReroute } from './cloneDiagnostics';
+import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
 import type { BulkVMSpec } from '../vm.types';
 import type { IVMJob } from '../vmJob.model';
 
@@ -41,6 +42,16 @@ export async function runBatchCloneForCloneJob(
   });
 
   for (const batch of batches) {
+    // Check for cancellation before starting each batch
+    if (await isCancelling(jobId)) {
+      logger.info('[CloneJob] Cancellation detected — stopping batch loop', {
+        jobId: jobId.toString(),
+        remainingBatches: batches.length - batches.indexOf(batch),
+      });
+      await finalizeCancelledJob(jobId);
+      return;
+    }
+
     const results = await Promise.allSettled(batch.map((spec) => createClonedVM(spec)));
 
     for (let i = 0; i < results.length; i++) {

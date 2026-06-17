@@ -122,6 +122,14 @@ export const jobIdParamSchema = z.object({
   }),
 });
 
+// ─── Cancel job ───────────────────────────────────────────────────────────────
+
+export const cancelJobSchema = z.object({
+  params: z.object({
+    jobId: mongoObjectId,
+  }),
+});
+
 // ─── Template ID param ────────────────────────────────────────────────────────
 
 export const templateIdParamSchema = z.object({

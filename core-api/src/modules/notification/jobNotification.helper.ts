@@ -2,7 +2,7 @@ import type { NotificationSeverity } from './notification.model';
 
 export interface JobNotificationSnapshot {
   type: 'single_create' | 'bulk_create' | 'bulk_delete' | 'bulk_start' | 'bulk_stop' | 'vm_clone';
-  status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
+  status: 'pending' | 'processing' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled';
   total: number;
   completed: number;
   failed: number;

@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useAuth } from '../../../../context/AuthContext';
 import { fetchMyJobs, type IVMJob, type JobStatus } from '../../../../lib/vmApi';
 import { ApiError } from '../../../../lib/apiClient';
-import { CheckCircle, XCircle, Clock, Loader2, Plus, Briefcase, RefreshCw } from 'lucide-react';
+import { CheckCircle, XCircle, Clock, Loader2, Plus, Briefcase, RefreshCw, Ban } from 'lucide-react';
 
 function getJobSummary(job: IVMJob): { title: string; subtitle: string } {
   if (job.type === 'bulk_delete') {
@@ -29,11 +29,13 @@ function getJobSummary(job: IVMJob): { title: string; subtitle: string } {
 }
 
 const statusConfig: Record<JobStatus, { label: string; color: string; icon: React.ReactNode }> = {
-  pending:    { label: 'Pending',    color: 'text-gray-500',   icon: <Clock className="w-3.5 h-3.5" /> },
-  processing: { label: 'Processing', color: 'text-blue-600',   icon: <Loader2 className="w-3.5 h-3.5 animate-spin" /> },
-  completed:  { label: 'Completed',  color: 'text-green-600',  icon: <CheckCircle className="w-3.5 h-3.5" /> },
-  partial:    { label: 'Partial',    color: 'text-yellow-600', icon: <CheckCircle className="w-3.5 h-3.5" /> },
-  failed:     { label: 'Failed',     color: 'text-red-600',    icon: <XCircle className="w-3.5 h-3.5" /> },
+  pending:     { label: 'Pending',     color: 'text-gray-500',   icon: <Clock className="w-3.5 h-3.5" /> },
+  processing:  { label: 'Processing',  color: 'text-blue-600',   icon: <Loader2 className="w-3.5 h-3.5 animate-spin" /> },
+  completed:   { label: 'Completed',   color: 'text-green-600',  icon: <CheckCircle className="w-3.5 h-3.5" /> },
+  partial:     { label: 'Partial',     color: 'text-yellow-600', icon: <CheckCircle className="w-3.5 h-3.5" /> },
+  failed:      { label: 'Failed',      color: 'text-red-600',    icon: <XCircle className="w-3.5 h-3.5" /> },
+  cancelling:  { label: 'Cancelling…', color: 'text-orange-500', icon: <Loader2 className="w-3.5 h-3.5 animate-spin" /> },
+  cancelled:   { label: 'Cancelled',   color: 'text-gray-400',   icon: <XCircle className="w-3.5 h-3.5" /> },
 };
 
 export default function JobsListPage() {

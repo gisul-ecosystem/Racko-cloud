@@ -124,7 +124,11 @@ export async function processVmClone(
     }
 
     // ── 5. Finalize job status (completed / partial / failed) ───────────────
-    await finalizeCloneJobStatus(jobId);
+    // Skip if already finalized by cancel handler inside runBatchCloneForCloneJob
+    const currentJob = await VMJob.findById(jobId).select('status').lean();
+    if (currentJob && !['cancelled', 'cancelling'].includes(currentJob.status)) {
+      await finalizeCloneJobStatus(jobId);
+    }
     void notificationService.notifyJobFinished(jobId);
 
   } catch (err) {

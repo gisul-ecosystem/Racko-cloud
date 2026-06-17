@@ -166,7 +166,7 @@ export interface VMOperationResult {
   error?: string;
 }
 
-export type JobStatus = 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
+export type JobStatus = 'pending' | 'processing' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled';
 
 export type JobPhase = 'building_golden_image' | 'cloning_vms';
 
@@ -208,6 +208,7 @@ export interface IVMJob {
   jobErrors: Array<{ index: number; vmName: string; error: string; node?: string }>;
   startedAt: string;
   completedAt?: string;
+  cancelledAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -491,6 +492,14 @@ export async function fetchJobStatus(
     `/api/v1/vms/jobs/${jobId}`
   );
   return { job: res.data.job, vms: res.data.vms ?? [] };
+}
+
+export async function cancelJob(jobId: string): Promise<{ jobId: string; status: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string; status: string }>>(
+    `/api/v1/vms/jobs/${jobId}/cancel`,
+    { method: 'PATCH' }
+  );
+  return res.data;
 }
 
 // ─── Alerts ───────────────────────────────────────────────────────────────────

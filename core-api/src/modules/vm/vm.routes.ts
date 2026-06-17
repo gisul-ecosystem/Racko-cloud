@@ -7,6 +7,7 @@ import {
   createVMSchema,
   vmIdParamSchema,
   jobIdParamSchema,
+  cancelJobSchema,
   templateIdParamSchema,
   vmListQuerySchema,
   assignVMsSchema,
@@ -146,6 +147,14 @@ router.get(
   requireRole('admin', 'super_admin'),
   validateRequest(jobIdParamSchema),
   (req, res, next) => vmController.getJobStatus(req, res, next)
+);
+
+// PATCH /api/v1/vms/jobs/:jobId/cancel
+router.patch(
+  '/jobs/:jobId/cancel',
+  requireRole('admin', 'super_admin'),
+  validateRequest(cancelJobSchema),
+  (req, res, next) => vmController.cancelJob(req, res, next)
 );
 
 // ─── VM collection routes ─────────────────────────────────────────────────────

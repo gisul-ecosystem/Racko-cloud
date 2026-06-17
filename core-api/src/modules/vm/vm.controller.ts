@@ -441,6 +441,27 @@ export class VMController {
   }
 
   /**
+   * PATCH /api/v1/vms/jobs/:jobId/cancel
+   */
+  async cancelJob(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const jobId = new mongoose.Types.ObjectId(req.params['jobId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('[JobCancel] Cancel requested', {
+        userId: authReq.user.userId,
+        jobId: jobId.toString(),
+      });
+
+      const result = await vmService.cancelJob(jobId, adminId, req);
+      success(res, 'Job cancellation requested.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * GET /api/v1/vms/:vmId/events
    */
   async getVMEvents(req: Request, res: Response, next: NextFunction): Promise<void> {
