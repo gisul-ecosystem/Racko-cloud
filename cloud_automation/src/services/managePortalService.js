@@ -301,6 +301,9 @@ const getPortalSessionByToken = async (sessionToken) => {
         aps.customer_email,
         aps.expires_at,
         aps.revoked,
+        COALESCE(aps.actor_type, 'admin') AS actor_type,
+        aps.user_id,
+        aps.admin_id,
         apt.used
       FROM access_portal_sessions aps
       INNER JOIN access_portal_tokens apt
@@ -313,6 +316,120 @@ const getPortalSessionByToken = async (sessionToken) => {
   );
 
   return result.rows[0] || null;
+};
+
+const normalizeLoginId = (value) => String(value || '').trim().toLowerCase();
+
+const verifyAzureUserCredentials = async ({ requestId, username, password }) => {
+  const loginId = normalizeLoginId(username);
+
+  if (!loginId || !password) {
+    throw new AppError('Username and password are required.', 400);
+  }
+
+  const result = await db.query(
+    `
+      SELECT
+        id,
+        azure_user_id,
+        username,
+        temporary_password,
+        status,
+        blocked_until,
+        COALESCE(is_deleted, false) AS is_deleted
+      FROM azure_users
+      WHERE request_id = $1
+        AND COALESCE(is_deleted, false) = false
+        AND (
+          lower(username) = $2
+          OR lower(azure_user_id) = $2
+        )
+      LIMIT 1
+    `,
+    [requestId, loginId]
+  );
+
+  const user = result.rows[0] || null;
+
+  if (!user || String(user.temporary_password) !== String(password)) {
+    throw new AppError('Invalid username or password.', 401);
+  }
+
+  const normalizedStatus = String(user.status || '').trim().toLowerCase();
+  if (normalizedStatus === 'blocked' || normalizedStatus === 'disabled') {
+    throw new AppError('This account is blocked and cannot sign in.', 403);
+  }
+
+  if (user.blocked_until && new Date(user.blocked_until).getTime() > Date.now()) {
+    throw new AppError('This account is temporarily blocked from portal access.', 403);
+  }
+
+  return {
+    id: user.id,
+    azureUserId: user.azure_user_id,
+    username: user.username
+  };
+};
+
+const resolvePortalActor = async ({ requestId, customerEmail, username, password }) => {
+  try {
+    const admin = await adminAuthService.verifyAdminCredentials({
+      email: customerEmail,
+      username,
+      password
+    });
+
+    return {
+      actorType: 'admin',
+      adminId: admin.id,
+      userId: null,
+      admin
+    };
+  } catch (adminError) {
+    try {
+      const azureUser = await verifyAzureUserCredentials({
+        requestId,
+        username,
+        password
+      });
+
+      return {
+        actorType: 'user',
+        adminId: null,
+        userId: azureUser.id,
+        admin: null,
+        azureUser
+      };
+    } catch (azureError) {
+      if (azureError instanceof AppError && azureError.statusCode === 403) {
+        throw azureError;
+      }
+
+      throw new AppError('Invalid username or password.', 401);
+    }
+  }
+};
+
+const assertAdminPortalSession = (session) => {
+  const actorType = session?.actor_type || 'admin';
+
+  if (actorType !== 'admin') {
+    throw new AppError('Admin access is required for this action.', 403);
+  }
+};
+
+const assertSelfOrAdminPortalSession = (session, targetUserId) => {
+  const actorType = session?.actor_type || 'admin';
+
+  if (actorType === 'admin') {
+    return;
+  }
+
+  if (actorType === 'user' && String(session.user_id) === String(targetUserId)) {
+    return;
+  }
+
+  throw new AppError('You can only access your own account.', 403);
 };
 
 const requireSession = async (sessionToken) => {
@@ -540,16 +657,13 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
       throw new AppError('Access link is invalid.', 401);
     }
 
-    if (portalToken.used) {
-      throw new AppError('Access link has already been used.', 401);
-    }
-
     if (new Date(portalToken.expires_at).getTime() <= Date.now()) {
       throw new AppError('Access link has expired.', 401);
     }
 
-    const admin = await adminAuthService.verifyAdminCredentials({
-      email: portalToken.customer_email,
+    const actor = await resolvePortalActor({
+      requestId: portalToken.request_id,
+      customerEmail: portalToken.customer_email,
       username: credentials.username,
       password: credentials.password
     });
@@ -558,15 +672,17 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
     const sessionHash = sha256Hex(sessionToken);
     const sessionExpiresAt = new Date(portalToken.expires_at);
 
-    await client.query(
-      `
-        UPDATE access_portal_tokens
-        SET used = true,
-            used_at = NOW()
-        WHERE id = $1
-      `,
-      [portalToken.id]
-    );
+    if (!portalToken.used) {
+      await client.query(
+        `
+          UPDATE access_portal_tokens
+          SET used = true,
+              used_at = NOW()
+          WHERE id = $1
+        `,
+        [portalToken.id]
+      );
+    }
 
     await client.query(
       `
@@ -577,9 +693,12 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
           customer_email,
           session_hash,
           expires_at,
-          revoked
+          revoked,
+          actor_type,
+          user_id,
+          admin_id
         )
-        VALUES ($1, $2, $3, $4, $5, $6, false)
+        VALUES ($1, $2, $3, $4, $5, $6, false, $7, $8, $9)
       `,
       [
         crypto.randomUUID(),
@@ -587,37 +706,28 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
         portalToken.request_id,
         portalToken.customer_email,
         sessionHash,
-        sessionExpiresAt
+        sessionExpiresAt,
+        actor.actorType,
+        actor.userId,
+        actor.adminId
       ]
     );
 
     const resourceGroup = await getRequestResourceGroupName(portalToken.request_id);
-
-    // Get the first azure user for this request to enable auto-session start
-    const userResult = await client.query(
-      `
-        SELECT id
-        FROM azure_users
-        WHERE request_id = $1
-          AND COALESCE(is_deleted, false) = false
-        ORDER BY created_at ASC
-        LIMIT 1
-      `,
-      [portalToken.request_id]
-    );
-
-    const userId = userResult.rows[0]?.id || null;
+    const userId = actor.userId;
 
     responseData = {
       requestId: portalToken.request_id,
       customerEmail: portalToken.customer_email,
-      admin,
+      admin: actor.admin,
+      azureUser: actor.azureUser || null,
+      role: actor.actorType,
       resourceGroup,
       sessionToken,
       expiresAt: sessionExpiresAt,
       userId,
-      adminId: admin.id,
-      adminUsername: admin.username
+      adminId: actor.adminId,
+      adminUsername: actor.admin?.username || null
     };
 
     await client.query('COMMIT');
@@ -627,7 +737,8 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
       requestId: portalToken.request_id,
       customerEmail: portalToken.customer_email,
       userId,
-      adminId: admin.id
+      adminId: actor.adminId,
+      role: actor.actorType
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -650,7 +761,8 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
             expiresAt: responseData.expiresAt.toISOString(),
             userId: responseData.userId,
             adminId: responseData.adminId,
-            adminUsername: responseData.adminUsername
+            adminUsername: responseData.adminUsername,
+            role: responseData.role
           }
         });
       } finally {
@@ -670,6 +782,8 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
     requestId: responseData.requestId,
     customerEmail: responseData.customerEmail,
     admin: responseData.admin,
+    azureUser: responseData.azureUser,
+    role: responseData.role,
     resourceGroup: responseData.resourceGroup,
     sessionToken: responseData.sessionToken,
     expiresAt: responseData.expiresAt,
@@ -686,7 +800,11 @@ const listPortalUsers = async (sessionToken, requestId) => {
     throw new AppError('Request not found.', 404);
   }
 
-  const users = await getManageUsersForRequest(db, requestId);
+  let users = await getManageUsersForRequest(db, requestId);
+
+  if (session.actor_type === 'user' && session.user_id) {
+    users = users.filter((user) => String(user.id) === String(session.user_id));
+  }
 
   // Record audit log using separate connection to ensure transaction safety
   try {
@@ -714,6 +832,7 @@ const listPortalUsers = async (sessionToken, requestId) => {
 
   return {
     requestId: Number(requestId),
+    role: session.actor_type || 'admin',
     users
   };
 };
@@ -1147,6 +1266,7 @@ const updatePortalUserRolesCore = async ({
 const deletePortalUser = async (sessionToken, requestId, userId) => {
   const session = await requireSession(sessionToken);
   validateSessionForRequest(session, requestId);
+  assertAdminPortalSession(session);
 
   return deletePortalUserCore({
     requestId,
@@ -1159,6 +1279,7 @@ const deletePortalUser = async (sessionToken, requestId, userId) => {
 const updatePortalUserRoles = async (sessionToken, requestId, userId, roles) => {
   const session = await requireSession(sessionToken);
   validateSessionForRequest(session, requestId);
+  assertAdminPortalSession(session);
 
   return updatePortalUserRolesCore({
     requestId,
@@ -1245,6 +1366,7 @@ const buildAzurePortalLaunchUrl = ({ portalRedirectUri, userPrincipalName }) => 
 const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
   const session = await requireSession(sessionToken);
   validateSessionForRequest(session, requestId);
+  assertSelfOrAdminPortalSession(session, userId);
 
   const userResult = await db.query(
     `
@@ -1358,6 +1480,7 @@ const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
 const endPortalUserUsageSession = async (sessionToken, requestId, userId) => {
   const session = await requireSession(sessionToken);
   validateSessionForRequest(session, requestId);
+  assertSelfOrAdminPortalSession(session, userId);
 
   const userResult = await db.query(
     `
@@ -1388,6 +1511,7 @@ const endPortalUserUsageSession = async (sessionToken, requestId, userId) => {
 const getPortalUserUsageStatus = async (sessionToken, requestId, userId) => {
   const session = await requireSession(sessionToken);
   validateSessionForRequest(session, requestId);
+  assertSelfOrAdminPortalSession(session, userId);
 
   const userResult = await db.query(
     `

@@ -36,9 +36,15 @@ export function ManageUsersSummary({ session }: ManageUsersSummaryProps) {
   });
 
   const sessionActive = new Date(session.expiresAt).getTime() > Date.now();
+  const roleLabel = session.role === 'user' ? 'Provisioned User' : 'Admin';
 
   return (
-    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+    <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-5">
+      <SummaryCard
+        label="Signed in as"
+        value={roleLabel}
+        icon={<ShieldCheck className="h-3.5 w-3.5" />}
+      />
       <SummaryCard
         label="Request ID"
         value={`#${session.requestId}`}

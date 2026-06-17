@@ -9,6 +9,7 @@ const KEYS = {
   resourceGroup: `${STORAGE_PREFIX}resourceGroup`,
   expiresAt: `${STORAGE_PREFIX}expiresAt`,
   userId: `${STORAGE_PREFIX}userId`,
+  role: `${STORAGE_PREFIX}role`,
 } as const;
 
 export function saveManagePortalSession(session: ManagePortalSession): void {
@@ -20,6 +21,7 @@ export function saveManagePortalSession(session: ManagePortalSession): void {
   sessionStorage.setItem(KEYS.resourceGroup, session.resourceGroup ?? '');
   sessionStorage.setItem(KEYS.expiresAt, session.expiresAt);
   sessionStorage.setItem(KEYS.userId, session.userId != null ? String(session.userId) : '');
+  sessionStorage.setItem(KEYS.role, session.role);
 }
 
 export function loadManagePortalSession(): ManagePortalSession | null {
@@ -47,6 +49,8 @@ export function loadManagePortalSession(): ManagePortalSession | null {
 
   const userIdRaw = sessionStorage.getItem(KEYS.userId)?.trim();
   const userId = userIdRaw ? Number(userIdRaw) : null;
+  const roleRaw = sessionStorage.getItem(KEYS.role)?.trim();
+  const role: ManagePortalSession['role'] = roleRaw === 'user' ? 'user' : 'admin';
 
   return {
     sessionToken,
@@ -55,6 +59,7 @@ export function loadManagePortalSession(): ManagePortalSession | null {
     resourceGroup: sessionStorage.getItem(KEYS.resourceGroup) || null,
     expiresAt,
     userId: userId != null && Number.isInteger(userId) ? userId : null,
+    role,
   };
 }
 

@@ -89,9 +89,10 @@ export function ManageUsersLogin({
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
             <Shield className="h-7 w-7" />
           </div>
-          <h1 className="text-xl font-bold text-gray-900">Admin Portal Login</h1>
+          <h1 className="text-xl font-bold text-gray-900">Manage Portal Login</h1>
           <p className="mt-2 text-sm text-gray-500">
-            Sign in with the temporary admin credentials from your email.
+            Admins: use the temporary admin username and password from your email. Provisioned users:
+            sign in with your Azure username or user ID and temporary password.
           </p>
         </div>
 
@@ -119,7 +120,7 @@ export function ManageUsersLogin({
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="username" className={labelClass}>
-                Admin Username
+                Username or Azure User ID
               </label>
               <input
                 id="username"
@@ -129,7 +130,7 @@ export function ManageUsersLogin({
                 required
                 disabled={missingToken || loading}
                 className={inputClass}
-                placeholder="admin-username"
+                placeholder="admin-username or azure-user-id"
               />
             </div>
 
@@ -160,7 +161,7 @@ export function ManageUsersLogin({
                   Authenticating…
                 </>
               ) : (
-                'Open Admin Portal'
+                'Sign In'
               )}
             </button>
           </form>

@@ -66,6 +66,7 @@ export function useManagePortalSession(enabled: boolean): UseManagePortalSession
         resourceGroup: result.resourceGroup,
         expiresAt: result.expiresAt,
         userId: result.userId,
+        role: result.role === 'user' ? 'user' : 'admin',
       };
 
       saveManagePortalSession(nextSession);
