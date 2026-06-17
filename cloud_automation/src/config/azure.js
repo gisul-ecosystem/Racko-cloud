@@ -7,6 +7,7 @@ const {
 } = require('../utils/azureLogger');
 
 const LOG_SERVICE = 'azure-config';
+const MANAGEMENT_SCOPE = 'https://management.azure.com/.default';
 
 const REQUIRED_ENV_VARS = [
   'AZURE_CLIENT_ID',
@@ -15,13 +16,20 @@ const REQUIRED_ENV_VARS = [
   'AZURE_SUBSCRIPTION_ID'
 ];
 
+let envValidationLogged = false;
+let cachedAzureContext = null;
+
 const getTrimmedEnvValue = (name) => {
   const value = process.env[name];
   return typeof value === 'string' ? value.trim() : '';
 };
 
 const validateAzureEnv = () => {
-  logAzureEvent(LOG_SERVICE, 'info', 'azure_env_validation_started', summarizeAzureEnv());
+  const shouldLog = !envValidationLogged;
+
+  if (shouldLog) {
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_env_validation_started', summarizeAzureEnv());
+  }
 
   const envValues = REQUIRED_ENV_VARS.reduce((accumulator, name) => {
     accumulator[name] = getTrimmedEnvValue(name);
@@ -42,13 +50,17 @@ const validateAzureEnv = () => {
     );
   }
 
-  logAzureEvent(LOG_SERVICE, 'info', 'azure_env_validation_success', {
-    tenantId: envValues.AZURE_TENANT_ID,
-    clientId: maskIdentifier(envValues.AZURE_CLIENT_ID),
-    subscriptionId: envValues.AZURE_SUBSCRIPTION_ID,
-    clientSecretConfigured: true,
-    clientSecretLength: envValues.AZURE_CLIENT_SECRET.length
-  });
+  if (shouldLog) {
+    envValidationLogged = true;
+
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_env_validation_success', {
+      tenantId: envValues.AZURE_TENANT_ID,
+      clientId: maskIdentifier(envValues.AZURE_CLIENT_ID),
+      subscriptionId: envValues.AZURE_SUBSCRIPTION_ID,
+      clientSecretConfigured: true,
+      clientSecretLength: envValues.AZURE_CLIENT_SECRET.length
+    });
+  }
 
   return {
     clientId: envValues.AZURE_CLIENT_ID,
@@ -59,24 +71,48 @@ const validateAzureEnv = () => {
 };
 
 const createAzureCredential = ({ tenantId, clientId, clientSecret }) => {
-  logAzureEvent(LOG_SERVICE, 'info', 'azure_credential_create_started', {
-    tenantId,
-    clientId: maskIdentifier(clientId),
-    credentialType: 'ClientSecretCredential'
-  });
+  return new ClientSecretCredential(tenantId, clientId, clientSecret);
+};
 
-  const credential = new ClientSecretCredential(tenantId, clientId, clientSecret);
+const getAzureContext = () => {
+  const config = validateAzureEnv();
 
-  logAzureEvent(LOG_SERVICE, 'info', 'azure_credential_create_success', {
-    tenantId,
-    clientId: maskIdentifier(clientId),
-    credentialType: 'ClientSecretCredential'
-  });
+  if (
+    !cachedAzureContext ||
+    cachedAzureContext.tenantId !== config.tenantId ||
+    cachedAzureContext.clientId !== config.clientId ||
+    cachedAzureContext.subscriptionId !== config.subscriptionId
+  ) {
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_credential_initialized', {
+      tenantId: config.tenantId,
+      clientId: maskIdentifier(config.clientId),
+      subscriptionId: config.subscriptionId,
+      credentialType: 'ClientSecretCredential'
+    });
 
-  return credential;
+    cachedAzureContext = {
+      ...config,
+      credential: createAzureCredential(config)
+    };
+  }
+
+  return cachedAzureContext;
+};
+
+const ensureAzureManagementAccess = async () => {
+  const { credential, subscriptionId } = getAzureContext();
+  const token = await credential.getToken(MANAGEMENT_SCOPE);
+
+  return {
+    credential,
+    subscriptionId,
+    token
+  };
 };
 
 module.exports = {
   createAzureCredential,
+  ensureAzureManagementAccess,
+  getAzureContext,
   validateAzureEnv
 };

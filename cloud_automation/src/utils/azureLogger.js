@@ -30,6 +30,23 @@ const summarizeAzureEnv = () => {
   };
 };
 
+const isAzureNetworkError = (error) => {
+  const message = String(error?.message || '').toLowerCase();
+  const errorCode = String(error?.code || '').toLowerCase();
+
+  return (
+    message.includes('network_error') ||
+    message.includes('econnrefused') ||
+    message.includes('enotfound') ||
+    message.includes('etimedout') ||
+    message.includes('esockettimedout') ||
+    errorCode === 'authenticationrequirederror' && message.includes('network')
+  );
+};
+
+const buildAzureNetworkErrorMessage = () =>
+  'Unable to reach Azure authentication endpoints. Ensure outbound HTTPS access to login.microsoftonline.com and management.azure.com from this server.';
+
 const extractAzureErrorDetails = (error) => {
   if (!error) {
     return {};
@@ -88,7 +105,9 @@ const logAzureEvent = (service, level, event, details = {}) => {
 };
 
 module.exports = {
+  buildAzureNetworkErrorMessage,
   extractAzureErrorDetails,
+  isAzureNetworkError,
   logAzureEvent,
   maskIdentifier,
   summarizeAzureEnv

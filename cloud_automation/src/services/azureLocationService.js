@@ -1,12 +1,18 @@
 const axios = require('axios');
-const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const { ensureAzureManagementAccess } = require('../config/azure');
 const {
   getRegionalDailyPricesForServices,
   getPortalDailyFees
 } = require('./estimatePricingService');
-const { getDistinctLocations } = require('./azureCatalogSyncService');
 const AppError = require('../utils/AppError');
+const {
+  buildAzureNetworkErrorMessage,
+  extractAzureErrorDetails,
+  isAzureNetworkError,
+  logAzureEvent
+} = require('../utils/azureLogger');
 
+const LOG_SERVICE = 'azure-locations';
 const CACHE_TTL_MS = 5 * 60 * 1000;
 const subscriptionLocationsCache = {
   expiresAt: 0,
@@ -55,24 +61,47 @@ const assertProvisionableLocation = (location) => {
   }
 };
 
-const getManagementAccessToken = async () => {
-  const azureConfig = validateAzureEnv();
-  const credential = createAzureCredential(azureConfig);
-  const token = await credential.getToken('https://management.azure.com/.default');
+const mapAzureNetworkError = (error) => {
+  if (isAzureNetworkError(error)) {
+    return new AppError(buildAzureNetworkErrorMessage(), 503);
+  }
 
-  return {
-    accessToken: token.token,
-    subscriptionId: azureConfig.subscriptionId
-  };
+  return error;
+};
+
+const getManagementAccessToken = async () => {
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_token_request_started', {});
+
+  try {
+    const { token, subscriptionId } = await ensureAzureManagementAccess();
+
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_token_request_success', {
+      subscriptionId
+    });
+
+    return {
+      accessToken: token.token,
+      subscriptionId
+    };
+  } catch (error) {
+    logAzureEvent(LOG_SERVICE, 'error', 'azure_locations_token_request_failed', extractAzureErrorDetails(error));
+    throw mapAzureNetworkError(error);
+  }
 };
 
 const getSubscriptionLocations = async () => {
   if (subscriptionLocationsCache.expiresAt > Date.now()) {
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_cache_hit', {
+      locationCount: subscriptionLocationsCache.locations.length
+    });
     return subscriptionLocationsCache.locations;
   }
 
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_api_request_started', {});
+
+  const { accessToken, subscriptionId } = await getManagementAccessToken();
+
   try {
-    const { accessToken, subscriptionId } = await getManagementAccessToken();
     const response = await axios.get(
       `https://management.azure.com/subscriptions/${subscriptionId}/locations`,
       {
@@ -105,29 +134,23 @@ const getSubscriptionLocations = async () => {
     subscriptionLocationsCache.locations = locations;
     subscriptionLocationsCache.expiresAt = Date.now() + CACHE_TTL_MS;
 
+    logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_api_request_success', {
+      subscriptionId,
+      locationCount: locations.length
+    });
+
     return locations;
   } catch (error) {
-    console.warn(
-      '[AZURE_LOCATIONS] Live subscription lookup failed; falling back to catalog DB.',
-      error?.message || error
-    );
+    logAzureEvent(LOG_SERVICE, 'error', 'azure_locations_api_request_failed', {
+      subscriptionId,
+      ...extractAzureErrorDetails(error)
+    });
 
-    const catalogLocations = await getDistinctLocations();
-    const locations = catalogLocations
-      .filter((location) => isProvisionableLocation(location))
-      .sort((left, right) => left.display_location.localeCompare(right.display_location));
-
-    if (locations.length === 0) {
-      throw new AppError(
-        'Unable to load Azure regions. Check Azure credentials and outbound network access to login.microsoftonline.com.',
-        503
-      );
+    if (error instanceof AppError) {
+      throw error;
     }
 
-    subscriptionLocationsCache.locations = locations;
-    subscriptionLocationsCache.expiresAt = Date.now() + CACHE_TTL_MS;
-
-    return locations;
+    throw mapAzureNetworkError(error);
   }
 };
 
@@ -198,27 +221,19 @@ const filterLocationsForSelectedInstances = async (
     return locations;
   }
 
-  try {
-    const availabilityChecks = await Promise.all(
-      locations.map(async (location) => {
-        const filtered = await filterInstancesForLocation(
-          location.arm_region_name,
-          instancesToValidate,
-          servicesById
-        );
+  const availabilityChecks = await Promise.all(
+    locations.map(async (location) => {
+      const filtered = await filterInstancesForLocation(
+        location.arm_region_name,
+        instancesToValidate,
+        servicesById
+      );
 
-        return filtered.length === instancesToValidate.length ? location : null;
-      })
-    );
+      return filtered.length === instancesToValidate.length ? location : null;
+    })
+  );
 
-    return availabilityChecks.filter(Boolean);
-  } catch (error) {
-    console.warn(
-      '[AZURE_LOCATIONS] Instance availability check failed; returning unfiltered regions.',
-      error?.message || error
-    );
-    return locations;
-  }
+  return availabilityChecks.filter(Boolean);
 };
 
 const getLocationsForSelectedServices = async (
