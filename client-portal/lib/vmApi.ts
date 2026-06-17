@@ -603,10 +603,10 @@ export interface ClonedVM extends IVM {
   isVmClone: boolean;
 }
 
-export async function cloneVM(vmId: string, name: string): Promise<{ jobId: string }> {
+export async function cloneVM(vmId: string, name: string, count: number = 1): Promise<{ jobId: string }> {
   const res = await apiRequest<ApiResponse<{ jobId: string }>>(
     `/api/v1/vms/${vmId}/clone`,
-    { method: 'POST', body: JSON.stringify({ name }) }
+    { method: 'POST', body: JSON.stringify({ name, count }) }
   );
   return res.data;
 }

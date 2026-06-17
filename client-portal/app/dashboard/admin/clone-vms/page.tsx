@@ -29,8 +29,10 @@ function CloneVMModal({ onClose, onSuccess, addToast }: CloneVMModalProps) {
   const [search, setSearch] = useState('');
   const [selectedVM, setSelectedVM] = useState<IVM | null>(null);
   const [cloneName, setCloneName] = useState('');
+  const [cloneCount, setCloneCount] = useState(1);
   const [cloning, setCloning] = useState(false);
   const [nameError, setNameError] = useState('');
+  const [countError, setCountError] = useState('');
 
   // Load VMs when modal mounts
   useEffect(() => {
@@ -63,11 +65,13 @@ function CloneVMModal({ onClose, onSuccess, addToast }: CloneVMModalProps) {
     if (!selectedVM) return;
     const err = validateName(cloneName);
     if (err) { setNameError(err); return; }
+    if (cloneCount < 1 || cloneCount > 100) { setCountError('Count must be between 1 and 100.'); return; }
 
     setCloning(true);
     try {
-      const { jobId } = await cloneVM(selectedVM._id, cloneName);
-      addToast('success', `Clone job started for "${cloneName}". Redirecting to job tracker…`);
+      const { jobId } = await cloneVM(selectedVM._id, cloneName, cloneCount);
+      const label = cloneCount === 1 ? `"${cloneName}"` : `${cloneCount} clones of "${cloneName}"`;
+      addToast('success', `Clone job started for ${label}. Redirecting to job tracker…`);
       onSuccess(jobId);
       onClose();
     } catch (e) {
@@ -171,6 +175,34 @@ function CloneVMModal({ onClose, onSuccess, addToast }: CloneVMModalProps) {
             />
             {nameError && <p className="text-xs text-red-500 mt-1">{nameError}</p>}
             <p className="text-xs text-gray-400 mt-1">Letters, numbers, and hyphens only. 3–50 characters.</p>
+          </div>
+
+          {/* Step 3 — Clone count */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5" htmlFor="clone-count">
+              Number of clones
+            </label>
+            <input
+              id="clone-count"
+              type="number"
+              min={1}
+              max={100}
+              value={cloneCount}
+              onChange={(e) => {
+                const val = parseInt(e.target.value, 10);
+                setCloneCount(isNaN(val) ? 1 : val);
+                setCountError('');
+              }}
+              className={`w-full px-3 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 ${
+                countError ? 'border-red-300' : 'border-gray-200'
+              }`}
+            />
+            {countError && <p className="text-xs text-red-500 mt-1">{countError}</p>}
+            <p className="text-xs text-gray-400 mt-1">
+              {cloneCount > 1
+                ? `Creates ${cloneCount} VMs named ${cloneName || 'name'}-1 through ${cloneName || 'name'}-${cloneCount}.`
+                : 'Set to 1 for a single clone. Max 100.'}
+            </p>
           </div>
         </div>
 

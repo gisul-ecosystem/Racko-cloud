@@ -3,16 +3,17 @@ import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { logger } from '../../../utils/logger';
 import { VM } from '../vm.model';
 import { VMJob } from '../vmJob.model';
-import { VMEvent } from '../vmEvent.model';
 import { pollTask } from './taskPoller';
 import { notificationService } from '../../notification/notification.service';
 import type { IVMJob } from '../vmJob.model';
+import type { BulkVMSpec } from '../vm.types';
 
-// Shared mutex for VMID allocation — prevents duplicate IDs under concurrent clones
-let vmidMutex = Promise.resolve();
+// Re-use the battle-tested batch clone + finalizer from the bulk processor
+import { runBatchCloneForCloneJob, finalizeCloneJobStatus } from './cloneJobBatch';
 
 /**
  * Process a VM clone job asynchronously.
+ * Supports count=1 (single clone, original behaviour) and count>1 (bulk clone).
  * Never throws — all errors are caught and written to the job record.
  */
 export async function processVmClone(
@@ -22,7 +23,8 @@ export async function processVmClone(
   const jobId = job._id;
   const specs = job.requestedSpecs;
   const sourceVmId = specs.sourceVmId!;
-  const cloneName = specs.namePrefix;
+  const namePrefix = specs.namePrefix;
+  const count = specs.count ?? 1;
 
   try {
     await VMJob.findByIdAndUpdate(jobId, { status: 'processing' });
@@ -41,6 +43,7 @@ export async function processVmClone(
         jobId: jobId.toString(),
         sourceVmid: sourceVm.vmid,
         node: sourceVm.node,
+        count,
       });
 
       const stopResp = await proxmoxClient.post<{ data: string }>(
@@ -59,44 +62,43 @@ export async function processVmClone(
       await sourceVm.save();
     }
 
-    // ── 3. Get next VMID + start clone (mutex prevents duplicate IDs) ───────
-    let newVmid!: number;
-    let cloneUpid!: string;
-
-    await new Promise<void>((resolve, reject) => {
-      vmidMutex = vmidMutex.then(async () => {
-        try {
-          const nextIdResp = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-          newVmid = nextIdResp.data.data;
-
-          logger.info('[CloneJob] Starting Proxmox clone', {
-            jobId: jobId.toString(),
-            sourceVmid: sourceVm.vmid,
-            newVmid,
-            node: sourceVm.node,
-            name: cloneName,
-          });
-
-          const cloneResp = await proxmoxClient.post<{ data: string }>(
-            `/nodes/${sourceVm.node}/qemu/${sourceVm.vmid}/clone`,
-            { newid: newVmid, name: cloneName, full: 1, target: sourceVm.node }
-          );
-          cloneUpid = cloneResp.data.data;
-          resolve();
-        } catch (err) {
-          reject(err);
-        }
+    // ── 3. Build per-VM specs and run batch clone ────────────────────────────
+    // Names: count=1 → exact namePrefix; count>1 → namePrefix-1, namePrefix-2, …
+    const vmSpecs: BulkVMSpec[] = [];
+    for (let i = 1; i <= count; i++) {
+      vmSpecs.push({
+        vmName: count === 1 ? namePrefix : `${namePrefix}-${i}`,
+        templateName: sourceVm.templateName,
+        index: i,
+        node: sourceVm.node,
+        templateId: sourceVm.vmid,          // clone from the live VM's Proxmox VMID
+        cloneType: 'dedicated_storage',
+        cpuCores: sourceVm.allocatedCpu,
+        memoryGb: sourceVm.allocatedMemoryGb,
+        diskGb: sourceVm.allocatedDiskGb,
+        templateDiskGb: sourceVm.allocatedDiskGb,
+        templateCpuCores: sourceVm.allocatedCpu,
+        templateMemoryGb: sourceVm.allocatedMemoryGb,
+        adminId,
+        jobId,
+        description: undefined,
+        consoleUsername: sourceVm.consoleUsername ?? '',
+        passwordMode: 'fixed',
+        consolePassword: sourceVm.consolePassword,
+        consoleProtocol: sourceVm.consoleProtocol,
+        enableVirtualization: false,
+        softwareIds: [],
+        schedulePostCreateJobs: false,
+        // Clone-specific extras so the created VM is marked as a clone
+        isVmClone: true,
+        sourceVmId: sourceVm._id,
+        sourceVmName: sourceVm.name,
       });
-    });
-
-    // ── 4. Poll clone task ──────────────────────────────────────────────────
-    const cloneResult = await pollTask(cloneUpid, sourceVm.node);
-
-    if (cloneResult.result === 'failed') {
-      throw new Error(`Proxmox clone task failed (exitstatus: ${cloneResult.exitstatus ?? 'unknown'}).`);
     }
 
-    // ── 5. Restart source VM ────────────────────────────────────────────────
+    await runBatchCloneForCloneJob(jobId, vmSpecs);
+
+    // ── 4. Restart source VM ────────────────────────────────────────────────
     if (wasRunning) {
       try {
         const startResp = await proxmoxClient.post<{ data: string }>(
@@ -121,71 +123,10 @@ export async function processVmClone(
       }
     }
 
-    // ── 6. Save cloned VM to DB ─────────────────────────────────────────────
-    const clonedVm = await VM.create({
-      vmid: newVmid,
-      node: sourceVm.node,
-      adminId,
-      isVmClone: true,
-      sourceVmId: sourceVm._id,
-      sourceVmName: sourceVm.name,
-      name: cloneName,
-      templateId: sourceVm.templateId,
-      templateName: sourceVm.templateName,
-      cloneType: 'dedicated_storage',
-      allocatedCpu: sourceVm.allocatedCpu,
-      allocatedMemoryGb: sourceVm.allocatedMemoryGb,
-      allocatedDiskGb: sourceVm.allocatedDiskGb,
-      status: 'stopped',
-      proxmoxStatus: 'stopped',
-      consoleUsername: sourceVm.consoleUsername,
-      consolePassword: sourceVm.consolePassword,
-      consoleProtocol: sourceVm.consoleProtocol,
-      consoleReady: false,
-      haEnabled: false,
-      enableVirtualization: false,
-      hyperVStatus: 'disabled',
-      hyperVAttemptCount: 0,
-      hyperVCancelled: false,
-      softwareInstalls: [],
-      jobId,
-    });
-
-    await VMEvent.create({
-      vmId: clonedVm._id,
-      vmid: newVmid,
-      adminId,
-      event: 'VM_CLONED',
-      status: 'success',
-      details: {
-        sourceVmId: sourceVm._id.toString(),
-        sourceVmid: sourceVm.vmid,
-        sourceVmName: sourceVm.name,
-        node: sourceVm.node,
-        sourceWasRunning: wasRunning,
-      },
-      ipAddress: 'clone-job',
-      userAgent: 'clone-processor',
-    });
-
-    // ── 7. Mark job completed ───────────────────────────────────────────────
-    await VMJob.findByIdAndUpdate(jobId, {
-      status: 'completed',
-      completed: 1,
-      failed: 0,
-      pending: 0,
-      vmIds: [clonedVm._id],
-      completedAt: new Date(),
-    });
-
+    // ── 5. Finalize job status (completed / partial / failed) ───────────────
+    await finalizeCloneJobStatus(jobId);
     void notificationService.notifyJobFinished(jobId);
 
-    logger.info('[CloneJob] Clone job completed', {
-      jobId: jobId.toString(),
-      newVmId: clonedVm._id.toString(),
-      newVmid,
-      node: sourceVm.node,
-    });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.error('[CloneJob] Clone job failed', {
@@ -195,13 +136,13 @@ export async function processVmClone(
 
     await VMJob.findByIdAndUpdate(jobId, {
       status: 'failed',
-      failed: 1,
+      failed: specs.count ?? 1,
       pending: 0,
       completedAt: new Date(),
       $push: {
         jobErrors: {
           index: 0,
-          vmName: cloneName,
+          vmName: namePrefix,
           error: message,
         },
       },

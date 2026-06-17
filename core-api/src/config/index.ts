@@ -61,6 +61,7 @@ const envSchema = z.object({
 
   // VM Configuration
   VM_BULK_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('10'),
+  VM_CLONE_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('3'),
   VM_BULK_DELETE_BATCH_SIZE: z.string().regex(/^\d+$/).transform(Number).default('5'),
   VM_TASK_POLL_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('2000'),
   VM_TASK_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),

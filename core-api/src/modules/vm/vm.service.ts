@@ -1229,7 +1229,8 @@ export class VMService {
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     name: string,
-    req: Request
+    req: Request,
+    count: number = 1
   ): Promise<{ jobId: string }> {
     const authReq = req as AuthenticatedRequest;
 
@@ -1250,10 +1251,10 @@ export class VMService {
       adminId,
       type: 'vm_clone',
       status: 'pending',
-      total: 1,
+      total: count,
       completed: 0,
       failed: 0,
-      pending: 1,
+      pending: count,
       vmIds: [],
       failedVmids: [],
       requestedSpecs: {
@@ -1268,7 +1269,7 @@ export class VMService {
         templateCpuCores: sourceVm.allocatedCpu,
         templateMemoryGb: sourceVm.allocatedMemoryGb,
         namePrefix: name,
-        count: 1,
+        count,
         consoleUsername: sourceVm.consoleUsername ?? '',
         passwordMode: 'fixed',
         consolePassword: sourceVm.consolePassword,
@@ -1286,6 +1287,7 @@ export class VMService {
       sourceVmId: vmId.toString(),
       sourceVmid: sourceVm.vmid,
       name,
+      count,
     });
 
     // Fire and forget — QUEUE_SLOT: replace with message queue (RabbitMQ/BullMQ)

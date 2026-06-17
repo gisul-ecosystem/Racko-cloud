@@ -102,15 +102,16 @@ export class VMController {
       const authReq = req as AuthenticatedRequest;
       const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
-      const { name } = req.body as { name: string };
+      const { name, count = 1 } = req.body as { name: string; count?: number };
 
       logger.info('[VMClone] Clone requested', {
         userId: authReq.user.userId,
         sourceVmId: vmId.toString(),
         name,
+        count,
       });
 
-      const result = await vmService.cloneVM(vmId, adminId, name, req);
+      const result = await vmService.cloneVM(vmId, adminId, name, req, count);
       success(res, 'VM clone job started.', { jobId: result.jobId }, 202);
     } catch (error) {
       next(error);
