@@ -1,3 +1,5 @@
+const https = require('https');
+const { createDefaultHttpClient } = require('@azure/core-rest-pipeline');
 const { ClientSecretCredential } = require('@azure/identity');
 const AppError = require('../utils/AppError');
 const {
@@ -18,6 +20,15 @@ const REQUIRED_ENV_VARS = [
 
 let envValidationLogged = false;
 let cachedAzureContext = null;
+
+const ipv4Agent = new https.Agent({ family: 4 });
+const defaultHttpClient = createDefaultHttpClient();
+const ipv4HttpClient = {
+  sendRequest: async (request) => {
+    request.agent = ipv4Agent;
+    return defaultHttpClient.sendRequest(request);
+  }
+};
 
 const getTrimmedEnvValue = (name) => {
   const value = process.env[name];
@@ -71,7 +82,9 @@ const validateAzureEnv = () => {
 };
 
 const createAzureCredential = ({ tenantId, clientId, clientSecret }) => {
-  return new ClientSecretCredential(tenantId, clientId, clientSecret);
+  return new ClientSecretCredential(tenantId, clientId, clientSecret, {
+    httpClient: ipv4HttpClient
+  });
 };
 
 const getAzureContext = () => {
