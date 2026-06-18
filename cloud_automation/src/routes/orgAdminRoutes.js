@@ -37,6 +37,11 @@ router.get(
   authenticateOrgAdmin,
   orgAdminController.getUserAzureCost
 );
+router.get(
+  '/resource-groups/:requestId/daily-usage',
+  authenticateOrgAdmin,
+  orgAdminController.getDailyUsage
+);
 router.get('/access-requests', authenticateOrgAdmin, orgAdminController.listAccessRequests);
 router.patch(
   '/access-requests/:id',

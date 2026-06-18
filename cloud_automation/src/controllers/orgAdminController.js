@@ -224,6 +224,25 @@ const getUserAzureCost = async (req, res, next) => {
   }
 };
 
+const getDailyUsage = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.getDailyUsageForRequest(requestId);
+
+    res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   login,
   listResourceGroups,
@@ -234,5 +253,6 @@ module.exports = {
   forceLogoutUser,
   listAccessRequests,
   reviewAccessRequest,
-  getUserAzureCost
+  getUserAzureCost,
+  getDailyUsage
 };

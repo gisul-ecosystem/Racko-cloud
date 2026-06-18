@@ -187,3 +187,24 @@ export interface OrgAdminAccessRequest {
 }
 
 export type OrgAdminErrorKind = 'invalid_credentials' | 'session_expired' | 'network' | 'unknown';
+
+export interface OrgAdminDailyUsageEntry {
+  userId: number;
+  username: string;
+  email: string;
+  accountEnabled: boolean;
+  limitReached: boolean;
+  dailyLimitHours: number | null;
+  consumedMinutes: number;
+  remainingMinutes: number | null;
+  consumedFormatted: string;
+  remainingFormatted: string | null;
+  todayWindow: { start: string; end: string } | null;
+}
+
+export interface OrgAdminDailyUsageResponse {
+  success: boolean;
+  data: OrgAdminDailyUsageEntry[];
+  timezone: string;
+  date: string;
+}

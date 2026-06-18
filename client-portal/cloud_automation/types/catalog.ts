@@ -84,6 +84,14 @@ export interface SelectedRole {
   roles: string[];
 }
 
+export interface UsageWindow {
+  day_of_week: number;
+  window_start_time: string;
+  window_end_time: string;
+  timezone?: string;
+  daily_limit_hours?: number;
+}
+
 export interface UsageDayConfig {
   enabled: boolean;
   limitMinutes: number;
@@ -132,6 +140,12 @@ export interface CreateRequestPayload {
   enableDailyUsage?: boolean;
   usageSchedule?: UsageSchedule;
   dailyLimitMinutes?: number;
+  cleanupEnabled?: boolean;
+  cleanupIntervalHours?: number;
+  resourceCleanupEnabled?: boolean;
+  resourceCleanupIntervalHours?: number;
+  usageWindows?: UsageWindow[];
+  perUserBudgetUsd?: number;
 }
 
 export interface CreateRequestResponse {

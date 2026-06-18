@@ -8,6 +8,7 @@ router.use(attachRackoUser);
 
 router.get('/', requestController.getAllRequests);
 router.post('/', requestController.createRequest);
+router.patch('/:id/cleanup-schedule', requestController.updateCleanupSchedule);
 router.get('/:id', requestController.getRequestById);
 
 module.exports = router;

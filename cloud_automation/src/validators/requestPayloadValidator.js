@@ -17,8 +17,16 @@ const allowedRequestFields = new Set([
   'enableDailyUsage',
   'dailyLimitMinutes',
   'usageSchedule',
-  'costingMode'
+  'costingMode',
+  'cleanupEnabled',
+  'cleanupIntervalHours',
+  'perUserBudgetUsd',
+  'resourceCleanupEnabled',
+  'resourceCleanupIntervalHours',
+  'usageWindows'
 ]);
+
+const timePattern = /^\d{2}:\d{2}$/;
 
 const validateRequestPayload = (body) => {
   const invalidFields = Object.keys(body).filter((field) => !allowedRequestFields.has(field));
@@ -35,7 +43,13 @@ const validateRequestPayload = (body) => {
     enableDailyUsage,
     dailyLimitMinutes,
     usageSchedule,
-    costingMode
+    costingMode,
+    cleanupEnabled,
+    cleanupIntervalHours,
+    perUserBudgetUsd,
+    resourceCleanupEnabled,
+    resourceCleanupIntervalHours,
+    usageWindows
   } = body;
 
   if (invalidFields.length > 0) {
@@ -103,6 +117,106 @@ const validateRequestPayload = (body) => {
 
   if (costingMode !== undefined && normalizeCostingMode(costingMode) === null) {
     throw new AppError("costingMode must be 'shared' or 'per_user'.", 400);
+  }
+
+  if (cleanupEnabled !== undefined && typeof cleanupEnabled !== 'boolean') {
+    throw new AppError('cleanupEnabled must be a boolean when provided.', 400);
+  }
+
+  const resolvedCleanupEnabled = cleanupEnabled === true;
+
+  if (cleanupIntervalHours !== undefined) {
+    if (!Number.isInteger(cleanupIntervalHours) || cleanupIntervalHours < 1 || cleanupIntervalHours > 168) {
+      throw new AppError('cleanupIntervalHours must be an integer between 1 and 168 when provided.', 400);
+    }
+  }
+
+  if (resolvedCleanupEnabled && cleanupIntervalHours === undefined) {
+    throw new AppError('Cleanup interval is required when schedule cleanup is enabled.', 400);
+  }
+
+  if (resourceCleanupEnabled !== undefined && typeof resourceCleanupEnabled !== 'boolean') {
+    throw new AppError('resourceCleanupEnabled must be a boolean when provided.', 400);
+  }
+
+  const resolvedResourceCleanupEnabled = resourceCleanupEnabled === true;
+
+  if (resourceCleanupIntervalHours !== undefined) {
+    if (
+      !Number.isInteger(resourceCleanupIntervalHours)
+      || resourceCleanupIntervalHours < 1
+      || resourceCleanupIntervalHours > 24
+    ) {
+      throw new AppError(
+        'resourceCleanupIntervalHours must be an integer between 1 and 24 when provided.',
+        400
+      );
+    }
+  }
+
+  if (resolvedResourceCleanupEnabled && resourceCleanupIntervalHours === undefined) {
+    throw new AppError(
+      'Cleanup interval is required when resource cleanup is enabled.',
+      400
+    );
+  }
+
+  if (usageWindows !== undefined) {
+    if (!Array.isArray(usageWindows)) {
+      throw new AppError('usageWindows must be an array when provided.', 400);
+    }
+
+    const seenDays = new Set();
+
+    for (const window of usageWindows) {
+      if (!window || typeof window !== 'object') {
+        throw new AppError('usageWindows must contain window objects.', 400);
+      }
+
+      if (!Number.isInteger(window.day_of_week) || window.day_of_week < 0 || window.day_of_week > 6) {
+        throw new AppError('usageWindows.day_of_week must be an integer between 0 and 6.', 400);
+      }
+
+      if (seenDays.has(window.day_of_week)) {
+        throw new AppError('usageWindows must not contain duplicate day_of_week values.', 400);
+      }
+
+      seenDays.add(window.day_of_week);
+
+      if (typeof window.window_start_time !== 'string' || !timePattern.test(window.window_start_time)) {
+        throw new AppError('usageWindows.window_start_time must use HH:mm format.', 400);
+      }
+
+      if (typeof window.window_end_time !== 'string' || !timePattern.test(window.window_end_time)) {
+        throw new AppError('usageWindows.window_end_time must use HH:mm format.', 400);
+      }
+
+      if (window.window_start_time >= window.window_end_time) {
+        throw new AppError('usageWindows.window_end_time must be after window_start_time.', 400);
+      }
+
+      if (window.timezone !== undefined && (typeof window.timezone !== 'string' || !window.timezone.trim())) {
+        throw new AppError('usageWindows.timezone must be a non-empty string when provided.', 400);
+      }
+
+      if (window.daily_limit_hours !== undefined && window.daily_limit_hours !== null) {
+        const dailyLimitHours = Number(window.daily_limit_hours);
+
+        if (!Number.isFinite(dailyLimitHours) || dailyLimitHours <= 0 || dailyLimitHours > 24) {
+          throw new AppError(
+            'usageWindows.daily_limit_hours must be a positive number up to 24 when provided.',
+            400
+          );
+        }
+      }
+    }
+  }
+
+  if (perUserBudgetUsd !== undefined) {
+    const budgetValue = Number(perUserBudgetUsd);
+    if (!Number.isFinite(budgetValue) || budgetValue <= 0 || budgetValue > 100000) {
+      throw new AppError('perUserBudgetUsd must be a positive number up to 100000 when provided.', 400);
+    }
   }
 
   const serviceIdSet = new Set(serviceIds);

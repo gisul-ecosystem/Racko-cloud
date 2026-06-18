@@ -1,5 +1,6 @@
 const AppError = require('../utils/AppError');
 const requestService = require('../services/requestService');
+const cleanupService = require('../services/cleanupService');
 const { getMaxDailyLimitMinutes } = require('../utils/usageSchedule');
 const { validateRequestPayload } = require('../validators/requestPayloadValidator');
 
@@ -32,7 +33,23 @@ const createRequest = async (req, res, next) => {
           ? getMaxDailyLimitMinutes(req.body.usageSchedule)
           : undefined,
       usageSchedule: req.body.usageSchedule || undefined,
-      costingMode: req.body.costingMode
+      costingMode: req.body.costingMode,
+      cleanupEnabled: req.body.cleanupEnabled === true,
+      cleanupIntervalHours:
+        req.body.cleanupIntervalHours !== undefined && req.body.cleanupIntervalHours !== null
+          ? Number(req.body.cleanupIntervalHours)
+          : undefined,
+      perUserBudgetUsd:
+        req.body.perUserBudgetUsd !== undefined && req.body.perUserBudgetUsd !== null
+          ? Number(req.body.perUserBudgetUsd)
+          : undefined,
+      resourceCleanupEnabled: req.body.resourceCleanupEnabled === true,
+      resourceCleanupIntervalHours:
+        req.body.resourceCleanupIntervalHours !== undefined
+        && req.body.resourceCleanupIntervalHours !== null
+          ? Number(req.body.resourceCleanupIntervalHours)
+          : undefined,
+      usageWindows: Array.isArray(req.body.usageWindows) ? req.body.usageWindows : undefined
     };
 
     const result = await requestService.createRequest({
@@ -89,9 +106,31 @@ const getRequestById = async (req, res, next) => {
   }
 };
 
+const updateCleanupSchedule = async (req, res, next) => {
+  try {
+    validateRequestId(req.params.id);
+
+    const updated = await cleanupService.updateCleanupSchedule(Number(req.params.id), {
+      cleanupEnabled: req.body.cleanupEnabled === true,
+      cleanupIntervalHours:
+        req.body.cleanupIntervalHours !== undefined && req.body.cleanupIntervalHours !== null
+          ? Number(req.body.cleanupIntervalHours)
+          : undefined
+    });
+
+    res.status(200).json({
+      success: true,
+      data: updated
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getAllRequests,
   createRequest,
   getRequestById,
+  updateCleanupSchedule,
   validateRequestPayload
 };

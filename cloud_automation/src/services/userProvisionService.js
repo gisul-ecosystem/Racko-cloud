@@ -11,6 +11,7 @@ const { runWithConcurrency } = require('../utils/concurrency');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroupForUserNumber } = require('./userResourceGroupService');
+const { provisionBudgetsForRequest } = require('./budgetProvisionService');
 
 const STATUS_CREATED = 'Created';
 const DEFAULT_CONCURRENCY = Math.max(1, Number(process.env.BULK_PROVISION_CONCURRENCY || 20));
@@ -233,6 +234,15 @@ const provisionUsersForRequest = async (requestId) => {
       subscriptionId,
       usersCreated: createdUsers.length
     });
+
+    try {
+      await provisionBudgetsForRequest(requestId);
+    } catch (budgetError) {
+      logAzureUserEvent('error', 'azure_user_budget_provision_failed', {
+        requestId,
+        message: budgetError?.message
+      });
+    }
 
     return {
       usersCreated: createdUsers.length

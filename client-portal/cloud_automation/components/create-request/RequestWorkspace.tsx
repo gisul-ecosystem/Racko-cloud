@@ -20,14 +20,12 @@ import type {
   SelectedInstance,
   SelectedRole,
   ServiceCatalogResponse,
-  UsageSchedule,
+  UsageWindow,
   CostingMode,
 } from '../../types/catalog';
 import {
-  createDefaultUsageSchedule,
   defaultEndDate,
   defaultStartDate,
-  getMaxDailyLimitMinutes,
   normalizeServiceId,
 } from '../../utils/requestForm';
 import { PricingSummary } from './PricingSummary';
@@ -96,8 +94,10 @@ function validateForm(input: {
   catalog: ServiceCatalogResponse;
   startDate: string;
   endDate: string;
-  enableDailyUsage: boolean;
-  usageSchedule: UsageSchedule;
+  usageWindows: UsageWindow[];
+  resourceCleanupEnabled: boolean;
+  resourceCleanupIntervalHours?: number;
+  perUserBudgetUsd?: number;
 }): string[] {
   const errors: string[] = [];
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -146,22 +146,29 @@ function validateForm(input: {
     }
   }
 
-  if (input.enableDailyUsage) {
-    if (!input.usageSchedule.timezone?.trim()) {
-      errors.push('Select a timezone for the usage schedule.');
-    }
-    const enabledDays = Object.values(input.usageSchedule.days).filter((day) => day.enabled);
-    if (enabledDays.length === 0) {
-      errors.push('Enable at least one day in the usage schedule.');
-    }
-    for (const day of enabledDays) {
-      const slot = day.slots[0];
-      if (!slot?.start || !slot?.end) {
-        errors.push('Each enabled day must have a start and end time.');
+  if (input.usageWindows.length > 0) {
+    for (const window of input.usageWindows) {
+      if (!window.window_start_time || !window.window_end_time) {
+        errors.push('Each enabled usage window must have a start and end time.');
+      } else if (window.window_start_time >= window.window_end_time) {
+        errors.push('Usage window end time must be after the start time.');
       }
-      if (!Number.isInteger(day.limitMinutes) || day.limitMinutes <= 0) {
-        errors.push('Each enabled day must have a positive usage limit in minutes.');
-      }
+    }
+  }
+
+  if (input.resourceCleanupEnabled) {
+    if (
+      !Number.isInteger(input.resourceCleanupIntervalHours)
+      || (input.resourceCleanupIntervalHours ?? 0) < 1
+      || (input.resourceCleanupIntervalHours ?? 0) > 24
+    ) {
+      errors.push('Enter a resource cleanup interval between 1 and 24 hours when enabled.');
+    }
+  }
+
+  if (input.perUserBudgetUsd !== undefined) {
+    if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
+      errors.push('Budget per user must be a positive number.');
     }
   }
 
@@ -181,8 +188,13 @@ export function RequestWorkspace() {
   const [costingMode, setCostingMode] = useState<CostingMode>('shared');
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
-  const [enableDailyUsage, setEnableDailyUsage] = useState(false);
-  const [usageSchedule, setUsageSchedule] = useState(createDefaultUsageSchedule);
+  const [usageWindows, setUsageWindows] = useState<UsageWindow[]>([]);
+  const [usageWindowTimezone, setUsageWindowTimezone] = useState('Asia/Kolkata');
+  const [resourceCleanupEnabled, setResourceCleanupEnabled] = useState(false);
+  const [resourceCleanupIntervalHours, setResourceCleanupIntervalHours] = useState<
+    number | undefined
+  >(undefined);
+  const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -284,8 +296,10 @@ export function RequestWorkspace() {
       catalog,
       startDate,
       endDate,
-      enableDailyUsage,
-      usageSchedule,
+      usageWindows,
+      resourceCleanupEnabled,
+      resourceCleanupIntervalHours,
+      perUserBudgetUsd,
     });
 
     setValidationErrors(errors);
@@ -304,12 +318,18 @@ export function RequestWorkspace() {
         serviceIds: selectedServiceIds,
         selectedRoles,
         selectedInstances,
-        enableDailyUsage,
         costingMode,
-        ...(enableDailyUsage
+        resourceCleanupEnabled,
+        ...(resourceCleanupEnabled && resourceCleanupIntervalHours
+          ? { resourceCleanupIntervalHours }
+          : {}),
+        ...(perUserBudgetUsd !== undefined ? { perUserBudgetUsd } : {}),
+        ...(usageWindows.length > 0
           ? {
-              usageSchedule,
-              dailyLimitMinutes: getMaxDailyLimitMinutes(usageSchedule),
+              usageWindows: usageWindows.map((window) => ({
+                ...window,
+                timezone: usageWindowTimezone,
+              })),
             }
           : {}),
       });
@@ -421,10 +441,16 @@ export function RequestWorkspace() {
               onStartDateChange={setStartDate}
               endDate={endDate}
               onEndDateChange={setEndDate}
-              enableDailyUsage={enableDailyUsage}
-              onEnableDailyUsageChange={setEnableDailyUsage}
-              usageSchedule={usageSchedule}
-              onUsageScheduleChange={setUsageSchedule}
+              usageWindows={usageWindows}
+              onUsageWindowsChange={setUsageWindows}
+              usageWindowTimezone={usageWindowTimezone}
+              onUsageWindowTimezoneChange={setUsageWindowTimezone}
+              resourceCleanupEnabled={resourceCleanupEnabled}
+              onResourceCleanupEnabledChange={setResourceCleanupEnabled}
+              resourceCleanupIntervalHours={resourceCleanupIntervalHours}
+              onResourceCleanupIntervalHoursChange={setResourceCleanupIntervalHours}
+              perUserBudgetUsd={perUserBudgetUsd}
+              onPerUserBudgetUsdChange={setPerUserBudgetUsd}
               adminAccessOpen={adminAccessOpen}
               onAdminAccessOpenChange={setAdminAccessOpen}
               adminAccessServiceId={adminAccessServiceId}

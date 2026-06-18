@@ -15,6 +15,10 @@ const serviceResourceProvisionRoutes = require('./src/routes/serviceResourceProv
 const userProvisionRoutes = require('./src/routes/userProvisionRoutes');
 const { startExpiryScheduler } = require('./src/scheduler/expiryScheduler');
 const { startUsageScheduler } = require('./src/scheduler/usageScheduler');
+const { startCleanupScheduler } = require('./src/scheduler/cleanupScheduler');
+const { startBudgetScheduler } = require('./src/scheduler/budgetScheduler');
+const { startResourceCleanupScheduler } = require('./src/scheduler/resourceCleanupScheduler');
+const { startWindowEnforcementScheduler } = require('./src/scheduler/windowEnforcementScheduler');
 const pricingRoutes = require('./src/routes/pricingRoutes');
 const servicePricingRoutes = require('./src/routes/servicePricingRoutes');
 const requestRoutes = require('./src/routes/requestRoutes');
@@ -102,6 +106,10 @@ let server;
 const startServer = () => {
   startExpiryScheduler();
   startUsageScheduler();
+  startCleanupScheduler();
+  startBudgetScheduler();
+  startResourceCleanupScheduler();
+  startWindowEnforcementScheduler();
   server = app.listen(port, () => {
     console.log(`Service Catalog API listening on port ${port}`);
   });

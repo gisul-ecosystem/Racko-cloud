@@ -2,9 +2,11 @@
 
 
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 
 import { Activity, DollarSign, Loader2, LogOut, Users } from 'lucide-react';
+
+import { getOrgDailyUsage } from '../../api/orgAdminClient';
 
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 
@@ -12,7 +14,12 @@ import { RequestStatusBadge } from '../RequestStatusBadge';
 
 import { formatCurrency, formatDateTime, formatMinutes } from '../../utils/formatters';
 
-import type { OrgAdminRequestDetail, OrgAdminUser, OrgAdminUserAzureCost } from '../../types/orgAdmin';
+import type {
+  OrgAdminDailyUsageEntry,
+  OrgAdminRequestDetail,
+  OrgAdminUser,
+  OrgAdminUserAzureCost,
+} from '../../types/orgAdmin';
 
 import { OrgAdminUserUsageModal } from './OrgAdminUserUsageModal';
 
@@ -23,6 +30,10 @@ interface OrgAdminUsersTableProps {
   users: OrgAdminUser[];
 
   request: OrgAdminRequestDetail | null;
+
+  requestId: number | null;
+
+  sessionToken: string | null;
 
   loading: boolean;
 
@@ -37,6 +48,88 @@ interface OrgAdminUsersTableProps {
   fetchUserMonitoring: (userId: number) => Promise<import('../../types/orgAdmin').OrgAdminMonitoringResponse | null>;
 
   onFetchAzureCost: (userId: number) => Promise<OrgAdminUserAzureCost | null>;
+
+}
+
+
+
+function DailyUsageBar({ usage }: { usage: OrgAdminDailyUsageEntry }) {
+
+  if (usage.dailyLimitHours === null) {
+
+    return null;
+
+  }
+
+
+
+  const limitMinutes = usage.dailyLimitHours * 60;
+
+  const pct = Math.min(100, Math.round((usage.consumedMinutes / limitMinutes) * 100));
+
+  const isLimitReached = usage.limitReached || usage.remainingMinutes === 0;
+
+
+
+  return (
+
+    <div className="mt-1.5 flex flex-col gap-1">
+
+      <div className="text-xs text-gray-500">
+
+        <span className="font-medium text-gray-700">{usage.consumedFormatted} used</span>
+
+        <span className="mx-1 text-gray-300">·</span>
+
+        {isLimitReached ? (
+
+          <span className="font-medium text-red-600">Limit reached — blocked</span>
+
+        ) : (
+
+          <span className="text-emerald-600">{usage.remainingFormatted} remaining</span>
+
+        )}
+
+        <span className="mx-1 text-gray-300">·</span>
+
+        <span className="text-gray-400">Limit: {usage.dailyLimitHours}h/day</span>
+
+        {usage.todayWindow && (
+
+          <span className="text-gray-400">
+
+            {' '}
+
+            ({usage.todayWindow.start.slice(0, 5)} – {usage.todayWindow.end.slice(0, 5)})
+
+          </span>
+
+        )}
+
+      </div>
+
+
+
+      <div className="h-1 w-[200px] overflow-hidden rounded-full bg-gray-200">
+
+        <div
+
+          className={`h-full rounded-full transition-[width] duration-300 ${
+
+            isLimitReached ? 'bg-red-600' : pct >= 80 ? 'bg-amber-500' : 'bg-blue-500'
+
+          }`}
+
+          style={{ width: `${pct}%` }}
+
+        />
+
+      </div>
+
+    </div>
+
+  );
 
 }
 
@@ -132,6 +225,10 @@ export function OrgAdminUsersTable({
 
   request,
 
+  requestId,
+
+  sessionToken,
+
   loading,
 
   selectedUserId,
@@ -155,6 +252,60 @@ export function OrgAdminUsersTable({
   const [azureCosts, setAzureCosts] = useState<Record<number, OrgAdminUserAzureCost>>({});
 
   const [loadingAzureCostUserId, setLoadingAzureCostUserId] = useState<number | null>(null);
+
+  const [dailyUsage, setDailyUsage] = useState<Record<number, OrgAdminDailyUsageEntry>>({});
+
+
+
+  useEffect(() => {
+
+    if (!requestId || !sessionToken) return undefined;
+
+
+
+    const fetchDailyUsage = async () => {
+
+      try {
+
+        const response = await getOrgDailyUsage(sessionToken, requestId);
+
+        if (response.success && response.data) {
+
+          const map: Record<number, OrgAdminDailyUsageEntry> = {};
+
+          response.data.forEach((entry) => {
+
+            map[entry.userId] = entry;
+
+          });
+
+          setDailyUsage(map);
+
+        }
+
+      } catch (err) {
+
+        console.error('Failed to fetch daily usage:', err);
+
+      }
+
+    };
+
+
+
+    void fetchDailyUsage();
+
+    const interval = window.setInterval(() => {
+
+      void fetchDailyUsage();
+
+    }, 60_000);
+
+
+
+    return () => window.clearInterval(interval);
+
+  }, [requestId, sessionToken]);
 
 
 
@@ -345,6 +496,18 @@ export function OrgAdminUsersTable({
                       <p className="font-medium text-gray-900">{user.username}</p>
 
                       <p className="font-mono text-xs text-gray-500">{user.azureUserId || '—'}</p>
+
+                      {dailyUsage[user.id] && <DailyUsageBar usage={dailyUsage[user.id]!} />}
+
+                      {dailyUsage[user.id]?.limitReached && (
+
+                        <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-600">
+
+                          Blocked today
+
+                        </span>
+
+                      )}
 
                     </td>
 
