@@ -16,12 +16,12 @@ export default function EsiAddingServersPage() {
             {
               title: 'Display name',
               description:
-                'Enter a friendly name for the server (e.g. "Finance VM 01"). This is only for your reference.',
+                'Enter a friendly name for the server, such as "Finance VM 01". This is only for your reference.',
             },
             {
               title: 'IP address',
               description:
-                'Enter the server\'s IPv4 address. This must be reachable from the Racko gateway.',
+                'Enter the server IPv4 address. This must be reachable from Racko.',
             },
             {
               title: 'Protocol',
@@ -30,7 +30,7 @@ export default function EsiAddingServersPage() {
             {
               title: 'Username and password',
               description:
-                'Enter the credentials Racko will use to open the console session. For RDP, this is typically "Administrator". For SSH, typically "root".',
+                'Enter the credentials Racko will use to open the console session. For RDP, this is typically "Administrator". For SSH, this is often "root" or another server user.',
             },
             {
               title: 'Click Add VM',
@@ -68,11 +68,11 @@ export default function EsiAddingServersPage() {
           Each entry requires at minimum: <code className="rounded bg-gray-100 px-1 py-0.5 text-xs">name</code>,{' '}
           <code className="rounded bg-gray-100 px-1 py-0.5 text-xs">ip</code>, and{' '}
           <code className="rounded bg-gray-100 px-1 py-0.5 text-xs">password</code>.
-          Protocol defaults to RDP if omitted. Username defaults to Administrator (RDP) or root (SSH).
+          Protocol defaults to RDP if omitted. Username defaults to Administrator for RDP or root for SSH.
         </p>
         <DocNote>
           Bulk import processes all entries immediately. Invalid entries are rejected with an error
-          message — fix the JSON and retry.
+          message - fix the JSON and retry.
         </DocNote>
       </DocSection>
 
@@ -86,7 +86,7 @@ export default function EsiAddingServersPage() {
       <DocSection title="Deleting servers">
         <p>
           From My Servers, click the Delete button next to a server. This removes the server from
-          Racko but does not affect the actual server in any way — it only removes the connection
+          Racko but does not affect the actual server in any way - it only removes the connection
           record.
         </p>
       </DocSection>

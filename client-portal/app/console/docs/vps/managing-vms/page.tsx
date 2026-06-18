@@ -4,8 +4,8 @@ const statusRows = [
   { status: 'Creating', description: 'VM is being provisioned. Wait for the job to complete.' },
   { status: 'Running', description: 'VM is powered on and operating normally.' },
   { status: 'Stopped', description: 'VM is powered off. Start it to use it.' },
-  { status: 'Paused', description: 'VM execution is paused at the hypervisor level.' },
-  { status: 'Suspended', description: 'VM state has been saved to disk (hibernate).' },
+  { status: 'Paused', description: 'VM execution is temporarily paused.' },
+  { status: 'Suspended', description: 'VM state has been saved to disk.' },
   { status: 'Error', description: 'An unexpected error occurred. Check the events log.' },
   { status: 'Deleting', description: 'VM deletion is in progress.' },
   { status: 'Delete Failed', description: 'Deletion failed. Retry from the VM detail page.' },
@@ -41,12 +41,12 @@ export default function ManagingVmsPage() {
       <DocSection title="Power Operations">
         <p>From the VM detail page or the VM list, you can perform the following actions:</p>
         <ul className="ml-4 mt-2 list-disc space-y-2 text-gray-600">
-          <li><strong>Start</strong> — Powers on a stopped VM. The VM boots and becomes reachable.</li>
-          <li><strong>Stop</strong> — Gracefully shuts down the OS before powering off.</li>
-          <li><strong>Force Stop</strong> — Immediately cuts power (like pulling the plug). Use only if the VM is unresponsive.</li>
-          <li><strong>Restart</strong> — Graceful reboot of the OS.</li>
-          <li><strong>Reset</strong> — Hard reset at the hypervisor level. Equivalent to a power cycle.</li>
-          <li><strong>Hibernate</strong> — Saves VM state to disk and powers off. Resume restores exactly where it left off.</li>
+          <li><strong>Start</strong> - Powers on a stopped VM. The VM boots and becomes reachable.</li>
+          <li><strong>Stop</strong> - Gracefully shuts down the OS before powering off.</li>
+          <li><strong>Force Stop</strong> - Immediately cuts power. Use only if the VM is unresponsive.</li>
+          <li><strong>Restart</strong> - Graceful reboot of the OS.</li>
+          <li><strong>Reset</strong> - Hard reset. Equivalent to a power cycle.</li>
+          <li><strong>Hibernate</strong> - Saves VM state to disk and powers off. Resume restores exactly where it left off.</li>
         </ul>
         <DocWarning>
           Force Stop and Reset do not flush disk writes. Only use them if the VM is completely unresponsive.
@@ -68,8 +68,8 @@ export default function ManagingVmsPage() {
       <DocSection title="Deleting a VM">
         <p>
           Delete a VM from its detail page or using bulk delete from the VM list. Deletion is
-          permanent — it removes the VM from Proxmox and purges all associated disks. There is no
-          recycle bin.
+          permanent - it removes the VM from Racko and permanently deletes all associated disks.
+          There is no recycle bin.
         </p>
         <DocWarning>
           Deleted VMs cannot be recovered. Make sure you have exported or backed up any data before

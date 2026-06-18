@@ -2,25 +2,25 @@ import { DocPage, DocSection, DocFaq } from '../../../../../components/console/D
 
 export default function VpsFaqPage() {
   return (
-    <DocPage title="VPS Hosting — FAQ">
+    <DocPage title="VPS Hosting - FAQ">
       <DocSection title="General">
         <DocFaq
           items={[
             {
               q: 'How many VMs can I create?',
-              a: 'There is no hard limit set by Racko. The practical limit is determined by the available resources (CPU, RAM, disk) on the cluster. Your super admin configures resource limits.',
+              a: 'There is no hard limit set by Racko. The practical limit depends on the resources available to your account and service plan.',
             },
             {
               q: 'Can I resize a VM after creation?',
-              a: 'CPU and RAM can be adjusted by your super admin at the Proxmox level. Disk size can only be increased, not decreased.',
+              a: 'CPU and RAM can be adjusted by an administrator when your plan allows it. Disk size can only be increased, not decreased.',
             },
             {
               q: 'What happens to my VM when I delete it?',
-              a: 'The VM is permanently removed from Proxmox along with all its disks. This cannot be undone. Export or backup any data before deleting.',
+              a: 'The VM is permanently removed from Racko along with all its disks. This cannot be undone. Export or backup any data before deleting.',
             },
             {
               q: 'Can I clone an existing VM?',
-              a: 'Yes. From the Clone VMs section, select a source VM and provide a name. The clone is a full copy of the disk — it inherits all installed software and configuration from the source.',
+              a: 'Yes. From the Clone VMs section, select a source VM and provide a name. The clone is a full copy of the disk - it inherits all installed software and configuration from the source.',
             },
           ]}
         />
@@ -31,11 +31,11 @@ export default function VpsFaqPage() {
           items={[
             {
               q: 'Why does the console say "not ready" even after the VM is running?',
-              a: 'Console readiness depends on the guest agent reporting the VM\'s IP address. This can take 1–3 minutes after first boot. If it persists, ensure the Proxmox QEMU guest agent is installed and running inside the VM.',
+              a: 'Console readiness can take 1-3 minutes after first boot while the VM finishes starting network and remote access services. If it persists, restart the VM or contact support.',
             },
             {
               q: 'I forgot my VM password. Can I reset it?',
-              a: 'Your console password is visible on the VM detail page. If it was changed inside the OS, contact your admin — Racko does not manage OS-level passwords after creation.',
+              a: 'Your console password is visible on the VM detail page. If it was changed inside the OS, contact your admin because Racko does not manage OS-level passwords after creation.',
             },
             {
               q: 'Can multiple users access the same VM console at once?',
@@ -49,12 +49,12 @@ export default function VpsFaqPage() {
         <DocFaq
           items={[
             {
-              q: 'My bulk create job shows "Partial" — what does that mean?',
+              q: 'My bulk create job shows "Partial" - what does that mean?',
               a: 'Some VMs were created successfully and others failed. The job detail page shows which VMs failed and why. Successfully created VMs are usable immediately.',
             },
             {
               q: 'Can I cancel a running job?',
-              a: 'Yes. On the job detail page, click Cancel Job while the job is in Processing status. VMs already being created finish normally. Remaining VMs that haven\'t started are skipped.',
+              a: 'Yes. On the job detail page, click Cancel Job while the job is in Processing status. VMs already being created finish normally. Remaining VMs that have not started are skipped.',
             },
             {
               q: 'How do I see the passwords for bulk-created VMs?',

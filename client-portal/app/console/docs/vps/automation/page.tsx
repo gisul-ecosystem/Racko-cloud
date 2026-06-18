@@ -8,13 +8,13 @@ export default function VpsAutomationPage() {
     >
       <DocSection title="What is VM Automation?">
         <p>
-          VM Automation lets you define a daily schedule for when your VMs should start (resume)
-          and stop (hibernate). This is useful for cost savings — turn off VMs overnight and on
-          weekends, and have them ready when you need them.
+          VM Automation lets you define a daily schedule for when your VMs should start or hibernate.
+          This is useful for cost savings - turn off VMs overnight and on weekends, and have them
+          ready when you need them.
         </p>
         <DocNote>
-          Automation uses hibernate (suspend to disk) rather than a hard shutdown, so your VM
-          resumes exactly where it left off.
+          Automation uses hibernate rather than a hard shutdown, so your VM resumes exactly where
+          it left off.
         </DocNote>
       </DocSection>
 
@@ -32,7 +32,7 @@ export default function VpsAutomationPage() {
             {
               title: 'Set start and stop times',
               description:
-                'Choose the daily start time (when VMs resume) and stop time (when VMs hibernate). Select your timezone.',
+                'Choose the daily start time and stop time. Select the timezone that should be used for the schedule.',
             },
             {
               title: 'Set the date range',
@@ -50,10 +50,10 @@ export default function VpsAutomationPage() {
 
       <DocSection title="How it works">
         <p>
-          Racko runs a background scheduler that checks automations at regular intervals. When a
-          stop time is reached, it hibernates each VM in the schedule. When a start time is reached,
-          it resumes them. The <strong>Last Resume</strong> and <strong>Last Hibernate</strong> times
-          are shown on the automation detail page so you can verify it ran correctly.
+          Racko checks your automation rules at regular intervals. When a stop time is reached,
+          each VM in the schedule hibernates. When a start time is reached, each VM resumes.
+          The <strong>Last Resume</strong> and <strong>Last Hibernate</strong> times are shown on
+          the automation detail page so you can verify it ran correctly.
         </p>
       </DocSection>
 
