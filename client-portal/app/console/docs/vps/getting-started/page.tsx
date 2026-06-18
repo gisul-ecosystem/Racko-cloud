@@ -8,12 +8,12 @@ export default function VpsGettingStartedPage() {
     >
       <DocSection title="What is VPS Hosting?">
         <p>
-          Racko VPS Hosting gives you dedicated virtual machines running on our cloud infrastructure.
-          Each VM is isolated, fully configurable, and accessible via a secure browser console — no
+          Racko VPS Hosting gives you dedicated virtual machines running on Racko cloud infrastructure.
+          Each VM is isolated, configurable, and accessible through a secure browser console - no
           VPN or SSH client required.
         </p>
         <p>
-          VMs are provisioned from pre-configured templates. You choose the template, set your
+          VMs are provisioned from ready-to-use templates. You choose the template, set your
           resource allocation, and Racko handles the rest.
         </p>
       </DocSection>
@@ -32,12 +32,12 @@ export default function VpsGettingStartedPage() {
             {
               title: 'Choose a template',
               description:
-                'Select an OS template (e.g. Windows Server 2022). Templates are pre-configured by your super admin.',
+                'Select an OS template, such as Windows Server 2022. Templates are pre-configured and ready to use.',
             },
             {
               title: 'Set a name and resources',
               description:
-                'Give your VM a name (letters, numbers, hyphens). Optionally adjust CPU, RAM, and disk size above the template defaults.',
+                'Give your VM a name. Optionally adjust CPU, RAM, and disk size above the template defaults when your plan allows it.',
             },
             {
               title: 'Set a console password',
@@ -47,7 +47,7 @@ export default function VpsGettingStartedPage() {
             {
               title: 'Click Create',
               description:
-                'Racko starts a background job. You\'ll be redirected to the job tracker where you can watch progress in real time.',
+                'Racko starts the provisioning job. You will be redirected to the job tracker where you can watch progress in real time.',
             },
           ]}
         />
@@ -55,12 +55,13 @@ export default function VpsGettingStartedPage() {
 
       <DocSection title="How long does it take?">
         <p>
-          A single VM typically provisions in 2–5 minutes. Bulk creation runs in parallel batches —
-          10 VMs usually complete in under 10 minutes depending on storage type and cluster load.
+          A single VM typically provisions in 2-5 minutes. Bulk creation runs in parallel batches.
+          Completion time depends on the number of VMs, selected template, storage type, and current
+          platform load.
         </p>
         <DocNote>
-          If you selected software installation (e.g. Chrome, VS Code), provisioning takes longer
-          as software is installed after the VM is created.
+          If you selected software installation, provisioning takes longer because software is
+          installed after the VM is created.
         </DocNote>
       </DocSection>
 

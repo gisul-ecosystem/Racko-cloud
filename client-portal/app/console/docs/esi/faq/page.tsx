@@ -2,7 +2,7 @@ import { DocPage, DocSection, DocFaq } from '../../../../../components/console/D
 
 export default function EsiFaqPage() {
   return (
-    <DocPage title="Elastic Server Import — FAQ">
+    <DocPage title="Elastic Server Import - FAQ">
       <DocSection title="General">
         <DocFaq
           items={[
@@ -12,7 +12,7 @@ export default function EsiFaqPage() {
             },
             {
               q: 'Does Racko manage or monitor my imported servers?',
-              a: 'No. Racko only stores the connection details and provides the browser console gateway. It does not monitor, provision, or manage the server in any way.',
+              a: 'No. Racko only stores the connection details and provides browser console access. It does not monitor, provision, or manage the server in any way.',
             },
             {
               q: 'How many servers can I import?',
@@ -20,7 +20,7 @@ export default function EsiFaqPage() {
             },
             {
               q: 'Are my server credentials stored securely?',
-              a: 'Yes. Passwords are encrypted at rest using AES-256-CBC before being stored in the database. They are decrypted only when opening a console session.',
+              a: 'Yes. Passwords are encrypted at rest and used only when opening a console session.',
             },
           ]}
         />
@@ -31,11 +31,11 @@ export default function EsiFaqPage() {
           items={[
             {
               q: 'My server is behind a firewall. Can I still use ESI?',
-              a: 'Yes, but you need to allow inbound connections from the Racko Guacamole gateway IP on port 3389 (RDP) or 22 (SSH). Contact your admin for the gateway IP address.',
+              a: 'Yes, but you need to allow inbound connections from the Racko gateway IP on port 3389 for RDP or 22 for SSH. Contact your admin for the gateway IP address.',
             },
             {
               q: 'Can I use a private IP address?',
-              a: 'Only if the private IP is routable from the Racko gateway — for example, if your server is on the same network. Public IPs work without any special configuration.',
+              a: 'Only if the private IP is reachable from Racko - for example, if your server is on the same network. Public IPs work without any special configuration.',
             },
             {
               q: 'Does ESI work with servers that use certificate-based SSH authentication?',
@@ -50,7 +50,7 @@ export default function EsiFaqPage() {
           items={[
             {
               q: 'What happens if one entry in my bulk JSON is invalid?',
-              a: 'The import stops at the invalid entry and returns an error. Fix the entry and retry — successfully imported entries before the error are already saved.',
+              a: 'The import stops at the invalid entry and returns an error. Fix the entry and retry - successfully imported entries before the error are already saved.',
             },
             {
               q: 'Is there a limit to how many servers I can bulk import at once?',

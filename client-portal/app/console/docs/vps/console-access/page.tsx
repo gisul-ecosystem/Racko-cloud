@@ -4,13 +4,12 @@ export default function VpsConsoleAccessPage() {
   return (
     <DocPage
       title="Console Access"
-      subtitle="Connect to your VM directly from the browser — no VPN, no SSH client needed."
+      subtitle="Connect to your VM directly from the browser - no VPN, no SSH client needed."
     >
       <DocSection title="How it works">
         <p>
-          Racko uses Apache Guacamole as a browser-based gateway. When you open the console, Racko
-          mints a one-time session token and opens an RDP or SSH connection to your VM through the
-          Guacamole server. Everything happens in your browser — no software to install.
+          Racko opens a secure browser-based RDP or SSH session to your VM. Everything happens in
+          your browser, so you do not need to install extra client software.
         </p>
       </DocSection>
 
@@ -27,20 +26,20 @@ export default function VpsConsoleAccessPage() {
             <tbody>
               <tr className="border-b border-gray-50">
                 <td className="px-4 py-3 font-medium text-gray-900">RDP</td>
-                <td className="px-4 py-3 text-gray-500">Windows VMs — full graphical desktop</td>
+                <td className="px-4 py-3 text-gray-500">Windows VMs - full graphical desktop</td>
                 <td className="px-4 py-3 font-mono text-gray-500">3389</td>
               </tr>
               <tr>
                 <td className="px-4 py-3 font-medium text-gray-900">SSH</td>
-                <td className="px-4 py-3 text-gray-500">Linux VMs — terminal access</td>
+                <td className="px-4 py-3 text-gray-500">Linux VMs - terminal access</td>
                 <td className="px-4 py-3 font-mono text-gray-500">22</td>
               </tr>
             </tbody>
           </table>
         </div>
         <p className="mt-3">
-          The protocol is automatically determined by the VM&apos;s OS template — Windows templates
-          use RDP, Linux templates use SSH. You don&apos;t need to configure this manually.
+          The protocol is automatically determined by the VM&apos;s OS template. Windows templates
+          use RDP, Linux templates use SSH. You do not need to configure this manually.
         </p>
       </DocSection>
 
@@ -54,12 +53,12 @@ export default function VpsConsoleAccessPage() {
             {
               title: 'Wait for console ready',
               description:
-                'After starting, Racko polls for the VM\'s private IP address via the guest agent. A "Console Ready" indicator appears once it\'s reachable — this typically takes 1–3 minutes after first boot.',
+                'After starting, Racko checks when the VM is ready for console access. A "Console Ready" indicator appears once it is reachable - this typically takes 1-3 minutes after first boot.',
             },
             {
               title: 'Click Open Console',
               description:
-                'From the VM detail page, click the Open Console button. A new tab opens with the Guacamole session.',
+                'From the VM detail page, click the Open Console button. A new tab opens with the browser console session.',
             },
             {
               title: 'Log in with your credentials',

@@ -8,9 +8,9 @@ export default function EsiConsoleAccessPage() {
     >
       <DocSection title="How it works">
         <p>
-          When you click Open Console, Racko creates a real-time RDP or SSH session through Apache
-          Guacamole. The session is proxied securely — your server credentials are stored encrypted
-          and never exposed to the browser directly.
+          When you click Open Console, Racko creates a real-time RDP or SSH session through the
+          secure browser console. Your server credentials are stored encrypted and are never exposed
+          to the browser directly.
         </p>
       </DocSection>
 
@@ -39,7 +39,7 @@ export default function EsiConsoleAccessPage() {
         />
         <DocNote>
           Console sessions open in a new tab. Keep the tab open to maintain the session. Closing
-          the tab ends the session — it does not affect anything running on the server itself.
+          the tab ends the session - it does not affect anything running on the server itself.
         </DocNote>
       </DocSection>
 
@@ -47,7 +47,7 @@ export default function EsiConsoleAccessPage() {
         <p>
           RDP sessions give you full graphical desktop access to Windows servers. You can use
           clipboard paste (Ctrl+V) for text. File transfer is not supported through the browser
-          console — use a native RDP client for file transfers.
+          console - use a native RDP client for file transfers.
         </p>
         <DocWarning>
           The browser RDP session shares the same desktop session as a native RDP connection. If
@@ -75,7 +75,7 @@ export default function EsiConsoleAccessPage() {
             </thead>
             <tbody>
               {[
-                { e: 'Connection timed out', c: 'The server IP is unreachable from the Racko gateway. Check firewall rules.' },
+                { e: 'Connection timed out', c: 'The server IP is unreachable from Racko. Check firewall rules.' },
                 { e: 'Authentication failed', c: 'The stored username or password is incorrect. Delete and re-add the server with correct credentials.' },
                 { e: 'Connection refused', c: 'RDP or SSH service is not running on the server, or the port is blocked.' },
                 { e: 'Session disconnected', c: 'The server was rebooted, or the network connection dropped. Try again.' },

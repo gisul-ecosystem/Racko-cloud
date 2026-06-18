@@ -8,25 +8,25 @@ export default function EsiGettingStartedPage() {
     >
       <DocSection title="What is Elastic Server Import?">
         <p>
-          Elastic Server Import (ESI) lets you connect servers you already own — from any provider
-          or on-premises — to Racko. Once connected, you can access them via a secure browser
+          Elastic Server Import (ESI) lets you connect servers you already own - from any provider
+          or on-premises - to Racko. Once connected, you can access them through a secure browser
           console, just like Racko-provisioned VMs.
         </p>
         <p>
-          ESI supports both RDP (Windows) and SSH (Linux) connections. No client software needed —
+          ESI supports both RDP for Windows and SSH for Linux. No client software is needed because
           everything works through your browser.
         </p>
         <DocNote>
-          ESI is for servers you already own and manage. Racko does not provision, bill for, or manage
-          the underlying hardware — it only provides the browser console gateway.
+          ESI is for servers you already own and manage. Racko does not provision, bill for, or
+          manage the underlying hardware - it only provides browser console access.
         </DocNote>
       </DocSection>
 
       <DocSection title="What you need before you start">
         <ul className="ml-4 list-disc space-y-2 text-gray-600">
-          <li>The server&apos;s IP address (must be reachable from the Racko gateway)</li>
+          <li>The server&apos;s IP address, reachable from Racko&apos;s browser console gateway</li>
           <li>A valid username and password for the server</li>
-          <li>RDP enabled (port 3389) for Windows, or SSH enabled (port 22) for Linux</li>
+          <li>RDP enabled on port 3389 for Windows, or SSH enabled on port 22 for Linux</li>
         </ul>
       </DocSection>
 
@@ -44,7 +44,7 @@ export default function EsiGettingStartedPage() {
             {
               title: 'Fill in the details',
               description:
-                'Enter a display name, the server\'s IP address, choose RDP or SSH, and provide the username and password.',
+                'Enter a display name, the server IP address, choose RDP or SSH, and provide the username and password.',
             },
             {
               title: 'Click Add VM',
@@ -57,9 +57,9 @@ export default function EsiGettingStartedPage() {
 
       <DocSection title="Network requirements">
         <p>
-          The Racko Guacamole gateway must be able to reach your server&apos;s IP on the required port
-          (3389 for RDP, 22 for SSH). If your server is behind a firewall or NAT, ensure the
-          appropriate port is open to the Racko gateway&apos;s IP address.
+          Racko must be able to reach your server&apos;s IP address on the required port: 3389 for
+          RDP or 22 for SSH. If your server is behind a firewall or NAT, allow access from the
+          Racko gateway IP provided by your administrator.
         </p>
       </DocSection>
     </DocPage>
