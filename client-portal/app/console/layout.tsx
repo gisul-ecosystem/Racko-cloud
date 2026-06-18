@@ -40,7 +40,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     }
     if (user.role !== 'admin') {
       router.replace(
-        user.role === 'super_admin' ? '/dashboard/super-admin' : '/dashboard/user'
+        user.role === 'super_admin' ? '/super-admin-console' : '/dashboard/user'
       );
     }
   }, [isLoading, isAuthenticated, user, router]);

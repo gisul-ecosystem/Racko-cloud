@@ -83,13 +83,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.replace('/dashboard/admin');
     }
     if (pathname.startsWith('/dashboard/admin') && user.role === 'super_admin') {
-      router.replace('/dashboard/super-admin');
+      router.replace('/super-admin-console');
     }
     if (pathname.startsWith('/dashboard/admin') && user.role === 'user') {
       router.replace('/dashboard/user');
     }
     if (pathname.startsWith('/dashboard/user') && user.role !== 'user') {
-      router.replace(user.role === 'super_admin' ? '/dashboard/super-admin' : '/dashboard/admin');
+      router.replace(user.role === 'super_admin' ? '/super-admin-console' : '/dashboard/admin');
     }
   }, [isLoading, isAuthenticated, user, pathname, router]);
 
