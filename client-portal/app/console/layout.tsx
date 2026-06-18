@@ -29,7 +29,8 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
 
   const usesOwnShell =
     (pathname?.startsWith('/console/elastic-servers') ?? false) ||
-    (pathname?.startsWith('/console/azure') ?? false);
+    (pathname?.startsWith('/console/azure') ?? false) ||
+    (pathname?.startsWith('/console/docs') ?? false);
 
   useEffect(() => {
     if (isLoading) return;

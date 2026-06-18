@@ -686,3 +686,43 @@ export async function updateVmAutomation(
 export async function deleteVmAutomation(automationId: string): Promise<void> {
   await apiRequest(`/api/v1/vm-automations/${automationId}`, { method: 'DELETE' });
 }
+
+// ─── Admin VM Templates ───────────────────────────────────────────────────────
+
+export type AdminVmTemplateStatus = 'creating' | 'ready' | 'failed';
+
+export interface AdminVmTemplate {
+  _id: string;
+  adminId: string;
+  name: string;
+  sourceVmId: string;
+  sourceVmName: string;
+  proxmoxVmid: number | null;
+  node: string | null;
+  status: AdminVmTemplateStatus;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchAdminVmTemplates(): Promise<AdminVmTemplate[]> {
+  const res = await apiRequest<ApiResponse<{ templates: AdminVmTemplate[] }>>(
+    '/api/v1/admin-vm-templates'
+  );
+  return res.data.templates;
+}
+
+export async function createAdminVmTemplate(
+  sourceVmId: string,
+  name: string
+): Promise<AdminVmTemplate> {
+  const res = await apiRequest<ApiResponse<{ template: AdminVmTemplate }>>(
+    '/api/v1/admin-vm-templates',
+    { method: 'POST', body: JSON.stringify({ sourceVmId, name }) }
+  );
+  return res.data.template;
+}
+
+export async function deleteAdminVmTemplate(templateId: string): Promise<void> {
+  await apiRequest(`/api/v1/admin-vm-templates/${templateId}`, { method: 'DELETE' });
+}

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '../../../../../context/AuthContext';
 import { useTemplates, useTemplateDetails } from '../../../../../hooks/useTemplates';
 import { createVM, fetchSoftwareCatalog, type SoftwareCatalogItem } from '../../../../../lib/vmApi';
@@ -24,6 +24,7 @@ const labelClass = 'block text-xs font-medium text-gray-700 mb-1';
 
 export default function CreateVMPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { isAuthenticated } = useAuth();
   const { templates, loading: templatesLoading, error: templatesError } = useTemplates(isAuthenticated);
   const { toasts, addToast, dismiss } = useToast();
@@ -34,6 +35,20 @@ export default function CreateVMPage() {
   // Step 1 — template selection
   const [selectedTemplateId, setSelectedTemplateId] = useState<number | null>(null);
   const { details: templateDetails, loading: detailsLoading } = useTemplateDetails(selectedTemplateId);
+
+  // Pre-select template from ?templateId= query param (coming from My Templates page)
+  useEffect(() => {
+    if (templatesLoading || templates.length === 0) return;
+    const paramId = searchParams.get('templateId');
+    if (!paramId) return;
+    const vmid = parseInt(paramId, 10);
+    if (isNaN(vmid)) return;
+    const match = templates.find((t) => t.vmid === vmid);
+    if (match) {
+      setSelectedTemplateId(vmid);
+      setStep(2);
+    }
+  }, [templates, templatesLoading, searchParams]);
 
   // Step 2 — configuration
   const [name, setName] = useState('');

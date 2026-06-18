@@ -7,6 +7,7 @@ import { VM } from './vm.model';
 import { VMJob } from './vmJob.model';
 import { VMEvent } from './vmEvent.model';
 import { VmTemplate } from './vmTemplate.model';
+import { AdminVmTemplate } from '../adminVmTemplate/adminVmTemplate.model';
 import { validateResources } from './helpers/resourceValidator';
 import {
   sumProxmoxProvisionedDiskBytes,
@@ -378,15 +379,50 @@ async function reconcileStaleTemplates(
 export class VMService {
   /**
    * Templates enabled for VM creation (admin dashboard).
-   * Only returns templates the super admin has selected in the catalog.
+   * Returns super-admin enabled Proxmox templates + the calling admin's own custom templates.
+   * Each admin only sees their own custom templates — never another admin's.
    */
-  async getTemplates(_req: Request): Promise<ProxmoxTemplate[]> {
-    const all = await fetchProxmoxTemplates();
-    const enabledDocs = await VmTemplate.find({ isEnabled: true }).select('vmid').lean();
-    if (enabledDocs.length === 0) return [];
+  async getTemplates(req: Request): Promise<ProxmoxTemplate[]> {
+    const authReq = req as AuthenticatedRequest;
+    const adminObjectId = new mongoose.Types.ObjectId(authReq.user.userId);
 
+    // Check DB first — skip Proxmox entirely if nothing to show
+    const [enabledDocs, adminTemplateDocs] = await Promise.all([
+      VmTemplate.find({ isEnabled: true }).select('vmid').lean(),
+      AdminVmTemplate.find({ adminId: adminObjectId, status: 'ready' }).lean(),
+    ]);
+
+    if (enabledDocs.length === 0 && adminTemplateDocs.length === 0) return [];
+
+    // Fetch Proxmox templates once — only when there's something to merge
+    const all = await fetchProxmoxTemplates();
+
+    // Super-admin enabled templates (shared across all admins)
     const enabledVmids = new Set(enabledDocs.map((d) => d.vmid));
-    return all.filter((t) => enabledVmids.has(t.vmid));
+    const sharedTemplates = all.filter((t) => enabledVmids.has(t.vmid));
+
+    // Admin's own custom templates merged into the same shape — deduped against shared
+    const proxmoxByVmid = new Map(all.map((t) => [t.vmid, t]));
+    const sharedVmids = new Set(sharedTemplates.map((t) => t.vmid));
+
+    const customTemplates: ProxmoxTemplate[] = adminTemplateDocs
+      .filter((t) => t.proxmoxVmid != null && proxmoxByVmid.has(t.proxmoxVmid) && !sharedVmids.has(t.proxmoxVmid))
+      .map((t) => {
+        const proxmox = proxmoxByVmid.get(t.proxmoxVmid!)!;
+        return {
+          vmid: proxmox.vmid,
+          name: t.name,
+          node: proxmox.node,
+          cpu: proxmox.cpu,
+          memory: proxmox.memory,
+          disk: proxmox.disk,
+          maxdisk: proxmox.maxdisk,
+          status: proxmox.status,
+          template: 1,
+        };
+      });
+
+    return [...sharedTemplates, ...customTemplates];
   }
 
   /**
@@ -483,14 +519,26 @@ export class VMService {
 
   private async assertTemplateEnabledForCreate(
     templateId: number,
-    role: string
+    role: string,
+    adminId?: string
   ): Promise<void> {
     if (role === 'super_admin') return;
 
+    // Check super-admin enabled templates
     const enabled = await VmTemplate.exists({ vmid: templateId, isEnabled: true });
-    if (!enabled) {
-      throw new ValidationError('This template is not available for VM creation.');
+    if (enabled) return;
+
+    // Check admin's own custom templates
+    if (adminId) {
+      const adminTemplate = await AdminVmTemplate.exists({
+        proxmoxVmid: templateId,
+        adminId: new mongoose.Types.ObjectId(adminId),
+        status: 'ready',
+      });
+      if (adminTemplate) return;
     }
+
+    throw new ValidationError('This template is not available for VM creation.');
   }
 
   /**
@@ -498,7 +546,7 @@ export class VMService {
    */
   async getTemplateDetails(templateId: number, req: Request): Promise<TemplateDetails> {
     const authReq = req as AuthenticatedRequest;
-    await this.assertTemplateEnabledForCreate(templateId, authReq.user.role);
+    await this.assertTemplateEnabledForCreate(templateId, authReq.user.role, authReq.user.userId);
 
     const all = await fetchProxmoxTemplates();
     const template = all.find((t) => t.vmid === templateId);

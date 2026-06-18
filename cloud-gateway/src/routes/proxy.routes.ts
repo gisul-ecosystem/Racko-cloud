@@ -144,6 +144,11 @@ router.get('/api/v1/vm-automations/:automationId', authMiddleware, verifyMiddlew
 router.patch('/api/v1/vm-automations/:automationId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/vm-automations/:automationId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
+// ─── ADMIN VM TEMPLATE ROUTES (admin + super_admin) ──────────────────────────
+router.get('/api/v1/admin-vm-templates', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/admin-vm-templates', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.delete('/api/v1/admin-vm-templates/:templateId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
 // ─── EXTERNAL VM ROUTES (admin + super_admin) ────────────────────────────────
 router.post('/api/v1/external-vms/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/external-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
