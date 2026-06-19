@@ -45,10 +45,10 @@ export function OrgAdminResourceGroupList({
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-100 px-4 py-3">
         <h2 className="text-sm font-semibold text-gray-900">Resource Groups</h2>
-        <p className="text-xs text-gray-500">{groups.length} provisioned request(s)</p>
+        <p className="text-xs text-gray-500">Click a request to open details</p>
       </div>
 
-      <ul className="max-h-[520px] divide-y divide-gray-50 overflow-y-auto">
+      <ul className="divide-y divide-gray-50">
         {groups.map((group) => {
           const selected = selectedRequestId === group.requestId;
           const displayRg =

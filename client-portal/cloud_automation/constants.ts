@@ -15,7 +15,7 @@ export const AZURE_ROUTES = {
   /** Short alias used by the standalone request builder flow. */
   legacyCreateRequest: '/request',
   legacyRequestStatus: (id: number | string) => `/status/${id}`,
-  orgAdmin: '/console/azure/org-admin',
+  orgAdmin: '/super-admin-console/azure/org-admin',
   manageUsers: '/manage-users',
   consoleHub: '/console',
 } as const;

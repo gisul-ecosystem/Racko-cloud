@@ -10,8 +10,11 @@ import {
   getOrgUserAzureCost,
   listOrgAccessRequests,
   listOrgAzureRoles,
-  listOrgResourceGroups,
+  listOrgRequests,
+  renewOrgAdminUserBudget,
   reviewOrgAccessRequest,
+  triggerOrgAdminCleanup,
+  updateOrgAdminCleanupSettings,
   updateOrgAdminUserRoles,
 } from '../api/orgAdminClient';
 import type {
@@ -19,14 +22,13 @@ import type {
   OrgAdminAzureRoleOption,
   OrgAdminMonitoringResponse,
   OrgAdminRequestDetail,
-  OrgAdminResourceGroup,
-  OrgAdminSession,
+  OrgAdminRequestSummary,
   OrgAdminUser,
   OrgAdminUserAzureCost,
 } from '../types/orgAdmin';
 
 interface UseOrgAdminPortalResult {
-  resourceGroups: OrgAdminResourceGroup[];
+  requests: OrgAdminRequestSummary[];
   selectedRequestId: number | null;
   requestDetail: OrgAdminRequestDetail | null;
   users: OrgAdminUser[];
@@ -40,7 +42,7 @@ interface UseOrgAdminPortalResult {
   detailError: string | null;
   actionError: string | null;
   actionSuccess: string | null;
-  selectRequest: (requestId: number) => void;
+  selectRequest: (requestId: number | null) => void;
   refreshOverview: () => Promise<void>;
   refreshDetail: () => Promise<void>;
   refreshAccessRequests: () => Promise<void>;
@@ -54,14 +56,17 @@ interface UseOrgAdminPortalResult {
   ) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<OrgAdminMonitoringResponse | null>;
   fetchUserAzureCost: (userId: number) => Promise<OrgAdminUserAzureCost | null>;
+  renewBudget: (userId: number, topUpAmount: number) => Promise<boolean>;
+  updateCleanupSettings: (
+    userId: number,
+    payload: { cleanupDisabled?: boolean; cleanupIntervalOverride?: number | null }
+  ) => Promise<boolean>;
+  triggerCleanup: (userId: number) => Promise<boolean>;
   clearActionFeedback: () => void;
 }
 
-export function useOrgAdminPortal(
-  session: OrgAdminSession | null,
-  onUnauthorized: () => void
-): UseOrgAdminPortalResult {
-  const [resourceGroups, setResourceGroups] = useState<OrgAdminResourceGroup[]>([]);
+export function useOrgAdminPortal(): UseOrgAdminPortalResult {
+  const [requests, setRequests] = useState<OrgAdminRequestSummary[]>([]);
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
   const [requestDetail, setRequestDetail] = useState<OrgAdminRequestDetail | null>(null);
   const [users, setUsers] = useState<OrgAdminUser[]>([]);
@@ -76,129 +81,93 @@ export function useOrgAdminPortal(
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
 
-  const handleApiError = useCallback(
-    (err: unknown, fallback: string) => {
-      if (err instanceof OrgAdminError) {
-        if (err.status === 401) {
-          onUnauthorized();
-          return;
-        }
-        setActionError(err.message);
-        return;
-      }
-      setActionError(fallback);
-    },
-    [onUnauthorized]
-  );
+  const handleApiError = useCallback((err: unknown, fallback: string) => {
+    if (err instanceof OrgAdminError) {
+      setActionError(err.message);
+      return;
+    }
+    setActionError(fallback);
+  }, []);
 
   const refreshOverview = useCallback(async () => {
-    if (!session) return;
-
     setOverviewLoading(true);
     setOverviewError(null);
 
     try {
-      const groups = await listOrgResourceGroups(session.sessionToken);
-      setResourceGroups(groups);
+      const data = await listOrgRequests();
+      setRequests(data);
 
-      if (groups.length === 0) {
+      if (data.length === 0) {
         setSelectedRequestId(null);
         setRequestDetail(null);
         setUsers([]);
-        return;
       }
-
-      setSelectedRequestId((current) => {
-        if (current != null && groups.some((group) => group.requestId === current)) {
-          return current;
-        }
-        return groups[0]?.requestId ?? null;
-      });
     } catch (err) {
-      if (err instanceof OrgAdminError && err.status === 401) {
-        onUnauthorized();
-      } else {
-        setOverviewError(err instanceof OrgAdminError ? err.message : 'Failed to load resource groups.');
-      }
+      setOverviewError(err instanceof OrgAdminError ? err.message : 'Failed to load requests.');
     } finally {
       setOverviewLoading(false);
     }
-  }, [session, onUnauthorized]);
+  }, []);
 
   const refreshDetail = useCallback(async () => {
-    if (!session || selectedRequestId == null) return;
+    if (selectedRequestId == null) return;
 
     setDetailLoading(true);
     setDetailError(null);
 
     try {
-      const detail = await getOrgResourceGroupDetail(session.sessionToken, selectedRequestId);
+      const detail = await getOrgResourceGroupDetail(selectedRequestId);
       setRequestDetail(detail.request);
       setUsers(detail.users);
     } catch (err) {
-      if (err instanceof OrgAdminError && err.status === 401) {
-        onUnauthorized();
-      } else {
-        setDetailError(err instanceof OrgAdminError ? err.message : 'Failed to load request detail.');
-      }
+      setDetailError(err instanceof OrgAdminError ? err.message : 'Failed to load request detail.');
     } finally {
       setDetailLoading(false);
     }
-  }, [session, selectedRequestId, onUnauthorized]);
+  }, [selectedRequestId]);
 
   const refreshAccessRequests = useCallback(async () => {
-    if (!session) return;
-
     setAccessLoading(true);
 
     try {
-      const requests = await listOrgAccessRequests(session.sessionToken, { status: 'pending' });
+      const requests = await listOrgAccessRequests({ status: 'pending' });
       setAccessRequests(requests);
-    } catch (err) {
-      if (err instanceof OrgAdminError && err.status === 401) {
-        onUnauthorized();
-      }
+    } catch {
+      // Non-blocking for the main view.
     } finally {
       setAccessLoading(false);
     }
-  }, [session, onUnauthorized]);
+  }, []);
 
   useEffect(() => {
-    if (session) {
-      void refreshOverview();
-      void refreshAccessRequests();
-      void listOrgAzureRoles(session.sessionToken)
-        .then(setAvailableRoles)
-        .catch(() => setAvailableRoles([]));
+    void refreshOverview();
+    void refreshAccessRequests();
+    void listOrgAzureRoles()
+      .then(setAvailableRoles)
+      .catch(() => setAvailableRoles([]));
+  }, [refreshOverview, refreshAccessRequests]);
+
+  useEffect(() => {
+    if (selectedRequestId != null) {
+      void refreshDetail();
     } else {
-      setResourceGroups([]);
-      setSelectedRequestId(null);
       setRequestDetail(null);
       setUsers([]);
-      setAvailableRoles([]);
-      setAccessRequests([]);
-      setOverviewError(null);
       setDetailError(null);
     }
-  }, [session, refreshOverview, refreshAccessRequests]);
+  }, [selectedRequestId, refreshDetail]);
 
   useEffect(() => {
-    if (session && selectedRequestId != null) {
-      void refreshDetail();
-    }
-  }, [session, selectedRequestId, refreshDetail]);
-
-  useEffect(() => {
-    if (!session || selectedRequestId == null) return undefined;
+    if (selectedRequestId == null) return undefined;
 
     const intervalId = window.setInterval(() => {
       void refreshDetail();
     }, 60_000);
 
     return () => window.clearInterval(intervalId);
-  }, [session, selectedRequestId, refreshDetail]);
+  }, [selectedRequestId, refreshDetail]);
 
-  const selectRequest = useCallback((requestId: number) => {
+  const selectRequest = useCallback((requestId: number | null) => {
     setSelectedRequestId(requestId);
     setActionError(null);
     setActionSuccess(null);
@@ -206,14 +175,14 @@ export function useOrgAdminPortal(
 
   const updateRoles = useCallback(
     async (userId: number, roles: string[]) => {
-      if (!session || selectedRequestId == null) return false;
+      if (selectedRequestId == null) return false;
 
       setSaving(true);
       setActionError(null);
       setActionSuccess(null);
 
       try {
-        await updateOrgAdminUserRoles(session.sessionToken, selectedRequestId, userId, roles);
+        await updateOrgAdminUserRoles(selectedRequestId, userId, roles);
         setActionSuccess('Roles updated successfully.');
         await refreshDetail();
         return true;
@@ -224,19 +193,19 @@ export function useOrgAdminPortal(
         setSaving(false);
       }
     },
-    [session, selectedRequestId, refreshDetail, handleApiError]
+    [selectedRequestId, refreshDetail, handleApiError]
   );
 
   const deleteUser = useCallback(
     async (userId: number) => {
-      if (!session || selectedRequestId == null) return false;
+      if (selectedRequestId == null) return false;
 
       setSaving(true);
       setActionError(null);
       setActionSuccess(null);
 
       try {
-        await deleteOrgAdminUser(session.sessionToken, selectedRequestId, userId);
+        await deleteOrgAdminUser(selectedRequestId, userId);
         setUsers((current) => current.filter((user) => user.id !== userId));
         setActionSuccess('User removed successfully.');
         await refreshOverview();
@@ -248,19 +217,19 @@ export function useOrgAdminPortal(
         setSaving(false);
       }
     },
-    [session, selectedRequestId, refreshOverview, handleApiError]
+    [selectedRequestId, refreshOverview, handleApiError]
   );
 
   const forceLogout = useCallback(
     async (userId: number) => {
-      if (!session || selectedRequestId == null) return false;
+      if (selectedRequestId == null) return false;
 
       setSaving(true);
       setActionError(null);
       setActionSuccess(null);
 
       try {
-        await forceOrgAdminLogout(session.sessionToken, selectedRequestId, userId);
+        await forceOrgAdminLogout(selectedRequestId, userId);
         setActionSuccess('User session ended.');
         await refreshDetail();
         return true;
@@ -271,19 +240,17 @@ export function useOrgAdminPortal(
         setSaving(false);
       }
     },
-    [session, selectedRequestId, refreshDetail, handleApiError]
+    [selectedRequestId, refreshDetail, handleApiError]
   );
 
   const reviewAccess = useCallback(
     async (id: number, status: 'approved' | 'rejected', reviewNotes?: string) => {
-      if (!session) return false;
-
       setSaving(true);
       setActionError(null);
       setActionSuccess(null);
 
       try {
-        await reviewOrgAccessRequest(session.sessionToken, id, { status, reviewNotes });
+        await reviewOrgAccessRequest(id, { status, reviewNotes });
         setActionSuccess(`Access request ${status}.`);
         await refreshAccessRequests();
         if (selectedRequestId != null) {
@@ -297,53 +264,42 @@ export function useOrgAdminPortal(
         setSaving(false);
       }
     },
-    [session, selectedRequestId, refreshAccessRequests, refreshDetail, handleApiError]
+    [selectedRequestId, refreshAccessRequests, refreshDetail, handleApiError]
   );
 
   const fetchUserMonitoring = useCallback(
     async (userId: number) => {
-      if (!session || selectedRequestId == null) return null;
+      if (selectedRequestId == null) return null;
 
       try {
-        return await getOrgMonitoringLogs(session.sessionToken, selectedRequestId, {
+        return await getOrgMonitoringLogs(selectedRequestId, {
           userId,
           limit: 30,
         });
-      } catch (err) {
-        if (err instanceof OrgAdminError && err.status === 401) {
-          onUnauthorized();
-        }
+      } catch {
         return null;
       }
     },
-    [session, selectedRequestId, onUnauthorized]
+    [selectedRequestId]
   );
 
   const fetchUserAzureCost = useCallback(
     async (userId: number) => {
-      if (!session || selectedRequestId == null) return null;
+      if (selectedRequestId == null) return null;
 
       try {
-        const response = await getOrgUserAzureCost(
-          session.sessionToken,
-          selectedRequestId,
-          userId
-        );
+        const response = await getOrgUserAzureCost(selectedRequestId, userId);
         return response.cost ?? null;
       } catch (err) {
         if (err instanceof OrgAdminError) {
-          if (err.status === 401) {
-            onUnauthorized();
-          } else {
-            setActionError(err.message);
-          }
+          setActionError(err.message);
         } else {
           setActionError('Failed to fetch Azure cost for this user.');
         }
         return null;
       }
     },
-    [session, selectedRequestId, onUnauthorized]
+    [selectedRequestId]
   );
 
   const clearActionFeedback = useCallback(() => {
@@ -351,8 +307,93 @@ export function useOrgAdminPortal(
     setActionSuccess(null);
   }, []);
 
+  const renewBudget = useCallback(
+    async (userId: number, topUpAmount: number) => {
+      if (selectedRequestId == null) return false;
+
+      setSaving(true);
+      setActionError(null);
+      setActionSuccess(null);
+
+      try {
+        const result = await renewOrgAdminUserBudget(selectedRequestId, userId, topUpAmount);
+        setActionSuccess(`Budget renewed. New total: $${result.newTotalBudget.toFixed(2)}`);
+        await refreshDetail();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to renew budget.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, refreshDetail, handleApiError]
+  );
+
+  const updateCleanupSettings = useCallback(
+    async (
+      userId: number,
+      payload: { cleanupDisabled?: boolean; cleanupIntervalOverride?: number | null }
+    ) => {
+      if (selectedRequestId == null) return false;
+
+      setSaving(true);
+      setActionError(null);
+      setActionSuccess(null);
+
+      try {
+        await updateOrgAdminCleanupSettings(selectedRequestId, userId, payload);
+        setUsers((current) =>
+          current.map((user) =>
+            user.id === userId
+              ? {
+                  ...user,
+                  cleanupDisabled: payload.cleanupDisabled ?? user.cleanupDisabled,
+                  cleanupIntervalOverride:
+                    payload.cleanupIntervalOverride !== undefined
+                      ? payload.cleanupIntervalOverride
+                      : user.cleanupIntervalOverride,
+                }
+              : user
+          )
+        );
+        setActionSuccess('Cleanup settings updated.');
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to update cleanup settings.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, handleApiError]
+  );
+
+  const triggerCleanup = useCallback(
+    async (userId: number) => {
+      if (selectedRequestId == null) return false;
+
+      setSaving(true);
+      setActionError(null);
+      setActionSuccess(null);
+
+      try {
+        const result = await triggerOrgAdminCleanup(selectedRequestId, userId);
+        setActionSuccess(`Cleanup completed. ${result.deletedCount} resource(s) removed.`);
+        await refreshDetail();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to trigger cleanup.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, refreshDetail, handleApiError]
+  );
+
   return {
-    resourceGroups,
+    requests,
     selectedRequestId,
     requestDetail,
     users,
@@ -376,6 +417,9 @@ export function useOrgAdminPortal(
     reviewAccess,
     fetchUserMonitoring,
     fetchUserAzureCost,
+    renewBudget,
+    updateCleanupSettings,
+    triggerCleanup,
     clearActionFeedback,
   };
 }

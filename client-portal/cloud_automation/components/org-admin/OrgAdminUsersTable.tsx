@@ -26,7 +26,6 @@ interface OrgAdminUsersTableProps {
   users: OrgAdminUser[];
   request: OrgAdminRequestDetail | null;
   requestId: number | null;
-  sessionToken: string | null;
   availableRoles: OrgAdminAzureRoleOption[];
   loading: boolean;
   selectedUserId: number | null;
@@ -36,6 +35,7 @@ interface OrgAdminUsersTableProps {
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<import('../../types/orgAdmin').OrgAdminMonitoringResponse | null>;
   onFetchAzureCost: (userId: number) => Promise<OrgAdminUserAzureCost | null>;
+  embedded?: boolean;
 }
 
 function DailyUsageBar({ usage }: { usage: OrgAdminDailyUsageEntry }) {
@@ -153,7 +153,6 @@ export function OrgAdminUsersTable({
   users,
   request,
   requestId,
-  sessionToken,
   availableRoles,
   loading,
   selectedUserId,
@@ -163,6 +162,7 @@ export function OrgAdminUsersTable({
   onUpdateRoles,
   fetchUserMonitoring,
   onFetchAzureCost,
+  embedded = false,
 }: OrgAdminUsersTableProps) {
   const [usageUser, setUsageUser] = useState<OrgAdminUser | null>(null);
   const [loggingOutUserId, setLoggingOutUserId] = useState<number | null>(null);
@@ -172,11 +172,11 @@ export function OrgAdminUsersTable({
   const [dailyUsage, setDailyUsage] = useState<Record<number, OrgAdminDailyUsageEntry>>({});
 
   useEffect(() => {
-    if (!requestId || !sessionToken) return undefined;
+    if (!requestId) return undefined;
 
     const fetchDailyUsage = async () => {
       try {
-        const response = await getOrgDailyUsage(sessionToken, requestId);
+        const response = await getOrgDailyUsage(requestId);
         if (response.success && response.data) {
           const map: Record<number, OrgAdminDailyUsageEntry> = {};
           response.data.forEach((entry) => {
@@ -195,7 +195,7 @@ export function OrgAdminUsersTable({
     }, 60_000);
 
     return () => window.clearInterval(interval);
-  }, [requestId, sessionToken]);
+  }, [requestId]);
 
   async function handleFetchAzureCost(event: React.MouseEvent, user: OrgAdminUser) {
     event.stopPropagation();
@@ -233,6 +233,10 @@ export function OrgAdminUsersTable({
   }
 
   if (loading) {
+    if (embedded) {
+      return <TableSkeleton rows={4} cols={9} embedded />;
+    }
+
     return (
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 px-6 py-4">
@@ -244,6 +248,12 @@ export function OrgAdminUsersTable({
   }
 
   if (users.length === 0) {
+    if (embedded) {
+      return (
+        <div className="py-10 text-center text-sm text-gray-500">No provisioned users yet.</div>
+      );
+    }
+
     return (
       <div className="flex flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-16 text-center shadow-sm">
         <Users className="mb-4 h-10 w-10 text-gray-300" />
@@ -255,9 +265,9 @@ export function OrgAdminUsersTable({
 
   const isPerUser = request?.costingMode === 'per_user';
 
-  return (
-    <>
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+  const tableContent = (
+    <div className={embedded ? '' : 'overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm'}>
+      {!embedded && (
         <div className="border-b border-gray-100 px-6 py-4">
           <h2 className="text-sm font-semibold text-gray-900">Provisioned Users</h2>
           <p className="mt-0.5 text-xs text-gray-500">
@@ -265,9 +275,10 @@ export function OrgAdminUsersTable({
             budget sync; use Azure cost for live billing detail.
           </p>
         </div>
+      )}
 
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[1100px] text-left text-sm">
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[1100px] text-left text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
                 <th className="px-4 py-3 font-medium">Username</th>
@@ -475,6 +486,11 @@ export function OrgAdminUsersTable({
           </table>
         </div>
       </div>
+  );
+
+  return (
+    <>
+      {tableContent}
 
       {usageUser && request && (
         <OrgAdminUserUsageModal

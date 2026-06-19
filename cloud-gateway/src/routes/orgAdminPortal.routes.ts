@@ -1,10 +1,24 @@
-import { Router, type Response } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import { createProxyMiddleware } from 'http-proxy-middleware';
+import { authMiddleware } from '../middleware/auth.middleware';
+import { verifyMiddleware } from '../middleware/verify.middleware';
 import { config } from '../config';
+import { ForbiddenError } from '../utils/errors';
+import type { AuthenticatedRequest } from '../types';
 
 const router = Router();
 
-/** Public proxy for organization admin portal (session auth on cloud_automation). */
+function requireRole(...roles: string[]) {
+  return (req: Request, _res: Response, next: NextFunction): void => {
+    const authReq = req as AuthenticatedRequest;
+    if (!authReq.user || !roles.includes(authReq.user.role)) {
+      return next(new ForbiddenError('Insufficient permissions.'));
+    }
+    next();
+  };
+}
+
+/** JWT-protected proxy for organization admin APIs (super_admin only on cloud_automation). */
 const orgAdminPortalProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_URL,
   changeOrigin: true,
@@ -26,6 +40,12 @@ const orgAdminPortalProxy = createProxyMiddleware({
   },
 });
 
-router.use('/api/org-admin', orgAdminPortalProxy);
+router.use(
+  '/api/org-admin',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin'),
+  orgAdminPortalProxy
+);
 
 export default router;

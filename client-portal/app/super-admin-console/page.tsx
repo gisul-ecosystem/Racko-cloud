@@ -14,7 +14,7 @@ const services = [
   {
     id: 'azure',
     name: 'Azure Service Management',
-    href: '/super-admin-console/azure',
+    href: '/super-admin-console/azure/org-admin',
     icon: Cloud,
     description: 'Manage Azure cloud services and resources',
   },

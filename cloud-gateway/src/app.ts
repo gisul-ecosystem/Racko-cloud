@@ -49,7 +49,7 @@ app.get('/health', (_req, res) => {
 // ─── PROXY ROUTES ─────────────────────────────────────────────────────────────
 // Manage-users portal (public; session auth enforced by cloud_automation)
 app.use(managePortalRoutes);
-// Organization admin portal (public; session auth enforced by cloud_automation)
+// Organization admin APIs (JWT super_admin; enforced by cloud_automation)
 app.use(orgAdminPortalRoutes);
 // Cloud automation (Type 1 admin APIs) — must register before core-api catch-all
 app.use(cloudAutomationRoutes);

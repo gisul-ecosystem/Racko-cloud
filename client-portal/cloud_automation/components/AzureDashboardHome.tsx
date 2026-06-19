@@ -9,7 +9,6 @@ import {
   FileText,
   Plus,
   RefreshCw,
-  Shield,
   Timer,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
@@ -95,13 +94,6 @@ export function AzureDashboardHome() {
             >
               <Plus className="h-4 w-4" />
               Create Request
-            </Link>
-            <Link
-              href={AZURE_ROUTES.orgAdmin}
-              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
-            >
-              <Shield className="h-4 w-4" />
-              Org Admin
             </Link>
           </div>
         </div>
