@@ -243,6 +243,17 @@ const getDailyUsage = async (req, res, next) => {
   }
 };
 
+const listAzureRoles = async (req, res, next) => {
+  try {
+    res.status(200).json({
+      success: true,
+      data: orgAdminService.listAzureRoles()
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   login,
   listResourceGroups,
@@ -254,5 +265,6 @@ module.exports = {
   listAccessRequests,
   reviewAccessRequest,
   getUserAzureCost,
-  getDailyUsage
+  getDailyUsage,
+  listAzureRoles
 };

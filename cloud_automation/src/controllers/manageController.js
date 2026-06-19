@@ -203,6 +203,79 @@ const getUsageStatus = async (req, res, next) => {
   }
 };
 
+const getUserControls = async (req, res, next) => {
+  try {
+    const sessionToken = getSessionToken(req);
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const data = await managePortalService.getUserControlsForRequest(sessionToken, requestId);
+
+    res.status(200).json({ success: true, data });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const renewBudget = async (req, res, next) => {
+  try {
+    const sessionToken = getSessionToken(req);
+    const userId = Number(req.params.userId);
+    const { topUpAmount } = req.body || {};
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await managePortalService.renewUserBudget(sessionToken, userId, topUpAmount);
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateCleanupSettings = async (req, res, next) => {
+  try {
+    const sessionToken = getSessionToken(req);
+    const userId = Number(req.params.userId);
+    const { cleanupDisabled, cleanupIntervalOverride } = req.body || {};
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    await managePortalService.updateUserCleanupSettings(sessionToken, userId, {
+      cleanupDisabled,
+      cleanupIntervalOverride
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const triggerCleanup = async (req, res, next) => {
+  try {
+    const sessionToken = getSessionToken(req);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await managePortalService.triggerUserCleanup(sessionToken, userId);
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   deleteUser,
   endUsageSession,
@@ -210,5 +283,9 @@ module.exports = {
   getConsoleLaunch,
   getRequest,
   getUsageStatus,
+  getUserControls,
+  renewBudget,
+  triggerCleanup,
+  updateCleanupSettings,
   updateRoles
 };

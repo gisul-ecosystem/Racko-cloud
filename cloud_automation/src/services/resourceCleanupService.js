@@ -1,7 +1,6 @@
 const { ResourceManagementClient } = require('@azure/arm-resources');
 const db = require('../db/postgres');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
-const { getResourceGroupNamesForCleanup } = require('./userResourceGroupService');
 
 let armClient = null;
 
@@ -198,7 +197,7 @@ async function deleteUserResourcesInSharedRG(resourceGroupName, entraObjectId) {
 async function runResourceCleanupForRequest(requestId) {
   const { rows: requestRows } = await db.query(
     `
-      SELECT id, costing_mode, azure_resource_group_name
+      SELECT id, costing_mode, azure_resource_group_name, resource_cleanup_interval_hours
       FROM requests
       WHERE id = $1
     `,
@@ -210,19 +209,77 @@ async function runResourceCleanupForRequest(requestId) {
   }
 
   const request = requestRows[0];
-  const resourceGroups = await getResourceGroupNamesForCleanup(
-    requestId,
-    request.costing_mode,
-    request.azure_resource_group_name
-  );
-
   const allDeleted = [];
-  for (const resourceGroup of resourceGroups) {
-    const deleted = await deleteResourcesInsideRG(resourceGroup);
+
+  if (request.costing_mode === 'per_user') {
+    const { rows: users } = await db.query(
+      `
+        SELECT id, azure_resource_group_name, cleanup_disabled, cleanup_interval_override
+        FROM azure_users
+        WHERE request_id = $1
+          AND azure_resource_group_name IS NOT NULL
+          AND COALESCE(is_deleted, FALSE) = FALSE
+      `,
+      [requestId]
+    );
+
+    const now = new Date();
+
+    for (const user of users) {
+      if (user.cleanup_disabled) {
+        console.log(
+          JSON.stringify({
+            service: 'resource-cleanup-scheduler',
+            event: 'user_cleanup_skipped_disabled',
+            requestId,
+            userId: user.id
+          })
+        );
+        continue;
+      }
+
+      if (user.cleanup_interval_override) {
+        const { rows: lastCleanup } = await db.query(
+          `
+            SELECT ran_at
+            FROM resource_cleanup_logs
+            WHERE request_id = $1
+              AND resources_deleted::text LIKE '%' || $2 || '%'
+            ORDER BY ran_at DESC
+            LIMIT 1
+          `,
+          [requestId, user.azure_resource_group_name]
+        );
+
+        if (lastCleanup.length) {
+          const lastRan = new Date(lastCleanup[0].ran_at);
+          const intervalMs = user.cleanup_interval_override * 60 * 60 * 1000;
+          const nextDue = new Date(lastRan.getTime() + intervalMs);
+
+          if (now < nextDue) {
+            console.log(
+              JSON.stringify({
+                service: 'resource-cleanup-scheduler',
+                event: 'user_cleanup_skipped_interval_not_due',
+                requestId,
+                userId: user.id,
+                nextDue: nextDue.toISOString()
+              })
+            );
+            continue;
+          }
+        }
+      }
+
+      const deleted = await deleteResourcesInsideRG(user.azure_resource_group_name);
+      allDeleted.push(...deleted);
+    }
+  } else if (request.azure_resource_group_name) {
+    const deleted = await deleteResourcesInsideRG(request.azure_resource_group_name);
     allDeleted.push(...deleted);
   }
 
-  return { resourceGroups, deleted: allDeleted };
+  return { deleted: allDeleted };
 }
 
 module.exports = {

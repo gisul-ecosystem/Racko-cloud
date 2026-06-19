@@ -26,6 +26,13 @@ export interface OrgAdminRole {
   scope?: string | null;
 }
 
+export interface OrgAdminAzureRoleOption {
+  name: string;
+  definitionId: string;
+}
+
+export type OrgAdminUserDisplayStatus = 'Created' | 'Active' | 'Blocked' | 'Expired';
+
 export interface OrgAdminResourceGroup {
   requestId: number;
   customerEmail: string;
@@ -82,7 +89,8 @@ export interface OrgAdminUser {
   id: number;
   username: string;
   azureUserId: string | null;
-  status: string;
+  status: OrgAdminUserDisplayStatus | string;
+  displayStatus?: OrgAdminUserDisplayStatus | string;
   createdAt: string;
   expiryDate: string | null;
   enableDailyUsage: boolean;
@@ -91,14 +99,29 @@ export interface OrgAdminUser {
   remainingMinutes: number | null;
   blockedUntil: string | null;
   hasActiveSession: boolean;
+  sessionActive?: boolean;
+  sessionStartedAt?: string | null;
   lastLoginAt: string | null;
   resourceGroup: string | null;
   roles: OrgAdminRole[];
+  liveResourceCount?: number;
   resourceCount?: number;
   totalMinutesSpent?: number;
+  todayMinutes?: number;
+  lifetimeMinutes?: number;
+  todayFormatted?: string;
+  lifetimeFormatted?: string;
   activeSessionMinutes?: number;
   hourlyResourceRate?: number;
   liveCost?: number;
+  azureAccountEnabled?: boolean;
+  budgetExceeded?: boolean;
+  perUserBudgetUsd?: number | null;
+  azureCostMtd?: number;
+  azureCostLifetime?: number;
+  totalBudget?: number | null;
+  costCurrency?: string;
+  lastCostSyncedAt?: string | null;
 }
 
 export interface OrgAdminUserAzureCost {
@@ -207,4 +230,9 @@ export interface OrgAdminDailyUsageResponse {
   data: OrgAdminDailyUsageEntry[];
   timezone: string;
   date: string;
+}
+
+export interface OrgAdminAzureRolesResponse {
+  success: boolean;
+  data: OrgAdminAzureRoleOption[];
 }

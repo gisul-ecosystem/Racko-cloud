@@ -9,6 +9,10 @@ import {
   launchAzureConsole,
 } from '../../utils/azureConsoleLaunch';
 import type { ManagePortalSession, ManagePortalUser } from '../../types/managePortal';
+import {
+  ManageUserControlsCell,
+  useManageUserControls,
+} from './ManageUserControlsCell';
 
 interface ManageUsersTableProps {
   users: ManagePortalUser[];
@@ -47,6 +51,8 @@ export function ManageUsersTable({
   onConsoleMessage,
 }: ManageUsersTableProps) {
   const [launchingUserId, setLaunchingUserId] = useState<number | null>(null);
+  const { userControls, loadingAction, setLoadingAction, updateControl } =
+    useManageUserControls(session, loading);
 
   const handleConsoleLaunch = useCallback(
     async (event: React.MouseEvent, user: ManagePortalUser) => {
@@ -76,7 +82,7 @@ export function ManageUsersTable({
         <div className="border-b border-gray-100 px-6 py-4">
           <div className="h-4 w-40 animate-pulse rounded bg-gray-200" />
         </div>
-        <TableSkeleton rows={5} cols={6} embedded />
+        <TableSkeleton rows={5} cols={7} embedded />
       </div>
     );
   }
@@ -100,12 +106,13 @@ export function ManageUsersTable({
       <div className="border-b border-gray-100 px-6 py-4">
         <h2 className="text-sm font-semibold text-gray-900">Provisioned Users</h2>
         <p className="mt-0.5 text-xs text-gray-500">
-          Select a user to edit roles or revoke access. Use Console to sign in to Azure.
+          Select a user to edit roles or revoke access. Use Console to sign in to Azure. Budget and
+          cleanup controls are admin-only.
         </p>
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] text-left text-sm">
+        <table className="w-full min-w-[900px] text-left text-sm">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
               <th className="px-4 py-3 font-medium">Username</th>
@@ -114,6 +121,7 @@ export function ManageUsersTable({
               <th className="px-4 py-3 font-medium">Roles</th>
               <th className="px-4 py-3 font-medium">Expiry</th>
               <th className="px-4 py-3 font-medium">Console</th>
+              <th className="px-4 py-3 font-medium">Budget &amp; Cleanup</th>
             </tr>
           </thead>
           <tbody>
@@ -155,6 +163,18 @@ export function ManageUsersTable({
                       )}
                       Console
                     </button>
+                  </td>
+                  <td className="px-4 py-3 align-top">
+                    <ManageUserControlsCell
+                      userId={user.id}
+                      username={user.username}
+                      session={session}
+                      control={userControls[user.id]}
+                      loadingAction={loadingAction}
+                      onControlUpdate={updateControl}
+                      onLoadingAction={setLoadingAction}
+                      onFeedback={onConsoleMessage}
+                    />
                   </td>
                 </tr>
               );

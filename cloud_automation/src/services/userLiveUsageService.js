@@ -7,23 +7,29 @@ const ACTIVE_RESOURCE_STATUSES = new Set(['policy_configured', 'provisioned']);
 const roundCurrency = (value) => Number(Number(value || 0).toFixed(4));
 
 const getSessionStatsByUser = async (requestId) => {
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+
   const result = await db.query(
     `
       SELECT
         uus.user_id,
         COALESCE(
           SUM(
+            EXTRACT(EPOCH FROM (COALESCE(uus.logout_at, NOW()) - uus.login_at)) / 60
+          ),
+          0
+        ) AS lifetime_minutes,
+        COALESCE(
+          SUM(
             CASE
-              WHEN uus.logout_at IS NULL
-                THEN EXTRACT(EPOCH FROM (NOW() - uus.login_at)) / 60
-              ELSE COALESCE(
-                uus.minutes_used,
-                EXTRACT(EPOCH FROM (uus.logout_at - uus.login_at)) / 60
-              )
+              WHEN uus.login_at >= $2
+                THEN EXTRACT(EPOCH FROM (COALESCE(uus.logout_at, NOW()) - uus.login_at)) / 60
+              ELSE 0
             END
           ),
           0
-        ) AS total_minutes,
+        ) AS today_minutes,
         COALESCE(
           SUM(
             CASE
@@ -40,14 +46,15 @@ const getSessionStatsByUser = async (requestId) => {
       WHERE uus.request_id = $1
       GROUP BY uus.user_id
     `,
-    [requestId]
+    [requestId, todayStart.toISOString()]
   );
 
   return new Map(
     result.rows.map((row) => [
       Number(row.user_id),
       {
-        totalMinutesSpent: Number(row.total_minutes || 0),
+        totalMinutesSpent: Number(row.lifetime_minutes || 0),
+        todayMinutes: Number(row.today_minutes || 0),
         activeSessionMinutes: Number(row.active_session_minutes || 0),
         activeSessionCount: Number(row.active_session_count || 0),
         activeLoginAt: row.active_login_at
@@ -75,31 +82,43 @@ const getLiveUsageForRequest = async (requestId, location) => {
   };
 };
 
-const attachLiveUsageToUsers = async (requestId, users, location) => {
+const attachLiveUsageToUsers = async (requestId, users, location, options = {}) => {
+  const { liveResourceCountByUser = null } = options;
   const liveUsage = await getLiveUsageForRequest(requestId, location);
 
   const enrichedUsers = users.map((user) => {
     const sessionStats = liveUsage.sessionStatsByUser.get(user.id) || {
       totalMinutesSpent: 0,
+      todayMinutes: 0,
       activeSessionMinutes: 0,
       activeSessionCount: 0,
       activeLoginAt: null
     };
 
-    const totalHours = sessionStats.totalMinutesSpent / 60;
+    const lifetimeMinutes = Number(sessionStats.totalMinutesSpent || 0);
+    const totalHours = lifetimeMinutes / 60;
     const liveCost =
       liveUsage.hourlyResourceRate > 0 && totalHours > 0
         ? roundCurrency(liveUsage.hourlyResourceRate * totalHours)
         : 0;
 
+    const liveResourceCount =
+      liveResourceCountByUser?.get(user.id) ??
+      user.liveResourceCount ??
+      liveUsage.resourceCount;
+
     return {
       ...user,
-      resourceCount: liveUsage.resourceCount,
-      totalMinutesSpent: Number(sessionStats.totalMinutesSpent.toFixed(2)),
+      liveResourceCount,
+      resourceCount: liveResourceCount,
+      totalMinutesSpent: Number(lifetimeMinutes.toFixed(2)),
+      todayMinutes: Number(sessionStats.todayMinutes.toFixed(2)),
       activeSessionMinutes: Number(sessionStats.activeSessionMinutes.toFixed(2)),
       hourlyResourceRate: liveUsage.hourlyResourceRate,
       liveCost,
-      hasActiveSession: sessionStats.activeSessionCount > 0 || user.hasActiveSession
+      hasActiveSession: sessionStats.activeSessionCount > 0,
+      sessionActive: sessionStats.activeSessionCount > 0,
+      sessionStartedAt: sessionStats.activeLoginAt || null
     };
   });
 

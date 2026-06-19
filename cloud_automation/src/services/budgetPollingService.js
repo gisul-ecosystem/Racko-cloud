@@ -14,7 +14,8 @@ const getUsersForBudgetPolling = async () => {
         au.request_id,
         au.azure_resource_group_name,
         au.username,
-        r.per_user_budget_usd
+        r.per_user_budget_usd,
+        COALESCE(au.budget_top_up_usd, 0) AS budget_top_up_usd
       FROM azure_users au
       INNER JOIN requests r ON r.id = au.request_id
       WHERE au.budget_id IS NOT NULL
@@ -36,7 +37,8 @@ const resolveContactEmail = (username) =>
   String(username || '').includes('@') ? String(username).trim() : null;
 
 const checkUserBudget = async (user) => {
-  const budgetLimitUsd = Number(user.per_user_budget_usd);
+  const budgetLimitUsd =
+    Number(user.per_user_budget_usd) + Number(user.budget_top_up_usd || 0);
 
   if (!Number.isFinite(budgetLimitUsd) || budgetLimitUsd <= 0) {
     return { exceeded: false, skipped: true };

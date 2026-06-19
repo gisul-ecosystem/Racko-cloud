@@ -42,6 +42,7 @@ router.get(
   authenticateOrgAdmin,
   orgAdminController.getDailyUsage
 );
+router.get('/azure/roles', authenticateOrgAdmin, orgAdminController.listAzureRoles);
 router.get('/access-requests', authenticateOrgAdmin, orgAdminController.listAccessRequests);
 router.patch(
   '/access-requests/:id',

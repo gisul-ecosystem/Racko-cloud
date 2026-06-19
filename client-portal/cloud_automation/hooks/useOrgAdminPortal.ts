@@ -9,12 +9,14 @@ import {
   getOrgResourceGroupDetail,
   getOrgUserAzureCost,
   listOrgAccessRequests,
+  listOrgAzureRoles,
   listOrgResourceGroups,
   reviewOrgAccessRequest,
   updateOrgAdminUserRoles,
 } from '../api/orgAdminClient';
 import type {
   OrgAdminAccessRequest,
+  OrgAdminAzureRoleOption,
   OrgAdminMonitoringResponse,
   OrgAdminRequestDetail,
   OrgAdminResourceGroup,
@@ -28,6 +30,7 @@ interface UseOrgAdminPortalResult {
   selectedRequestId: number | null;
   requestDetail: OrgAdminRequestDetail | null;
   users: OrgAdminUser[];
+  availableRoles: OrgAdminAzureRoleOption[];
   accessRequests: OrgAdminAccessRequest[];
   overviewLoading: boolean;
   detailLoading: boolean;
@@ -62,6 +65,7 @@ export function useOrgAdminPortal(
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
   const [requestDetail, setRequestDetail] = useState<OrgAdminRequestDetail | null>(null);
   const [users, setUsers] = useState<OrgAdminUser[]>([]);
+  const [availableRoles, setAvailableRoles] = useState<OrgAdminAzureRoleOption[]>([]);
   const [accessRequests, setAccessRequests] = useState<OrgAdminAccessRequest[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -163,11 +167,15 @@ export function useOrgAdminPortal(
     if (session) {
       void refreshOverview();
       void refreshAccessRequests();
+      void listOrgAzureRoles(session.sessionToken)
+        .then(setAvailableRoles)
+        .catch(() => setAvailableRoles([]));
     } else {
       setResourceGroups([]);
       setSelectedRequestId(null);
       setRequestDetail(null);
       setUsers([]);
+      setAvailableRoles([]);
       setAccessRequests([]);
       setOverviewError(null);
       setDetailError(null);
@@ -180,17 +188,15 @@ export function useOrgAdminPortal(
     }
   }, [session, selectedRequestId, refreshDetail]);
 
-  const hasActiveSessions = users.some((user) => user.hasActiveSession);
-
   useEffect(() => {
-    if (!session || selectedRequestId == null || !hasActiveSessions) return undefined;
+    if (!session || selectedRequestId == null) return undefined;
 
     const intervalId = window.setInterval(() => {
       void refreshDetail();
-    }, 30000);
+    }, 60_000);
 
     return () => window.clearInterval(intervalId);
-  }, [session, selectedRequestId, hasActiveSessions, refreshDetail]);
+  }, [session, selectedRequestId, refreshDetail]);
 
   const selectRequest = useCallback((requestId: number) => {
     setSelectedRequestId(requestId);
@@ -350,6 +356,7 @@ export function useOrgAdminPortal(
     selectedRequestId,
     requestDetail,
     users,
+    availableRoles,
     accessRequests,
     overviewLoading,
     detailLoading,

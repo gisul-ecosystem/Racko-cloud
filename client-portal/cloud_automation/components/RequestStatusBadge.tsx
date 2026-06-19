@@ -22,6 +22,16 @@ const statusConfig: Record<
     dot: 'bg-blue-400',
     badge: 'bg-blue-100 text-blue-700 border-blue-200',
   },
+  created: {
+    label: 'Created',
+    dot: 'bg-gray-400',
+    badge: 'bg-gray-100 text-gray-600 border-gray-200',
+  },
+  blocked: {
+    label: 'Blocked',
+    dot: 'bg-red-500',
+    badge: 'bg-red-100 text-red-700 border-red-200',
+  },
   active: {
     label: 'Active',
     dot: 'bg-green-500',
