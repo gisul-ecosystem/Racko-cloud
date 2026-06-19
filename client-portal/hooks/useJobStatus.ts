@@ -1,10 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchJobStatus, type IVMJob, type JobVMCredential } from '../lib/vmApi';
+import { fetchJobStatus, cancelJob, type IVMJob, type JobVMCredential } from '../lib/vmApi';
 import { ApiError } from '../lib/apiClient';
 
-const TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed']);
+const TERMINAL_STATUSES = new Set(['completed', 'partial', 'failed', 'cancelled']);
 const POLL_INTERVAL_MS = 3000;
 
 interface UseJobStatusResult {
@@ -12,6 +12,8 @@ interface UseJobStatusResult {
   vms: JobVMCredential[];
   loading: boolean;
   error: string | null;
+  cancelling: boolean;
+  cancel: () => Promise<void>;
 }
 
 export function useJobStatus(jobId: string | null): UseJobStatusResult {
@@ -19,6 +21,7 @@ export function useJobStatus(jobId: string | null): UseJobStatusResult {
   const [vms, setVms] = useState<JobVMCredential[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [cancelling, setCancelling] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const poll = useCallback(async () => {
@@ -28,9 +31,10 @@ export function useJobStatus(jobId: string | null): UseJobStatusResult {
       setJob(result.job);
       setVms(result.vms);
       setError(null);
-      // Stop polling once terminal
+      // Stop polling once terminal (including cancelled)
       if (TERMINAL_STATUSES.has(result.job.status)) {
         if (intervalRef.current) clearInterval(intervalRef.current);
+        setCancelling(false);
       }
     } catch (err) {
       setError(
@@ -52,5 +56,20 @@ export function useJobStatus(jobId: string | null): UseJobStatusResult {
     };
   }, [poll, jobId]);
 
-  return { job, vms, loading, error };
+  const cancel = useCallback(async () => {
+    if (!jobId || cancelling) return;
+    setCancelling(true);
+    try {
+      await cancelJob(jobId);
+      // Optimistically update local state; poll will sync the real status shortly
+      setJob((prev) => prev ? { ...prev, status: 'cancelling' } : prev);
+    } catch (err) {
+      setCancelling(false);
+      setError(
+        err instanceof ApiError ? err.message : 'Failed to cancel job.'
+      );
+    }
+  }, [jobId, cancelling]);
+
+  return { job, vms, loading, error, cancelling, cancel };
 }

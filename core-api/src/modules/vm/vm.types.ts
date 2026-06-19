@@ -343,6 +343,10 @@ export interface BulkVMSpec {
   softwarePreInstalled?: boolean;
   /** Run Hyper-V / software queues after clone (single-VM create only). */
   schedulePostCreateJobs?: boolean;
+  /** Clone-job extras — marks the resulting VM as a clone of an existing VM. */
+  isVmClone?: boolean;
+  sourceVmId?: mongoose.Types.ObjectId;
+  sourceVmName?: string;
 }
 
 // ─── Bulk 1:1 VM assignment ──────────────────────────────────────────────────

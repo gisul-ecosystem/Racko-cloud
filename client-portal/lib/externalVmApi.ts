@@ -11,7 +11,6 @@ export interface IExternalVM {
   protocol: ExternalVMProtocol;
   username: string;
   password: string;
-  vmType: string;
   adminId: string;
   createdAt: string;
   updatedAt: string;
@@ -23,7 +22,6 @@ export interface CreateExternalVMDto {
   protocol: ExternalVMProtocol;
   username?: string;
   password: string;
-  vmType?: string;
 }
 
 export interface BulkCreateExternalVMDto {

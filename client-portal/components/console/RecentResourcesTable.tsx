@@ -82,7 +82,7 @@ export function RecentResourcesTable() {
         kind: 'vps' as const,
         name: vm.name,
         serviceLabel: 'VPS Hosting',
-        detail: vm.node,
+        detail: vm.ipAddress || vm.templateName || 'VPS',
         lastActivityAt: vm.updatedAt,
         href: `/dashboard/admin/vms/${vm._id}`,
         vpsStatus: vm.status,
@@ -215,7 +215,7 @@ export function RecentResourcesTable() {
                       ) : item.elasticProtocol ? (
                         <ProtocolBadge protocol={item.elasticProtocol} />
                       ) : (
-                        '—'
+                        'N/A'
                       )}
                     </td>
                     <td className="px-4 py-3.5 text-gray-500">

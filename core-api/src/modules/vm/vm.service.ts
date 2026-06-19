@@ -7,6 +7,7 @@ import { VM } from './vm.model';
 import { VMJob } from './vmJob.model';
 import { VMEvent } from './vmEvent.model';
 import { VmTemplate } from './vmTemplate.model';
+import { AdminVmTemplate } from '../adminVmTemplate/adminVmTemplate.model';
 import { validateResources } from './helpers/resourceValidator';
 import {
   sumProxmoxProvisionedDiskBytes,
@@ -378,15 +379,50 @@ async function reconcileStaleTemplates(
 export class VMService {
   /**
    * Templates enabled for VM creation (admin dashboard).
-   * Only returns templates the super admin has selected in the catalog.
+   * Returns super-admin enabled Proxmox templates + the calling admin's own custom templates.
+   * Each admin only sees their own custom templates — never another admin's.
    */
-  async getTemplates(_req: Request): Promise<ProxmoxTemplate[]> {
-    const all = await fetchProxmoxTemplates();
-    const enabledDocs = await VmTemplate.find({ isEnabled: true }).select('vmid').lean();
-    if (enabledDocs.length === 0) return [];
+  async getTemplates(req: Request): Promise<ProxmoxTemplate[]> {
+    const authReq = req as AuthenticatedRequest;
+    const adminObjectId = new mongoose.Types.ObjectId(authReq.user.userId);
 
+    // Check DB first — skip Proxmox entirely if nothing to show
+    const [enabledDocs, adminTemplateDocs] = await Promise.all([
+      VmTemplate.find({ isEnabled: true }).select('vmid').lean(),
+      AdminVmTemplate.find({ adminId: adminObjectId, status: 'ready' }).lean(),
+    ]);
+
+    if (enabledDocs.length === 0 && adminTemplateDocs.length === 0) return [];
+
+    // Fetch Proxmox templates once — only when there's something to merge
+    const all = await fetchProxmoxTemplates();
+
+    // Super-admin enabled templates (shared across all admins)
     const enabledVmids = new Set(enabledDocs.map((d) => d.vmid));
-    return all.filter((t) => enabledVmids.has(t.vmid));
+    const sharedTemplates = all.filter((t) => enabledVmids.has(t.vmid));
+
+    // Admin's own custom templates merged into the same shape — deduped against shared
+    const proxmoxByVmid = new Map(all.map((t) => [t.vmid, t]));
+    const sharedVmids = new Set(sharedTemplates.map((t) => t.vmid));
+
+    const customTemplates: ProxmoxTemplate[] = adminTemplateDocs
+      .filter((t) => t.proxmoxVmid != null && proxmoxByVmid.has(t.proxmoxVmid) && !sharedVmids.has(t.proxmoxVmid))
+      .map((t) => {
+        const proxmox = proxmoxByVmid.get(t.proxmoxVmid!)!;
+        return {
+          vmid: proxmox.vmid,
+          name: t.name,
+          node: proxmox.node,
+          cpu: proxmox.cpu,
+          memory: proxmox.memory,
+          disk: proxmox.disk,
+          maxdisk: proxmox.maxdisk,
+          status: proxmox.status,
+          template: 1,
+        };
+      });
+
+    return [...sharedTemplates, ...customTemplates];
   }
 
   /**
@@ -483,14 +519,26 @@ export class VMService {
 
   private async assertTemplateEnabledForCreate(
     templateId: number,
-    role: string
+    role: string,
+    adminId?: string
   ): Promise<void> {
     if (role === 'super_admin') return;
 
+    // Check super-admin enabled templates
     const enabled = await VmTemplate.exists({ vmid: templateId, isEnabled: true });
-    if (!enabled) {
-      throw new ValidationError('This template is not available for VM creation.');
+    if (enabled) return;
+
+    // Check admin's own custom templates
+    if (adminId) {
+      const adminTemplate = await AdminVmTemplate.exists({
+        proxmoxVmid: templateId,
+        adminId: new mongoose.Types.ObjectId(adminId),
+        status: 'ready',
+      });
+      if (adminTemplate) return;
     }
+
+    throw new ValidationError('This template is not available for VM creation.');
   }
 
   /**
@@ -498,7 +546,7 @@ export class VMService {
    */
   async getTemplateDetails(templateId: number, req: Request): Promise<TemplateDetails> {
     const authReq = req as AuthenticatedRequest;
-    await this.assertTemplateEnabledForCreate(templateId, authReq.user.role);
+    await this.assertTemplateEnabledForCreate(templateId, authReq.user.role, authReq.user.userId);
 
     const all = await fetchProxmoxTemplates();
     const template = all.find((t) => t.vmid === templateId);
@@ -932,27 +980,11 @@ export class VMService {
     if (vm.isHibernated) {
       operation = 'resume';
       proxmoxApiPath = 'status/resume';
-      try {
-        const response = await proxmoxClient.post<{ data: string }>(
-          `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
-          {}
-        );
-        upid = response.data.data;
-      } catch (err) {
-        logger.warn('[VMPowerOn] Proxmox resume API failed — falling back to cold start', {
-          vmId: vmIdStr,
-          vmid: vm.vmid,
-          node: vm.node,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        proxmoxApiPath = 'status/start';
-        const startResponse = await proxmoxClient.post<{ data: string }>(
-          `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
-          {}
-        );
-        upid = startResponse.data.data;
-        operation = 'start';
-      }
+      const response = await proxmoxClient.post<{ data: string }>(
+        `/nodes/${vm.node}/qemu/${vm.vmid}/status/resume`,
+        {}
+      );
+      upid = response.data.data;
     } else {
       const response = await proxmoxClient.post<{ data: string }>(
         `/nodes/${vm.node}/qemu/${vm.vmid}/status/start`,
@@ -1245,7 +1277,8 @@ export class VMService {
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     name: string,
-    req: Request
+    req: Request,
+    count: number = 1
   ): Promise<{ jobId: string }> {
     const authReq = req as AuthenticatedRequest;
 
@@ -1266,10 +1299,10 @@ export class VMService {
       adminId,
       type: 'vm_clone',
       status: 'pending',
-      total: 1,
+      total: count,
       completed: 0,
       failed: 0,
-      pending: 1,
+      pending: count,
       vmIds: [],
       failedVmids: [],
       requestedSpecs: {
@@ -1284,7 +1317,7 @@ export class VMService {
         templateCpuCores: sourceVm.allocatedCpu,
         templateMemoryGb: sourceVm.allocatedMemoryGb,
         namePrefix: name,
-        count: 1,
+        count,
         consoleUsername: sourceVm.consoleUsername ?? '',
         passwordMode: 'fixed',
         consolePassword: sourceVm.consolePassword,
@@ -1302,6 +1335,7 @@ export class VMService {
       sourceVmId: vmId.toString(),
       sourceVmid: sourceVm.vmid,
       name,
+      count,
     });
 
     // Fire and forget — QUEUE_SLOT: replace with message queue (RabbitMQ/BullMQ)
@@ -1639,10 +1673,38 @@ export class VMService {
       return null;
     }
 
-    return this.powerOnStoppedVm(vm, adminId, {
-      ipAddress: 'automation',
-      userAgent: 'vm-automation-scheduler',
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY_MS = 5000;
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      try {
+        return await this.powerOnStoppedVm(vm, adminId, {
+          ipAddress: 'automation',
+          userAgent: 'vm-automation-scheduler',
+        });
+      } catch (err) {
+        lastError = err;
+        logger.warn('[Automation] Resume attempt failed', {
+          vmId: vmId.toString(),
+          vmid: vm.vmid,
+          attempt,
+          maxRetries: MAX_RETRIES,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        if (attempt < MAX_RETRIES) {
+          await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS));
+        }
+      }
+    }
+
+    logger.error('[Automation] Resume failed after all retries', {
+      vmId: vmId.toString(),
+      vmid: vm.vmid,
+      maxRetries: MAX_RETRIES,
+      error: lastError instanceof Error ? lastError.message : String(lastError),
     });
+    throw lastError;
   }
 
   /**
@@ -2153,6 +2215,53 @@ export class VMService {
     }));
 
     return { job, vms };
+  }
+
+  /**
+   * PATCH /api/v1/vms/jobs/:jobId/cancel
+   * Soft-cancel a running bulk job. Sets status to 'cancelling' so the background
+   * processor stops queuing new batches after the current one finishes.
+   * Only applicable to: bulk_create, bulk_delete, vm_clone.
+   */
+  async cancelJob(
+    jobId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ jobId: string; status: string }> {
+    const authReq = req as AuthenticatedRequest;
+
+    const job = await VMJob.findById(jobId);
+    if (!job) throw new VMNotFoundError(`Job ${jobId.toString()} not found.`);
+
+    if (authReq.user.role !== 'super_admin' && job.adminId.toString() !== adminId.toString()) {
+      throw new VMOwnershipError('You do not have permission to cancel this job.');
+    }
+
+    const cancellableTypes: IVMJob['type'][] = ['bulk_create', 'bulk_delete', 'vm_clone'];
+    if (!cancellableTypes.includes(job.type)) {
+      throw new ValidationError(`Job type '${job.type}' does not support cancellation.`);
+    }
+
+    const cancellableStatuses: IVMJob['status'][] = ['pending', 'processing'];
+    if (!cancellableStatuses.includes(job.status)) {
+      throw new ValidationError(
+        `Cannot cancel a job with status '${job.status}'. Only pending or processing jobs can be cancelled.`
+      );
+    }
+
+    await VMJob.findByIdAndUpdate(jobId, {
+      status: 'cancelling',
+      cancelledAt: new Date(),
+    });
+
+    logger.info('[JobCancel] Job cancel requested', {
+      jobId: jobId.toString(),
+      adminId: adminId.toString(),
+      jobType: job.type,
+      previousStatus: job.status,
+    });
+
+    return { jobId: jobId.toString(), status: 'cancelling' };
   }
 
   /**

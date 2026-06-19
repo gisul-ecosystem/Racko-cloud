@@ -19,6 +19,7 @@ import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
+import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
 import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconcileSweeper';
@@ -124,6 +125,7 @@ app.use('/api/v1/managed-users', managedUsersRoutes);
 app.use('/api/v1/software', softwareRoutes);
 app.use('/api/v1/vm-automations', vmAutomationRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/admin-vm-templates', adminVmTemplateRoutes);
 
 // Start background services
 startNodeMonitoring();

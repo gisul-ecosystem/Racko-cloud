@@ -8,6 +8,7 @@ import {
   Clock,
   Copy,
   LayoutDashboard,
+  Layers,
   Plus,
   Server,
   UserCheck,
@@ -50,6 +51,11 @@ const navLinks: NavLink[] = [
     href: '/dashboard/admin/automation',
     label: 'Automation',
     icon: <Clock className="h-4 w-4" />,
+  },
+  {
+    href: '/dashboard/admin/templates',
+    label: 'My Templates',
+    icon: <Layers className="h-4 w-4" />,
   },
   {
     href: '/dashboard/admin/users',

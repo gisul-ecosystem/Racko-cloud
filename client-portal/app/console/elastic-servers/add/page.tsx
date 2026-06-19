@@ -21,7 +21,6 @@ export default function AddServerPage() {
   const [protocol, setProtocol] = useState<ExternalVMProtocol>('rdp');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [vmType, setVmType] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -37,7 +36,6 @@ export default function AddServerPage() {
         protocol,
         password,
         ...(username.trim() && { username: username.trim() }),
-        ...(vmType.trim() && { vmType: vmType.trim() }),
       };
       await createExternalVM(dto);
       addToast('success', `${dto.name} added.`);
@@ -87,27 +85,16 @@ export default function AddServerPage() {
               placeholder="10.0.0.10"
             />
           </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className={labelClass}>Protocol</label>
-              <select
-                className={inputClass}
-                value={protocol}
-                onChange={(e) => setProtocol(e.target.value as ExternalVMProtocol)}
-              >
-                <option value="rdp">RDP</option>
-                <option value="ssh">SSH</option>
-              </select>
-            </div>
-            <div>
-              <label className={labelClass}>VM Type</label>
-              <input
-                className={inputClass}
-                value={vmType}
-                onChange={(e) => setVmType(e.target.value)}
-                placeholder="ROOT"
-              />
-            </div>
+          <div>
+            <label className={labelClass}>Protocol</label>
+            <select
+              className={inputClass}
+              value={protocol}
+              onChange={(e) => setProtocol(e.target.value as ExternalVMProtocol)}
+            >
+              <option value="rdp">RDP</option>
+              <option value="ssh">SSH</option>
+            </select>
           </div>
           <div>
             <label className={labelClass}>Username</label>

@@ -166,7 +166,7 @@ export interface VMOperationResult {
   error?: string;
 }
 
-export type JobStatus = 'pending' | 'processing' | 'completed' | 'partial' | 'failed';
+export type JobStatus = 'pending' | 'processing' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled';
 
 export type JobPhase = 'building_golden_image' | 'cloning_vms';
 
@@ -208,6 +208,7 @@ export interface IVMJob {
   jobErrors: Array<{ index: number; vmName: string; error: string; node?: string }>;
   startedAt: string;
   completedAt?: string;
+  cancelledAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -493,6 +494,14 @@ export async function fetchJobStatus(
   return { job: res.data.job, vms: res.data.vms ?? [] };
 }
 
+export async function cancelJob(jobId: string): Promise<{ jobId: string; status: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string; status: string }>>(
+    `/api/v1/vms/jobs/${jobId}/cancel`,
+    { method: 'PATCH' }
+  );
+  return res.data;
+}
+
 // ─── Alerts ───────────────────────────────────────────────────────────────────
 
 export async function fetchActiveAlerts(): Promise<NodeAlert[]> {
@@ -603,10 +612,10 @@ export interface ClonedVM extends IVM {
   isVmClone: boolean;
 }
 
-export async function cloneVM(vmId: string, name: string): Promise<{ jobId: string }> {
+export async function cloneVM(vmId: string, name: string, count: number = 1): Promise<{ jobId: string }> {
   const res = await apiRequest<ApiResponse<{ jobId: string }>>(
     `/api/v1/vms/${vmId}/clone`,
-    { method: 'POST', body: JSON.stringify({ name }) }
+    { method: 'POST', body: JSON.stringify({ name, count }) }
   );
   return res.data;
 }
@@ -676,4 +685,44 @@ export async function updateVmAutomation(
 
 export async function deleteVmAutomation(automationId: string): Promise<void> {
   await apiRequest(`/api/v1/vm-automations/${automationId}`, { method: 'DELETE' });
+}
+
+// ─── Admin VM Templates ───────────────────────────────────────────────────────
+
+export type AdminVmTemplateStatus = 'creating' | 'ready' | 'failed';
+
+export interface AdminVmTemplate {
+  _id: string;
+  adminId: string;
+  name: string;
+  sourceVmId: string;
+  sourceVmName: string;
+  proxmoxVmid: number | null;
+  node: string | null;
+  status: AdminVmTemplateStatus;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchAdminVmTemplates(): Promise<AdminVmTemplate[]> {
+  const res = await apiRequest<ApiResponse<{ templates: AdminVmTemplate[] }>>(
+    '/api/v1/admin-vm-templates'
+  );
+  return res.data.templates;
+}
+
+export async function createAdminVmTemplate(
+  sourceVmId: string,
+  name: string
+): Promise<AdminVmTemplate> {
+  const res = await apiRequest<ApiResponse<{ template: AdminVmTemplate }>>(
+    '/api/v1/admin-vm-templates',
+    { method: 'POST', body: JSON.stringify({ sourceVmId, name }) }
+  );
+  return res.data.template;
+}
+
+export async function deleteAdminVmTemplate(templateId: string): Promise<void> {
+  await apiRequest(`/api/v1/admin-vm-templates/${templateId}`, { method: 'DELETE' });
 }

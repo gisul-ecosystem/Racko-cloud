@@ -8,22 +8,17 @@ import { VMJob } from '../vmJob.model';
 import { VMEvent } from '../vmEvent.model';
 import { selectNodesForBulk, selectNode } from './placementEngine';
 import { pollTaskWithCleanup } from './taskPoller';
+import { withCloneWorkerRetry } from './cloneWorkerRetry';
 import { scheduleHyperVEnable } from './hypervQueue';
 import { scheduleSoftwareInstall } from './softwareQueue';
 import { softwareService } from '../../software/software.service';
 import { buildGoldenTemplate, deleteGoldenTemplate } from './goldenImageProcessor';
-import {
-  bulkCloneDiagLog,
-  fetchSourceVmDiagnostics,
-  resolveCloneErrorMessage,
-  shouldAttemptConnectivityReroute,
-  summarizeDiskPlacement,
-  type BulkClonePath,
-} from './cloneDiagnostics';
+import { bulkCloneDiagLog, fetchSourceVmDiagnostics, resolveCloneErrorMessage, shouldAttemptConnectivityReroute, summarizeDiskPlacement, type BulkClonePath, } from './cloneDiagnostics';
 import { ProxmoxConnectionError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
 import { notificationService } from '../../notification/notification.service';
+import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
 
 // QUEUE_SLOT: replace direct async call with message queue job (RabbitMQ/BullMQ)
 // EVENT_SLOT: emit 'vm.bulk_created' event to message queue
@@ -90,7 +85,11 @@ export async function processBulkCreation(
       const vmSpecs = buildVmSpecsForGoldenClone(job, adminId, node, goldenTemplateVmid);
       await runBatchClone(jobId, vmSpecs, { allowReroute: false });
 
-      await finalizeJobStatus(jobId);
+      // Skip finalize if cancel handler already set a terminal status
+      const afterGolden = await VMJob.findById(jobId).select('status').lean();
+      if (afterGolden && !['cancelled', 'cancelling'].includes(afterGolden.status)) {
+        await finalizeJobStatus(jobId);
+      }
       void notificationService.notifyJobFinished(jobId);
       const finishedJob = await VMJob.findById(jobId).lean();
       logger.info('[Golden][Diag] bulk job — clone phase finished', {
@@ -221,7 +220,11 @@ export async function processBulkCreation(
     }
 
     await runBatchClone(jobId, vmSpecs, { allowReroute: true });
-    await finalizeJobStatus(jobId);
+    // Skip finalize if cancel handler already set a terminal status
+    const afterStandard = await VMJob.findById(jobId).select('status').lean();
+    if (afterStandard && !['cancelled', 'cancelling'].includes(afterStandard.status)) {
+      await finalizeJobStatus(jobId);
+    }
     void notificationService.notifyJobFinished(jobId);
   } catch (error) {
     logger.error('Unexpected error in bulk processor', {
@@ -320,6 +323,16 @@ async function runBatchClone(
   });
 
   for (const batch of batches) {
+    // Check for cancellation before starting each batch
+    if (await isCancelling(jobId)) {
+      logger.info('[BulkJob] Cancellation detected — stopping batch loop', {
+        jobId: jobId.toString(),
+        remainingBatches: batches.length - batches.indexOf(batch),
+      });
+      await finalizeCancelledJob(jobId);
+      return;
+    }
+
     const results = await Promise.allSettled(batch.map((spec) => createSingleVM(spec)));
 
     for (let i = 0; i < results.length; i++) {
@@ -509,68 +522,75 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
 
   let vmid!: number;
   let cloneUpid!: string;
+  let cloneResult: import('./proxmoxTaskPoll').PollResult = 'unknown';
 
-  await new Promise<void>((resolve, reject) => {
-    vmidMutex = vmidMutex.then(async () => {
-      try {
-        const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-        vmid = response.data.data;
+  // Wraps VMID allocation + clone POST + task poll with worker-retry logic.
+  // Each retry allocates a fresh VMID via the mutex to avoid conflicts.
+  await withCloneWorkerRetry(async () => {
+    await new Promise<void>((resolve, reject) => {
+      vmidMutex = vmidMutex.then(async () => {
+        try {
+          const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
+          vmid = response.data.data;
 
-        const cloneBody: Record<string, unknown> = {
-          newid: vmid,
-          name: spec.vmName,
-          full: spec.cloneType === 'dedicated_storage' ? 1 : 0,
-          target: spec.node,
-        };
-        if (storagePool) cloneBody['storage'] = storagePool;
+          const cloneBody: Record<string, unknown> = {
+            newid: vmid,
+            name: spec.vmName,
+            full: spec.cloneType === 'dedicated_storage' ? 1 : 0,
+            target: spec.node,
+          };
+          if (storagePool) cloneBody['storage'] = storagePool;
 
-        const cloneEndpoint = `/nodes/${spec.node}/qemu/${sourceTemplateId}/clone`;
-        bulkCloneDiagLog('sending clone request', {
-          jobId: spec.jobId.toString(),
-          clonePath,
-          vmName: spec.vmName,
-          index: spec.index,
-          node: spec.node,
-          sourceTemplateId,
-          baseTemplateId: spec.templateId,
-          newVmid: vmid,
-          cloneEndpoint,
-          cloneBody,
-          storagePoolSelected: storagePool ?? null,
-          softwarePreInstalled: spec.softwarePreInstalled ?? false,
-        });
+          const cloneEndpoint = `/nodes/${spec.node}/qemu/${sourceTemplateId}/clone`;
+          bulkCloneDiagLog('sending clone request', {
+            jobId: spec.jobId.toString(),
+            clonePath,
+            vmName: spec.vmName,
+            index: spec.index,
+            node: spec.node,
+            sourceTemplateId,
+            baseTemplateId: spec.templateId,
+            newVmid: vmid,
+            cloneEndpoint,
+            cloneBody,
+            storagePoolSelected: storagePool ?? null,
+            softwarePreInstalled: spec.softwarePreInstalled ?? false,
+          });
 
-        const cloneResponse = await proxmoxClient.post<{ data: string }>(
-          cloneEndpoint,
-          cloneBody
-        );
-        cloneUpid = cloneResponse.data.data;
-        bulkCloneDiagLog('clone task started', {
-          jobId: spec.jobId.toString(),
-          clonePath,
-          vmName: spec.vmName,
-          newVmid: vmid,
-          node: spec.node,
-          upid: cloneUpid,
-        });
-        resolve();
-      } catch (err) {
-        bulkCloneDiagLog('clone request failed', {
-          jobId: spec.jobId.toString(),
-          clonePath,
-          vmName: spec.vmName,
-          index: spec.index,
-          node: spec.node,
-          sourceTemplateId,
-          baseTemplateId: spec.templateId,
-          proxmoxError: resolveCloneErrorMessage(err),
-        });
-        reject(err);
-      }
+          const cloneResponse = await proxmoxClient.post<{ data: string }>(
+            cloneEndpoint,
+            cloneBody
+          );
+          cloneUpid = cloneResponse.data.data;
+          bulkCloneDiagLog('clone task started', {
+            jobId: spec.jobId.toString(),
+            clonePath,
+            vmName: spec.vmName,
+            newVmid: vmid,
+            node: spec.node,
+            upid: cloneUpid,
+          });
+          resolve();
+        } catch (err) {
+          bulkCloneDiagLog('clone request failed', {
+            jobId: spec.jobId.toString(),
+            clonePath,
+            vmName: spec.vmName,
+            index: spec.index,
+            node: spec.node,
+            sourceTemplateId,
+            baseTemplateId: spec.templateId,
+            proxmoxError: resolveCloneErrorMessage(err),
+          });
+          reject(err);
+        }
+      });
     });
-  });
 
-  const cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+    // Poll inside the retry wrapper — a worker error here triggers a retry
+    // with a brand-new VMID on the next iteration.
+    cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+  }, { jobId: spec.jobId.toString(), vmName: spec.vmName, node: spec.node });
 
   bulkCloneDiagLog('clone task finished', {
     jobId: spec.jobId.toString(),

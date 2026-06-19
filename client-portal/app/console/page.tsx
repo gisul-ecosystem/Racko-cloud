@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, Globe, Server } from 'lucide-react';
+import { Cloud, Globe, Server, BookOpen } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 
@@ -28,6 +28,14 @@ const services = [
     href: AZURE_ROUTES.dashboard,
     icon: Cloud,
     description: AZURE_SERVICE.description,
+    available: true,
+  },
+  {
+    id: 'docs',
+    name: 'Documentation',
+    href: '/console/docs',
+    icon: BookOpen,
+    description: 'Guides and reference for VPS Hosting and Elastic Server Import',
     available: true,
   },
 ] as const;

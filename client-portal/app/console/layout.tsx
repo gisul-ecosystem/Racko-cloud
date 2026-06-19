@@ -29,7 +29,8 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
 
   const usesOwnShell =
     (pathname?.startsWith('/console/elastic-servers') ?? false) ||
-    (pathname?.startsWith('/console/azure') ?? false);
+    (pathname?.startsWith('/console/azure') ?? false) ||
+    (pathname?.startsWith('/console/docs') ?? false);
 
   useEffect(() => {
     if (isLoading) return;
@@ -39,7 +40,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     }
     if (user.role !== 'admin') {
       router.replace(
-        user.role === 'super_admin' ? '/dashboard/super-admin' : '/dashboard/user'
+        user.role === 'super_admin' ? '/super-admin-console' : '/dashboard/user'
       );
     }
   }, [isLoading, isAuthenticated, user, router]);
