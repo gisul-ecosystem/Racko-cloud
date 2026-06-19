@@ -34,6 +34,7 @@ export function OrgAdminPortal() {
     selectedRequestId,
     requestDetail,
     users,
+    availableRoles,
     accessRequests,
     overviewLoading,
     detailLoading,
@@ -231,11 +232,13 @@ export function OrgAdminPortal() {
                         request={requestDetail}
                         requestId={selectedRequestId}
                         sessionToken={session!.sessionToken}
+                        availableRoles={availableRoles}
                         loading={detailLoading}
                         selectedUserId={selectedUserId}
                         saving={saving}
                         onSelect={setSelectedUserId}
                         onForceLogout={forceLogout}
+                        onUpdateRoles={updateRoles}
                         fetchUserMonitoring={fetchUserMonitoring}
                         onFetchAzureCost={fetchUserAzureCost}
                       />

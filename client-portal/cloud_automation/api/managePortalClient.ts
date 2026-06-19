@@ -4,6 +4,10 @@ import type {
   ManagePortalConsoleLaunchResponse,
   ManagePortalLoginResponse,
   ManagePortalMutationResponse,
+  ManagePortalRenewBudgetResponse,
+  ManagePortalTriggerCleanupResponse,
+  ManagePortalUserControlData,
+  ManagePortalUserControlsResponse,
   ManagePortalUsersResponse,
 } from '../types/managePortal';
 
@@ -222,4 +226,80 @@ export function parseRolesInput(input: string): string[] {
 
 export function formatRolesForInput(roles: { role: string }[]): string {
   return roles.map((entry) => entry.role).join('\n');
+}
+
+function mapUserControlRow(row: ManagePortalUserControlsResponse['data'][number]): ManagePortalUserControlData {
+  return {
+    id: row.id,
+    username: row.username,
+    cleanupDisabled: row.cleanup_disabled,
+    cleanupIntervalOverride: row.cleanup_interval_override,
+    defaultCleanupInterval: row.default_cleanup_interval,
+    budgetExceeded: row.budget_exceeded,
+    budgetRenewedCount: row.budget_renewed_count ?? 0,
+    currentSpend: parseFloat(String(row.current_spend || 0)),
+    totalBudget: row.total_budget != null ? parseFloat(String(row.total_budget)) : null,
+    baseBudget: row.base_budget != null ? parseFloat(String(row.base_budget)) : null,
+    lastSyncedAt: row.last_synced_at,
+  };
+}
+
+export async function fetchManagePortalUserControls(
+  requestId: number,
+  sessionToken: string
+): Promise<Record<number, ManagePortalUserControlData>> {
+  const payload = await manageRequest<ManagePortalUserControlsResponse>(
+    `/requests/${requestId}/users/controls`,
+    {
+      method: 'GET',
+      sessionToken,
+    }
+  );
+
+  const map: Record<number, ManagePortalUserControlData> = {};
+  for (const row of payload.data || []) {
+    map[row.id] = mapUserControlRow(row);
+  }
+  return map;
+}
+
+export async function renewManagePortalUserBudget(params: {
+  userId: number;
+  topUpAmount: number;
+  sessionToken: string;
+}): Promise<ManagePortalRenewBudgetResponse> {
+  return manageRequest<ManagePortalRenewBudgetResponse>(`/users/${params.userId}/renew-budget`, {
+    method: 'POST',
+    sessionToken: params.sessionToken,
+    body: JSON.stringify({ topUpAmount: params.topUpAmount }),
+  });
+}
+
+export async function updateManagePortalCleanupSettings(params: {
+  userId: number;
+  sessionToken: string;
+  cleanupDisabled?: boolean;
+  cleanupIntervalOverride?: number | null;
+}): Promise<{ success: boolean }> {
+  return manageRequest<{ success: boolean }>(`/users/${params.userId}/cleanup-settings`, {
+    method: 'PATCH',
+    sessionToken: params.sessionToken,
+    body: JSON.stringify({
+      cleanupDisabled: params.cleanupDisabled,
+      cleanupIntervalOverride: params.cleanupIntervalOverride,
+    }),
+  });
+}
+
+export async function triggerManagePortalUserCleanup(params: {
+  userId: number;
+  sessionToken: string;
+}): Promise<ManagePortalTriggerCleanupResponse> {
+  return manageRequest<ManagePortalTriggerCleanupResponse>(
+    `/users/${params.userId}/trigger-cleanup`,
+    {
+      method: 'POST',
+      sessionToken: params.sessionToken,
+    }
+  );
 }

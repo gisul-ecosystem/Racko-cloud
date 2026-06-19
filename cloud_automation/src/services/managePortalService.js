@@ -1534,6 +1534,277 @@ const getPortalUserUsageStatus = async (sessionToken, requestId, userId) => {
   return status;
 };
 
+const getUserControlsForRequest = async (sessionToken, requestId) => {
+  const session = await requireSession(sessionToken);
+  validateSessionForRequest(session, requestId);
+  assertAdminPortalSession(session);
+
+  const { rows } = await db.query(
+    `
+      SELECT
+        au.id,
+        au.username,
+        au.azure_user_id,
+        COALESCE(au.azure_account_enabled, TRUE) AS azure_account_enabled,
+        au.budget_id,
+        au.budget_exceeded,
+        au.budget_exceeded_at,
+        au.cleanup_disabled,
+        au.cleanup_interval_override,
+        au.budget_top_up_usd,
+        au.budget_renewed_at,
+        au.budget_renewed_count,
+        r.per_user_budget_usd AS base_budget,
+        r.resource_cleanup_enabled,
+        r.resource_cleanup_interval_hours AS default_cleanup_interval,
+        COALESCE(ubs.current_spend, 0) AS current_spend,
+        COALESCE(
+          ubs.budget_amount,
+          r.per_user_budget_usd + COALESCE(au.budget_top_up_usd, 0)
+        ) AS total_budget,
+        ubs.last_synced_at
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      LEFT JOIN user_budget_spend ubs ON ubs.azure_user_id = au.id
+      WHERE au.request_id = $1
+        AND COALESCE(au.is_deleted, FALSE) = FALSE
+      ORDER BY au.username
+    `,
+    [requestId]
+  );
+
+  return rows;
+};
+
+const renewUserBudget = async (sessionToken, userId, topUpAmount) => {
+  const session = await requireSession(sessionToken);
+  assertAdminPortalSession(session);
+
+  const amount = parseFloat(topUpAmount);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new AppError('topUpAmount must be positive.', 400);
+  }
+
+  const { rows } = await db.query(
+    `
+      SELECT
+        au.id,
+        au.azure_user_id,
+        au.azure_resource_group_name,
+        au.budget_id,
+        au.budget_top_up_usd,
+        au.budget_exceeded,
+        au.request_id,
+        r.per_user_budget_usd AS base_budget,
+        r.expiry_date
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      WHERE au.id = $1
+        AND COALESCE(au.is_deleted, FALSE) = FALSE
+    `,
+    [userId]
+  );
+
+  if (!rows.length) {
+    throw new AppError('User not found.', 404);
+  }
+
+  const user = rows[0];
+  validateSessionForRequest(session, user.request_id);
+
+  const previousTopUp = parseFloat(user.budget_top_up_usd || 0);
+  const newTopUp = previousTopUp + amount;
+  const newTotalBudget = parseFloat(user.base_budget || 0) + newTopUp;
+
+  if (user.azure_resource_group_name) {
+    try {
+      const { updateUserBudgetAmount } = require('../provisioners/azure/azureBudgetProvisioner');
+      await updateUserBudgetAmount({
+        resourceGroupName: user.azure_resource_group_name,
+        userId: user.id,
+        newBudgetAmount: newTotalBudget,
+        endDate: new Date(user.expiry_date)
+      });
+    } catch (azureErr) {
+      logManagePortalEvent('error', 'azure_budget_update_failed', {
+        userId,
+        message: azureErr?.message
+      });
+    }
+  }
+
+  await db.query(
+    `
+      UPDATE azure_users
+      SET budget_top_up_usd = $1,
+          budget_exceeded = FALSE,
+          budget_exceeded_at = NULL,
+          budget_renewed_at = NOW(),
+          budget_renewed_count = COALESCE(budget_renewed_count, 0) + 1
+      WHERE id = $2
+    `,
+    [newTopUp, userId]
+  );
+
+  await db.query(
+    `
+      INSERT INTO user_budget_spend
+        (azure_user_id, request_id, current_spend, budget_amount, last_synced_at)
+      SELECT au.id, au.request_id, COALESCE(ubs.current_spend, 0), $1, NOW()
+      FROM azure_users au
+      LEFT JOIN user_budget_spend ubs ON ubs.azure_user_id = au.id
+      WHERE au.id = $2
+      ON CONFLICT (azure_user_id)
+      DO UPDATE SET budget_amount = EXCLUDED.budget_amount, last_synced_at = NOW()
+    `,
+    [newTotalBudget, userId]
+  );
+
+  if (user.budget_exceeded && user.azure_user_id) {
+    const { graphClient } = createGraphClient();
+    await graphClient.api(`/users/${user.azure_user_id}`).patch({ accountEnabled: true });
+
+    await db.query(
+      `
+        UPDATE azure_users
+        SET azure_account_enabled = TRUE
+        WHERE id = $1
+      `,
+      [userId]
+    );
+  }
+
+  logManagePortalEvent('info', 'budget_renewed', {
+    userId,
+    topUpAmount: amount,
+    newTotalBudget
+  });
+
+  return {
+    newTotalBudget,
+    topUpAmount: amount,
+    previousTopUp
+  };
+};
+
+const updateUserCleanupSettings = async (
+  sessionToken,
+  userId,
+  { cleanupDisabled, cleanupIntervalOverride }
+) => {
+  const session = await requireSession(sessionToken);
+  assertAdminPortalSession(session);
+
+  const userResult = await db.query(
+    `
+      SELECT request_id
+      FROM azure_users
+      WHERE id = $1
+        AND COALESCE(is_deleted, FALSE) = FALSE
+    `,
+    [userId]
+  );
+
+  if (!userResult.rows.length) {
+    throw new AppError('User not found.', 404);
+  }
+
+  validateSessionForRequest(session, userResult.rows[0].request_id);
+
+  const updates = [];
+  const values = [];
+  let idx = 1;
+
+  if (cleanupDisabled !== undefined) {
+    updates.push(`cleanup_disabled = $${idx++}`);
+    values.push(Boolean(cleanupDisabled));
+  }
+
+  if (cleanupIntervalOverride !== undefined) {
+    updates.push(`cleanup_interval_override = $${idx++}`);
+    values.push(cleanupIntervalOverride);
+  }
+
+  if (!updates.length) {
+    throw new AppError('No fields to update.', 400);
+  }
+
+  values.push(userId);
+  await db.query(
+    `
+      UPDATE azure_users
+      SET ${updates.join(', ')}
+      WHERE id = $${idx}
+    `,
+    values
+  );
+
+  logManagePortalEvent('info', 'cleanup_settings_updated', {
+    userId,
+    cleanupDisabled,
+    cleanupIntervalOverride
+  });
+};
+
+const triggerUserCleanup = async (sessionToken, userId) => {
+  const session = await requireSession(sessionToken);
+  assertAdminPortalSession(session);
+
+  const { rows } = await db.query(
+    `
+      SELECT
+        au.azure_resource_group_name,
+        au.request_id,
+        au.azure_user_id,
+        r.costing_mode,
+        r.azure_resource_group_name AS shared_resource_group_name
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      WHERE au.id = $1
+        AND COALESCE(au.is_deleted, FALSE) = FALSE
+    `,
+    [userId]
+  );
+
+  if (!rows.length) {
+    throw new AppError('User not found.', 404);
+  }
+
+  const user = rows[0];
+  validateSessionForRequest(session, user.request_id);
+
+  const { deleteResourcesInsideRG, deleteUserResourcesInSharedRG } = require('./resourceCleanupService');
+
+  let deleted = [];
+
+  if (user.costing_mode === 'per_user' && user.azure_resource_group_name) {
+    deleted = await deleteResourcesInsideRG(user.azure_resource_group_name);
+  } else if (user.costing_mode === 'shared' && user.shared_resource_group_name) {
+    deleted = await deleteUserResourcesInSharedRG(
+      user.shared_resource_group_name,
+      user.azure_user_id
+    );
+  }
+
+  await db.query(
+    `
+      INSERT INTO resource_cleanup_logs (request_id, ran_at, resources_deleted, user_count, status)
+      VALUES ($1, NOW(), $2, 1, 'success')
+    `,
+    [user.request_id, JSON.stringify(deleted)]
+  );
+
+  logManagePortalEvent('info', 'manual_cleanup_triggered', {
+    userId,
+    deletedCount: deleted.length
+  });
+
+  return {
+    deletedCount: deleted.length,
+    deleted
+  };
+};
+
 module.exports = {
   deletePortalUser,
   deletePortalUserByOrgAdmin,
@@ -1541,9 +1812,13 @@ module.exports = {
   endPortalUserUsageSession,
   getAzureConsoleLaunch,
   getPortalUserUsageStatus,
+  getUserControlsForRequest,
   issueAccessPortalTokenForRequest,
   listPortalUsers,
+  renewUserBudget,
   requireSession,
+  triggerUserCleanup,
   updatePortalUserRoles,
-  updatePortalUserRolesByOrgAdmin
+  updatePortalUserRolesByOrgAdmin,
+  updateUserCleanupSettings
 };

@@ -1,5 +1,6 @@
 const db = require('../db/postgres');
 const { DateTime } = require('luxon');
+const { ResourceManagementClient } = require('@azure/arm-resources');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const AppError = require('../utils/AppError');
 const adminAuthService = require('./adminAuthService');
@@ -11,6 +12,83 @@ const { getStagingResourceGroups, getResourceGroupNameForUser } = require('./use
 const { attachLiveUsageToUsers } = require('./userLiveUsageService');
 const { getResourceGroupCosts } = require('./azureCostManagementService');
 const { formatMinutes } = require('../utils/formatMinutes');
+const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+
+let armClient = null;
+
+const getArmClient = () => {
+  if (armClient) {
+    return armClient;
+  }
+
+  const azureConfig = validateAzureEnv();
+  const credential = createAzureCredential(azureConfig);
+  armClient = new ResourceManagementClient(credential, azureConfig.subscriptionId);
+  return armClient;
+};
+
+const countResourcesInResourceGroup = async (resourceGroupName) => {
+  const normalizedName = String(resourceGroupName || '').trim();
+  if (!normalizedName) {
+    return 0;
+  }
+
+  try {
+    const client = getArmClient();
+    let count = 0;
+
+    for await (const _ of client.resources.listByResourceGroup(normalizedName)) {
+      count += 1;
+    }
+
+    return count;
+  } catch {
+    return 0;
+  }
+};
+
+const getLiveResourceCountsByUser = async (users, sharedResourceGroup) => {
+  const countsByUser = new Map();
+  const countsByRg = new Map();
+  const rgNameByKey = new Map();
+
+  for (const user of users) {
+    const rgName = user.azure_resource_group_name || sharedResourceGroup;
+    if (rgName) {
+      rgNameByKey.set(String(rgName).toLowerCase(), rgName);
+    }
+  }
+
+  await Promise.all(
+    [...rgNameByKey.entries()].map(async ([rgKey, rgName]) => {
+      countsByRg.set(rgKey, await countResourcesInResourceGroup(rgName));
+    })
+  );
+
+  for (const user of users) {
+    const rgName = user.azure_resource_group_name || sharedResourceGroup;
+    const rgKey = rgName ? String(rgName).toLowerCase() : '';
+    countsByUser.set(user.id, countsByRg.get(rgKey) ?? 0);
+  }
+
+  return countsByUser;
+};
+
+const deriveUserDisplayStatus = ({ azureAccountEnabled, budgetExceeded, hasOpenSession, expiryDate }) => {
+  if (azureAccountEnabled === false || budgetExceeded === true) {
+    return 'Blocked';
+  }
+
+  if (hasOpenSession) {
+    return 'Active';
+  }
+
+  if (expiryDate && new Date(expiryDate) < new Date()) {
+    return 'Expired';
+  }
+
+  return 'Created';
+};
 
 const mapUserUsage = (row) => {
   const access = evaluateUsageAccess({
@@ -24,14 +102,17 @@ const mapUserUsage = (row) => {
       blocked_until: row.blocked_until,
       last_reset_date: row.last_reset_date
     },
-    currentSessionMinutes: Number(row.active_session_minutes || 0)
+    currentSessionMinutes: 0
   });
+
+  const roles = Array.isArray(row.roles) ? row.roles : [];
 
   return {
     id: row.id,
     username: row.username,
     azureUserId: row.azure_user_id,
-    status: row.status,
+    status: row.display_status || row.status,
+    displayStatus: row.display_status || row.status,
     createdAt: row.created_at,
     expiryDate: row.expiry_date,
     enableDailyUsage: row.enable_daily_usage === true,
@@ -39,10 +120,26 @@ const mapUserUsage = (row) => {
     usedTodayMinutes: Number(access.usedMinutes || 0),
     remainingMinutes: access.remainingMinutes,
     blockedUntil: row.blocked_until,
-    hasActiveSession: Number(row.active_session_count || 0) > 0,
+    hasActiveSession: false,
+    sessionActive: false,
+    sessionStartedAt: null,
     lastLoginAt: row.last_login_at,
     resourceGroup: row.azure_resource_group_name || null,
-    roles: row.roles || []
+    roles,
+    azureAccountEnabled: row.azure_account_enabled !== false,
+    budgetExceeded: row.budget_exceeded === true,
+    perUserBudgetUsd:
+      row.per_user_budget_usd != null ? Number(row.per_user_budget_usd) : null,
+    azureCostMtd: Number(row.azure_cost_mtd || 0),
+    azureCostLifetime: Number(row.azure_cost_lifetime || 0),
+    totalBudget: row.total_budget != null ? Number(row.total_budget) : null,
+    costCurrency: row.cost_currency || 'USD',
+    lastCostSyncedAt: row.last_synced_at || null,
+    todayMinutes: 0,
+    lifetimeMinutes: 0,
+    todayFormatted: '0m',
+    lifetimeFormatted: '0m',
+    liveResourceCount: 0
   };
 };
 
@@ -145,51 +242,47 @@ const getResourceGroupDetail = async (requestId) => {
         au.blocked_until,
         au.last_reset_date,
         au.azure_resource_group_name,
+        au.azure_account_enabled,
+        au.budget_exceeded,
         r.expiry_date,
         r.enable_daily_usage,
         r.daily_limit_minutes,
         r.usage_schedule,
-        COUNT(uus.id) FILTER (WHERE uus.logout_at IS NULL) AS active_session_count,
-        MAX(uus.login_at) AS last_login_at,
+        r.per_user_budget_usd,
+        COALESCE(ubs.current_spend, 0) AS azure_cost_mtd,
+        COALESCE(ubs.current_spend, 0) AS azure_cost_lifetime,
         COALESCE(
-          SUM(
-            CASE
-              WHEN uus.logout_at IS NULL
-                THEN EXTRACT(EPOCH FROM (NOW() - uus.login_at)) / 60
-              ELSE 0
-            END
-          ),
-          0
-        ) AS active_session_minutes,
+          ubs.budget_amount,
+          r.per_user_budget_usd + COALESCE(au.budget_top_up_usd, 0)
+        ) AS total_budget,
+        ubs.currency AS cost_currency,
+        ubs.last_synced_at,
+        (
+          SELECT MAX(uus.login_at)
+          FROM user_usage_sessions uus
+          WHERE uus.request_id = au.request_id
+            AND uus.user_id = au.id
+        ) AS last_login_at,
         COALESCE(
-          json_agg(
-            DISTINCT jsonb_build_object(
-              'role', ura.azure_role,
-              'scope', ura.scope
+          (
+            SELECT json_agg(
+              jsonb_build_object(
+                'role', ura.azure_role,
+                'scope', ura.scope
+              )
             )
-          ) FILTER (WHERE ura.azure_role IS NOT NULL),
+            FROM user_role_assignments ura
+            WHERE ura.request_id = au.request_id
+              AND ura.user_id = au.id
+              AND ura.azure_role IS NOT NULL
+          ),
           '[]'::json
         ) AS roles
       FROM azure_users au
       JOIN requests r ON r.id = au.request_id
-      LEFT JOIN user_usage_sessions uus ON uus.request_id = au.request_id AND uus.user_id = au.id
-      LEFT JOIN user_role_assignments ura ON ura.request_id = au.request_id AND ura.user_id = au.id
+      LEFT JOIN user_budget_spend ubs ON ubs.azure_user_id = au.id
       WHERE au.request_id = $1
         AND COALESCE(au.is_deleted, false) = false
-      GROUP BY
-        au.id,
-        au.username,
-        au.azure_user_id,
-        au.status,
-        au.created_at,
-        au.used_today_minutes,
-        au.blocked_until,
-        au.last_reset_date,
-        au.azure_resource_group_name,
-        r.expiry_date,
-        r.enable_daily_usage,
-        r.daily_limit_minutes,
-        r.usage_schedule
       ORDER BY au.created_at DESC
     `,
     [requestId]
@@ -199,12 +292,41 @@ const getResourceGroupDetail = async (requestId) => {
     ? await getStagingResourceGroups(requestId)
     : [];
 
+  const liveResourceCountByUser = await getLiveResourceCountsByUser(
+    usersResult.rows,
+    request.azure_resource_group_name
+  );
+
   const mappedUsers = usersResult.rows.map(mapUserUsage);
-  const { users, liveSummary } = await attachLiveUsageToUsers(
+  const { users: enrichedUsers, liveSummary } = await attachLiveUsageToUsers(
     requestId,
     mappedUsers,
-    request.location
+    request.location,
+    { liveResourceCountByUser }
   );
+
+  const users = enrichedUsers.map((user) => {
+    const todayMinutes = Math.round(Number(user.todayMinutes || 0));
+    const lifetimeMinutes = Math.round(Number(user.totalMinutesSpent || 0));
+    const displayStatus = deriveUserDisplayStatus({
+      azureAccountEnabled: user.azureAccountEnabled,
+      budgetExceeded: user.budgetExceeded,
+      hasOpenSession: user.hasActiveSession === true,
+      expiryDate: user.expiryDate
+    });
+
+    return {
+      ...user,
+      status: displayStatus,
+      displayStatus,
+      todayMinutes,
+      lifetimeMinutes,
+      todayFormatted: formatMinutes(todayMinutes),
+      lifetimeFormatted: formatMinutes(lifetimeMinutes),
+      hasActiveSession: user.hasActiveSession === true,
+      sessionActive: user.hasActiveSession === true
+    };
+  });
 
   return {
     request: {
@@ -625,6 +747,24 @@ const getDailyUsageForRequest = async (requestId) => {
   };
 };
 
+const listAzureRoles = () => [
+  { name: 'Owner', definitionId: '8e3af657-a8ff-443c-a75c-2fe8c4bcb635' },
+  { name: 'Contributor', definitionId: 'b24988ac-6180-42a0-ab88-20f7382dd24c' },
+  { name: 'Reader', definitionId: 'acdd72a7-3385-48ef-bd42-f606fba81ae7' },
+  { name: 'Virtual Machine Contributor', definitionId: '9980e02c-c2be-4d73-94e8-173b1dc7cf3c' },
+  {
+    name: 'Virtual Machine Administrator Login',
+    definitionId: '1c0163c0-47e6-4577-8991-ea5c82e286e4'
+  },
+  { name: 'Storage Blob Data Contributor', definitionId: 'ba92f5b4-2d11-453d-a403-e96b0029c9fe' },
+  { name: 'Storage Account Contributor', definitionId: '17d1049b-9a84-46fb-8f53-869881c3d3ab' },
+  { name: 'SQL DB Contributor', definitionId: '9b7fa17d-e63e-47b0-bb0a-15c516ac86ec' },
+  { name: 'AKS Cluster User Role', definitionId: '4abbcc35-e782-43d8-92c5-2d3f1bd2253f' },
+  { name: 'Key Vault Contributor', definitionId: 'f25e0fa2-a7c8-4b68-b2c4-4e531fbf2015' },
+  { name: 'Network Contributor', definitionId: '4d97b98b-1d4f-4787-a291-c67834d212e7' },
+  { name: 'Monitoring Reader', definitionId: '43d0d8ad-25c7-4714-9337-8ba259a9fe05' }
+];
+
 module.exports = {
   login,
   listResourceGroups,
@@ -636,5 +776,6 @@ module.exports = {
   listAccessRequests,
   reviewAccessRequest,
   getUserAzureCost,
-  getDailyUsageForRequest
+  getDailyUsageForRequest,
+  listAzureRoles
 };

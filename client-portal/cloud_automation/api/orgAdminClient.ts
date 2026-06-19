@@ -1,6 +1,8 @@
 import { ORG_ADMIN_API_PREFIX } from '../constants';
 import type {
   OrgAdminAccessRequest,
+  OrgAdminAzureRoleOption,
+  OrgAdminAzureRolesResponse,
   OrgAdminDailyUsageResponse,
   OrgAdminErrorKind,
   OrgAdminLoginResponse,
@@ -190,6 +192,15 @@ export async function getOrgDailyUsage(
     `/resource-groups/${encodeURIComponent(requestId)}/daily-usage`,
     { sessionToken }
   );
+}
+
+export async function listOrgAzureRoles(
+  sessionToken: string
+): Promise<OrgAdminAzureRoleOption[]> {
+  const response = await orgAdminRequest<OrgAdminAzureRolesResponse>('/azure/roles', {
+    sessionToken,
+  });
+  return response.data ?? [];
 }
 
 export async function listOrgAccessRequests(

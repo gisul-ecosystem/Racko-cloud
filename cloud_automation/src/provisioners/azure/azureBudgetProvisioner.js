@@ -97,6 +97,52 @@ const createUserBudget = async ({
   };
 };
 
+const updateUserBudgetAmount = async ({ resourceGroupName, userId, newBudgetAmount, endDate }) => {
+  const { consumptionClient, subscriptionId } = createBudgetClients();
+  const resourceGroupScope = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}`;
+  const budgetName = `racko-budget-${userId}`;
+
+  let existingBudget;
+
+  try {
+    existingBudget = await consumptionClient.budgets.get(resourceGroupScope, budgetName);
+  } catch (error) {
+    const code = String(error?.code || error?.statusCode || '').toLowerCase();
+    if (code.includes('notfound') || code === '404') {
+      console.warn(
+        JSON.stringify({
+          service: 'azure-budget-provisioner',
+          event: 'budget_not_found_for_update',
+          userId,
+          resourceGroupName
+        })
+      );
+      return;
+    }
+
+    throw error;
+  }
+
+  await consumptionClient.budgets.createOrUpdate(resourceGroupScope, budgetName, {
+    ...existingBudget,
+    amount: newBudgetAmount,
+    timePeriod: {
+      ...existingBudget.timePeriod,
+      endDate: toBudgetPeriodEndDate(endDate)
+    }
+  });
+
+  console.log(
+    JSON.stringify({
+      service: 'azure-budget-provisioner',
+      event: 'budget_amount_updated',
+      userId,
+      resourceGroupName,
+      newBudgetAmount
+    })
+  );
+};
+
 const deleteUserBudget = async ({ resourceGroupName, userId }) => {
   const { consumptionClient, monitorClient, subscriptionId } = createBudgetClients();
   const resourceGroupScope = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}`;
@@ -124,5 +170,6 @@ const deleteUserBudget = async ({ resourceGroupName, userId }) => {
 
 module.exports = {
   createUserBudget,
-  deleteUserBudget
+  deleteUserBudget,
+  updateUserBudgetAmount
 };
