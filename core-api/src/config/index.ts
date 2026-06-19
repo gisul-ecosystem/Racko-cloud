@@ -84,6 +84,9 @@ const envSchema = z.object({
     .transform((v) => v === 'true'),
   VM_POLL_NETWORK_RETRY_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
   VM_POLL_NETWORK_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('5000'),
+  // Retry clone when Proxmox returns "no worker upid" (transient worker exhaustion)
+  VM_CLONE_WORKER_RETRY_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('3'),
+  VM_CLONE_WORKER_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('15000'),
 
   // Resource Alert Thresholds
   ALERT_CPU_WARNING: z.string().regex(/^\d+$/).transform(Number).default('70'),

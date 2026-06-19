@@ -16,6 +16,7 @@ import {
   resolveCloneErrorMessage,
   summarizeDiskPlacement,
 } from './cloneDiagnostics';
+import { withCloneWorkerRetry } from './cloneWorkerRetry';
 import type { IVMJob } from '../vmJob.model';
 
 let seedVmidMutex = Promise.resolve();
@@ -91,100 +92,106 @@ async function cloneSeedVm(params: {
     });
   }
 
-  await new Promise<void>((resolve, reject) => {
-    seedVmidMutex = seedVmidMutex.then(async () => {
-      try {
-        const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-        vmid = response.data.data;
+  // Wraps VMID allocation + clone POST + task poll with worker-retry logic.
+  // Each retry allocates a fresh VMID via the mutex to avoid conflicts.
+  await withCloneWorkerRetry(async () => {
+    await new Promise<void>((resolve, reject) => {
+      seedVmidMutex = seedVmidMutex.then(async () => {
+        try {
+          const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
+          vmid = response.data.data;
 
-        const cloneBody: Record<string, unknown> = {
-          newid: vmid,
-          name: params.vmName,
-          full: 1,
-          target: params.node,
-        };
-        if (storagePool) cloneBody['storage'] = storagePool;
+          const cloneBody: Record<string, unknown> = {
+            newid: vmid,
+            name: params.vmName,
+            full: 1,
+            target: params.node,
+          };
+          if (storagePool) cloneBody['storage'] = storagePool;
 
-        const cloneEndpoint = `/nodes/${params.node}/qemu/${params.sourceTemplateId}/clone`;
-        bulkCloneDiagLog('golden seed — sending clone request', {
-          jobId: params.jobId,
-          clonePath: 'golden_seed',
-          node: params.node,
-          sourceTemplateId: params.sourceTemplateId,
-          newVmid: vmid,
-          vmName: params.vmName,
-          cloneEndpoint,
-          cloneBody,
-          storagePoolSelected: storagePool ?? null,
-        });
+          const cloneEndpoint = `/nodes/${params.node}/qemu/${params.sourceTemplateId}/clone`;
+          bulkCloneDiagLog('golden seed — sending clone request', {
+            jobId: params.jobId,
+            clonePath: 'golden_seed',
+            node: params.node,
+            sourceTemplateId: params.sourceTemplateId,
+            newVmid: vmid,
+            vmName: params.vmName,
+            cloneEndpoint,
+            cloneBody,
+            storagePoolSelected: storagePool ?? null,
+          });
 
-        goldenLog('1/8 clone-seed', 'sending clone request', {
-          jobId: params.jobId,
-          node: params.node,
-          sourceTemplateId: params.sourceTemplateId,
-          newVmid: vmid,
-          vmName: params.vmName,
-          cloneBody,
-        });
+          goldenLog('1/8 clone-seed', 'sending clone request', {
+            jobId: params.jobId,
+            node: params.node,
+            sourceTemplateId: params.sourceTemplateId,
+            newVmid: vmid,
+            vmName: params.vmName,
+            cloneBody,
+          });
 
-        const cloneResponse = await proxmoxClient.post<{ data: string }>(
-          cloneEndpoint,
-          cloneBody
-        );
-        cloneUpid = cloneResponse.data.data;
-        bulkCloneDiagLog('golden seed — clone task started', {
-          jobId: params.jobId,
-          clonePath: 'golden_seed',
-          vmid,
-          node: params.node,
-          upid: cloneUpid,
-        });
-        goldenLog('1/8 clone-seed', 'clone task started', {
-          jobId: params.jobId,
-          vmid,
-          node: params.node,
-          upid: cloneUpid,
-        });
-        resolve();
-      } catch (err) {
-        const proxmoxError = resolveCloneErrorMessage(err);
-        bulkCloneDiagLog('golden seed — clone request failed', {
-          jobId: params.jobId,
-          clonePath: 'golden_seed',
-          node: params.node,
-          sourceTemplateId: params.sourceTemplateId,
-          proxmoxError,
-        });
-        goldenLog('1/8 clone-seed', 'clone request failed', {
-          jobId: params.jobId,
-          node: params.node,
-          sourceTemplateId: params.sourceTemplateId,
-          error: proxmoxError,
-        });
-        reject(err);
-      }
+          const cloneResponse = await proxmoxClient.post<{ data: string }>(
+            cloneEndpoint,
+            cloneBody
+          );
+          cloneUpid = cloneResponse.data.data;
+          bulkCloneDiagLog('golden seed — clone task started', {
+            jobId: params.jobId,
+            clonePath: 'golden_seed',
+            vmid,
+            node: params.node,
+            upid: cloneUpid,
+          });
+          goldenLog('1/8 clone-seed', 'clone task started', {
+            jobId: params.jobId,
+            vmid,
+            node: params.node,
+            upid: cloneUpid,
+          });
+          resolve();
+        } catch (err) {
+          const proxmoxError = resolveCloneErrorMessage(err);
+          bulkCloneDiagLog('golden seed — clone request failed', {
+            jobId: params.jobId,
+            clonePath: 'golden_seed',
+            node: params.node,
+            sourceTemplateId: params.sourceTemplateId,
+            proxmoxError,
+          });
+          goldenLog('1/8 clone-seed', 'clone request failed', {
+            jobId: params.jobId,
+            node: params.node,
+            sourceTemplateId: params.sourceTemplateId,
+            error: proxmoxError,
+          });
+          reject(err);
+        }
+      });
     });
-  });
 
-  const cloneResult = await pollTaskWithCleanup(cloneUpid, params.node, vmid, true);
-  bulkCloneDiagLog('golden seed — clone task finished', {
-    jobId: params.jobId,
-    clonePath: 'golden_seed',
-    vmid,
-    node: params.node,
-    upid: cloneUpid,
-    outcome: cloneResult,
-  });
-  goldenLog('1/8 clone-seed', 'clone task finished', {
-    jobId: params.jobId,
-    vmid,
-    node: params.node,
-    upid: cloneUpid,
-    outcome: cloneResult,
-  });
-  if (cloneResult !== 'success') {
-    throw new Error(`Golden seed clone failed (outcome: ${cloneResult}).`);
-  }
+    // Poll inside the retry wrapper — a worker error here triggers a retry
+    // with a brand-new VMID on the next iteration.
+    const cloneResult = await pollTaskWithCleanup(cloneUpid, params.node, vmid, true);
+    bulkCloneDiagLog('golden seed — clone task finished', {
+      jobId: params.jobId,
+      clonePath: 'golden_seed',
+      vmid,
+      node: params.node,
+      upid: cloneUpid,
+      outcome: cloneResult,
+    });
+    goldenLog('1/8 clone-seed', 'clone task finished', {
+      jobId: params.jobId,
+      vmid,
+      node: params.node,
+      upid: cloneUpid,
+      outcome: cloneResult,
+    });
+    if (cloneResult !== 'success') {
+      throw new Error(`Golden seed clone failed (outcome: ${cloneResult}).`);
+    }
+  }, { jobId: params.jobId, vmName: params.vmName, node: params.node });
 
   try {
     const seedDiag = await fetchSourceVmDiagnostics(params.node, vmid);

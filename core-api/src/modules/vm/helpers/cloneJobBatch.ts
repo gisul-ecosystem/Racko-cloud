@@ -15,6 +15,7 @@ import { VMJob } from '../vmJob.model';
 import { VMEvent } from '../vmEvent.model';
 import { pollTaskWithCleanup } from './taskPoller';
 import { resolveCloneErrorMessage, shouldAttemptConnectivityReroute } from './cloneDiagnostics';
+import { withCloneWorkerRetry } from './cloneWorkerRetry';
 import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
 import type { BulkVMSpec } from '../vm.types';
 import type { IVMJob } from '../vmJob.model';
@@ -134,6 +135,7 @@ export async function finalizeCloneJobStatus(jobId: mongoose.Types.ObjectId): Pr
 async function createClonedVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId> {
   let vmid!: number;
   let cloneUpid!: string;
+  let cloneResult: import('./proxmoxTaskPoll').PollResult = 'unknown';
 
   // Storage pool selection — prefer shared storage (Ceph/NFS) for live-migration support
   const nodeStorageResp = await proxmoxClient.get<{
@@ -147,42 +149,47 @@ async function createClonedVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
   const local = eligible.filter((s) => s.shared !== 1).sort((a, b) => b.avail - a.avail);
   const storagePool = (shared[0] ?? local[0])?.storage;
 
-  // VMID mutex — one at a time to avoid duplicate IDs
-  await new Promise<void>((resolve, reject) => {
-    vmidMutex = vmidMutex.then(async () => {
-      try {
-        const nextIdResp = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-        vmid = nextIdResp.data.data;
+  // Wraps VMID allocation + clone POST + task poll with worker-retry logic.
+  // Each retry allocates a fresh VMID via the mutex to avoid conflicts.
+  await withCloneWorkerRetry(async () => {
+    await new Promise<void>((resolve, reject) => {
+      vmidMutex = vmidMutex.then(async () => {
+        try {
+          const nextIdResp = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
+          vmid = nextIdResp.data.data;
 
-        logger.info('[CloneJob] Starting Proxmox clone', {
-          jobId: spec.jobId.toString(),
-          sourceVmid: spec.templateId,
-          newVmid: vmid,
-          node: spec.node,
-          name: spec.vmName,
-        });
+          logger.info('[CloneJob] Starting Proxmox clone', {
+            jobId: spec.jobId.toString(),
+            sourceVmid: spec.templateId,
+            newVmid: vmid,
+            node: spec.node,
+            name: spec.vmName,
+          });
 
-        const cloneBody: Record<string, unknown> = {
-          newid: vmid,
-          name: spec.vmName,
-          full: 1,                  // always full/dedicated clone
-          target: spec.node,
-        };
-        if (storagePool) cloneBody['storage'] = storagePool;
+          const cloneBody: Record<string, unknown> = {
+            newid: vmid,
+            name: spec.vmName,
+            full: 1,                  // always full/dedicated clone
+            target: spec.node,
+          };
+          if (storagePool) cloneBody['storage'] = storagePool;
 
-        const cloneResp = await proxmoxClient.post<{ data: string }>(
-          `/nodes/${spec.node}/qemu/${spec.templateId}/clone`,
-          cloneBody
-        );
-        cloneUpid = cloneResp.data.data;
-        resolve();
-      } catch (err) {
-        reject(err);
-      }
+          const cloneResp = await proxmoxClient.post<{ data: string }>(
+            `/nodes/${spec.node}/qemu/${spec.templateId}/clone`,
+            cloneBody
+          );
+          cloneUpid = cloneResp.data.data;
+          resolve();
+        } catch (err) {
+          reject(err);
+        }
+      });
     });
-  });
 
-  const cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+    // Poll inside the retry wrapper — a worker error here triggers a retry
+    // with a brand-new VMID on the next iteration.
+    cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+  }, { jobId: spec.jobId.toString(), vmName: spec.vmName, node: spec.node });
 
   if (cloneResult === 'unknown') {
     logger.warn('[CloneJob] Clone task outcome unknown — saving VM as creating for reconciliation', {
