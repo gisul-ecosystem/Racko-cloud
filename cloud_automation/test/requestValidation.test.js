@@ -154,6 +154,92 @@ test('validateRequestPayload rejects invalid costing mode', () => {
   );
 });
 
+test('validateRequestPayload requires cleanup interval when cleanup is enabled', () => {
+  expectValidationError(
+    () => validateRequestPayload({ ...validPayload, cleanupEnabled: true }),
+    'Cleanup interval is required when schedule cleanup is enabled'
+  );
+});
+
+test('validateRequestPayload accepts scheduled cleanup fields', () => {
+  assert.doesNotThrow(() =>
+    validateRequestPayload({
+      ...validPayload,
+      cleanupEnabled: true,
+      cleanupIntervalHours: 2,
+      perUserBudgetUsd: 50
+    })
+  );
+});
+
+test('validateRequestPayload rejects invalid per-user budget', () => {
+  expectValidationError(
+    () => validateRequestPayload({ ...validPayload, perUserBudgetUsd: 0 }),
+    'perUserBudgetUsd'
+  );
+});
+
+test('validateRequestPayload requires resource cleanup interval when enabled', () => {
+  expectValidationError(
+    () => validateRequestPayload({ ...validPayload, resourceCleanupEnabled: true }),
+    'Cleanup interval is required when resource cleanup is enabled'
+  );
+});
+
+test('validateRequestPayload accepts resource cleanup and usage windows', () => {
+  assert.doesNotThrow(() =>
+    validateRequestPayload({
+      ...validPayload,
+      resourceCleanupEnabled: true,
+      resourceCleanupIntervalHours: 2,
+      usageWindows: [
+        {
+          day_of_week: 1,
+          window_start_time: '09:00',
+          window_end_time: '17:00',
+          timezone: 'Asia/Kolkata',
+          daily_limit_hours: 4
+        }
+      ]
+    })
+  );
+});
+
+test('validateRequestPayload rejects invalid daily_limit_hours', () => {
+  expectValidationError(
+    () =>
+      validateRequestPayload({
+        ...validPayload,
+        usageWindows: [
+          {
+            day_of_week: 1,
+            window_start_time: '09:00',
+            window_end_time: '17:00',
+            daily_limit_hours: 25
+          }
+        ]
+      }),
+    'daily_limit_hours must be a positive number up to 24'
+  );
+});
+
+test('validateRequestPayload rejects invalid usage window times', () => {
+  expectValidationError(
+    () =>
+      validateRequestPayload({
+        ...validPayload,
+        usageWindows: [
+          {
+            day_of_week: 1,
+            window_start_time: '18:00',
+            window_end_time: '09:00'
+          }
+        ]
+      }),
+    'window_end_time must be after window_start_time'
+  );
+});
+
 test('getZonedParts resolves weekday in timezone', () => {
   const parts = getZonedParts(new Date('2026-06-15T15:00:00Z'), 'UTC');
   assert.equal(parts.weekday, 'monday');

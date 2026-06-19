@@ -229,6 +229,8 @@ export function OrgAdminPortal() {
                       <OrgAdminUsersTable
                         users={users}
                         request={requestDetail}
+                        requestId={selectedRequestId}
+                        sessionToken={session!.sessionToken}
                         loading={detailLoading}
                         selectedUserId={selectedUserId}
                         saving={saving}

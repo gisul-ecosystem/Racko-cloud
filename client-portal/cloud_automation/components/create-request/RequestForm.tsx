@@ -1,7 +1,7 @@
 'use client';
 
-import { AlertCircle, ChevronDown, Clock, Plus, Shield, X } from 'lucide-react';
-import { COMMON_TIMEZONES, WEEKDAY_INITIALS, WEEKDAY_LABELS, WEEKDAYS } from '../../constants';
+import { AlertCircle, ChevronDown, Shield } from 'lucide-react';
+import { COMMON_TIMEZONES } from '../../constants';
 import type {
   AvailableInstance,
   AvailableLocation,
@@ -9,12 +9,11 @@ import type {
   SelectedRole,
   ServiceCatalogResponse,
   SelectedInstance,
-  UsageSchedule,
+  UsageWindow,
   CostingMode,
 } from '../../types/catalog';
 import {
   catalogInstancesForServices,
-  copyMondayScheduleToWeekdays,
   formatInstanceGuide,
   isCustomerDetailsComplete,
   normalizeServiceId,
@@ -27,18 +26,17 @@ const inputClass =
 const timeInputClass =
   'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
 
-const iconButtonClass =
-  'inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 transition hover:border-gray-300 hover:text-gray-900';
-
 const labelClass = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500';
 
-function minutesToHours(minutes: number): number {
-  return Math.max(1, Math.round(minutes / 60));
-}
-
-function hoursToMinutes(hours: number): number {
-  return Math.max(60, Math.round(hours * 60));
-}
+const USAGE_WINDOW_DAYS = [
+  'Sunday',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+] as const;
 
 interface RequestFormProps {
   catalog: ServiceCatalogResponse;
@@ -65,10 +63,16 @@ interface RequestFormProps {
   onStartDateChange: (value: string) => void;
   endDate: string;
   onEndDateChange: (value: string) => void;
-  enableDailyUsage: boolean;
-  onEnableDailyUsageChange: (value: boolean) => void;
-  usageSchedule: UsageSchedule;
-  onUsageScheduleChange: (schedule: UsageSchedule) => void;
+  usageWindows: UsageWindow[];
+  onUsageWindowsChange: (windows: UsageWindow[]) => void;
+  usageWindowTimezone: string;
+  onUsageWindowTimezoneChange: (value: string) => void;
+  resourceCleanupEnabled: boolean;
+  onResourceCleanupEnabledChange: (value: boolean) => void;
+  resourceCleanupIntervalHours?: number;
+  onResourceCleanupIntervalHoursChange: (value: number | undefined) => void;
+  perUserBudgetUsd?: number;
+  onPerUserBudgetUsdChange: (value: number | undefined) => void;
   adminAccessOpen: boolean;
   onAdminAccessOpenChange: (value: boolean) => void;
   adminAccessServiceId: number | null;
@@ -151,10 +155,16 @@ export function RequestForm({
   onStartDateChange,
   endDate,
   onEndDateChange,
-  enableDailyUsage,
-  onEnableDailyUsageChange,
-  usageSchedule,
-  onUsageScheduleChange,
+  usageWindows,
+  onUsageWindowsChange,
+  usageWindowTimezone,
+  onUsageWindowTimezoneChange,
+  resourceCleanupEnabled,
+  onResourceCleanupEnabledChange,
+  resourceCleanupIntervalHours,
+  onResourceCleanupIntervalHoursChange,
+  perUserBudgetUsd,
+  onPerUserBudgetUsdChange,
   adminAccessOpen,
   onAdminAccessOpenChange,
   adminAccessServiceId,
@@ -186,58 +196,30 @@ export function RequestForm({
   const showLocations =
     showPermissions && rolesComplete(catalog, selectedServiceIds, resolvedRoles);
 
-  const updateDay = (
-    day: (typeof WEEKDAYS)[number],
-    patch: Partial<UsageSchedule['days'][string]>
-  ) => {
-    onUsageScheduleChange({
-      ...usageSchedule,
-      days: {
-        ...usageSchedule.days,
-        [day]: { ...usageSchedule.days[day], ...patch },
-      },
-    });
-  };
-
-  const enableDay = (day: (typeof WEEKDAYS)[number]) => {
-    updateDay(day, {
-      enabled: true,
-      limitMinutes: usageSchedule.days[day]?.limitMinutes || 120,
-      slots: [{ start: '09:00', end: '17:00' }],
-    });
-  };
-
-  const updateSlot = (
-    day: (typeof WEEKDAYS)[number],
-    slotIndex: number,
-    patch: Partial<{ start: string; end: string }>
-  ) => {
-    const config = usageSchedule.days[day];
-    if (!config) return;
-    const slots = config.slots.map((slot, index) =>
-      index === slotIndex ? { ...slot, ...patch } : slot
+  const updateUsageWindowDay = (dayIndex: number, patch: Partial<UsageWindow>) => {
+    onUsageWindowsChange(
+      usageWindows.map((window) =>
+        window.day_of_week === dayIndex ? { ...window, ...patch } : window
+      )
     );
-    updateDay(day, { slots });
   };
 
-  const addSlot = (day: (typeof WEEKDAYS)[number]) => {
-    const config = usageSchedule.days[day];
-    if (!config) return;
-    updateDay(day, {
-      enabled: true,
-      slots: [...config.slots, { start: '09:00', end: '17:00' }],
-    });
-  };
-
-  const removeSlot = (day: (typeof WEEKDAYS)[number], slotIndex: number) => {
-    const config = usageSchedule.days[day];
-    if (!config) return;
-    const slots = config.slots.filter((_, index) => index !== slotIndex);
-    if (slots.length === 0) {
-      updateDay(day, { enabled: false, slots: [], limitMinutes: 0 });
+  const toggleUsageWindowDay = (dayIndex: number, enabled: boolean) => {
+    if (!enabled) {
+      onUsageWindowsChange(usageWindows.filter((window) => window.day_of_week !== dayIndex));
       return;
     }
-    updateDay(day, { slots });
+
+    onUsageWindowsChange([
+      ...usageWindows.filter((window) => window.day_of_week !== dayIndex),
+      {
+        day_of_week: dayIndex,
+        window_start_time: '09:00',
+        window_end_time: '17:00',
+        timezone: usageWindowTimezone,
+        daily_limit_hours: undefined,
+      },
+    ]);
   };
 
   return (
@@ -349,173 +331,211 @@ export function RequestForm({
         </div>
       </section>
 
-      {/* Step 2: Daily usage limits */}
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Daily usage limits</h2>
-            <p className="mt-0.5 text-xs text-gray-400">
-              Set weekly access windows and per-day usage limits for provisioned Azure access
-            </p>
-          </div>
+          <h2 className="text-sm font-semibold text-gray-900">Daily usage windows</h2>
+          <p className="mt-0.5 text-xs text-gray-400">
+            Set which days and hours lab users can access Azure
+          </p>
 
-          <label className="mt-4 flex cursor-pointer items-center gap-3">
-            <input
-              type="checkbox"
-              checked={enableDailyUsage}
-              onChange={(event) => onEnableDailyUsageChange(event.target.checked)}
-              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
-            />
-            <span className="text-sm font-medium text-gray-900">Enable daily usage limit</span>
-          </label>
+          <div className="mt-4 space-y-3">
+            {USAGE_WINDOW_DAYS.map((day, index) => {
+              const existing = usageWindows.find((window) => window.day_of_week === index);
 
-          {enableDailyUsage && (
-            <div className="mt-5 space-y-4 border-t border-gray-100 pt-5">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-                <div className="sm:max-w-xs sm:flex-1">
-                  <label className={labelClass} htmlFor="usageTimezone">
-                    Time zone
-                  </label>
-                  <select
-                    id="usageTimezone"
-                    className={inputClass}
-                    value={usageSchedule.timezone}
-                    onChange={(event) =>
-                      onUsageScheduleChange({ ...usageSchedule, timezone: event.target.value })
-                    }
-                  >
-                    {COMMON_TIMEZONES.map((tz) => (
-                      <option key={tz} value={tz}>
-                        {tz.replace(/_/g, ' ')}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                <button
-                  type="button"
-                  onClick={() =>
-                    onUsageScheduleChange(copyMondayScheduleToWeekdays(usageSchedule))
-                  }
-                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+              return (
+                <div
+                  key={day}
+                  className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-3"
                 >
-                  Copy Monday to Tue–Fri
-                </button>
-              </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="flex min-w-[132px] cursor-pointer items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={Boolean(existing)}
+                        onChange={(event) => toggleUsageWindowDay(index, event.target.checked)}
+                        className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                      />
+                      <span className="text-sm font-medium text-gray-900">{day}</span>
+                    </label>
 
-              <div className="space-y-2">
-                {WEEKDAYS.map((day) => {
-                  const config = usageSchedule.days[day] ?? {
-                    enabled: false,
-                    limitMinutes: 0,
-                    slots: [],
-                  };
-
-                  return (
-                    <div
-                      key={day}
-                      className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-3"
-                    >
-                      <div className="flex flex-wrap items-center gap-3">
-                        <div className="flex min-w-[132px] items-center gap-2.5">
-                          <span className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#B91C1C] text-xs font-semibold text-white">
-                            {WEEKDAY_INITIALS[day]}
-                          </span>
-                          <span className="text-sm font-medium text-gray-900">
-                            {WEEKDAY_LABELS[day]}
-                          </span>
+                    {existing && (
+                      <div className="flex flex-1 flex-wrap items-center gap-3">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <input
+                            type="time"
+                            value={existing.window_start_time}
+                            onChange={(event) =>
+                              updateUsageWindowDay(index, { window_start_time: event.target.value })
+                            }
+                            className={timeInputClass}
+                            aria-label={`${day} start time`}
+                          />
+                          <span className="text-xs text-gray-400">to</span>
+                          <input
+                            type="time"
+                            value={existing.window_end_time}
+                            onChange={(event) =>
+                              updateUsageWindowDay(index, { window_end_time: event.target.value })
+                            }
+                            className={timeInputClass}
+                            aria-label={`${day} end time`}
+                          />
                         </div>
 
-                        {!config.enabled || config.slots.length === 0 ? (
-                          <div className="flex flex-1 items-center justify-between gap-3">
-                            <span className="text-sm text-gray-400">Unavailable</span>
-                            <button
-                              type="button"
-                              onClick={() => enableDay(day)}
-                              className={iconButtonClass}
-                              aria-label={`Enable ${WEEKDAY_LABELS[day]}`}
-                            >
-                              <Plus className="h-4 w-4" />
-                            </button>
-                          </div>
-                        ) : (
-                          config.slots.map((slot, slotIndex) => (
-                            <div
-                              key={`${day}-${slotIndex}`}
-                              className="flex flex-1 flex-wrap items-center gap-2"
-                            >
-                              <div className="flex items-center gap-2">
-                                <Clock className="hidden h-4 w-4 text-gray-400 sm:block" />
-                                <input
-                                  type="time"
-                                  value={slot.start}
-                                  onChange={(event) =>
-                                    updateSlot(day, slotIndex, { start: event.target.value })
-                                  }
-                                  className={timeInputClass}
-                                  aria-label={`${WEEKDAY_LABELS[day]} start time`}
-                                />
-                                <span className="text-xs text-gray-400">–</span>
-                                <input
-                                  type="time"
-                                  value={slot.end}
-                                  onChange={(event) =>
-                                    updateSlot(day, slotIndex, { end: event.target.value })
-                                  }
-                                  className={timeInputClass}
-                                  aria-label={`${WEEKDAY_LABELS[day]} end time`}
-                                />
-                              </div>
-
-                              {slotIndex === 0 && (
-                                <div className="flex items-center gap-1.5">
-                                  <span className="text-xs text-gray-500">Limit</span>
-                                  <input
-                                    type="number"
-                                    min={1}
-                                    max={24}
-                                    value={minutesToHours(config.limitMinutes)}
-                                    onChange={(event) =>
-                                      updateDay(day, {
-                                        limitMinutes: hoursToMinutes(Number(event.target.value)),
-                                      })
-                                    }
-                                    className="w-14 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900"
-                                    aria-label={`${WEEKDAY_LABELS[day]} daily limit in hours`}
-                                  />
-                                  <span className="text-xs text-gray-500">h</span>
-                                </div>
-                              )}
-
-                              <div className="ml-auto flex items-center gap-1">
-                                <button
-                                  type="button"
-                                  onClick={() => removeSlot(day, slotIndex)}
-                                  className={iconButtonClass}
-                                  aria-label={`Remove ${WEEKDAY_LABELS[day]} time window`}
-                                >
-                                  <X className="h-4 w-4" />
-                                </button>
-                                {slotIndex === config.slots.length - 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => addSlot(day)}
-                                    className={iconButtonClass}
-                                    aria-label={`Add ${WEEKDAY_LABELS[day]} time window`}
-                                  >
-                                    <Plus className="h-4 w-4" />
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))
-                        )}
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label className="text-xs font-medium text-gray-500" htmlFor={`daily-limit-${index}`}>
+                            Max hours/day
+                          </label>
+                          <input
+                            id={`daily-limit-${index}`}
+                            type="number"
+                            min={0.5}
+                            max={24}
+                            step={0.5}
+                            placeholder="No limit"
+                            value={existing.daily_limit_hours ?? ''}
+                            onChange={(event) =>
+                              updateUsageWindowDay(index, {
+                                daily_limit_hours: event.target.value
+                                  ? parseFloat(event.target.value)
+                                  : undefined,
+                              })
+                            }
+                            className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                          />
+                          {existing.daily_limit_hours ? (
+                            <span className="text-xs text-gray-400">
+                              Users blocked + resources deleted after {existing.daily_limit_hours}h of usage
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
-                    </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-4">
+            <label className={labelClass} htmlFor="usageWindowTimezone">
+              Timezone
+            </label>
+            <select
+              id="usageWindowTimezone"
+              className={inputClass}
+              value={usageWindowTimezone}
+              onChange={(event) => {
+                const timezone = event.target.value;
+                onUsageWindowTimezoneChange(timezone);
+                onUsageWindowsChange(
+                  usageWindows.map((window) => ({ ...window, timezone }))
+                );
+              }}
+            >
+              <option value="Asia/Kolkata">IST — Asia/Kolkata</option>
+              <option value="UTC">UTC</option>
+              <option value="America/New_York">EST — America/New_York</option>
+              <option value="America/Los_Angeles">PST — America/Los_Angeles</option>
+              <option value="Europe/London">GMT — Europe/London</option>
+              <option value="Asia/Dubai">GST — Asia/Dubai</option>
+              {COMMON_TIMEZONES.filter(
+                (tz) =>
+                  ![
+                    'Asia/Kolkata',
+                    'UTC',
+                    'America/New_York',
+                    'America/Los_Angeles',
+                    'Europe/London',
+                    'Asia/Dubai',
+                  ].includes(tz)
+              ).map((tz) => (
+                <option key={tz} value={tz}>
+                  {tz.replace(/_/g, ' ')}
+                </option>
+              ))}
+            </select>
+          </div>
+        </section>
+      )}
+
+      {detailsComplete && (
+        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <label className="flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              checked={resourceCleanupEnabled}
+              onChange={(event) => {
+                onResourceCleanupEnabledChange(event.target.checked);
+                if (!event.target.checked) {
+                  onResourceCleanupIntervalHoursChange(undefined);
+                }
+              }}
+              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+            />
+            <span className="text-sm font-medium text-gray-900">Enable periodic resource cleanup</span>
+          </label>
+
+          {resourceCleanupEnabled && (
+            <div className="mt-4">
+              <label className={labelClass} htmlFor="resourceCleanupIntervalHours">
+                Delete all resources inside lab every (hours)
+              </label>
+              <input
+                id="resourceCleanupIntervalHours"
+                type="number"
+                min={1}
+                max={24}
+                placeholder="e.g. 1"
+                className={inputClass}
+                value={resourceCleanupIntervalHours ?? ''}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  onResourceCleanupIntervalHoursChange(
+                    value ? Number.parseInt(value, 10) : undefined
                   );
-                })}
-              </div>
+                }}
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Every {resourceCleanupIntervalHours || '?'} hour(s), all Azure resources (VMs,
+                databases, disks, etc.) created inside the lab will be automatically deleted. Lab
+                accounts and access are kept — users can create new resources again immediately
+                after cleanup.
+              </p>
             </div>
           )}
+        </section>
+      )}
+
+      {detailsComplete && (
+        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="text-sm font-semibold text-gray-900">Per-user budget</h2>
+          <p className="mt-0.5 text-xs text-gray-400">
+            Optional spending cap per user (requires per-user resource groups)
+          </p>
+
+          <div className="mt-4">
+            <label className={labelClass} htmlFor="perUserBudgetUsd">
+              Budget per user (USD) — optional
+            </label>
+            <input
+              id="perUserBudgetUsd"
+              type="number"
+              min={1}
+              step={0.01}
+              placeholder="e.g. 50.00"
+              className={inputClass}
+              value={perUserBudgetUsd ?? ''}
+              onChange={(event) => {
+                const value = event.target.value;
+                onPerUserBudgetUsdChange(value ? Number.parseFloat(value) : undefined);
+              }}
+            />
+            <p className="mt-2 text-xs text-gray-500">
+              An Azure budget is created for each user with their own resource group. When spending
+              exceeds this amount, the user receives an email and their account is automatically suspended.
+            </p>
+          </div>
         </section>
       )}
 

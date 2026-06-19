@@ -5,6 +5,11 @@ const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const usageEnforcementService = require('./usageEnforcementService');
 const usageService = require('./usageService');
 const { resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
+const {
+  loadUsageWindowsByRequest,
+  isWithinUsageWindow,
+  isDailyHourLimitReachedToday
+} = require('./usageWindowAccessService');
 
 /**
  * Create Microsoft Graph client with app-only authentication
@@ -111,19 +116,39 @@ const monitorAzureSignIns = async () => {
         r.enable_daily_usage,
         r.daily_limit_minutes,
         r.usage_schedule,
-        r.enforce_in_azure
+        r.enforce_in_azure,
+        EXISTS (
+          SELECT 1
+          FROM request_usage_windows ruw
+          WHERE ruw.request_id = r.id
+        ) AS has_usage_windows
       FROM azure_users au
       JOIN requests r ON r.id = au.request_id
       WHERE COALESCE(au.is_deleted, false) = false
-        AND r.enable_daily_usage = true
+        AND r.status = 'Completed'
+        AND COALESCE(r.expired, false) = false
+        AND (
+          r.enable_daily_usage = true
+          OR EXISTS (
+            SELECT 1
+            FROM request_usage_windows ruw
+            WHERE ruw.request_id = r.id
+          )
+        )
       `
     );
 
-    // Build map for fast lookup: azure_user_id -> user data
+    // Build map for fast lookup: azure_user_id (lowercase) -> user data
     const trackedUsersMap = new Map();
     for (const user of trackedUsersResult.rows) {
-      trackedUsersMap.set(user.azure_user_id, user);
+      if (user.azure_user_id) {
+        trackedUsersMap.set(String(user.azure_user_id).toLowerCase(), user);
+      }
     }
+
+    const usageWindowsByRequest = await loadUsageWindowsByRequest(
+      [...new Set(trackedUsersResult.rows.map((user) => user.request_id))]
+    );
 
     console.log(`[SIGNIN_MONITOR] Tracking ${trackedUsersMap.size} provisioned user(s).`);
 
@@ -135,7 +160,7 @@ const monitorAzureSignIns = async () => {
     const client = createGraphClient();
 
     // Fetch recent sign-ins (time window avoids missing events when the tenant has heavy traffic)
-    const lookbackMinutes = 15;
+    const lookbackMinutes = Number(process.env.SIGNIN_MONITOR_LOOKBACK_MINUTES || 60);
     const since = new Date(Date.now() - lookbackMinutes * 60 * 1000).toISOString();
     console.log(`[SIGNIN_MONITOR] Fetching sign-ins since ${since}...`);
 
@@ -157,11 +182,11 @@ const monitorAzureSignIns = async () => {
     // Process each sign-in
     for (const signIn of signIns.value) {
       const azureUserId = signIn.userId;
+      const normalizedUserId = azureUserId ? String(azureUserId).toLowerCase() : null;
 
       // STEP 2: Immediately filter - only process tracked users
-      // DO NOT LOG anything for untracked users
-      if (!azureUserId || !trackedUsersMap.has(azureUserId)) {
-        continue; // Silent skip - not our provisioned user
+      if (!normalizedUserId || !trackedUsersMap.has(normalizedUserId)) {
+        continue;
       }
 
       const errorCode = Number(signIn.status?.errorCode ?? -1);
@@ -203,10 +228,12 @@ const monitorAzureSignIns = async () => {
         'Azure Portal',
         'Azure Resource Manager',
         'Azure CLI',
-        'Azure PowerShell'
+        'Azure PowerShell',
+        'Microsoft Azure',
+        'Windows Azure Service Management API'
       ];
 
-      const allowedResourceKeywords = ['Azure'];
+      const allowedResourceKeywords = ['Azure', 'Windows Azure'];
       
       const rejectedKeywords = [
         'Outlook',
@@ -256,36 +283,52 @@ const monitorAzureSignIns = async () => {
       const signInId = signIn.id || null;
 
       // Get user from map
-      const user = trackedUsersMap.get(azureUserId);
+      const user = trackedUsersMap.get(normalizedUserId);
+      const usageWindows = usageWindowsByRequest.get(user.request_id) || [];
+      const windowTimezone = usageWindows[0]?.timezone || 'Asia/Kolkata';
 
       if (await isSignInAlreadyProcessed(signInId)) {
         continue;
       }
 
-      // STEP 5: Log tracked user match
-      console.log(
-        `[TRACKED_USER] username=${user.username}, request=${user.request_id}`
-      );
+      let access;
 
-      const request = {
-        enable_daily_usage: user.enable_daily_usage,
-        daily_limit_minutes: user.daily_limit_minutes,
-        usage_schedule: user.usage_schedule
-      };
-      const refreshedUser = await resetDailyCountersIfNeeded(request, user, user.id, user.request_id);
-      const access = evaluateUsageAccess({
-        request,
-        user: refreshedUser,
-        currentSessionMinutes: 0,
-        at: loginTime
-      });
+      if (user.enable_daily_usage) {
+        const request = {
+          enable_daily_usage: user.enable_daily_usage,
+          daily_limit_minutes: user.daily_limit_minutes,
+          usage_schedule: user.usage_schedule
+        };
+        const refreshedUser = await resetDailyCountersIfNeeded(request, user, user.id, user.request_id);
+        access = evaluateUsageAccess({
+          request,
+          user: refreshedUser,
+          currentSessionMinutes: 0,
+          at: loginTime
+        });
+      } else if (user.has_usage_windows) {
+        const withinWindow = isWithinUsageWindow(usageWindows, loginTime);
+        const limitReached = await isDailyHourLimitReachedToday(user.id, windowTimezone);
+
+        access = {
+          allowed: withinWindow && !limitReached,
+          reason: limitReached ? 'daily_hour_limit_reached' : withinWindow ? 'ok' : 'outside_window',
+          message: limitReached
+            ? 'Daily hour limit reached for today.'
+            : withinWindow
+              ? 'Access allowed.'
+              : 'Sign-in outside scheduled usage window.'
+        };
+      } else {
+        access = { allowed: true, reason: 'ok' };
+      }
 
       if (!access.allowed) {
         console.log(
           `[SIGNIN_MONITOR] User ${user.id} denied Azure session (${access.reason}): ${access.message}`
         );
 
-        if (user.enforce_in_azure) {
+        if (user.enable_daily_usage && user.enforce_in_azure) {
           if (access.reason === 'limit_exceeded') {
             usageEnforcementService
               .enforceUsageLimit({ requestId: user.request_id, userId: user.id })
@@ -311,6 +354,11 @@ const monitorAzureSignIns = async () => {
         });
         continue;
       }
+
+      // STEP 5: Log tracked user match
+      console.log(
+        `[TRACKED_USER] username=${user.username}, request=${user.request_id}`
+      );
 
       // Check if active session already exists
       const sessionCheck = await db.query(
@@ -359,12 +407,9 @@ const monitorAzureSignIns = async () => {
         INSERT INTO user_usage_sessions (
           request_id,
           user_id,
-          login_at,
-          last_activity_at,
-          tracking_status,
-          created_at
+          login_at
         )
-        VALUES ($1, $2, $3, NOW(), 'ACTIVE', NOW())
+        VALUES ($1, $2, $3)
         RETURNING id
         `,
         [user.request_id, user.id, loginTime]
@@ -400,6 +445,19 @@ const monitorAzureSignIns = async () => {
     console.log(
       `[SIGNIN_MONITOR] Completed. Fetched=${fetchedCount}, Tracked=${trackedCount}, AzurePortal=${azurePortalCount}, SessionsCreated=${sessionsCreated}`
     );
+
+    if (fetchedCount > 0 && trackedCount === 0) {
+      const sampleSignIns = signIns.value.slice(0, 5).map((signIn) => ({
+        upn: signIn.userPrincipalName,
+        userId: signIn.userId,
+        app: signIn.appDisplayName,
+        resource: signIn.resourceDisplayName
+      }));
+      console.log(
+        '[SIGNIN_MONITOR] Fetched sign-ins did not match any tracked provisioned users. Sample:',
+        JSON.stringify(sampleSignIns)
+      );
+    }
   } catch (error) {
     console.error('[SIGNIN_MONITOR] Error monitoring Azure sign-ins:', error.message);
 

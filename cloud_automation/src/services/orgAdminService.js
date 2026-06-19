@@ -1,4 +1,5 @@
 const db = require('../db/postgres');
+const { DateTime } = require('luxon');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const AppError = require('../utils/AppError');
 const adminAuthService = require('./adminAuthService');
@@ -9,6 +10,7 @@ const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroups, getResourceGroupNameForUser } = require('./userResourceGroupService');
 const { attachLiveUsageToUsers } = require('./userLiveUsageService');
 const { getResourceGroupCosts } = require('./azureCostManagementService');
+const { formatMinutes } = require('../utils/formatMinutes');
 
 const mapUserUsage = (row) => {
   const access = evaluateUsageAccess({
@@ -505,6 +507,124 @@ const getUserAzureCost = async (requestId, userId) => {
   };
 };
 
+const getDailyUsageForRequest = async (requestId) => {
+  const requestResult = await db.query(
+    `
+      SELECT id
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  if (!requestResult.rows.length) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  const { rows: windowRows } = await db.query(
+    `
+      SELECT timezone
+      FROM request_usage_windows
+      WHERE request_id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  const tz = windowRows[0]?.timezone || 'Asia/Kolkata';
+  const nowInTz = DateTime.now().setZone(tz);
+  const todayDate = nowInTz.toISODate();
+  const dayOfWeek = nowInTz.weekday % 7;
+
+  const { rows: todayWindow } = await db.query(
+    `
+      SELECT daily_limit_hours, window_start_time, window_end_time
+      FROM request_usage_windows
+      WHERE request_id = $1
+        AND day_of_week = $2
+    `,
+    [requestId, dayOfWeek]
+  );
+
+  const dailyLimitHours = todayWindow[0]?.daily_limit_hours ?? null;
+  const dailyLimitMinutes = dailyLimitHours ? dailyLimitHours * 60 : null;
+
+  const { rows: users } = await db.query(
+    `
+      SELECT
+        au.id,
+        au.username,
+        au.azure_user_id,
+        au.azure_account_enabled,
+        COALESCE(dut.consumed_minutes, 0) AS tracked_consumed_minutes,
+        COALESCE(dut.limit_reached, FALSE) AS limit_reached,
+        dut.tracking_date
+      FROM azure_users au
+      LEFT JOIN daily_usage_tracking dut
+        ON dut.azure_user_id = au.id
+       AND dut.tracking_date = $1
+      WHERE au.request_id = $2
+        AND COALESCE(au.is_deleted, FALSE) = FALSE
+      ORDER BY au.username
+    `,
+    [todayDate, requestId]
+  );
+
+  const dayStart = nowInTz.startOf('day').toUTC().toISO();
+  const dayEnd = nowInTz.endOf('day').toUTC().toISO();
+
+  const data = await Promise.all(
+    users.map(async (user) => {
+      const { rows: sessionRows } = await db.query(
+        `
+          SELECT
+            COALESCE(SUM(
+              EXTRACT(EPOCH FROM (COALESCE(logout_at, NOW()) - login_at)) / 60
+            ), 0) AS total_minutes
+          FROM user_usage_sessions
+          WHERE user_id = $1
+            AND login_at >= $2
+            AND login_at < $3
+        `,
+        [user.id, dayStart, dayEnd]
+      );
+
+      const consumedMinutes = parseFloat(sessionRows[0]?.total_minutes ?? 0);
+      const remainingMinutes = dailyLimitMinutes
+        ? Math.max(0, dailyLimitMinutes - consumedMinutes)
+        : null;
+      const roundedConsumed = Math.round(consumedMinutes);
+      const roundedRemaining = remainingMinutes !== null ? Math.round(remainingMinutes) : null;
+
+      return {
+        userId: user.id,
+        username: user.username,
+        email: user.username,
+        accountEnabled: user.azure_account_enabled !== false,
+        limitReached: user.limit_reached,
+        dailyLimitHours: dailyLimitHours !== null ? Number(dailyLimitHours) : null,
+        consumedMinutes: roundedConsumed,
+        remainingMinutes: roundedRemaining,
+        consumedFormatted: formatMinutes(roundedConsumed),
+        remainingFormatted: roundedRemaining !== null ? formatMinutes(roundedRemaining) : null,
+        todayWindow: todayWindow[0]
+          ? {
+              start: todayWindow[0].window_start_time,
+              end: todayWindow[0].window_end_time
+            }
+          : null
+      };
+    })
+  );
+
+  return {
+    data,
+    timezone: tz,
+    date: todayDate
+  };
+};
+
 module.exports = {
   login,
   listResourceGroups,
@@ -515,5 +635,6 @@ module.exports = {
   forceLogoutUser,
   listAccessRequests,
   reviewAccessRequest,
-  getUserAzureCost
+  getUserAzureCost,
+  getDailyUsageForRequest
 };

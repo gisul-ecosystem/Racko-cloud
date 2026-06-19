@@ -1,3 +1,5 @@
+import type { UsageWindow } from './catalog';
+
 export interface CloudAutomationHealth {
   success: boolean;
   message: string;
@@ -28,6 +30,26 @@ export interface ProvisioningRequest {
   costingMode?: CostingMode;
   azure_resource_group_name?: string | null;
   azureResourceGroupName?: string | null;
+  cleanup_enabled?: boolean;
+  cleanupEnabled?: boolean;
+  cleanup_interval_hours?: number | null;
+  cleanupIntervalHours?: number | null;
+  last_cleanup_at?: string | null;
+  lastCleanupAt?: string | null;
+  next_cleanup_at?: string | null;
+  nextCleanupAt?: string | null;
+  per_user_budget_usd?: number | string | null;
+  perUserBudgetUsd?: number | null;
+  resource_cleanup_enabled?: boolean;
+  resourceCleanupEnabled?: boolean;
+  resource_cleanup_interval_hours?: number | null;
+  resourceCleanupIntervalHours?: number | null;
+  resource_cleanup_last_ran_at?: string | null;
+  resourceCleanupLastRanAt?: string | null;
+  resource_cleanup_next_run_at?: string | null;
+  resourceCleanupNextRunAt?: string | null;
+  usage_windows?: UsageWindow[];
+  usageWindows?: UsageWindow[];
 }
 
 export interface ListRequestsResponse {

@@ -20,6 +20,12 @@ async function createRequest({
   dailyLimitMinutes,
   usageSchedule,
   costingMode,
+  cleanupEnabled,
+  cleanupIntervalHours,
+  perUserBudgetUsd,
+  resourceCleanupEnabled,
+  resourceCleanupIntervalHours,
+  usageWindows,
   rackoUserId
 }) {
 
@@ -219,6 +225,28 @@ async function createRequest({
 
     const resolvedCostingMode = normalizeCostingMode(costingMode) || COSTING_MODE_SHARED;
     const resolvedRackoUserId = String(rackoUserId || '').trim() || null;
+    const resolvedCleanupEnabled = cleanupEnabled === true;
+    const resolvedCleanupIntervalHours =
+      resolvedCleanupEnabled && Number.isInteger(cleanupIntervalHours)
+        ? cleanupIntervalHours
+        : null;
+    const resolvedPerUserBudgetUsd =
+      perUserBudgetUsd !== undefined && perUserBudgetUsd !== null && perUserBudgetUsd !== ''
+        ? Number(perUserBudgetUsd)
+        : null;
+    const resolvedNextCleanupAt =
+      resolvedCleanupEnabled && resolvedCleanupIntervalHours
+        ? new Date(Date.now() + resolvedCleanupIntervalHours * 60 * 60 * 1000).toISOString()
+        : null;
+    const resolvedResourceCleanupEnabled = resourceCleanupEnabled === true;
+    const resolvedResourceCleanupIntervalHours =
+      resolvedResourceCleanupEnabled && Number.isInteger(resourceCleanupIntervalHours)
+        ? resourceCleanupIntervalHours
+        : null;
+    const resolvedResourceCleanupNextRunAt =
+      resolvedResourceCleanupEnabled && resolvedResourceCleanupIntervalHours
+        ? new Date(Date.now() + resolvedResourceCleanupIntervalHours * 60 * 60 * 1000).toISOString()
+        : null;
 
     const request =
       await client.query(
@@ -245,7 +273,21 @@ async function createRequest({
 
           costing_mode,
 
-          racko_user_id
+          racko_user_id,
+
+          cleanup_enabled,
+
+          cleanup_interval_hours,
+
+          next_cleanup_at,
+
+          per_user_budget_usd,
+
+          resource_cleanup_enabled,
+
+          resource_cleanup_interval_hours,
+
+          resource_cleanup_next_run_at
 
         )
 
@@ -261,7 +303,14 @@ async function createRequest({
           $8,
           $9,
           $10,
-          $11
+          $11,
+          $12,
+          $13,
+          $14,
+          $15,
+          $16,
+          $17,
+          $18
 
         )
 
@@ -292,7 +341,21 @@ async function createRequest({
 
           resolvedCostingMode,
 
-          resolvedRackoUserId
+          resolvedRackoUserId,
+
+          resolvedCleanupEnabled,
+
+          resolvedCleanupIntervalHours,
+
+          resolvedNextCleanupAt,
+
+          resolvedPerUserBudgetUsd,
+
+          resolvedResourceCleanupEnabled,
+
+          resolvedResourceCleanupIntervalHours,
+
+          resolvedResourceCleanupNextRunAt
 
         ]
       );
@@ -301,6 +364,38 @@ async function createRequest({
 
     const requestId =
       request.rows[0].id;
+
+    if (Array.isArray(usageWindows) && usageWindows.length > 0) {
+      for (const window of usageWindows) {
+        await client.query(
+          `
+            INSERT INTO request_usage_windows (
+              request_id,
+              day_of_week,
+              window_start_time,
+              window_end_time,
+              timezone,
+              daily_limit_hours
+            )
+            VALUES ($1, $2, $3, $4, $5, $6)
+            ON CONFLICT (request_id, day_of_week)
+            DO UPDATE SET
+              window_start_time = EXCLUDED.window_start_time,
+              window_end_time = EXCLUDED.window_end_time,
+              timezone = EXCLUDED.timezone,
+              daily_limit_hours = EXCLUDED.daily_limit_hours
+          `,
+          [
+            requestId,
+            window.day_of_week,
+            `${window.window_start_time}:00`,
+            `${window.window_end_time}:00`,
+            window.timezone || 'Asia/Kolkata',
+            window.daily_limit_hours ?? null
+          ]
+        );
+      }
+    }
 
 
 

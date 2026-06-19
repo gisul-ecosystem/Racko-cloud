@@ -1,6 +1,7 @@
 import { ORG_ADMIN_API_PREFIX } from '../constants';
 import type {
   OrgAdminAccessRequest,
+  OrgAdminDailyUsageResponse,
   OrgAdminErrorKind,
   OrgAdminLoginResponse,
   OrgAdminMonitoringResponse,
@@ -177,6 +178,16 @@ export async function getOrgUserAzureCost(
 ): Promise<OrgAdminUserAzureCostResponse> {
   return orgAdminRequest<OrgAdminUserAzureCostResponse>(
     `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/azure-cost`,
+    { sessionToken }
+  );
+}
+
+export async function getOrgDailyUsage(
+  sessionToken: string,
+  requestId: number
+): Promise<OrgAdminDailyUsageResponse> {
+  return orgAdminRequest<OrgAdminDailyUsageResponse>(
+    `/resource-groups/${encodeURIComponent(requestId)}/daily-usage`,
     { sessionToken }
   );
 }
