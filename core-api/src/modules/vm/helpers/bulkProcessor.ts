@@ -8,6 +8,7 @@ import { VMJob } from '../vmJob.model';
 import { VMEvent } from '../vmEvent.model';
 import { selectNodesForBulk, selectNode } from './placementEngine';
 import { pollTaskWithCleanup } from './taskPoller';
+import { withCloneWorkerRetry } from './cloneWorkerRetry';
 import { scheduleHyperVEnable } from './hypervQueue';
 import { scheduleSoftwareInstall } from './softwareQueue';
 import { softwareService } from '../../software/software.service';
@@ -521,68 +522,75 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
 
   let vmid!: number;
   let cloneUpid!: string;
+  let cloneResult: import('./proxmoxTaskPoll').PollResult = 'unknown';
 
-  await new Promise<void>((resolve, reject) => {
-    vmidMutex = vmidMutex.then(async () => {
-      try {
-        const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-        vmid = response.data.data;
+  // Wraps VMID allocation + clone POST + task poll with worker-retry logic.
+  // Each retry allocates a fresh VMID via the mutex to avoid conflicts.
+  await withCloneWorkerRetry(async () => {
+    await new Promise<void>((resolve, reject) => {
+      vmidMutex = vmidMutex.then(async () => {
+        try {
+          const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
+          vmid = response.data.data;
 
-        const cloneBody: Record<string, unknown> = {
-          newid: vmid,
-          name: spec.vmName,
-          full: spec.cloneType === 'dedicated_storage' ? 1 : 0,
-          target: spec.node,
-        };
-        if (storagePool) cloneBody['storage'] = storagePool;
+          const cloneBody: Record<string, unknown> = {
+            newid: vmid,
+            name: spec.vmName,
+            full: spec.cloneType === 'dedicated_storage' ? 1 : 0,
+            target: spec.node,
+          };
+          if (storagePool) cloneBody['storage'] = storagePool;
 
-        const cloneEndpoint = `/nodes/${spec.node}/qemu/${sourceTemplateId}/clone`;
-        bulkCloneDiagLog('sending clone request', {
-          jobId: spec.jobId.toString(),
-          clonePath,
-          vmName: spec.vmName,
-          index: spec.index,
-          node: spec.node,
-          sourceTemplateId,
-          baseTemplateId: spec.templateId,
-          newVmid: vmid,
-          cloneEndpoint,
-          cloneBody,
-          storagePoolSelected: storagePool ?? null,
-          softwarePreInstalled: spec.softwarePreInstalled ?? false,
-        });
+          const cloneEndpoint = `/nodes/${spec.node}/qemu/${sourceTemplateId}/clone`;
+          bulkCloneDiagLog('sending clone request', {
+            jobId: spec.jobId.toString(),
+            clonePath,
+            vmName: spec.vmName,
+            index: spec.index,
+            node: spec.node,
+            sourceTemplateId,
+            baseTemplateId: spec.templateId,
+            newVmid: vmid,
+            cloneEndpoint,
+            cloneBody,
+            storagePoolSelected: storagePool ?? null,
+            softwarePreInstalled: spec.softwarePreInstalled ?? false,
+          });
 
-        const cloneResponse = await proxmoxClient.post<{ data: string }>(
-          cloneEndpoint,
-          cloneBody
-        );
-        cloneUpid = cloneResponse.data.data;
-        bulkCloneDiagLog('clone task started', {
-          jobId: spec.jobId.toString(),
-          clonePath,
-          vmName: spec.vmName,
-          newVmid: vmid,
-          node: spec.node,
-          upid: cloneUpid,
-        });
-        resolve();
-      } catch (err) {
-        bulkCloneDiagLog('clone request failed', {
-          jobId: spec.jobId.toString(),
-          clonePath,
-          vmName: spec.vmName,
-          index: spec.index,
-          node: spec.node,
-          sourceTemplateId,
-          baseTemplateId: spec.templateId,
-          proxmoxError: resolveCloneErrorMessage(err),
-        });
-        reject(err);
-      }
+          const cloneResponse = await proxmoxClient.post<{ data: string }>(
+            cloneEndpoint,
+            cloneBody
+          );
+          cloneUpid = cloneResponse.data.data;
+          bulkCloneDiagLog('clone task started', {
+            jobId: spec.jobId.toString(),
+            clonePath,
+            vmName: spec.vmName,
+            newVmid: vmid,
+            node: spec.node,
+            upid: cloneUpid,
+          });
+          resolve();
+        } catch (err) {
+          bulkCloneDiagLog('clone request failed', {
+            jobId: spec.jobId.toString(),
+            clonePath,
+            vmName: spec.vmName,
+            index: spec.index,
+            node: spec.node,
+            sourceTemplateId,
+            baseTemplateId: spec.templateId,
+            proxmoxError: resolveCloneErrorMessage(err),
+          });
+          reject(err);
+        }
+      });
     });
-  });
 
-  const cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+    // Poll inside the retry wrapper — a worker error here triggers a retry
+    // with a brand-new VMID on the next iteration.
+    cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+  }, { jobId: spec.jobId.toString(), vmName: spec.vmName, node: spec.node });
 
   bulkCloneDiagLog('clone task finished', {
     jobId: spec.jobId.toString(),
