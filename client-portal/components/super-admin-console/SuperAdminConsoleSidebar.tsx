@@ -12,7 +12,7 @@ interface SuperAdminConsoleSidebarProps {
 const navItems = [
   { href: '/super-admin-console', label: 'All services', icon: LayoutGrid, exact: true },
   { href: '/super-admin-console/vm-management', label: 'VM Management', icon: MonitorCheck, exact: false },
-  { href: '/super-admin-console/azure', label: 'Azure Services', icon: Cloud, exact: false },
+  { href: '/super-admin-console/azure/org-admin', label: 'Azure Services', icon: Cloud, exact: false },
 ];
 
 export function SuperAdminConsoleSidebar({ sidebarOpen, onCloseSidebar }: SuperAdminConsoleSidebarProps) {

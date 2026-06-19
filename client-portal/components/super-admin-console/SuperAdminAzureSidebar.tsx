@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Cloud, ChevronLeft } from 'lucide-react';
+import { ChevronLeft, Shield } from 'lucide-react';
 
 interface SuperAdminAzureSidebarProps {
   sidebarOpen: boolean;
@@ -10,7 +10,7 @@ interface SuperAdminAzureSidebarProps {
 }
 
 const navLinks = [
-  { href: '/super-admin-console/azure', label: 'Overview', icon: Cloud, exact: true },
+  { href: '/super-admin-console/azure/org-admin', label: 'Lab Management', icon: Shield, exact: true },
 ];
 
 export function SuperAdminAzureSidebar({ sidebarOpen, onCloseSidebar }: SuperAdminAzureSidebarProps) {

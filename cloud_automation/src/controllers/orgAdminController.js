@@ -1,23 +1,9 @@
 const AppError = require('../utils/AppError');
 const orgAdminService = require('../services/orgAdminService');
 
-const login = async (req, res, next) => {
-  try {
-    const email = String(req.body?.email || '').trim();
-    const username = String(req.body?.username || '').trim();
-    const password = String(req.body?.password || '');
-
-    const result = await orgAdminService.login({ email, username, password });
-
-    res.status(200).json({
-      success: true,
-      admin: result.admin,
-      sessionToken: result.sessionToken,
-      expiresAt: result.expiresAt
-    });
-  } catch (error) {
-    next(error);
-  }
+const getSuperAdminActor = (req) => {
+  const userId = req.rackoUser?.userId;
+  return userId ? `super_admin:${userId}` : 'super_admin';
 };
 
 const listResourceGroups = async (req, res, next) => {
@@ -28,6 +14,19 @@ const listResourceGroups = async (req, res, next) => {
       success: true,
       resourceGroups,
       count: resourceGroups.length
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const listRequests = async (req, res, next) => {
+  try {
+    const data = await orgAdminService.listRequests();
+
+    res.status(200).json({
+      success: true,
+      data
     });
   } catch (error) {
     next(error);
@@ -89,7 +88,7 @@ const deleteUser = async (req, res, next) => {
     }
 
     const result = await orgAdminService.deleteUser({
-      adminEmail: req.orgAdmin.email,
+      adminEmail: getSuperAdminActor(req),
       requestId,
       userId
     });
@@ -118,7 +117,7 @@ const updateUserRoles = async (req, res, next) => {
     }
 
     const result = await orgAdminService.updateUserRoles({
-      adminEmail: req.orgAdmin.email,
+      adminEmail: getSuperAdminActor(req),
       requestId,
       userId,
       roles
@@ -188,7 +187,7 @@ const reviewAccessRequest = async (req, res, next) => {
       id,
       status,
       reviewNotes,
-      reviewedBy: req.orgAdmin.email
+      reviewedBy: getSuperAdminActor(req)
     });
 
     res.status(200).json({
@@ -254,9 +253,82 @@ const listAzureRoles = async (req, res, next) => {
   }
 };
 
+const renewUserBudget = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = Number(req.params.userId);
+    const { topUpAmount } = req.body || {};
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.renewUserBudget({
+      requestId,
+      userId,
+      topUpAmount,
+      adminEmail: getSuperAdminActor(req)
+    });
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const updateUserCleanupSettings = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = Number(req.params.userId);
+    const { cleanupDisabled, cleanupIntervalOverride } = req.body || {};
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    await orgAdminService.updateUserCleanupSettings(requestId, userId, {
+      cleanupDisabled,
+      cleanupIntervalOverride
+    });
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const triggerUserCleanup = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.triggerUserCleanup(requestId, userId);
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
-  login,
   listResourceGroups,
+  listRequests,
   getResourceGroupDetail,
   getMonitoringLogs,
   deleteUser,
@@ -266,5 +338,8 @@ module.exports = {
   reviewAccessRequest,
   getUserAzureCost,
   getDailyUsage,
-  listAzureRoles
+  listAzureRoles,
+  renewUserBudget,
+  updateUserCleanupSettings,
+  triggerUserCleanup
 };

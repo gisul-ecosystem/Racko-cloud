@@ -1,36 +1,36 @@
 'use client';
 
-import Link from 'next/link';
 import { useCallback, useMemo, useState } from 'react';
-import { ArrowLeft, LogOut, RefreshCw, Shield } from 'lucide-react';
+import {
+  ChevronRight,
+  ClipboardList,
+  Loader2,
+  RefreshCw,
+  Search,
+  Users,
+  X,
+} from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
-import { AZURE_ROUTES } from '../../constants';
 import { useOrgAdminPortal } from '../../hooks/useOrgAdminPortal';
-import { useOrgAdminSession } from '../../hooks/useOrgAdminSession';
 import { OrgAdminAccessRequests } from './OrgAdminAccessRequests';
-import { OrgAdminLogin } from './OrgAdminLogin';
-import { OrgAdminRequestSummary } from './OrgAdminRequestSummary';
-import { OrgAdminResourceGroupList } from './OrgAdminResourceGroupList';
-import { OrgAdminUserPanel } from './OrgAdminUserPanel';
-import { OrgAdminUsersTable } from './OrgAdminUsersTable';
+import { OrgAdminLabStatusBadge } from './OrgAdminLabStatusBadge';
+import { OrgAdminRequestDetailPanel } from './OrgAdminRequestDetailPanel';
+import { OrgAdminStatCard } from './OrgAdminStatCard';
+import { CostingModeBadge } from './CostingModeBadge';
+
+const STATUS_FILTERS = ['all', 'completed', 'expired', 'provisioning', 'failed'] as const;
+
+function normalizeStatus(status: string) {
+  return status.trim().toLowerCase();
+}
 
 export function OrgAdminPortal() {
-  const {
-    session,
-    bootstrapping,
-    loginError,
-    sessionExpired,
-    login,
-    logout,
-    invalidateSession,
-    clearLoginError,
-  } = useOrgAdminSession();
-
-  const [loginLoading, setLoginLoading] = useState(false);
-  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [search, setSearch] = useState('');
+  const [regionFilter, setRegionFilter] = useState('all');
 
   const {
-    resourceGroups,
+    requests,
     selectedRequestId,
     requestDetail,
     users,
@@ -49,213 +49,313 @@ export function OrgAdminPortal() {
     refreshDetail,
     refreshAccessRequests,
     updateRoles,
-    deleteUser,
     forceLogout,
     reviewAccess,
     fetchUserMonitoring,
     fetchUserAzureCost,
+    renewBudget,
+    updateCleanupSettings,
+    triggerCleanup,
     clearActionFeedback,
-  } = useOrgAdminPortal(session, invalidateSession);
+  } = useOrgAdminPortal();
 
-  const selectedUser = useMemo(
-    () => users.find((user) => user.id === selectedUserId) ?? null,
-    [users, selectedUserId]
+  const stats = useMemo(
+    () => ({
+      active: requests.filter((r) => normalizeStatus(r.status) === 'completed').length,
+      expired: requests.filter((r) => normalizeStatus(r.status) === 'expired').length,
+      total: requests.length,
+      totalUsers: requests.reduce((sum, r) => sum + r.userCount, 0),
+    }),
+    [requests]
   );
 
-  const handleLogin = useCallback(
-    async (credentials: { email: string; username: string; password: string }) => {
-      clearLoginError();
-      setLoginLoading(true);
-      try {
-        await login(credentials);
-      } finally {
-        setLoginLoading(false);
-      }
-    },
-    [login, clearLoginError]
+  const regions = useMemo(() => {
+    const unique = new Set(
+      requests.map((r) => r.region).filter((region): region is string => Boolean(region))
+    );
+    return Array.from(unique).sort();
+  }, [requests]);
+
+  const filtered = useMemo(
+    () =>
+      requests.filter((request) => {
+        const status = normalizeStatus(request.status);
+        const matchStatus =
+          statusFilter === 'all' ||
+          status === statusFilter ||
+          (statusFilter === 'completed' && status === 'completed');
+        const matchRegion =
+          regionFilter === 'all' || (request.region || '').toLowerCase() === regionFilter.toLowerCase();
+        const query = search.trim().toLowerCase();
+        const matchSearch =
+          !query ||
+          request.customerEmail.toLowerCase().includes(query) ||
+          String(request.id).includes(query) ||
+          (request.region || '').toLowerCase().includes(query) ||
+          (request.requestName || '').toLowerCase().includes(query);
+
+        return matchStatus && matchRegion && matchSearch;
+      }),
+    [requests, statusFilter, regionFilter, search]
   );
 
-  const handleDeleteUser = useCallback(
-    async (userId: number) => {
-      const ok = await deleteUser(userId);
-      if (ok && selectedUserId === userId) {
-        setSelectedUserId(null);
-      }
-      return ok;
+  const handleToggleRequest = useCallback(
+    (requestId: number) => {
+      clearActionFeedback();
+      selectRequest(selectedRequestId === requestId ? null : requestId);
     },
-    [deleteUser, selectedUserId]
+    [clearActionFeedback, selectRequest, selectedRequestId]
   );
 
   const handleRefresh = useCallback(() => {
     clearActionFeedback();
     void refreshOverview();
-    void refreshDetail();
     void refreshAccessRequests();
-  }, [clearActionFeedback, refreshOverview, refreshDetail, refreshAccessRequests]);
+    if (selectedRequestId != null) {
+      void refreshDetail();
+    }
+  }, [clearActionFeedback, refreshOverview, refreshAccessRequests, refreshDetail, selectedRequestId]);
 
-  if (bootstrapping) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[#B91C1C]" />
-      </div>
-    );
-  }
-
-  const showPortal = Boolean(session);
+  const handleToggleCleanup = useCallback(
+    (userId: number, disabled: boolean) => updateCleanupSettings(userId, { cleanupDisabled: disabled }),
+    [updateCleanupSettings]
+  );
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="border-b border-gray-200 bg-white">
-        <div className="mx-auto flex max-w-screen-2xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
-              <Shield className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Racko Cloud</p>
-              <h1 className="text-lg font-bold text-gray-900">Organization Admin</h1>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-2">
-            {showPortal ? (
-              <>
-                <span className="hidden text-sm text-gray-500 sm:inline">
-                  {session!.admin.email}
-                </span>
-                <button
-                  type="button"
-                  onClick={handleRefresh}
-                  disabled={overviewLoading || detailLoading || saving}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
-                >
-                  <RefreshCw
-                    className={`h-3.5 w-3.5 ${overviewLoading || detailLoading ? 'animate-spin' : ''}`}
-                  />
-                  Refresh
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    logout();
-                    setSelectedUserId(null);
-                  }}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
-                >
-                  <LogOut className="h-3.5 w-3.5" />
-                  Sign Out
-                </button>
-              </>
-            ) : (
-              <Link
-                href={AZURE_ROUTES.dashboard}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50"
-              >
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Back
-              </Link>
-            )}
-          </div>
+    <div className="mx-auto max-w-screen-2xl space-y-6">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold text-gray-900">Azure Lab Management</h1>
+          <p className="mt-1 text-sm text-gray-500">
+            Manage provisioned lab requests and user access
+          </p>
         </div>
-      </header>
 
-      <main className="mx-auto max-w-screen-2xl px-4 py-8 sm:px-6 lg:px-8">
-        {!showPortal ? (
-          <div className="space-y-8">
-            <div className="mx-auto max-w-lg text-center">
-              <h2 className="text-2xl font-bold text-gray-900">Organization Admin Portal</h2>
-              <p className="mt-2 text-sm text-gray-500">
-                Manage provisioned resource groups, users, sessions, and elevated access requests across
-                your organization.
-              </p>
-            </div>
-            <OrgAdminLogin
-              loading={loginLoading}
-              error={loginError}
-              sessionExpired={sessionExpired}
-              onSubmit={handleLogin}
-            />
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <OrgAdminAccessRequests
-              requests={accessRequests}
-              loading={accessLoading}
-              saving={saving}
-              onReview={reviewAccess}
-            />
+        <button
+          type="button"
+          onClick={handleRefresh}
+          disabled={overviewLoading || detailLoading || saving}
+          className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
+        >
+          <RefreshCw
+            className={`h-3.5 w-3.5 ${overviewLoading || detailLoading ? 'animate-spin' : ''}`}
+          />
+          Refresh
+        </button>
+      </div>
 
-            {(actionError || actionSuccess) && (
-              <div
-                className={`rounded-lg border px-4 py-3 text-sm ${
-                  actionError
-                    ? 'border-red-200 bg-red-50 text-red-700'
-                    : 'border-green-200 bg-green-50 text-green-700'
-                }`}
-              >
-                {actionError || actionSuccess}
-              </div>
-            )}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <OrgAdminStatCard
+          label="Active Labs"
+          value={stats.active}
+          color="green"
+          icon="🟢"
+          onClick={() => setStatusFilter('completed')}
+          active={statusFilter === 'completed'}
+        />
+        <OrgAdminStatCard
+          label="Expired Labs"
+          value={stats.expired}
+          color="orange"
+          icon="🔴"
+          onClick={() => setStatusFilter('expired')}
+          active={statusFilter === 'expired'}
+        />
+        <OrgAdminStatCard
+          label="Total Requests"
+          value={stats.total}
+          color="blue"
+          icon="📋"
+          onClick={() => setStatusFilter('all')}
+          active={statusFilter === 'all'}
+        />
+        <OrgAdminStatCard label="Total Users" value={stats.totalUsers} color="purple" icon="👥" />
+      </div>
 
-            {overviewError && !overviewLoading ? (
-              <ErrorState
-                title="Failed to load resource groups"
-                message={overviewError}
-                onRetry={() => void refreshOverview()}
-              />
-            ) : (
-              <div className="grid grid-cols-1 gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
-                <OrgAdminResourceGroupList
-                  groups={resourceGroups}
-                  selectedRequestId={selectedRequestId}
-                  loading={overviewLoading}
-                  onSelect={selectRequest}
-                />
+      <OrgAdminAccessRequests
+        requests={accessRequests}
+        loading={accessLoading}
+        saving={saving}
+        onReview={reviewAccess}
+      />
 
-                <div className="space-y-6">
-                  <OrgAdminRequestSummary
-                    request={requestDetail}
-                    users={users}
-                    loading={detailLoading}
-                  />
+      {(actionError || actionSuccess) && (
+        <div
+          className={`rounded-lg border px-4 py-3 text-sm ${
+            actionError
+              ? 'border-red-200 bg-red-50 text-red-700'
+              : 'border-green-200 bg-green-50 text-green-700'
+          }`}
+        >
+          {actionError || actionSuccess}
+        </div>
+      )}
 
-                  {detailError && !detailLoading ? (
-                    <ErrorState
-                      title="Failed to load request detail"
-                      message={detailError}
-                      onRetry={() => void refreshDetail()}
-                    />
-                  ) : (
-                    <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_300px]">
-                      <OrgAdminUsersTable
-                        users={users}
-                        request={requestDetail}
-                        requestId={selectedRequestId}
-                        sessionToken={session!.sessionToken}
-                        availableRoles={availableRoles}
-                        loading={detailLoading}
-                        selectedUserId={selectedUserId}
-                        saving={saving}
-                        onSelect={setSelectedUserId}
-                        onForceLogout={forceLogout}
-                        onUpdateRoles={updateRoles}
-                        fetchUserMonitoring={fetchUserMonitoring}
-                        onFetchAzureCost={fetchUserAzureCost}
-                      />
-                      <OrgAdminUserPanel
-                        user={selectedUser}
-                        saving={saving}
-                        onSaveRoles={updateRoles}
-                        onDelete={handleDeleteUser}
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="relative min-w-[240px] flex-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="text"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by email, request ID, or region..."
+            className="w-full rounded-lg border border-gray-200 py-2 pl-9 pr-9 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+          />
+          {search && (
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 rounded p-0.5 text-gray-400 hover:text-gray-600"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+
+        <div className="flex flex-wrap gap-1 rounded-lg bg-gray-100 p-1">
+          {STATUS_FILTERS.map((status) => (
+            <button
+              key={status}
+              type="button"
+              onClick={() => setStatusFilter(status)}
+              className={`rounded-md px-3 py-1 text-xs font-medium transition ${
+                statusFilter === status
+                  ? 'bg-white text-gray-900 shadow-sm'
+                  : 'text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {status === 'all' ? 'All' : status.charAt(0).toUpperCase() + status.slice(1)}
+            </button>
+          ))}
+        </div>
+
+        {regions.length > 0 && (
+          <select
+            value={regionFilter}
+            onChange={(event) => setRegionFilter(event.target.value)}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+          >
+            <option value="all">All regions</option>
+            {regions.map((region) => (
+              <option key={region} value={region}>
+                {region}
+              </option>
+            ))}
+          </select>
         )}
-      </main>
+
+        <span className="text-sm text-gray-400">
+          {filtered.length} request{filtered.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {overviewError && !overviewLoading ? (
+        <ErrorState
+          title="Failed to load requests"
+          message={overviewError}
+          onRetry={() => void refreshOverview()}
+        />
+      ) : (
+        <div className="space-y-2">
+          {overviewLoading && requests.length === 0 && (
+            <div className="flex items-center justify-center gap-2 rounded-xl border border-gray-200 bg-white py-16 text-sm text-gray-500">
+              <Loader2 className="h-5 w-5 animate-spin text-[#B91C1C]" />
+              Loading requests...
+            </div>
+          )}
+
+          {!overviewLoading && filtered.length === 0 && (
+            <div className="rounded-xl border border-gray-200 bg-white py-16 text-center">
+              <ClipboardList className="mx-auto mb-3 h-10 w-10 text-gray-300" />
+              <p className="text-sm font-medium text-gray-900">No requests found</p>
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="mt-3 text-sm text-[#B91C1C] hover:underline"
+                >
+                  Clear search
+                </button>
+              )}
+            </div>
+          )}
+
+          {filtered.map((request) => {
+            const open = selectedRequestId === request.id;
+
+            return (
+              <div key={request.id}>
+                <button
+                  type="button"
+                  onClick={() => handleToggleRequest(request.id)}
+                  className={`flex w-full flex-wrap items-center gap-4 rounded-xl border bg-white px-5 py-4 text-left transition hover:border-blue-300 hover:shadow-sm ${
+                    open
+                      ? 'rounded-b-none border-[#B91C1C]/40 border-b-transparent'
+                      : 'border-gray-200'
+                  }`}
+                >
+                  <div className="min-w-[180px]">
+                    <div className="text-sm font-bold text-gray-900">#{request.id}</div>
+                    <div className="text-sm text-gray-500">{request.customerEmail}</div>
+                    {request.requestName && (
+                      <div className="mt-0.5 truncate text-xs text-gray-400">{request.requestName}</div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-1 flex-wrap items-center gap-2">
+                    {request.region && (
+                      <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-medium text-blue-700">
+                        {request.region}
+                      </span>
+                    )}
+                    <CostingModeBadge mode={request.costingMode} />
+                    <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
+                      <Users className="h-3 w-3" />
+                      {request.userCount} user{request.userCount !== 1 ? 's' : ''}
+                    </span>
+                  </div>
+
+                  <div className="ml-auto flex min-w-[160px] flex-col items-end gap-1.5">
+                    <OrgAdminLabStatusBadge status={request.status} />
+                    <div className="flex items-center gap-1.5 text-xs text-gray-400">
+                      <span>{new Date(request.startDate).toLocaleDateString()}</span>
+                      <span>→</span>
+                      <span>
+                        {request.expiryDate
+                          ? new Date(request.expiryDate).toLocaleDateString()
+                          : '—'}
+                      </span>
+                    </div>
+                    <ChevronRight
+                      className={`h-5 w-5 text-gray-400 transition-transform ${open ? 'rotate-90' : ''}`}
+                    />
+                  </div>
+                </button>
+
+                {open && (
+                  <OrgAdminRequestDetailPanel
+                    request={request}
+                    requestDetail={requestDetail}
+                    users={users}
+                    availableRoles={availableRoles}
+                    loading={detailLoading}
+                    detailError={detailError}
+                    saving={saving}
+                    onRetry={() => void refreshDetail()}
+                    onForceLogout={forceLogout}
+                    onUpdateRoles={updateRoles}
+                    fetchUserMonitoring={fetchUserMonitoring}
+                    onFetchAzureCost={fetchUserAzureCost}
+                    onRenewBudget={renewBudget}
+                    onToggleCleanup={handleToggleCleanup}
+                    onManualCleanup={triggerCleanup}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

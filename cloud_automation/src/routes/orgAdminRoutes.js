@@ -1,52 +1,66 @@
 const express = require('express');
 const orgAdminController = require('../controllers/orgAdminController');
-const { authenticateOrgAdmin } = require('../middleware/orgAdminMiddleware');
+const { requireSuperAdmin } = require('../middleware/requireSuperAdmin');
 
 const router = express.Router();
 
-router.post('/login', orgAdminController.login);
-
-router.get('/resource-groups', authenticateOrgAdmin, orgAdminController.listResourceGroups);
+router.get('/requests', requireSuperAdmin, orgAdminController.listRequests);
+router.get('/resource-groups', requireSuperAdmin, orgAdminController.listResourceGroups);
 router.get(
   '/resource-groups/:requestId',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.getResourceGroupDetail
 );
 router.get(
   '/resource-groups/:requestId/monitoring',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.getMonitoringLogs
 );
 router.delete(
   '/resource-groups/:requestId/users/:userId',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.deleteUser
 );
 router.patch(
   '/resource-groups/:requestId/users/:userId/roles',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.updateUserRoles
 );
 router.post(
   '/resource-groups/:requestId/users/:userId/force-logout',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.forceLogoutUser
+);
+router.post(
+  '/resource-groups/:requestId/users/:userId/renew-budget',
+  requireSuperAdmin,
+  orgAdminController.renewUserBudget
+);
+router.patch(
+  '/resource-groups/:requestId/users/:userId/cleanup-settings',
+  requireSuperAdmin,
+  orgAdminController.updateUserCleanupSettings
+);
+router.post(
+  '/resource-groups/:requestId/users/:userId/trigger-cleanup',
+  requireSuperAdmin,
+  orgAdminController.triggerUserCleanup
 );
 router.get(
   '/resource-groups/:requestId/users/:userId/azure-cost',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.getUserAzureCost
 );
 router.get(
   '/resource-groups/:requestId/daily-usage',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.getDailyUsage
 );
-router.get('/azure/roles', authenticateOrgAdmin, orgAdminController.listAzureRoles);
-router.get('/access-requests', authenticateOrgAdmin, orgAdminController.listAccessRequests);
+router.get('/azure/roles', requireSuperAdmin, orgAdminController.listAzureRoles);
+router.get('/access-requests', requireSuperAdmin, orgAdminController.listAccessRequests);
 router.patch(
   '/access-requests/:id',
-  authenticateOrgAdmin,
+  requireSuperAdmin,
   orgAdminController.reviewAccessRequest
 );
 

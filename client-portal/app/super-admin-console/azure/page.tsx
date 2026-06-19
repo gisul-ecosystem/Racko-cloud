@@ -1,17 +1,19 @@
 'use client';
 
-import { Cloud } from 'lucide-react';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { AZURE_ROUTES } from '../../../cloud_automation/constants';
 
-export default function SuperAdminAzurePage() {
+export default function SuperAdminAzureRedirectPage() {
+  const router = useRouter();
+
+  useEffect(() => {
+    router.replace(AZURE_ROUTES.orgAdmin);
+  }, [router]);
+
   return (
-    <div className="flex min-h-[60vh] flex-col items-center justify-center text-center">
-      <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-red-50">
-        <Cloud className="h-8 w-8 text-[#B91C1C]" />
-      </div>
-      <h1 className="text-xl font-bold text-gray-900">Azure Service Management</h1>
-      <p className="mt-2 max-w-sm text-sm text-gray-500">
-        Azure cloud service management for super admins is coming soon.
-      </p>
+    <div className="flex min-h-[40vh] items-center justify-center">
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[#B91C1C]" />
     </div>
   );
 }

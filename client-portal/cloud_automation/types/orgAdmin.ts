@@ -8,19 +8,6 @@ export interface OrgAdminProfile {
   mustChangePassword?: boolean;
 }
 
-export interface OrgAdminSession {
-  sessionToken: string;
-  expiresAt: string;
-  admin: OrgAdminProfile;
-}
-
-export interface OrgAdminLoginResponse {
-  success: boolean;
-  admin: OrgAdminProfile;
-  sessionToken: string;
-  expiresAt: string;
-}
-
 export interface OrgAdminRole {
   role: string;
   scope?: string | null;
@@ -48,6 +35,19 @@ export interface OrgAdminResourceGroup {
   createdAt: string;
   userCount: number;
   activeSessions: number;
+}
+
+export interface OrgAdminRequestSummary {
+  id: number;
+  customerEmail: string;
+  status: string;
+  costingMode: CostingMode;
+  region: string | null;
+  userCount: number;
+  startDate: string;
+  expiryDate: string | null;
+  requestName: string | null;
+  resourceGroupCount: number;
 }
 
 export interface OrgAdminLiveResource {
@@ -122,6 +122,8 @@ export interface OrgAdminUser {
   totalBudget?: number | null;
   costCurrency?: string;
   lastCostSyncedAt?: string | null;
+  cleanupDisabled?: boolean;
+  cleanupIntervalOverride?: number | null;
 }
 
 export interface OrgAdminUserAzureCost {
