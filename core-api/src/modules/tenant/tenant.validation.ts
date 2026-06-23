@@ -1,6 +1,5 @@
 import { z } from 'zod';
 import { registerSchema } from '../auth/auth.validation';
-import { SERVICE_CATALOG } from '../../constants/serviceCatalog';
 
 export const passwordSchema = registerSchema.shape.body.shape.password;
 
@@ -28,21 +27,6 @@ const brandingSchema = z
 
 const tenantStatusSchema = z.enum(['pending', 'active', 'suspended', 'cancelled']);
 
-const serviceKeySchema = z.enum(SERVICE_CATALOG);
-
-export const serviceMutationSchema = z.object({
-  services: z.array(serviceKeySchema).min(1),
-});
-
-export const limitsUpdateSchema = z
-  .object({
-    maxVms: z.number().int().positive().optional(),
-    maxManagedUsers: z.number().int().positive().optional(),
-  })
-  .refine((data) => Object.keys(data).length > 0, {
-    message: 'At least one limit field must be provided',
-  });
-
 export const createTenantSchema = z.object({
   body: z.object({
     name: z.string().min(1, 'Name is required').max(200, 'Name too long').trim(),
@@ -69,16 +53,6 @@ export const tenantIdRouteParamSchema = z.object({
   params: z.object({
     tenantId: z.string().min(1, 'Tenant id is required'),
   }),
-});
-
-export const tenantServiceMutationRequestSchema = z.object({
-  params: tenantIdRouteParamSchema.shape.params,
-  body: serviceMutationSchema,
-});
-
-export const tenantLimitsUpdateRequestSchema = z.object({
-  params: tenantIdRouteParamSchema.shape.params,
-  body: limitsUpdateSchema,
 });
 
 export const updateTenantSchema = z.object({
