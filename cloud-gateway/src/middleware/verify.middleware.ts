@@ -56,6 +56,10 @@ export async function verifyMiddleware(req: Request, _res: Response, next: NextF
     req.headers['x-user-role'] = result.role;
     req.headers['x-session-id'] = result.sessionId;
 
+    if (authReq.tenantContext) {
+      req.headers['x-tenant-id'] = authReq.tenantContext.id;
+    }
+
     next();
   } catch (error) {
     if (axios.isAxiosError(error)) {

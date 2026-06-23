@@ -20,6 +20,10 @@ import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
+import internalTenantRoutes from './modules/tenant/internalTenant.routes';
+import tenantRoutes from './modules/tenant/tenant.routes';
+import tenantAuthRoutes from './modules/tenantAuth/tenantAuth.routes';
+import superAdminRoutes from './modules/superAdmin/superAdmin.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
 import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconcileSweeper';
@@ -116,6 +120,10 @@ app.get('/health', (_req, res) => {
 });
 
 // Routes
+app.use('/internal/tenants', internalTenantRoutes);
+app.use('/api/v1/tenants', tenantRoutes);
+app.use('/api/v1/tenant-auth', tenantAuthRoutes);
+app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
