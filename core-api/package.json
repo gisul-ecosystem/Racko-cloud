@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "nodemon --exec ts-node src/server.ts",
+    "dev": "node --watch -r ts-node/register src/server.ts",
     "seed": "ts-node src/scripts/seedSuperAdmin.ts",
     "typecheck": "tsc --noEmit",
     "test": "ts-node --transpile-only src/modules/vm/helpers/hypervGuestOutput.test.ts"

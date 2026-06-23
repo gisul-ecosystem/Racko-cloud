@@ -14,37 +14,43 @@ import type { AuthenticatedRequest } from '../types';
 
 const router = Router();
 
-// Single proxy instance — full path is preserved because all routes are
-// mounted with their complete path (no prefix stripping by Express) 
-const coreApiProxy = createProxyMiddleware({
+const proxyOnHandlers = {
+  proxyRes: (proxyRes: import('http').IncomingMessage) => {
+    const setCookie = proxyRes.headers['set-cookie'];
+    if (setCookie) {
+      proxyRes.headers['set-cookie'] = setCookie.map((cookie) =>
+        cookie
+          .replace(/;\s*Domain=[^;]*/gi, '')
+          .replace(/;\s*Path=[^;]*/gi, '; Path=/')
+      );
+    }
+  },
+  error: (_err: Error, _req: unknown, res: unknown) => {
+    (res as Response).status(502).json({
+      success: false,
+      message: 'Service temporarily unavailable.',
+      code: 'BAD_GATEWAY',
+    });
+  },
+};
+
+const sharedProxyOptions = {
   target: config.CORE_API_URL,
   changeOrigin: true,
   timeout: config.REQUEST_TIMEOUT_MS,
-  // Strip Domain from Set-Cookie so the browser accepts cookies from localhost:8000
-  cookieDomainRewrite: { '*': '' },
-  // Ensure cookie path is always /
-  cookiePathRewrite: { '*': '/' },
-  on: {
-    proxyRes: (proxyRes) => {
-      const setCookie = proxyRes.headers['set-cookie'];
-      if (setCookie) {
-        proxyRes.headers['set-cookie'] = setCookie.map((cookie) =>
-          cookie
-            // Remove Domain attribute entirely
-            .replace(/;\s*Domain=[^;]*/gi, '')
-            // Normalise Path to /
-            .replace(/;\s*Path=[^;]*/gi, '; Path=/')
-        );
-      }
-    },
-    error: (_err, _req, res) => {
-      (res as Response).status(502).json({
-        success: false,
-        message: 'Service temporarily unavailable.',
-        code: 'BAD_GATEWAY',
-      });
-    },
-  },
+  cookieDomainRewrite: { '*': '' } as const,
+  cookiePathRewrite: { '*': '/' } as const,
+  on: proxyOnHandlers,
+};
+
+// Explicit routes use the full path — no rewrite needed
+const coreApiProxy = createProxyMiddleware(sharedProxyOptions);
+
+// Catch-all mounted at /api/v1 — Express strips that prefix from req.url before
+// the proxy runs, so we must restore it for core-api routes like /api/v1/tenants
+const coreApiCatchAllProxy = createProxyMiddleware({
+  ...sharedProxyOptions,
+  pathRewrite: (path) => `/api/v1${path}`,
 });
 
 // Role guard middleware factory
@@ -166,6 +172,6 @@ router.delete('/api/v1/managed-users/:userId', authMiddleware, verifyMiddleware,
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
-router.use('/api/v1', authMiddleware, verifyMiddleware, coreApiProxy);
+router.use('/api/v1', authMiddleware, verifyMiddleware, coreApiCatchAllProxy);
 
 export default router;

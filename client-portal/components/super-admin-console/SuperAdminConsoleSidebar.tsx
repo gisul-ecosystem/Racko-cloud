@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutGrid, MonitorCheck, Cloud } from 'lucide-react';
+import { LayoutGrid, MonitorCheck, Cloud, Palette } from 'lucide-react';
 
 interface SuperAdminConsoleSidebarProps {
   sidebarOpen: boolean;
@@ -13,6 +13,7 @@ const navItems = [
   { href: '/super-admin-console', label: 'All services', icon: LayoutGrid, exact: true },
   { href: '/super-admin-console/vm-management', label: 'VM Management', icon: MonitorCheck, exact: false },
   { href: '/super-admin-console/azure/org-admin', label: 'Azure Services', icon: Cloud, exact: false },
+  { href: '/super-admin-console/white-labelling', label: 'White Labelling', icon: Palette, exact: false },
 ];
 
 export function SuperAdminConsoleSidebar({ sidebarOpen, onCloseSidebar }: SuperAdminConsoleSidebarProps) {
