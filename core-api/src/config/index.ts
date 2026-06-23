@@ -139,6 +139,11 @@ const envSchema = z.object({
   GUACAMOLE_USERNAME: z.string().min(1, 'GUACAMOLE_USERNAME is required'),
   GUACAMOLE_PASSWORD: z.string().min(1, 'GUACAMOLE_PASSWORD is required'),
 
+  // Razorpay (wallet top-up)
+  RAZORPAY_KEY_ID: z.string().optional().default(''),
+  RAZORPAY_KEY_SECRET: z.string().optional().default(''),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
+
   // Test VM scaffolding — remove once VM model stores private IP + credentials
   TEST_VM_IP: z.string().optional(),
   TEST_VM_USERNAME: z.string().optional(),
