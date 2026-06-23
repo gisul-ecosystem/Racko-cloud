@@ -9,6 +9,7 @@ const vmManagementLimitsSchema = z.object({
   maxTotalVcpu: z.number().int().positive(),
   maxTotalRamGb: z.number().positive(),
   maxTotalDiskGb: z.number().positive(),
+  allowedTemplateIds: z.array(z.number().int().positive()).optional().default([]),
 });
 
 const vmManagementPricingSchema = z.object({

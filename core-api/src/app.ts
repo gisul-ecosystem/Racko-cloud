@@ -24,6 +24,10 @@ import internalTenantRoutes from './modules/tenant/internalTenant.routes';
 import tenantRoutes from './modules/tenant/tenant.routes';
 import tenantAuthRoutes from './modules/tenantAuth/tenantAuth.routes';
 import superAdminRoutes from './modules/superAdmin/superAdmin.routes';
+import walletRoutes from './modules/wallet/wallet.routes';
+import orderRoutes from './modules/order/order.routes';
+import superAdminOrderRoutes from './modules/order/superAdminOrder.routes';
+import razorpayWebhookRoutes from './modules/billing/razorpay/razorpayWebhook.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
 import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconcileSweeper';
@@ -84,11 +88,14 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret', 'x-tenant-id'],
     exposedHeaders: ['X-Request-ID'],
     maxAge: 86400,
   })
 );
+
+// Razorpay webhook — raw body required for HMAC verification (before JSON parser)
+app.use('/webhooks/razorpay', express.raw({ type: 'application/json' }), razorpayWebhookRoutes);
 
 // 4. Body parsing
 app.use(express.json({ limit: '10kb' }));
@@ -124,6 +131,9 @@ app.use('/internal/tenants', internalTenantRoutes);
 app.use('/api/v1/tenants', tenantRoutes);
 app.use('/api/v1/tenant-auth', tenantAuthRoutes);
 app.use('/api/v1/super-admin', superAdminRoutes);
+app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
+app.use('/api/v1/tenant-wallet', walletRoutes);
+app.use('/api/v1/tenant-orders', orderRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
