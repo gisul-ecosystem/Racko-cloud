@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { MonitorCheck, Cloud } from 'lucide-react';
+import { MonitorCheck, Cloud, Palette } from 'lucide-react';
 
 const services = [
   {
@@ -17,6 +17,13 @@ const services = [
     href: '/super-admin-console/azure/org-admin',
     icon: Cloud,
     description: 'Manage Azure cloud services and resources',
+  },
+  {
+    id: 'white-labelling',
+    name: 'White Labelling Service',
+    href: '/super-admin-console/white-labelling',
+    icon: Palette,
+    description: 'Manage tenants, branding, service configs and tenant admins',
   },
 ] as const;
 
