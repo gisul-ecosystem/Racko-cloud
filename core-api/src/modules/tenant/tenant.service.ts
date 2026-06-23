@@ -1,6 +1,5 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
-import type { ServiceKey } from '../../constants/serviceCatalog';
 import { Tenant, type ITenant, type TenantStatus } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { hashPassword } from '../../utils/argon2';
@@ -195,90 +194,6 @@ export class TenantService {
       }
       throw error;
     }
-  }
-
-  private async requireTenantById(tenantId: string): Promise<ITenant> {
-    if (!isValidObjectId(tenantId)) {
-      throw new ValidationError('Invalid tenant id format.');
-    }
-
-    const tenant = await Tenant.findById(tenantId);
-    if (!tenant) {
-      throw new NotFoundError('Tenant not found.');
-    }
-
-    return tenant;
-  }
-
-  async addServices(tenantId: string, services: ServiceKey[]): Promise<TenantPublic> {
-    await this.requireTenantById(tenantId);
-
-    const tenant = await Tenant.findByIdAndUpdate(
-      tenantId,
-      { $addToSet: { enabledServices: { $each: services } } },
-      { new: true }
-    );
-
-    if (!tenant) {
-      throw new NotFoundError('Tenant not found.');
-    }
-
-    return toTenantPublic(tenant);
-  }
-
-  async removeServices(tenantId: string, services: ServiceKey[]): Promise<TenantPublic> {
-    await this.requireTenantById(tenantId);
-
-    const tenant = await Tenant.findByIdAndUpdate(
-      tenantId,
-      { $pull: { enabledServices: { $in: services } } },
-      { new: true }
-    );
-
-    if (!tenant) {
-      throw new NotFoundError('Tenant not found.');
-    }
-
-    return toTenantPublic(tenant);
-  }
-
-  async setServices(tenantId: string, services: ServiceKey[]): Promise<TenantPublic> {
-    await this.requireTenantById(tenantId);
-
-    const tenant = await Tenant.findByIdAndUpdate(
-      tenantId,
-      { $set: { enabledServices: services } },
-      { new: true }
-    );
-
-    if (!tenant) {
-      throw new NotFoundError('Tenant not found.');
-    }
-
-    return toTenantPublic(tenant);
-  }
-
-  async updateLimits(
-    tenantId: string,
-    limits: { maxVms?: number; maxManagedUsers?: number }
-  ): Promise<TenantPublic> {
-    await this.requireTenantById(tenantId);
-
-    const $set: Record<string, number> = {};
-    if (limits.maxVms !== undefined) {
-      $set['limits.maxVms'] = limits.maxVms;
-    }
-    if (limits.maxManagedUsers !== undefined) {
-      $set['limits.maxManagedUsers'] = limits.maxManagedUsers;
-    }
-
-    const tenant = await Tenant.findByIdAndUpdate(tenantId, { $set }, { new: true });
-
-    if (!tenant) {
-      throw new NotFoundError('Tenant not found.');
-    }
-
-    return toTenantPublic(tenant);
   }
 
   async createTenantAdmin(

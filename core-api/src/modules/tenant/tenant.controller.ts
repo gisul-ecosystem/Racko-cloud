@@ -1,5 +1,4 @@
 import type { Request, Response, NextFunction } from 'express';
-import type { ServiceKey } from '../../constants/serviceCatalog';
 import { tenantService } from './tenant.service';
 import type { AuthenticatedRequest } from '../../types';
 import type { CreateTenantInput, CreateTenantAdminInput, UpdateTenantInput } from './tenant.validation';
@@ -70,50 +69,6 @@ export class TenantController {
         req.body as CreateTenantAdminInput
       );
       success(res, 'Tenant admin created.', { admin }, 201);
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async addServices(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { tenantId } = req.params as { tenantId: string };
-      const { services } = req.body as { services: ServiceKey[] };
-      const tenant = await tenantService.addServices(tenantId, services);
-      success(res, 'Services added to tenant.', { tenant });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async removeServices(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { tenantId } = req.params as { tenantId: string };
-      const { services } = req.body as { services: ServiceKey[] };
-      const tenant = await tenantService.removeServices(tenantId, services);
-      success(res, 'Services removed from tenant.', { tenant });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async setServices(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { tenantId } = req.params as { tenantId: string };
-      const { services } = req.body as { services: ServiceKey[] };
-      const tenant = await tenantService.setServices(tenantId, services);
-      success(res, 'Tenant services updated.', { tenant });
-    } catch (error) {
-      next(error);
-    }
-  }
-
-  async updateLimits(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const { tenantId } = req.params as { tenantId: string };
-      const limits = req.body as { maxVms?: number; maxManagedUsers?: number };
-      const tenant = await tenantService.updateLimits(tenantId, limits);
-      success(res, 'Tenant limits updated.', { tenant });
     } catch (error) {
       next(error);
     }
