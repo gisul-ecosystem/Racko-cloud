@@ -8,7 +8,18 @@ export interface VerifiedUser {
   sessionId: string;
 }
 
-export interface AuthenticatedRequest extends Request {
+export interface TenantContext {
+  id: string;
+  slug: string;
+  status: string;
+}
+
+export interface GatewayRequest extends Request {
+  requestId?: string;
+  tenantContext?: TenantContext | null;
+}
+
+export interface AuthenticatedRequest extends GatewayRequest {
   user: VerifiedUser;
   requestId: string;
 }
@@ -19,4 +30,10 @@ export interface TokenValidationResponse {
   role?: UserRole;
   sessionId?: string;
   reason?: string;
+}
+
+export interface TenantResolveResponse {
+  id: string;
+  slug: string;
+  status: string;
 }

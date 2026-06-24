@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { helmetMiddleware } from './middleware/helmet.middleware';
 import { requestIdMiddleware } from './middleware/requestId.middleware';
+import { tenantResolver } from './middleware/tenant.middleware';
 import { loggerMiddleware } from './middleware/logger.middleware';
 import { userRateLimiter } from './middleware/rateLimit.middleware';
 import { corsOptions } from './config/cors';
@@ -26,6 +27,9 @@ app.use(helmetMiddleware);
 
 // 3. CORS — strict origin whitelist
 app.use(cors(corsOptions));
+
+// 3b. Tenant host resolution (non-blocking; sets req.tenantContext)
+app.use(tenantResolver);
 
 // 4. Morgan/logger — request logging
 app.use(loggerMiddleware);
