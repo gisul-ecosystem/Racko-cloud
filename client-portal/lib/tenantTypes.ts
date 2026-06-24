@@ -5,6 +5,7 @@ export type ServiceConfigStatus = 'active' | 'suspended';
 export interface TenantBranding {
   logoUrl?: string;
   faviconUrl?: string;
+  loginPageImageUrl?: string;
   primaryColor?: string;
   secondaryColor?: string;
   supportEmail?: string;
@@ -115,4 +116,54 @@ export interface TenantsListResult {
   total: number;
   page: number;
   limit: number;
+}
+
+export type BrandingAssetType = 'logo' | 'favicon' | 'login-page-image';
+
+export interface PlatformTemplateOption {
+  templateId: number;
+  name: string;
+  node: string;
+  cpuCores: number;
+  memoryGb: number;
+  diskGb: number;
+  enabled: boolean;
+  selected: boolean;
+}
+
+export interface VmManagementPlatformTemplates {
+  platformCatalogPath: string;
+  platformSelectionPath: string;
+  selectionMode: 'all_enabled' | 'allowlist';
+  allowedTemplateIds: number[];
+  templates: PlatformTemplateOption[];
+}
+
+export type SuperAdminOrderStatus =
+  | 'pending_payment'
+  | 'pending_approval'
+  | 'approved'
+  | 'rejected'
+  | 'fulfilled';
+
+export interface SuperAdminOrder {
+  id: string;
+  tenantId: string;
+  templateId: number;
+  templateName: string;
+  count: number;
+  specs: {
+    cpuCores: number;
+    memoryGb: number;
+    diskGb: number;
+  };
+  calculatedAmount: number;
+  status: SuperAdminOrderStatus;
+  createdBy: string;
+  approvedBy: string | null;
+  rejectedBy: string | null;
+  rejectionReason: string | null;
+  provisionJobId: string | null;
+  createdAt: string;
+  updatedAt: string;
 }

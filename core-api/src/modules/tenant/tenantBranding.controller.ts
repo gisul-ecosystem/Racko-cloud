@@ -57,7 +57,7 @@ export class TenantBrandingController {
       }
 
       res.setHeader('Content-Type', asset.mimeType);
-      res.setHeader('Cache-Control', 'public, max-age=300');
+      res.setHeader('Cache-Control', 'private, no-cache');
       res.send(asset.buffer);
     } catch (error) {
       next(error);

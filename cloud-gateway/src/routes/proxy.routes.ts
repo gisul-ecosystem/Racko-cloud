@@ -54,6 +54,19 @@ const coreApiCatchAllProxy = createProxyMiddleware({
   pathRewrite: (path) => `/api/v1${path}`,
 });
 
+/** router.use('/api/v1/foo', proxy) strips the mount — restore full path for core-api */
+function createMountedCoreApiProxy(mountPath: string) {
+  return createProxyMiddleware({
+    ...sharedProxyOptions,
+    pathRewrite: (path) => `${mountPath}${path === '/' ? '' : path}`,
+  });
+}
+
+const tenantWalletProxy = createMountedCoreApiProxy('/api/v1/tenant-wallet');
+const tenantOrdersProxy = createMountedCoreApiProxy('/api/v1/tenant-orders');
+const tenantPlansProxy = createMountedCoreApiProxy('/api/v1/tenant-plans');
+const tenantNotificationsProxy = createMountedCoreApiProxy('/api/v1/tenant-notifications');
+
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
@@ -182,10 +195,10 @@ router.get('/api/v1/tenant-branding/asset', injectTenantHeader, coreApiProxy);
 router.post('/webhooks/razorpay', coreApiProxy);
 
 // ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
-router.use('/api/v1/tenant-wallet', requireTenantBearer, coreApiProxy);
-router.use('/api/v1/tenant-orders', requireTenantBearer, coreApiProxy);
-router.use('/api/v1/tenant-plans', requireTenantBearer, coreApiProxy);
-router.use('/api/v1/tenant-notifications', requireTenantBearer, coreApiProxy);
+router.use('/api/v1/tenant-wallet', requireTenantBearer, tenantWalletProxy);
+router.use('/api/v1/tenant-orders', requireTenantBearer, tenantOrdersProxy);
+router.use('/api/v1/tenant-plans', requireTenantBearer, tenantPlansProxy);
+router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificationsProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
