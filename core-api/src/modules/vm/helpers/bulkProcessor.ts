@@ -19,6 +19,7 @@ import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
 import { notificationService } from '../../notification/notification.service';
 import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
+import { finalizeOrderAfterProvisionJob } from '../../order/orderPlanProvisioning.service';
 
 // QUEUE_SLOT: replace direct async call with message queue job (RabbitMQ/BullMQ)
 // EVENT_SLOT: emit 'vm.bulk_created' event to message queue
@@ -441,6 +442,12 @@ async function finalizeJobStatus(jobId: mongoose.Types.ObjectId): Promise<void> 
     status: finalStatus,
     completedAt: new Date(),
   });
+
+  if (finalStatus === 'completed' || finalStatus === 'partial') {
+    await finalizeOrderAfterProvisionJob(jobId, finalStatus);
+  } else if (finalStatus === 'failed') {
+    await finalizeOrderAfterProvisionJob(jobId, 'failed');
+  }
 
   logger.info('Bulk VM creation job finished', {
     jobId: jobId.toString(),

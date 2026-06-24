@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 import mongoose from 'mongoose';
-import { Order, type IOrder, type IOrderSpecs } from '../../models/order.model';
+import { Order, type IOrder, type IOrderSpecs, type BillingPeriod } from '../../models/order.model';
 import { TenantServiceConfig } from '../../models/tenantServiceConfig.model';
 import { Tenant } from '../../models/tenant.model';
 import { User } from '../../models/user.model';
@@ -19,6 +19,15 @@ interface VmManagementPricing {
   cpuRatePerCoreMonthly: number;
   ramRatePerGbMonthly: number;
   diskRatePerGbMonthly: number;
+  billingDiscounts?: {
+    quarterly: number;
+    yearly: number;
+  };
+}
+
+interface BillingDiscounts {
+  quarterly: number;
+  yearly: number;
 }
 
 interface VmManagementLimits {
@@ -70,6 +79,25 @@ export interface PlaceOrderInput {
   cpuCores?: number;
   memoryGb?: number;
   diskGb?: number;
+  billingPeriod?: BillingPeriod;
+}
+
+function getBillingDiscounts(pricing: Record<string, unknown>): BillingDiscounts {
+  const raw = pricing['billingDiscounts'] as Record<string, unknown> | undefined;
+  return {
+    quarterly: typeof raw?.['quarterly'] === 'number' ? raw['quarterly'] : 0,
+    yearly: typeof raw?.['yearly'] === 'number' ? raw['yearly'] : 0,
+  };
+}
+
+function applyBillingPeriodMultiplier(
+  monthlyAmount: number,
+  billingPeriod: BillingPeriod,
+  discounts: BillingDiscounts
+): number {
+  if (billingPeriod === 'monthly') return monthlyAmount;
+  if (billingPeriod === 'quarterly') return monthlyAmount * 3 * (1 - discounts.quarterly);
+  return monthlyAmount * 12 * (1 - discounts.yearly);
 }
 
 function buildSuperAdminRequest(userId: string): Request {
@@ -112,7 +140,7 @@ async function getActiveVmManagementConfig(tenantId: string) {
 async function getTenantOrderUsage(tenantId: string): Promise<TenantOrderUsage> {
   const orders = await Order.find({
     tenantId: new mongoose.Types.ObjectId(tenantId),
-    status: { $in: ['pending_approval', 'fulfilled'] },
+    status: { $in: ['pending_approval', 'provisioning', 'fulfilled'] },
   })
     .select('count specs')
     .lean();
@@ -169,6 +197,9 @@ function toOrderPublic(order: IOrder) {
     rejectedBy: order.rejectedBy ? order.rejectedBy.toString() : null,
     rejectionReason: order.rejectionReason,
     provisionJobId: order.provisionJobId ?? null,
+    billingPeriod: order.billingPeriod,
+    periodStartDate: order.periodStartDate,
+    periodEndDate: order.periodEndDate,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
@@ -370,7 +401,8 @@ export class OrderService {
     tenantId: string,
     templateId: number,
     count: number,
-    requestedSpecs?: OrderSpecInput
+    requestedSpecs?: OrderSpecInput,
+    billingPeriod: BillingPeriod = 'monthly'
   ): Promise<{ amount: number; specs: IOrderSpecs; templateName: string; baselineSpecs: IOrderSpecs }> {
     if (!Number.isInteger(count) || count < 1) {
       throw new AppError('count must be a positive integer', 400, 'VALIDATION_ERROR');
@@ -378,6 +410,7 @@ export class OrderService {
 
     const serviceConfig = await getActiveVmManagementConfig(tenantId);
     const pricing = serviceConfig.pricing as unknown as VmManagementPricing;
+    const discounts = getBillingDiscounts(serviceConfig.pricing as Record<string, unknown>);
     const allowedTemplateIds = getAllowedTemplateIds(serviceConfig.limits as Record<string, unknown>);
 
     if (allowedTemplateIds.length > 0 && !allowedTemplateIds.includes(templateId)) {
@@ -396,8 +429,10 @@ export class OrderService {
     );
 
     const perVmCost = computePerVmCost(specs, pricing);
+    const monthlyTotal = perVmCost * count;
+    const amount = applyBillingPeriodMultiplier(monthlyTotal, billingPeriod, discounts);
     return {
-      amount: perVmCost * count,
+      amount,
       specs,
       templateName,
       baselineSpecs,
@@ -409,12 +444,13 @@ export class OrderService {
     tenantUserId: string,
     input: PlaceOrderInput
   ): Promise<ReturnType<typeof toOrderPublic>> {
-    const { templateId, count, cpuCores, memoryGb, diskGb } = input;
+    const { templateId, count, cpuCores, memoryGb, diskGb, billingPeriod = 'monthly' } = input;
     const { amount, specs, templateName } = await this.calculateOrderCost(
       tenantId,
       templateId,
       count,
-      { cpuCores, memoryGb, diskGb }
+      { cpuCores, memoryGb, diskGb },
+      billingPeriod
     );
 
     const serviceConfig = await getActiveVmManagementConfig(tenantId);
@@ -432,6 +468,7 @@ export class OrderService {
         specs,
         calculatedAmount: amount,
         status: 'pending_approval',
+        billingPeriod,
         createdBy: new mongoose.Types.ObjectId(tenantUserId),
       });
 
@@ -449,6 +486,7 @@ export class OrderService {
       specs,
       calculatedAmount: amount,
       status: 'pending_payment',
+      billingPeriod,
       createdBy: new mongoose.Types.ObjectId(tenantUserId),
     });
 
@@ -493,7 +531,7 @@ export class OrderService {
 
     try {
       const { jobId } = await vmService.createVM(dto, new mongoose.Types.ObjectId(approvedByUserId), req);
-      order.status = 'fulfilled';
+      order.status = 'provisioning';
       order.approvedBy = new mongoose.Types.ObjectId(approvedByUserId);
       order.provisionJobId = jobId;
       await order.save();

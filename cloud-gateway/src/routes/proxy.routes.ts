@@ -184,6 +184,8 @@ router.post('/webhooks/razorpay', coreApiProxy);
 // ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
 router.use('/api/v1/tenant-wallet', requireTenantBearer, coreApiProxy);
 router.use('/api/v1/tenant-orders', requireTenantBearer, coreApiProxy);
+router.use('/api/v1/tenant-plans', requireTenantBearer, coreApiProxy);
+router.use('/api/v1/tenant-notifications', requireTenantBearer, coreApiProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
