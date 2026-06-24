@@ -11,7 +11,7 @@ import type {
   ManagePortalUsersResponse,
 } from '../types/managePortal';
 
-const API_BASE = process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'http://localhost:8000';
+import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
 
 export class ManagePortalError extends Error {
   readonly status: number;
@@ -67,7 +67,7 @@ async function manageRequest<T>(
   let response: Response;
 
   try {
-    response = await fetch(`${API_BASE}${MANAGE_PORTAL_API_PREFIX}${path}`, {
+    response = await fetch(`${getGatewayBaseUrl()}${MANAGE_PORTAL_API_PREFIX}${path}`, {
       ...rest,
       headers,
       cache: 'no-store',

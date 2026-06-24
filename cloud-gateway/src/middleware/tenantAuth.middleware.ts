@@ -7,8 +7,8 @@ import type { GatewayRequest } from '../types';
 interface TenantTokenPayload {
   sub: string;
   tenantId: string;
-  role: string;
-  type: string;
+  role: 'tenant_admin' | 'tenant_user';
+  type: 'tenant';
   iat?: number;
   exp?: number;
 }
