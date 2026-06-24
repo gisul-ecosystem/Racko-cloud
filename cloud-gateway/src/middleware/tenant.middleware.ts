@@ -25,6 +25,10 @@ function headerToString(value: string | string[] | undefined): string | undefine
   return undefined;
 }
 
+function isLocalGatewayHost(host: string): boolean {
+  return host === 'localhost' || host === '127.0.0.1';
+}
+
 function resolveHost(req: Request): string | null {
   const raw =
     headerToString(req.headers['x-forwarded-host']) ?? headerToString(req.headers['host']);
@@ -35,7 +39,22 @@ function resolveHost(req: Request): string | null {
   const withoutPort = firstHop.replace(/:\d+$/, '');
   const normalized = withoutPort.toLowerCase().trim();
 
-  return normalized.length > 0 ? normalized : null;
+  if (!normalized) return null;
+
+  // Local dev: frontend sends X-Tenant-Domain when NEXT_PUBLIC_TENANT_DEV_DOMAIN is set
+  if (
+    config.NODE_ENV === 'development' &&
+    isLocalGatewayHost(normalized) &&
+    headerToString(req.headers['x-tenant-domain'])
+  ) {
+    const override = headerToString(req.headers['x-tenant-domain'])!
+      .replace(/:\d+$/, '')
+      .toLowerCase()
+      .trim();
+    return override.length > 0 ? override : normalized;
+  }
+
+  return normalized;
 }
 
 async function fetchTenantFromCoreApi(

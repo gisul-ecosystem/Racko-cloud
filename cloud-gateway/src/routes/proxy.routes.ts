@@ -11,6 +11,8 @@ import { loginSlowDown } from '../middleware/slowDown.middleware';
 import { config } from '../config';
 import { ForbiddenError } from '../utils/errors';
 import type { AuthenticatedRequest } from '../types';
+import { injectTenantHeader } from '../middleware/injectTenantHeader.middleware';
+import { tenantAuthMiddleware } from '../middleware/tenantAuth.middleware';
 
 const router = Router();
 
@@ -169,6 +171,21 @@ router.post('/api/v1/managed-users/bulk', authMiddleware, verifyMiddleware, requ
 router.get('/api/v1/managed-users', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.patch('/api/v1/managed-users/:userId/active', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/managed-users/:userId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
+// ─── TENANT AUTH (public — host resolves tenant via injectTenantHeader) ───────
+router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
+router.post('/api/v1/tenant-auth/forgot-password', injectTenantHeader, coreApiProxy);
+router.post('/api/v1/tenant-auth/reset-password', injectTenantHeader, coreApiProxy);
+
+// ─── TENANT WALLET (tenant Bearer JWT — not platform verifyMiddleware) ───────
+router.get('/api/v1/tenant-wallet', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
+router.get('/api/v1/tenant-wallet/transactions', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
+router.post('/api/v1/tenant-wallet/topup', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
+
+// ─── TENANT ORDERS (tenant Bearer JWT — tenant_admin enforced in core-api) ───
+router.get('/api/v1/tenant-orders/templates', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
+router.get('/api/v1/tenant-orders', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
+router.post('/api/v1/tenant-orders', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

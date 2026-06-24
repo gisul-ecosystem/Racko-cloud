@@ -4,6 +4,8 @@
  * Refresh token lives in HttpOnly cookie (handled by browser automatically).
  */ 
 
+import { getGatewayBaseUrl } from './gatewayUrl';
+
 // Global session-expiry event — fired by apiClient when refresh fails mid-session
 export const SESSION_EXPIRED_EVENT = 'racko:session_expired';
 
@@ -12,8 +14,6 @@ export function emitSessionExpired(): void {
     window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
   }
 }
-
-const API_BASE = process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'http://localhost:8000';
 
 // In-memory token store — cleared on page refresh (intentional security decision)
 let accessToken: string | null = null;
@@ -36,11 +36,13 @@ interface RequestOptions extends RequestInit {
 
 async function refreshAccessToken(): Promise<string | null> {
   try {
-    const res = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
+    const res = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/refresh`, {
       method: 'POST',
-      credentials: 'include', // sends HttpOnly refresh token cookie
+      credentials: 'include',
       headers: { 'Content-Type': 'application/json' },
     });
+
+    if (res.status === 401) return null;
 
     const data = (await res.json()) as { data?: { accessToken?: string } };
     const newToken = data.data?.accessToken ?? null;
@@ -51,6 +53,11 @@ async function refreshAccessToken(): Promise<string | null> {
   } catch {
     return null;
   }
+}
+
+/** Restore session on app load; returns null when no cookie (expected, not an error). */
+export async function tryRestoreSession(): Promise<string | null> {
+  return refreshAccessToken();
 }
 
 export async function apiRequest<T>(
@@ -68,7 +75,7 @@ export async function apiRequest<T>(
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
 
-  const res = await fetch(`${API_BASE}${path}`, {
+  const res = await fetch(`${getGatewayBaseUrl()}${path}`, {
     ...fetchOptions,
     headers,
     credentials: 'include',
@@ -80,7 +87,7 @@ export async function apiRequest<T>(
     const newToken = await refreshAccessToken();
     if (newToken) {
       headers['Authorization'] = `Bearer ${newToken}`;
-      const retryRes = await fetch(`${API_BASE}${path}`, {
+      const retryRes = await fetch(`${getGatewayBaseUrl()}${path}`, {
         ...fetchOptions,
         headers,
         credentials: 'include',
