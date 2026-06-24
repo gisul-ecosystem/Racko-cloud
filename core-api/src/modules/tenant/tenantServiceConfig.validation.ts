@@ -8,6 +8,13 @@ export const vmManagementPricingSchema = z.object({
   cpuRatePerCoreMonthly: z.number().nonnegative(),
   ramRatePerGbMonthly: z.number().nonnegative(),
   diskRatePerGbMonthly: z.number().nonnegative(),
+  billingDiscounts: z
+    .object({
+      quarterly: z.number().min(0).max(1).default(0),
+      yearly: z.number().min(0).max(1).default(0),
+    })
+    .optional()
+    .default({ quarterly: 0, yearly: 0 }),
   fixedPlans: z
     .array(
       z.object({

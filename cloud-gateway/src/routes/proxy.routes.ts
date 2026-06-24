@@ -64,6 +64,8 @@ function createMountedCoreApiProxy(mountPath: string) {
 
 const tenantWalletProxy = createMountedCoreApiProxy('/api/v1/tenant-wallet');
 const tenantOrdersProxy = createMountedCoreApiProxy('/api/v1/tenant-orders');
+const tenantPlansProxy = createMountedCoreApiProxy('/api/v1/tenant-plans');
+const tenantNotificationsProxy = createMountedCoreApiProxy('/api/v1/tenant-notifications');
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -195,6 +197,8 @@ router.post('/webhooks/razorpay', coreApiProxy);
 // ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
 router.use('/api/v1/tenant-wallet', requireTenantBearer, tenantWalletProxy);
 router.use('/api/v1/tenant-orders', requireTenantBearer, tenantOrdersProxy);
+router.use('/api/v1/tenant-plans', requireTenantBearer, tenantPlansProxy);
+router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificationsProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

@@ -9,6 +9,7 @@ export interface IWalletTransaction extends Document {
   amount: number;
   reason: string;
   relatedOrderId: mongoose.Types.ObjectId | null;
+  relatedVmId: mongoose.Types.ObjectId | null;
   balanceAfter: number;
   createdAt: Date;
 }
@@ -40,6 +41,12 @@ const walletTransactionSchema = new Schema<IWalletTransaction>(
       type: Schema.Types.ObjectId,
       ref: 'Order',
       default: null,
+    },
+    relatedVmId: {
+      type: Schema.Types.ObjectId,
+      ref: 'VM',
+      default: null,
+      index: true,
     },
     balanceAfter: {
       type: Number,

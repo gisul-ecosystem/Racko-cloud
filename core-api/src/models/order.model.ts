@@ -4,8 +4,11 @@ export type OrderStatus =
   | 'pending_payment'
   | 'pending_approval'
   | 'approved'
+  | 'provisioning'
   | 'rejected'
   | 'fulfilled';
+
+export type BillingPeriod = 'monthly' | 'quarterly' | 'yearly';
 
 export interface IOrderSpecs {
   cpuCores: number;
@@ -27,6 +30,9 @@ export interface IOrder extends Document {
   rejectedBy: mongoose.Types.ObjectId | null;
   rejectionReason: string | null;
   provisionJobId: string | null;
+  billingPeriod: BillingPeriod;
+  periodStartDate: Date | null;
+  periodEndDate: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -73,7 +79,7 @@ const orderSchema = new Schema<IOrder>(
     },
     status: {
       type: String,
-      enum: ['pending_payment', 'pending_approval', 'approved', 'rejected', 'fulfilled'],
+      enum: ['pending_payment', 'pending_approval', 'approved', 'provisioning', 'rejected', 'fulfilled'],
       default: 'pending_payment',
       required: true,
       index: true,
@@ -102,6 +108,20 @@ const orderSchema = new Schema<IOrder>(
       type: String,
       default: null,
       trim: true,
+    },
+    billingPeriod: {
+      type: String,
+      enum: ['monthly', 'quarterly', 'yearly'],
+      required: true,
+      default: 'monthly',
+    },
+    periodStartDate: {
+      type: Date,
+      default: null,
+    },
+    periodEndDate: {
+      type: Date,
+      default: null,
     },
   },
   { timestamps: true }

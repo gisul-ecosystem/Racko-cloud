@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema } from 'mongoose';
+import type { BillingPeriod } from '../../models/order.model';
 
 export type SoftwareInstallStatus = 'pending' | 'installing' | 'installed' | 'failed';
 
@@ -61,6 +62,15 @@ export interface IVM extends Document {
 
   // Job tracking
   jobId?: mongoose.Types.ObjectId;
+
+  // Tenant order plan (null = not provisioned via tenant order flow)
+  tenantId?: mongoose.Types.ObjectId | null;
+  orderId?: mongoose.Types.ObjectId | null;
+  planPeriodEnd?: Date | null;
+  planStatus?: 'active' | 'expired' | null;
+  billingPeriod?: BillingPeriod | null;
+  /** planPeriodEnd value a soon-expiry warning was already sent for */
+  planExpiryWarningFor?: Date | null;
 
   // Assignment
   assignedTo?: mongoose.Types.ObjectId;
@@ -205,6 +215,37 @@ const vmSchema = new Schema<IVM>(
       type: Schema.Types.ObjectId,
       ref: 'VMJob',
       index: true,
+    },
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      default: null,
+      index: true,
+    },
+    orderId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Order',
+      default: null,
+      index: true,
+    },
+    planPeriodEnd: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    planStatus: {
+      type: String,
+      enum: ['active', 'expired'],
+      default: null,
+    },
+    billingPeriod: {
+      type: String,
+      enum: ['monthly', 'quarterly', 'yearly'],
+      default: null,
+    },
+    planExpiryWarningFor: {
+      type: Date,
+      default: null,
     },
     assignedTo: {
       type: Schema.Types.ObjectId,

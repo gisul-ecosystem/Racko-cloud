@@ -33,6 +33,10 @@ import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
 import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconcileSweeper';
 import { startVmAutomationScheduler } from './modules/vmAutomation/vmAutomationScheduler';
+import tenantPlanRoutes from './modules/tenantPlan/tenantPlan.routes';
+import tenantNotificationRoutes from './modules/tenantNotification/tenantNotification.routes';
+import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
+import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 
 const app = express();
 
@@ -136,6 +140,8 @@ app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
 app.use('/api/v1/tenant-wallet', walletRoutes);
 app.use('/api/v1/tenant-orders', orderRoutes);
+app.use('/api/v1/tenant-plans', tenantPlanRoutes);
+app.use('/api/v1/tenant-notifications', tenantNotificationRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -152,6 +158,8 @@ startNodeMonitoring();
 startHyperVSweeper();
 startStorageReconcileSweeper();
 startVmAutomationScheduler();
+startPlanExpiryScheduler();
+startPlanExpiryWarningScheduler();
 
 // 404 handler
 app.use(notFoundHandler);
