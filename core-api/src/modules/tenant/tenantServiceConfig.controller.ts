@@ -5,6 +5,7 @@ import { tenantServiceConfigService } from './tenantServiceConfig.service';
 import type {
   ServiceConfigCreateInput,
   ServiceConfigUpdateInput,
+  VmManagementPricingInput,
 } from './tenantServiceConfig.validation';
 
 function success<T>(res: Response, message: string, data: T, statusCode = 200): void {
@@ -62,6 +63,40 @@ export class TenantServiceConfigController {
     }
   }
 
+  async updateVmManagementPricing(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { tenantId } = req.params as { tenantId: string };
+      const pricing = req.body as VmManagementPricingInput;
+
+      const config = await tenantServiceConfigService.updateServiceConfig(tenantId, 'vm-management', {
+        pricing,
+      });
+
+      success(res, 'VM management pricing updated.', { config });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateVmManagementAllowedTemplates(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const { tenantId } = req.params as { tenantId: string };
+      const { allowedTemplateIds } = req.body as { allowedTemplateIds: number[] };
+
+      const config = await tenantServiceConfigService.updateServiceConfig(tenantId, 'vm-management', {
+        limits: { allowedTemplateIds },
+      });
+
+      success(res, 'VM management allowed templates updated.', { config });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async removeService(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { tenantId, serviceKey } = req.params as {
@@ -82,6 +117,35 @@ export class TenantServiceConfigController {
       }
 
       success(res, 'Tenant service config suspended.', { config: result });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getVmManagementPlatformTemplates(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const { tenantId } = req.params as { tenantId: string };
+      const data = await tenantServiceConfigService.getVmManagementPlatformTemplates(tenantId);
+      success(res, 'VM management platform templates retrieved.', data);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getVmManagementOrderableTemplates(
+    req: Request,
+    res: Response,
+    next: NextFunction
+  ): Promise<void> {
+    try {
+      const { tenantId } = req.params as { tenantId: string };
+      const templates =
+        await tenantServiceConfigService.getVmManagementOrderableTemplatesForTenant(tenantId);
+      success(res, 'Tenant orderable templates retrieved.', { templates });
     } catch (error) {
       next(error);
     }

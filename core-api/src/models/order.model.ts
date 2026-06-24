@@ -26,6 +26,7 @@ export interface IOrder extends Document {
   approvedBy: mongoose.Types.ObjectId | null;
   rejectedBy: mongoose.Types.ObjectId | null;
   rejectionReason: string | null;
+  provisionJobId: string | null;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -93,6 +94,11 @@ const orderSchema = new Schema<IOrder>(
       default: null,
     },
     rejectionReason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    provisionJobId: {
       type: String,
       default: null,
       trim: true,

@@ -22,7 +22,32 @@ interface VmManagementPricing {
 }
 
 interface VmManagementLimits {
+  maxVms?: number;
+  maxTotalVcpu?: number;
+  maxTotalRamGb?: number;
+  maxTotalDiskGb?: number;
   allowedTemplateIds?: number[];
+}
+
+interface TenantOrderUsage {
+  vmCount: number;
+  totalVcpu: number;
+  totalRamGb: number;
+  totalDiskGb: number;
+}
+
+export interface TenantOrderCatalog {
+  templates: TenantTemplateCatalogItem[];
+  pricing: VmManagementPricing & { fixedPlans?: unknown[] };
+}
+
+export interface TenantTemplateDetail {
+  templateId: number;
+  name: string;
+  node: string;
+  baselineSpecs: IOrderSpecs;
+  pricePerVm: number;
+  pricing: VmManagementPricing;
 }
 
 export interface TenantTemplateCatalogItem {
@@ -31,6 +56,20 @@ export interface TenantTemplateCatalogItem {
   node: string;
   baselineSpecs: IOrderSpecs;
   pricePerVm: number;
+}
+
+export interface OrderSpecInput {
+  cpuCores?: number;
+  memoryGb?: number;
+  diskGb?: number;
+}
+
+export interface PlaceOrderInput {
+  templateId: number;
+  count: number;
+  cpuCores?: number;
+  memoryGb?: number;
+  diskGb?: number;
 }
 
 function buildSuperAdminRequest(userId: string): Request {
@@ -70,6 +109,51 @@ async function getActiveVmManagementConfig(tenantId: string) {
   return config;
 }
 
+async function getTenantOrderUsage(tenantId: string): Promise<TenantOrderUsage> {
+  const orders = await Order.find({
+    tenantId: new mongoose.Types.ObjectId(tenantId),
+    status: { $in: ['pending_approval', 'fulfilled'] },
+  })
+    .select('count specs')
+    .lean();
+
+  return orders.reduce<TenantOrderUsage>(
+    (acc, order) => ({
+      vmCount: acc.vmCount + order.count,
+      totalVcpu: acc.totalVcpu + order.specs.cpuCores * order.count,
+      totalRamGb: acc.totalRamGb + order.specs.memoryGb * order.count,
+      totalDiskGb: acc.totalDiskGb + order.specs.diskGb * order.count,
+    }),
+    { vmCount: 0, totalVcpu: 0, totalRamGb: 0, totalDiskGb: 0 }
+  );
+}
+
+function assertOrderWithinTenantLimits(
+  limits: Record<string, unknown>,
+  usage: TenantOrderUsage,
+  count: number,
+  specs: IOrderSpecs
+): void {
+  const l = limits as VmManagementLimits;
+  const newVms = usage.vmCount + count;
+  const newVcpu = usage.totalVcpu + specs.cpuCores * count;
+  const newRamGb = usage.totalRamGb + specs.memoryGb * count;
+  const newDiskGb = usage.totalDiskGb + specs.diskGb * count;
+
+  if (typeof l.maxVms === 'number' && newVms > l.maxVms) {
+    throw new AppError('TENANT_VM_LIMIT_EXCEEDED', 403, 'TENANT_VM_LIMIT_EXCEEDED');
+  }
+  if (typeof l.maxTotalVcpu === 'number' && newVcpu > l.maxTotalVcpu) {
+    throw new AppError('TENANT_VCPU_LIMIT_EXCEEDED', 403, 'TENANT_VCPU_LIMIT_EXCEEDED');
+  }
+  if (typeof l.maxTotalRamGb === 'number' && newRamGb > l.maxTotalRamGb) {
+    throw new AppError('TENANT_RAM_LIMIT_EXCEEDED', 403, 'TENANT_RAM_LIMIT_EXCEEDED');
+  }
+  if (typeof l.maxTotalDiskGb === 'number' && newDiskGb > l.maxTotalDiskGb) {
+    throw new AppError('TENANT_DISK_LIMIT_EXCEEDED', 403, 'TENANT_DISK_LIMIT_EXCEEDED');
+  }
+}
+
 function toOrderPublic(order: IOrder) {
   return {
     id: order._id.toString(),
@@ -84,6 +168,7 @@ function toOrderPublic(order: IOrder) {
     approvedBy: order.approvedBy ? order.approvedBy.toString() : null,
     rejectedBy: order.rejectedBy ? order.rejectedBy.toString() : null,
     rejectionReason: order.rejectionReason,
+    provisionJobId: order.provisionJobId ?? null,
     createdAt: order.createdAt,
     updatedAt: order.updatedAt,
   };
@@ -127,7 +212,112 @@ async function notifySuperAdminsOfNewOrder(order: IOrder): Promise<void> {
   );
 }
 
+async function resolveOrderSpecs(
+  templateId: number,
+  req: Request,
+  requested?: OrderSpecInput
+): Promise<{ specs: IOrderSpecs; templateName: string; baselineSpecs: IOrderSpecs }> {
+  let details;
+  try {
+    details = await vmService.getTemplateDetails(templateId, req);
+  } catch (error) {
+    if (error instanceof TemplateNotFoundError) {
+      throw new AppError('TEMPLATE_NOT_FOUND', 404, 'TEMPLATE_NOT_FOUND');
+    }
+    throw error;
+  }
+
+  const baselineSpecs: IOrderSpecs = {
+    cpuCores: details.cpuCores,
+    memoryGb: details.memoryGb,
+    diskGb: details.diskGb,
+  };
+
+  const specs: IOrderSpecs = {
+    cpuCores: requested?.cpuCores ?? baselineSpecs.cpuCores,
+    memoryGb: requested?.memoryGb ?? baselineSpecs.memoryGb,
+    diskGb: requested?.diskGb ?? baselineSpecs.diskGb,
+  };
+
+  if (specs.cpuCores < baselineSpecs.cpuCores) {
+    throw new AppError(
+      `cpuCores (${specs.cpuCores}) cannot be less than template minimum (${baselineSpecs.cpuCores})`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  if (specs.memoryGb < baselineSpecs.memoryGb) {
+    throw new AppError(
+      `memoryGb (${specs.memoryGb}) cannot be less than template minimum (${baselineSpecs.memoryGb})`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+  if (specs.diskGb < baselineSpecs.diskGb) {
+    throw new AppError(
+      `diskGb (${specs.diskGb}) cannot be less than template minimum (${baselineSpecs.diskGb})`,
+      400,
+      'VALIDATION_ERROR'
+    );
+  }
+
+  return { specs, templateName: details.name, baselineSpecs };
+}
+
 export class OrderService {
+  async getOrderCatalogForTenant(tenantId: string): Promise<TenantOrderCatalog> {
+    const serviceConfig = await getActiveVmManagementConfig(tenantId);
+    const templates = await this.getAvailableTemplatesForTenant(tenantId);
+    const pricing = serviceConfig.pricing as Record<string, unknown>;
+
+    return {
+      templates,
+      pricing: {
+        cpuRatePerCoreMonthly: Number(pricing['cpuRatePerCoreMonthly'] ?? 0),
+        ramRatePerGbMonthly: Number(pricing['ramRatePerGbMonthly'] ?? 0),
+        diskRatePerGbMonthly: Number(pricing['diskRatePerGbMonthly'] ?? 0),
+        fixedPlans: Array.isArray(pricing['fixedPlans'])
+          ? (pricing['fixedPlans'] as unknown[])
+          : undefined,
+      },
+    };
+  }
+
+  async getTemplateDetailForTenant(
+    tenantId: string,
+    templateId: number
+  ): Promise<TenantTemplateDetail> {
+    const serviceConfig = await getActiveVmManagementConfig(tenantId);
+    const pricing = serviceConfig.pricing as unknown as VmManagementPricing;
+    const allowedTemplateIds = getAllowedTemplateIds(serviceConfig.limits as Record<string, unknown>);
+
+    if (allowedTemplateIds.length > 0 && !allowedTemplateIds.includes(templateId)) {
+      throw new AppError('TEMPLATE_NOT_ALLOWED_FOR_TENANT', 403, 'TEMPLATE_NOT_ALLOWED_FOR_TENANT');
+    }
+
+    const superAdmin = await User.findOne({ role: 'super_admin', isActive: true })
+      .select('_id')
+      .lean();
+    const req = buildSuperAdminRequest(superAdmin?._id.toString() ?? new mongoose.Types.ObjectId().toString());
+
+    const { specs, templateName, baselineSpecs } = await resolveOrderSpecs(templateId, req);
+
+    const catalog = await vmService.getTemplateCatalog();
+    const template = catalog.templates.find((t) => t.vmid === templateId);
+    if (!template || !catalog.enabledVmids.includes(templateId)) {
+      throw new AppError('TEMPLATE_NOT_FOUND', 404, 'TEMPLATE_NOT_FOUND');
+    }
+
+    return {
+      templateId,
+      name: templateName,
+      node: template.node,
+      baselineSpecs,
+      pricePerVm: computePerVmCost(specs, pricing),
+      pricing,
+    };
+  }
+
   async getAvailableTemplatesForTenant(tenantId: string): Promise<TenantTemplateCatalogItem[]> {
     const serviceConfig = await getActiveVmManagementConfig(tenantId);
     const pricing = serviceConfig.pricing as unknown as VmManagementPricing;
@@ -179,8 +369,9 @@ export class OrderService {
   async calculateOrderCost(
     tenantId: string,
     templateId: number,
-    count: number
-  ): Promise<{ amount: number; specs: IOrderSpecs; templateName: string }> {
+    count: number,
+    requestedSpecs?: OrderSpecInput
+  ): Promise<{ amount: number; specs: IOrderSpecs; templateName: string; baselineSpecs: IOrderSpecs }> {
     if (!Number.isInteger(count) || count < 1) {
       throw new AppError('count must be a positive integer', 400, 'VALIDATION_ERROR');
     }
@@ -198,37 +389,38 @@ export class OrderService {
       .lean();
     const req = buildSuperAdminRequest(superAdmin?._id.toString() ?? new mongoose.Types.ObjectId().toString());
 
-    let details;
-    try {
-      details = await vmService.getTemplateDetails(templateId, req);
-    } catch (error) {
-      if (error instanceof TemplateNotFoundError) {
-        throw new AppError('TEMPLATE_NOT_FOUND', 404, 'TEMPLATE_NOT_FOUND');
-      }
-      throw error;
-    }
-
-    const specs: IOrderSpecs = {
-      cpuCores: details.cpuCores,
-      memoryGb: details.memoryGb,
-      diskGb: details.diskGb,
-    };
+    const { specs, templateName, baselineSpecs } = await resolveOrderSpecs(
+      templateId,
+      req,
+      requestedSpecs
+    );
 
     const perVmCost = computePerVmCost(specs, pricing);
     return {
       amount: perVmCost * count,
       specs,
-      templateName: details.name,
+      templateName,
+      baselineSpecs,
     };
   }
 
   async createOrder(
     tenantId: string,
     tenantUserId: string,
-    templateId: number,
-    count: number
+    input: PlaceOrderInput
   ): Promise<ReturnType<typeof toOrderPublic>> {
-    const { amount, specs, templateName } = await this.calculateOrderCost(tenantId, templateId, count);
+    const { templateId, count, cpuCores, memoryGb, diskGb } = input;
+    const { amount, specs, templateName } = await this.calculateOrderCost(
+      tenantId,
+      templateId,
+      count,
+      { cpuCores, memoryGb, diskGb }
+    );
+
+    const serviceConfig = await getActiveVmManagementConfig(tenantId);
+    const usage = await getTenantOrderUsage(tenantId);
+    assertOrderWithinTenantLimits(serviceConfig.limits as Record<string, unknown>, usage, count, specs);
+
     const balance = await walletService.getBalance(tenantId);
 
     if (balance >= amount) {
@@ -300,9 +492,10 @@ export class OrderService {
     };
 
     try {
-      await vmService.createVM(dto, new mongoose.Types.ObjectId(approvedByUserId), req);
+      const { jobId } = await vmService.createVM(dto, new mongoose.Types.ObjectId(approvedByUserId), req);
       order.status = 'fulfilled';
       order.approvedBy = new mongoose.Types.ObjectId(approvedByUserId);
+      order.provisionJobId = jobId;
       await order.save();
     } catch (error) {
       logger.error('Order approval VM provisioning failed', {

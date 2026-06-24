@@ -144,6 +144,9 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional().default(''),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
 
+  // Tenant branding asset volume (logo, favicon, login page image cache)
+  TENANT_ASSETS_VOLUME_PATH: z.string().default('./data/tenant-assets'),
+
   // Test VM scaffolding — remove once VM model stores private IP + credentials
   TEST_VM_IP: z.string().optional(),
   TEST_VM_USERNAME: z.string().optional(),
