@@ -4,15 +4,7 @@ import { tenantIdRouteParamSchema } from './tenant.validation';
 
 export const serviceKeyParamSchema = z.enum(SERVICE_CATALOG);
 
-const vmManagementLimitsSchema = z.object({
-  maxVms: z.number().int().positive(),
-  maxTotalVcpu: z.number().int().positive(),
-  maxTotalRamGb: z.number().positive(),
-  maxTotalDiskGb: z.number().positive(),
-  allowedTemplateIds: z.array(z.number().int().positive()).optional().default([]),
-});
-
-const vmManagementPricingSchema = z.object({
+export const vmManagementPricingSchema = z.object({
   cpuRatePerCoreMonthly: z.number().nonnegative(),
   ramRatePerGbMonthly: z.number().nonnegative(),
   diskRatePerGbMonthly: z.number().nonnegative(),
@@ -28,6 +20,14 @@ const vmManagementPricingSchema = z.object({
     )
     .optional()
     .default([]),
+});
+
+const vmManagementLimitsSchema = z.object({
+  maxVms: z.number().int().positive(),
+  maxTotalVcpu: z.number().int().positive(),
+  maxTotalRamGb: z.number().positive(),
+  maxTotalDiskGb: z.number().positive(),
+  allowedTemplateIds: z.array(z.number().int().positive()).optional().default([]),
 });
 
 const azureLimitsSchema = z.object({}).passthrough();
@@ -65,12 +65,28 @@ export const listTenantServicesRequestSchema = z.object({
   params: tenantIdRouteParamSchema.shape.params,
 });
 
+export const vmManagementCatalogRequestSchema = z.object({
+  params: tenantIdRouteParamSchema.shape.params,
+});
+
 export const updateServiceConfigRequestSchema = z.object({
   params: z.object({
     tenantId: z.string().min(1, 'Tenant id is required'),
     serviceKey: serviceKeyParamSchema,
   }),
   body: serviceConfigUpdateSchema,
+});
+
+export const updateVmManagementPricingRequestSchema = z.object({
+  params: tenantIdRouteParamSchema.shape.params,
+  body: vmManagementPricingSchema,
+});
+
+export const updateVmManagementAllowedTemplatesRequestSchema = z.object({
+  params: tenantIdRouteParamSchema.shape.params,
+  body: z.object({
+    allowedTemplateIds: z.array(z.number().int().positive()),
+  }),
 });
 
 export const removeServiceConfigRequestSchema = z.object({
@@ -88,3 +104,4 @@ export const removeServiceConfigRequestSchema = z.object({
 
 export type ServiceConfigCreateInput = z.infer<typeof serviceConfigCreateSchema>;
 export type ServiceConfigUpdateInput = z.infer<typeof serviceConfigUpdateSchema>;
+export type VmManagementPricingInput = z.infer<typeof vmManagementPricingSchema>;

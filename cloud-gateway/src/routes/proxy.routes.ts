@@ -11,8 +11,7 @@ import { loginSlowDown } from '../middleware/slowDown.middleware';
 import { config } from '../config';
 import { ForbiddenError } from '../utils/errors';
 import type { AuthenticatedRequest } from '../types';
-import { injectTenantHeader } from '../middleware/injectTenantHeader.middleware';
-import { tenantAuthMiddleware } from '../middleware/tenantAuth.middleware';
+import { injectTenantHeader, requireTenantBearer } from '../middleware/tenantAuth.middleware';
 
 const router = Router();
 
@@ -172,20 +171,19 @@ router.get('/api/v1/managed-users', authMiddleware, verifyMiddleware, requireRol
 router.patch('/api/v1/managed-users/:userId/active', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/managed-users/:userId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
-// ─── TENANT AUTH (public — host resolves tenant via injectTenantHeader) ───────
+// ─── TENANT PUBLIC ROUTES (host → x-tenant-id; no platform JWT) ───────────────
 router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/forgot-password', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/reset-password', injectTenantHeader, coreApiProxy);
+router.get('/api/v1/tenant-branding', injectTenantHeader, coreApiProxy);
+router.get('/api/v1/tenant-branding/asset', injectTenantHeader, coreApiProxy);
 
-// ─── TENANT WALLET (tenant Bearer JWT — not platform verifyMiddleware) ───────
-router.get('/api/v1/tenant-wallet', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
-router.get('/api/v1/tenant-wallet/transactions', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
-router.post('/api/v1/tenant-wallet/topup', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
+// Razorpay wallet webhook (no auth; signature verified by core-api)
+router.post('/webhooks/razorpay', coreApiProxy);
 
-// ─── TENANT ORDERS (tenant Bearer JWT — tenant_admin enforced in core-api) ───
-router.get('/api/v1/tenant-orders/templates', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
-router.get('/api/v1/tenant-orders', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
-router.post('/api/v1/tenant-orders', tenantAuthMiddleware, injectTenantHeader, coreApiProxy);
+// ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
+router.use('/api/v1/tenant-wallet', requireTenantBearer, coreApiProxy);
+router.use('/api/v1/tenant-orders', requireTenantBearer, coreApiProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
