@@ -1,0 +1,48 @@
+export const SERVICE_IAM_POLICIES = {
+  EC2: ['EC2FullAccess', 'EC2ReadOnlyAccess'],
+  Lightsail: ['LightsailFullAccess', 'LightsailReadOnlyAccess'],
+  RDS: ['RDSFullAccess', 'RDSReadOnlyAccess'],
+  DynamoDB: ['DynamoDBFullAccess', 'DynamoDBReadOnlyAccess'],
+  ElastiCache: ['ElastiCacheFullAccess', 'ElastiCacheReadOnlyAccess'],
+  Redshift: ['RedshiftFullAccess', 'RedshiftReadOnlyAccess'],
+  S3: ['S3FullAccess', 'S3ReadOnlyAccess'],
+  EKS: ['EKSFullAccess', 'EKSReadOnlyAccess'],
+  Lambda: ['LambdaFullAccess', 'LambdaReadOnlyAccess'],
+  VPC: ['VPCFullAccess', 'VPCReadOnlyAccess'],
+  CloudFront: ['CloudFrontFullAccess', 'CloudFrontReadOnlyAccess'],
+  SQS: ['SQSFullAccess', 'SQSReadOnlyAccess'],
+  SNS: ['SNSFullAccess', 'SNSReadOnlyAccess'],
+  Kinesis: ['KinesisFullAccess', 'KinesisReadOnlyAccess'],
+  EMR: ['EMRFullAccess', 'EMRReadOnlyAccess'],
+  OpenSearch: ['OpenSearchFullAccess', 'OpenSearchReadOnlyAccess'],
+  SageMaker: ['SageMakerFullAccess', 'SageMakerReadOnlyAccess'],
+};
+
+export const DEFAULT_IAM_POLICIES = {
+  EC2: 'EC2FullAccess',
+  Lightsail: 'LightsailFullAccess',
+  RDS: 'RDSFullAccess',
+  DynamoDB: 'DynamoDBFullAccess',
+  ElastiCache: 'ElastiCacheFullAccess',
+  Redshift: 'RedshiftFullAccess',
+  S3: 'S3FullAccess',
+  EKS: 'EKSFullAccess',
+  Lambda: 'LambdaFullAccess',
+  VPC: 'VPCFullAccess',
+  CloudFront: 'CloudFrontFullAccess',
+  SQS: 'SQSFullAccess',
+  SNS: 'SNSFullAccess',
+  Kinesis: 'KinesisFullAccess',
+  EMR: 'EMRFullAccess',
+  OpenSearch: 'OpenSearchFullAccess',
+  SageMaker: 'SageMakerFullAccess',
+};
+
+export const FLAT_RATE_INFO = {
+  S3: 'Billed per GB stored. No instance selection needed.',
+  Lambda: 'Billed per GB-second of execution.',
+  CloudFront: 'Billed per GB transferred. No instance selection needed.',
+  SQS: 'Billed per request. No instance selection needed.',
+  SNS: 'Billed per notification. No instance selection needed.',
+  VPC: 'No direct instance charge. Resources inside VPC are billed separately.',
+};

@@ -8,14 +8,7 @@ import type { AuthenticatedRequest } from '../types';
 
 const router = Router();
 
-const GATEWAY_PREFIX = '/api/v1/cloud-automation';
-
-/** Type 2 & 3 routes — lab users and org admins; not exposed via Racko admin API. */
-const BLOCKED_PATH_PATTERNS = [
-  /^\/api\/v1\/cloud-automation\/(access|manage|org-admin)(\/|$)/,
-  /^\/api\/v1\/cloud-automation\/usage\/(start|end)(\/|$)/,
-  /^\/api\/v1\/cloud-automation\/usage\/status\//,
-];
+const GATEWAY_PREFIX = '/api/v1/cloud-automation-aws';
 
 function requireRole(...roles: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
@@ -27,28 +20,7 @@ function requireRole(...roles: string[]) {
   };
 }
 
-function blockLabAndPortalRoutes(req: Request, _res: Response, next: NextFunction): void {
-  const path = req.path.split('?')[0] ?? req.path;
-
-  if (BLOCKED_PATH_PATTERNS.some((pattern) => pattern.test(path))) {
-    return next(
-      new ForbiddenError('This cloud automation endpoint is not available through the Racko admin API.')
-    );
-  }
-
-  next();
-}
-
-/** AWS routes share the Azure prefix; skip them so the AWS proxy can handle the request. */
-function skipAwsAutomationPaths(req: Request, _res: Response, next: NextFunction): void {
-  const path = req.path.split('?')[0] ?? req.path;
-  if (path.startsWith('/api/v1/cloud-automation-aws')) {
-    return next('route');
-  }
-  next();
-}
-
-function rewriteCloudAutomationPath(path: string): string {
+function rewriteCloudAutomationAwsPath(path: string): string {
   if (path === '/health' || path === `${GATEWAY_PREFIX}/health`) {
     return '/health';
   }
@@ -73,31 +45,28 @@ function rewriteCloudAutomationPath(path: string): string {
   return `/api${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
 }
 
-const cloudAutomationProxy = createProxyMiddleware({
-  target: config.CLOUD_AUTOMATION_URL,
+const cloudAutomationAwsProxy = createProxyMiddleware({
+  target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
   timeout: config.REQUEST_TIMEOUT_MS,
-  pathRewrite: rewriteCloudAutomationPath,
+  pathRewrite: rewriteCloudAutomationAwsPath,
   on: {
     error: (_err, _req, res) => {
       (res as Response).status(502).json({
         success: false,
-        message: 'Cloud automation service temporarily unavailable.',
+        message: 'Cloud automation AWS service temporarily unavailable.',
         code: 'BAD_GATEWAY',
       });
     },
   },
 });
 
-// Type 1 — Racko JWT + role guard; all admin cloud_automation APIs except lab/portal routes.
 router.use(
   GATEWAY_PREFIX,
-  skipAwsAutomationPaths,
   authMiddleware,
   verifyMiddleware,
   requireRole('admin', 'super_admin'),
-  blockLabAndPortalRoutes,
-  cloudAutomationProxy
+  cloudAutomationAwsProxy
 );
 
 export default router;
