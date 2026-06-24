@@ -16,6 +16,8 @@ import {
   type ServiceConfigUpdateInput,
 } from './tenantServiceConfig.validation';
 import { isValidObjectId } from './tenant.service';
+import { normalizeVmManagementLimits, listPlatformTemplatesForAssignment } from './tenantVmManagementCatalog.service';
+import { orderService } from '../order/order.service';
 
 export interface TenantServiceConfigPublic {
   id: string;
@@ -89,13 +91,18 @@ export class TenantServiceConfigService {
       throw new ConflictError('use PATCH to update an existing service config');
     }
 
-    assertValidMergedConfig(serviceKey, limits, pricing);
+    const resolvedLimits =
+      serviceKey === 'vm-management'
+        ? await normalizeVmManagementLimits(limits)
+        : limits;
+
+    assertValidMergedConfig(serviceKey, resolvedLimits, pricing);
 
     const doc = await TenantServiceConfig.create({
       tenantId: new mongoose.Types.ObjectId(tenantId),
       serviceKey,
       status: 'active',
-      limits,
+      limits: resolvedLimits,
       pricing,
       createdBy: new mongoose.Types.ObjectId(createdBy),
     });
@@ -141,10 +148,15 @@ export class TenantServiceConfigService {
         ? { ...(config.pricing as Record<string, unknown>), ...updates.pricing }
         : config.pricing;
 
-    assertValidMergedConfig(serviceKey, mergedLimits, mergedPricing);
+    const resolvedLimits =
+      serviceKey === 'vm-management'
+        ? await normalizeVmManagementLimits(mergedLimits as Record<string, unknown>)
+        : mergedLimits;
+
+    assertValidMergedConfig(serviceKey, resolvedLimits, mergedPricing);
 
     if (updates.limits !== undefined) {
-      config.limits = mergedLimits;
+      config.limits = resolvedLimits;
     }
     if (updates.pricing !== undefined) {
       config.pricing = mergedPricing;
@@ -187,6 +199,43 @@ export class TenantServiceConfigService {
     await config.save();
 
     return toPublic(config);
+  }
+
+  async getVmManagementPlatformTemplates(tenantId: string) {
+    await requireTenantExists(tenantId);
+
+    const [templates, config] = await Promise.all([
+      listPlatformTemplatesForAssignment(),
+      TenantServiceConfig.findOne({
+        tenantId: new mongoose.Types.ObjectId(tenantId),
+        serviceKey: 'vm-management',
+      }).lean(),
+    ]);
+
+    const allowedTemplateIds = config
+      ? ((config.limits as Record<string, unknown>)['allowedTemplateIds'] as number[] | undefined) ?? []
+      : [];
+    const validAllowed = Array.isArray(allowedTemplateIds)
+      ? allowedTemplateIds.filter((id) => typeof id === 'number')
+      : [];
+    const allEnabledAllowed = validAllowed.length === 0;
+    const allowedSet = new Set(validAllowed);
+
+    return {
+      platformCatalogPath: '/api/v1/vms/templates/catalog',
+      platformSelectionPath: '/api/v1/vms/templates/selection',
+      selectionMode: allEnabledAllowed ? ('all_enabled' as const) : ('allowlist' as const),
+      allowedTemplateIds: validAllowed,
+      templates: templates.map((template) => ({
+        ...template,
+        selected: allEnabledAllowed || allowedSet.has(template.templateId),
+      })),
+    };
+  }
+
+  async getVmManagementOrderableTemplatesForTenant(tenantId: string) {
+    await requireTenantExists(tenantId);
+    return orderService.getAvailableTemplatesForTenant(tenantId);
   }
 }
 

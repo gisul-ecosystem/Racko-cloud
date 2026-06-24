@@ -19,6 +19,7 @@ const brandingSchema = z
   .object({
     logoUrl: z.string().optional(),
     faviconUrl: z.string().optional(),
+    loginPageImageUrl: z.string().optional(),
     primaryColor: z.string().optional(),
     secondaryColor: z.string().optional(),
     supportEmail: z.string().email('Support email must be valid').optional(),

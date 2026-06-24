@@ -11,6 +11,7 @@ import { loginSlowDown } from '../middleware/slowDown.middleware';
 import { config } from '../config';
 import { ForbiddenError } from '../utils/errors';
 import type { AuthenticatedRequest } from '../types';
+import { injectTenantHeader, requireTenantBearer } from '../middleware/tenantAuth.middleware';
 
 const router = Router();
 
@@ -169,6 +170,20 @@ router.post('/api/v1/managed-users/bulk', authMiddleware, verifyMiddleware, requ
 router.get('/api/v1/managed-users', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.patch('/api/v1/managed-users/:userId/active', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/managed-users/:userId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
+// ─── TENANT PUBLIC ROUTES (host → x-tenant-id; no platform JWT) ───────────────
+router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
+router.post('/api/v1/tenant-auth/forgot-password', injectTenantHeader, coreApiProxy);
+router.post('/api/v1/tenant-auth/reset-password', injectTenantHeader, coreApiProxy);
+router.get('/api/v1/tenant-branding', injectTenantHeader, coreApiProxy);
+router.get('/api/v1/tenant-branding/asset', injectTenantHeader, coreApiProxy);
+
+// Razorpay wallet webhook (no auth; signature verified by core-api)
+router.post('/webhooks/razorpay', coreApiProxy);
+
+// ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
+router.use('/api/v1/tenant-wallet', requireTenantBearer, coreApiProxy);
+router.use('/api/v1/tenant-orders', requireTenantBearer, coreApiProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

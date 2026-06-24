@@ -5,6 +5,7 @@ export type TenantStatus = 'pending' | 'active' | 'suspended' | 'cancelled';
 export interface ITenantBranding {
   logoUrl?: string;
   faviconUrl?: string;
+  loginPageImageUrl?: string;
   primaryColor?: string;
   secondaryColor?: string;
   supportEmail?: string;
@@ -33,6 +34,7 @@ const brandingSchema = new Schema<ITenantBranding>(
   {
     logoUrl: { type: String, default: '' },
     faviconUrl: { type: String, default: '' },
+    loginPageImageUrl: { type: String, default: '' },
     primaryColor: { type: String, default: '' },
     secondaryColor: { type: String, default: '' },
     supportEmail: { type: String, default: '' },

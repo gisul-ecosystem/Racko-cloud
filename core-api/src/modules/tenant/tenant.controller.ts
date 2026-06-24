@@ -1,8 +1,13 @@
 import type { Request, Response, NextFunction } from 'express';
 import { tenantService } from './tenant.service';
+import {
+  tenantBrandingAssetService,
+  resolveBrandingAssetType,
+} from './tenantBrandingAsset.service';
 import type { AuthenticatedRequest } from '../../types';
 import type { CreateTenantInput, CreateTenantAdminInput, UpdateTenantInput } from './tenant.validation';
 import type { TenantStatus } from '../../models/tenant.model';
+import { ValidationError } from '../../utils/errors';
 
 function success<T>(res: Response, message: string, data: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, data });
@@ -69,6 +74,48 @@ export class TenantController {
         req.body as CreateTenantAdminInput
       );
       success(res, 'Tenant admin created.', { admin }, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async uploadBrandingAsset(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params as { id: string };
+      const assetType = resolveBrandingAssetType((req.body as { assetType?: string }).assetType);
+      if (!assetType) {
+        throw new ValidationError(
+          'assetType is required. Use logo, favicon, or login-page-image.'
+        );
+      }
+
+      const file = req.file;
+      if (!file) {
+        throw new ValidationError('File is required. Use multipart field name "file".');
+      }
+
+      const doc = await tenantBrandingAssetService.uploadAsset(id, assetType, {
+        buffer: file.buffer,
+        mimetype: file.mimetype,
+        originalname: file.originalname,
+        size: file.size,
+      });
+
+      const tenant = await tenantService.getTenantById(id);
+
+      success(
+        res,
+        'Branding asset uploaded.',
+        {
+          assetType,
+          byteSize: doc.byteSize,
+          mimeType: doc.mimeType,
+          filename: doc.filename,
+          url: tenant.branding[assetType === 'login_page_image' ? 'loginPageImageUrl' : assetType === 'logo' ? 'logoUrl' : 'faviconUrl'],
+          tenant,
+        },
+        201
+      );
     } catch (error) {
       next(error);
     }

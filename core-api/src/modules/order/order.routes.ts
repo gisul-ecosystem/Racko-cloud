@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import { Router } from 'express';
 import { resolveTenantContext } from '../../middleware/resolveTenantContext.middleware';
 import {
@@ -7,13 +6,7 @@ import {
 } from '../../middleware/requireTenantAuth.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { orderController } from './order.controller';
-
-const createOrderSchema = z.object({
-  body: z.object({
-    templateId: z.number().int().positive(),
-    count: z.number().int().positive(),
-  }),
-});
+import { createOrderSchema, quoteOrderSchema, tenantTemplateIdParamSchema } from './order.validation';
 
 const router = Router();
 
@@ -22,6 +15,17 @@ router.use(requireTenantAuth);
 router.use(requireTenantRole('tenant_admin'));
 
 router.get('/templates', (req, res, next) => orderController.listTemplates(req, res, next));
+
+router.get(
+  '/templates/:templateId',
+  validateRequest(tenantTemplateIdParamSchema),
+  (req, res, next) => orderController.getTemplate(req, res, next)
+);
+router.post(
+  '/quote',
+  validateRequest(quoteOrderSchema),
+  (req, res, next) => orderController.quoteOrder(req, res, next)
+);
 
 router.post(
   '/',
