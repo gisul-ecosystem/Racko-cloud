@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import mongoose from 'mongoose';
+import { Tenant } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { hashPassword, verifyPassword } from '../../utils/argon2';
 import { generateSecureToken, hashToken } from '../../utils/crypto';
@@ -44,6 +45,11 @@ export class TenantAuthService {
     tenantId: string,
     dto: TenantLoginInput
   ): Promise<{ accessToken: string; tenantUser: TenantUserPublic }> {
+    const tenant = await Tenant.findById(tenantId).select('status').lean();
+    if (!tenant || tenant.status !== 'active') {
+      throw new TenantAuthError('INVALID_CREDENTIALS', 401);
+    }
+
     const tenantUser = await TenantUser.findOne({
       tenantId: new mongoose.Types.ObjectId(tenantId),
       email: dto.email,

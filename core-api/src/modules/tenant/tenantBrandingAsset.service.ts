@@ -72,9 +72,11 @@ async function readFromVolumeIfExists(
   tenantId: string,
   assetType: TenantBrandingAssetType,
   ext: string
-): Promise<Buffer | null> {
+): Promise<{ buffer: Buffer; mtimeMs: number } | null> {
+  const filePath = volumeFilePath(tenantId, assetType, ext);
   try {
-    return await fs.readFile(volumeFilePath(tenantId, assetType, ext));
+    const [buffer, stat] = await Promise.all([fs.readFile(filePath), fs.stat(filePath)]);
+    return { buffer, mtimeMs: stat.mtimeMs };
   } catch {
     return null;
   }
@@ -126,9 +128,11 @@ export class TenantBrandingAssetService {
     }
 
     const ext = extensionForMime(doc.mimeType);
+    const docUpdatedMs = doc.updatedAt ? new Date(doc.updatedAt).getTime() : 0;
     const cached = await readFromVolumeIfExists(tenantId, assetType, ext);
-    if (cached) {
-      return { buffer: cached, mimeType: doc.mimeType, filename: doc.filename };
+
+    if (cached && (!docUpdatedMs || cached.mtimeMs >= docUpdatedMs)) {
+      return { buffer: cached.buffer, mimeType: doc.mimeType, filename: doc.filename };
     }
 
     await writeToVolume(tenantId, assetType, doc.data, ext);

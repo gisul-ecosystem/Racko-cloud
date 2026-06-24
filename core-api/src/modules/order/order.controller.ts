@@ -69,11 +69,13 @@ export class OrderController {
           cpuCores: body.cpuCores,
           memoryGb: body.memoryGb,
           diskGb: body.diskGb,
-        }
+        },
+        body.billingPeriod ?? 'monthly'
       );
       success(res, 'Order quote calculated.', {
         templateId: body.templateId,
         count: body.count,
+        billingPeriod: body.billingPeriod ?? 'monthly',
         templateName: quote.templateName,
         baselineSpecs: quote.baselineSpecs,
         specs: quote.specs,

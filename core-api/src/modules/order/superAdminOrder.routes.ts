@@ -8,7 +8,7 @@ import { superAdminOrderController } from './superAdminOrder.controller';
 const listOrdersSchema = z.object({
   query: z.object({
     status: z
-      .enum(['pending_payment', 'pending_approval', 'approved', 'rejected', 'fulfilled'])
+      .enum(['pending_payment', 'pending_approval', 'approved', 'provisioning', 'rejected', 'fulfilled'])
       .optional(),
   }),
 });

@@ -15,6 +15,7 @@ import {
   clearAccessToken,
   ApiError,
   SESSION_EXPIRED_EVENT,
+  tryRestoreSession,
 } from '../lib/apiClient';
 
 export type UserRole = 'super_admin' | 'admin' | 'user';
@@ -144,14 +145,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     async function restoreSession() {
       try {
-        const res = await apiRequest<RefreshResponse>('/api/v1/auth/refresh', {
-          method: 'POST',
-          skipAuth: true,
-        });
+        const token = await tryRestoreSession();
 
         if (cancelled) return;
 
-        const token = res.data?.accessToken;
         if (!token) {
           setState({ user: null, isLoading: false, isAuthenticated: false });
           return;

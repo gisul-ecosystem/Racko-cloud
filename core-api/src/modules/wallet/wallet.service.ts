@@ -58,7 +58,8 @@ export class WalletService {
     tenantId: string,
     amount: number,
     reason: string,
-    relatedOrderId: string | null = null
+    relatedOrderId: string | null = null,
+    relatedVmId: string | null = null
   ): Promise<{ balance: number; currency: string }> {
     if (amount <= 0) {
       throw new AppError('Amount must be positive.', 400, 'VALIDATION_ERROR');
@@ -81,6 +82,7 @@ export class WalletService {
       amount,
       reason,
       relatedOrderId: relatedOrderId ? new mongoose.Types.ObjectId(relatedOrderId) : null,
+      relatedVmId: relatedVmId ? new mongoose.Types.ObjectId(relatedVmId) : null,
       balanceAfter: wallet.balance,
     });
 
@@ -98,6 +100,7 @@ export class WalletService {
       amount: number;
       reason: string;
       relatedOrderId: string | null;
+      relatedVmId: string | null;
       balanceAfter: number;
       createdAt: Date;
     }>;
@@ -126,6 +129,7 @@ export class WalletService {
         amount: row.amount,
         reason: row.reason,
         relatedOrderId: row.relatedOrderId ? row.relatedOrderId.toString() : null,
+        relatedVmId: row.relatedVmId ? row.relatedVmId.toString() : null,
         balanceAfter: row.balanceAfter,
         createdAt: row.createdAt,
       })),

@@ -1172,6 +1172,92 @@ export class VMService {
   }
 
   /**
+   * Power on a stopped VM (no auth checks).
+   * Used by tenant plan renew and other system flows.
+   */
+  async startVmSystem(
+    vm: IVM,
+    adminId: mongoose.Types.ObjectId,
+    auditContext: { ipAddress: string; userAgent: string }
+  ): Promise<VMOperationResult> {
+    if (vm.status === 'running') {
+      return { success: true, vmid: vm.vmid, node: vm.node, operation: 'start', taskId: '' };
+    }
+    return this.powerOnStoppedVm(vm, adminId, auditContext);
+  }
+
+  /**
+   * Graceful Proxmox shutdown + DB status update (no auth checks).
+   * Used by stopVM and system schedulers (plan expiry).
+   */
+  async gracefulShutdownVm(
+    vm: IVM,
+    adminId: mongoose.Types.ObjectId,
+    auditContext: { ipAddress: string; userAgent: string }
+  ): Promise<{ taskId: string }> {
+    if (vm.status === 'stopped') {
+      try {
+        const statusRes = await proxmoxClient.get<{ data: { status: string } }>(
+          `/nodes/${vm.node}/qemu/${vm.vmid}/status/current`
+        );
+        if (statusRes.data.data.status === 'stopped') {
+          return { taskId: '' };
+        }
+        logger.warn('[VM] Status desync detected — MongoDB stopped but Proxmox running; issuing shutdown', {
+          vmId: vm._id.toString(),
+          vmid: vm.vmid,
+          node: vm.node,
+          proxmoxStatus: statusRes.data.data.status,
+        });
+      } catch (err) {
+        logger.warn('[VM] Could not verify Proxmox status for stopped VM — skipping shutdown', {
+          vmId: vm._id.toString(),
+          vmid: vm.vmid,
+          node: vm.node,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return { taskId: '' };
+      }
+    }
+
+    const response = await proxmoxClient.post<{ data: string }>(
+      `/nodes/${vm.node}/qemu/${vm.vmid}/status/shutdown`,
+      {}
+    );
+    const upid = response.data.data;
+    const pollResult = await pollTask(upid, vm.node);
+
+    if (pollResult.result === 'failed') {
+      throw new VMOperationError('VM failed to stop. Check Proxmox task logs.', vm.status, 'running');
+    }
+    if (pollResult.result === 'unknown') {
+      throw new VMOperationError(
+        'VM stop outcome unknown due to a connectivity issue. Refresh to check actual status.',
+        vm.status,
+        'running'
+      );
+    }
+
+    vm.status = 'stopped';
+    vm.proxmoxStatus = 'stopped';
+    vm.isHibernated = false;
+    await vm.save();
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'VM_STOPPED',
+      status: 'success',
+      details: { node: vm.node, source: auditContext.userAgent },
+      ipAddress: auditContext.ipAddress,
+      userAgent: auditContext.userAgent,
+    });
+
+    return { taskId: upid };
+  }
+
+  /**
    * Stop a VM (graceful shutdown).
    */
   async stopVM(
@@ -1192,32 +1278,12 @@ export class VMService {
       throw new VMOperationError('VM is already stopped.', vm.status, 'running');
     }
 
-    const response = await proxmoxClient.post<{ data: string }>(
-      `/nodes/${vm.node}/qemu/${vm.vmid}/status/shutdown`,
-      {}
-    );
-    const upid = response.data.data;
-    const pollResult = await pollTask(upid, vm.node);
-
-    if (pollResult.result === 'failed') {
-      throw new VMOperationError('VM failed to stop. Check Proxmox task logs.', vm.status, 'running');
-    }
-    if (pollResult.result === 'unknown') {
-      throw new VMOperationError('VM stop outcome unknown due to a connectivity issue. Refresh to check actual status.', vm.status, 'running');
-    }
-
-    vm.status = 'stopped';
-    vm.proxmoxStatus = 'stopped';
-    vm.isHibernated = false;
-    await vm.save();
-
-    await VMEvent.create({
-      vmId: vm._id, vmid: vm.vmid, adminId,
-      event: 'VM_STOPPED', status: 'success',
-      details: { node: vm.node }, ipAddress: ip, userAgent: ua,
+    const { taskId } = await this.gracefulShutdownVm(vm, adminId, {
+      ipAddress: ip,
+      userAgent: ua,
     });
 
-    return { success: true, vmid: vm.vmid, node: vm.node, operation: 'stop', taskId: upid };
+    return { success: true, vmid: vm.vmid, node: vm.node, operation: 'stop', taskId };
   }
 
   /**

@@ -12,6 +12,7 @@ export const placeOrderBodySchema = z.object({
   cpuCores: orderSpecFields.cpuCores,
   memoryGb: orderSpecFields.memoryGb,
   diskGb: orderSpecFields.diskGb,
+  billingPeriod: z.enum(['monthly', 'quarterly', 'yearly']).default('monthly'),
 });
 
 export const quoteOrderSchema = z.object({
