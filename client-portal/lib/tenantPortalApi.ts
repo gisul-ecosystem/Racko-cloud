@@ -1,9 +1,15 @@
 import { tenantPortalRequest } from './tenantPortalApiClient';
+import { getGatewayBaseUrl, getTenantDomainHeaders } from './gatewayUrl';
 import type {
   ApiEnvelope,
+  PlaceOrderInput,
+  TenantBranding,
+  TenantBrandingAssetType,
   TenantOrder,
-  TenantOrderTemplate,
+  TenantOrderCatalog,
+  TenantOrderQuote,
   TenantPortalUser,
+  TenantTemplateDetail,
   TenantTopupResult,
   TenantWallet,
   TenantWalletTransactionsResult,
@@ -40,6 +46,50 @@ export async function tenantResetPassword(token: string, newPassword: string): P
   );
 }
 
+export async function getTenantBranding(): Promise<{
+  tenantId: string;
+  branding: TenantBranding;
+}> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ tenantId: string; branding: TenantBranding }>>(
+      '/api/v1/tenant-branding',
+      { skipAuth: true }
+    )
+  );
+}
+
+/**
+ * Fetch binary branding asset from GET /api/v1/tenant-branding/asset?assetType=…
+ * Uses X-Tenant-Domain on localhost so the gateway can resolve the tenant.
+ */
+export async function fetchTenantBrandingAsset(
+  assetType: TenantBrandingAssetType,
+  cacheBust?: string | number
+): Promise<Blob | null> {
+  const params = new URLSearchParams({ assetType });
+  if (cacheBust !== undefined) params.set('v', String(cacheBust));
+
+  const res = await fetch(
+    `${getGatewayBaseUrl()}/api/v1/tenant-branding/asset?${params.toString()}`,
+    {
+      headers: getTenantDomainHeaders(),
+      credentials: 'omit',
+      cache: 'no-store',
+    }
+  );
+  if (!res.ok) return null;
+  return res.blob();
+}
+
+export async function fetchTenantBrandingAssetObjectUrl(
+  assetType: TenantBrandingAssetType,
+  cacheBust?: string | number
+): Promise<string | null> {
+  const blob = await fetchTenantBrandingAsset(assetType, cacheBust);
+  if (!blob) return null;
+  return URL.createObjectURL(blob);
+}
+
 export async function getTenantWallet(): Promise<TenantWallet> {
   return unwrap(tenantPortalRequest<ApiEnvelope<TenantWallet>>('/api/v1/tenant-wallet'));
 }
@@ -64,23 +114,37 @@ export async function createTenantWalletTopup(amount: number): Promise<TenantTop
   );
 }
 
-export async function getTenantOrderTemplates(): Promise<TenantOrderTemplate[]> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ templates: TenantOrderTemplate[] }>>(
-      '/api/v1/tenant-orders/templates'
-    )
+export async function getTenantOrderCatalog(): Promise<TenantOrderCatalog> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantOrderCatalog>>('/api/v1/tenant-orders/templates')
   );
-  return data.templates;
 }
 
-export async function createTenantOrder(
-  templateId: number,
-  count: number
-): Promise<TenantOrder> {
+export async function getTenantOrderTemplateDetail(
+  templateId: number
+): Promise<TenantTemplateDetail> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ template: TenantTemplateDetail }>>(
+      `/api/v1/tenant-orders/templates/${templateId}`
+    )
+  );
+  return data.template;
+}
+
+export async function quoteTenantOrder(input: PlaceOrderInput): Promise<TenantOrderQuote> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantOrderQuote>>('/api/v1/tenant-orders/quote', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    })
+  );
+}
+
+export async function createTenantOrder(input: PlaceOrderInput): Promise<TenantOrder> {
   return unwrap(
     tenantPortalRequest<ApiEnvelope<TenantOrder>>('/api/v1/tenant-orders', {
       method: 'POST',
-      body: JSON.stringify({ templateId, count }),
+      body: JSON.stringify(input),
     })
   );
 }
@@ -90,4 +154,10 @@ export async function listTenantOrders(): Promise<TenantOrder[]> {
     tenantPortalRequest<ApiEnvelope<{ orders: TenantOrder[] }>>('/api/v1/tenant-orders')
   );
   return data.orders;
+}
+
+/** @deprecated Use getTenantOrderCatalog */
+export async function getTenantOrderTemplates() {
+  const catalog = await getTenantOrderCatalog();
+  return catalog.templates;
 }

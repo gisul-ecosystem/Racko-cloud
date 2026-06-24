@@ -6,11 +6,13 @@ import { Plus, Wallet as WalletIcon } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import {
   createTenantWalletTopup,
   getTenantWallet,
   getTenantWalletTransactions,
 } from '@/lib/tenantPortalApi';
+import { tenantAccentButton, tenantAccentSurface } from '@/lib/tenantAccentStyles';
 import { ApiError } from '@/lib/apiClient';
 import type { TenantWallet, TenantWalletTransaction } from '@/types/tenantPortal';
 
@@ -34,6 +36,7 @@ function formatDate(iso: string): string {
 
 export default function TenantWalletPage() {
   const { tenantUser } = useTenantAuth();
+  const { accentColor } = useTenantBranding();
   const isAdmin = tenantUser?.role === 'tenant_admin';
 
   const [wallet, setWallet] = useState<TenantWallet | null>(null);
@@ -131,7 +134,7 @@ export default function TenantWalletPage() {
         currency: data.currency,
         order_id: data.razorpayOrderId,
         handler: () => startBalancePoll(previousBalance),
-        theme: { color: '#B91C1C' },
+        theme: { color: accentColor },
       };
 
       new window.Razorpay(options).open();
@@ -171,8 +174,11 @@ export default function TenantWalletPage() {
                 {wallet ? formatMoney(wallet.balance, wallet.currency) : '—'}
               </p>
             </div>
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-red-50">
-              <WalletIcon className="h-6 w-6 text-[#B91C1C]" />
+            <div
+              className="flex h-12 w-12 items-center justify-center rounded-xl border"
+              style={tenantAccentSurface(accentColor)}
+            >
+              <WalletIcon className="h-6 w-6 text-gray-600" />
             </div>
           </div>
 
@@ -203,7 +209,8 @@ export default function TenantWalletPage() {
               <button
                 type="submit"
                 disabled={topupLoading || !topupAmount}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#DC2626] disabled:opacity-50"
+                className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+                style={tenantAccentButton(accentColor)}
               >
                 <Plus className="h-4 w-4" />
                 {topupLoading ? 'Opening checkout…' : 'Add funds'}

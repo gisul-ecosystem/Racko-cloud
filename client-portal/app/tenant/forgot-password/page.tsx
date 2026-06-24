@@ -2,16 +2,19 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { AuthBrand } from '@/components/auth/AuthBrand';
+import { TenantAuthFrame } from '@/components/tenant/TenantAuthFrame';
 import {
-  TENANT_BTN_PRIMARY,
-  TENANT_INPUT_CLASS,
-  TENANT_LINK_ACCENT,
+  TENANT_AUTH_BTN,
+  TENANT_AUTH_ERROR_BOX,
+  TENANT_AUTH_INPUT,
+  TENANT_AUTH_LINK,
 } from '@/components/tenant/tenantAuthStyles';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { tenantForgotPassword } from '@/lib/tenantPortalApi';
 import { ApiError } from '@/lib/apiClient';
 
 export default function TenantForgotPasswordPage() {
+  const { accentColor, tenantNotFound, loading: brandingLoading } = useTenantBranding();
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sent, setSent] = useState(false);
@@ -26,7 +29,7 @@ export default function TenantForgotPasswordPage() {
       setSent(true);
     } catch (err) {
       if (err instanceof ApiError && err.message === 'TENANT_NOT_FOUND') {
-        setError('This domain is not recognized as an active tenant.');
+        setError('Tenant not found');
       } else {
         setSent(true);
       }
@@ -35,51 +38,51 @@ export default function TenantForgotPasswordPage() {
     }
   }
 
+  const formDisabled = brandingLoading || tenantNotFound || isLoading;
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0a0f1e] px-4">
-      <div className="w-full max-w-md">
-        <AuthBrand />
-        <div className="rounded-xl border border-gray-800 bg-[#111827] p-8">
-          <h1 className="mb-6 text-xl font-semibold text-white">Reset password</h1>
+    <TenantAuthFrame
+      eyebrow="PASSWORD"
+      title="Reset your password"
+      description="Enter your work email and we'll send a reset link if an account exists."
+    >
+      {sent ? (
+        <p className="text-sm text-gray-600">
+          If an account exists for that email, a reset link has been sent.
+        </p>
+      ) : (
+        <form onSubmit={handleSubmit} className="space-y-5">
+          <div>
+            <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-gray-700">
+              Email <span className="text-red-500">*</span>
+            </label>
+            <input
+              id="email"
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className={TENANT_AUTH_INPUT}
+              disabled={formDisabled}
+            />
+          </div>
+          {error && <div className={TENANT_AUTH_ERROR_BOX}>{error}</div>}
+          <button
+            type="submit"
+            disabled={formDisabled}
+            className={TENANT_AUTH_BTN}
+            style={{ backgroundColor: accentColor }}
+          >
+            {isLoading ? 'Sending…' : 'Send reset link'}
+          </button>
+        </form>
+      )}
 
-          {sent ? (
-            <p className="text-sm text-gray-300">
-              If an account exists for that email, a reset link has been sent.
-            </p>
-          ) : (
-            <form onSubmit={handleSubmit} className="space-y-5">
-              <div>
-                <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-gray-300">
-                  Email address
-                </label>
-                <input
-                  id="email"
-                  type="email"
-                  required
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  className={TENANT_INPUT_CLASS}
-                  disabled={isLoading}
-                />
-              </div>
-              {error && (
-                <div className="rounded-lg border border-red-700 bg-red-900/30 px-4 py-3 text-sm text-red-300">
-                  {error}
-                </div>
-              )}
-              <button type="submit" disabled={isLoading} className={TENANT_BTN_PRIMARY}>
-                {isLoading ? 'Sending...' : 'Send reset link'}
-              </button>
-            </form>
-          )}
-
-          <p className="mt-6 text-center text-sm text-gray-400">
-            <Link href="/tenant/login" className={TENANT_LINK_ACCENT}>
-              Back to sign in
-            </Link>
-          </p>
-        </div>
-      </div>
-    </div>
+      <p className="mt-6 text-center text-sm text-gray-500">
+        <Link href="/tenant/login" className={TENANT_AUTH_LINK}>
+          Back to sign in
+        </Link>
+      </p>
+    </TenantAuthFrame>
   );
 }

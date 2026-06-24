@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, ChevronLeft, LayoutDashboard } from 'lucide-react';
+import { Building2, ChevronLeft, ClipboardList, LayoutDashboard } from 'lucide-react';
 
 interface WhiteLabellingSidebarProps {
   sidebarOpen: boolean;
@@ -20,6 +20,12 @@ const navLinks = [
     href: '/super-admin-console/white-labelling/tenants',
     label: 'Tenants',
     icon: Building2,
+    exact: false,
+  },
+  {
+    href: '/super-admin-console/white-labelling/orders',
+    label: 'Orders',
+    icon: ClipboardList,
     exact: false,
   },
 ];

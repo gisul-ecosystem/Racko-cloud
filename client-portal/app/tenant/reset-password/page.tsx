@@ -4,16 +4,19 @@ import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
-import { AuthBrand } from '@/components/auth/AuthBrand';
+import { TenantAuthFrame } from '@/components/tenant/TenantAuthFrame';
 import {
-  TENANT_BTN_PRIMARY,
-  TENANT_INPUT_CLASS,
-  TENANT_LINK_ACCENT,
+  TENANT_AUTH_BTN,
+  TENANT_AUTH_ERROR_BOX,
+  TENANT_AUTH_INPUT,
+  TENANT_AUTH_LINK,
 } from '@/components/tenant/tenantAuthStyles';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { tenantResetPassword } from '@/lib/tenantPortalApi';
 import { ApiError } from '@/lib/apiClient';
 
 function ResetPasswordForm() {
+  const { accentColor, tenantNotFound, loading: brandingLoading } = useTenantBranding();
   const searchParams = useSearchParams();
   const token = searchParams.get('token') ?? '';
 
@@ -47,19 +50,19 @@ function ResetPasswordForm() {
     }
   }
 
-  return (
-    <div className="rounded-xl border border-gray-800 bg-[#111827] p-8">
-      <h1 className="mb-6 text-xl font-semibold text-white">Set new password</h1>
+  const formDisabled = brandingLoading || tenantNotFound || isLoading;
 
+  return (
+    <>
       {done ? (
-        <p className="text-sm text-green-300">
+        <p className="text-sm text-green-700">
           Password updated. You can sign in with your new password.
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-5">
           <div>
-            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-gray-300">
-              New password
+            <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-gray-700">
+              New password <span className="text-red-500">*</span>
             </label>
             <input
               id="password"
@@ -68,13 +71,13 @@ function ResetPasswordForm() {
               minLength={8}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className={TENANT_INPUT_CLASS}
-              disabled={isLoading}
+              className={TENANT_AUTH_INPUT}
+              disabled={formDisabled}
             />
           </div>
           <div>
-            <label htmlFor="confirm" className="mb-1.5 block text-sm font-medium text-gray-300">
-              Confirm password
+            <label htmlFor="confirm" className="mb-1.5 block text-sm font-medium text-gray-700">
+              Confirm password <span className="text-red-500">*</span>
             </label>
             <input
               id="confirm"
@@ -82,45 +85,47 @@ function ResetPasswordForm() {
               required
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              className={TENANT_INPUT_CLASS}
-              disabled={isLoading}
+              className={TENANT_AUTH_INPUT}
+              disabled={formDisabled}
             />
           </div>
-          {error && (
-            <div className="rounded-lg border border-red-700 bg-red-900/30 px-4 py-3 text-sm text-red-300">
-              {error}
-            </div>
-          )}
-          <button type="submit" disabled={isLoading} className={TENANT_BTN_PRIMARY}>
-            {isLoading ? 'Updating...' : 'Update password'}
+          {error && <div className={TENANT_AUTH_ERROR_BOX}>{error}</div>}
+          <button
+            type="submit"
+            disabled={formDisabled}
+            className={TENANT_AUTH_BTN}
+            style={{ backgroundColor: accentColor }}
+          >
+            {isLoading ? 'Updating…' : 'Update password'}
           </button>
         </form>
       )}
 
-      <p className="mt-6 text-center text-sm text-gray-400">
-        <Link href="/tenant/login" className={TENANT_LINK_ACCENT}>
+      <p className="mt-6 text-center text-sm text-gray-500">
+        <Link href="/tenant/login" className={TENANT_AUTH_LINK}>
           Back to sign in
         </Link>
       </p>
-    </div>
+    </>
   );
 }
 
 export default function TenantResetPasswordPage() {
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#0a0f1e] px-4">
-      <div className="w-full max-w-md">
-        <AuthBrand />
-        <Suspense
-          fallback={
-            <div className="flex justify-center py-12">
-              <Loader2 className="h-8 w-8 animate-spin text-[#B91C1C]" />
-            </div>
-          }
-        >
-          <ResetPasswordForm />
-        </Suspense>
-      </div>
-    </div>
+    <TenantAuthFrame
+      eyebrow="PASSWORD"
+      title="Set new password"
+      description="Choose a strong password for your tenant account."
+    >
+      <Suspense
+        fallback={
+          <div className="flex justify-center py-12">
+            <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
+          </div>
+        }
+      >
+        <ResetPasswordForm />
+      </Suspense>
+    </TenantAuthFrame>
   );
 }

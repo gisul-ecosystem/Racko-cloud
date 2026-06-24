@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
-  ChevronLeft,
   History,
   LogOut,
   PlusCircle,
   Wallet,
 } from 'lucide-react';
 import { useTenantAuth } from '../../context/TenantAuthContext';
+import { useTenantBranding } from '../../context/TenantBrandingContext';
+import { tenantAccentSurface } from '../../lib/tenantAccentStyles';
 import type { TenantUserRole } from '../../types/tenantPortal';
 
 interface TenantShellProps {
@@ -40,6 +41,7 @@ const navItems: Array<{
 export function TenantShell({ children }: TenantShellProps) {
   const pathname = usePathname();
   const { tenantUser, logout } = useTenantAuth();
+  const { logoSrc, accentColor } = useTenantBranding();
 
   const visibleNav = navItems.filter(
     (item) => !item.roles || (tenantUser && item.roles.includes(tenantUser.role))
@@ -49,9 +51,15 @@ export function TenantShell({ children }: TenantShellProps) {
     <div className="min-h-screen bg-gray-50">
       <header className="border-b border-gray-200 bg-white shadow-sm">
         <div className="mx-auto flex max-w-screen-xl items-center justify-between px-6 py-4">
-          <div>
-            <p className="text-sm font-semibold text-gray-900">Tenant Portal</p>
-            <p className="text-xs text-gray-500">{tenantUser?.email}</p>
+          <div className="flex items-center gap-3">
+            {logoSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={logoSrc} alt="Tenant logo" className="h-8 max-w-[140px] object-contain" />
+            ) : null}
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Tenant Portal</p>
+              <p className="text-xs text-gray-500">{tenantUser?.email}</p>
+            </div>
           </div>
           <button
             type="button"
@@ -72,11 +80,12 @@ export function TenantShell({ children }: TenantShellProps) {
               <Link
                 key={href}
                 href={href}
-                className={`inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium transition ${
+                className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition ${
                   isActive
-                    ? 'bg-red-50 text-[#B91C1C]'
-                    : 'text-gray-600 hover:bg-white hover:text-gray-900'
+                    ? 'border text-gray-900'
+                    : 'border border-transparent text-gray-600 hover:border-gray-200 hover:bg-white hover:text-gray-900'
                 }`}
+                style={isActive ? tenantAccentSurface(accentColor) : undefined}
               >
                 <Icon className="h-4 w-4" />
                 {label}
@@ -92,16 +101,6 @@ export function TenantShell({ children }: TenantShellProps) {
         )}
 
         {children}
-      </div>
-
-      <div className="border-t border-gray-100 px-6 py-4">
-        <Link
-          href="/tenant/login"
-          className="inline-flex items-center gap-1 text-xs text-gray-400 hover:text-[#B91C1C]"
-        >
-          <ChevronLeft className="h-3 w-3" />
-          Tenant login
-        </Link>
       </div>
     </div>
   );

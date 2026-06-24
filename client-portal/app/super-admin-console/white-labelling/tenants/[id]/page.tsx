@@ -46,6 +46,9 @@ import type {
 import { ErrorState } from '../../../../../components/dashboard/ErrorState';
 import { TenantStatusBadge } from '../../../../../components/super-admin-console/white-labelling/TenantStatusBadge';
 import { WhiteLabellingEmptyState } from '../../../../../components/super-admin-console/white-labelling/WhiteLabellingEmptyState';
+import { VmManagementConfigPanel } from '../../../../../components/super-admin-console/white-labelling/VmManagementConfigPanel';
+import { ServiceConfigSummary } from '../../../../../components/super-admin-console/white-labelling/ServiceConfigSummary';
+import { BrandingUploadSection } from '../../../../../components/super-admin-console/white-labelling/BrandingUploadSection';
 
 type Tab = 'general' | 'services' | 'admins';
 
@@ -145,8 +148,11 @@ export default function TenantDetailPage() {
         domain: generalForm.domain.trim().toLowerCase(),
         status: generalForm.status,
         branding: {
-          logoUrl: generalForm.logoUrl || undefined,
+          logoUrl: (tenant?.branding?.logoUrl || generalForm.logoUrl) || undefined,
+          faviconUrl: tenant?.branding?.faviconUrl || undefined,
+          loginPageImageUrl: tenant?.branding?.loginPageImageUrl || undefined,
           primaryColor: generalForm.primaryColor || undefined,
+          secondaryColor: tenant?.branding?.secondaryColor || undefined,
           supportEmail: generalForm.supportEmail || undefined,
         },
       });
@@ -431,6 +437,22 @@ export default function TenantDetailPage() {
             </div>
           </div>
 
+          <BrandingUploadSection
+            tenantId={tenantId}
+            tenant={tenant}
+            onUpdated={(updated) => {
+              setTenant(updated);
+              setGeneralForm((f) => ({
+                ...f,
+                logoUrl: updated.branding?.logoUrl ?? f.logoUrl,
+                primaryColor: updated.branding?.primaryColor ?? f.primaryColor,
+                supportEmail: updated.branding?.supportEmail ?? f.supportEmail,
+              }));
+            }}
+            onFlash={flash}
+            onFlashErr={flashErr}
+          />
+
           <div className="flex justify-end pt-2">
             <button
               type="submit"
@@ -540,24 +562,35 @@ export default function TenantDetailPage() {
                       </button>
                     </div>
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-                        Limits
-                      </p>
-                      <pre className="overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
-                        {JSON.stringify(config.limits, null, 2)}
-                      </pre>
-                    </div>
-                    <div>
-                      <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-                        Pricing
-                      </p>
-                      <pre className="overflow-x-auto rounded-lg bg-gray-50 p-3 text-xs text-gray-700">
-                        {JSON.stringify(config.pricing, null, 2)}
-                      </pre>
-                    </div>
-                  </div>
+                  <ServiceConfigSummary
+                    serviceKey={config.serviceKey}
+                    limits={config.limits}
+                    pricing={config.pricing}
+                  />
+                  {config.serviceKey === 'vm-management' && config.status === 'active' ? (
+                    <VmManagementConfigPanel
+                      tenantId={tenantId}
+                      initialPricing={{
+                        cpuRatePerCoreMonthly: Number(config.pricing['cpuRatePerCoreMonthly'] ?? 500),
+                        ramRatePerGbMonthly: Number(config.pricing['ramRatePerGbMonthly'] ?? 100),
+                        diskRatePerGbMonthly: Number(config.pricing['diskRatePerGbMonthly'] ?? 10),
+                        fixedPlans: Array.isArray(config.pricing['fixedPlans'])
+                          ? (config.pricing['fixedPlans'] as VmManagementPricing['fixedPlans'])
+                          : [],
+                      }}
+                      onFlash={flash}
+                      onFlashErr={flashErr}
+                      onPricingSaved={(pricing) => {
+                        setServices((prev) =>
+                          prev.map((s) =>
+                            s.id === config.id
+                              ? { ...s, pricing: pricing as unknown as Record<string, unknown> }
+                              : s
+                          )
+                        );
+                      }}
+                    />
+                  ) : null}
                 </div>
               );
               })}

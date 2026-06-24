@@ -3,10 +3,12 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { TenantShell } from '@/components/tenant/TenantShell';
 
 export default function TenantDashboardLayout({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useTenantAuth();
+  const { accentColor } = useTenantBranding();
   const router = useRouter();
 
   useEffect(() => {
@@ -18,7 +20,10 @@ export default function TenantDashboardLayout({ children }: { children: React.Re
   if (isLoading || !isAuthenticated) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#B91C1C] border-t-transparent" />
+        <div
+          className="h-8 w-8 animate-spin rounded-full border-2 border-t-transparent"
+          style={{ borderColor: accentColor, borderTopColor: 'transparent' }}
+        />
       </div>
     );
   }

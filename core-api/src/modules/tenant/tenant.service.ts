@@ -183,7 +183,10 @@ export class TenantService {
     if (updates.name !== undefined) tenant.name = updates.name;
     if (updates.domain !== undefined) tenant.domain = updates.domain;
     if (updates.status !== undefined) tenant.status = updates.status;
-    if (updates.branding !== undefined) tenant.branding = updates.branding;
+    if (updates.branding !== undefined) {
+      tenant.branding = { ...(tenant.branding ?? {}), ...updates.branding };
+      tenant.markModified('branding');
+    }
 
     try {
       await tenant.save();

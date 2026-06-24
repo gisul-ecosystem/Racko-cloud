@@ -2,8 +2,11 @@ import { apiRequest } from './apiClient';
 import type {
   ApiEnvelope,
   AssignServiceInput,
+  BrandingAssetType,
   CreateTenantAdminInput,
   CreateTenantInput,
+  SuperAdminOrder,
+  SuperAdminOrderStatus,
   SuperAdminOverview,
   Tenant,
   TenantAdmin,
@@ -12,6 +15,8 @@ import type {
   TenantStatus,
   UpdateServiceConfigInput,
   UpdateTenantInput,
+  VmManagementPlatformTemplates,
+  VmManagementPricing,
 } from './tenantTypes';
 
 async function unwrap<T>(promise: Promise<ApiEnvelope<T>>): Promise<T> {
@@ -145,4 +150,91 @@ export async function setTenantAdminActive(
     )
   );
   return data.admin;
+}
+
+export async function fetchVmManagementPlatformTemplates(
+  tenantId: string
+): Promise<VmManagementPlatformTemplates> {
+  return unwrap(
+    apiRequest<ApiEnvelope<VmManagementPlatformTemplates>>(
+      `/api/v1/tenants/${tenantId}/services/vm-management/platform-templates`
+    )
+  );
+}
+
+export async function updateVmManagementAllowedTemplates(
+  tenantId: string,
+  allowedTemplateIds: number[]
+): Promise<TenantServiceConfig> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ config: TenantServiceConfig }>>(
+      `/api/v1/tenants/${tenantId}/services/vm-management/allowed-templates`,
+      { method: 'PATCH', body: JSON.stringify({ allowedTemplateIds }) }
+    )
+  );
+  return data.config;
+}
+
+export async function updateVmManagementPricing(
+  tenantId: string,
+  pricing: VmManagementPricing
+): Promise<TenantServiceConfig> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ config: TenantServiceConfig }>>(
+      `/api/v1/tenants/${tenantId}/services/vm-management/pricing`,
+      { method: 'PATCH', body: JSON.stringify(pricing) }
+    )
+  );
+  return data.config;
+}
+
+export async function uploadTenantBrandingAsset(
+  tenantId: string,
+  assetType: BrandingAssetType,
+  file: File
+): Promise<Tenant> {
+  const form = new FormData();
+  form.append('assetType', assetType);
+  form.append('file', file);
+
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ tenant: Tenant }>>(`/api/v1/tenants/${tenantId}/branding`, {
+      method: 'POST',
+      body: form,
+    })
+  );
+  return data.tenant;
+}
+
+export async function fetchSuperAdminOrders(
+  status?: SuperAdminOrderStatus
+): Promise<SuperAdminOrder[]> {
+  const qs = status ? `?status=${status}` : '';
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ orders: SuperAdminOrder[] }>>(
+      `/api/v1/super-admin/orders${qs}`
+    )
+  );
+  return data.orders;
+}
+
+export async function approveSuperAdminOrder(orderId: string): Promise<SuperAdminOrder> {
+  return unwrap(
+    apiRequest<ApiEnvelope<SuperAdminOrder>>(
+      `/api/v1/super-admin/orders/${orderId}/approve`,
+      { method: 'PATCH' }
+    )
+  );
+}
+
+export async function rejectSuperAdminOrder(
+  orderId: string,
+  reason: string
+): Promise<SuperAdminOrder> {
+  return unwrap(
+    apiRequest<ApiEnvelope<SuperAdminOrder>>(
+      `/api/v1/super-admin/orders/${orderId}/reject`,
+      { method: 'PATCH', body: JSON.stringify({ reason }) }
+    )
+  );
 }

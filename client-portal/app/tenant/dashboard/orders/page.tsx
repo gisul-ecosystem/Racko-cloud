@@ -8,7 +8,9 @@ import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { listTenantOrders } from '@/lib/tenantPortalApi';
+import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { ApiError } from '@/lib/apiClient';
 import type { TenantOrder } from '@/types/tenantPortal';
 
@@ -26,6 +28,7 @@ function formatDate(iso: string): string {
 
 export default function TenantOrderHistoryPage() {
   const { tenantUser } = useTenantAuth();
+  const { accentColor } = useTenantBranding();
   const router = useRouter();
   const [orders, setOrders] = useState<TenantOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,7 +64,7 @@ export default function TenantOrderHistoryPage() {
   }
 
   if (loading) {
-    return <TableSkeleton rows={5} cols={5} />;
+    return <TableSkeleton rows={5} cols={6} />;
   }
 
   if (error) {
@@ -74,7 +77,8 @@ export default function TenantOrderHistoryPage() {
         <h1 className="text-lg font-semibold text-gray-900">Order history</h1>
         <Link
           href="/tenant/dashboard/orders/new"
-          className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#DC2626]"
+          className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+          style={tenantAccentButton(accentColor)}
         >
           <PlusCircle className="h-4 w-4" />
           Place new order
@@ -90,6 +94,7 @@ export default function TenantOrderHistoryPage() {
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
                   <th className="px-4 py-3">Template</th>
+                  <th className="px-4 py-3">Specs</th>
                   <th className="px-4 py-3">Count</th>
                   <th className="px-4 py-3">Amount</th>
                   <th className="px-4 py-3">Status</th>
@@ -101,9 +106,23 @@ export default function TenantOrderHistoryPage() {
                   <tr key={order.id} className="border-b border-gray-50 align-top">
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{order.templateName}</p>
-                      {order.status === 'rejected' && order.rejectionReason && (
+                      {order.status === 'fulfilled' && order.provisionJobId ? (
+                        <p className="mt-1 font-mono text-xs text-green-700">
+                          Job: {order.provisionJobId}
+                        </p>
+                      ) : null}
+                      {order.status === 'rejected' && order.rejectionReason ? (
                         <p className="mt-1 text-xs text-red-600">{order.rejectionReason}</p>
-                      )}
+                      ) : null}
+                      {order.status === 'pending_payment' ? (
+                        <p className="mt-1 text-xs text-orange-600">
+                          Top up wallet to complete this order.
+                        </p>
+                      ) : null}
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-600">
+                      {order.specs.cpuCores} vCPU · {order.specs.memoryGb} GB RAM ·{' '}
+                      {order.specs.diskGb} GB disk
                     </td>
                     <td className="px-4 py-3 text-gray-700">{order.count}</td>
                     <td className="px-4 py-3 font-medium text-gray-900">

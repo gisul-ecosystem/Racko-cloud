@@ -84,8 +84,9 @@ export async function tenantPortalRequest<T>(
   const { skipAuth = false, ...fetchOptions } = options;
   const API_BASE = getGatewayBaseUrl();
 
+  const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
   const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
+    ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
     ...getTenantDomainHeaders(),
     ...(fetchOptions.headers as Record<string, string>),
   };
@@ -101,15 +102,24 @@ export async function tenantPortalRequest<T>(
     cache: 'no-store',
   });
 
-  if (res.status === 401 && !skipAuth) {
-    clearTenantAccessToken();
-    emitTenantSessionExpired();
-    throw new ApiError('Session expired. Please log in again.', 401, 'SESSION_EXPIRED');
-  }
-
   if (!res.ok) {
     const errorData = (await res.json()) as { message?: string; code?: string };
-    throw new ApiError(errorData.message ?? 'Request failed', res.status, errorData.code);
+    const code = errorData.code ?? errorData.message;
+
+    if (
+      !skipAuth &&
+      (res.status === 401 ||
+        (res.status === 403 && code === 'TENANT_MISMATCH'))
+    ) {
+      clearTenantAccessToken();
+      emitTenantSessionExpired();
+      if (code === 'TENANT_MISMATCH') {
+        throw new ApiError('TENANT_MISMATCH', res.status, 'TENANT_MISMATCH');
+      }
+      throw new ApiError('Session expired. Please log in again.', 401, 'SESSION_EXPIRED');
+    }
+
+    throw new ApiError(errorData.message ?? 'Request failed', res.status, code);
   }
 
   return res.json() as Promise<T>;

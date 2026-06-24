@@ -7,13 +7,27 @@ import { CheckCircle2, Server } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { StatCardSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import {
   createTenantOrder,
-  getTenantOrderTemplates,
+  getTenantOrderCatalog,
   getTenantWallet,
+  quoteTenantOrder,
 } from '@/lib/tenantPortalApi';
+import { tenantAccentButton, tenantAccentSelectedBox } from '@/lib/tenantAccentStyles';
 import { ApiError } from '@/lib/apiClient';
-import type { TenantOrder, TenantOrderTemplate } from '@/types/tenantPortal';
+import type { OrderSpecs, PlaceOrderInput, TenantOrder, TenantOrderTemplate } from '@/types/tenantPortal';
+
+const ORDER_ERROR_MESSAGES: Record<string, string> = {
+  TEMPLATE_NOT_ALLOWED_FOR_TENANT: 'This template is not available for your organization.',
+  TEMPLATE_NOT_FOUND: 'Template not found.',
+  SERVICE_NOT_ENABLED: 'VM management is not enabled for your organization.',
+  TENANT_VM_LIMIT_EXCEEDED: 'This order would exceed your VM limit.',
+  TENANT_VCPU_LIMIT_EXCEEDED: 'This order would exceed your vCPU limit.',
+  TENANT_RAM_LIMIT_EXCEEDED: 'This order would exceed your RAM limit.',
+  TENANT_DISK_LIMIT_EXCEEDED: 'This order would exceed your disk limit.',
+  VALIDATION_ERROR: 'Specs must be at or above the template minimum.',
+};
 
 function formatMoney(amount: number, currency = 'INR'): string {
   return new Intl.NumberFormat('en-IN', {
@@ -23,8 +37,16 @@ function formatMoney(amount: number, currency = 'INR'): string {
   }).format(amount);
 }
 
+function orderErrorMessage(err: unknown): string {
+  if (err instanceof ApiError) {
+    return ORDER_ERROR_MESSAGES[err.code ?? err.message] ?? err.message;
+  }
+  return 'Failed to place order.';
+}
+
 export default function TenantPlaceOrderPage() {
   const { tenantUser } = useTenantAuth();
+  const { accentColor } = useTenantBranding();
   const router = useRouter();
 
   const [templates, setTemplates] = useState<TenantOrderTemplate[]>([]);
@@ -32,6 +54,9 @@ export default function TenantPlaceOrderPage() {
   const [currency, setCurrency] = useState('INR');
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [count, setCount] = useState(1);
+  const [specs, setSpecs] = useState<OrderSpecs | null>(null);
+  const [quotedTotal, setQuotedTotal] = useState<number | null>(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -51,14 +76,17 @@ export default function TenantPlaceOrderPage() {
       setLoading(true);
       setError(null);
       try {
-        const [tpls, wallet] = await Promise.all([
-          getTenantOrderTemplates(),
+        const [catalog, wallet] = await Promise.all([
+          getTenantOrderCatalog(),
           getTenantWallet(),
         ]);
-        setTemplates(tpls);
+        setTemplates(catalog.templates);
         setBalance(wallet.balance);
         setCurrency(wallet.currency);
-        if (tpls[0]) setSelectedId(tpls[0].templateId);
+        if (catalog.templates[0]) {
+          setSelectedId(catalog.templates[0].templateId);
+          setSpecs({ ...catalog.templates[0].baselineSpecs });
+        }
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Failed to load templates.');
       } finally {
@@ -74,11 +102,49 @@ export default function TenantPlaceOrderPage() {
     [templates, selectedId]
   );
 
-  const estimatedTotal = selected ? count * selected.pricePerVm : 0;
+  const orderInput: PlaceOrderInput | null = useMemo(() => {
+    if (!selectedId || !specs) return null;
+    return {
+      templateId: selectedId,
+      count,
+      cpuCores: specs.cpuCores,
+      memoryGb: specs.memoryGb,
+      diskGb: specs.diskGb,
+    };
+  }, [selectedId, count, specs]);
+
+  useEffect(() => {
+    if (!orderInput || tenantUser?.role !== 'tenant_admin') return;
+
+    const timer = setTimeout(() => {
+      setQuoteLoading(true);
+      void quoteTenantOrder(orderInput)
+        .then((q) => setQuotedTotal(q.amount))
+        .catch(() => setQuotedTotal(null))
+        .finally(() => setQuoteLoading(false));
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [orderInput, tenantUser]);
+
+  function selectTemplate(tpl: TenantOrderTemplate) {
+    setSelectedId(tpl.templateId);
+    setSpecs({ ...tpl.baselineSpecs });
+    setQuotedTotal(null);
+  }
+
+  function updateSpec(key: keyof OrderSpecs, value: number) {
+    if (!selected) return;
+    const min = selected.baselineSpecs[key];
+    setSpecs((prev) => ({
+      ...(prev ?? selected.baselineSpecs),
+      [key]: Math.max(min, value),
+    }));
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!selectedId || count < 1) return;
+    if (!orderInput) return;
 
     setSubmitting(true);
     setError(null);
@@ -86,7 +152,7 @@ export default function TenantPlaceOrderPage() {
     setSuccess(null);
 
     try {
-      const order = await createTenantOrder(selectedId, count);
+      const order = await createTenantOrder(orderInput);
 
       if (order.status === 'pending_payment') {
         setInsufficientBalance(true);
@@ -95,7 +161,7 @@ export default function TenantPlaceOrderPage() {
 
       setSuccess(order);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to place order.');
+      setError(orderErrorMessage(err));
     } finally {
       setSubmitting(false);
     }
@@ -130,13 +196,16 @@ export default function TenantPlaceOrderPage() {
         </p>
         <Link
           href="/tenant/dashboard/orders"
-          className="mt-6 inline-block rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#DC2626]"
+          className="mt-6 inline-block rounded-lg px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
+          style={tenantAccentButton(accentColor)}
         >
           View order history
         </Link>
       </div>
     );
   }
+
+  const estimatedTotal = quotedTotal ?? (selected ? count * selected.pricePerVm : 0);
 
   return (
     <div className="space-y-6">
@@ -173,12 +242,11 @@ export default function TenantPlaceOrderPage() {
               <button
                 key={tpl.templateId}
                 type="button"
-                onClick={() => setSelectedId(tpl.templateId)}
+                onClick={() => selectTemplate(tpl)}
                 className={`rounded-xl border p-5 text-left transition ${
-                  isSelected
-                    ? 'border-[#B91C1C] bg-red-50 ring-1 ring-[#B91C1C]'
-                    : 'border-gray-200 bg-white hover:border-gray-300'
+                  isSelected ? 'border' : 'border-gray-200 bg-white hover:border-gray-300'
                 }`}
+                style={isSelected ? tenantAccentSelectedBox(accentColor) : undefined}
               >
                 <div className="flex items-start gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-gray-100">
@@ -191,7 +259,7 @@ export default function TenantPlaceOrderPage() {
                       {tpl.baselineSpecs.cpuCores} vCPU · {tpl.baselineSpecs.memoryGb} GB RAM ·{' '}
                       {tpl.baselineSpecs.diskGb} GB disk
                     </p>
-                    <p className="mt-2 text-sm font-medium text-[#B91C1C]">
+                    <p className="mt-2 text-sm font-medium text-gray-900">
                       {formatMoney(tpl.pricePerVm)}/VM/month
                     </p>
                   </div>
@@ -200,6 +268,38 @@ export default function TenantPlaceOrderPage() {
             );
           })}
         </div>
+
+        {selected && specs ? (
+          <div className="rounded-xl border border-gray-200 bg-white p-5">
+            <h2 className="text-sm font-semibold text-gray-900">Spec overrides (optional)</h2>
+            <p className="mt-1 text-xs text-gray-500">
+              Values must be at or above the template baseline.
+            </p>
+            <div className="mt-4 grid gap-4 sm:grid-cols-3">
+              {(
+                [
+                  ['cpuCores', 'vCPU', selected.baselineSpecs.cpuCores, 1],
+                  ['memoryGb', 'RAM (GB)', selected.baselineSpecs.memoryGb, 0.5],
+                  ['diskGb', 'Disk (GB)', selected.baselineSpecs.diskGb, 1],
+                ] as const
+              ).map(([key, label, min, step]) => (
+                <div key={key}>
+                  <label className="mb-1 block text-xs font-medium text-gray-500">
+                    {label} (min {min})
+                  </label>
+                  <input
+                    type="number"
+                    min={min}
+                    step={step}
+                    value={specs[key]}
+                    onChange={(e) => updateSpec(key, Number(e.target.value))}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="flex flex-wrap items-end gap-4 rounded-xl border border-gray-200 bg-white p-5">
           <div>
@@ -217,7 +317,7 @@ export default function TenantPlaceOrderPage() {
             />
           </div>
           <div className="text-sm text-gray-600">
-            Estimated total:{' '}
+            {quoteLoading ? 'Calculating…' : 'Estimated total:'}{' '}
             <span className="text-base font-semibold text-gray-900">
               {formatMoney(estimatedTotal, currency)}
             </span>
@@ -225,7 +325,8 @@ export default function TenantPlaceOrderPage() {
           <button
             type="submit"
             disabled={submitting || !selected}
-            className="ml-auto rounded-lg bg-[#B91C1C] px-5 py-2 text-sm font-semibold text-white hover:bg-[#DC2626] disabled:opacity-50"
+            className="ml-auto rounded-lg px-5 py-2 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-50"
+            style={tenantAccentButton(accentColor)}
           >
             {submitting ? 'Placing order…' : 'Place order'}
           </button>
