@@ -50,56 +50,42 @@ export const tenantVmListQuerySchema = z.object({
   }),
 });
 
-export const tenantAssignVMsSchema = z.object({
-  body: z.object({
-    userId: mongoObjectId,
-    vmIds: z
-      .array(mongoObjectId)
-      .min(1, 'At least one VM must be specified')
-      .max(50, 'Cannot assign more than 50 VMs at once'),
-  }),
-});
-
-export const tenantBulkAssignPairsSchema = z.object({
+export const tenantOnboardSchema = z.object({
   body: z
     .object({
       vmIds: z
         .array(mongoObjectId)
         .min(1, 'At least one VM must be specified')
-        .max(50, 'Cannot assign more than 50 VMs at once'),
-      mode: z.enum(['create', 'existing']),
+        .max(50, 'Cannot onboard more than 50 VMs at once'),
       emailPrefix: z.string().email('emailPrefix must be a valid email').toLowerCase().trim().optional(),
-      passwordMode: z.enum(['auto', 'shared']).optional(),
+      passwordMode: z.enum(['auto', 'shared']),
       sharedPassword: assignPasswordRules.optional(),
-      userIds: z.array(mongoObjectId).optional(),
+      email: z.string().email('email must be a valid email').toLowerCase().trim().optional(),
     })
     .superRefine((data, ctx) => {
-      if (data.mode === 'create') {
-        if (!data.emailPrefix) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'emailPrefix is required', path: ['emailPrefix'] });
-        }
-        if (!data.passwordMode) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'passwordMode is required', path: ['passwordMode'] });
-        }
-        if (data.passwordMode === 'shared' && !data.sharedPassword) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: 'sharedPassword is required when passwordMode is shared',
-            path: ['sharedPassword'],
-          });
-        }
+      if (data.passwordMode === 'shared' && !data.sharedPassword) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'sharedPassword is required when passwordMode is shared',
+          path: ['sharedPassword'],
+        });
       }
 
-      if (data.mode === 'existing') {
-        if (!data.userIds || data.userIds.length === 0) {
-          ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'userIds is required', path: ['userIds'] });
-        } else if (data.userIds.length !== data.vmIds.length) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            message: 'userIds length must match vmIds length',
-            path: ['userIds'],
-          });
-        }
+      if (data.email && data.vmIds.length !== 1) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'email is only allowed when onboarding exactly one VM',
+          path: ['email'],
+        });
+      }
+
+      const usesExplicitEmail = data.email && data.vmIds.length === 1;
+      if (!usesExplicitEmail && !data.emailPrefix) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'emailPrefix is required unless email is provided for a single VM',
+          path: ['emailPrefix'],
+        });
       }
     }),
 });

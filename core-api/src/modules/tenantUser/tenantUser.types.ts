@@ -28,3 +28,11 @@ export interface BulkCreateTenantUsersResult {
     error?: string;
   }>;
 }
+
+export interface CreateOnboardTenantUserResult {
+  email: string;
+  password: string;
+  status: 'created' | 'failed';
+  userId?: string;
+  error?: string;
+}
