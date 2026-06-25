@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { MonitorCheck, Cloud } from 'lucide-react';
+import { MonitorCheck, Cloud, Monitor } from 'lucide-react';
 
 const services = [
   {
@@ -17,6 +17,13 @@ const services = [
     href: '/super-admin-console/azure/org-admin',
     icon: Cloud,
     description: 'Manage Azure cloud services and resources',
+  },
+  {
+    id: 'machine-manager',
+    name: 'Machine Manager',
+    href: '/super-admin-console/machine-manager',
+    icon: Monitor,
+    description: 'Manage software catalog for machine installations',
   },
 ] as const;
 

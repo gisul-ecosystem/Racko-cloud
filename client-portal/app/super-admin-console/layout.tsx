@@ -11,6 +11,7 @@ import { SuperAdminConsoleTopBar } from '../../components/super-admin-console/Su
 const SERVICES_WITH_OWN_SHELL = [
   '/super-admin-console/vm-management',
   '/super-admin-console/azure',
+  '/super-admin-console/machine-manager',
 ];
 
 function SuperAdminConsoleShell({ children }: { children: React.ReactNode }) {

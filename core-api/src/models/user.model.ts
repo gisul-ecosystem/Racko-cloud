@@ -1,5 +1,6 @@
 import mongoose, { Document, Model, Schema } from 'mongoose';
 import { hashPassword, verifyPassword } from '../utils/argon2';
+import { v4 as uuidv4 } from 'uuid';
 import type { UserRole } from '../types';
 
 export interface IUser extends Document {
@@ -19,6 +20,7 @@ export interface IUser extends Document {
   emailVerificationExpires?: Date;
   passwordChangedAt?: Date;
   createdBy?: mongoose.Types.ObjectId;  // admin who provisioned this user (null for self-registered)
+  enrollmentKey: string;                // used for VM template agent auto-registration
   // MFA_SLOT: mfaEnabled: boolean (default: false)
   // MFA_SLOT: mfaSecret?: string
   createdAt: Date;
@@ -96,6 +98,12 @@ const userSchema = new Schema<IUser, IUserModel>(
       ref: 'User',
       index: true,
     },
+    enrollmentKey: {
+      type: String,
+      unique: true,
+      sparse: true,
+      index: true,
+    },
   },
   {
     strict: true,
@@ -117,6 +125,14 @@ userSchema.pre('save', async function (next) {
   this.password = await hashPassword(this.password);
   if (!this.isNew) {
     this.passwordChangedAt = new Date();
+  }
+  next();
+});
+
+// Auto-generate enrollmentKey for new admin/super_admin users
+userSchema.pre('save', function (next) {
+  if (this.isNew && !this.enrollmentKey) {
+    this.enrollmentKey = uuidv4();
   }
   next();
 });
