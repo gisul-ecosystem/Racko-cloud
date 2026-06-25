@@ -10,6 +10,12 @@ const envSchema = z.object({
   // Cloud automation (Azure access management)
   CLOUD_AUTOMATION_URL: z.string().url('CLOUD_AUTOMATION_URL must be a valid URL'),
 
+  // Cloud automation AWS (AWS access management)
+  CLOUD_AUTOMATION_AWS_URL: z
+    .string()
+    .url('CLOUD_AUTOMATION_AWS_URL must be a valid URL')
+    .default('http://localhost:3003'),
+
   // JWT
   JWT_ACCESS_SECRET: z.string().min(64, 'JWT_ACCESS_SECRET must be at least 64 characters'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
