@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Cloud, Globe, Monitor, Server, BookOpen } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
+import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
 
 const services = [
   {
@@ -28,6 +29,14 @@ const services = [
     href: AZURE_ROUTES.dashboard,
     icon: Cloud,
     description: AZURE_SERVICE.description,
+    available: true,
+  },
+  {
+    id: AWS_SERVICE.id,
+    name: AWS_SERVICE.name,
+    href: AWS_ROUTES.dashboard,
+    icon: Server,
+    description: AWS_SERVICE.description,
     available: true,
   },
   {

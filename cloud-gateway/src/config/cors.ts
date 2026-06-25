@@ -16,6 +16,8 @@ export const corsOptions: CorsOptions = {
     'X-Request-ID',
     'X-Access-Session',
     'X-Org-Admin-Session',
+    'X-Tenant-Domain',
+    'Idempotency-Key',
   ],
   exposedHeaders: ['X-Request-ID', 'Retry-After'],
   maxAge: 86400,

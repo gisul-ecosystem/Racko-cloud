@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { MonitorCheck, Cloud, Monitor } from 'lucide-react';
+import { MonitorCheck, Cloud, Palette } from 'lucide-react';
 
 const services = [
   {
@@ -24,6 +25,11 @@ const services = [
     href: '/super-admin-console/machine-manager',
     icon: Monitor,
     description: 'Manage software catalog for machine installations',
+    id: 'white-labelling',
+    name: 'White Labelling Service',
+    href: '/super-admin-console/white-labelling',
+    icon: Palette,
+    description: 'Manage tenants, branding, service configs and tenant admins',
   },
 ] as const;
 

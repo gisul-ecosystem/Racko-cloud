@@ -1,0 +1,210 @@
+'use client';
+
+import React, {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from 'react';
+import { ApiError } from '@/lib/apiClient';
+import {
+  fetchTenantBrandingAssetObjectUrl,
+  getTenantBranding,
+} from '@/lib/tenantPortalApi';
+import { isTenantBrandingAssetPath, resolveTenantBrandingUrl } from '@/lib/tenantBrandingUrl';
+import { getTenantDevDomain } from '@/lib/gatewayUrl';
+import type { TenantBranding, TenantBrandingAssetType } from '@/types/tenantPortal';
+
+const DEFAULT_BRANDING: TenantBranding = {
+  logoUrl: '',
+  faviconUrl: '',
+  loginPageImageUrl: '',
+  primaryColor: '#111827',
+  secondaryColor: '#22c55e',
+  supportEmail: '',
+};
+
+const ASSET_TYPES: TenantBrandingAssetType[] = ['logo', 'favicon', 'login-page-image'];
+
+function capitalizePortalSegment(segment: string): string {
+  return segment.charAt(0).toUpperCase() + segment.slice(1);
+}
+
+/** SSR-safe: uses only NEXT_PUBLIC_TENANT_DEV_DOMAIN (same on server + client). */
+function resolvePortalNameFromEnv(): string {
+  const dev = getTenantDevDomain();
+  if (!dev) return 'Portal';
+  return capitalizePortalSegment(dev.split('.')[0] ?? 'portal');
+}
+
+/** Client-only: derives name from browser hostname (after hydration). */
+function resolvePortalNameFromHost(): string {
+  const dev = getTenantDevDomain();
+  if (dev) return capitalizePortalSegment(dev.split('.')[0] ?? 'portal');
+
+  const host = window.location.hostname;
+  if (host === 'localhost' || host === '127.0.0.1') return 'Portal';
+
+  return capitalizePortalSegment(host.split('.')[0] ?? 'portal');
+}
+
+interface TenantBrandingState {
+  branding: TenantBranding;
+  logoSrc: string;
+  faviconSrc: string;
+  heroSrc: string;
+  accentColor: string;
+  secondaryColor: string;
+  portalName: string;
+  tenantNotFound: boolean;
+  brandingError: string | null;
+  loading: boolean;
+}
+
+const TenantBrandingContext = createContext<TenantBrandingState | null>(null);
+
+function resolveLogoSrc(
+  metadata: TenantBranding,
+  assetUrls: Partial<Record<TenantBrandingAssetType, string>>
+): string {
+  if (metadata.logoUrl && !isTenantBrandingAssetPath(metadata.logoUrl)) {
+    return resolveTenantBrandingUrl(metadata.logoUrl);
+  }
+  return assetUrls.logo ?? '';
+}
+
+export function TenantBrandingProvider({ children }: { children: React.ReactNode }) {
+  const [branding, setBranding] = useState<TenantBranding>(DEFAULT_BRANDING);
+  const [assetUrls, setAssetUrls] = useState<Partial<Record<TenantBrandingAssetType, string>>>(
+    {}
+  );
+  const [loading, setLoading] = useState(true);
+  const [tenantNotFound, setTenantNotFound] = useState(false);
+  const [brandingError, setBrandingError] = useState<string | null>(null);
+  const [portalName, setPortalName] = useState(resolvePortalNameFromEnv);
+  const objectUrlsRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    setPortalName(resolvePortalNameFromHost());
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load(showSpinner: boolean) {
+      if (showSpinner) setLoading(true);
+      setTenantNotFound(false);
+      setBrandingError(null);
+
+      try {
+        const { branding: metadata } = await getTenantBranding();
+        if (cancelled) return;
+
+        const merged: TenantBranding = {
+          ...DEFAULT_BRANDING,
+          ...metadata,
+          primaryColor: metadata.primaryColor || DEFAULT_BRANDING.primaryColor,
+          secondaryColor: metadata.secondaryColor || DEFAULT_BRANDING.secondaryColor,
+        };
+        setBranding(merged);
+
+        const cacheBust = Date.now();
+
+        const entries = await Promise.all(
+          ASSET_TYPES.map(async (assetType) => {
+            const hasAsset =
+              assetType === 'logo'
+                ? Boolean(merged.logoUrl)
+                : assetType === 'favicon'
+                  ? Boolean(merged.faviconUrl)
+                  : Boolean(merged.loginPageImageUrl);
+
+            if (!hasAsset) return [assetType, null] as const;
+
+            const objectUrl = await fetchTenantBrandingAssetObjectUrl(assetType, cacheBust);
+            return [assetType, objectUrl] as const;
+          })
+        );
+
+        if (cancelled) return;
+
+        objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+        const next: Partial<Record<TenantBrandingAssetType, string>> = {};
+        const nextObjectUrls: string[] = [];
+        for (const [type, url] of entries) {
+          if (url) {
+            next[type] = url;
+            nextObjectUrls.push(url);
+          }
+        }
+        objectUrlsRef.current = nextObjectUrls;
+        setAssetUrls(next);
+      } catch (err) {
+        if (cancelled) return;
+        setAssetUrls({});
+        setBranding(DEFAULT_BRANDING);
+
+        if (err instanceof ApiError) {
+          const isNotFound =
+            err.code === 'TENANT_NOT_FOUND' ||
+            err.message === 'TENANT_NOT_FOUND' ||
+            err.message.toLowerCase().includes('tenant not found');
+          if (isNotFound) {
+            setTenantNotFound(true);
+            setBrandingError('Tenant not found');
+          } else {
+            setBrandingError(err.message);
+          }
+        } else {
+          setBrandingError('Failed to load workspace branding.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }
+
+    void load(true);
+
+    function onFocus() {
+      void load(false);
+    }
+    window.addEventListener('focus', onFocus);
+
+    return () => {
+      cancelled = true;
+      window.removeEventListener('focus', onFocus);
+      objectUrlsRef.current.forEach((url) => URL.revokeObjectURL(url));
+      objectUrlsRef.current = [];
+    };
+  }, []);
+
+  const value = useMemo<TenantBrandingState>(
+    () => ({
+      branding,
+      logoSrc: resolveLogoSrc(branding, assetUrls),
+      faviconSrc: assetUrls.favicon ?? '',
+      heroSrc: assetUrls['login-page-image'] ?? '',
+      accentColor: branding.primaryColor || '#111827',
+      secondaryColor: branding.secondaryColor || '#22c55e',
+      portalName,
+      tenantNotFound,
+      brandingError,
+      loading,
+    }),
+    [branding, assetUrls, portalName, tenantNotFound, brandingError, loading]
+  );
+
+  return (
+    <TenantBrandingContext.Provider value={value}>{children}</TenantBrandingContext.Provider>
+  );
+}
+
+export function useTenantBranding(): TenantBrandingState {
+  const ctx = useContext(TenantBrandingContext);
+  if (!ctx) {
+    throw new Error('useTenantBranding must be used within TenantBrandingProvider');
+  }
+  return ctx;
+}

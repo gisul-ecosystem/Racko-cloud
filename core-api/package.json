@@ -6,7 +6,7 @@
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
-    "dev": "nodemon --exec ts-node src/server.ts",
+    "dev": "node --watch -r ts-node/register src/server.ts",
     "seed": "ts-node src/scripts/seedSuperAdmin.ts",
     "typecheck": "tsc --noEmit",
     "test": "ts-node --transpile-only src/modules/vm/helpers/hypervGuestOutput.test.ts"
@@ -26,6 +26,8 @@
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.1.1",
     "morgan": "^1.10.0",
+    "multer": "^2.2.0",
+    "razorpay": "^2.9.6",
     "sanitize-html": "^2.12.1",
     "uuid": "^9.0.1",
     "winston": "^3.11.0",
@@ -38,6 +40,7 @@
     "@types/hpp": "^0.2.6",
     "@types/jsonwebtoken": "^9.0.5",
     "@types/morgan": "^1.9.9",
+    "@types/multer": "^2.1.0",
     "@types/node": "^25.9.1",
     "@types/sanitize-html": "^2.11.0",
     "@types/uuid": "^9.0.7",

@@ -12,6 +12,7 @@ const SERVICES_WITH_OWN_SHELL = [
   '/super-admin-console/vm-management',
   '/super-admin-console/azure',
   '/super-admin-console/machine-manager',
+  '/super-admin-console/white-labelling',
 ];
 
 function SuperAdminConsoleShell({ children }: { children: React.ReactNode }) {

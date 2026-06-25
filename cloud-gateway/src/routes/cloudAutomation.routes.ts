@@ -39,6 +39,15 @@ function blockLabAndPortalRoutes(req: Request, _res: Response, next: NextFunctio
   next();
 }
 
+/** AWS routes share the Azure prefix; skip them so the AWS proxy can handle the request. */
+function skipAwsAutomationPaths(req: Request, _res: Response, next: NextFunction): void {
+  const path = req.path.split('?')[0] ?? req.path;
+  if (path.startsWith('/api/v1/cloud-automation-aws')) {
+    return next('route');
+  }
+  next();
+}
+
 function rewriteCloudAutomationPath(path: string): string {
   if (path === '/health' || path === `${GATEWAY_PREFIX}/health`) {
     return '/health';
@@ -83,6 +92,7 @@ const cloudAutomationProxy = createProxyMiddleware({
 // Type 1 — Racko JWT + role guard; all admin cloud_automation APIs except lab/portal routes.
 router.use(
   GATEWAY_PREFIX,
+  skipAwsAutomationPaths,
   authMiddleware,
   verifyMiddleware,
   requireRole('admin', 'super_admin'),

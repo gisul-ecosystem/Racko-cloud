@@ -22,10 +22,23 @@ import notificationRoutes from './modules/notification/notification.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
 import { machineRouter, agentRouter } from './modules/machine-manager/machine-manager.routes';
 import softwareCatalogRoutes from './modules/software-catalog/software-catalog.routes';
+import internalTenantRoutes from './modules/tenant/internalTenant.routes';
+import tenantRoutes from './modules/tenant/tenant.routes';
+import tenantBrandingRoutes from './modules/tenant/tenantBranding.routes';
+import tenantAuthRoutes from './modules/tenantAuth/tenantAuth.routes';
+import superAdminRoutes from './modules/superAdmin/superAdmin.routes';
+import walletRoutes from './modules/wallet/wallet.routes';
+import orderRoutes from './modules/order/order.routes';
+import superAdminOrderRoutes from './modules/order/superAdminOrder.routes';
+import razorpayWebhookRoutes from './modules/billing/razorpay/razorpayWebhook.routes';
 import { startNodeMonitoring } from './modules/proxmox/proxmox.service';
 import { startHyperVSweeper } from './modules/vm/helpers/hypervSweeper';
 import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconcileSweeper';
 import { startVmAutomationScheduler } from './modules/vmAutomation/vmAutomationScheduler';
+import tenantPlanRoutes from './modules/tenantPlan/tenantPlan.routes';
+import tenantNotificationRoutes from './modules/tenantNotification/tenantNotification.routes';
+import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
+import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 
 const app = express();
 
@@ -82,11 +95,14 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret', 'x-tenant-id', 'Idempotency-Key'],
     exposedHeaders: ['X-Request-ID'],
     maxAge: 86400,
   })
 );
+
+// Razorpay webhook — raw body required for HMAC verification (before JSON parser)
+app.use('/webhooks/razorpay', express.raw({ type: 'application/json' }), razorpayWebhookRoutes);
 
 // 4. Body parsing
 app.use(express.json({ limit: '10kb' }));
@@ -118,6 +134,16 @@ app.get('/health', (_req, res) => {
 });
 
 // Routes
+app.use('/internal/tenants', internalTenantRoutes);
+app.use('/api/v1/tenants', tenantRoutes);
+app.use('/api/v1/tenant-branding', tenantBrandingRoutes);
+app.use('/api/v1/tenant-auth', tenantAuthRoutes);
+app.use('/api/v1/super-admin', superAdminRoutes);
+app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
+app.use('/api/v1/tenant-wallet', walletRoutes);
+app.use('/api/v1/tenant-orders', orderRoutes);
+app.use('/api/v1/tenant-plans', tenantPlanRoutes);
+app.use('/api/v1/tenant-notifications', tenantNotificationRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -137,6 +163,8 @@ startNodeMonitoring();
 startHyperVSweeper();
 startStorageReconcileSweeper();
 startVmAutomationScheduler();
+startPlanExpiryScheduler();
+startPlanExpiryWarningScheduler();
 
 // 404 handler
 app.use(notFoundHandler);

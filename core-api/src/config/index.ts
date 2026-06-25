@@ -106,6 +106,15 @@ const envSchema = z.object({
   VM_AUTOMATION_TICK_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('60000'),
   VM_AUTOMATION_STAGGER_MS: z.string().regex(/^\d+$/).transform(Number).default('300'),
 
+  // Tenant VM plan expiry (graceful stop when planPeriodEnd passes)
+  PLAN_EXPIRY_CHECK_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
+  PLAN_EXPIRY_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('7'),
+  PLAN_EXPIRY_WARNING_CHECK_INTERVAL_MS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('3600000'),
+
   // Software installation (Windows guests — Chocolatey)
   SOFTWARE_QMP_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('45000'),
   SOFTWARE_VM_START_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
@@ -138,6 +147,22 @@ const envSchema = z.object({
   GUACAMOLE_PUBLIC_URL: z.string().url('GUACAMOLE_PUBLIC_URL must be a valid URL'),
   GUACAMOLE_USERNAME: z.string().min(1, 'GUACAMOLE_USERNAME is required'),
   GUACAMOLE_PASSWORD: z.string().min(1, 'GUACAMOLE_PASSWORD is required'),
+
+  // Razorpay (wallet top-up)
+  RAZORPAY_KEY_ID: z.string().optional().default(''),
+  RAZORPAY_KEY_SECRET: z.string().optional().default(''),
+  RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
+
+  // Manual wallet top-up (super-admin offline payments)
+  MANUAL_TOPUP_MAX_AMOUNT: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/)
+    .optional()
+    .default('500000')
+    .transform(Number),
+
+  // Tenant branding asset volume (logo, favicon, login page image cache)
+  TENANT_ASSETS_VOLUME_PATH: z.string().default('./data/tenant-assets'),
 
   // Test VM scaffolding — remove once VM model stores private IP + credentials
   TEST_VM_IP: z.string().optional(),

@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import { helmetMiddleware } from './middleware/helmet.middleware';
 import { requestIdMiddleware } from './middleware/requestId.middleware';
+import { tenantResolver } from './middleware/tenant.middleware';
 import { loggerMiddleware } from './middleware/logger.middleware';
 import { userRateLimiter } from './middleware/rateLimit.middleware';
 import { corsOptions } from './config/cors';
@@ -9,6 +10,7 @@ import { GatewayError } from './utils/errors';
 import { logger } from './utils/logger';
 import { config } from './config';
 import cloudAutomationRoutes from './routes/cloudAutomation.routes';
+import cloudAutomationAwsRoutes from './routes/cloudAutomationAws.routes';
 import managePortalRoutes from './routes/managePortal.routes';
 import orgAdminPortalRoutes from './routes/orgAdminPortal.routes';
 import proxyRoutes from './routes/proxy.routes';
@@ -25,6 +27,9 @@ app.use(helmetMiddleware);
 
 // 3. CORS — strict origin whitelist
 app.use(cors(corsOptions));
+
+// 3b. Tenant host resolution (non-blocking; sets req.tenantContext)
+app.use(tenantResolver);
 
 // 4. Morgan/logger — request logging
 app.use(loggerMiddleware);
@@ -51,6 +56,9 @@ app.get('/health', (_req, res) => {
 app.use(managePortalRoutes);
 // Organization admin APIs (JWT super_admin; enforced by cloud_automation)
 app.use(orgAdminPortalRoutes);
+// Cloud automation AWS — register before Azure routes because
+// /api/v1/cloud-automation-aws is a prefix of /api/v1/cloud-automation.
+app.use(cloudAutomationAwsRoutes);
 // Cloud automation (Type 1 admin APIs) — must register before core-api catch-all
 app.use(cloudAutomationRoutes);
 app.use(proxyRoutes);
