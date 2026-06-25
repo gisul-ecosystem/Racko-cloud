@@ -76,8 +76,11 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
         await walletService.creditWallet(
           notes['tenantId'],
           payment.amount / 100,
-          'topup',
-          null
+          'topup_razorpay',
+          {
+            source: 'razorpay',
+            externalReference: payment.id ?? null,
+          }
         );
       } catch (error) {
         logger.error('Failed to credit wallet from Razorpay webhook', {

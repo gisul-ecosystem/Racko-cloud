@@ -93,7 +93,7 @@ app.use(
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret', 'x-tenant-id'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID', 'X-Internal-Secret', 'x-tenant-id', 'Idempotency-Key'],
     exposedHeaders: ['X-Request-ID'],
     maxAge: 86400,
   })

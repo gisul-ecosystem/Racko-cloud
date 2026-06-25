@@ -15,7 +15,8 @@ export type AuditEvent =
   | 'ACCOUNT_LOCKED'
   | 'ACCOUNT_UNLOCKED'
   | 'SUSPICIOUS_LOGIN'
-  | 'PASSWORD_CHANGE';
+  | 'PASSWORD_CHANGE'
+  | 'WALLET_MANUAL_CREDIT';
 
 export interface IAuditLog extends Document {
   _id: mongoose.Types.ObjectId;
@@ -54,6 +55,7 @@ const auditLogSchema = new Schema<IAuditLog>(
         'ACCOUNT_UNLOCKED',
         'SUSPICIOUS_LOGIN',
         'PASSWORD_CHANGE',
+        'WALLET_MANUAL_CREDIT',
       ],
       index: true,
     },
