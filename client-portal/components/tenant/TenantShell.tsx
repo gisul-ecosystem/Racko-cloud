@@ -8,6 +8,7 @@ import {
   PlusCircle,
   Server,
   User,
+  Users,
   Wallet,
 } from 'lucide-react';
 import { useTenantAuth } from '../../context/TenantAuthContext';
@@ -26,7 +27,25 @@ const navItems: Array<{
   icon: typeof Wallet;
   roles?: TenantUserRole[];
 }> = [
-  { href: '/tenant/dashboard/wallet', label: 'Wallet', icon: Wallet },
+  {
+    href: '/tenant/dashboard/vms',
+    label: 'VMs',
+    icon: Server,
+    roles: ['tenant_admin'],
+  },
+  {
+    href: '/tenant/dashboard/my-vms',
+    label: 'My VMs',
+    icon: Server,
+    roles: ['tenant_user'],
+  },
+  {
+    href: '/tenant/dashboard/users',
+    label: 'Users',
+    icon: Users,
+    roles: ['tenant_admin'],
+  },
+  { href: '/tenant/dashboard/wallet', label: 'Wallet', icon: Wallet, roles: ['tenant_admin'] },
   {
     href: '/tenant/dashboard/plans',
     label: 'VM Plans',
@@ -114,7 +133,7 @@ export function TenantShell({ children }: TenantShellProps) {
 
         {tenantUser?.role === 'tenant_user' && (
           <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            You have read-only access. Contact your tenant admin to place orders or add funds.
+            You can access your assigned virtual machines below. Contact your tenant admin for billing, orders, or renewals.
           </div>
         )}
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import Script from 'next/script';
+import { useRouter } from 'next/navigation';
 import { Plus, Wallet as WalletIcon } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
@@ -38,6 +39,7 @@ function formatDate(iso: string): string {
 export default function TenantWalletPage() {
   const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
+  const router = useRouter();
   const isAdmin = tenantUser?.role === 'tenant_admin';
 
   const [wallet, setWallet] = useState<TenantWallet | null>(null);
@@ -87,6 +89,13 @@ export default function TenantWalletPage() {
       setLoading(false);
     }
   }, [loadWallet, loadTransactions, page]);
+
+  useEffect(() => {
+    if (tenantUser?.role === 'tenant_user') {
+      router.replace('/tenant/dashboard/my-vms');
+      return;
+    }
+  }, [router, tenantUser?.role]);
 
   useEffect(() => {
     void loadAll();
@@ -145,6 +154,10 @@ export default function TenantWalletPage() {
     } finally {
       setTopupLoading(false);
     }
+  }
+
+  if (tenantUser?.role === 'tenant_user') {
+    return null;
   }
 
   if (loading && !wallet) {

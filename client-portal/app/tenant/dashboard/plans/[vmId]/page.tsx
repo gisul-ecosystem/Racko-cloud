@@ -61,7 +61,7 @@ export default function TenantPlanDetailPage() {
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/wallet');
+      router.replace('/tenant/dashboard/my-vms');
     }
   }, [tenantUser, router]);
 

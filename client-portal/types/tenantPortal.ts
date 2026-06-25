@@ -10,6 +10,33 @@ export interface TenantPortalUser {
   tenantId: string;
 }
 
+export interface TenantUserProfile {
+  id: string;
+  email: string;
+  role: 'tenant_user';
+  tenantId: string;
+  isActive: boolean;
+  createdAt: string;
+}
+
+export interface TenantUsersResult {
+  users: TenantUserProfile[];
+  total: number;
+}
+
+export interface BulkCreatedTenantUserResultRow {
+  email: string;
+  password: string;
+  status: 'created' | 'failed';
+  error?: string;
+}
+
+export interface BulkCreateTenantUsersResult {
+  created: number;
+  failed: number;
+  users: BulkCreatedTenantUserResultRow[];
+}
+
 export interface TenantBranding {
   logoUrl: string;
   faviconUrl: string;
@@ -106,6 +133,115 @@ export type TenantOrderStatus =
 export type PlanStatus = 'active' | 'expired';
 
 export type BillingPeriod = 'monthly' | 'quarterly' | 'yearly';
+
+export type TenantVmStatus =
+  | 'creating'
+  | 'running'
+  | 'stopped'
+  | 'paused'
+  | 'suspended'
+  | 'error'
+  | 'deleting'
+  | 'deleted';
+
+export interface TenantVmAssignmentSummary {
+  tenantUserId: string;
+  email: string;
+  isActive: boolean;
+}
+
+export interface TenantVmLiveStatus {
+  vmid: number;
+  node: string;
+  status: string;
+  cpu: { usagePercent: number; allocated: number };
+  memory: { usedGb: number; allocatedGb: number; usagePercent: number };
+  disk: { usedGb: number; allocatedGb: number };
+  uptime: { seconds: number; formatted: string };
+  ipAddress?: string;
+}
+
+export interface TenantVmSummary {
+  id: string;
+  vmid: number;
+  node: string;
+  name: string;
+  description?: string;
+  status: TenantVmStatus;
+  proxmoxStatus: string;
+  ipAddress?: string;
+  cloneType: 'dedicated_storage' | 'dynamic_storage';
+  allocatedCpu: number;
+  allocatedMemoryGb: number;
+  allocatedDiskGb: number;
+  consoleProtocol: 'rdp' | 'ssh';
+  consoleReady: boolean;
+  planStatus?: PlanStatus | null;
+  planPeriodEnd?: string | null;
+  billingPeriod?: BillingPeriod | null;
+  assignment?: TenantVmAssignmentSummary | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TenantVmsResult {
+  vms: TenantVmSummary[];
+  total: number;
+}
+
+export interface TenantVmDetails {
+  vm: TenantVmSummary;
+  liveStatus?: TenantVmLiveStatus;
+}
+
+export interface TenantVmConsoleResult {
+  protocol: 'rdp' | 'ssh' | 'vnc' | string;
+  clientUrl: string;
+  connectionId: string;
+}
+
+export interface TenantVmOperationResult {
+  success: boolean;
+  vmid: number;
+  node: string;
+  operation: string;
+  taskId?: string;
+  error?: string;
+}
+
+export interface TenantVmAssignmentCountsResult {
+  counts: Record<string, number>;
+}
+
+export interface BulkAssignedTenantVmPair {
+  vmId: string;
+  vmName: string;
+  userId?: string;
+  userEmail: string;
+  password?: string;
+  status: 'assigned' | 'failed';
+  error?: string;
+}
+
+export interface BulkAssignTenantVmsResult {
+  assigned: number;
+  failed: number;
+  pairs: BulkAssignedTenantVmPair[];
+}
+
+export type BulkAssignTenantVmsInput =
+  | {
+      vmIds: string[];
+      mode: 'create';
+      emailPrefix: string;
+      passwordMode: 'auto' | 'shared';
+      sharedPassword?: string;
+    }
+  | {
+      vmIds: string[];
+      mode: 'existing';
+      userIds: string[];
+    };
 
 export interface TenantPlanSpecs {
   cpuCores: number;
