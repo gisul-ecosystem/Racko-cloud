@@ -18,9 +18,7 @@ import {
   RotateCcw,
   Server,
   Square,
-  UserPlus,
   Users,
-  X,
 } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
@@ -30,7 +28,7 @@ import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { ApiError } from '@/lib/apiClient';
-import { tenantAccentButton, tenantAccentSurface } from '@/lib/tenantAccentStyles';
+import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import {
   formatBillingPeriod,
   formatPlanPeriodEnd,
@@ -38,53 +36,33 @@ import {
   planExpiryLabel,
 } from '@/lib/tenantPlanUtils';
 import {
-  assignTenantVms,
-  bulkAssignTenantVms,
-  fetchAssignedTenantVmsForUser,
-  fetchTenantUsers,
   fetchTenantVm,
-  fetchTenantVmAssignmentCounts,
   fetchTenantVmStatus,
   fetchTenantVms,
+  fetchTenantVmsForUser,
   openTenantVmConsole,
   restartTenantVm,
   startTenantVm,
   stopTenantVm,
-  unassignTenantVm,
-} from '@/lib/tenantPortalApi';
-import type {
-  BulkAssignTenantVmsInput,
-  BulkAssignTenantVmsResult,
-  TenantUserProfile,
-  TenantVmDetails,
-  TenantVmLiveStatus,
-  TenantVmSummary,
-} from '@/types/tenantPortal';
+} from '@/lib/tenantVmApi';
+import type { TenantVmDetails, TenantVmLiveStatus, TenantVmSummary } from '@/types/tenantPortal';
 import type { VMStatus } from '@/lib/vmApi';
 
-type TenantVmScope = 'admin' | 'user';
+const VM_LIST_PATH = '/tenant/dashboard/vms';
 type PowerAction = 'start' | 'stop' | 'restart';
-type BulkMode = 'create' | 'existing';
-type PasswordMode = 'auto' | 'shared';
 
 function isPlanExpired(vm: Pick<TenantVmSummary, 'planStatus' | 'planPeriodEnd'>): boolean {
   if (!vm.planStatus || !vm.planPeriodEnd) return false;
-  return getPlanDisplayStatus({
-    planStatus: vm.planStatus,
-    planPeriodEnd: vm.planPeriodEnd,
-  }) === 'expired';
+  return (
+    getPlanDisplayStatus({
+      planStatus: vm.planStatus,
+      planPeriodEnd: vm.planPeriodEnd,
+    }) === 'expired'
+  );
 }
 
 function formatDateTime(value: string): string {
   return new Date(value).toLocaleString();
-}
-
-function scopeBasePath(scope: TenantVmScope): string {
-  return scope === 'admin' ? '/tenant/dashboard/vms' : '/tenant/dashboard/my-vms';
-}
-
-function scopeHeading(scope: TenantVmScope): string {
-  return scope === 'admin' ? 'Tenant VMs' : 'My VMs';
 }
 
 function openPopupShell(): Window | null {
@@ -124,429 +102,6 @@ function PageNotice({
   return <div className={`rounded-lg border px-4 py-3 text-sm ${styles}`}>{children}</div>;
 }
 
-function BulkAssignResultPanel({
-  result,
-  onClear,
-}: {
-  result: BulkAssignTenantVmsResult;
-  onClear: () => void;
-}) {
-  const hasPasswords = result.pairs.some((pair) => pair.password);
-
-  return (
-    <div className="space-y-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
-            {result.assigned} assigned
-          </span>
-          {result.failed > 0 ? (
-            <span className="rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-700">
-              {result.failed} failed
-            </span>
-          ) : null}
-        </div>
-        <button
-          type="button"
-          onClick={onClear}
-          className="text-sm font-medium text-gray-500 hover:text-gray-900"
-        >
-          Clear results
-        </button>
-      </div>
-
-      {hasPasswords ? (
-        <PageNotice>
-          Save these credentials now. Passwords are shown once and will not be available later.
-        </PageNotice>
-      ) : null}
-
-      <div className="overflow-x-auto rounded-lg border border-gray-200">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b border-gray-100 bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
-              <th className="px-4 py-3">VM</th>
-              <th className="px-4 py-3">User</th>
-              {hasPasswords ? <th className="px-4 py-3">Password</th> : null}
-              <th className="px-4 py-3">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {result.pairs.map((pair) => (
-              <tr key={pair.vmId} className="border-b border-gray-50 last:border-0">
-                <td className="px-4 py-3 font-medium text-gray-900">{pair.vmName}</td>
-                <td className="px-4 py-3 text-gray-700">{pair.userEmail}</td>
-                {hasPasswords ? (
-                  <td className="px-4 py-3 font-mono text-xs text-gray-700">{pair.password ?? '—'}</td>
-                ) : null}
-                <td className="px-4 py-3">
-                  {pair.status === 'assigned' ? (
-                    <span className="text-xs font-medium text-green-700">Assigned</span>
-                  ) : (
-                    <span className="text-xs text-red-600" title={pair.error}>
-                      Failed
-                    </span>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-}
-
-function AssignVmModal({
-  open,
-  vmNames,
-  accentColor,
-  users,
-  loading,
-  onSubmit,
-  onClose,
-}: {
-  open: boolean;
-  vmNames: string[];
-  accentColor: string;
-  users: TenantUserProfile[];
-  loading: boolean;
-  onSubmit: (userId: string) => Promise<void>;
-  onClose: () => void;
-}) {
-  const [userId, setUserId] = useState('');
-
-  useEffect(() => {
-    if (!open) return;
-    setUserId((prev) => prev || (users.find((user) => user.isActive)?.id ?? ''));
-  }, [open, users]);
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-lg rounded-xl border border-gray-200 bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Assign VMs</h2>
-            <p className="text-xs text-gray-500">{vmNames.length} VM(s) selected</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded p-1 text-gray-400 transition hover:bg-gray-100"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="space-y-4 p-5">
-          <div>
-            <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-              Selected VMs
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {vmNames.map((name) => (
-                <span
-                  key={name}
-                  className="rounded-full border border-gray-200 bg-gray-50 px-3 py-1 text-xs text-gray-700"
-                >
-                  {name}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <label className="mb-1 block text-xs font-medium text-gray-700">Tenant user</label>
-            <select
-              value={userId}
-              onChange={(event) => setUserId(event.target.value)}
-              className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-            >
-              {users.filter((user) => user.isActive).map((user) => (
-                <option key={user.id} value={user.id}>
-                  {user.email}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!userId || loading}
-              onClick={() => void onSubmit(userId)}
-              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              style={tenantAccentButton(accentColor)}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-              Assign
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function BulkAssignModal({
-  open,
-  accentColor,
-  selectedVms,
-  users,
-  loading,
-  onSubmit,
-  onClose,
-}: {
-  open: boolean;
-  accentColor: string;
-  selectedVms: TenantVmSummary[];
-  users: TenantUserProfile[];
-  loading: boolean;
-  onSubmit: (payload: BulkAssignTenantVmsInput) => Promise<void>;
-  onClose: () => void;
-}) {
-  const [mode, setMode] = useState<BulkMode>('create');
-  const [emailPrefix, setEmailPrefix] = useState('');
-  const [passwordMode, setPasswordMode] = useState<PasswordMode>('auto');
-  const [sharedPassword, setSharedPassword] = useState('');
-  const [selectedUserIds, setSelectedUserIds] = useState<string[]>([]);
-
-  useEffect(() => {
-    if (!open) return;
-    setMode('create');
-    setEmailPrefix('');
-    setPasswordMode('auto');
-    setSharedPassword('');
-    setSelectedUserIds([]);
-  }, [open]);
-
-  const selectedCount = selectedVms.length;
-  const activeUsers = users.filter((user) => user.isActive);
-  const canSubmit =
-    mode === 'create'
-      ? selectedCount > 0 &&
-        emailPrefix.includes('@') &&
-        (passwordMode === 'auto' || sharedPassword.trim().length > 0)
-      : selectedCount > 0 && selectedUserIds.length === selectedCount;
-
-  const previewPairs =
-    mode === 'create' && emailPrefix.includes('@')
-      ? (() => {
-          const at = emailPrefix.lastIndexOf('@');
-          if (at <= 0) return [];
-          const local = emailPrefix.slice(0, at);
-          const domain = emailPrefix.slice(at);
-          return selectedVms.map((vm, index) => ({
-            vmName: vm.name,
-            userEmail: `${local}${index + 1}${domain}`,
-          }));
-        })()
-      : selectedVms.map((vm, index) => ({
-          vmName: vm.name,
-          userEmail:
-            activeUsers.find((user) => user.id === selectedUserIds[index])?.email ?? 'Select user',
-        }));
-
-  if (!open) return null;
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-      <div className="w-full max-w-3xl rounded-xl border border-gray-200 bg-white shadow-xl">
-        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
-          <div>
-            <h2 className="text-base font-semibold text-gray-900">Bulk assign VMs</h2>
-            <p className="text-xs text-gray-500">One VM per user, {selectedCount} VM(s) selected</p>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded p-1 text-gray-400 transition hover:bg-gray-100"
-          >
-            <X className="h-5 w-5" />
-          </button>
-        </div>
-
-        <div className="space-y-5 p-5">
-          <div className="flex rounded-lg border border-gray-200 p-1">
-            <button
-              type="button"
-              onClick={() => setMode('create')}
-              className={`flex-1 rounded-md px-3 py-2 text-sm font-medium ${
-                mode === 'create' ? 'bg-red-50 text-[#B91C1C]' : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              Create users
-            </button>
-            <button
-              type="button"
-              onClick={() => setMode('existing')}
-              className={`flex-1 rounded-md px-3 py-2 text-sm font-medium ${
-                mode === 'existing' ? 'bg-red-50 text-[#B91C1C]' : 'text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              Existing users
-            </button>
-          </div>
-
-          {mode === 'create' ? (
-            <div className="grid gap-4 md:grid-cols-2">
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-700">Email prefix</label>
-                <input
-                  value={emailPrefix}
-                  onChange={(event) => setEmailPrefix(event.target.value)}
-                  placeholder="student@college.edu"
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
-                <p className="mt-1 text-xs text-gray-400">
-                  Creates `name1@...`, `name2@...`, one per selected VM.
-                </p>
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-700">Password mode</label>
-                <div className="space-y-2 rounded-lg border border-gray-200 p-3">
-                  <label className="flex items-center gap-2 text-sm text-gray-700">
-                    <input
-                      type="radio"
-                      checked={passwordMode === 'auto'}
-                      onChange={() => setPasswordMode('auto')}
-                    />
-                    Auto-generate one per user
-                  </label>
-                  <label className="flex items-center gap-2 text-sm text-gray-700">
-                    <input
-                      type="radio"
-                      checked={passwordMode === 'shared'}
-                      onChange={() => setPasswordMode('shared')}
-                    />
-                    Use shared password
-                  </label>
-                  {passwordMode === 'shared' ? (
-                    <input
-                      value={sharedPassword}
-                      onChange={(event) => setSharedPassword(event.target.value)}
-                      type="text"
-                      placeholder="Shared password"
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                    />
-                  ) : null}
-                </div>
-              </div>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <p className="text-sm text-gray-500">
-                Select exactly {selectedCount} active user(s) to match the selected VMs.
-              </p>
-              <div className="max-h-64 overflow-y-auto rounded-lg border border-gray-200">
-                {activeUsers.map((user) => {
-                  const checked = selectedUserIds.includes(user.id);
-                  const atLimit = !checked && selectedUserIds.length >= selectedCount;
-                  return (
-                    <label
-                      key={user.id}
-                      className={`flex items-center gap-3 border-b border-gray-100 px-4 py-3 last:border-0 ${
-                        atLimit ? 'cursor-not-allowed opacity-40' : 'cursor-pointer hover:bg-gray-50'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        disabled={atLimit}
-                        onChange={() =>
-                          setSelectedUserIds((prev) =>
-                            checked
-                              ? prev.filter((id) => id !== user.id)
-                              : [...prev, user.id]
-                          )
-                        }
-                      />
-                      <span className="text-sm text-gray-900">{user.email}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {previewPairs.length > 0 ? (
-            <div>
-              <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">
-                Preview
-              </p>
-              <div className="overflow-x-auto rounded-lg border border-gray-200">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-gray-100 bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
-                      <th className="px-4 py-3">VM</th>
-                      <th className="px-4 py-3">User</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {previewPairs.map((pair) => (
-                      <tr key={`${pair.vmName}-${pair.userEmail}`} className="border-b border-gray-50 last:border-0">
-                        <td className="px-4 py-3 font-medium text-gray-900">{pair.vmName}</td>
-                        <td className="px-4 py-3 text-gray-700">{pair.userEmail}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          ) : null}
-
-          <div className="flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600"
-            >
-              Cancel
-            </button>
-            <button
-              type="button"
-              disabled={!canSubmit || loading}
-              onClick={() =>
-                void onSubmit(
-                  mode === 'create'
-                    ? {
-                        vmIds: selectedVms.map((vm) => vm.id),
-                        mode: 'create',
-                        emailPrefix: emailPrefix.trim().toLowerCase(),
-                        passwordMode,
-                        ...(passwordMode === 'shared'
-                          ? { sharedPassword: sharedPassword.trim() }
-                          : {}),
-                      }
-                    : {
-                        vmIds: selectedVms.map((vm) => vm.id),
-                        mode: 'existing',
-                        userIds: selectedUserIds,
-                      }
-                )
-              }
-              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
-              style={tenantAccentButton(accentColor)}
-            >
-              {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Users className="h-4 w-4" />}
-              Bulk assign
-            </button>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function PlanStatusCell({ vm }: { vm: TenantVmSummary }) {
   if (!vm.planStatus || !vm.planPeriodEnd) {
     return <span className="text-xs text-gray-400">—</span>;
@@ -570,104 +125,74 @@ function PlanStatusCell({ vm }: { vm: TenantVmSummary }) {
       >
         {display === 'expiring_soon' ? 'Expiring soon' : display === 'expired' ? 'Expired' : 'Active'}
       </span>
-      <p className="text-xs text-gray-500">{planExpiryLabel({ planStatus: vm.planStatus, planPeriodEnd: vm.planPeriodEnd })}</p>
+      <p className="text-xs text-gray-500">
+        {planExpiryLabel({ planStatus: vm.planStatus, planPeriodEnd: vm.planPeriodEnd })}
+      </p>
     </div>
   );
 }
 
-export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
+export function TenantVmListView() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { tenantUser } = useTenantAuth();
-  const { accentColor } = useTenantBranding();
   const { toasts, addToast, dismiss } = useToast();
+
+  const isAdmin = tenantUser?.role === 'tenant_admin';
 
   const [vms, setVms] = useState<TenantVmSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [actionId, setActionId] = useState<string | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [assignOpen, setAssignOpen] = useState(false);
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const [users, setUsers] = useState<TenantUserProfile[]>([]);
-  const [usersLoading, setUsersLoading] = useState(false);
-  const [bulkResult, setBulkResult] = useState<BulkAssignTenantVmsResult | null>(null);
 
   const status = searchParams.get('status') ?? '';
   const node = searchParams.get('node') ?? '';
   const userId = searchParams.get('userId') ?? '';
-
-  const loadUsers = useCallback(async () => {
-    if (scope !== 'admin') return;
-    setUsersLoading(true);
-    try {
-      const result = await fetchTenantUsers();
-      setUsers(result.users);
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to load tenant users.');
-    } finally {
-      setUsersLoading(false);
-    }
-  }, [addToast, scope]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const result =
-        scope === 'admin' && userId
-          ? await fetchAssignedTenantVmsForUser(userId)
+        isAdmin && userId
+          ? await fetchTenantVmsForUser(userId)
           : await fetchTenantVms({
               status: status || undefined,
               node: node || undefined,
             });
       const filtered =
-        scope === 'admin' && userId
+        isAdmin && userId
           ? result.vms.filter(
               (vm) => (!status || vm.status === status) && (!node || vm.node === node)
             )
           : result.vms;
       setVms(filtered);
-      setSelectedIds(new Set());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load VMs.');
     } finally {
       setLoading(false);
     }
-  }, [node, scope, status, userId]);
+  }, [isAdmin, node, status, userId]);
 
   useEffect(() => {
     void load();
   }, [load]);
 
-  const nodes = useMemo(
-    () => Array.from(new Set(vms.map((vm) => vm.node))).sort(),
-    [vms]
-  );
-
-  const selectedVms = vms.filter((vm) => selectedIds.has(vm.id));
-  const selectedAssignable = selectedVms.filter((vm) => !vm.assignment);
-  const allSelectable = vms.filter((vm) => !vm.assignment);
-  const allSelected =
-    allSelectable.length > 0 && allSelectable.every((vm) => selectedIds.has(vm.id));
+  const nodes = useMemo(() => Array.from(new Set(vms.map((vm) => vm.node))).sort(), [vms]);
 
   const setQueryParam = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams.toString());
     if (value) next.set(key, value);
     else next.delete(key);
-    router.replace(`${scopeBasePath(scope)}?${next.toString()}`);
+    router.replace(`${VM_LIST_PATH}?${next.toString()}`);
   };
 
   const performPowerAction = async (vm: TenantVmSummary, action: PowerAction) => {
     setActionId(`${action}:${vm.id}`);
     try {
-      if (action === 'start') {
-        await startTenantVm(vm.id);
-      } else if (action === 'stop') {
-        await stopTenantVm(vm.id);
-      } else {
-        await restartTenantVm(vm.id);
-      }
+      if (action === 'start') await startTenantVm(vm.id);
+      else if (action === 'stop') await stopTenantVm(vm.id);
+      else await restartTenantVm(vm.id);
       addToast('success', `${vm.name}: ${action} requested.`);
       await load();
     } catch (err) {
@@ -688,170 +213,80 @@ export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
     }
   };
 
-  const handleAssignSubmit = async (targetUserId: string) => {
-    setActionId('assign');
-    try {
-      await assignTenantVms(
-        targetUserId,
-        selectedAssignable.map((vm) => vm.id)
-      );
-      addToast('success', `${selectedAssignable.length} VM(s) assigned.`);
-      setAssignOpen(false);
-      setSelectedIds(new Set());
-      await load();
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to assign VMs.');
-    } finally {
-      setActionId(null);
-    }
-  };
-
-  const handleBulkSubmit = async (payload: BulkAssignTenantVmsInput) => {
-    setActionId('bulk');
-    try {
-      const result = await bulkAssignTenantVms(payload);
-      setBulkResult(result);
-      setBulkOpen(false);
-      setSelectedIds(new Set());
-      await load();
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Bulk assign failed.');
-    } finally {
-      setActionId(null);
-    }
-  };
-
-  const handleUnassign = async (vm: TenantVmSummary) => {
-    setActionId(`unassign:${vm.id}`);
-    try {
-      await unassignTenantVm(vm.id);
-      addToast('success', `${vm.name} unassigned.`);
-      await load();
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to unassign VM.');
-    } finally {
-      setActionId(null);
-    }
-  };
-
-  const visibleTitle =
-    scope === 'admin' && userId ? 'Assigned VMs' : scopeHeading(scope);
+  const title = isAdmin && userId ? 'Assigned VMs' : isAdmin ? 'Tenant VMs' : 'My VMs';
 
   return (
     <div className="space-y-6">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
 
-      <AssignVmModal
-        open={assignOpen}
-        vmNames={selectedAssignable.map((vm) => vm.name)}
-        accentColor={accentColor}
-        users={users}
-        loading={actionId === 'assign' || usersLoading}
-        onSubmit={handleAssignSubmit}
-        onClose={() => setAssignOpen(false)}
-      />
-
-      <BulkAssignModal
-        open={bulkOpen}
-        accentColor={accentColor}
-        selectedVms={selectedAssignable}
-        users={users}
-        loading={actionId === 'bulk' || usersLoading}
-        onSubmit={handleBulkSubmit}
-        onClose={() => setBulkOpen(false)}
-      />
-
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-lg font-semibold text-gray-900">{visibleTitle}</h1>
+          <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
           <p className="text-sm text-gray-500">
-            {scope === 'admin'
+            {isAdmin
               ? 'View and operate provisioned tenant virtual machines.'
               : 'Access and operate your assigned virtual machines.'}
           </p>
         </div>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40"
-        >
-          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-          Refresh
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {isAdmin ? (
+            <Link
+              href="/tenant/dashboard/vms/onboard"
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
+            >
+              Onboard VMs
+            </Link>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40"
+          >
+            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+            Refresh
+          </button>
+        </div>
       </div>
 
-      {scope === 'admin' && userId ? (
+      {isAdmin && userId ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-800">
           <span>Showing VMs assigned to a selected tenant user.</span>
-          <Link href="/tenant/dashboard/vms" className="font-medium underline">
+          <Link href={VM_LIST_PATH} className="font-medium underline">
             View all tenant VMs
           </Link>
         </div>
-      ) : null}
-
-      {bulkResult ? (
-        <BulkAssignResultPanel result={bulkResult} onClear={() => setBulkResult(null)} />
       ) : null}
 
       {error && !loading ? (
         <ErrorState title="VMs unavailable" message={error} onRetry={() => void load()} />
       ) : (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-6 py-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <select
-                value={status}
-                onChange={(event) => setQueryParam('status', event.target.value)}
-                className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              >
-                <option value="">All statuses</option>
-                <option value="running">Running</option>
-                <option value="stopped">Stopped</option>
-                <option value="paused">Paused</option>
-                <option value="suspended">Suspended</option>
-                <option value="error">Error</option>
-              </select>
-              <select
-                value={node}
-                onChange={(event) => setQueryParam('node', event.target.value)}
-                className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              >
-                <option value="">All nodes</option>
-                {nodes.map((nodeName) => (
-                  <option key={nodeName} value={nodeName}>
-                    {nodeName}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {scope === 'admin' ? (
-              <div className="flex flex-wrap items-center gap-2">
-                <button
-                  type="button"
-                  disabled={selectedAssignable.length === 0}
-                  onClick={() => {
-                    void loadUsers();
-                    setAssignOpen(true);
-                  }}
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 disabled:opacity-40"
-                >
-                  Assign selected
-                </button>
-                <button
-                  type="button"
-                  disabled={selectedAssignable.length === 0}
-                  onClick={() => {
-                    void loadUsers();
-                    setBulkOpen(true);
-                  }}
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 disabled:opacity-40"
-                >
-                  Bulk 1:1
-                </button>
-              </div>
-            ) : null}
+          <div className="flex flex-wrap items-center gap-2 border-b border-gray-100 px-6 py-4">
+            <select
+              value={status}
+              onChange={(event) => setQueryParam('status', event.target.value)}
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            >
+              <option value="">All statuses</option>
+              <option value="running">Running</option>
+              <option value="stopped">Stopped</option>
+              <option value="paused">Paused</option>
+              <option value="suspended">Suspended</option>
+              <option value="error">Error</option>
+            </select>
+            <select
+              value={node}
+              onChange={(event) => setQueryParam('node', event.target.value)}
+              className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
+            >
+              <option value="">All nodes</option>
+              {nodes.map((nodeName) => (
+                <option key={nodeName} value={nodeName}>
+                  {nodeName}
+                </option>
+              ))}
+            </select>
           </div>
 
           {loading ? (
@@ -863,17 +298,22 @@ export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
               </div>
               <p className="font-medium text-gray-700">No VMs yet.</p>
               <p className="mt-1 text-sm text-gray-500">
-                {scope === 'admin'
-                  ? 'Place an order and wait for provisioning.'
+                {isAdmin
+                  ? 'Place an order or onboard users onto provisioned VMs.'
                   : 'Your tenant admin will assign virtual machines to your account.'}
               </p>
-              {scope === 'admin' ? (
-                <Link
-                  href="/tenant/dashboard/orders"
-                  className="mt-4 inline-flex text-sm font-medium text-[#B91C1C] hover:underline"
-                >
-                  Go to orders
-                </Link>
+              {isAdmin ? (
+                <div className="mt-4 flex justify-center gap-4 text-sm">
+                  <Link href="/tenant/dashboard/orders" className="font-medium text-[#B91C1C] hover:underline">
+                    Go to orders
+                  </Link>
+                  <Link
+                    href="/tenant/dashboard/vms/onboard"
+                    className="font-medium text-[#B91C1C] hover:underline"
+                  >
+                    Onboard VMs
+                  </Link>
+                </div>
               ) : null}
             </div>
           ) : (
@@ -881,25 +321,12 @@ export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
-                    {scope === 'admin' ? (
-                      <th className="px-4 py-3">
-                        <input
-                          type="checkbox"
-                          checked={allSelected}
-                          onChange={() =>
-                            setSelectedIds(
-                              allSelected ? new Set() : new Set(allSelectable.map((vm) => vm.id))
-                            )
-                          }
-                        />
-                      </th>
-                    ) : null}
                     <th className="px-4 py-3">VM</th>
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Node / IP</th>
                     <th className="px-4 py-3">Specs</th>
                     <th className="px-4 py-3">Plan</th>
-                    {scope === 'admin' ? <th className="px-4 py-3">Assigned</th> : null}
+                    {isAdmin ? <th className="px-4 py-3">Assigned</th> : null}
                     <th className="px-4 py-3">Actions</th>
                   </tr>
                 </thead>
@@ -908,28 +335,10 @@ export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
                     const expired = isPlanExpired(vm);
                     const isRunning = vm.status === 'running';
                     const isStopped = vm.status === 'stopped';
-                    const selectionDisabled = Boolean(vm.assignment);
-                    const detailHref = `${scopeBasePath(scope)}/${vm.id}`;
+                    const detailHref = `${VM_LIST_PATH}/${vm.id}`;
 
                     return (
                       <tr key={vm.id} className="border-b border-gray-50 align-top">
-                        {scope === 'admin' ? (
-                          <td className="px-4 py-3">
-                            <input
-                              type="checkbox"
-                              disabled={selectionDisabled}
-                              checked={selectedIds.has(vm.id)}
-                              onChange={() =>
-                                setSelectedIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(vm.id)) next.delete(vm.id);
-                                  else next.add(vm.id);
-                                  return next;
-                                })
-                              }
-                            />
-                          </td>
-                        ) : null}
                         <td className="px-4 py-3">
                           <Link href={detailHref} className="block">
                             <p className="font-medium text-gray-900 hover:text-[#B91C1C]">{vm.name}</p>
@@ -953,7 +362,7 @@ export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
                         <td className="px-4 py-3">
                           <PlanStatusCell vm={vm} />
                         </td>
-                        {scope === 'admin' ? (
+                        {isAdmin ? (
                           <td className="px-4 py-3 text-xs text-gray-600">
                             {vm.assignment ? (
                               <div>
@@ -1024,35 +433,11 @@ export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
                             >
                               {actionId === `console:${vm.id}` ? 'Opening…' : 'Console'}
                             </button>
-                            {scope === 'admin' ? (
-                              vm.assignment ? (
-                                <button
-                                  type="button"
-                                  disabled={actionId === `unassign:${vm.id}`}
-                                  onClick={() => void handleUnassign(vm)}
-                                  className="rounded-lg border border-red-200 px-3 py-1.5 text-xs text-red-700 disabled:opacity-40"
-                                >
-                                  {actionId === `unassign:${vm.id}` ? 'Removing…' : 'Unassign'}
-                                </button>
-                              ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setSelectedIds(new Set([vm.id]));
-                                    void loadUsers();
-                                    setAssignOpen(true);
-                                  }}
-                                  className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs text-gray-700"
-                                >
-                                  Assign
-                                </button>
-                              )
-                            ) : null}
                           </div>
                           {expired ? (
                             <p className="mt-2 text-xs text-red-600">
                               Plan expired.{' '}
-                              {scope === 'admin' ? (
+                              {isAdmin ? (
                                 <Link href={`/tenant/dashboard/plans/${vm.id}`} className="underline">
                                   Renew in VM Plans
                                 </Link>
@@ -1078,12 +463,14 @@ export function TenantVmListView({ scope }: { scope: TenantVmScope }) {
   );
 }
 
-export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
+export function TenantVmDetailView() {
   const params = useParams<{ vmId: string }>();
   const vmId = params.vmId;
   const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const { toasts, addToast, dismiss } = useToast();
+
+  const isAdmin = tenantUser?.role === 'tenant_admin';
 
   const [details, setDetails] = useState<TenantVmDetails | null>(null);
   const [liveStatus, setLiveStatus] = useState<TenantVmLiveStatus | null>(null);
@@ -1092,24 +479,6 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
   const [action, setAction] = useState<PowerAction | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
   const [consoleLoading, setConsoleLoading] = useState(false);
-  const [users, setUsers] = useState<TenantUserProfile[]>([]);
-  const [assignUserId, setAssignUserId] = useState('');
-  const [assignLoading, setAssignLoading] = useState(false);
-  const [unassignLoading, setUnassignLoading] = useState(false);
-
-  const isAdmin = scope === 'admin';
-  const backHref = scopeBasePath(scope);
-
-  const loadUsers = useCallback(async () => {
-    if (!isAdmin) return;
-    try {
-      const result = await fetchTenantUsers();
-      setUsers(result.users);
-      setAssignUserId((prev) => prev || (result.users.find((user) => user.isActive)?.id ?? ''));
-    } catch {
-      // non-critical
-    }
-  }, [isAdmin]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -1127,8 +496,7 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
 
   useEffect(() => {
     void load();
-    void loadUsers();
-  }, [load, loadUsers]);
+  }, [load]);
 
   const refreshLive = useCallback(async () => {
     try {
@@ -1150,7 +518,7 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
       <div className="space-y-4">
         <div className="h-8 w-48 animate-pulse rounded bg-gray-200" />
         <div className="grid gap-4 lg:grid-cols-3">
-          <div className="lg:col-span-2 h-64 animate-pulse rounded-xl border border-gray-200 bg-white" />
+          <div className="h-64 animate-pulse rounded-xl border border-gray-200 bg-white lg:col-span-2" />
           <div className="h-64 animate-pulse rounded-xl border border-gray-200 bg-white" />
         </div>
       </div>
@@ -1161,7 +529,7 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
     return (
       <div className="space-y-4">
         <Link
-          href={backHref}
+          href={VM_LIST_PATH}
           className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
         >
           <ChevronLeft className="h-4 w-4" />
@@ -1222,11 +590,11 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <Link
-            href={backHref}
+            href={VM_LIST_PATH}
             className="inline-flex items-center gap-1 text-sm text-gray-500 hover:text-gray-900"
           >
             <ChevronLeft className="h-4 w-4" />
-            Back to {scopeHeading(scope)}
+            Back to VMs
           </Link>
           <div className="mt-2 flex flex-wrap items-center gap-3">
             <h1 className="text-xl font-semibold text-gray-900">{vm.name}</h1>
@@ -1313,7 +681,7 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
       ) : null}
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <div className="lg:col-span-2 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm lg:col-span-2">
           <div className="mb-4 flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-sm font-semibold text-gray-900">
               <Activity className="h-4 w-4 text-gray-400" />
@@ -1453,7 +821,6 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
                 <Users className="h-4 w-4 text-gray-400" />
                 Assignment
               </h2>
-
               {vm.assignment ? (
                 <div className="space-y-3">
                   <div className="rounded-lg border border-gray-200 bg-gray-50 p-3">
@@ -1462,61 +829,23 @@ export function TenantVmDetailView({ scope }: { scope: TenantVmScope }) {
                       {vm.assignment.isActive ? 'Active tenant user' : 'Inactive tenant user'}
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    disabled={unassignLoading}
-                    onClick={async () => {
-                      setUnassignLoading(true);
-                      try {
-                        await unassignTenantVm(vm.id);
-                        addToast('success', 'VM unassigned.');
-                        await load();
-                      } catch (err) {
-                        addToast('error', err instanceof ApiError ? err.message : 'Failed to unassign VM.');
-                      } finally {
-                        setUnassignLoading(false);
-                      }
-                    }}
-                    className="rounded-lg border border-red-200 px-3 py-2 text-sm text-red-700 disabled:opacity-40"
-                  >
-                    {unassignLoading ? 'Removing…' : 'Unassign'}
-                  </button>
+                  <p className="text-xs text-gray-500">
+                    To remove access,{' '}
+                    <Link href="/tenant/dashboard/users" className="font-medium text-[#B91C1C] hover:underline">
+                      delete the user
+                    </Link>{' '}
+                    on the Users page — this frees the VM.
+                  </p>
                 </div>
               ) : (
                 <div className="space-y-3">
-                  <select
-                    value={assignUserId}
-                    onChange={(event) => setAssignUserId(event.target.value)}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                  <p className="text-sm text-gray-500">No user assigned to this VM.</p>
+                  <Link
+                    href="/tenant/dashboard/vms/onboard"
+                    className="inline-flex text-sm font-medium text-[#B91C1C] hover:underline"
                   >
-                    <option value="">Select tenant user</option>
-                    {users.filter((user) => user.isActive).map((user) => (
-                      <option key={user.id} value={user.id}>
-                        {user.email}
-                      </option>
-                    ))}
-                  </select>
-                  <button
-                    type="button"
-                    disabled={!assignUserId || assignLoading}
-                    onClick={async () => {
-                      setAssignLoading(true);
-                      try {
-                        await assignTenantVms(assignUserId, [vm.id]);
-                        addToast('success', 'VM assigned.');
-                        await load();
-                      } catch (err) {
-                        addToast('error', err instanceof ApiError ? err.message : 'Failed to assign VM.');
-                      } finally {
-                        setAssignLoading(false);
-                      }
-                    }}
-                    className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white disabled:opacity-40"
-                    style={tenantAccentButton(accentColor)}
-                  >
-                    {assignLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <UserPlus className="h-4 w-4" />}
-                    Assign user
-                  </button>
+                    Onboard a user onto this VM
+                  </Link>
                 </div>
               )}
             </div>

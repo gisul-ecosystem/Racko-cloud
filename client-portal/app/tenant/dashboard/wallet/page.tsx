@@ -92,7 +92,7 @@ export default function TenantWalletPage() {
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/my-vms');
+      router.replace('/tenant/dashboard/vms');
       return;
     }
   }, [router, tenantUser?.role]);

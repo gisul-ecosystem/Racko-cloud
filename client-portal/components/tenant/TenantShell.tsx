@@ -8,6 +8,7 @@ import {
   PlusCircle,
   Server,
   User,
+  UserPlus,
   Users,
   Wallet,
 } from 'lucide-react';
@@ -27,17 +28,12 @@ const navItems: Array<{
   icon: typeof Wallet;
   roles?: TenantUserRole[];
 }> = [
+  { href: '/tenant/dashboard/vms', label: 'VMs', icon: Server },
   {
-    href: '/tenant/dashboard/vms',
-    label: 'VMs',
-    icon: Server,
+    href: '/tenant/dashboard/vms/onboard',
+    label: 'Onboard',
+    icon: UserPlus,
     roles: ['tenant_admin'],
-  },
-  {
-    href: '/tenant/dashboard/my-vms',
-    label: 'My VMs',
-    icon: Server,
-    roles: ['tenant_user'],
   },
   {
     href: '/tenant/dashboard/users',
@@ -71,6 +67,34 @@ const navItems: Array<{
     roles: ['tenant_admin'],
   },
 ];
+
+function isTenantNavActive(pathname: string, href: string): boolean {
+  if (pathname === href) return true;
+
+  if (href === '/tenant/dashboard/orders') {
+    return (
+      pathname.startsWith('/tenant/dashboard/orders/') &&
+      !pathname.startsWith('/tenant/dashboard/orders/new')
+    );
+  }
+
+  if (href === '/tenant/dashboard/orders/new') {
+    return pathname === href;
+  }
+
+  if (href === '/tenant/dashboard/vms') {
+    return (
+      pathname.startsWith('/tenant/dashboard/vms/') &&
+      !pathname.startsWith('/tenant/dashboard/vms/onboard')
+    );
+  }
+
+  if (href === '/tenant/dashboard/vms/onboard') {
+    return pathname === href;
+  }
+
+  return pathname.startsWith(`${href}/`);
+}
 
 export function TenantShell({ children }: TenantShellProps) {
   const pathname = usePathname();
@@ -112,7 +136,7 @@ export function TenantShell({ children }: TenantShellProps) {
       <div className="mx-auto max-w-screen-xl px-6 py-6">
         <nav className="mb-6 flex flex-wrap gap-2">
           {visibleNav.map(({ href, label, icon: Icon }) => {
-            const isActive = pathname === href || pathname?.startsWith(`${href}/`);
+            const isActive = pathname ? isTenantNavActive(pathname, href) : false;
             return (
               <Link
                 key={href}
@@ -130,12 +154,6 @@ export function TenantShell({ children }: TenantShellProps) {
             );
           })}
         </nav>
-
-        {tenantUser?.role === 'tenant_user' && (
-          <div className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            You can access your assigned virtual machines below. Contact your tenant admin for billing, orders, or renewals.
-          </div>
-        )}
 
         {children}
       </div>

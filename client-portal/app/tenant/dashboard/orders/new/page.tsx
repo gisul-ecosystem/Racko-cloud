@@ -82,7 +82,7 @@ export default function TenantPlaceOrderPage() {
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/my-vms');
+      router.replace('/tenant/dashboard/vms');
     }
   }, [tenantUser, router]);
 

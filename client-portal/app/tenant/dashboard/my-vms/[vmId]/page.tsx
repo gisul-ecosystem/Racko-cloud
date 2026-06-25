@@ -1,21 +1,17 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { TenantVmDetailView } from '@/components/tenant/TenantVmViews';
-import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useParams, useRouter } from 'next/navigation';
 
-export default function TenantUserVmDetailPage() {
+export default function LegacyMyVmDetailRedirectPage() {
   const router = useRouter();
-  const { tenantUser } = useTenantAuth();
+  const params = useParams<{ vmId: string }>();
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_admin') {
-      router.replace('/tenant/dashboard/vms');
+    if (params.vmId) {
+      router.replace(`/tenant/dashboard/vms/${params.vmId}`);
     }
-  }, [router, tenantUser?.role]);
+  }, [router, params.vmId]);
 
-  if (tenantUser?.role !== 'tenant_user') return null;
-
-  return <TenantVmDetailView scope="user" />;
+  return null;
 }

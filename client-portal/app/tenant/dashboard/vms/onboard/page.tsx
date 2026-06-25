@@ -2,10 +2,10 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { TenantUsersPage } from '@/components/tenant/TenantUsersPage';
+import { TenantOnboardPage } from '@/components/tenant/TenantOnboardPage';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 
-export default function TenantUsersRoutePage() {
+export default function TenantOnboardRoutePage() {
   const router = useRouter();
   const { tenantUser } = useTenantAuth();
 
@@ -17,5 +17,5 @@ export default function TenantUsersRoutePage() {
 
   if (tenantUser?.role !== 'tenant_admin') return null;
 
-  return <TenantUsersPage />;
+  return <TenantOnboardPage />;
 }

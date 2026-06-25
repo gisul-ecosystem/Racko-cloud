@@ -2,19 +2,9 @@ import { tenantPortalRequest } from './tenantPortalApiClient';
 import { getGatewayBaseUrl, getTenantDomainHeaders } from './gatewayUrl';
 import type {
   ApiEnvelope,
-  BulkAssignTenantVmsInput,
-  BulkAssignTenantVmsResult,
-  BulkCreateTenantUsersResult,
   PlaceOrderInput,
   TenantBranding,
   TenantBrandingAssetType,
-  TenantUserProfile,
-  TenantUsersResult,
-  TenantVmAssignmentCountsResult,
-  TenantVmConsoleResult,
-  TenantVmDetails,
-  TenantVmLiveStatus,
-  TenantVmOperationResult,
   TenantOrder,
   TenantOrderCatalog,
   TenantOrderQuote,
@@ -26,7 +16,6 @@ import type {
   TenantPortalUser,
   TenantTemplateDetail,
   TenantTopupResult,
-  TenantVmsResult,
   TenantWallet,
   TenantWalletTransactionsResult,
 } from '../types/tenantPortal';
@@ -242,188 +231,6 @@ export async function markTenantNotificationRead(notificationId: string): Promis
   await tenantPortalRequest<ApiEnvelope<{ id: string }>>(
     `/api/v1/tenant-notifications/${notificationId}/read`,
     { method: 'PATCH' }
-  );
-}
-
-export async function createTenantUser(
-  email: string,
-  password: string
-): Promise<TenantUserProfile> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ user: TenantUserProfile }>>('/api/v1/tenant-users/single', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    })
-  );
-  return data.user;
-}
-
-export async function bulkCreateTenantUsers(input: {
-  emailPrefix: string;
-  count: number;
-  password?: string;
-}): Promise<BulkCreateTenantUsersResult> {
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<BulkCreateTenantUsersResult>>('/api/v1/tenant-users/bulk', {
-      method: 'POST',
-      body: JSON.stringify(input),
-    })
-  );
-}
-
-export async function fetchTenantUsers(): Promise<TenantUsersResult> {
-  return unwrap(tenantPortalRequest<ApiEnvelope<TenantUsersResult>>('/api/v1/tenant-users'));
-}
-
-export async function setTenantUserActive(
-  userId: string,
-  isActive: boolean
-): Promise<TenantUserProfile> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ user: TenantUserProfile }>>(
-      `/api/v1/tenant-users/${userId}/active`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ isActive }),
-      }
-    )
-  );
-  return data.user;
-}
-
-export async function deleteTenantUser(userId: string): Promise<void> {
-  await tenantPortalRequest<ApiEnvelope<Record<string, never>>>(`/api/v1/tenant-users/${userId}`, {
-    method: 'DELETE',
-  });
-}
-
-export async function fetchTenantVms(filters?: {
-  status?: string;
-  node?: string;
-}): Promise<TenantVmsResult> {
-  const params = new URLSearchParams();
-  if (filters?.status) params.set('status', filters.status);
-  if (filters?.node) params.set('node', filters.node);
-  const qs = params.toString();
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<TenantVmsResult>>(
-      `/api/v1/tenant-vms${qs ? `?${qs}` : ''}`
-    )
-  );
-}
-
-export async function fetchTenantVm(vmId: string): Promise<TenantVmDetails> {
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<TenantVmDetails>>(`/api/v1/tenant-vms/${vmId}`)
-  );
-}
-
-export async function fetchTenantVmStatus(vmId: string): Promise<TenantVmLiveStatus> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ status: TenantVmLiveStatus }>>(
-      `/api/v1/tenant-vms/${vmId}/status`
-    )
-  );
-  return data.status;
-}
-
-export async function startTenantVm(vmId: string): Promise<TenantVmOperationResult> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ result: TenantVmOperationResult }>>(
-      `/api/v1/tenant-vms/${vmId}/start`,
-      { method: 'POST' }
-    )
-  );
-  return data.result;
-}
-
-export async function stopTenantVm(vmId: string): Promise<TenantVmOperationResult> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ result: TenantVmOperationResult }>>(
-      `/api/v1/tenant-vms/${vmId}/stop`,
-      { method: 'POST' }
-    )
-  );
-  return data.result;
-}
-
-export async function restartTenantVm(vmId: string): Promise<TenantVmOperationResult> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<{ result: TenantVmOperationResult }>>(
-      `/api/v1/tenant-vms/${vmId}/restart`,
-      { method: 'POST' }
-    )
-  );
-  return data.result;
-}
-
-export async function openTenantVmConsole(
-  vmId: string,
-  protocol?: 'rdp' | 'ssh' | 'vnc'
-): Promise<TenantVmConsoleResult> {
-  const qs = protocol ? `?protocol=${protocol}` : '';
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<TenantVmConsoleResult>>(
-      `/api/v1/tenant-vms/${vmId}/console${qs}`
-    )
-  );
-}
-
-export async function fetchAssignableTenantVms(): Promise<TenantVmsResult> {
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<TenantVmsResult>>('/api/v1/tenant-vms/assign/available')
-  );
-}
-
-export async function fetchTenantVmAssignmentCounts(): Promise<Record<string, number>> {
-  const data = await unwrap(
-    tenantPortalRequest<ApiEnvelope<TenantVmAssignmentCountsResult>>(
-      '/api/v1/tenant-vms/assign/counts'
-    )
-  );
-  return data.counts;
-}
-
-export async function fetchAssignedTenantVmsForUser(userId: string): Promise<TenantVmsResult> {
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<TenantVmsResult>>(
-      `/api/v1/tenant-vms/assign/user/${userId}`
-    )
-  );
-}
-
-export async function assignTenantVms(
-  userId: string,
-  vmIds: string[]
-): Promise<{ assigned: number }> {
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<{ assigned: number }>>('/api/v1/tenant-vms/assign', {
-      method: 'POST',
-      body: JSON.stringify({ userId, vmIds }),
-    })
-  );
-}
-
-export async function bulkAssignTenantVms(
-  payload: BulkAssignTenantVmsInput
-): Promise<BulkAssignTenantVmsResult> {
-  return unwrap(
-    tenantPortalRequest<ApiEnvelope<BulkAssignTenantVmsResult>>(
-      '/api/v1/tenant-vms/assign/bulk',
-      {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      }
-    )
-  );
-}
-
-export async function unassignTenantVm(vmId: string): Promise<void> {
-  await tenantPortalRequest<ApiEnvelope<Record<string, never>>>(
-    `/api/v1/tenant-vms/assign/${vmId}`,
-    {
-      method: 'DELETE',
-    }
   );
 }
 

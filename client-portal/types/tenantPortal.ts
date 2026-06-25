@@ -24,18 +24,6 @@ export interface TenantUsersResult {
   total: number;
 }
 
-export interface BulkCreatedTenantUserResultRow {
-  email: string;
-  password: string;
-  status: 'created' | 'failed';
-  error?: string;
-}
-
-export interface BulkCreateTenantUsersResult {
-  created: number;
-  failed: number;
-  users: BulkCreatedTenantUserResultRow[];
-}
 
 export interface TenantBranding {
   logoUrl: string;
@@ -213,7 +201,7 @@ export interface TenantVmAssignmentCountsResult {
   counts: Record<string, number>;
 }
 
-export interface BulkAssignedTenantVmPair {
+export interface TenantOnboardPair {
   vmId: string;
   vmName: string;
   userId?: string;
@@ -223,25 +211,19 @@ export interface BulkAssignedTenantVmPair {
   error?: string;
 }
 
-export interface BulkAssignTenantVmsResult {
+export interface TenantOnboardResult {
   assigned: number;
   failed: number;
-  pairs: BulkAssignedTenantVmPair[];
+  pairs: TenantOnboardPair[];
 }
 
-export type BulkAssignTenantVmsInput =
-  | {
-      vmIds: string[];
-      mode: 'create';
-      emailPrefix: string;
-      passwordMode: 'auto' | 'shared';
-      sharedPassword?: string;
-    }
-  | {
-      vmIds: string[];
-      mode: 'existing';
-      userIds: string[];
-    };
+export interface TenantOnboardDto {
+  vmIds: string[];
+  passwordMode: 'auto' | 'shared';
+  sharedPassword?: string;
+  emailPrefix?: string;
+  email?: string;
+}
 
 export interface TenantPlanSpecs {
   cpuCores: number;
