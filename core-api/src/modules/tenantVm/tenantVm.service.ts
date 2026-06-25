@@ -9,8 +9,8 @@ import { NotFoundError, ValidationError } from '../../utils/errors';
 import { tenantUserService } from '../tenantUser/tenantUser.service';
 import type {
   TenantVmActor,
-  TenantBulkAssignPairsDto,
   TenantBulkAssignPairsResult,
+  TenantOnboardDto,
   TenantVmAssignmentSummary,
   TenantVmDetails,
   TenantVmListFilters,
@@ -253,58 +253,15 @@ export class TenantVmService {
     );
   }
 
-  async assignVms(
-    vmIds: mongoose.Types.ObjectId[],
-    targetUserId: mongoose.Types.ObjectId,
-    tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
-  ): Promise<{ assigned: number }> {
-    if (vmIds.length === 0) throw new ValidationError('No VMs specified.');
-    if (vmIds.length > 50) throw new ValidationError('Cannot assign more than 50 VMs at once.');
-
-    const user = await TenantUser.findOne({
-      _id: targetUserId,
-      tenantId,
-      role: 'tenant_user',
-      isActive: true,
-    });
-    if (!user) throw new NotFoundError('Active tenant user not found.');
-    if (!user.createdBy || user.createdBy.toString() !== createdBy.toString()) {
-      throw new ValidationError('You can only assign VMs to tenant users you created.');
-    }
-
-    const vms = await VM.find({
-      _id: { $in: vmIds },
-      tenantId,
-      status: { $nin: ['deleted', 'deleting', 'delete_failed', 'creating'] },
-    });
-
-    if (vms.length !== vmIds.length) {
-      throw new ValidationError('One or more VMs not found or unavailable for assignment.');
-    }
-
-    const alreadyAssigned = vms.filter((vm) => vm.assignedTenantUserId != null);
-    if (alreadyAssigned.length > 0) {
-      const names = alreadyAssigned.map((vm) => vm.name).join(', ');
-      throw new ValidationError(`The following VMs are already assigned: ${names}`);
-    }
-
-    await VM.updateMany(
-      { _id: { $in: vmIds }, tenantId, assignedTenantUserId: null },
-      { $set: { assignedTenantUserId: targetUserId } }
-    );
-
-    logger.info('Tenant VMs assigned to tenant user', {
-      tenantId: tenantId.toString(),
-      targetUserId: targetUserId.toString(),
-      vmIds: vmIds.map((id) => id.toString()),
-    });
-
-    return { assigned: vmIds.length };
-  }
-
-  async bulkAssignOneToOne(
-    dto: TenantBulkAssignPairsDto,
+  /**
+   * Create tenant users and assign one VM each (1:1).
+   * Supports single (vmIds.length === 1) and bulk with the same contract.
+   * - emailPrefix vmuser@gmail.com → vmuser1@, vmuser2@, … for N VMs
+   * - optional `email` when N === 1 for an explicit address
+   * - passwordMode auto | shared (shared requires sharedPassword)
+   */
+  async onboardVms(
+    dto: TenantOnboardDto,
     tenantId: mongoose.Types.ObjectId,
     createdBy: mongoose.Types.ObjectId
   ): Promise<TenantBulkAssignPairsResult> {
@@ -325,10 +282,42 @@ export class TenantVmService {
     type UserSlot = { userId?: mongoose.Types.ObjectId; email: string; password?: string };
     const userSlots: UserSlot[] = [];
 
-    if (dto.mode === 'create') {
+    if (dto.vmIds.length === 1 && dto.email) {
+      const row = await tenantUserService.createOneForOnboard(
+        dto.email,
+        dto.passwordMode,
+        dto.sharedPassword,
+        tenantId,
+        createdBy
+      );
+      userSlots.push({
+        userId: row.userId ? new mongoose.Types.ObjectId(row.userId) : undefined,
+        email: row.email,
+        password: row.password,
+      });
+      if (row.status !== 'created') {
+        return {
+          assigned: 0,
+          failed: 1,
+          pairs: [
+            {
+              vmId: orderedVms[0]!._id.toString(),
+              vmName: orderedVms[0]!.name,
+              userEmail: row.email,
+              password: row.password,
+              status: 'failed',
+              error: row.error ?? 'Tenant user creation failed',
+            },
+          ],
+        };
+      }
+    } else {
+      if (!dto.emailPrefix) {
+        throw new ValidationError('emailPrefix is required when email is not provided.');
+      }
       const bulkResult = await tenantUserService.createBulk(
         {
-          emailPrefix: dto.emailPrefix!,
+          emailPrefix: dto.emailPrefix,
           count: dto.vmIds.length,
           password: dto.passwordMode === 'shared' ? dto.sharedPassword : undefined,
         },
@@ -353,26 +342,6 @@ export class TenantVmService {
           email: row.email,
           password: row.password,
         });
-      }
-    } else {
-      const userObjectIds = dto.userIds!.map((id) => new mongoose.Types.ObjectId(id));
-      const users = await TenantUser.find({
-        _id: { $in: userObjectIds },
-        tenantId,
-        role: 'tenant_user',
-        isActive: true,
-      }).lean();
-      const userById = new Map(users.map((user) => [user._id.toString(), user]));
-
-      for (const userId of dto.userIds!) {
-        const user = userById.get(userId);
-        if (!user) {
-          throw new ValidationError('One or more tenant users not found or inactive.');
-        }
-        if (!user.createdBy || user.createdBy.toString() !== createdBy.toString()) {
-          throw new ValidationError('You can only assign VMs to tenant users you created.');
-        }
-        userSlots.push({ userId: user._id, email: user.email });
       }
     }
 
@@ -427,9 +396,9 @@ export class TenantVmService {
       assigned++;
     }
 
-    logger.info('Bulk tenant VM assignment complete', {
+    logger.info('Tenant VM onboard complete', {
       tenantId: tenantId.toString(),
-      mode: dto.mode,
+      passwordMode: dto.passwordMode,
       assigned,
       failed,
       total: dto.vmIds.length,
