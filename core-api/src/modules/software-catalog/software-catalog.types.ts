@@ -1,4 +1,5 @@
-import type { MachineOS, InstallMethod } from './software-catalog.model';
+import type { MachineOS } from '../machine-manager/machine-manager.model';
+import type { InstallMethod } from './software-catalog.model';
 
 export interface CreateSoftwareCatalogDto {
   name: string;
