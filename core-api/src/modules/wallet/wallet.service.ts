@@ -1,7 +1,26 @@
 import mongoose from 'mongoose';
 import { Wallet } from '../../models/wallet.model';
-import { WalletTransaction } from '../../models/walletTransaction.model';
+import {
+  WalletTransaction,
+  type WalletTransactionSource,
+} from '../../models/walletTransaction.model';
 import { AppError } from '../../utils/errors';
+
+export interface CreditWalletOptions {
+  relatedOrderId?: string | null;
+  relatedVmId?: string | null;
+  source?: WalletTransactionSource;
+  externalReference?: string | null;
+  createdBy?: mongoose.Types.ObjectId | string | null;
+  idempotencyKey?: string | null;
+  session?: mongoose.ClientSession | null;
+}
+
+export interface CreditWalletResult {
+  balance: number;
+  currency: string;
+  transactionId: string;
+}
 
 export class WalletService {
   async getOrCreateWallet(tenantId: string): Promise<{ balance: number; currency: string }> {
@@ -26,32 +45,67 @@ export class WalletService {
     tenantId: string,
     amount: number,
     reason: string,
-    relatedOrderId: string | null = null
-  ): Promise<{ balance: number; currency: string }> {
+    options: CreditWalletOptions = {}
+  ): Promise<CreditWalletResult> {
     if (amount <= 0) {
       throw new AppError('Amount must be positive.', 400, 'VALIDATION_ERROR');
     }
 
+    const {
+      relatedOrderId = null,
+      relatedVmId = null,
+      source = 'system',
+      externalReference = null,
+      createdBy = null,
+      idempotencyKey = null,
+      session = null,
+    } = options;
+
     const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
+    const createdById =
+      createdBy == null
+        ? null
+        : createdBy instanceof mongoose.Types.ObjectId
+          ? createdBy
+          : new mongoose.Types.ObjectId(createdBy);
+
     const wallet = await Wallet.findOneAndUpdate(
       { tenantId: tenantObjectId },
       {
         $inc: { balance: amount },
         $setOnInsert: { tenantId: tenantObjectId, currency: 'INR' },
       },
-      { upsert: true, new: true }
+      { upsert: true, new: true, session: session ?? undefined }
     );
 
-    await WalletTransaction.create({
-      tenantId: tenantObjectId,
-      type: 'credit',
-      amount,
-      reason,
-      relatedOrderId: relatedOrderId ? new mongoose.Types.ObjectId(relatedOrderId) : null,
-      balanceAfter: wallet.balance,
-    });
+    if (!wallet) {
+      throw new AppError('Failed to update wallet.', 500, 'INTERNAL_ERROR');
+    }
 
-    return { balance: wallet.balance, currency: wallet.currency };
+    const [transaction] = await WalletTransaction.create(
+      [
+        {
+          tenantId: tenantObjectId,
+          type: 'credit',
+          amount,
+          reason,
+          source,
+          externalReference,
+          createdBy: createdById,
+          idempotencyKey,
+          relatedOrderId: relatedOrderId ? new mongoose.Types.ObjectId(relatedOrderId) : null,
+          relatedVmId: relatedVmId ? new mongoose.Types.ObjectId(relatedVmId) : null,
+          balanceAfter: wallet.balance,
+        },
+      ],
+      { session: session ?? undefined }
+    );
+
+    return {
+      balance: wallet.balance,
+      currency: wallet.currency,
+      transactionId: transaction._id.toString(),
+    };
   }
 
   async debitWallet(
@@ -81,6 +135,7 @@ export class WalletService {
       type: 'debit',
       amount,
       reason,
+      source: 'system',
       relatedOrderId: relatedOrderId ? new mongoose.Types.ObjectId(relatedOrderId) : null,
       relatedVmId: relatedVmId ? new mongoose.Types.ObjectId(relatedVmId) : null,
       balanceAfter: wallet.balance,
@@ -99,6 +154,8 @@ export class WalletService {
       type: string;
       amount: number;
       reason: string;
+      source: WalletTransactionSource;
+      externalReference: string | null;
       relatedOrderId: string | null;
       relatedVmId: string | null;
       balanceAfter: number;
@@ -128,6 +185,8 @@ export class WalletService {
         type: row.type,
         amount: row.amount,
         reason: row.reason,
+        source: row.source ?? 'system',
+        externalReference: row.externalReference ?? null,
         relatedOrderId: row.relatedOrderId ? row.relatedOrderId.toString() : null,
         relatedVmId: row.relatedVmId ? row.relatedVmId.toString() : null,
         balanceAfter: row.balanceAfter,

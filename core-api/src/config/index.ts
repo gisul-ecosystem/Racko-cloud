@@ -153,6 +153,14 @@ const envSchema = z.object({
   RAZORPAY_KEY_SECRET: z.string().optional().default(''),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
 
+  // Manual wallet top-up (super-admin offline payments)
+  MANUAL_TOPUP_MAX_AMOUNT: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/)
+    .optional()
+    .default('500000')
+    .transform(Number),
+
   // Tenant branding asset volume (logo, favicon, login page image cache)
   TENANT_ASSETS_VOLUME_PATH: z.string().default('./data/tenant-assets'),
 
