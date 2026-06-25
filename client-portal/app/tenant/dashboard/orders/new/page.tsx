@@ -11,12 +11,25 @@ import { useTenantBranding } from '@/context/TenantBrandingContext';
 import {
   createTenantOrder,
   getTenantOrderCatalog,
+  getTenantOrderTemplateDetail,
   getTenantWallet,
   quoteTenantOrder,
 } from '@/lib/tenantPortalApi';
 import { tenantAccentButton, tenantAccentSelectedBox } from '@/lib/tenantAccentStyles';
+import { billingPeriodHelperText, parseBillingDiscounts } from '@/lib/billingPeriodUtils';
+import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ApiError } from '@/lib/apiClient';
-import type { OrderSpecs, PlaceOrderInput, TenantOrder, TenantOrderTemplate } from '@/types/tenantPortal';
+import type {
+  BillingPeriod,
+  OrderSpecs,
+  PlaceOrderInput,
+  TenantOrder,
+  TenantOrderTemplate,
+  TenantTemplateDetail,
+  VmManagementPricing,
+} from '@/types/tenantPortal';
+
+const BILLING_PERIODS: BillingPeriod[] = ['monthly', 'quarterly', 'yearly'];
 
 const ORDER_ERROR_MESSAGES: Record<string, string> = {
   TEMPLATE_NOT_ALLOWED_FOR_TENANT: 'This template is not available for your organization.',
@@ -53,6 +66,8 @@ export default function TenantPlaceOrderPage() {
   const [balance, setBalance] = useState<number | null>(null);
   const [currency, setCurrency] = useState('INR');
   const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly');
+  const [catalogPricing, setCatalogPricing] = useState<VmManagementPricing | null>(null);
   const [count, setCount] = useState(1);
   const [specs, setSpecs] = useState<OrderSpecs | null>(null);
   const [quotedTotal, setQuotedTotal] = useState<number | null>(null);
@@ -62,6 +77,8 @@ export default function TenantPlaceOrderPage() {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<TenantOrder | null>(null);
   const [insufficientBalance, setInsufficientBalance] = useState(false);
+  const [templateDetail, setTemplateDetail] = useState<TenantTemplateDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(false);
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
@@ -81,6 +98,7 @@ export default function TenantPlaceOrderPage() {
           getTenantWallet(),
         ]);
         setTemplates(catalog.templates);
+        setCatalogPricing(catalog.pricing);
         setBalance(wallet.balance);
         setCurrency(wallet.currency);
         if (catalog.templates[0]) {
@@ -107,11 +125,19 @@ export default function TenantPlaceOrderPage() {
     return {
       templateId: selectedId,
       count,
+      billingPeriod,
       cpuCores: specs.cpuCores,
       memoryGb: specs.memoryGb,
       diskGb: specs.diskGb,
     };
-  }, [selectedId, count, specs]);
+  }, [selectedId, count, billingPeriod, specs]);
+
+  const billingDiscounts = useMemo(
+    () => parseBillingDiscounts(catalogPricing?.billingDiscounts),
+    [catalogPricing]
+  );
+
+  const billingHelper = billingPeriodHelperText(billingPeriod, billingDiscounts);
 
   useEffect(() => {
     if (!orderInput || tenantUser?.role !== 'tenant_admin') return;
@@ -126,6 +152,19 @@ export default function TenantPlaceOrderPage() {
 
     return () => clearTimeout(timer);
   }, [orderInput, tenantUser]);
+
+  useEffect(() => {
+    if (!selectedId || tenantUser?.role !== 'tenant_admin') {
+      setTemplateDetail(null);
+      return;
+    }
+
+    setDetailLoading(true);
+    void getTenantOrderTemplateDetail(selectedId)
+      .then(setTemplateDetail)
+      .catch(() => setTemplateDetail(null))
+      .finally(() => setDetailLoading(false));
+  }, [selectedId, tenantUser]);
 
   function selectTemplate(tpl: TenantOrderTemplate) {
     setSelectedId(tpl.templateId);
@@ -235,6 +274,36 @@ export default function TenantPlaceOrderPage() {
       )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        <div className="rounded-xl border border-gray-200 bg-white p-5">
+          <h2 className="text-sm font-semibold text-gray-900">Billing period</h2>
+          <p className="mt-1 text-xs text-gray-500">
+            Locked for the VM plan after order fulfillment. Extend and renew use the same period.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            {BILLING_PERIODS.map((period) => {
+              const isSelected = billingPeriod === period;
+              return (
+                <button
+                  key={period}
+                  type="button"
+                  onClick={() => setBillingPeriod(period)}
+                  className={`rounded-lg border px-4 py-2 text-sm font-medium transition ${
+                    isSelected
+                      ? 'border text-gray-900'
+                      : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                  }`}
+                  style={isSelected ? tenantAccentSelectedBox(accentColor) : undefined}
+                >
+                  {formatBillingPeriod(period)}
+                </button>
+              );
+            })}
+          </div>
+          {billingHelper ? (
+            <p className="mt-2 text-xs text-gray-600">{billingHelper}</p>
+          ) : null}
+        </div>
+
         <div className="grid gap-4 sm:grid-cols-2">
           {templates.map((tpl) => {
             const isSelected = tpl.templateId === selectedId;
@@ -268,6 +337,44 @@ export default function TenantPlaceOrderPage() {
             );
           })}
         </div>
+
+        {selected && (
+          <div className="rounded-xl border border-gray-200 bg-white p-5">
+            <h2 className="text-sm font-semibold text-gray-900">Template details</h2>
+            {detailLoading ? (
+              <p className="mt-2 text-sm text-gray-500">Loading template info…</p>
+            ) : templateDetail ? (
+              <dl className="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+                <div>
+                  <dt className="text-xs text-gray-500">Template ID</dt>
+                  <dd className="text-gray-900">{templateDetail.templateId}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Node</dt>
+                  <dd className="text-gray-900">{templateDetail.node}</dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-xs text-gray-500">Baseline specs</dt>
+                  <dd className="text-gray-900">
+                    {templateDetail.baselineSpecs.cpuCores} vCPU ·{' '}
+                    {templateDetail.baselineSpecs.memoryGb} GB RAM ·{' '}
+                    {templateDetail.baselineSpecs.diskGb} GB disk
+                  </dd>
+                </div>
+                <div className="sm:col-span-2">
+                  <dt className="text-xs text-gray-500">Pricing rates (monthly)</dt>
+                  <dd className="text-gray-900">
+                    CPU {formatMoney(templateDetail.pricing.cpuRatePerCoreMonthly)}/core · RAM{' '}
+                    {formatMoney(templateDetail.pricing.ramRatePerGbMonthly)}/GB · Disk{' '}
+                    {formatMoney(templateDetail.pricing.diskRatePerGbMonthly)}/GB
+                  </dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="mt-2 text-sm text-gray-500">Template details unavailable.</p>
+            )}
+          </div>
+        )}
 
         {selected && specs ? (
           <div className="rounded-xl border border-gray-200 bg-white p-5">

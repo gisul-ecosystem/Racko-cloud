@@ -20,6 +20,7 @@ import {
   Trash2,
   UserPlus,
   Users,
+  Wallet,
   X,
 } from 'lucide-react';
 import { ApiError } from '../../../../../lib/apiClient';
@@ -29,6 +30,7 @@ import {
   fetchTenant,
   fetchTenantAdmins,
   fetchTenantServices,
+  fetchSuperAdminOrders,
   removeTenantService,
   setTenantAdminActive,
   updateTenant,
@@ -42,15 +44,19 @@ import type {
   TenantStatus,
   VmManagementLimits,
   VmManagementPricing,
+  SuperAdminOrder,
 } from '../../../../../lib/tenantTypes';
+import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
+import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ErrorState } from '../../../../../components/dashboard/ErrorState';
 import { TenantStatusBadge } from '../../../../../components/super-admin-console/white-labelling/TenantStatusBadge';
 import { WhiteLabellingEmptyState } from '../../../../../components/super-admin-console/white-labelling/WhiteLabellingEmptyState';
 import { VmManagementConfigPanel } from '../../../../../components/super-admin-console/white-labelling/VmManagementConfigPanel';
 import { ServiceConfigSummary } from '../../../../../components/super-admin-console/white-labelling/ServiceConfigSummary';
 import { BrandingUploadSection } from '../../../../../components/super-admin-console/white-labelling/BrandingUploadSection';
+import { TenantWalletPanel } from '../../../../../components/super-admin-console/white-labelling/TenantWalletPanel';
 
-type Tab = 'general' | 'services' | 'admins';
+type Tab = 'general' | 'services' | 'wallet' | 'orders' | 'admins';
 
 const DEFAULT_VM_LIMITS: VmManagementLimits = {
   maxVms: 50,
@@ -63,6 +69,7 @@ const DEFAULT_VM_PRICING: VmManagementPricing = {
   cpuRatePerCoreMonthly: 500,
   ramRatePerGbMonthly: 100,
   diskRatePerGbMonthly: 10,
+  billingDiscounts: { quarterly: 0, yearly: 0 },
   fixedPlans: [],
 };
 
@@ -96,6 +103,10 @@ export default function TenantDetailPage() {
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminForm, setAdminForm] = useState({ email: '', password: '' });
+
+  const [tenantOrders, setTenantOrders] = useState<SuperAdminOrder[]>([]);
+  const [ordersLoading, setOrdersLoading] = useState(false);
+  const [ordersError, setOrdersError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -258,9 +269,26 @@ export default function TenantDetailPage() {
   };
 
   const assignedKeys = new Set(services.map((s) => s.serviceKey));
-  const availableServices: ServiceKey[] = (['vm-management', 'azure'] as const).filter(
+  const availableServices: ServiceKey[] = (['vm-management'] as const).filter(
     (k) => !assignedKeys.has(k)
   );
+
+  const loadTenantOrders = useCallback(async () => {
+    setOrdersLoading(true);
+    setOrdersError(null);
+    try {
+      const all = await fetchSuperAdminOrders();
+      setTenantOrders(all.filter((o) => o.tenantId === tenantId));
+    } catch (err) {
+      setOrdersError(err instanceof ApiError ? err.message : 'Failed to load orders.');
+    } finally {
+      setOrdersLoading(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (tab === 'orders') void loadTenantOrders();
+  }, [tab, loadTenantOrders]);
 
   const serviceIcon = (key: ServiceKey) =>
     key === 'vm-management' ? MonitorCheck : Cloud;
@@ -282,6 +310,8 @@ export default function TenantDetailPage() {
   const tabs: Array<{ id: Tab; label: string; icon: typeof Settings }> = [
     { id: 'general', label: 'General & Branding', icon: Settings },
     { id: 'services', label: 'Services', icon: Shield },
+    { id: 'wallet', label: 'Wallet', icon: Wallet },
+    { id: 'orders', label: 'Orders', icon: MonitorCheck },
     { id: 'admins', label: 'Tenant Admins', icon: Users },
   ];
 
@@ -488,7 +518,7 @@ export default function TenantDetailPage() {
             <WhiteLabellingEmptyState
               icon={Shield}
               title="No services assigned yet"
-              description="Assign vm-management or azure to enable tenant capabilities."
+              description="Assign vm-management to enable tenant VM ordering."
               action={
                 <button
                   type="button"
@@ -574,6 +604,16 @@ export default function TenantDetailPage() {
                         cpuRatePerCoreMonthly: Number(config.pricing['cpuRatePerCoreMonthly'] ?? 500),
                         ramRatePerGbMonthly: Number(config.pricing['ramRatePerGbMonthly'] ?? 100),
                         diskRatePerGbMonthly: Number(config.pricing['diskRatePerGbMonthly'] ?? 10),
+                        billingDiscounts: {
+                          quarterly: Number(
+                            (config.pricing['billingDiscounts'] as Record<string, unknown> | undefined)
+                              ?.quarterly ?? 0
+                          ),
+                          yearly: Number(
+                            (config.pricing['billingDiscounts'] as Record<string, unknown> | undefined)
+                              ?.yearly ?? 0
+                          ),
+                        },
                         fixedPlans: Array.isArray(config.pricing['fixedPlans'])
                           ? (config.pricing['fixedPlans'] as VmManagementPricing['fixedPlans'])
                           : [],
@@ -594,6 +634,77 @@ export default function TenantDetailPage() {
                 </div>
               );
               })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {tab === 'wallet' && (
+        <TenantWalletPanel tenantId={tenantId} onFlash={flash} onFlashErr={flashErr} />
+      )}
+
+      {tab === 'orders' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-gray-500">VM orders placed by this tenant.</p>
+            <Link
+              href="/super-admin-console/white-labelling/orders"
+              className="text-xs font-medium text-[#B91C1C] hover:underline"
+            >
+              All tenant orders →
+            </Link>
+          </div>
+
+          {ordersLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+            </div>
+          ) : ordersError ? (
+            <ErrorState title="Orders unavailable" message={ordersError} onRetry={() => void loadTenantOrders()} />
+          ) : tenantOrders.length === 0 ? (
+            <p className="rounded-xl border border-gray-200 bg-white px-6 py-12 text-center text-sm text-gray-500">
+              No orders for this tenant yet.
+            </p>
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                      <th className="px-4 py-3">Template</th>
+                      <th className="px-4 py-3">Amount</th>
+                      <th className="px-4 py-3">Billing</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Created</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tenantOrders.map((order) => (
+                      <tr key={order.id} className="border-b border-gray-50 align-top">
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-gray-900">{order.templateName}</p>
+                          <p className="text-xs text-gray-500">× {order.count}</p>
+                        </td>
+                        <td className="px-4 py-3 font-medium text-gray-900">
+                          {new Intl.NumberFormat('en-IN', {
+                            style: 'currency',
+                            currency: 'INR',
+                          }).format(order.calculatedAmount)}
+                        </td>
+                        <td className="px-4 py-3 text-gray-600">
+                          {formatBillingPeriod(order.billingPeriod ?? 'monthly')}
+                        </td>
+                        <td className="px-4 py-3">
+                          <OrderStatusBadge status={order.status} />
+                        </td>
+                        <td className="px-4 py-3 text-gray-500">
+                          {new Date(order.createdAt).toLocaleString()}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           )}
         </div>
@@ -782,12 +893,6 @@ export default function TenantDetailPage() {
                     ))}
                   </div>
                 </>
-              )}
-
-              {assignKey === 'azure' && (
-                <p className="rounded-lg bg-gray-50 px-4 py-3 text-sm text-gray-600">
-                  Azure service uses empty limits and pricing stubs until fully configured.
-                </p>
               )}
 
               <div className="flex justify-end gap-2 pt-2">

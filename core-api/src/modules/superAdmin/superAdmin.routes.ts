@@ -4,8 +4,11 @@ import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import {
+  manualWalletCreditSchema,
   setTenantAdminActiveSchema,
+  superAdminManualCreditsListSchema,
   superAdminTenantIdParamSchema,
+  superAdminWalletTransactionsSchema,
 } from './superAdmin.validation';
 
 const router = Router();
@@ -30,6 +33,38 @@ router.patch(
   validateRequest(setTenantAdminActiveSchema),
   (req, res, next) => {
     superAdminController.setTenantAdminActive(req, res, next);
+  }
+);
+
+router.get(
+  '/tenants/:tenantId/wallet',
+  validateRequest(superAdminTenantIdParamSchema),
+  (req, res, next) => {
+    superAdminController.getTenantWallet(req, res, next);
+  }
+);
+
+router.get(
+  '/tenants/:tenantId/wallet/transactions',
+  validateRequest(superAdminWalletTransactionsSchema),
+  (req, res, next) => {
+    superAdminController.listTenantWalletTransactions(req, res, next);
+  }
+);
+
+router.get(
+  '/tenants/:tenantId/wallet/manual-credits',
+  validateRequest(superAdminManualCreditsListSchema),
+  (req, res, next) => {
+    superAdminController.listTenantManualCredits(req, res, next);
+  }
+);
+
+router.post(
+  '/tenants/:tenantId/wallet/manual-credit',
+  validateRequest(manualWalletCreditSchema),
+  (req, res, next) => {
+    superAdminController.manualCreditTenantWallet(req, res, next);
   }
 );
 

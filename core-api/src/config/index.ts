@@ -22,6 +22,7 @@ const envSchema = z.object({
   // JWT
   JWT_ACCESS_SECRET: z.string().min(64, 'JWT_ACCESS_SECRET must be at least 64 characters'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
+  JWT_TENANT_ACCESS_EXPIRES_IN: z.string().default('1d'),
   JWT_REFRESH_SECRET: z.string().min(64, 'JWT_REFRESH_SECRET must be at least 64 characters'),
   JWT_REFRESH_EXPIRES_IN: z.string().default('7d'),
 
@@ -152,6 +153,14 @@ const envSchema = z.object({
   RAZORPAY_KEY_ID: z.string().optional().default(''),
   RAZORPAY_KEY_SECRET: z.string().optional().default(''),
   RAZORPAY_WEBHOOK_SECRET: z.string().optional().default(''),
+
+  // Manual wallet top-up (super-admin offline payments)
+  MANUAL_TOPUP_MAX_AMOUNT: z
+    .string()
+    .regex(/^\d+(\.\d+)?$/)
+    .optional()
+    .default('500000')
+    .transform(Number),
 
   // Tenant branding asset volume (logo, favicon, login page image cache)
   TENANT_ASSETS_VOLUME_PATH: z.string().default('./data/tenant-assets'),

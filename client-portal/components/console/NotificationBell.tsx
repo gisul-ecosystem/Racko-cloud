@@ -100,8 +100,22 @@ export function NotificationBell() {
     }
 
     setOpen(false);
+
     if (notification.actionUrl) {
       router.push(notification.actionUrl);
+      return;
+    }
+
+    if (notification.type === 'vm_plan_expired') {
+      const tenantId = notification.metadata?.tenantId;
+      if (typeof tenantId === 'string' && tenantId) {
+        router.push(`/super-admin-console/white-labelling/tenants/${tenantId}`);
+        return;
+      }
+    }
+
+    if (notification.type === 'tenant_order') {
+      router.push('/super-admin-console/white-labelling/orders');
     }
   }
 

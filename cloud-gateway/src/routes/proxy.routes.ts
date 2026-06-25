@@ -66,6 +66,8 @@ const tenantWalletProxy = createMountedCoreApiProxy('/api/v1/tenant-wallet');
 const tenantOrdersProxy = createMountedCoreApiProxy('/api/v1/tenant-orders');
 const tenantPlansProxy = createMountedCoreApiProxy('/api/v1/tenant-plans');
 const tenantNotificationsProxy = createMountedCoreApiProxy('/api/v1/tenant-notifications');
+const tenantUsersProxy = createMountedCoreApiProxy('/api/v1/tenant-users');
+const tenantVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-vms');
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -184,6 +186,37 @@ router.get('/api/v1/managed-users', authMiddleware, verifyMiddleware, requireRol
 router.patch('/api/v1/managed-users/:userId/active', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/managed-users/:userId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
+// ─── MACHINE MANAGER ROUTES (admin + super_admin) ────────────────────────────
+// Static sub-routes must come before /:id to avoid collision
+router.post('/api/v1/machines/push-agent', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/machines/jobs/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// Public download-agent redeem — no auth, token validated internally (single-use, 60s TTL)
+router.get('/api/v1/machines/download-agent', coreApiProxy);
+router.post('/api/v1/machines', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/machines', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// Issue download token — authenticated
+router.post('/api/v1/machines/:id/download-agent/token', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/machines/:id/download-agent', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.delete('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+
+// ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
+router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.delete('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+
+// ─── AGENT ROUTES (no JWT auth — agent uses accountToken in body) ─────────────
+router.post('/api/v1/agent/register', coreApiProxy);
+router.post('/api/v1/agent/enroll', coreApiProxy);
+router.get('/api/v1/agent/binary/:os', coreApiProxy);
+router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
+router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
+router.post('/api/v1/agent/heartbeat', coreApiProxy);
+router.get('/api/v1/agent/software-catalog/:id', coreApiProxy);
 // ─── TENANT PUBLIC ROUTES (host → x-tenant-id; no platform JWT) ───────────────
 router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/forgot-password', injectTenantHeader, coreApiProxy);
@@ -199,6 +232,8 @@ router.use('/api/v1/tenant-wallet', requireTenantBearer, tenantWalletProxy);
 router.use('/api/v1/tenant-orders', requireTenantBearer, tenantOrdersProxy);
 router.use('/api/v1/tenant-plans', requireTenantBearer, tenantPlansProxy);
 router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificationsProxy);
+router.use('/api/v1/tenant-users', requireTenantBearer, tenantUsersProxy);
+router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

@@ -8,6 +8,11 @@ import type {
   TenantOrder,
   TenantOrderCatalog,
   TenantOrderQuote,
+  TenantNotificationsResult,
+  TenantPlan,
+  TenantPlanActionResult,
+  TenantPlanHistoryEntry,
+  TenantPlanQuote,
   TenantPortalUser,
   TenantTemplateDetail,
   TenantTopupResult,
@@ -160,4 +165,84 @@ export async function listTenantOrders(): Promise<TenantOrder[]> {
 export async function getTenantOrderTemplates() {
   const catalog = await getTenantOrderCatalog();
   return catalog.templates;
+}
+
+export async function listTenantPlans(): Promise<TenantPlan[]> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ plans: TenantPlan[] }>>('/api/v1/tenant-plans')
+  );
+  return data.plans;
+}
+
+export async function getTenantPlan(vmId: string): Promise<TenantPlan> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ plan: TenantPlan }>>(`/api/v1/tenant-plans/${vmId}`)
+  );
+  return data.plan;
+}
+
+export async function quoteTenantPlan(vmId: string): Promise<TenantPlanQuote> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantPlanQuote>>(`/api/v1/tenant-plans/${vmId}/quote`, {
+      method: 'POST',
+    })
+  );
+}
+
+export async function extendTenantPlan(vmId: string): Promise<TenantPlanActionResult> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantPlanActionResult>>(
+      `/api/v1/tenant-plans/${vmId}/extend`,
+      { method: 'POST' }
+    )
+  );
+}
+
+export async function renewTenantPlan(vmId: string): Promise<TenantPlanActionResult> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantPlanActionResult>>(
+      `/api/v1/tenant-plans/${vmId}/renew`,
+      { method: 'POST' }
+    )
+  );
+}
+
+export async function listTenantPlanHistory(vmId: string): Promise<TenantPlanHistoryEntry[]> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ history: TenantPlanHistoryEntry[] }>>(
+      `/api/v1/tenant-plans/${vmId}/history`
+    )
+  );
+  return data.history;
+}
+
+export async function listTenantNotifications(
+  page = 1,
+  limit = 20
+): Promise<TenantNotificationsResult> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantNotificationsResult>>(
+      `/api/v1/tenant-notifications?page=${page}&limit=${limit}`
+    )
+  );
+}
+
+export async function markTenantNotificationRead(notificationId: string): Promise<void> {
+  await tenantPortalRequest<ApiEnvelope<{ id: string }>>(
+    `/api/v1/tenant-notifications/${notificationId}/read`,
+    { method: 'PATCH' }
+  );
+}
+
+/**
+ * Complete payment for a pending_payment order.
+ * Requires backend POST /api/v1/tenant-orders/:id/complete-payment.
+ */
+export async function completeTenantOrderPayment(orderId: string): Promise<TenantOrder> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantOrder>>(
+      `/api/v1/tenant-orders/${orderId}/complete-payment`,
+      { method: 'POST' }
+    )
+  );
 }
