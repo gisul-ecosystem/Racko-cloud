@@ -8,6 +8,7 @@ import { hashPassword } from '../../utils/argon2';
 import type {
   BulkCreateTenantUsersResult,
   CreateBulkTenantUsersDto,
+  CreateOnboardTenantUserResult,
   CreateSingleTenantUserDto,
   TenantUserProfile,
 } from './tenantUser.types';
@@ -86,6 +87,59 @@ export class TenantUserService {
     });
 
     return toTenantUserProfile(user);
+  }
+
+  /**
+   * Create one tenant_user for VM onboard (single VM).
+   * passwordMode shared → sharedPassword; auto → cryptographically generated password returned once.
+   */
+  async createOneForOnboard(
+    email: string,
+    passwordMode: 'auto' | 'shared',
+    sharedPassword: string | undefined,
+    tenantId: mongoose.Types.ObjectId,
+    createdBy: mongoose.Types.ObjectId
+  ): Promise<CreateOnboardTenantUserResult> {
+    const normalizedEmail = email.toLowerCase().trim();
+    const plainPassword =
+      passwordMode === 'shared' ? sharedPassword! : generateSecurePassword();
+
+    try {
+      const existing = await TenantUser.findOne({ tenantId, email: normalizedEmail });
+      if (existing) {
+        return {
+          email: normalizedEmail,
+          password: plainPassword,
+          status: 'failed',
+          error: 'Email already in use',
+        };
+      }
+
+      const user = await TenantUser.create({
+        tenantId,
+        email: normalizedEmail,
+        passwordHash: await hashPassword(plainPassword),
+        role: 'tenant_user',
+        isActive: true,
+        isEmailVerified: true,
+        createdBy,
+      });
+
+      return {
+        email: normalizedEmail,
+        password: plainPassword,
+        status: 'created',
+        userId: user._id.toString(),
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unknown error';
+      return {
+        email: normalizedEmail,
+        password: plainPassword,
+        status: 'failed',
+        error: msg,
+      };
+    }
   }
 
   async createBulk(

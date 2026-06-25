@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from 'express';
 import mongoose from 'mongoose';
 import type { TenantAuthenticatedRequest } from '../../middleware/requireTenantAuth.middleware';
 import { tenantVmService } from './tenantVm.service';
-import type { TenantBulkAssignPairsDto, TenantVmActor, TenantVmListFilters } from './tenantVm.types';
+import type { TenantOnboardDto, TenantVmActor, TenantVmListFilters } from './tenantVm.types';
 
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, ...(data !== undefined && { data }) });
@@ -132,35 +132,18 @@ export class TenantVmController {
     }
   }
 
-  async assignVms(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async onboardVms(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as TenantAuthenticatedRequest;
       const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
       const createdBy = new mongoose.Types.ObjectId(authReq.tenantUser.id);
-      const { userId, vmIds } = req.body as { userId: string; vmIds: string[] };
-      const result = await tenantVmService.assignVms(
-        vmIds.map((id) => new mongoose.Types.ObjectId(id)),
-        new mongoose.Types.ObjectId(userId),
-        tenantId,
-        createdBy
-      );
-      success(res, 'Tenant VMs assigned successfully.', result);
-    } catch (error) {
-      next(error);
-    }
-  }
+      const dto = req.body as TenantOnboardDto;
 
-  async bulkAssignOneToOne(req: Request, res: Response, next: NextFunction): Promise<void> {
-    try {
-      const authReq = req as TenantAuthenticatedRequest;
-      const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
-      const createdBy = new mongoose.Types.ObjectId(authReq.tenantUser.id);
-      const dto = req.body as TenantBulkAssignPairsDto;
-
-      const result = await tenantVmService.bulkAssignOneToOne(dto, tenantId, createdBy);
+      const result = await tenantVmService.onboardVms(dto, tenantId, createdBy);
+      const noun = dto.vmIds.length === 1 ? 'VM' : 'VMs';
       success(
         res,
-        `Bulk tenant VM assignment complete. ${result.assigned} assigned, ${result.failed} failed.`,
+        `Tenant onboard complete. ${result.assigned} ${noun} assigned${result.failed > 0 ? `, ${result.failed} failed` : ''}.`,
         result,
         201
       );

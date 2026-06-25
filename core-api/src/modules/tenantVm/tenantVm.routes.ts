@@ -4,8 +4,7 @@ import { requireTenantAuth, requireTenantRole } from '../../middleware/requireTe
 import { validateRequest } from '../../middleware/validate.middleware';
 import { tenantVmController } from './tenantVm.controller';
 import {
-  tenantAssignVMsSchema,
-  tenantBulkAssignPairsSchema,
+  tenantOnboardSchema,
   tenantUserIdParamSchema,
   tenantVmConsoleSchema,
   tenantVmIdParamSchema,
@@ -37,17 +36,10 @@ router.get(
 );
 
 router.post(
-  '/assign',
+  '/assign/onboard',
   requireTenantRole('tenant_admin'),
-  validateRequest(tenantAssignVMsSchema),
-  (req, res, next) => tenantVmController.assignVms(req, res, next)
-);
-
-router.post(
-  '/assign/bulk',
-  requireTenantRole('tenant_admin'),
-  validateRequest(tenantBulkAssignPairsSchema),
-  (req, res, next) => tenantVmController.bulkAssignOneToOne(req, res, next)
+  validateRequest(tenantOnboardSchema),
+  (req, res, next) => tenantVmController.onboardVms(req, res, next)
 );
 
 router.delete(

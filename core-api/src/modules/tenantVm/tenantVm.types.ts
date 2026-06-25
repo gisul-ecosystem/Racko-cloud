@@ -11,13 +11,14 @@ export interface TenantVmActor {
   role: 'tenant_admin' | 'tenant_user';
 }
 
-export interface TenantBulkAssignPairsDto {
+/** Create tenant users + 1:1 VM assign — single (vmIds.length === 1) or bulk */
+export interface TenantOnboardDto {
   vmIds: string[];
-  mode: 'create' | 'existing';
   emailPrefix?: string;
-  passwordMode?: 'auto' | 'shared';
+  passwordMode: 'auto' | 'shared';
   sharedPassword?: string;
-  userIds?: string[];
+  /** Optional full email when onboarding exactly one VM (otherwise uses emailPrefix + index) */
+  email?: string;
 }
 
 export interface TenantBulkAssignPairRow {
