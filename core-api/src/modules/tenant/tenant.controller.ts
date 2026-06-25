@@ -13,6 +13,16 @@ function success<T>(res: Response, message: string, data: T, statusCode = 200): 
   res.status(statusCode).json({ success: true, message, data });
 }
 
+/** Multer memory upload — works with or without @types/multer global augmentation */
+type BrandingUploadRequest = Omit<Request, 'file'> & {
+  file?: {
+    buffer: Buffer;
+    mimetype: string;
+    originalname: string;
+    size: number;
+  };
+};
+
 export class TenantController {
   async create(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -79,7 +89,7 @@ export class TenantController {
     }
   }
 
-  async uploadBrandingAsset(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async uploadBrandingAsset(req: BrandingUploadRequest, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params as { id: string };
       const assetType = resolveBrandingAssetType((req.body as { assetType?: string }).assetType);

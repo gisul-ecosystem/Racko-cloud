@@ -27,7 +27,7 @@ export interface TenantUserPublic {
 
 function signTenantAccessToken(payload: TenantTokenPayload): string {
   return jwt.sign(payload, config.JWT_ACCESS_SECRET, {
-    expiresIn: config.JWT_ACCESS_EXPIRES_IN as jwt.SignOptions['expiresIn'],
+    expiresIn: config.JWT_TENANT_ACCESS_EXPIRES_IN as jwt.SignOptions['expiresIn'],
     algorithm: 'HS256',
   });
 }
