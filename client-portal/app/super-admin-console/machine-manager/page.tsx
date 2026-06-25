@@ -165,7 +165,7 @@ export default function SuperAdminSoftwareCatalogPage() {
         <h1 className="text-2xl font-bold text-gray-900">Software Catalog</h1>
         <p className="mt-0.5 text-sm text-gray-500">
           Add software packages that admins can install on their machines.
-          Supports winget, Chocolatey, apt/brew, .msi, .exe, .zip, and PowerShell/shell scripts.
+          Supports Chocolatey, apt/brew, .msi, .exe, .zip, and PowerShell/shell scripts.
         </p>
       </div>
 
@@ -215,12 +215,6 @@ export default function SuperAdminSoftwareCatalogPage() {
           </div>
 
           {/* Package manager IDs — shown only for pkg-based methods */}
-          {installMethod === 'winget' && (
-            <div className="sm:col-span-2">
-              <label className={labelClass}>winget package ID <span className="text-red-500">*</span></label>
-              <input className={inputClass} value={wingetId} onChange={(e) => setWingetId(e.target.value)} placeholder="Google.Chrome" />
-            </div>
-          )}
           {installMethod === 'apt' && (
             <div className="sm:col-span-2">
               <label className={labelClass}>apt package name <span className="text-red-500">*</span></label>
@@ -270,7 +264,7 @@ export default function SuperAdminSoftwareCatalogPage() {
               className={inputClass}
               value={installArgs}
               onChange={(e) => setInstallArgs(e.target.value)}
-              placeholder={installMethod === 'winget' ? '--scope machine' : installMethod === 'script' ? '-param value' : ''}
+              placeholder={installMethod === 'script' ? '-param value' : ''}
             />
           </div>
         </div>

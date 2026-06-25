@@ -179,7 +179,7 @@ export class MachineManagerController {
       };
 
       const entry = fileMap[osParam] ?? fileMap['windows'];
-      const binaryPath = path.resolve(process.cwd(), '..', 'agent', 'installer', 'dist', entry.file);
+      const binaryPath = path.resolve(process.cwd(), '..', 'agent', 'dist', entry.file);
 
       if (!fs.existsSync(binaryPath)) {
         res.status(404).json({
