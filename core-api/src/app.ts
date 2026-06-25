@@ -20,6 +20,8 @@ import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
+import { machineRouter, agentRouter } from './modules/machine-manager/machine-manager.routes';
+import softwareCatalogRoutes from './modules/software-catalog/software-catalog.routes';
 import internalTenantRoutes from './modules/tenant/internalTenant.routes';
 import tenantRoutes from './modules/tenant/tenant.routes';
 import tenantBrandingRoutes from './modules/tenant/tenantBranding.routes';
@@ -152,6 +154,9 @@ app.use('/api/v1/software', softwareRoutes);
 app.use('/api/v1/vm-automations', vmAutomationRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/admin-vm-templates', adminVmTemplateRoutes);
+app.use('/api/v1/machines', machineRouter);
+app.use('/api/v1/agent', agentRouter);
+app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 
 // Start background services
 startNodeMonitoring();

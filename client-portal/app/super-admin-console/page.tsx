@@ -1,6 +1,7 @@
 'use client';
 
 import Link from 'next/link';
+import { MonitorCheck, Cloud, Monitor } from 'lucide-react';
 import { MonitorCheck, Cloud, Palette } from 'lucide-react';
 
 const services = [
@@ -19,6 +20,11 @@ const services = [
     description: 'Manage Azure cloud services and resources',
   },
   {
+    id: 'machine-manager',
+    name: 'Machine Manager',
+    href: '/super-admin-console/machine-manager',
+    icon: Monitor,
+    description: 'Manage software catalog for machine installations',
     id: 'white-labelling',
     name: 'White Labelling Service',
     href: '/super-admin-console/white-labelling',
