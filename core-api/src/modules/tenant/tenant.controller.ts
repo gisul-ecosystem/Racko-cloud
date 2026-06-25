@@ -8,7 +8,7 @@ import type { AuthenticatedRequest } from '../../types';
 import type { CreateTenantInput, CreateTenantAdminInput, UpdateTenantInput } from './tenant.validation';
 import type { TenantStatus } from '../../models/tenant.model';
 import { ValidationError } from '../../utils/errors';
-
+ 
 function success<T>(res: Response, message: string, data: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, data });
 }
@@ -36,20 +36,20 @@ export class TenantController {
       next(error);
     }
   }
-
+ 
   async list(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const page = Number(req.query['page'] ?? 1);
       const limit = Number(req.query['limit'] ?? 20);
       const status = req.query['status'] as TenantStatus | undefined;
-
+ 
       const result = await tenantService.listTenants(page, limit, status);
       success(res, 'Tenants retrieved.', result);
     } catch (error) {
       next(error);
     }
   }
-
+ 
   async getById(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params as { id: string };
@@ -59,23 +59,23 @@ export class TenantController {
       next(error);
     }
   }
-
+ 
   async update(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { id } = req.params as { id: string };
       const body = req.body as UpdateTenantInput & { slug?: string; createdBy?: string };
-
+ 
       const updates: UpdateTenantInput = { ...body };
       delete (updates as { slug?: string }).slug;
       delete (updates as { createdBy?: string }).createdBy;
-
+ 
       const tenant = await tenantService.updateTenant(id, updates);
       success(res, 'Tenant updated.', { tenant });
     } catch (error) {
       next(error);
     }
   }
-
+ 
   async createAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { tenantId } = req.params as { tenantId: string };
@@ -98,21 +98,21 @@ export class TenantController {
           'assetType is required. Use logo, favicon, or login-page-image.'
         );
       }
-
+ 
       const file = req.file;
       if (!file) {
         throw new ValidationError('File is required. Use multipart field name "file".');
       }
-
+ 
       const doc = await tenantBrandingAssetService.uploadAsset(id, assetType, {
         buffer: file.buffer,
         mimetype: file.mimetype,
         originalname: file.originalname,
         size: file.size,
       });
-
+ 
       const tenant = await tenantService.getTenantById(id);
-
+ 
       success(
         res,
         'Branding asset uploaded.',
@@ -131,5 +131,5 @@ export class TenantController {
     }
   }
 }
-
+ 
 export const tenantController = new TenantController();
