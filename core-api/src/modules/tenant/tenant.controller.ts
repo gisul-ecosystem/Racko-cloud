@@ -1,4 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
+import 'multer';
 import { tenantService } from './tenant.service';
 import {
   tenantBrandingAssetService,

@@ -17,8 +17,7 @@ async function migrateRequests() {
         currentStep: 0,
         progress: 0,
         credentialsSent: false,
-        permissionSetArns: [],
-        identityUsers: [],
+        labRoles: [],
       },
     }
   );

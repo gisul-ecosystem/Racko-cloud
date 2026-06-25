@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Loader2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
@@ -10,20 +10,12 @@ import { createRequest } from '../../api/client';
 import { AWS_DEFAULT_REGION, AWS_ROUTES } from '../../constants';
 import { DEFAULT_IAM_POLICIES } from '../../config/iamPolicies';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
+import { useAvailableRegions } from '../../hooks/useAvailableRegions';
 import { useServiceCatalog } from '../../hooks/useServiceCatalog';
 import { getEffectivePolicies } from './PermissionsPicker';
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
-
-function defaultStartDate() {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function defaultEndDate() {
-  const date = new Date();
-  date.setDate(date.getDate() + 30);
-  return date.toISOString().slice(0, 10);
-}
+import { defaultEndDate, defaultStartDate } from '../../utils/requestForm';
 
 function durationDaysBetween(startDate, endDate) {
   if (!startDate || !endDate) return 0;
@@ -41,8 +33,8 @@ function validateStep(step, input) {
     if (!emailPattern.test(input.customerEmail.trim())) {
       errors.push('Enter a valid customer email address.');
     }
-    if (!Number.isInteger(input.accountCount) || input.accountCount <= 0) {
-      errors.push('Account count must be a positive integer.');
+    if (!Number.isInteger(input.accountCount) || input.accountCount <= 0 || input.accountCount > 50) {
+      errors.push('Account count must be a positive integer between 1 and 50.');
     }
     if (!input.startDate || !input.endDate) {
       errors.push('Start and end dates are required.');
@@ -51,27 +43,36 @@ function validateStep(step, input) {
     }
   }
 
-  if (step === 2 && input.usageWindows.length > 0) {
+  if (step === 2 && input.enableDailyUsage) {
+    if (input.usageWindows.length === 0) {
+      errors.push('Enable at least one day when daily usage windows are turned on.');
+    }
     for (const window of input.usageWindows) {
-      if (!window.startTime || !window.endTime) {
+      if (!window.windowStartTime || !window.windowEndTime) {
         errors.push('Each enabled usage window must have a start and end time.');
-      } else if (window.startTime >= window.endTime) {
+      } else if (window.windowStartTime >= window.windowEndTime) {
         errors.push('Usage window end time must be after the start time.');
+      }
+      if (
+        window.dailyLimitHours != null &&
+        (window.dailyLimitHours < 0.5 || window.dailyLimitHours > 24)
+      ) {
+        errors.push('Max hours/day must be between 0.5 and 24 when set.');
       }
     }
   }
 
-  if (step === 3 && input.cleanupEnabled) {
+  if (step === 3 && input.enableResourceCleanup) {
     if (
-      !Number.isInteger(input.cleanupIntervalHours) ||
-      input.cleanupIntervalHours < 1 ||
-      input.cleanupIntervalHours > 24
+      !Number.isInteger(input.resourceCleanupIntervalHours) ||
+      input.resourceCleanupIntervalHours < 1 ||
+      input.resourceCleanupIntervalHours > 24
     ) {
       errors.push('Enter a resource cleanup interval between 1 and 24 hours when enabled.');
     }
   }
 
-  if (step === 4 && input.perUserBudgetUsd !== undefined) {
+  if (step === 4 && input.budgetEnabled) {
     if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
       errors.push('Budget per user must be a positive number.');
     }
@@ -122,10 +123,12 @@ export function RequestWorkspace() {
   const [costingMode, setCostingMode] = useState('shared');
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
+  const [enableDailyUsage, setEnableDailyUsage] = useState(false);
   const [usageWindows, setUsageWindows] = useState([]);
   const [timezone, setTimezone] = useState('Asia/Kolkata');
-  const [cleanupEnabled, setCleanupEnabled] = useState(false);
-  const [cleanupIntervalHours, setCleanupIntervalHours] = useState(undefined);
+  const [enableResourceCleanup, setEnableResourceCleanup] = useState(false);
+  const [resourceCleanupIntervalHours, setResourceCleanupIntervalHours] = useState(undefined);
+  const [budgetEnabled, setBudgetEnabled] = useState(false);
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
@@ -154,9 +157,11 @@ export function RequestWorkspace() {
       accountCount,
       startDate,
       endDate,
+      enableDailyUsage,
       usageWindows,
-      cleanupEnabled,
-      cleanupIntervalHours,
+      enableResourceCleanup,
+      resourceCleanupIntervalHours,
+      budgetEnabled,
       perUserBudgetUsd,
       selectedServiceIds,
       selectedInstances,
@@ -168,9 +173,11 @@ export function RequestWorkspace() {
       accountCount,
       startDate,
       endDate,
+      enableDailyUsage,
       usageWindows,
-      cleanupEnabled,
-      cleanupIntervalHours,
+      enableResourceCleanup,
+      resourceCleanupIntervalHours,
+      budgetEnabled,
       perUserBudgetUsd,
       selectedServiceIds,
       selectedInstances,
@@ -187,14 +194,34 @@ export function RequestWorkspace() {
     return {
       selectedServiceIds,
       selectedInstances,
+      selectedServices,
       region: pricingRegion,
       accountCount,
       durationDays,
+      startDate,
+      endDate,
     };
-  }, [selectedServiceIds, selectedInstances, pricingRegion, accountCount, durationDays]);
+  }, [
+    selectedServiceIds,
+    selectedInstances,
+    selectedServices,
+    pricingRegion,
+    accountCount,
+    durationDays,
+    startDate,
+    endDate,
+  ]);
 
   const { estimate, loading: estimateLoading, error: estimateError } =
     usePricingEstimate(estimatePayload);
+
+  const {
+    regions: availableRegions,
+    loading: regionsLoading,
+    error: regionsError,
+  } = useAvailableRegions(selectedServiceIds, selectedInstances);
+
+  const showPricingPanel = currentStep >= 6;
 
   const handleToggleService = useCallback((serviceId) => {
     setSelectedServiceIds((current) => {
@@ -233,8 +260,15 @@ export function RequestWorkspace() {
 
   const handleRegionChange = useCallback((nextRegion) => {
     setRegion(nextRegion);
-    setSelectedInstances([]);
   }, []);
+
+  useEffect(() => {
+    if (!region) return;
+    if (availableRegions.length === 0) return;
+    if (!availableRegions.some((entry) => entry.code === region)) {
+      setRegion('');
+    }
+  }, [availableRegions, region]);
 
   const goToStep = useCallback((step) => {
     setCurrentStep(step);
@@ -275,6 +309,7 @@ export function RequestWorkspace() {
         serviceName: service.name,
         instanceType: instance?.instanceType ?? null,
         pricePerDay: pricingLine?.pricePerDay ?? 0,
+        pricingType: service.pricingType,
       };
     });
 
@@ -284,30 +319,47 @@ export function RequestWorkspace() {
       policies: getEffectivePolicies(service.name, permissionOverrides[service._id]),
     }));
 
+    const selectedPermissions = Object.fromEntries(
+      permissionsPayload.map((entry) => [String(entry.serviceId), entry.policies])
+    );
+
+    const normalizedUsageWindows = enableDailyUsage
+      ? usageWindows.map((window) => ({
+          day_of_week: window.dayOfWeek,
+          window_start_time: window.windowStartTime,
+          window_end_time: window.windowEndTime,
+          timezone: window.timezone || timezone,
+          daily_limit_hours: window.dailyLimitHours ?? null,
+        }))
+      : [];
+
     const payload = {
-      customerEmail: customerEmail.trim(),
-      accountCount,
-      costingMode,
-      startDate,
-      endDate,
-      enableDailyUsage: usageWindows.length > 0,
-      usageWindows,
-      timezone,
-      cleanupEnabled,
-      cleanupIntervalHours: cleanupEnabled ? cleanupIntervalHours : undefined,
-      perUserBudgetUsd,
-      selectedServices: selectedServicesPayload,
+      customer_email: customerEmail.trim(),
+      account_count: accountCount,
+      costing_mode: costingMode,
+      start_date: startDate,
+      end_date: endDate,
+      enable_daily_usage: enableDailyUsage && normalizedUsageWindows.length > 0,
+      usage_windows: normalizedUsageWindows,
+      enable_resource_cleanup: enableResourceCleanup,
+      resource_cleanup_interval_hours: enableResourceCleanup
+        ? resourceCleanupIntervalHours
+        : undefined,
+      per_user_budget_usd: budgetEnabled ? perUserBudgetUsd : undefined,
+      selected_services: selectedServicesPayload,
+      selected_permissions: selectedPermissions,
       permissions: permissionsPayload,
       region,
-      estimatedPrice: estimate?.total ?? 0,
+      estimated_price: estimate?.total ?? 0,
     };
 
     setSubmitting(true);
     try {
       const response = await createRequest(payload);
-      router.push(AWS_ROUTES.requestStatus(String(response.requestId)));
+      const requestId = response.data?.requestId ?? response.requestId;
+      router.push(AWS_ROUTES.requestStatus(String(requestId)));
     } catch (err) {
-      setSubmitError(err?.message || 'Failed to create request.');
+      setSubmitError(`Failed to create request: ${err?.message || 'Unknown error'}`);
     } finally {
       setSubmitting(false);
     }
@@ -368,34 +420,55 @@ export function RequestWorkspace() {
               onStartDateChange={setStartDate}
               endDate={endDate}
               onEndDateChange={setEndDate}
+              durationDays={durationDays}
+              enableDailyUsage={enableDailyUsage}
+              onEnableDailyUsageChange={setEnableDailyUsage}
               usageWindows={usageWindows}
               onUsageWindowsChange={setUsageWindows}
               timezone={timezone}
               onTimezoneChange={setTimezone}
-              cleanupEnabled={cleanupEnabled}
-              onCleanupEnabledChange={setCleanupEnabled}
-              cleanupIntervalHours={cleanupIntervalHours}
-              onCleanupIntervalHoursChange={setCleanupIntervalHours}
+              enableResourceCleanup={enableResourceCleanup}
+              onEnableResourceCleanupChange={setEnableResourceCleanup}
+              resourceCleanupIntervalHours={resourceCleanupIntervalHours}
+              onResourceCleanupIntervalHoursChange={setResourceCleanupIntervalHours}
+              budgetEnabled={budgetEnabled}
+              onBudgetEnabledChange={setBudgetEnabled}
               perUserBudgetUsd={perUserBudgetUsd}
               onPerUserBudgetUsdChange={setPerUserBudgetUsd}
               permissionOverrides={permissionOverrides}
               onPermissionChange={handlePermissionChange}
               validationErrors={validationErrors}
+              availableRegions={availableRegions}
+              regionsLoading={regionsLoading}
+              regionsError={regionsError}
             />
           </div>
 
           <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-            <PricingSummary
-              totalPrice={totalPrice}
-              breakdown={estimate?.breakdown ?? []}
-              duration={durationDays}
-              accountCount={accountCount}
-              loading={estimateLoading}
-              error={estimateError}
-            />
+            {showPricingPanel ? (
+              <PricingSummary
+                totalPrice={totalPrice}
+                breakdown={estimate?.breakdown ?? []}
+                duration={durationDays}
+                accountCount={accountCount}
+                loading={estimateLoading}
+                error={estimateError}
+              />
+            ) : (
+              <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+                <h2 className="text-sm font-semibold text-gray-900">Pricing estimate</h2>
+                <p className="mt-2 text-sm text-gray-400">
+                  Select services and instances in steps 5–6 to see a live estimate.
+                </p>
+              </div>
+            )}
 
             <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-              {submitError && <p className="mb-4 text-sm text-red-600">{submitError}</p>}
+              {submitError && (
+                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {submitError}
+                </div>
+              )}
               <button
                 type="button"
                 onClick={handleSubmit}
@@ -405,14 +478,14 @@ export function RequestWorkspace() {
                 {submitting ? (
                   <>
                     <Loader2 className="h-4 w-4 animate-spin" />
-                    Submitting request…
+                    Creating request…
                   </>
                 ) : (
-                  'Submit request'
+                  'Create request'
                 )}
               </button>
               <p className="mt-3 text-center text-xs text-gray-400">
-                Submits to AWS provisioning pipeline
+                Submits to POST /api/v1/cloud-automation-aws/requests
               </p>
             </div>
           </div>

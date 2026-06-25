@@ -2,6 +2,12 @@ import mongoose from 'mongoose';
 
 const usageWindowSchema = new mongoose.Schema(
   {
+    dayOfWeek: { type: Number, min: 0, max: 6 },
+    windowStartTime: String,
+    windowEndTime: String,
+    timezone: { type: String, default: 'Asia/Kolkata' },
+    dailyLimitHours: { type: Number, default: null },
+    // Legacy fields (Phase 1 wizard)
     day: {
       type: String,
       enum: ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'],
@@ -18,6 +24,7 @@ const selectedServiceSchema = new mongoose.Schema(
     serviceName: String,
     instanceType: String,
     pricePerDay: Number,
+    pricingType: { type: String, enum: ['instance', 'flat_rate'], default: 'instance' },
   },
   { _id: false }
 );
@@ -31,20 +38,57 @@ const permissionSchema = new mongoose.Schema(
   { _id: false }
 );
 
-const identityUserSchema = new mongoose.Schema(
+const provisionStepSchema = new mongoose.Schema(
+  {
+    status: { type: String, default: 'pending' },
+    startedAt: Date,
+    completedAt: Date,
+    error: String,
+    output: mongoose.Schema.Types.Mixed,
+  },
+  { _id: false }
+);
+
+const usageSessionSchema = new mongoose.Schema(
+  {
+    userId: String,
+    username: String,
+    loginAt: { type: Date, required: true },
+    logoutAt: Date,
+  },
+  { _id: true }
+);
+
+const usageUserStateSchema = new mongoose.Schema(
+  {
+    userId: String,
+    username: String,
+    email: String,
+    dailyLimitReached: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+const cleanupLogSchema = new mongoose.Schema(
+  {
+    ranAt: Date,
+    cleanedAt: Date,
+    message: String,
+    results: mongoose.Schema.Types.Mixed,
+  },
+  { _id: false }
+);
+
+const labRoleSchema = new mongoose.Schema(
   {
     userIndex: Number,
-    email: String,
-    username: String,
-    userId: String,
-    temporaryPassword: String,
-    needsActivation: { type: Boolean, default: false },
-    awsAccountId: String,
-    accountCreationRequestId: String,
-    permissionSetArn: String,
-    budgetExceeded: { type: Boolean, default: false },
+    roleName: String,
+    roleArn: String,
     suspended: { type: Boolean, default: false },
+    budgetExceeded: { type: Boolean, default: false },
     currentSpend: { type: Number, default: 0 },
+    lastCleanupAt: { type: Date },
+    cleanupLogs: [cleanupLogSchema],
   },
   { _id: false }
 );
@@ -90,25 +134,35 @@ const requestSchema = new mongoose.Schema(
   {
     customerEmail: { type: String, required: true },
     requestName: String,
-    accountCount: { type: Number, required: true, default: 10 },
+    accountCount: { type: Number, required: true, min: 1, default: 10 },
     costingMode: { type: String, enum: ['shared', 'per_user'], default: 'shared' },
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
+    region: { type: String, required: true },
 
     enableDailyUsage: { type: Boolean, default: false },
     usageWindows: [usageWindowSchema],
     timezone: { type: String, default: 'Asia/Kolkata' },
 
+    enableResourceCleanup: { type: Boolean, default: false },
+    resourceCleanupIntervalHours: { type: Number, min: 1, max: 24 },
+    resourceCleanupNextRunAt: Date,
+    resourceCleanupLastRanAt: Date,
+
     cleanupEnabled: { type: Boolean, default: false },
     cleanupIntervalHours: { type: Number },
+    cleanupNextRunAt: Date,
+    cleanupLogs: [cleanupLogSchema],
 
-    perUserBudgetUsd: { type: Number },
+    perUserBudgetUsd: { type: Number, default: null },
 
     selectedServices: [selectedServiceSchema],
-
     permissions: [permissionSchema],
-
-    region: { type: String, required: true },
+    selectedPermissions: {
+      type: Map,
+      of: [String],
+      default: undefined,
+    },
 
     estimatedPrice: { type: Number, default: 0 },
 
@@ -118,14 +172,31 @@ const requestSchema = new mongoose.Schema(
       default: 'Pending',
     },
 
+    provisionStatus: {
+      overall: {
+        type: String,
+        enum: ['idle', 'running', 'completed', 'failed'],
+        default: 'idle',
+      },
+      steps: {
+        create_account: { type: provisionStepSchema, default: () => ({}) },
+        apply_scp: { type: provisionStepSchema, default: () => ({}) },
+        create_users: { type: provisionStepSchema, default: () => ({}) },
+        assign_permissions: { type: provisionStepSchema, default: () => ({}) },
+        send_credentials: { type: provisionStepSchema, default: () => ({}) },
+      },
+    },
+
+    usageSessions: [usageSessionSchema],
+    usageUserStates: [usageUserStateSchema],
+
     currentStep: { type: Number, default: 0 },
     progress: { type: Number, default: 0 },
 
     awsAccountId: String,
     awsAccountIds: [String],
     accountCreationRequestId: String,
-    permissionSetArns: [String],
-    identityUsers: [identityUserSchema],
+    labRoles: [labRoleSchema],
     provisionedResources: { type: provisionedResourcesSchema, default: () => ({}) },
 
     credentialsSent: { type: Boolean, default: false },

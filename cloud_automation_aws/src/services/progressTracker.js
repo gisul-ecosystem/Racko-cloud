@@ -6,9 +6,9 @@ const STEP_MESSAGES = {
   0: 'Waiting to start provisioning.',
   1: 'Preparing lab account access…',
   2: 'Applying SCP service restrictions…',
-  3: 'Creating IAM Identity Center users…',
-  4: 'Creating permission sets and attaching policies…',
-  5: 'Assigning users to the AWS account…',
+  3: 'Creating IAM lab roles…',
+  4: 'Attaching permissions to lab roles…',
+  5: 'Creating manage portal access…',
   6: 'Sending credentials email…',
 };
 
@@ -111,9 +111,9 @@ export function buildStepStatuses(request) {
   const steps = [
     { key: 'account', label: 'Account', step: 1 },
     { key: 'scp', label: 'SCP', step: 2 },
-    { key: 'users', label: 'Users', step: 3 },
+    { key: 'roles', label: 'Roles', step: 3 },
     { key: 'permissions', label: 'Permissions', step: 4 },
-    { key: 'assignment', label: 'Assignment', step: 5 },
+    { key: 'portal', label: 'Portal', step: 5 },
     { key: 'email', label: 'Email', step: 6 },
   ];
 

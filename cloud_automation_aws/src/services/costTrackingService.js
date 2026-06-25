@@ -66,31 +66,32 @@ export async function syncRequestUserSpend(requestId) {
 
   const results = [];
 
-  for (const user of request.identityUsers || []) {
-    const spend = await fetchUserSpend(user.username, startDate, endDate);
+  for (const role of request.labRoles || []) {
+    const username = `labuser${role.userIndex + 1}`;
+    const spend = await fetchUserSpend(username, startDate, endDate);
 
     await UserSpend.findOneAndUpdate(
-      { requestId, username: user.username, date: today },
+      { requestId, username, date: today },
       {
         requestId,
-        username: user.username,
-        userId: user.userId,
+        username,
+        userId: String(role.userIndex),
         date: today,
         spendUsd: spend.totalSpend,
         services: spend.services,
-        budgetExceeded: Boolean(user.budgetExceeded),
+        budgetExceeded: Boolean(role.budgetExceeded),
         syncedAt: new Date(),
       },
       { upsert: true, new: true }
     );
 
     await Request.findOneAndUpdate(
-      { _id: requestId, 'identityUsers.userId': user.userId },
-      { $set: { 'identityUsers.$.currentSpend': spend.totalSpend } }
+      { _id: requestId, 'labRoles.userIndex': role.userIndex },
+      { $set: { 'labRoles.$.currentSpend': spend.totalSpend } }
     );
 
     results.push({
-      username: user.username,
+      username,
       spendUsd: spend.totalSpend,
       services: spend.services,
     });
@@ -112,15 +113,16 @@ export async function getAllUsersSpend(requestId) {
     spendRecords.map((record) => [record.username, record.toObject()])
   );
 
-  return (request.identityUsers || []).map((user) => {
-    const record = spendByUsername.get(user.username);
+  return (request.labRoles || []).map((role) => {
+    const username = `labuser${role.userIndex + 1}`;
+    const record = spendByUsername.get(username);
     return {
-      username: user.username,
-      userId: user.userId,
-      spendUsd: record?.spendUsd ?? user.currentSpend ?? 0,
+      username,
+      userId: String(role.userIndex),
+      spendUsd: record?.spendUsd ?? role.currentSpend ?? 0,
       services: record?.services ?? [],
-      budgetExceeded: Boolean(user.budgetExceeded),
-      suspended: Boolean(user.suspended),
+      budgetExceeded: Boolean(role.budgetExceeded),
+      suspended: Boolean(role.suspended),
       syncedAt: record?.syncedAt ?? null,
     };
   });
