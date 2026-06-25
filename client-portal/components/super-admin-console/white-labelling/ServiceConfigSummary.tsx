@@ -79,6 +79,26 @@ function VmManagementPricingSummary({ pricing }: { pricing: Record<string, unkno
         <StatRow label="CPU" value={formatInrPerMonth(pricing['cpuRatePerCoreMonthly'], 'core')} />
         <StatRow label="RAM" value={formatInrPerMonth(pricing['ramRatePerGbMonthly'], 'GB')} />
         <StatRow label="Disk" value={formatInrPerMonth(pricing['diskRatePerGbMonthly'], 'GB')} />
+        <StatRow
+          label="Quarterly discount"
+          value={
+            Number(pricing['billingDiscounts'] &&
+              typeof pricing['billingDiscounts'] === 'object' &&
+              (pricing['billingDiscounts'] as Record<string, unknown>)['quarterly']) > 0
+              ? `${Math.round(Number((pricing['billingDiscounts'] as Record<string, unknown>)['quarterly']) * 100)}%`
+              : '—'
+          }
+        />
+        <StatRow
+          label="Yearly discount"
+          value={
+            Number(pricing['billingDiscounts'] &&
+              typeof pricing['billingDiscounts'] === 'object' &&
+              (pricing['billingDiscounts'] as Record<string, unknown>)['yearly']) > 0
+              ? `${Math.round(Number((pricing['billingDiscounts'] as Record<string, unknown>)['yearly']) * 100)}%`
+              : '—'
+          }
+        />
       </dl>
       {fixedPlans.length > 0 ? (
         <div className="mt-3 border-t border-gray-200 pt-3">

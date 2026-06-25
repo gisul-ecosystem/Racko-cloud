@@ -6,10 +6,13 @@ import {
   History,
   LogOut,
   PlusCircle,
+  Server,
+  User,
   Wallet,
 } from 'lucide-react';
 import { useTenantAuth } from '../../context/TenantAuthContext';
 import { useTenantBranding } from '../../context/TenantBrandingContext';
+import { TenantNotificationBell } from './TenantNotificationBell';
 import { tenantAccentSurface } from '../../lib/tenantAccentStyles';
 import type { TenantUserRole } from '../../types/tenantPortal';
 
@@ -25,6 +28,12 @@ const navItems: Array<{
 }> = [
   { href: '/tenant/dashboard/wallet', label: 'Wallet', icon: Wallet },
   {
+    href: '/tenant/dashboard/plans',
+    label: 'VM Plans',
+    icon: Server,
+    roles: ['tenant_admin'],
+  },
+  {
     href: '/tenant/dashboard/orders/new',
     label: 'Place Order',
     icon: PlusCircle,
@@ -34,6 +43,12 @@ const navItems: Array<{
     href: '/tenant/dashboard/orders',
     label: 'Order History',
     icon: History,
+    roles: ['tenant_admin'],
+  },
+  {
+    href: '/tenant/dashboard/profile',
+    label: 'Profile',
+    icon: User,
     roles: ['tenant_admin'],
   },
 ];
@@ -61,14 +76,17 @@ export function TenantShell({ children }: TenantShellProps) {
               <p className="text-xs text-gray-500">{tenantUser?.email}</p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={logout}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50"
-          >
-            <LogOut className="h-4 w-4" />
-            Logout
-          </button>
+          <div className="flex items-center gap-2">
+            <TenantNotificationBell />
+            <button
+              type="button"
+              onClick={logout}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50"
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </button>
+          </div>
         </div>
       </header>
 

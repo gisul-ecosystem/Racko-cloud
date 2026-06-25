@@ -5,14 +5,19 @@ import type {
   BrandingAssetType,
   CreateTenantAdminInput,
   CreateTenantInput,
+  ManualWalletCreditInput,
+  ManualWalletCreditResult,
+  ManualWalletCreditsResult,
   SuperAdminOrder,
   SuperAdminOrderStatus,
   SuperAdminOverview,
+  SuperAdminWalletTransactionsResult,
   Tenant,
   TenantAdmin,
   TenantServiceConfig,
   TenantsListResult,
   TenantStatus,
+  TenantWalletBalance,
   UpdateServiceConfigInput,
   UpdateTenantInput,
   VmManagementPlatformTemplates,
@@ -235,6 +240,67 @@ export async function rejectSuperAdminOrder(
     apiRequest<ApiEnvelope<SuperAdminOrder>>(
       `/api/v1/super-admin/orders/${orderId}/reject`,
       { method: 'PATCH', body: JSON.stringify({ reason }) }
+    )
+  );
+}
+
+export async function fetchTenantWalletBalance(tenantId: string): Promise<TenantWalletBalance> {
+  return unwrap(
+    apiRequest<ApiEnvelope<TenantWalletBalance>>(
+      `/api/v1/super-admin/tenants/${tenantId}/wallet`
+    )
+  );
+}
+
+export async function fetchTenantWalletTransactions(
+  tenantId: string,
+  page = 1,
+  limit = 20
+): Promise<SuperAdminWalletTransactionsResult> {
+  const qs = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  return unwrap(
+    apiRequest<ApiEnvelope<SuperAdminWalletTransactionsResult>>(
+      `/api/v1/super-admin/tenants/${tenantId}/wallet/transactions?${qs}`
+    )
+  );
+}
+
+export async function fetchTenantManualCredits(
+  tenantId: string,
+  page = 1,
+  limit = 20
+): Promise<ManualWalletCreditsResult> {
+  const qs = new URLSearchParams({
+    page: String(page),
+    limit: String(limit),
+  });
+  return unwrap(
+    apiRequest<ApiEnvelope<ManualWalletCreditsResult>>(
+      `/api/v1/super-admin/tenants/${tenantId}/wallet/manual-credits?${qs}`
+    )
+  );
+}
+
+export async function manualCreditTenantWallet(
+  tenantId: string,
+  input: ManualWalletCreditInput,
+  idempotencyKey?: string
+): Promise<ManualWalletCreditResult> {
+  const headers: Record<string, string> = {};
+  if (idempotencyKey) {
+    headers['Idempotency-Key'] = idempotencyKey;
+  }
+  return unwrap(
+    apiRequest<ApiEnvelope<ManualWalletCreditResult>>(
+      `/api/v1/super-admin/tenants/${tenantId}/wallet/manual-credit`,
+      {
+        method: 'POST',
+        body: JSON.stringify(input),
+        headers,
+      }
     )
   );
 }

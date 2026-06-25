@@ -11,6 +11,7 @@ import {
   rejectSuperAdminOrder,
 } from '@/lib/tenantApi';
 import type { SuperAdminOrder, Tenant } from '@/lib/tenantTypes';
+import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
@@ -32,7 +33,9 @@ export default function SuperAdminOrdersPage() {
   const [tenants, setTenants] = useState<Record<string, Tenant>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [statusFilter, setStatusFilter] = useState<'pending_approval' | 'all'>('pending_approval');
+  const [statusFilter, setStatusFilter] = useState<
+    'pending_approval' | 'provisioning' | 'all'
+  >('pending_approval');
   const [actionId, setActionId] = useState<string | null>(null);
   const [rejectId, setRejectId] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
@@ -44,7 +47,9 @@ export default function SuperAdminOrdersPage() {
     try {
       const [orderList, tenantList] = await Promise.all([
         fetchSuperAdminOrders(
-          statusFilter === 'pending_approval' ? 'pending_approval' : undefined
+          statusFilter === 'all'
+            ? undefined
+            : statusFilter
         ),
         fetchTenants({ limit: 200 }),
       ]);
@@ -104,7 +109,7 @@ export default function SuperAdminOrdersPage() {
   const displayed =
     statusFilter === 'all'
       ? orders
-      : orders.filter((o) => o.status === 'pending_approval');
+      : orders.filter((o) => o.status === statusFilter);
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-6">
@@ -118,10 +123,13 @@ export default function SuperAdminOrdersPage() {
         <div className="flex items-center gap-2">
           <select
             value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value as 'pending_approval' | 'all')}
+            onChange={(e) =>
+              setStatusFilter(e.target.value as 'pending_approval' | 'provisioning' | 'all')
+            }
             className="rounded-lg border border-gray-200 px-3 py-2 text-sm"
           >
             <option value="pending_approval">Pending approval</option>
+            <option value="provisioning">Provisioning</option>
             <option value="all">All orders</option>
           </select>
           <button
@@ -147,7 +155,7 @@ export default function SuperAdminOrdersPage() {
         <ErrorState title="Orders unavailable" message={error} onRetry={() => void load()} />
       ) : displayed.length === 0 ? (
         <p className="rounded-xl border border-gray-200 bg-white px-6 py-12 text-center text-sm text-gray-500">
-          No orders{statusFilter === 'pending_approval' ? ' pending approval' : ''}.
+          No orders{statusFilter !== 'all' ? ` (${statusFilter.replace('_', ' ')})` : ''}.
         </p>
       ) : (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -159,6 +167,7 @@ export default function SuperAdminOrdersPage() {
                   <th className="px-4 py-3">Template</th>
                   <th className="px-4 py-3">Specs</th>
                   <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Billing</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Actions</th>
                 </tr>
@@ -193,6 +202,9 @@ export default function SuperAdminOrdersPage() {
                       </td>
                       <td className="px-4 py-3 font-medium text-gray-900">
                         {formatMoney(order.calculatedAmount)}
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {formatBillingPeriod(order.billingPeriod ?? 'monthly')}
                       </td>
                       <td className="px-4 py-3">
                         <OrderStatusBadge status={order.status} />

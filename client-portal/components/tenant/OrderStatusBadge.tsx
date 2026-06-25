@@ -21,6 +21,11 @@ const statusConfig: Record<
     dot: 'bg-green-500',
     badge: 'bg-green-100 text-green-700 border-green-200',
   },
+  provisioning: {
+    label: 'Provisioning',
+    dot: 'bg-purple-500',
+    badge: 'bg-purple-100 text-purple-700 border-purple-200',
+  },
   rejected: {
     label: 'Rejected',
     dot: 'bg-red-500',

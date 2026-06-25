@@ -3,20 +3,12 @@
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { Bell, CheckCircle2, AlertCircle, Info, Loader2 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
-import { useNotifications } from '../../hooks/useNotifications';
-import type { AppNotification, NotificationSeverity } from '../../lib/notificationApi';
-
-const severityStyles: Record<
-  NotificationSeverity,
-  { icon: React.ReactNode; dot: string }
-> = {
-  info: { icon: <Info className="h-4 w-4" />, dot: 'bg-blue-500' },
-  success: { icon: <CheckCircle2 className="h-4 w-4" />, dot: 'bg-green-500' },
-  warning: { icon: <AlertCircle className="h-4 w-4" />, dot: 'bg-yellow-500' },
-  error: { icon: <AlertCircle className="h-4 w-4" />, dot: 'bg-red-500' },
-};
+import { AlertCircle, Bell, Info, Loader2 } from 'lucide-react';
+import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantNotifications } from '@/hooks/useTenantNotifications';
+import { tenantAccentButton } from '@/lib/tenantAccentStyles';
+import type { TenantNotification } from '@/types/tenantPortal';
 
 function formatRelativeTime(value: string) {
   const diffMs = Date.now() - new Date(value).getTime();
@@ -25,28 +17,34 @@ function formatRelativeTime(value: string) {
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
   if (hours < 24) return `${hours}h ago`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function notificationHref(notification: TenantNotification): string | null {
+  if (notification.type === 'vm_plan_expiring_soon' && notification.metadata?.vmId) {
+    return `/tenant/dashboard/plans/${notification.metadata.vmId}`;
+  }
+  return null;
 }
 
 function NotificationItem({
   notification,
   onOpen,
 }: {
-  notification: AppNotification;
-  onOpen: (notification: AppNotification) => void;
+  notification: TenantNotification;
+  onOpen: (notification: TenantNotification) => void;
 }) {
-  const style = severityStyles[notification.severity];
+  const Icon = notification.severity === 'warning' ? AlertCircle : Info;
 
   return (
     <button
       type="button"
       onClick={() => onOpen(notification)}
       className={`flex w-full gap-3 px-4 py-3 text-left transition hover:bg-gray-50 ${
-        notification.read ? 'opacity-80' : 'bg-red-50/30'
+        notification.read ? 'opacity-80' : 'bg-amber-50/40'
       }`}
     >
-      <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${style.dot}`} />
+      <Icon className="mt-0.5 h-4 w-4 shrink-0 text-gray-500" />
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium text-gray-900">{notification.title}</span>
         <span className="mt-0.5 block text-xs text-gray-500">{notification.message}</span>
@@ -55,17 +53,21 @@ function NotificationItem({
         </span>
       </span>
       {!notification.read && (
-        <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-[#B91C1C]" />
+        <span className="mt-1 h-2 w-2 shrink-0 rounded-full bg-amber-500" />
       )}
     </button>
   );
 }
 
-export function NotificationBell() {
-  const { isAuthenticated } = useAuth();
+export function TenantNotificationBell() {
+  const { isAuthenticated, tenantUser } = useTenantAuth();
+  const { accentColor } = useTenantBranding();
   const router = useRouter();
-  const { notifications, unreadCount, loading, error, markRead, markAllRead } =
-    useNotifications(isAuthenticated);
+  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { notifications, unreadCount, loading, error, markRead } = useTenantNotifications(
+    isAuthenticated,
+    isAdmin
+  );
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -73,11 +75,8 @@ export function NotificationBell() {
     if (!open) return;
 
     function handleClickOutside(event: MouseEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
+      if (!containerRef.current?.contains(event.target as Node)) setOpen(false);
     }
-
     function handleEscape(event: KeyboardEvent) {
       if (event.key === 'Escape') setOpen(false);
     }
@@ -90,33 +89,19 @@ export function NotificationBell() {
     };
   }, [open]);
 
-  async function handleOpenNotification(notification: AppNotification) {
+  if (!isAdmin) return null;
+
+  async function handleOpenNotification(notification: TenantNotification) {
     if (!notification.read) {
       try {
-        await markRead(notification._id);
+        await markRead(notification.id);
       } catch {
-        // Navigation still proceeds if mark-read fails
+        // continue navigation
       }
     }
-
     setOpen(false);
-
-    if (notification.actionUrl) {
-      router.push(notification.actionUrl);
-      return;
-    }
-
-    if (notification.type === 'vm_plan_expired') {
-      const tenantId = notification.metadata?.tenantId;
-      if (typeof tenantId === 'string' && tenantId) {
-        router.push(`/super-admin-console/white-labelling/tenants/${tenantId}`);
-        return;
-      }
-    }
-
-    if (notification.type === 'tenant_order') {
-      router.push('/super-admin-console/white-labelling/orders');
-    }
+    const href = notificationHref(notification);
+    if (href) router.push(href);
   }
 
   return (
@@ -126,11 +111,14 @@ export function NotificationBell() {
         aria-label="Notifications"
         aria-expanded={open}
         onClick={() => setOpen((prev) => !prev)}
-        className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
+        className="relative inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-50"
       >
-        <Bell className="h-5 w-5" />
+        <Bell className="h-4 w-4" />
         {unreadCount > 0 && (
-          <span className="absolute right-1 top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#B91C1C] px-1 text-[10px] font-bold text-white">
+          <span
+            className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-bold text-white"
+            style={tenantAccentButton(accentColor)}
+          >
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -138,24 +126,15 @@ export function NotificationBell() {
 
       {open && (
         <div className="absolute right-0 z-50 mt-2 w-80 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-lg sm:w-96">
-          <div className="flex items-center justify-between border-b border-gray-100 px-4 py-3">
+          <div className="border-b border-gray-100 px-4 py-3">
             <p className="text-sm font-semibold text-gray-900">Notifications</p>
-            {unreadCount > 0 && (
-              <button
-                type="button"
-                onClick={() => void markAllRead()}
-                className="text-xs font-medium text-[#B91C1C] hover:text-[#DC2626]"
-              >
-                Mark all read
-              </button>
-            )}
           </div>
 
           <div className="max-h-96 overflow-y-auto">
             {loading && notifications.length === 0 ? (
               <div className="flex items-center justify-center gap-2 px-4 py-10 text-sm text-gray-500">
                 <Loader2 className="h-4 w-4 animate-spin" />
-                Loading...
+                Loading…
               </div>
             ) : error ? (
               <div className="px-4 py-10 text-center text-sm text-red-600">{error}</div>
@@ -163,9 +142,9 @@ export function NotificationBell() {
               <div className="px-4 py-10 text-center text-sm text-gray-500">No notifications yet</div>
             ) : (
               <div className="divide-y divide-gray-100">
-                {notifications.map((notification) => (
+                {notifications.slice(0, 8).map((notification) => (
                   <NotificationItem
-                    key={notification._id}
+                    key={notification.id}
                     notification={notification}
                     onOpen={handleOpenNotification}
                   />
@@ -176,11 +155,11 @@ export function NotificationBell() {
 
           <div className="border-t border-gray-100 px-4 py-2.5">
             <Link
-              href="/dashboard/admin/jobs"
+              href="/tenant/dashboard/notifications"
               onClick={() => setOpen(false)}
-              className="text-xs font-medium text-gray-500 hover:text-[#B91C1C]"
+              className="text-xs font-medium text-gray-600 hover:text-gray-900"
             >
-              View all jobs
+              View all notifications
             </Link>
           </div>
         </div>
