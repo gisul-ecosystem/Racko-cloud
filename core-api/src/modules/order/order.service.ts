@@ -563,7 +563,7 @@ export class OrderService {
       order.tenantId.toString(),
       order.calculatedAmount,
       'order_refund',
-      order._id.toString()
+      { relatedOrderId: order._id.toString(), source: 'system' }
     );
 
     order.status = 'rejected';
