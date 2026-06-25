@@ -153,6 +153,66 @@ export type SuperAdminOrderStatus =
   | 'rejected'
   | 'fulfilled';
 
+export type ManualWalletPaymentMethod = 'upi' | 'bank_transfer' | 'cash' | 'other';
+
+export interface TenantWalletBalance {
+  balance: number;
+  currency: string;
+}
+
+export interface SuperAdminWalletTransaction {
+  id: string;
+  type: string;
+  amount: number;
+  reason: string;
+  source?: string;
+  externalReference?: string | null;
+  relatedOrderId: string | null;
+  relatedVmId?: string | null;
+  balanceAfter: number;
+  createdAt: string;
+}
+
+export interface SuperAdminWalletTransactionsResult {
+  transactions: SuperAdminWalletTransaction[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface ManualWalletCredit {
+  id: string;
+  tenantId: string;
+  amount: number;
+  currency: string;
+  paymentMethod: ManualWalletPaymentMethod;
+  paymentReference: string;
+  internalNote: string | null;
+  creditedBy: string;
+  walletTransactionId: string;
+  createdAt: string;
+}
+
+export interface ManualWalletCreditsResult {
+  credits: ManualWalletCredit[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export interface ManualWalletCreditInput {
+  amount: number;
+  paymentReference: string;
+  paymentMethod: ManualWalletPaymentMethod;
+  internalNote?: string;
+}
+
+export interface ManualWalletCreditResult {
+  credit: ManualWalletCredit;
+  wallet: TenantWalletBalance;
+  idempotentReplay: boolean;
+}
+
 export interface SuperAdminOrder {
   id: string;
   tenantId: string;

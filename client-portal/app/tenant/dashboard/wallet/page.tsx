@@ -14,6 +14,7 @@ import {
 } from '@/lib/tenantPortalApi';
 import { tenantAccentButton, tenantAccentSurface } from '@/lib/tenantAccentStyles';
 import { ApiError } from '@/lib/apiClient';
+import { formatWalletTransactionReason } from '@/lib/walletTransactionLabels';
 import type { TenantWallet, TenantWalletTransaction } from '@/types/tenantPortal';
 
 declare global {
@@ -251,7 +252,9 @@ export default function TenantWalletPage() {
                       <td className="px-4 py-3 font-medium text-gray-900">
                         {wallet ? formatMoney(tx.amount, wallet.currency) : tx.amount}
                       </td>
-                      <td className="px-4 py-3 text-gray-600">{tx.reason}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {formatWalletTransactionReason(tx.reason)}
+                      </td>
                       <td className="px-4 py-3 text-gray-600">
                         {wallet ? formatMoney(tx.balanceAfter, wallet.currency) : tx.balanceAfter}
                       </td>

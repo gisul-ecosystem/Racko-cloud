@@ -3,19 +3,16 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { StatCardSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { useTenantAuth } from '@/context/TenantAuthContext';
-import { useTenantBranding } from '@/context/TenantBrandingContext';
 import {
-  completeTenantOrderPayment,
   getTenantWallet,
   listTenantOrders,
   listTenantPlans,
 } from '@/lib/tenantPortalApi';
-import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ApiError } from '@/lib/apiClient';
 import type { TenantOrder, TenantPlan } from '@/types/tenantPortal';
@@ -36,7 +33,6 @@ export default function TenantOrderDetailPage() {
   const params = useParams();
   const orderId = params.id as string;
   const { tenantUser } = useTenantAuth();
-  const { accentColor } = useTenantBranding();
   const router = useRouter();
 
   const [order, setOrder] = useState<TenantOrder | null>(null);
@@ -44,8 +40,6 @@ export default function TenantOrderDetailPage() {
   const [balance, setBalance] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [completing, setCompleting] = useState(false);
-  const [completeError, setCompleteError] = useState<string | null>(null);
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
@@ -87,26 +81,6 @@ export default function TenantOrderDetailPage() {
     [plans, orderId]
   );
 
-  async function handleCompletePayment() {
-    if (!order) return;
-    setCompleting(true);
-    setCompleteError(null);
-    try {
-      const updated = await completeTenantOrderPayment(order.id);
-      setOrder(updated);
-    } catch (err) {
-      if (err instanceof ApiError && err.status === 404) {
-        setCompleteError(
-          'Payment completion is not available yet. After topping up your wallet, place the order again or contact support.'
-        );
-      } else {
-        setCompleteError(err instanceof ApiError ? err.message : 'Could not complete payment.');
-      }
-    } finally {
-      setCompleting(false);
-    }
-  }
-
   if (tenantUser?.role !== 'tenant_admin') return null;
 
   if (loading) {
@@ -127,11 +101,6 @@ export default function TenantOrderDetailPage() {
       />
     );
   }
-
-  const canCompletePayment =
-    order.status === 'pending_payment' &&
-    balance !== null &&
-    balance >= order.calculatedAmount;
 
   return (
     <div className="space-y-6">
@@ -207,27 +176,14 @@ export default function TenantOrderDetailPage() {
                 {balance < order.calculatedAmount ? ' (insufficient)' : ''}
               </p>
             )}
-            <div className="mt-3 flex flex-wrap gap-2">
+            <div className="mt-3">
               <Link
                 href="/tenant/dashboard/wallet"
                 className="inline-flex rounded-lg border border-orange-300 bg-white px-3 py-1.5 text-xs font-medium text-orange-900 hover:bg-orange-50"
               >
                 Add funds
               </Link>
-              {canCompletePayment && (
-                <button
-                  type="button"
-                  disabled={completing}
-                  onClick={() => void handleCompletePayment()}
-                  className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-semibold text-white hover:opacity-90 disabled:opacity-50"
-                  style={tenantAccentButton(accentColor)}
-                >
-                  {completing ? <Loader2 className="h-3 w-3 animate-spin" /> : null}
-                  Complete order
-                </button>
-              )}
             </div>
-            {completeError && <p className="mt-2 text-xs text-red-700">{completeError}</p>}
           </div>
         )}
 

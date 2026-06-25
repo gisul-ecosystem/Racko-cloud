@@ -20,6 +20,7 @@ import {
   Trash2,
   UserPlus,
   Users,
+  Wallet,
   X,
 } from 'lucide-react';
 import { ApiError } from '../../../../../lib/apiClient';
@@ -53,8 +54,9 @@ import { WhiteLabellingEmptyState } from '../../../../../components/super-admin-
 import { VmManagementConfigPanel } from '../../../../../components/super-admin-console/white-labelling/VmManagementConfigPanel';
 import { ServiceConfigSummary } from '../../../../../components/super-admin-console/white-labelling/ServiceConfigSummary';
 import { BrandingUploadSection } from '../../../../../components/super-admin-console/white-labelling/BrandingUploadSection';
+import { TenantWalletPanel } from '../../../../../components/super-admin-console/white-labelling/TenantWalletPanel';
 
-type Tab = 'general' | 'services' | 'admins' | 'orders';
+type Tab = 'general' | 'services' | 'wallet' | 'orders' | 'admins';
 
 const DEFAULT_VM_LIMITS: VmManagementLimits = {
   maxVms: 50,
@@ -308,6 +310,7 @@ export default function TenantDetailPage() {
   const tabs: Array<{ id: Tab; label: string; icon: typeof Settings }> = [
     { id: 'general', label: 'General & Branding', icon: Settings },
     { id: 'services', label: 'Services', icon: Shield },
+    { id: 'wallet', label: 'Wallet', icon: Wallet },
     { id: 'orders', label: 'Orders', icon: MonitorCheck },
     { id: 'admins', label: 'Tenant Admins', icon: Users },
   ];
@@ -634,6 +637,10 @@ export default function TenantDetailPage() {
             </div>
           )}
         </div>
+      )}
+
+      {tab === 'wallet' && (
+        <TenantWalletPanel tenantId={tenantId} onFlash={flash} onFlashErr={flashErr} />
       )}
 
       {tab === 'orders' && (
