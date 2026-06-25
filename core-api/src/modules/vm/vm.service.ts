@@ -27,6 +27,7 @@ import { processBulkCreation } from './helpers/bulkProcessor';
 import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
 import { processVmClone } from './helpers/cloneProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
+import { releaseIP } from './ipAllocator.service';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
@@ -128,7 +129,7 @@ interface ConsolePollOptions {
 }
 
 async function startIpPolling(
-  vm: Pick<IVM, '_id' | 'node' | 'vmid'>,
+  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress'>,
   trigger = 'unknown',
   options: ConsolePollOptions = {}
 ): Promise<void> {
@@ -182,7 +183,7 @@ async function startIpPolling(
           }
         }
         const match = iface['ip-addresses']?.find(
-          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'].startsWith('10.100.')
+          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'] === vm.ipAddress
         );
         if (match) {
           foundIp = match['ip-address'];
@@ -218,7 +219,7 @@ async function startIpPolling(
         return;
       }
 
-      logger.warn('[VMConsolePoll] Guest agent responded but no 10.100.* IP yet', {
+      logger.warn('[VMConsolePoll] Guest agent responded but assigned IP not seen yet', {
         vmId: vmObjectId.toString(),
         vmid,
         node,
@@ -861,6 +862,17 @@ export class VMService {
     vm.deletedAt = new Date();
     vm.lastError = undefined;
     await vm.save();
+
+    // Release the public IP back to the pool
+    try {
+      await releaseIP(vm._id.toString());
+    } catch (releaseErr) {
+      logger.warn('[VMDelete] Failed to release public IP — continuing', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+      });
+    }
 
     await VMEvent.create({
       vmId: vm._id,
@@ -1813,7 +1825,7 @@ export class VMService {
       for (const iface of interfaces) {
         if (iface.name === 'lo') continue;
         const ipv4 = iface['ip-addresses']?.find(
-          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'].startsWith('10.100.')
+          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'] === vm.ipAddress
         );
         if (ipv4) {
           ipAddress = ipv4['ip-address'];

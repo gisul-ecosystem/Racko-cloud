@@ -85,6 +85,49 @@ export function summarizeDiskPlacement(diag: SourceVmDiagnostics): Record<string
   return summary;
 }
 
+/**
+ * Resolve the correct storage pool to use for cloning a template.
+ *
+ * Rules (in priority order):
+ * 1. If shared storage (Ceph/NFS) exists on the node → use it (enables live-migration later)
+ * 2. Otherwise → use the exact storage the template's scsi0 disk lives on
+ * 3. Fallback → undefined (let Proxmox decide, only for linked clones where storage param is not sent)
+ *
+ * For linked clones, always pass undefined — Proxmox enforces same storage automatically.
+ */
+export async function resolveCloneStorage(
+  node: string,
+  templateScsi0: string | undefined,
+  cloneType: 'dedicated_storage' | 'dynamic_storage'
+): Promise<string | undefined> {
+  // Linked clones: never send a storage param — Proxmox enforces template storage
+  if (cloneType === 'dynamic_storage') return undefined;
+
+  // Fetch node storage list
+  const res = await proxmoxClient.get<{
+    data: Array<{ storage: string; avail: number; active: number; enabled: number; content: string; shared?: number }>;
+  }>(`/nodes/${node}/storage`);
+
+  const eligible = res.data.data.filter(
+    (s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images')
+  );
+
+  // Prefer shared storage (Ceph/NFS) — supports live-migration
+  const shared = eligible.filter((s) => s.shared === 1).sort((a, b) => b.avail - a.avail);
+  if (shared.length > 0) return shared[0]!.storage;
+
+  // No shared storage — use the exact storage the template disk is on
+  const templateStorage = parseDiskStorage(templateScsi0);
+  if (templateStorage) {
+    const templatePoolExists = eligible.some((s) => s.storage === templateStorage);
+    if (templatePoolExists) return templateStorage;
+  }
+
+  // Last fallback: local pool with most free space
+  const local = eligible.sort((a, b) => b.avail - a.avail);
+  return local[0]?.storage;
+}
+
 export function bulkCloneDiagLog(
   message: string,
   meta: Record<string, unknown> = {}
