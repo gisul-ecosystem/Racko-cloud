@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Clock,
   Globe,
+  History,
   Loader2,
   PieChart,
   Plus,
@@ -159,6 +160,16 @@ export default function WhiteLabellingOverviewPage() {
               <span className="flex items-center gap-2.5">
                 <Plus className="h-4 w-4 text-gray-400" />
                 Create new tenant
+              </span>
+              <ChevronRight className="h-4 w-4 text-gray-400" />
+            </Link>
+            <Link
+              href="/super-admin-console/white-labelling/orders"
+              className="flex items-center justify-between rounded-lg border border-gray-100 px-4 py-3 text-sm text-gray-700 transition hover:border-[#B91C1C] hover:bg-red-50"
+            >
+              <span className="flex items-center gap-2.5">
+                <History className="h-4 w-4 text-gray-400" />
+                Review tenant orders
               </span>
               <ChevronRight className="h-4 w-4 text-gray-400" />
             </Link>

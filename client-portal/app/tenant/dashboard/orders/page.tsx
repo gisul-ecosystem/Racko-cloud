@@ -11,6 +11,7 @@ import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { listTenantOrders } from '@/lib/tenantPortalApi';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
+import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ApiError } from '@/lib/apiClient';
 import type { TenantOrder } from '@/types/tenantPortal';
 
@@ -64,7 +65,7 @@ export default function TenantOrderHistoryPage() {
   }
 
   if (loading) {
-    return <TableSkeleton rows={5} cols={6} />;
+    return <TableSkeleton rows={5} cols={7} />;
   }
 
   if (error) {
@@ -97,16 +98,22 @@ export default function TenantOrderHistoryPage() {
                   <th className="px-4 py-3">Specs</th>
                   <th className="px-4 py-3">Count</th>
                   <th className="px-4 py-3">Amount</th>
+                  <th className="px-4 py-3">Billing</th>
                   <th className="px-4 py-3">Status</th>
                   <th className="px-4 py-3">Created</th>
                 </tr>
               </thead>
               <tbody>
                 {orders.map((order) => (
-                  <tr key={order.id} className="border-b border-gray-50 align-top">
+                  <tr
+                    key={order.id}
+                    onClick={() => router.push(`/tenant/dashboard/orders/${order.id}`)}
+                    className="cursor-pointer border-b border-gray-50 align-top transition hover:bg-gray-50/80"
+                  >
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{order.templateName}</p>
-                      {order.status === 'fulfilled' && order.provisionJobId ? (
+                      {(order.status === 'fulfilled' || order.status === 'provisioning') &&
+                      order.provisionJobId ? (
                         <p className="mt-1 font-mono text-xs text-green-700">
                           Job: {order.provisionJobId}
                         </p>
@@ -127,6 +134,9 @@ export default function TenantOrderHistoryPage() {
                     <td className="px-4 py-3 text-gray-700">{order.count}</td>
                     <td className="px-4 py-3 font-medium text-gray-900">
                       {formatMoney(order.calculatedAmount)}
+                    </td>
+                    <td className="px-4 py-3 text-gray-600">
+                      {formatBillingPeriod(order.billingPeriod ?? 'monthly')}
                     </td>
                     <td className="px-4 py-3">
                       <OrderStatusBadge status={order.status} />

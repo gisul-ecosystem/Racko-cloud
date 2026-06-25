@@ -166,6 +166,9 @@ function TenantsListContent() {
           ))}
         </select>
         </div>
+        <p className="w-full text-xs text-gray-400">
+          Search filters the current page only. Server-side search is not available yet.
+        </p>
       </div>
 
       {loading && tenants.length === 0 ? (

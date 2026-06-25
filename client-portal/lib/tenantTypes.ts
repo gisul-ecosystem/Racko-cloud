@@ -66,6 +66,10 @@ export interface VmManagementPricing {
   cpuRatePerCoreMonthly: number;
   ramRatePerGbMonthly: number;
   diskRatePerGbMonthly: number;
+  billingDiscounts?: {
+    quarterly: number;
+    yearly: number;
+  };
   fixedPlans?: Array<{
     name: string;
     cpuCores: number;
@@ -139,10 +143,13 @@ export interface VmManagementPlatformTemplates {
   templates: PlatformTemplateOption[];
 }
 
+export type BillingPeriod = 'monthly' | 'quarterly' | 'yearly';
+
 export type SuperAdminOrderStatus =
   | 'pending_payment'
   | 'pending_approval'
   | 'approved'
+  | 'provisioning'
   | 'rejected'
   | 'fulfilled';
 
@@ -159,6 +166,7 @@ export interface SuperAdminOrder {
   };
   calculatedAmount: number;
   status: SuperAdminOrderStatus;
+  billingPeriod?: BillingPeriod;
   createdBy: string;
   approvedBy: string | null;
   rejectedBy: string | null;
