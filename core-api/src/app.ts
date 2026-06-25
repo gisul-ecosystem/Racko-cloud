@@ -37,6 +37,8 @@ import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconc
 import { startVmAutomationScheduler } from './modules/vmAutomation/vmAutomationScheduler';
 import tenantPlanRoutes from './modules/tenantPlan/tenantPlan.routes';
 import tenantNotificationRoutes from './modules/tenantNotification/tenantNotification.routes';
+import tenantUserRoutes from './modules/tenantUser/tenantUser.routes';
+import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 
@@ -144,6 +146,8 @@ app.use('/api/v1/tenant-wallet', walletRoutes);
 app.use('/api/v1/tenant-orders', orderRoutes);
 app.use('/api/v1/tenant-plans', tenantPlanRoutes);
 app.use('/api/v1/tenant-notifications', tenantNotificationRoutes);
+app.use('/api/v1/tenant-users', tenantUserRoutes);
+app.use('/api/v1/tenant-vms', tenantVmRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
