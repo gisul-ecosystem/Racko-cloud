@@ -45,6 +45,30 @@ function rewriteCloudAutomationAwsPath(path: string): string {
   return `/api${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
 }
 
+function rewriteAwsManagePortalPath(path: string): string {
+  const managePrefix = `${GATEWAY_PREFIX}/manage`;
+  const suffix = path.startsWith(managePrefix)
+    ? path.slice(managePrefix.length) || '/'
+    : path;
+  return `/api/manage${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
+const awsManagePortalProxy = createProxyMiddleware({
+  target: config.CLOUD_AUTOMATION_AWS_URL,
+  changeOrigin: true,
+  timeout: config.REQUEST_TIMEOUT_MS,
+  pathRewrite: rewriteAwsManagePortalPath,
+  on: {
+    error: (_err, _req, res) => {
+      (res as Response).status(502).json({
+        success: false,
+        message: 'AWS manage portal service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
+  },
+});
+
 const cloudAutomationAwsProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
@@ -60,6 +84,9 @@ const cloudAutomationAwsProxy = createProxyMiddleware({
     },
   },
 });
+
+/** Public AWS manage-users portal (token/JWT auth enforced by cloud_automation_aws). */
+router.use(`${GATEWAY_PREFIX}/manage`, awsManagePortalProxy);
 
 router.use(
   GATEWAY_PREFIX,

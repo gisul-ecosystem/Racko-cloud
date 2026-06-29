@@ -1,25 +1,13 @@
-import Request from '../../models/Request.js';
-import { resolveLabAccount } from './accountProvisioner.js';
-import { assignUsersToAccount, rollbackAssignments } from './accountAssignmentProvisioner.js';
-import { sendCredentialsEmail } from './emailProvisioner.js';
+import { createLabRoles, rollbackLabRoles } from './iamRoleProvisioner.js';
 import {
-  createIdentityCenterUser,
-  createIdentityCenterUsers,
+  provisionIdentityUsers,
   rollbackIdentityUsers,
 } from './identityProvisioner.js';
-import {
-  createPermissionSet,
-  createPermissionSets,
-  rollbackPermissionSets,
-} from './permissionSetProvisioner.js';
-import {
-  applyScpRestrictions,
-  isScpStepComplete,
-  rollbackScpResources,
-} from './scpProvisioner.js';
-import { deriveRequestAccountName } from '../../config/scpPolicies.js';
-import { initializeIdentityCenter } from '../../config/ssoConfig.js';
-import { isPerUserCosting } from '../../utils/costingMode.js';
+import { createManagePortalSession } from '../../services/managePortalService.js';
+import { sendCredentialsEmail } from './emailProvisioner.js';
+import { resolveLabAccount } from './accountProvisioner.js';
+import { applyScpRestrictions, isScpStepComplete, rollbackScpResources } from './scpProvisioner.js';
+import Request from '../../models/Request.js';
 import {
   complete,
   fail,
@@ -28,6 +16,32 @@ import {
   logStepStart,
   updateStep,
 } from '../../services/progressTracker.js';
+
+function mapIdentityUsersForStorage(users = []) {
+  return users.map((user) => ({
+    userIndex: user.userIndex,
+    username: user.username,
+    email: user.email,
+    userId: user.userId,
+    password: user.password,
+    accountId: user.accountId || user.awsAccountId,
+    awsAccountId: user.awsAccountId || user.accountId,
+    consoleUrl: user.consoleUrl,
+    needsActivation: user.needsActivation ?? false,
+    policies: user.policies || [],
+    suspended: user.suspended ?? false,
+    budgetExceeded: user.budgetExceeded ?? false,
+    currentSpend: user.currentSpend ?? 0,
+  }));
+}
+
+function buildLabAccounts(request, awsAccountId) {
+  const ids = request.awsAccountIds?.length ? request.awsAccountIds : [awsAccountId];
+  return ids.filter(Boolean).map((accountId, index) => ({
+    accountId,
+    accountName: `lab-${index + 1}`,
+  }));
+}
 
 async function runStep(requestId, stepKey, stepName, stepNumber, handler) {
   const log = await logStepStart(requestId, stepNumber, stepName);
@@ -42,39 +56,34 @@ async function runStep(requestId, stepKey, stepName, stepNumber, handler) {
   }
 }
 
-function getPermissionSetArnsForRollback(request) {
-  const arns = new Set(request.permissionSetArns || []);
+async function rollbackAll(request, context, isMagicLink) {
+  try {
+    if (!isMagicLink) {
+      if (context.identityUsers?.length) {
+        await rollbackIdentityUsers({
+          identityUsers: context.identityUsers,
+          awsAccountId: context.awsAccountId,
+        });
+      }
+    } else if (context.labRoles?.length) {
+      await rollbackLabRoles(context.labRoles);
+    }
 
-  for (const account of request.provisionedResources?.accounts || []) {
-    if (account.permissionSetArn) arns.add(account.permissionSetArn);
+    if (context.scpResult && !context.scpResult.skipped) {
+      await rollbackScpResources(context.scpResult);
+    }
+  } catch (err) {
+    console.error('[orchestrator] Rollback error:', err.message);
   }
-
-  for (const user of request.identityUsers || []) {
-    if (user.permissionSetArn) arns.add(user.permissionSetArn);
-  }
-
-  return [...arns];
-}
-
-async function rollbackProvisionedResources(request) {
-  const assignments = (request.provisionedResources?.assignments || []).map((entry) => ({
-    ...entry,
-    targetAccountId: entry.targetAccountId || request.awsAccountId,
-  }));
-
-  await rollbackAssignments(assignments);
-  await rollbackPermissionSets(getPermissionSetArnsForRollback(request));
-  await rollbackIdentityUsers(request.identityUsers || []);
-  await rollbackScpResources(request.provisionedResources || {});
 }
 
 async function resetRequestAfterFailure(requestId) {
   await Request.findByIdAndUpdate(requestId, {
     awsAccountId: null,
     awsAccountIds: [],
-    accountCreationRequestId: null,
-    permissionSetArns: [],
+    labRoles: [],
     identityUsers: [],
+    permissionSetArns: [],
     provisionedResources: {
       ou: null,
       scps: [],
@@ -91,386 +100,143 @@ async function resetRequestAfterFailure(requestId) {
   });
 }
 
-function accountCountFor(request) {
-  return Number(request.accountCount) || 1;
-}
-
-function buildPerUserAccountSlots(request, labAccount) {
-  const totalUsers = accountCountFor(request);
-  const slots = [];
-
-  for (let userIndex = 0; userIndex < totalUsers; userIndex += 1) {
-    slots.push({
-      userIndex,
-      awsAccountId: labAccount.awsAccountId,
-      accountName: deriveRequestAccountName(request, userIndex),
-      scpPolicyIds: [],
-      permissionSetArn: null,
-    });
-  }
-
-  return slots;
-}
-
-async function runSharedProvisioning(requestId) {
-  let request = await Request.findById(requestId);
-
-  if (!request.awsAccountId) {
-    const accountResult = await runStep(
-      requestId,
-      'ACCOUNT',
-      'Prepare lab account',
-      1,
-      () => resolveLabAccount(request)
-    );
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      {
-        awsAccountId: accountResult.awsAccountId,
-        awsAccountIds: [accountResult.awsAccountId],
-        updatedAt: new Date(),
-      },
-      { new: true }
-    );
-  }
-
-  if (!isScpStepComplete(request.provisionedResources)) {
-    const scpResult = await runStep(
-      requestId,
-      'SCP',
-      'Apply SCP restrictions',
-      2,
-      () => applyScpRestrictions(request, request.awsAccountId)
-    );
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      {
-        provisionedResources: {
-          ...request.provisionedResources,
-          ou: scpResult.ou,
-          scps: scpResult.scps,
-          targetAccountId: scpResult.targetAccountId,
-          scpSkipped: Boolean(scpResult.skipped),
-          scpSkipReason: scpResult.skipReason || null,
-          assignments: request.provisionedResources?.assignments || [],
-          accounts: request.provisionedResources?.accounts || [],
-        },
-        updatedAt: new Date(),
-      },
-      { new: true }
-    );
-  }
-
-  if (!request.identityUsers?.length) {
-    const users = await runStep(
-      requestId,
-      'IDENTITY',
-      'Create Identity Center users',
-      3,
-      () => createIdentityCenterUsers(request)
-    );
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      { identityUsers: users, updatedAt: new Date() },
-      { new: true }
-    );
-  }
-
-  if (!request.permissionSetArns?.length) {
-    const permissionResult = await runStep(
-      requestId,
-      'PERMISSION_SET',
-      'Create permission sets',
-      4,
-      () =>
-        createPermissionSets(request, request.awsAccountId, {
-          username: `request-${String(request._id).slice(-6)}`,
-          userIndex: 0,
-        })
-    );
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      { permissionSetArns: permissionResult.permissionSetArns, updatedAt: new Date() },
-      { new: true }
-    );
-  }
-
-  if (!request.provisionedResources?.assignments?.length) {
-    const assignments = await runStep(
-      requestId,
-      'ASSIGNMENT',
-      'Assign users to account',
-      5,
-      () =>
-        assignUsersToAccount(
-          request,
-          request.awsAccountId,
-          request.identityUsers,
-          request.permissionSetArns
-        )
-    );
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      {
-        provisionedResources: {
-          ...request.provisionedResources,
-          assignments,
-        },
-        updatedAt: new Date(),
-      },
-      { new: true }
-    );
-  }
-
-  if (!request.credentialsSent) {
-    await runStep(requestId, 'EMAIL', 'Send credentials email', 6, () =>
-      sendCredentialsEmail(request, {
-        awsAccountId: request.awsAccountId,
-        identityUsers: request.identityUsers,
-        costingMode: request.costingMode,
-      })
-    );
-  }
-
-  return complete(requestId);
-}
-
-async function runPerUserProvisioning(requestId) {
-  let request = await Request.findById(requestId);
-  const totalUsers = accountCountFor(request);
-  let accounts = request.provisionedResources?.accounts || [];
-
-  if (!request.awsAccountId || accounts.length < totalUsers) {
-    const labAccount = await runStep(
-      requestId,
-      'ACCOUNT',
-      'Prepare lab account',
-      1,
-      () => resolveLabAccount(request)
-    );
-
-    accounts = buildPerUserAccountSlots(request, labAccount);
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      {
-        awsAccountId: labAccount.awsAccountId,
-        awsAccountIds: [labAccount.awsAccountId],
-        provisionedResources: {
-          ...request.provisionedResources,
-          accounts,
-          assignments: request.provisionedResources?.assignments || [],
-          scps: request.provisionedResources?.scps || [],
-          ou: request.provisionedResources?.ou || null,
-          targetAccountId: request.provisionedResources?.targetAccountId || labAccount.awsAccountId,
-        },
-        updatedAt: new Date(),
-      },
-      { new: true }
-    );
-  }
-
-  if (!isScpStepComplete(request.provisionedResources)) {
-    const scpResult = await runStep(
-      requestId,
-      'SCP',
-      'Apply SCP restrictions',
-      2,
-      () => applyScpRestrictions(request, request.awsAccountId)
-    );
-
-    accounts = accounts.map((entry) => ({
-      ...entry,
-      scpPolicyIds: scpResult.scps,
-    }));
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      {
-        provisionedResources: {
-          ...request.provisionedResources,
-          accounts,
-          scps: scpResult.scps,
-          ou: scpResult.ou,
-          targetAccountId: scpResult.targetAccountId,
-          scpSkipped: Boolean(scpResult.skipped),
-          scpSkipReason: scpResult.skipReason || null,
-          assignments: request.provisionedResources?.assignments || [],
-        },
-        updatedAt: new Date(),
-      },
-      { new: true }
-    );
-  }
-
-  if ((request.identityUsers?.length || 0) < totalUsers) {
-    const users = await runStep(
-      requestId,
-      'IDENTITY',
-      'Create Identity Center users',
-      3,
-      async () => {
-        const existingUsers = [...(request.identityUsers || [])];
-
-        for (const account of accounts) {
-          if (existingUsers.some((entry) => entry.userIndex === account.userIndex)) {
-            continue;
-          }
-
-          const user = await createIdentityCenterUser(request, account.userIndex, {
-            awsAccountId: account.awsAccountId,
-          });
-          existingUsers.push(user);
-        }
-
-        return existingUsers.sort((a, b) => (a.userIndex ?? 0) - (b.userIndex ?? 0));
-      }
-    );
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      { identityUsers: users, updatedAt: new Date() },
-      { new: true }
-    );
-  }
-
-  const accountsMissingPermissionSets = accounts.filter((entry) => !entry.permissionSetArn);
-  if (accountsMissingPermissionSets.length > 0) {
-    const updatedAccounts = await runStep(
-      requestId,
-      'PERMISSION_SET',
-      'Create permission sets',
-      4,
-      async () => {
-        const nextAccounts = [...accounts];
-        const permissionSetArns = [...(request.permissionSetArns || [])];
-
-        for (const account of accountsMissingPermissionSets) {
-          const identityUser = (request.identityUsers || []).find(
-            (entry) => entry.userIndex === account.userIndex
-          );
-          const permissionResult = await createPermissionSet(request, account.awsAccountId, {
-            nameSuffix: `-u${account.userIndex + 1}`,
-            username: identityUser?.username,
-            userIndex: account.userIndex,
-          });
-
-          const index = nextAccounts.findIndex((entry) => entry.userIndex === account.userIndex);
-          if (index >= 0) {
-            nextAccounts[index] = {
-              ...nextAccounts[index],
-              permissionSetArn: permissionResult.permissionSetArn,
-            };
-          }
-
-          permissionSetArns.push(permissionResult.permissionSetArn);
-        }
-
-        return {
-          accounts: nextAccounts,
-          permissionSetArns: [...new Set(permissionSetArns)],
-        };
-      }
-    );
-
-    accounts = updatedAccounts.accounts;
-    const identityUsers = (request.identityUsers || []).map((user) => {
-      const account = accounts.find((entry) => entry.userIndex === user.userIndex);
-      return account?.permissionSetArn
-        ? { ...user, permissionSetArn: account.permissionSetArn }
-        : user;
-    });
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      {
-        permissionSetArns: updatedAccounts.permissionSetArns,
-        identityUsers,
-        provisionedResources: {
-          ...request.provisionedResources,
-          accounts,
-        },
-        updatedAt: new Date(),
-      },
-      { new: true }
-    );
-  }
-
-  if ((request.provisionedResources?.assignments?.length || 0) < totalUsers) {
-    const assignments = await runStep(
-      requestId,
-      'ASSIGNMENT',
-      'Assign users to account',
-      5,
-      () =>
-        assignUsersToAccount(
-          request,
-          request.awsAccountId,
-          request.identityUsers,
-          request.permissionSetArns
-        )
-    );
-
-    request = await Request.findByIdAndUpdate(
-      requestId,
-      {
-        provisionedResources: {
-          ...request.provisionedResources,
-          accounts,
-          assignments,
-        },
-        updatedAt: new Date(),
-      },
-      { new: true }
-    );
-  }
-
-  if (!request.credentialsSent) {
-    await runStep(requestId, 'EMAIL', 'Send credentials email', 6, () =>
-      sendCredentialsEmail(request, {
-        awsAccountId: request.awsAccountId,
-        awsAccountIds: [request.awsAccountId],
-        identityUsers: request.identityUsers,
-        costingMode: request.costingMode,
-      })
-    );
-  }
-
-  return complete(requestId);
-}
-
 export async function run(requestId) {
   let request = await Request.findById(requestId);
-  if (!request) {
-    throw new Error('Request not found');
-  }
+  if (!request) throw new Error(`Request ${requestId} not found`);
 
   if (['Completed', 'Expired'].includes(request.status)) {
     return request;
   }
 
-  await initializeIdentityCenter();
+  const isMagicLink = request.accessType !== 'identity_center';
+  const context = {
+    awsAccountId: null,
+    scpResult: null,
+    labRoles: [],
+    identityUsers: [],
+    permSetArns: [],
+    assignments: [],
+    portalSession: null,
+  };
 
   try {
-    if (isPerUserCosting(request.costingMode)) {
-      return runPerUserProvisioning(requestId);
+    if (!request.awsAccountId) {
+      const accountResult = await runStep(requestId, 'ACCOUNT', 'Prepare lab account', 1, () =>
+        resolveLabAccount(request)
+      );
+      context.awsAccountId = accountResult.awsAccountId;
+      request = await Request.findByIdAndUpdate(
+        requestId,
+        {
+          awsAccountId: context.awsAccountId,
+          awsAccountIds: [context.awsAccountId],
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    } else {
+      context.awsAccountId = request.awsAccountId;
     }
 
-    return runSharedProvisioning(requestId);
-  } catch (err) {
-    request = await Request.findById(requestId);
-    await fail(requestId, err.message || 'Provisioning failed');
+    if (!isScpStepComplete(request.provisionedResources)) {
+      context.scpResult = await runStep(requestId, 'SCP', 'Apply SCP restrictions', 2, async () => {
+        try {
+          return await applyScpRestrictions(request, context.awsAccountId);
+        } catch (err) {
+          return { skipped: true, skipReason: err.message, scps: [] };
+        }
+      });
 
+      request = await Request.findByIdAndUpdate(
+        requestId,
+        {
+          provisionedResources: {
+            ...request.provisionedResources,
+            ou: context.scpResult.ou,
+            scps: context.scpResult.scps,
+            targetAccountId: context.scpResult.targetAccountId,
+            scpSkipped: Boolean(context.scpResult.skipped),
+            scpSkipReason: context.scpResult.skipReason || null,
+          },
+          updatedAt: new Date(),
+        },
+        { new: true }
+      );
+    }
+
+    const hasUsers = isMagicLink ? request.labRoles?.length : request.identityUsers?.length;
+
+    if (!hasUsers) {
+      context.identityUsers = [];
+      context.labRoles = [];
+
+      await runStep(requestId, 'ROLES', 'Create lab users/roles', 3, async () => {
+        if (isMagicLink) {
+          context.labRoles = await createLabRoles(request);
+          await Request.findByIdAndUpdate(requestId, {
+            labRoles: context.labRoles,
+            updatedAt: new Date(),
+          });
+          return { count: context.labRoles.length, type: 'iam_roles' };
+        }
+
+        const accounts = buildLabAccounts(request, context.awsAccountId);
+        context.identityUsers = await provisionIdentityUsers(request, accounts);
+        await Request.findByIdAndUpdate(requestId, {
+          identityUsers: mapIdentityUsersForStorage(context.identityUsers),
+          updatedAt: new Date(),
+        });
+        return { count: context.identityUsers.length, type: 'iam_users' };
+      });
+    } else if (isMagicLink) {
+      context.labRoles = request.labRoles;
+    } else {
+      context.identityUsers = request.identityUsers;
+    }
+
+    if (!isMagicLink) {
+      await runStep(requestId, 'POLICY', 'Assign permissions', 4, async () => {
+        console.log('[Orchestrator] Step 4 skipped for IAM User path — policies attached in Step 3');
+        return { skipped: true, reason: 'iam_user_inline_policies' };
+      });
+    } else if (isMagicLink) {
+      await runStep(requestId, 'POLICY', 'Attach permissions', 4, async () => ({
+        attached: true,
+        roleCount: context.labRoles.length,
+      }));
+    }
+
+    if (!request.credentialsSent) {
+      context.portalSession = await runStep(
+        requestId,
+        'PORTAL',
+        'Create manage portal access',
+        5,
+        () => createManagePortalSession(request)
+      );
+
+      await runStep(requestId, 'EMAIL', 'Send credentials email', 6, () =>
+        sendCredentialsEmail(request, {
+          awsAccountId: context.awsAccountId,
+          labRoles: context.labRoles,
+          identityUsers: context.identityUsers,
+          portalSession: context.portalSession,
+          accessType: request.accessType,
+          isMagicLink,
+        })
+      );
+    }
+
+    console.log(`[orchestrator] Provisioning completed for ${requestId} (${request.accessType})`);
+    return complete(requestId);
+  } catch (err) {
+    console.error(`[orchestrator] Failed for ${requestId}:`, err.message);
+    await fail(requestId, err.message || 'Provisioning failed');
+    request = await Request.findById(requestId);
     if (request) {
-      await rollbackProvisionedResources(request);
+      await rollbackAll(request, context, isMagicLink);
       await resetRequestAfterFailure(requestId);
     }
-
     throw err;
   }
 }

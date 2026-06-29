@@ -1,46 +1,37 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { AWS_REGIONS } from '../../constants';
-import { getRegions } from '../../api/client';
+function formatHourly(price) {
+  return `$${Number(price).toFixed(4)}/hr`;
+}
 
-export function RegionPicker({ region, onRegionChange }) {
-  const [regions, setRegions] = useState(AWS_REGIONS);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    void getRegions()
-      .then((entries) => {
-        if (entries.length > 0) {
-          setRegions(
-            entries.map((entry) => {
-              const known = AWS_REGIONS.find((item) => item.code === entry.code);
-              return {
-                code: entry.code,
-                name: entry.name,
-                location: known?.location ?? entry.name.split('(')[0]?.trim() ?? entry.name,
-              };
-            })
-          );
-        }
-      })
-      .catch(() => {
-        setRegions(AWS_REGIONS);
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
+export function RegionPicker({
+  region,
+  onRegionChange,
+  regions,
+  loading,
+  error,
+}) {
   if (loading) {
-    return <p className="text-sm text-gray-400">Loading regions…</p>;
+    return <p className="text-sm text-gray-400">Loading regions from AWS…</p>;
+  }
+
+  if (error) {
+    return <p className="text-sm text-red-600">{error}</p>;
+  }
+
+  if (regions.length === 0) {
+    return (
+      <p className="text-sm text-gray-400">
+        No AWS regions found with pricing for your selected services and instances.
+      </p>
+    );
   }
 
   return (
     <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
       {regions.map((entry) => {
         const active = region === entry.code;
-        const subtitle = entry.name.includes('(')
-          ? entry.name.slice(entry.name.indexOf('('))
-          : '';
+        const subtitle = entry.name.includes('(') ? entry.name.slice(entry.name.indexOf('(')) : '';
 
         return (
           <button
@@ -54,8 +45,13 @@ export function RegionPicker({ region, onRegionChange }) {
             }`}
           >
             <span className="block text-sm font-semibold text-gray-900">{entry.code}</span>
-            <span className="mt-1 block text-xs text-gray-500">{entry.location}</span>
+            <span className="mt-1 block text-xs text-gray-500">{entry.location || entry.name}</span>
             {subtitle && <span className="mt-0.5 block text-xs text-gray-400">{subtitle}</span>}
+            {entry.basePrice != null && (
+              <span className="mt-2 block text-xs font-medium text-gray-700">
+                from {formatHourly(entry.basePrice)}
+              </span>
+            )}
           </button>
         );
       })}

@@ -1,7 +1,7 @@
 'use client';
 
 import { AlertCircle } from 'lucide-react';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { COMMON_TIMEZONES } from '../../constants';
 import { inputClass, labelClass, sectionClass, timeInputClass } from './formStyles';
 import { InstancePicker } from './InstancePicker';
@@ -19,6 +19,19 @@ const USAGE_WINDOW_DAYS = [
   'Friday',
   'Saturday',
 ];
+
+function formatWindowSummary(windows) {
+  return windows
+    .map((window) => {
+      const day = USAGE_WINDOW_DAYS[window.dayOfWeek] ?? '?';
+      const start = window.windowStartTime;
+      const end = window.windowEndTime;
+      const limit = window.dailyLimitHours;
+      const limitText = limit ? ` (max ${limit}h)` : '';
+      return `${day.slice(0, 3)} ${start}–${end}${limitText}`;
+    })
+    .join(', ');
+}
 
 export function RequestForm({
   currentStep,
@@ -42,24 +55,42 @@ export function RequestForm({
   onAccountCountChange,
   costingMode,
   onCostingModeChange,
+  accessType,
+  onAccessTypeChange,
   startDate,
   onStartDateChange,
   endDate,
   onEndDateChange,
+  durationDays,
+  enableDailyUsage,
+  onEnableDailyUsageChange,
   usageWindows,
   onUsageWindowsChange,
   timezone,
   onTimezoneChange,
-  cleanupEnabled,
-  onCleanupEnabledChange,
-  cleanupIntervalHours,
-  onCleanupIntervalHoursChange,
+  enableResourceCleanup,
+  onEnableResourceCleanupChange,
+  resourceCleanupIntervalHours,
+  onResourceCleanupIntervalHoursChange,
+  budgetEnabled,
+  onBudgetEnabledChange,
   perUserBudgetUsd,
   onPerUserBudgetUsdChange,
   permissionOverrides,
   onPermissionChange,
   validationErrors,
+  availableRegions,
+  regionsLoading,
+  regionsError,
 }) {
+  useEffect(() => {
+    if (!startDate || !endDate) return;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    onAccessTypeChange(days > 7 ? 'identity_center' : 'magic_link');
+  }, [startDate, endDate, onAccessTypeChange]);
+
   const selectedServices = useMemo(
     () => services.filter((service) => selectedServiceIds.includes(service._id)),
     [services, selectedServiceIds]
@@ -68,21 +99,29 @@ export function RequestForm({
   const instanceServices = selectedServices.filter((service) => service.pricingType === 'instance');
   const flatRateServices = selectedServices.filter((service) => service.pricingType === 'flat_rate');
 
-  const toggleUsageWindowDay = (day, enabled) => {
+  const toggleUsageWindowDay = (dayIndex, enabled) => {
     if (!enabled) {
-      onUsageWindowsChange(usageWindows.filter((window) => window.day !== day));
+      onUsageWindowsChange(usageWindows.filter((window) => window.dayOfWeek !== dayIndex));
       return;
     }
 
     onUsageWindowsChange([
-      ...usageWindows.filter((window) => window.day !== day),
-      { day, startTime: '09:00', endTime: '18:00' },
+      ...usageWindows.filter((window) => window.dayOfWeek !== dayIndex),
+      {
+        dayOfWeek: dayIndex,
+        windowStartTime: '11:00',
+        windowEndTime: '17:00',
+        timezone,
+        dailyLimitHours: undefined,
+      },
     ]);
   };
 
-  const updateUsageWindow = (day, patch) => {
+  const updateUsageWindow = (dayIndex, patch) => {
     onUsageWindowsChange(
-      usageWindows.map((window) => (window.day === day ? { ...window, ...patch } : window))
+      usageWindows.map((window) =>
+        window.dayOfWeek === dayIndex ? { ...window, ...patch } : window
+      )
     );
   };
 
@@ -124,6 +163,7 @@ export function RequestForm({
                 value={customerEmail}
                 onChange={(event) => onCustomerEmailChange(event.target.value)}
                 placeholder="customer@company.com"
+                required
               />
             </div>
             <div>
@@ -134,9 +174,11 @@ export function RequestForm({
                 id="accountCount"
                 type="number"
                 min={1}
+                max={50}
                 className={inputClass}
                 value={accountCount}
                 onChange={(event) => onAccountCountChange(Number(event.target.value))}
+                required
               />
             </div>
             <div className="sm:col-span-2">
@@ -154,7 +196,8 @@ export function RequestForm({
                   <span>
                     <span className="block text-sm font-medium text-gray-900">Shared account</span>
                     <span className="mt-1 block text-xs text-gray-500">
-                      One AWS account for all users
+                      Shared = all users in one AWS account. Best for shared labs and total request
+                      costing.
                     </span>
                   </span>
                 </label>
@@ -170,22 +213,82 @@ export function RequestForm({
                   <span>
                     <span className="block text-sm font-medium text-gray-900">Per-user accounts</span>
                     <span className="mt-1 block text-xs text-gray-500">
-                      Separate AWS account per user
+                      Per User = one AWS account per user (stronger isolation, required for per-user
+                      budgets).
                     </span>
                   </span>
                 </label>
               </div>
             </div>
+
+            <div className="sm:col-span-2">
+              <span className={labelClass}>Access type</span>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => onAccessTypeChange('magic_link')}
+                  className={`rounded-lg border-2 p-4 text-left transition ${
+                    accessType === 'magic_link'
+                      ? 'border-[#B91C1C] bg-red-50/40'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-gray-900">🔗 Magic Link Access</div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Best for short labs (≤7 days). Admin generates one-click console links from the
+                    manage portal. No password needed.
+                  </p>
+                  <p className="mt-2 text-[11px] font-semibold text-[#B91C1C]">
+                    Max session: 12 hours per link
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onAccessTypeChange('identity_center')}
+                  className={`rounded-lg border-2 p-4 text-left transition ${
+                    accessType === 'identity_center'
+                      ? 'border-[#B91C1C] bg-red-50/40'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-gray-900">🔐 Direct IAM Login</div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Best for long labs (&gt;7 days). Users receive username and password and can sign
+                    in directly to the AWS console for the full lab duration.
+                  </p>
+                  <p className="mt-2 text-[11px] font-semibold text-blue-800">
+                    Persistent access for full lab duration
+                  </p>
+                </button>
+              </div>
+
+              {accessType === 'identity_center' && (
+                <div className="mt-3 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  Each lab user gets an IAM account with a console username and password emailed
+                  directly. Users can log in anytime during the lab — no MFA or activation flow.
+                </div>
+              )}
+
+              {accessType === 'magic_link' && (
+                <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  Magic links expire after 12 hours. Regenerate links from the manage portal for
+                  extended access.
+                </div>
+              )}
+            </div>
+
             <div>
               <label className={labelClass} htmlFor="startDate">
                 Service start date
               </label>
               <input
                 id="startDate"
-                type="date"
+                type="datetime-local"
                 className={inputClass}
                 value={startDate}
                 onChange={(event) => onStartDateChange(event.target.value)}
+                required
               />
             </div>
             <div>
@@ -194,11 +297,15 @@ export function RequestForm({
               </label>
               <input
                 id="endDate"
-                type="date"
+                type="datetime-local"
                 className={inputClass}
                 value={endDate}
                 onChange={(event) => onEndDateChange(event.target.value)}
+                required
               />
+              {durationDays > 0 && (
+                <p className="mt-1 text-xs text-gray-400">{durationDays} day{durationDays !== 1 ? 's' : ''}</p>
+              )}
             </div>
           </div>
         </section>
@@ -206,84 +313,153 @@ export function RequestForm({
 
       {currentStep === 2 && (
         <section className={sectionClass}>
-          <h2 className="text-sm font-semibold text-gray-900">Daily usage windows</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
+          <label className="flex cursor-pointer items-center gap-3">
+            <input
+              type="checkbox"
+              checked={enableDailyUsage}
+              onChange={(event) => {
+                onEnableDailyUsageChange(event.target.checked);
+                if (!event.target.checked) {
+                  onUsageWindowsChange([]);
+                }
+              }}
+              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+            />
+            <span className="text-sm font-medium text-gray-900">Enable daily usage windows</span>
+          </label>
+          <p className="mt-1 text-xs text-gray-400">
             Set which days and hours lab users can access AWS
           </p>
-          <div className="mt-4 space-y-3">
-            {USAGE_WINDOW_DAYS.map((day) => {
-              const existing = usageWindows.find((window) => window.day === day);
-              return (
-                <div key={day} className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-3">
-                  <div className="flex flex-wrap items-center gap-3">
-                    <label className="flex min-w-[132px] cursor-pointer items-center gap-2.5">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(existing)}
-                        onChange={(event) => toggleUsageWindowDay(day, event.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
-                      />
-                      <span className="text-sm font-medium text-gray-900">{day}</span>
-                    </label>
-                    {existing && (
-                      <div className="flex flex-wrap items-center gap-2">
-                        <input
-                          type="time"
-                          value={existing.startTime}
-                          onChange={(event) =>
-                            updateUsageWindow(day, { startTime: event.target.value })
-                          }
-                          className={timeInputClass}
-                          aria-label={`${day} start time`}
-                        />
-                        <span className="text-xs text-gray-400">→</span>
-                        <input
-                          type="time"
-                          value={existing.endTime}
-                          onChange={(event) => updateUsageWindow(day, { endTime: event.target.value })}
-                          className={timeInputClass}
-                          aria-label={`${day} end time`}
-                        />
+
+          {enableDailyUsage && (
+            <>
+              <div className="mt-4 space-y-3">
+                {USAGE_WINDOW_DAYS.map((day, index) => {
+                  const existing = usageWindows.find((window) => window.dayOfWeek === index);
+                  return (
+                    <div
+                      key={day}
+                      className="rounded-lg border border-gray-100 bg-gray-50/60 px-3 py-3"
+                    >
+                      <div className="flex flex-wrap items-center gap-3">
+                        <label className="flex min-w-[132px] cursor-pointer items-center gap-2.5">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(existing)}
+                            onChange={(event) => toggleUsageWindowDay(index, event.target.checked)}
+                            className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                          />
+                          <span className="text-sm font-medium text-gray-900">{day}</span>
+                        </label>
+                        {existing && (
+                          <div className="flex flex-1 flex-wrap items-center gap-3">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <input
+                                type="time"
+                                value={existing.windowStartTime}
+                                onChange={(event) =>
+                                  updateUsageWindow(index, { windowStartTime: event.target.value })
+                                }
+                                className={timeInputClass}
+                                aria-label={`${day} start time`}
+                              />
+                              <span className="text-xs text-gray-400">→</span>
+                              <input
+                                type="time"
+                                value={existing.windowEndTime}
+                                onChange={(event) =>
+                                  updateUsageWindow(index, { windowEndTime: event.target.value })
+                                }
+                                className={timeInputClass}
+                                aria-label={`${day} end time`}
+                              />
+                            </div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <label
+                                className="text-xs font-medium text-gray-500"
+                                htmlFor={`daily-limit-${index}`}
+                              >
+                                Max hours/day
+                              </label>
+                              <input
+                                id={`daily-limit-${index}`}
+                                type="number"
+                                min={0.5}
+                                max={24}
+                                step={0.5}
+                                placeholder="No limit"
+                                value={existing.dailyLimitHours ?? ''}
+                                onChange={(event) =>
+                                  updateUsageWindow(index, {
+                                    dailyLimitHours: event.target.value
+                                      ? parseFloat(event.target.value)
+                                      : undefined,
+                                  })
+                                }
+                                className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                              />
+                              {existing.dailyLimitHours ? (
+                                <span className="text-xs text-gray-400">
+                                  Users blocked + resources deleted after {existing.dailyLimitHours}h
+                                  of usage
+                                </span>
+                              ) : null}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
-                  </div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              <div className="mt-4">
+                <label className={labelClass} htmlFor="timezone">
+                  Timezone
+                </label>
+                <select
+                  id="timezone"
+                  className={inputClass}
+                  value={timezone}
+                  onChange={(event) => {
+                    const nextTimezone = event.target.value;
+                    onTimezoneChange(nextTimezone);
+                    onUsageWindowsChange(
+                      usageWindows.map((window) => ({ ...window, timezone: nextTimezone }))
+                    );
+                  }}
+                >
+                  <option value="Asia/Kolkata">IST — Asia/Kolkata</option>
+                  <option value="Asia/Singapore">SGT — Asia/Singapore</option>
+                  <option value="America/New_York">US/Eastern — America/New_York</option>
+                  <option value="America/Los_Angeles">US/Pacific — America/Los_Angeles</option>
+                  <option value="Europe/London">GMT — Europe/London</option>
+                  <option value="UTC">UTC</option>
+                  {COMMON_TIMEZONES.filter(
+                    (entry) =>
+                      ![
+                        'Asia/Kolkata',
+                        'Asia/Singapore',
+                        'America/New_York',
+                        'America/Los_Angeles',
+                        'Europe/London',
+                        'UTC',
+                      ].includes(entry)
+                  ).map((entry) => (
+                    <option key={entry} value={entry}>
+                      {entry.replace(/_/g, ' ')}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {usageWindows.length > 0 && (
+                <div className="mt-4 rounded-lg border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-900">
+                  Users can access AWS on: {formatWindowSummary(usageWindows)}
                 </div>
-              );
-            })}
-          </div>
-          <div className="mt-4">
-            <label className={labelClass} htmlFor="timezone">
-              Timezone
-            </label>
-            <select
-              id="timezone"
-              className={inputClass}
-              value={timezone}
-              onChange={(event) => onTimezoneChange(event.target.value)}
-            >
-              <option value="Asia/Kolkata">IST — Asia/Kolkata</option>
-              <option value="UTC">UTC</option>
-              <option value="America/New_York">EST — America/New_York</option>
-              <option value="America/Los_Angeles">PST — America/Los_Angeles</option>
-              <option value="Europe/London">GMT — Europe/London</option>
-              <option value="Asia/Dubai">GST — Asia/Dubai</option>
-              {COMMON_TIMEZONES.filter(
-                (entry) =>
-                  ![
-                    'Asia/Kolkata',
-                    'UTC',
-                    'America/New_York',
-                    'America/Los_Angeles',
-                    'Europe/London',
-                    'Asia/Dubai',
-                  ].includes(entry)
-              ).map((entry) => (
-                <option key={entry} value={entry}>
-                  {entry.replace(/_/g, ' ')}
-                </option>
-              ))}
-            </select>
-          </div>
+              )}
+            </>
+          )}
         </section>
       )}
 
@@ -292,41 +468,49 @@ export function RequestForm({
           <label className="flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
-              checked={cleanupEnabled}
+              checked={enableResourceCleanup}
               onChange={(event) => {
-                onCleanupEnabledChange(event.target.checked);
+                onEnableResourceCleanupChange(event.target.checked);
                 if (!event.target.checked) {
-                  onCleanupIntervalHoursChange(undefined);
+                  onResourceCleanupIntervalHoursChange(undefined);
+                } else if (!resourceCleanupIntervalHours) {
+                  onResourceCleanupIntervalHoursChange(4);
                 }
               }}
               className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
             />
             <span className="text-sm font-medium text-gray-900">Enable periodic resource cleanup</span>
           </label>
-          {cleanupEnabled && (
+          {enableResourceCleanup && (
             <div className="mt-4">
-              <label className={labelClass} htmlFor="cleanupIntervalHours">
+              <label className={labelClass} htmlFor="resourceCleanupIntervalHours">
                 Delete all resources inside lab every (hours)
               </label>
               <input
-                id="cleanupIntervalHours"
+                id="resourceCleanupIntervalHours"
                 type="number"
                 min={1}
                 max={24}
-                placeholder="e.g. 1"
+                placeholder="e.g. 4"
                 className={inputClass}
-                value={cleanupIntervalHours ?? ''}
+                value={resourceCleanupIntervalHours ?? ''}
                 onChange={(event) => {
                   const value = event.target.value;
-                  onCleanupIntervalHoursChange(value ? Number.parseInt(value, 10) : undefined);
+                  onResourceCleanupIntervalHoursChange(
+                    value ? Number.parseInt(value, 10) : undefined
+                  );
                 }}
               />
               <p className="mt-2 text-xs text-gray-500">
-                Every {cleanupIntervalHours || '?'} hour(s), all AWS resources (EC2 instances, RDS
-                databases, S3 objects, etc.) created inside the lab will be automatically deleted. Lab
-                accounts and access are kept — users can create new resources again immediately after
-                cleanup.
+                Every {resourceCleanupIntervalHours || '?'} hour(s), all AWS resources (EC2
+                instances, EKS clusters, RDS databases, S3 objects, etc.) inside the lab accounts
+                will be automatically deleted. IAM users and account structure are kept — lab users
+                can create new resources again immediately after cleanup.
               </p>
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                ⚠ This permanently deletes all resources in lab accounts on a timer. Lab users lose
+                their work.
+              </div>
             </div>
           )}
         </section>
@@ -334,32 +518,51 @@ export function RequestForm({
 
       {currentStep === 4 && (
         <section className={sectionClass}>
-          <h2 className="text-sm font-semibold text-gray-900">Per-user budget</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Optional spending cap per user (requires per-user accounts)
-          </p>
-          <div className="mt-4">
-            <label className={labelClass} htmlFor="perUserBudgetUsd">
-              Budget per user (USD) — optional
-            </label>
+          <label className="flex cursor-pointer items-center gap-3">
             <input
-              id="perUserBudgetUsd"
-              type="number"
-              min={1}
-              step={0.01}
-              placeholder="e.g. 50.00"
-              className={inputClass}
-              value={perUserBudgetUsd ?? ''}
+              type="checkbox"
+              checked={budgetEnabled}
               onChange={(event) => {
-                const value = event.target.value;
-                onPerUserBudgetUsdChange(value ? Number.parseFloat(value) : undefined);
+                onBudgetEnabledChange(event.target.checked);
+                if (!event.target.checked) {
+                  onPerUserBudgetUsdChange(undefined);
+                }
               }}
+              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
             />
-            <p className="mt-2 text-xs text-gray-500">
-              An AWS Budget is created for each user with their own account. When spending exceeds
-              this amount, the user receives an email and their IAM access is automatically suspended.
-            </p>
-          </div>
+            <span className="text-sm font-medium text-gray-900">Set per-user budget cap</span>
+          </label>
+          {budgetEnabled && (
+            <div className="mt-4">
+              <label className={labelClass} htmlFor="perUserBudgetUsd">
+                Budget per user (USD)
+              </label>
+              <input
+                id="perUserBudgetUsd"
+                type="number"
+                min={1}
+                step={0.01}
+                placeholder="e.g. 50.00"
+                className={inputClass}
+                value={perUserBudgetUsd ?? ''}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  onPerUserBudgetUsdChange(value ? Number.parseFloat(value) : undefined);
+                }}
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                When a user&apos;s AWS spend exceeds this amount, their IAM lab account
+                is automatically disabled and they receive an email notification. An admin must
+                renew their budget to restore access.
+              </p>
+              {costingMode === 'shared' && (
+                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  ⚠ Per-user budgets work best with Per User costing mode. In Shared mode, budget
+                  tracking is per-account, not per-user.
+                </div>
+              )}
+            </div>
+          )}
         </section>
       )}
 
@@ -381,10 +584,10 @@ export function RequestForm({
         <section className={sectionClass}>
           <h2 className="text-sm font-semibold text-gray-900">Instance sizes</h2>
           <p className="mt-0.5 text-xs text-gray-400">
-            Choose instance tiers for services that support sizing
+            Choose instance tiers for services that support sizing (live AWS pricing)
           </p>
           <p className="mt-1 text-xs text-gray-400">
-            Pricing preview uses {pricingRegion}. Final pricing uses your selected region in step 8.
+            Preview uses {pricingRegion} until you select a region in step 8.
           </p>
           <div className="mt-4">
             <InstancePicker
@@ -417,9 +620,17 @@ export function RequestForm({
       {currentStep === 8 && (
         <section className={sectionClass}>
           <h2 className="text-sm font-semibold text-gray-900">Select AWS region</h2>
-          <p className="mt-0.5 text-xs text-gray-400">Choose the region where lab resources will run</p>
+          <p className="mt-0.5 text-xs text-gray-400">
+            Available regions based on your service and instance selections (live AWS pricing)
+          </p>
           <div className="mt-4">
-            <RegionPicker region={region} onRegionChange={onRegionChange} />
+            <RegionPicker
+              region={region}
+              onRegionChange={onRegionChange}
+              regions={availableRegions}
+              loading={regionsLoading}
+              error={regionsError}
+            />
           </div>
         </section>
       )}

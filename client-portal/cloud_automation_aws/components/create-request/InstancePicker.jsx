@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { Info } from 'lucide-react';
 import { getPricing } from '../../api/client';
 import { FLAT_RATE_INFO } from '../../config/iamPolicies';
+import { getInstanceDescription } from '../../config/instanceDescriptions';
 
 function formatHourly(price) {
   return `$${Number(price).toFixed(4)}/hr`;
@@ -60,6 +61,7 @@ export function InstancePicker({
               <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
                 {options.map((option) => {
                   const active = selected?.instanceType === option.instanceType;
+                  const description = getInstanceDescription(option.instanceType);
                   return (
                     <button
                       key={option.instanceType}
@@ -74,7 +76,12 @@ export function InstancePicker({
                       <span className="block text-sm font-medium text-gray-900">
                         {option.instanceType}
                       </span>
-                      <span className="mt-1 block text-xs text-gray-500">
+                      {description && (
+                        <span className="mt-1 block text-xs leading-snug text-gray-500">
+                          {description}
+                        </span>
+                      )}
+                      <span className={`block text-xs text-gray-500 ${description ? 'mt-1.5' : 'mt-1'}`}>
                         {formatHourly(option.pricePerHour)}
                       </span>
                       <span className="mt-0.5 block text-xs text-gray-400">

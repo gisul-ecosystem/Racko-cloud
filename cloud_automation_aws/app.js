@@ -9,7 +9,14 @@ import provisionRoutes from './src/routes/provision.routes.js';
 import { ensureDefaultCatalog } from './src/services/catalogSeedService.js';
 import { startCatalogScheduler } from './src/schedulers/catalogScheduler.js';
 import { startBudgetScheduler } from './src/schedulers/budgetScheduler.js';
-import { initializeIdentityCenter } from './src/config/ssoConfig.js';
+import { startCleanupScheduler } from './src/schedulers/cleanupScheduler.js';
+import { startWindowEnforcementScheduler } from './src/schedulers/windowEnforcementScheduler.js';
+import { startUsageScheduler } from './src/schedulers/usageScheduler.js';
+import { startResourceCleanupScheduler } from './src/schedulers/resourceCleanupScheduler.js';
+import { startSessionScheduler } from './src/schedulers/sessionScheduler.js';
+import { startExpiryScheduler } from './src/schedulers/expiryScheduler.js';
+import managePortalRoutes from './src/routes/managePortal.js';
+import orgAdminRoutes from './src/routes/orgAdmin.js';
 
 const app = express();
 
@@ -19,6 +26,8 @@ app.use('/health', healthRoutes);
 app.use('/api', catalogRoutes);
 app.use('/api', requestRoutes);
 app.use('/api', provisionRoutes);
+app.use('/api', managePortalRoutes);
+app.use('/api', orgAdminRoutes);
 
 app.all('*', (req, res) => {
   res.status(404).json({
@@ -38,9 +47,15 @@ app.use((error, req, res, next) => {
 
 await connectDB();
 await ensureDefaultCatalog();
-await initializeIdentityCenter();
 startCatalogScheduler();
 startBudgetScheduler();
+startCleanupScheduler();
+startWindowEnforcementScheduler();
+startUsageScheduler();
+startResourceCleanupScheduler();
+startSessionScheduler();
+startExpiryScheduler();
+console.log('[Schedulers] Window enforcement, usage tracking, session expiry, lab expiry, and resource cleanup started');
 
 const port = Number(process.env.PORT || 3003);
 

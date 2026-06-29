@@ -76,7 +76,6 @@ export default function SuperAdminSoftwareCatalogPage() {
   const [version, setVersion] = useState('');
   const [selectedOS, setSelectedOS] = useState<MachineOS[]>([]);
   const [installMethod, setInstallMethod] = useState<InstallMethod>('choco');
-  const [wingetId, setWingetId] = useState('');
   const [aptName, setAptName] = useState('');
   const [brewName, setBrewName] = useState('');
   const [chocoName, setChocoName] = useState('');
@@ -108,7 +107,6 @@ export default function SuperAdminSoftwareCatalogPage() {
         version: version.trim(),
         supportedOS: selectedOS,
         installMethod,
-        wingetId:    wingetId.trim()    || undefined,
         aptName:     aptName.trim()     || undefined,
         brewName:    brewName.trim()    || undefined,
         chocoName:   chocoName.trim()   || undefined,
@@ -119,7 +117,7 @@ export default function SuperAdminSoftwareCatalogPage() {
       addToast('success', `${name.trim()} added to catalog.`);
       // Reset form
       setName(''); setVersion(''); setSelectedOS([]); setInstallMethod('choco');
-      setWingetId(''); setAptName(''); setBrewName(''); setChocoName('');
+      setAptName(''); setBrewName(''); setChocoName('');
       setFileUrl(''); setFileName(''); setInstallArgs('');
       refetch();
     } catch (err) {
@@ -165,7 +163,7 @@ export default function SuperAdminSoftwareCatalogPage() {
         <h1 className="text-2xl font-bold text-gray-900">Software Catalog</h1>
         <p className="mt-0.5 text-sm text-gray-500">
           Add software packages that admins can install on their machines.
-          Supports winget, Chocolatey, apt/brew, .msi, .exe, .zip, and PowerShell/shell scripts.
+          Supports Chocolatey, apt/brew, .msi, .exe, .zip, and PowerShell/shell scripts.
         </p>
       </div>
 
@@ -215,12 +213,6 @@ export default function SuperAdminSoftwareCatalogPage() {
           </div>
 
           {/* Package manager IDs — shown only for pkg-based methods */}
-          {installMethod === 'winget' && (
-            <div className="sm:col-span-2">
-              <label className={labelClass}>winget package ID <span className="text-red-500">*</span></label>
-              <input className={inputClass} value={wingetId} onChange={(e) => setWingetId(e.target.value)} placeholder="Google.Chrome" />
-            </div>
-          )}
           {installMethod === 'apt' && (
             <div className="sm:col-span-2">
               <label className={labelClass}>apt package name <span className="text-red-500">*</span></label>
@@ -270,7 +262,7 @@ export default function SuperAdminSoftwareCatalogPage() {
               className={inputClass}
               value={installArgs}
               onChange={(e) => setInstallArgs(e.target.value)}
-              placeholder={installMethod === 'winget' ? '--scope machine' : installMethod === 'script' ? '-param value' : ''}
+              placeholder={installMethod === 'script' ? '-param value' : ''}
             />
           </div>
         </div>
