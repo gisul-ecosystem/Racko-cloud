@@ -1,8 +1,7 @@
 import { cookies } from 'next/headers';
 import { CLOUD_AUTOMATION_API_PREFIX } from '../constants';
 import type { ProvisionSnapshot } from '../types/provisioning';
-
-const GATEWAY_BASE = process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'http://localhost:8000';
+import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
 
 /** Forward a rotated refreshToken Set-Cookie from the gateway into the browser session. */
 function syncRefreshCookie(refreshResponse: Response): void {
@@ -59,7 +58,7 @@ async function getServerAuthHeaders(): Promise<Record<string, string>> {
     throw new Error('Authentication required.');
   }
 
-  const refreshResponse = await fetch(`${GATEWAY_BASE}/api/v1/auth/refresh`, {
+  const refreshResponse = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/refresh`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -91,7 +90,7 @@ async function getServerAuthHeaders(): Promise<Record<string, string>> {
 }
 
 async function gatewayRequest<T>(path: string, headers: Record<string, string>): Promise<T> {
-  const response = await fetch(`${GATEWAY_BASE}${path}`, {
+  const response = await fetch(`${getGatewayBaseUrl()}${path}`, {
     headers,
     cache: 'no-store',
   });
