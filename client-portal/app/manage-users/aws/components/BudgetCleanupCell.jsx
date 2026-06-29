@@ -22,6 +22,7 @@ export default function BudgetCleanupCell({
   const spend = user.spendUsd || 0;
   const cleanupEnabled = portalData.cleanupEnabled;
   const cleanupInterval = portalData.cleanupIntervalHours || 2;
+  const budgetPct = budget > 0 ? Math.min((spend / budget) * 100, 100) : 0;
 
   async function handleCleanNow() {
     if (!window.confirm("Delete all AWS resources inside this user's lab right now?")) {
@@ -62,24 +63,37 @@ export default function BudgetCleanupCell({
   }
 
   return (
-    <div className="flex min-w-[220px] flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
+    <div className="flex min-w-[220px] flex-col gap-1.5" onClick={(event) => event.stopPropagation()}>
       {budget != null ? (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <span
-            className={`text-xs font-medium ${
-              user.budgetExceeded ? 'text-red-600' : 'text-gray-700'
-            }`}
-          >
-            ${spend.toFixed(2)} / ${budget.toFixed(2)}
-          </span>
-          {user.budgetExceeded && (
-            <span className="rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-semibold text-red-600">
-              Exceeded
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className={`text-sm font-bold ${user.budgetExceeded ? 'text-red-600' : 'text-gray-900'}`}>
+              ${spend.toFixed(4)}
             </span>
-          )}
-          <span className="text-[11px] text-gray-400">
+            <span className="text-xs text-gray-500">/ ${budget.toFixed(2)}</span>
+          </div>
+
+          <div className="mt-1.5">
+            <div className="mb-0.5 h-1 overflow-hidden rounded bg-gray-200">
+              <div
+                className={`h-full rounded transition-[width] duration-300 ${
+                  spend >= budget ? 'bg-[#B91C1C]' : spend >= budget * 0.8 ? 'bg-amber-500' : 'bg-green-600'
+                }`}
+                style={{ width: `${budgetPct}%` }}
+              />
+            </div>
+            <div className="text-[10px] text-gray-500">{budgetPct.toFixed(1)}% of budget used</div>
+          </div>
+
+          <div className="mt-1 text-[10px] text-gray-400">
             synced {new Date().toLocaleTimeString()}
-          </span>
+          </div>
+
+          {user.budgetExceeded && (
+            <div className="mt-1.5 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-[#B91C1C]">
+              ⚠️ Budget exceeded — user suspended
+            </div>
+          )}
         </div>
       ) : (
         <span className="text-xs text-gray-400">No budget set</span>

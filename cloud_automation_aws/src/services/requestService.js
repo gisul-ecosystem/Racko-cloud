@@ -221,6 +221,11 @@ function normalizePayload(payload) {
     customerEmail: payload.customerEmail ?? payload.customer_email,
     accountCount: payload.accountCount ?? payload.account_count,
     costingMode: payload.costingMode ?? payload.costing_mode ?? 'shared',
+    accessType:
+      payload.accessType ??
+      payload.access_type ??
+      process.env.DEFAULT_ACCESS_TYPE ??
+      'magic_link',
     startDate: payload.startDate ?? payload.start_date,
     endDate: payload.endDate ?? payload.end_date,
     region: payload.region,
@@ -279,6 +284,10 @@ export const createRequest = async (payload, userId) => {
     throw validationError('selected_services must contain at least one entry');
   }
 
+  if (!['magic_link', 'identity_center'].includes(input.accessType)) {
+    throw validationError("access_type must be 'magic_link' or 'identity_center'");
+  }
+
   if (input.enableDailyUsage && input.usageWindows.length > 0) {
     validateUsageWindows(input.usageWindows);
   }
@@ -332,6 +341,7 @@ export const createRequest = async (payload, userId) => {
     customerEmail: input.customerEmail.trim(),
     accountCount: input.accountCount,
     costingMode: input.costingMode,
+    accessType: input.accessType,
     startDate: start,
     endDate: end,
     region: input.region.trim(),

@@ -38,7 +38,7 @@ async function enforceWindowForRequest(request) {
   if (!isRequestWithinServicePeriod(request)) {
     let disabledCount = 0;
     for (const user of users) {
-      disableIamUser(user.userId);
+      await disableIamUser(String(request._id), user.userId);
       disabledCount += 1;
     }
 
@@ -84,10 +84,10 @@ async function enforceWindowForRequest(request) {
     );
 
     if (shouldBeActive && !limitReached) {
-      enableIamUser(user.userId);
+      await enableIamUser(String(request._id), user.userId);
       enabledCount += 1;
     } else {
-      disableIamUser(user.userId);
+      await disableIamUser(String(request._id), user.userId);
       disabledCount += 1;
     }
   }

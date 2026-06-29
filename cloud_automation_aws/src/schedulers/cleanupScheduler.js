@@ -21,7 +21,12 @@ export async function runCleanupCheck() {
     let cleaned = 0;
 
     for (const request of requests) {
-      for (const role of request.labRoles || []) {
+      const users =
+        request.accessType === 'identity_center'
+          ? request.identityUsers || []
+          : request.labRoles || [];
+
+      for (const role of users) {
         if (role.suspended) continue;
 
         const lastCleanup = role.lastCleanupAt

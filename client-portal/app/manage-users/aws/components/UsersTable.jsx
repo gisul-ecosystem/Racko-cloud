@@ -20,7 +20,7 @@ export default function UsersTable({
         <div className="border-b border-gray-100 px-6 py-4">
           <div className="h-4 w-40 animate-pulse rounded bg-gray-200" />
         </div>
-        <TableSkeleton rows={5} cols={7} embedded />
+        <TableSkeleton rows={5} cols={9} embedded />
       </div>
     );
   }
@@ -49,7 +49,7 @@ export default function UsersTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] text-left text-sm">
+        <table className="w-full min-w-[1100px] text-left text-sm">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
               <th className="px-4 py-3 font-medium">Username</th>
@@ -58,6 +58,7 @@ export default function UsersTable({
               <th className="px-4 py-3 font-medium">Permissions</th>
               <th className="px-4 py-3 font-medium">Expiry</th>
               <th className="px-4 py-3 font-medium">Console</th>
+              <th className="px-4 py-3 font-medium">Session</th>
               <th className="px-4 py-3 font-medium">Budget &amp; Cleanup</th>
             </tr>
           </thead>

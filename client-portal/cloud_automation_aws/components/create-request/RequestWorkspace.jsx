@@ -123,6 +123,10 @@ export function RequestWorkspace() {
   const [costingMode, setCostingMode] = useState('shared');
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
+  const [accessType, setAccessType] = useState(() => {
+    const days = durationDaysBetween(defaultStartDate, defaultEndDate);
+    return days > 7 ? 'identity_center' : 'magic_link';
+  });
   const [enableDailyUsage, setEnableDailyUsage] = useState(false);
   const [usageWindows, setUsageWindows] = useState([]);
   const [timezone, setTimezone] = useState('Asia/Kolkata');
@@ -337,6 +341,7 @@ export function RequestWorkspace() {
       customer_email: customerEmail.trim(),
       account_count: accountCount,
       costing_mode: costingMode,
+      access_type: accessType,
       start_date: startDate,
       end_date: endDate,
       enable_daily_usage: enableDailyUsage && normalizedUsageWindows.length > 0,
@@ -416,6 +421,8 @@ export function RequestWorkspace() {
               onAccountCountChange={setAccountCount}
               costingMode={costingMode}
               onCostingModeChange={setCostingMode}
+              accessType={accessType}
+              onAccessTypeChange={setAccessType}
               startDate={startDate}
               onStartDateChange={setStartDate}
               endDate={endDate}

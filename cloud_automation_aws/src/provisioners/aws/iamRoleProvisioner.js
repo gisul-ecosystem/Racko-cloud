@@ -6,6 +6,7 @@ import {
 } from '@aws-sdk/client-iam';
 import { iamClient, MASTER_ACCOUNT_ID } from '../../config/aws.js';
 import { INLINE_IAM_POLICIES, INLINE_IAM_POLICY_ALIASES } from '../../config/iamPolicies.js';
+import { magicLinkSessionSeconds } from '../../utils/magicLinkSession.js';
 
 function buildRoleName(request, userIndex) {
   const idSuffix = String(request._id).slice(-8);
@@ -73,7 +74,7 @@ export async function createLabRole(request, userIndex) {
         RoleName: roleName,
         AssumeRolePolicyDocument: JSON.stringify(trustPolicy),
         Description: `Racko lab role for request ${request._id} user ${userIndex + 1}`,
-        MaxSessionDuration: 28800,
+        MaxSessionDuration: magicLinkSessionSeconds(),
         Tags: [
           { Key: 'racko:request', Value: String(request._id) },
           { Key: 'racko:user-index', Value: String(userIndex + 1) },

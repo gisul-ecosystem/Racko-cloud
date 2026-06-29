@@ -7,6 +7,7 @@ import {
 } from '../../../../cloud_automation_aws/api/managePortalClient';
 import BudgetCleanupCell from './BudgetCleanupCell';
 import LaunchConsoleButton from './LaunchConsoleButton';
+import SessionInfo from './SessionInfo';
 
 function StatusBadge({ suspended, servicePeriodBlocked }) {
   if (servicePeriodBlocked) {
@@ -89,10 +90,22 @@ export default function UserRow({
   const expiryDate = portalData.endDate
     ? new Date(portalData.endDate).toISOString().split('T')[0]
     : '—';
+  const isIdentityCenter = portalData.accessType === 'identity_center';
 
   return (
     <tr className="border-b border-gray-50 transition hover:bg-gray-50">
-      <td className="px-4 py-3 font-medium text-gray-900">{user.username}</td>
+      <td className="px-4 py-3 font-medium text-gray-900">
+        <div>{user.username}</div>
+        {isIdentityCenter ? (
+          <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-800">
+            🔐 Direct IAM Login
+          </span>
+        ) : (
+          <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
+            🔗 Magic Link
+          </span>
+        )}
+      </td>
 
       <td className="px-4 py-3 font-mono text-xs text-gray-600" title={user.roleName}>
         {truncateRole(user.roleName)}
@@ -147,15 +160,45 @@ export default function UserRow({
       <td className="px-4 py-3 text-gray-600">{expiryDate}</td>
 
       <td className="px-4 py-3">
-        <LaunchConsoleButton
-          requestId={requestId}
-          userIndex={user.userIndex}
-          jwtToken={jwtToken}
-          suspended={user.suspended}
-          servicePeriodBlocked={user.servicePeriodBlocked}
-          servicePeriodMessage={user.servicePeriodMessage}
-          onFeedback={onFeedback}
-        />
+        {isIdentityCenter ? (
+          <div className="flex flex-col gap-1">
+            {user.suspended || user.servicePeriodBlocked ? (
+              <span className="text-xs text-gray-400">Access blocked</span>
+            ) : user.consoleUrl ? (
+              <>
+                <a
+                  href={user.consoleUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs font-medium text-blue-700 underline"
+                >
+                  Open Console
+                </a>
+                {user.password ? (
+                  <span className="font-mono text-[10px] text-gray-500" title="Console password">
+                    {user.username} / {user.password}
+                  </span>
+                ) : null}
+              </>
+            ) : (
+              <span className="text-xs text-gray-400">No console URL</span>
+            )}
+          </div>
+        ) : (
+          <LaunchConsoleButton
+            requestId={requestId}
+            userIndex={user.userIndex}
+            jwtToken={jwtToken}
+            suspended={user.suspended}
+            servicePeriodBlocked={user.servicePeriodBlocked}
+            servicePeriodMessage={user.servicePeriodMessage}
+            onFeedback={onFeedback}
+          />
+        )}
+      </td>
+
+      <td className="px-4 py-3 align-top">
+        <SessionInfo requestId={requestId} userIndex={user.userIndex} jwtToken={jwtToken} />
       </td>
 
       <td className="px-4 py-3 align-top">

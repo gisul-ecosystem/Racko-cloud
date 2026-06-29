@@ -60,70 +60,86 @@ export async function verifyManagePortalLogin(token, username, password) {
   };
 }
 
+function buildMagicLinkUserEntry(role, servicePeriod) {
+  const username = `labuser${role.userIndex + 1}`;
+  const base = {
+    userIndex: role.userIndex,
+    username,
+    roleName: role.roleName,
+    spendUsd: role.currentSpend || 0,
+    budgetExceeded: role.budgetExceeded || false,
+    suspended: role.suspended || false,
+  };
+
+  if (role.suspended) {
+    return {
+      ...base,
+      consoleUrl: null,
+      servicePeriodBlocked: !servicePeriod.allowed,
+      servicePeriodMessage: servicePeriod.message,
+    };
+  }
+
+  if (!servicePeriod.allowed) {
+    return {
+      ...base,
+      consoleUrl: null,
+      servicePeriodBlocked: true,
+      servicePeriodMessage: servicePeriod.message,
+    };
+  }
+
+  return {
+    ...base,
+    consoleUrl: null,
+    servicePeriodBlocked: false,
+    servicePeriodMessage: null,
+  };
+}
+
+function buildIdentityCenterUserEntry(user, servicePeriod) {
+  const blocked = user.suspended || !servicePeriod.allowed;
+
+  return {
+    userIndex: user.userIndex,
+    username: user.username,
+    email: user.email,
+    roleName: user.username,
+    accountId: user.accountId || user.awsAccountId,
+    consoleUrl: blocked ? null : user.consoleUrl,
+    password: blocked ? null : user.password,
+    suspended: user.suspended || false,
+    budgetExceeded: user.budgetExceeded || false,
+    spendUsd: user.currentSpend || 0,
+    needsActivation: false,
+    servicePeriodBlocked: !servicePeriod.allowed,
+    servicePeriodMessage: servicePeriod.allowed ? null : servicePeriod.message,
+  };
+}
+
 export async function getManagePortalData(requestId) {
   const request = await Request.findById(requestId);
   if (!request) throw new Error('Request not found');
 
   const servicePeriod = evaluateServicePeriodAccess(request);
-  const labRoles = request.labRoles || [];
-  const consoleUrls = [];
+  const accessType = request.accessType || 'magic_link';
+  const isMagicLink = accessType !== 'identity_center';
 
-  for (const role of labRoles) {
-    const username = `labuser${role.userIndex + 1}`;
-
-    if (role.suspended) {
-      consoleUrls.push({
-        userIndex: role.userIndex,
-        username,
-        roleName: role.roleName,
-        consoleUrl: null,
-        suspended: true,
-        servicePeriodBlocked: !servicePeriod.allowed,
-        servicePeriodMessage: servicePeriod.message,
-        spendUsd: role.currentSpend || 0,
-        budgetExceeded: role.budgetExceeded || false,
-      });
-      continue;
-    }
-
-    if (!servicePeriod.allowed) {
-      consoleUrls.push({
-        userIndex: role.userIndex,
-        username,
-        roleName: role.roleName,
-        consoleUrl: null,
-        suspended: false,
-        servicePeriodBlocked: true,
-        servicePeriodMessage: servicePeriod.message,
-        spendUsd: role.currentSpend || 0,
-        budgetExceeded: role.budgetExceeded || false,
-      });
-      continue;
-    }
-
-    consoleUrls.push({
-      userIndex: role.userIndex,
-      username,
-      roleName: role.roleName,
-      consoleUrl: null,
-      suspended: false,
-      servicePeriodBlocked: false,
-      servicePeriodMessage: null,
-      spendUsd: role.currentSpend || 0,
-      budgetExceeded: role.budgetExceeded || false,
-    });
-  }
+  const consoleUrls = isMagicLink
+    ? (request.labRoles || []).map((role) => buildMagicLinkUserEntry(role, servicePeriod))
+    : (request.identityUsers || []).map((user) => buildIdentityCenterUserEntry(user, servicePeriod));
 
   return {
     requestId,
     customerEmail: request.customerEmail,
     region: request.region,
     awsAccountId: request.awsAccountId,
-    allowedServices: (request.selectedServices || []).map((s) => s.serviceName),
+    allowedServices: (request.selectedServices || []).map((service) => service.serviceName),
     accountCount: request.accountCount,
     startDate: request.startDate,
     endDate: request.endDate,
     status: request.status,
+    accessType,
     perUserBudgetUsd: request.perUserBudgetUsd,
     cleanupEnabled: request.cleanupEnabled || false,
     cleanupIntervalHours: request.cleanupIntervalHours,

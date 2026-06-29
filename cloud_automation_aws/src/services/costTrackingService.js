@@ -7,7 +7,10 @@ function formatDate(date) {
   return date.toISOString().split('T')[0];
 }
 
-export async function fetchUserSpend(username, startDate, endDate) {
+export async function fetchUserSpend(username, requestId, startDate, endDate, accessType = 'magic_link') {
+  const tagKey = accessType === 'magic_link' ? 'racko:user' : 'racko:request';
+  const tagValue = accessType === 'magic_link' ? username : String(requestId);
+
   const command = new GetCostAndUsageCommand({
     TimePeriod: {
       Start: formatDate(startDate),
@@ -15,10 +18,7 @@ export async function fetchUserSpend(username, startDate, endDate) {
     },
     Granularity: 'DAILY',
     Filter: {
-      Tags: {
-        Key: 'racko:user',
-        Values: [username],
-      },
+      Tags: { Key: tagKey, Values: [tagValue] },
     },
     GroupBy: [{ Type: 'DIMENSION', Key: 'SERVICE' }],
     Metrics: ['UnblendedCost'],
@@ -58,43 +58,56 @@ export async function fetchUserSpend(username, startDate, endDate) {
 
 export async function syncRequestUserSpend(requestId) {
   const request = await Request.findById(requestId);
-  if (!request || request.status !== 'Completed') return;
+  if (!request || request.status !== 'Completed') return [];
 
   const today = formatDate(new Date());
   const startDate = new Date(request.startDate);
   const endDate = new Date();
+  const accessType = request.accessType || 'magic_link';
+
+  const users =
+    accessType === 'magic_link'
+      ? (request.labRoles || []).map((r) => ({
+          userIndex: r.userIndex,
+          username: `labuser${r.userIndex + 1}`,
+        }))
+      : (request.identityUsers || []).map((u) => ({
+          userIndex: u.userIndex,
+          username: u.username,
+        }));
 
   const results = [];
 
-  for (const role of request.labRoles || []) {
-    const username = `labuser${role.userIndex + 1}`;
-    const spend = await fetchUserSpend(username, startDate, endDate);
+  for (const user of users) {
+    const spend = await fetchUserSpend(
+      user.username,
+      requestId,
+      startDate,
+      endDate,
+      accessType
+    );
 
     await UserSpend.findOneAndUpdate(
-      { requestId, username, date: today },
+      { requestId, username: user.username, date: today },
       {
         requestId,
-        username,
-        userId: String(role.userIndex),
+        username: user.username,
+        userId: String(user.userIndex),
         date: today,
         spendUsd: spend.totalSpend,
         services: spend.services,
-        budgetExceeded: Boolean(role.budgetExceeded),
         syncedAt: new Date(),
       },
       { upsert: true, new: true }
     );
 
+    const field = accessType === 'magic_link' ? 'labRoles' : 'identityUsers';
     await Request.findOneAndUpdate(
-      { _id: requestId, 'labRoles.userIndex': role.userIndex },
-      { $set: { 'labRoles.$.currentSpend': spend.totalSpend } }
+      { _id: requestId, [`${field}.userIndex`]: user.userIndex },
+      { $set: { [`${field}.$.currentSpend`]: spend.totalSpend } }
     );
 
-    results.push({
-      username,
-      spendUsd: spend.totalSpend,
-      services: spend.services,
-    });
+    results.push({ username: user.username, spendUsd: spend.totalSpend, services: spend.services });
   }
 
   return results;
@@ -109,12 +122,23 @@ export async function getAllUsersSpend(requestId) {
 
   if (!request) return [];
 
+  const accessType = request.accessType || 'magic_link';
   const spendByUsername = new Map(
     spendRecords.map((record) => [record.username, record.toObject()])
   );
 
-  return (request.labRoles || []).map((role) => {
-    const username = `labuser${role.userIndex + 1}`;
+  const users =
+    accessType === 'magic_link'
+      ? (request.labRoles || []).map((role) => ({
+          role,
+          username: `labuser${role.userIndex + 1}`,
+        }))
+      : (request.identityUsers || []).map((user) => ({
+          role: user,
+          username: user.username,
+        }));
+
+  return users.map(({ role, username }) => {
     const record = spendByUsername.get(username);
     return {
       username,

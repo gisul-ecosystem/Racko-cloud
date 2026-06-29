@@ -15,6 +15,7 @@
     "@aws-sdk/client-budgets": "^3.840.0",
     "@aws-sdk/client-cloudformation": "^3.840.0",
     "@aws-sdk/client-cloudfront": "^3.1075.0",
+    "@aws-sdk/client-cloudtrail": "^3.1075.0",
     "@aws-sdk/client-cloudwatch": "^3.840.0",
     "@aws-sdk/client-cost-explorer": "^3.840.0",
     "@aws-sdk/client-dynamodb": "^3.1075.0",

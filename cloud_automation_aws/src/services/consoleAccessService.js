@@ -1,6 +1,26 @@
+import { GetRoleCommand } from '@aws-sdk/client-iam';
 import { AssumeRoleCommand } from '@aws-sdk/client-sts';
 import https from 'https';
-import { stsClient } from '../config/aws.js';
+import { iamClient, stsClient } from '../config/aws.js';
+import { magicLinkSessionSeconds } from '../utils/magicLinkSession.js';
+import { startMagicLinkSession } from './sessionTrackingService.js';
+
+async function resolveSessionDuration(roleArn, requestedSeconds) {
+  const roleName = roleArn.split('/').pop();
+  if (!roleName) return requestedSeconds;
+
+  try {
+    const role = await iamClient.send(new GetRoleCommand({ RoleName: roleName }));
+    const maxDuration = role.Role?.MaxSessionDuration;
+    if (maxDuration && requestedSeconds > maxDuration) {
+      return maxDuration;
+    }
+  } catch (err) {
+    console.warn(`[consoleAccess] Could not fetch role max session duration: ${err.message}`);
+  }
+
+  return requestedSeconds;
+}
 
 async function getSigninToken(credentials) {
   const sessionJson = JSON.stringify({
@@ -31,12 +51,14 @@ async function getSigninToken(credentials) {
   });
 }
 
-export async function generateConsoleUrl(roleArn, sessionName, durationSeconds = 28800) {
+export async function generateConsoleUrl(roleArn, sessionName, durationSeconds) {
+  const requestedDuration = durationSeconds ?? magicLinkSessionSeconds();
+  const resolvedDuration = await resolveSessionDuration(roleArn, requestedDuration);
   const assumed = await stsClient.send(
     new AssumeRoleCommand({
       RoleArn: roleArn,
       RoleSessionName: sessionName.slice(0, 64),
-      DurationSeconds: durationSeconds,
+      DurationSeconds: resolvedDuration,
     })
   );
 
@@ -50,7 +72,7 @@ export async function generateConsoleUrl(roleArn, sessionName, durationSeconds =
 
   return {
     consoleUrl,
-    expiresAt: new Date(Date.now() + durationSeconds * 1000),
+    expiresAt: new Date(Date.now() + resolvedDuration * 1000),
     roleArn,
     sessionName,
   };
@@ -77,4 +99,18 @@ export async function generateAllConsoleUrls(labRoles, requestId) {
   }
 
   return urls;
+}
+
+export async function generateAndLogConsoleUrl(requestId, userIndex, roleArn, sessionName, durationSeconds) {
+  const result = await generateConsoleUrl(roleArn, sessionName, durationSeconds);
+
+  await startMagicLinkSession(
+    requestId,
+    userIndex,
+    roleArn,
+    sessionName,
+    result.expiresAt
+  );
+
+  return result;
 }

@@ -1,12 +1,21 @@
 import cron from 'node-cron';
 import { DateTime } from 'luxon';
 import Request from '../models/Request.js';
+import { monitorAwsConsoleLogins, monitorIdleUsageSessions, monitorStaleSessions } from '../services/awsConsoleLoginMonitor.js';
+import { syncActiveMagicLinkUsageSessions } from '../services/sessionTrackingService.js';
 import {
-  disableIamUser,
+  handleDailyLimitReached,
+  monitorActiveSessions,
+} from '../services/usageService.js';
+import {
   getProvisionedUsers,
-  getTodayWindowForRequest,
   getUserDailyLimitState,
 } from '../utils/provisionedUsers.js';
+import {
+  getDailyLimitHours,
+  getRequestTimezone,
+  sumConsumedMinutesToday,
+} from '../utils/usageWindowAccess.js';
 
 let usageMonitorTask = null;
 let dailyResetTask = null;
@@ -28,154 +37,69 @@ const logEvent = (level, event, details = {}) => {
   console.log(message);
 };
 
-function getRequestTimezone(request) {
-  const windows = request.usageWindows || [];
-  return windows[0]?.timezone || request.timezone || 'Asia/Kolkata';
-}
+async function enforceDailyLimitsForRequest(request) {
+  const timezone = getRequestTimezone(request);
+  const nowInTz = DateTime.now().setZone(timezone);
+  const todayDate = nowInTz.toISODate();
+  const dailyLimitHours = getDailyLimitHours(request, nowInTz);
+  if (dailyLimitHours == null) return;
 
-function getDailyLimitHours(request, nowInTz) {
-  const todayWindow = getTodayWindowForRequest(request, nowInTz);
-  if (!todayWindow) {
-    return null;
-  }
-  return todayWindow.dailyLimitHours ?? todayWindow.daily_limit_hours ?? null;
-}
+  const users = getProvisionedUsers(request);
 
-function sumConsumedMinutesToday(sessions, todayDate, timezone) {
-  const dayStart = DateTime.fromISO(todayDate, { zone: timezone }).startOf('day');
-  const dayEnd = dayStart.endOf('day');
+  for (const user of users) {
+    const state = getUserDailyLimitState(request, user.userId);
+    if (state?.dailyLimitReached) continue;
 
-  let total = 0;
-  for (const session of sessions) {
-    const loginAt = DateTime.fromJSDate(new Date(session.loginAt)).setZone(timezone);
-    if (loginAt < dayStart || loginAt > dayEnd) {
-      continue;
-    }
-
-    const logoutAt = session.logoutAt
-      ? DateTime.fromJSDate(new Date(session.logoutAt)).setZone(timezone)
-      : DateTime.now().setZone(timezone);
-
-    total += logoutAt.diff(loginAt, 'minutes').minutes;
-  }
-
-  return Math.max(0, total);
-}
-
-async function handleDailyLimitReached(request, user, consumedMinutes, dailyLimitHours) {
-  disableIamUser(user.userId);
-
-  const existingState = (request.usageUserStates || []).some(
-    (entry) => entry.userId === user.userId
-  );
-
-  if (existingState) {
-    await Request.findOneAndUpdate(
-      { _id: request._id },
-      {
-        $set: {
-          'usageUserStates.$[existing].dailyLimitReached': true,
-          updatedAt: new Date(),
-        },
-      },
-      { arrayFilters: [{ 'existing.userId': user.userId }] }
+    const userSessions = (request.usageSessions || []).filter(
+      (session) => session.userId === user.userId
     );
-  } else {
-    await Request.findByIdAndUpdate(request._id, {
-      $push: {
-        usageUserStates: {
-          userId: user.userId,
-          username: user.username,
-          email: user.email,
-          dailyLimitReached: true,
-        },
-      },
-      updatedAt: new Date(),
-    });
+    const consumedMinutes = sumConsumedMinutesToday(userSessions, todayDate, timezone);
+
+    if (consumedMinutes >= dailyLimitHours * 60) {
+      await handleDailyLimitReached(request, user, consumedMinutes, dailyLimitHours);
+    }
   }
-
-  await Request.updateOne(
-    { _id: request._id },
-    {
-      $set: {
-        'usageSessions.$[session].logoutAt': new Date(),
-        updatedAt: new Date(),
-      },
-    },
-    { arrayFilters: [{ 'session.userId': user.userId, 'session.logoutAt': null }] }
-  );
-
-  console.log(
-    `[UsageScheduler] Daily limit reached for ${user.username} — account disabled (${consumedMinutes.toFixed(1)}/${dailyLimitHours * 60} min)`
-  );
-  console.log('[Email] Daily limit email to', user.email || user.username);
 }
 
 async function monitorUsageSessions() {
+  await monitorAwsConsoleLogins();
+  await monitorIdleUsageSessions();
+  await monitorActiveSessions();
+  await monitorStaleSessions();
+
   const requests = await Request.find({
+    status: 'Completed',
+    $or: [{ enableDailyUsage: true }, { 'usageWindows.0': { $exists: true } }],
+    startDate: { $lte: new Date() },
+    endDate: { $gte: new Date() },
+  }).select('_id accessType');
+
+  for (const request of requests) {
+    try {
+      await syncActiveMagicLinkUsageSessions(String(request._id));
+    } catch (err) {
+      logEvent('error', 'magic_link_usage_sync_failed', {
+        requestId: String(request._id),
+        error: err.message,
+      });
+    }
+  }
+
+  const dailyLimitRequests = await Request.find({
     status: 'Completed',
     enableDailyUsage: true,
     startDate: { $lte: new Date() },
     endDate: { $gte: new Date() },
   });
 
-  for (const request of requests) {
-    const timezone = getRequestTimezone(request);
-    const nowInTz = DateTime.now().setZone(timezone);
-    const todayDate = nowInTz.toISODate();
-    const dailyLimitHours = getDailyLimitHours(request, nowInTz);
-    const users = getProvisionedUsers(request);
-
-    for (const user of users) {
-      const state = getUserDailyLimitState(request, user.userId);
-      if (state?.dailyLimitReached) {
-        continue;
-      }
-
-      console.log('[UsageScheduler] Checking CloudTrail for', user.userId);
-
-      const openSession = (request.usageSessions || []).find(
-        (session) => session.userId === user.userId && !session.logoutAt
-      );
-
-      if (!openSession) {
-        const withinWindow = Boolean(getTodayWindowForRequest(request, nowInTz));
-        if (withinWindow) {
-          await Request.findByIdAndUpdate(request._id, {
-            $push: {
-              usageSessions: {
-                userId: user.userId,
-                username: user.username,
-                loginAt: new Date(),
-                logoutAt: null,
-              },
-            },
-            updatedAt: new Date(),
-          });
-          logEvent('info', 'session_created_stub', {
-            requestId: String(request._id),
-            userId: user.userId,
-          });
-        }
-      }
-
-      const refreshed = await Request.findById(request._id).lean();
-      const userSessions = (refreshed.usageSessions || []).filter(
-        (session) => session.userId === user.userId
-      );
-      const consumedMinutes = sumConsumedMinutesToday(userSessions, todayDate, timezone);
-
-      if (
-        dailyLimitHours != null &&
-        consumedMinutes >= dailyLimitHours * 60
-      ) {
-        await handleDailyLimitReached(
-          refreshed,
-          user,
-          consumedMinutes,
-          dailyLimitHours
-        );
-      }
+  for (const request of dailyLimitRequests) {
+    try {
+      await enforceDailyLimitsForRequest(request);
+    } catch (err) {
+      logEvent('error', 'enforce_daily_limit_failed', {
+        requestId: String(request._id),
+        error: err.message,
+      });
     }
   }
 }
@@ -195,6 +119,19 @@ async function resetDailyUsageCounters() {
         updatedAt: new Date(),
       },
     });
+
+    const users = getProvisionedUsers(request);
+    for (const user of users) {
+      await Request.findOneAndUpdate(
+        { _id: request._id, 'labRoles.userIndex': user.userIndex },
+        {
+          $set: {
+            'labRoles.$.suspended': false,
+            updatedAt: new Date(),
+          },
+        }
+      );
+    }
 
     logEvent('info', 'daily_reset_applied', { requestId: String(request._id) });
   }

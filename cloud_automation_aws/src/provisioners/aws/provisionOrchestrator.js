@@ -1,4 +1,8 @@
 import { createLabRoles, rollbackLabRoles } from './iamRoleProvisioner.js';
+import {
+  provisionIdentityUsers,
+  rollbackIdentityUsers,
+} from './identityProvisioner.js';
 import { createManagePortalSession } from '../../services/managePortalService.js';
 import { sendCredentialsEmail } from './emailProvisioner.js';
 import { resolveLabAccount } from './accountProvisioner.js';
@@ -13,6 +17,32 @@ import {
   updateStep,
 } from '../../services/progressTracker.js';
 
+function mapIdentityUsersForStorage(users = []) {
+  return users.map((user) => ({
+    userIndex: user.userIndex,
+    username: user.username,
+    email: user.email,
+    userId: user.userId,
+    password: user.password,
+    accountId: user.accountId || user.awsAccountId,
+    awsAccountId: user.awsAccountId || user.accountId,
+    consoleUrl: user.consoleUrl,
+    needsActivation: user.needsActivation ?? false,
+    policies: user.policies || [],
+    suspended: user.suspended ?? false,
+    budgetExceeded: user.budgetExceeded ?? false,
+    currentSpend: user.currentSpend ?? 0,
+  }));
+}
+
+function buildLabAccounts(request, awsAccountId) {
+  const ids = request.awsAccountIds?.length ? request.awsAccountIds : [awsAccountId];
+  return ids.filter(Boolean).map((accountId, index) => ({
+    accountId,
+    accountName: `lab-${index + 1}`,
+  }));
+}
+
 async function runStep(requestId, stepKey, stepName, stepNumber, handler) {
   const log = await logStepStart(requestId, stepNumber, stepName);
   try {
@@ -26,10 +56,24 @@ async function runStep(requestId, stepKey, stepName, stepNumber, handler) {
   }
 }
 
-async function rollback(request, context) {
-  if (context.labRoles?.length) await rollbackLabRoles(context.labRoles);
-  if (context.scpResult && !context.scpResult.skipped) {
-    await rollbackScpResources(context.scpResult);
+async function rollbackAll(request, context, isMagicLink) {
+  try {
+    if (!isMagicLink) {
+      if (context.identityUsers?.length) {
+        await rollbackIdentityUsers({
+          identityUsers: context.identityUsers,
+          awsAccountId: context.awsAccountId,
+        });
+      }
+    } else if (context.labRoles?.length) {
+      await rollbackLabRoles(context.labRoles);
+    }
+
+    if (context.scpResult && !context.scpResult.skipped) {
+      await rollbackScpResources(context.scpResult);
+    }
+  } catch (err) {
+    console.error('[orchestrator] Rollback error:', err.message);
   }
 }
 
@@ -38,6 +82,8 @@ async function resetRequestAfterFailure(requestId) {
     awsAccountId: null,
     awsAccountIds: [],
     labRoles: [],
+    identityUsers: [],
+    permissionSetArns: [],
     provisionedResources: {
       ou: null,
       scps: [],
@@ -62,10 +108,14 @@ export async function run(requestId) {
     return request;
   }
 
+  const isMagicLink = request.accessType !== 'identity_center';
   const context = {
     awsAccountId: null,
     scpResult: null,
     labRoles: [],
+    identityUsers: [],
+    permSetArns: [],
+    assignments: [],
     portalSession: null,
   };
 
@@ -114,24 +164,47 @@ export async function run(requestId) {
       );
     }
 
-    if (!request.labRoles?.length) {
-      context.labRoles = await runStep(requestId, 'ROLES', 'Create IAM lab roles', 3, () =>
-        createLabRoles(request)
-      );
+    const hasUsers = isMagicLink ? request.labRoles?.length : request.identityUsers?.length;
 
-      request = await Request.findByIdAndUpdate(
-        requestId,
-        { labRoles: context.labRoles, updatedAt: new Date() },
-        { new: true }
-      );
-    } else {
+    if (!hasUsers) {
+      context.identityUsers = [];
+      context.labRoles = [];
+
+      await runStep(requestId, 'ROLES', 'Create lab users/roles', 3, async () => {
+        if (isMagicLink) {
+          context.labRoles = await createLabRoles(request);
+          await Request.findByIdAndUpdate(requestId, {
+            labRoles: context.labRoles,
+            updatedAt: new Date(),
+          });
+          return { count: context.labRoles.length, type: 'iam_roles' };
+        }
+
+        const accounts = buildLabAccounts(request, context.awsAccountId);
+        context.identityUsers = await provisionIdentityUsers(request, accounts);
+        await Request.findByIdAndUpdate(requestId, {
+          identityUsers: mapIdentityUsersForStorage(context.identityUsers),
+          updatedAt: new Date(),
+        });
+        return { count: context.identityUsers.length, type: 'iam_users' };
+      });
+    } else if (isMagicLink) {
       context.labRoles = request.labRoles;
+    } else {
+      context.identityUsers = request.identityUsers;
     }
 
-    await runStep(requestId, 'POLICY', 'Attach permissions', 4, async () => ({
-      attached: true,
-      roleCount: context.labRoles.length,
-    }));
+    if (!isMagicLink) {
+      await runStep(requestId, 'POLICY', 'Assign permissions', 4, async () => {
+        console.log('[Orchestrator] Step 4 skipped for IAM User path — policies attached in Step 3');
+        return { skipped: true, reason: 'iam_user_inline_policies' };
+      });
+    } else if (isMagicLink) {
+      await runStep(requestId, 'POLICY', 'Attach permissions', 4, async () => ({
+        attached: true,
+        roleCount: context.labRoles.length,
+      }));
+    }
 
     if (!request.credentialsSent) {
       context.portalSession = await runStep(
@@ -146,19 +219,22 @@ export async function run(requestId) {
         sendCredentialsEmail(request, {
           awsAccountId: context.awsAccountId,
           labRoles: context.labRoles,
+          identityUsers: context.identityUsers,
           portalSession: context.portalSession,
+          accessType: request.accessType,
+          isMagicLink,
         })
       );
     }
 
-    console.log(`[orchestrator] Provisioning completed for request ${requestId}`);
+    console.log(`[orchestrator] Provisioning completed for ${requestId} (${request.accessType})`);
     return complete(requestId);
   } catch (err) {
     console.error(`[orchestrator] Failed for ${requestId}:`, err.message);
     await fail(requestId, err.message || 'Provisioning failed');
     request = await Request.findById(requestId);
     if (request) {
-      await rollback(request, context);
+      await rollbackAll(request, context, isMagicLink);
       await resetRequestAfterFailure(requestId);
     }
     throw err;

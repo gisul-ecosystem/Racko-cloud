@@ -1,4 +1,12 @@
+import Request from '../models/Request.js';
+
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function parseUserIndexFromUserId(userId) {
+  const match = String(userId || '').match(/^labuser(\d+)$/i);
+  if (!match) return null;
+  return Number(match[1]) - 1;
+}
 
 /**
  * Resolve provisioned IAM IC users from provisionStatus or legacy provisionedResources.
@@ -6,9 +14,10 @@ const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 export function getProvisionedUsers(request) {
   const fromSteps = request.provisionStatus?.steps?.create_users?.output?.users;
   if (Array.isArray(fromSteps) && fromSteps.length > 0) {
-    return fromSteps.map((user) => ({
-      userId: user.userId || user.user_id,
-      username: user.username,
+    return fromSteps.map((user, index) => ({
+      userId: user.userId || user.user_id || `labuser${index + 1}`,
+      userIndex: user.userIndex ?? index,
+      username: user.username || `labuser${index + 1}`,
       email: user.email || user.username,
       dailyLimitReached: Boolean(user.dailyLimitReached ?? user.daily_limit_reached),
     }));
@@ -16,18 +25,20 @@ export function getProvisionedUsers(request) {
 
   const assignments = request.provisionedResources?.assignments || [];
   if (assignments.length > 0) {
-    return assignments.map((assignment) => ({
-      userId: assignment.userId,
-      username: assignment.username,
+    return assignments.map((assignment, index) => ({
+      userId: assignment.userId || `labuser${index + 1}`,
+      userIndex: assignment.userIndex ?? index,
+      username: assignment.username || `labuser${index + 1}`,
       email: assignment.username,
       dailyLimitReached: false,
     }));
   }
 
   const labRoles = request.labRoles || [];
-  return labRoles.map((role, index) => ({
-    userId: `labuser${index + 1}`,
-    username: `labuser${index + 1}`,
+  return labRoles.map((role) => ({
+    userId: `labuser${role.userIndex + 1}`,
+    userIndex: role.userIndex,
+    username: `labuser${role.userIndex + 1}`,
     email: null,
     dailyLimitReached: false,
   }));
@@ -65,10 +76,38 @@ export function formatWindowSummary(windows) {
     .join(', ');
 }
 
-export function enableIamUser(userId) {
-  console.log('[WindowEnforcement] Enabling', userId);
+export async function enableIamUser(requestId, userId) {
+  const userIndex = parseUserIndexFromUserId(userId);
+  if (userIndex == null || !requestId) {
+    console.log('[WindowEnforcement] Enabling', userId);
+    return;
+  }
+
+  await Request.findOneAndUpdate(
+    { _id: requestId, 'labRoles.userIndex': userIndex },
+    {
+      $set: {
+        'labRoles.$.suspended': false,
+        updatedAt: new Date(),
+      },
+    }
+  );
 }
 
-export function disableIamUser(userId) {
-  console.log('[WindowEnforcement] Disabling', userId);
+export async function disableIamUser(requestId, userId) {
+  const userIndex = parseUserIndexFromUserId(userId);
+  if (userIndex == null || !requestId) {
+    console.log('[WindowEnforcement] Disabling', userId);
+    return;
+  }
+
+  await Request.findOneAndUpdate(
+    { _id: requestId, 'labRoles.userIndex': userIndex },
+    {
+      $set: {
+        'labRoles.$.suspended': true,
+        updatedAt: new Date(),
+      },
+    }
+  );
 }

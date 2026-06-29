@@ -1,7 +1,7 @@
 'use client';
 
 import { AlertCircle } from 'lucide-react';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { COMMON_TIMEZONES } from '../../constants';
 import { inputClass, labelClass, sectionClass, timeInputClass } from './formStyles';
 import { InstancePicker } from './InstancePicker';
@@ -55,6 +55,8 @@ export function RequestForm({
   onAccountCountChange,
   costingMode,
   onCostingModeChange,
+  accessType,
+  onAccessTypeChange,
   startDate,
   onStartDateChange,
   endDate,
@@ -81,6 +83,14 @@ export function RequestForm({
   regionsLoading,
   regionsError,
 }) {
+  useEffect(() => {
+    if (!startDate || !endDate) return;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+    onAccessTypeChange(days > 7 ? 'identity_center' : 'magic_link');
+  }, [startDate, endDate, onAccessTypeChange]);
+
   const selectedServices = useMemo(
     () => services.filter((service) => selectedServiceIds.includes(service._id)),
     [services, selectedServiceIds]
@@ -210,6 +220,64 @@ export function RequestForm({
                 </label>
               </div>
             </div>
+
+            <div className="sm:col-span-2">
+              <span className={labelClass}>Access type</span>
+              <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                <button
+                  type="button"
+                  onClick={() => onAccessTypeChange('magic_link')}
+                  className={`rounded-lg border-2 p-4 text-left transition ${
+                    accessType === 'magic_link'
+                      ? 'border-[#B91C1C] bg-red-50/40'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-gray-900">🔗 Magic Link Access</div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Best for short labs (≤7 days). Admin generates one-click console links from the
+                    manage portal. No password needed.
+                  </p>
+                  <p className="mt-2 text-[11px] font-semibold text-[#B91C1C]">
+                    Max session: 12 hours per link
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => onAccessTypeChange('identity_center')}
+                  className={`rounded-lg border-2 p-4 text-left transition ${
+                    accessType === 'identity_center'
+                      ? 'border-[#B91C1C] bg-red-50/40'
+                      : 'border-gray-200 bg-white hover:border-gray-300'
+                  }`}
+                >
+                  <div className="text-sm font-semibold text-gray-900">🔐 Direct IAM Login</div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Best for long labs (&gt;7 days). Users receive username and password and can sign
+                    in directly to the AWS console for the full lab duration.
+                  </p>
+                  <p className="mt-2 text-[11px] font-semibold text-blue-800">
+                    Persistent access for full lab duration
+                  </p>
+                </button>
+              </div>
+
+              {accessType === 'identity_center' && (
+                <div className="mt-3 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  Each lab user gets an IAM account with a console username and password emailed
+                  directly. Users can log in anytime during the lab — no MFA or activation flow.
+                </div>
+              )}
+
+              {accessType === 'magic_link' && (
+                <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                  Magic links expire after 12 hours. Regenerate links from the manage portal for
+                  extended access.
+                </div>
+              )}
+            </div>
+
             <div>
               <label className={labelClass} htmlFor="startDate">
                 Service start date
@@ -483,7 +551,7 @@ export function RequestForm({
                 }}
               />
               <p className="mt-2 text-xs text-gray-500">
-                When a user&apos;s AWS spend exceeds this amount, their IAM Identity Center account
+                When a user&apos;s AWS spend exceeds this amount, their IAM lab account
                 is automatically disabled and they receive an email notification. An admin must
                 renew their budget to restore access.
               </p>

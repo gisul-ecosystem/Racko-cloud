@@ -55,8 +55,18 @@ const usageSessionSchema = new mongoose.Schema(
     username: String,
     loginAt: { type: Date, required: true },
     logoutAt: Date,
+    minutesUsed: Number,
   },
   { _id: true }
+);
+
+const processedCloudTrailEventSchema = new mongoose.Schema(
+  {
+    eventId: String,
+    userId: String,
+    processedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
 );
 
 const usageUserStateSchema = new mongoose.Schema(
@@ -87,8 +97,38 @@ const labRoleSchema = new mongoose.Schema(
     suspended: { type: Boolean, default: false },
     budgetExceeded: { type: Boolean, default: false },
     currentSpend: { type: Number, default: 0 },
+    totalSessionMins: { type: Number, default: 0 },
+    lastSessionAt: { type: Date },
     lastCleanupAt: { type: Date },
     cleanupLogs: [cleanupLogSchema],
+    linkUsed: { type: Boolean, default: false },
+    linkUsedAt: { type: Date },
+    policies: [String],
+    permissionSetArn: String,
+  },
+  { _id: false }
+);
+
+const identityUserSchema = new mongoose.Schema(
+  {
+    userIndex: Number,
+    username: String,
+    email: String,
+    userId: String,
+    password: String,
+    accountId: String,
+    awsAccountId: String,
+    consoleUrl: String,
+    permissionSetArn: String,
+    suspended: { type: Boolean, default: false },
+    budgetExceeded: { type: Boolean, default: false },
+    currentSpend: { type: Number, default: 0 },
+    totalSessionMins: { type: Number, default: 0 },
+    lastSessionAt: { type: Date },
+    lastCleanupAt: { type: Date },
+    cleanupLogs: [cleanupLogSchema],
+    needsActivation: { type: Boolean, default: false },
+    policies: [String],
   },
   { _id: false }
 );
@@ -136,6 +176,11 @@ const requestSchema = new mongoose.Schema(
     requestName: String,
     accountCount: { type: Number, required: true, min: 1, default: 10 },
     costingMode: { type: String, enum: ['shared', 'per_user'], default: 'shared' },
+    accessType: {
+      type: String,
+      enum: ['magic_link', 'identity_center'],
+      default: 'magic_link',
+    },
     startDate: { type: Date, required: true },
     endDate: { type: Date, required: true },
     region: { type: String, required: true },
@@ -189,6 +234,7 @@ const requestSchema = new mongoose.Schema(
 
     usageSessions: [usageSessionSchema],
     usageUserStates: [usageUserStateSchema],
+    processedCloudTrailEvents: [processedCloudTrailEventSchema],
 
     currentStep: { type: Number, default: 0 },
     progress: { type: Number, default: 0 },
@@ -197,6 +243,8 @@ const requestSchema = new mongoose.Schema(
     awsAccountIds: [String],
     accountCreationRequestId: String,
     labRoles: [labRoleSchema],
+    identityUsers: [identityUserSchema],
+    permissionSetArns: [String],
     provisionedResources: { type: provisionedResourcesSchema, default: () => ({}) },
 
     credentialsSent: { type: Boolean, default: false },

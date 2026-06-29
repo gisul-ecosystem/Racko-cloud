@@ -785,8 +785,9 @@ export async function cleanupUserResources(requestId, userIndex) {
   const request = await Request.findById(requestId);
   if (!request) throw new Error('Request not found');
 
-  const role = request.labRoles?.find((r) => r.userIndex === userIndex);
-  if (!role) throw new Error(`Role not found for userIndex ${userIndex}`);
+  const field = request.accessType === 'identity_center' ? 'identityUsers' : 'labRoles';
+  const user = request[field]?.find((entry) => entry.userIndex === userIndex);
+  if (!user) throw new Error(`User not found for userIndex ${userIndex}`);
 
   const allowedServices = (request.selectedServices || []).map((s) => s.serviceName);
 
@@ -810,11 +811,11 @@ export async function cleanupUserResources(requestId, userIndex) {
   }
 
   await Request.findOneAndUpdate(
-    { _id: requestId, 'labRoles.userIndex': userIndex },
+    { _id: requestId, [`${field}.userIndex`]: userIndex },
     {
-      $set: { 'labRoles.$.lastCleanupAt': new Date() },
+      $set: { [`${field}.$.lastCleanupAt`]: new Date() },
       $push: {
-        'labRoles.$.cleanupLogs': {
+        [`${field}.$.cleanupLogs`]: {
           cleanedAt: new Date(),
           results,
         },
@@ -830,8 +831,13 @@ export async function cleanupAllUsers(requestId) {
   const request = await Request.findById(requestId);
   if (!request) throw new Error('Request not found');
 
+  const users =
+    request.accessType === 'identity_center'
+      ? request.identityUsers || []
+      : request.labRoles || [];
+
   const allResults = [];
-  for (const role of request.labRoles || []) {
+  for (const role of users) {
     const result = await cleanupUserResources(requestId, role.userIndex);
     allResults.push({ userIndex: role.userIndex, ...result });
   }
