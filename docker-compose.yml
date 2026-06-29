@@ -53,6 +53,7 @@ services:
     environment:
       HOSTNAME: 0.0.0.0
       PORT: ${CLIENT_PORTAL_PORT:-3000}
+      GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
     depends_on:
       - cloud-gateway
     ports:

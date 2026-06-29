@@ -1,4 +1,5 @@
 import { apiRequest } from './apiClient';
+import { getGatewayBaseUrl } from './gatewayUrl';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -220,16 +221,13 @@ export async function issueAgentDownloadToken(
 }
 
 export function getAgentDownloadUrl(machineId: string, os: MachineOS): string {
-  const API_BASE = process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'http://localhost:8000';
-  return `${API_BASE}/api/v1/machines/${machineId}/download-agent?os=${os}`;
+  return `${getGatewayBaseUrl()}/api/v1/machines/${machineId}/download-agent?os=${os}`;
 }
 
 export function buildPublicDownloadUrl(downloadToken: string): string {
-  const API_BASE = process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'http://localhost:8000';
-  return `${API_BASE}/api/v1/machines/download-agent?dt=${downloadToken}`;
+  return `${getGatewayBaseUrl()}/api/v1/machines/download-agent?dt=${downloadToken}`;
 }
 
 export function getEnrollmentAgentDownloadUrl(os: MachineOS): string {
-  const API_BASE = process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'http://localhost:8000';
-  return `${API_BASE}/api/v1/agent/download-enrollment?os=${os}`;
+  return `${getGatewayBaseUrl()}/api/v1/agent/download-enrollment?os=${os}`;
 }
