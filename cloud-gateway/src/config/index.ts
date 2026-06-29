@@ -20,10 +20,8 @@ const envSchema = z.object({
   JWT_ACCESS_SECRET: z.string().min(64, 'JWT_ACCESS_SECRET must be at least 64 characters'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),
 
-  // CORS (+ optional portal URLs merged into allowedOrigins below)
+  // CORS
   ALLOWED_ORIGINS: z.string().min(1, 'ALLOWED_ORIGINS is required'),
-  FRONTEND_URL: z.string().url().optional(),
-  CLIENT_PORTAL_URL: z.string().url().optional(),
 
   // Timeouts
   REQUEST_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('10000'),
@@ -51,12 +49,5 @@ if (!parsed.success) {
 
 export const config = parsed.data;
 
-// Parse allowed origins; always include portal base URLs when set
-const originSet = new Set(
-  config.ALLOWED_ORIGINS.split(',')
-    .map((o) => o.trim())
-    .filter(Boolean)
-);
-if (config.FRONTEND_URL) originSet.add(config.FRONTEND_URL);
-if (config.CLIENT_PORTAL_URL) originSet.add(config.CLIENT_PORTAL_URL);
-export const allowedOrigins = [...originSet];
+// Parse allowed origins into array
+export const allowedOrigins = config.ALLOWED_ORIGINS.split(',').map((o) => o.trim());
