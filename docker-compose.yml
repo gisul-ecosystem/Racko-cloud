@@ -1,0 +1,34 @@
+version: '3.9'
+
+services:
+  core-api:
+    build:
+      context: .
+      dockerfile: core-api/Dockerfile
+    ports:
+      - '8001:5000'
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - tenant-assets:/data/tenant-assets
+
+  cloud-gateway:
+    build:
+      context: .
+      dockerfile: cloud-gateway/Dockerfile
+    ports:
+      - '8000:8000'
+    depends_on:
+      - core-api
+
+  client-portal:
+    build:
+      context: .
+      dockerfile: client-portal/Dockerfile
+    ports:
+      - '3000:3000'
+    depends_on:
+      - cloud-gateway
+
+volumes:
+  tenant-assets:
