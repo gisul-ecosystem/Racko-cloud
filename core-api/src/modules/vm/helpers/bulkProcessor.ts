@@ -23,6 +23,7 @@ import type { BulkVMSpec } from '../vm.types';
 import { notificationService } from '../../notification/notification.service';
 import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
 import { finalizeOrderAfterProvisionJob } from '../../order/orderPlanProvisioning.service';
+import { allocateVerifiedVmid } from './vmidAllocator';
 import { allocateIP, confirmIP, updateIpVmId } from '../ipAllocator.service';
 
 // QUEUE_SLOT: replace direct async call with message queue job (RabbitMQ/BullMQ)
@@ -538,8 +539,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     await new Promise<void>((resolve, reject) => {
       vmidMutex = vmidMutex.then(async () => {
         try {
-          const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-          vmid = response.data.data;
+          vmid = await allocateVerifiedVmid(spec.node);
 
           const cloneBody: Record<string, unknown> = {
             newid: vmid,
@@ -565,11 +565,14 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
             softwarePreInstalled: spec.softwarePreInstalled ?? false,
           });
 
+          logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: sending clone POST to Proxmox | data: ${JSON.stringify(cloneBody)}`);
+
           const cloneResponse = await proxmoxClient.post<{ data: string }>(
             cloneEndpoint,
             cloneBody
           );
           cloneUpid = cloneResponse.data.data;
+          logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: clone task started | data: upid=${cloneUpid}`);
           bulkCloneDiagLog('clone task started', {
             jobId: spec.jobId.toString(),
             clonePath,
@@ -597,7 +600,10 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
 
     // Poll inside the retry wrapper — a worker error here triggers a retry
     // with a brand-new VMID on the next iteration.
+    const cloneStartMs = Date.now();
     cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+    const cloneDurationMs = Date.now() - cloneStartMs;
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: clone task polling finished | data: result=${cloneResult} durationMs=${cloneDurationMs}`);
   }, { jobId: spec.jobId.toString(), vmName: spec.vmName, node: spec.node });
 
   bulkCloneDiagLog('clone task finished', {
@@ -666,6 +672,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
   // Allocate a public IP from the pool before configuring the VM.
   // If anything fails after this point, releaseIP is called in the catch below.
   const { ip: allocatedIP, gateway: allocatedGateway } = await allocateIP(vmid.toString());
+  logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: allocateIP returned | data: ip=${allocatedIP} gateway=${allocatedGateway}`);
 
   let vm!: InstanceType<typeof VM>;
   try {
@@ -673,19 +680,30 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     // the password for the template's built-in account (no ciuser rename).
     const configUpdates: Record<string, unknown> = {
       cipassword: consolePassword,
-      net0: 'virtio,bridge=vmbr0,firewall=0',
+      net0: 'virtio,bridge=vmbr0,firewall=1',
       ipconfig0: `ip=${allocatedIP}/24,gw=${allocatedGateway}`,
       nameserver: '8.8.8.8',
     };
     if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;
     if (spec.memoryGb !== spec.templateMemoryGb) configUpdates['memory'] = Math.round(spec.memoryGb * 1024);
 
-    await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
+    const maskedConfigUpdates = { ...configUpdates, cipassword: '*****' };
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: sending POST /config | data: ${JSON.stringify(maskedConfigUpdates)}`);
+    const configResponse = await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: POST /config response | data: status=success responseStatus=${(configResponse as { status?: number }).status ?? 'unknown'}`);
 
     // Regenerate the cloud-init drive so the new credentials take effect.
     // Best-effort: templates without a cloud-init drive return 404 — log and continue.
     try {
-      await proxmoxClient.put(`/nodes/${spec.node}/qemu/${vmid}/cloudinit`, {});
+      logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: sending PUT /cloudinit | data: timestamp=${new Date().toISOString()}`);
+      const cloudinitResponse = await proxmoxClient.put<{ data: string | null }>(`/nodes/${spec.node}/qemu/${vmid}/cloudinit`, {});
+      const cloudinitUpid = cloudinitResponse.data?.data;
+      if (cloudinitUpid) {
+        logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: PUT /cloudinit response — returned UPID | data: upid=${cloudinitUpid} — polling it`);
+        await pollTaskWithCleanup(cloudinitUpid, spec.node, vmid, false);
+      } else {
+        logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: PUT /cloudinit response — no UPID returned (empty/immediate response) | data: ignoring, continuing`);
+      }
     } catch (err) {
       logger.warn('[BulkVM] cloud-init regenerate failed — continuing', {
         vmName: spec.vmName,
@@ -713,6 +731,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
 
     const hyperVBakedIn = spec.softwarePreInstalled && spec.enableVirtualization;
 
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: calling VM.create (MongoDB) | data: vmid=${vmid} ipAddress=${allocatedIP} consoleUsername=${consoleUsername} consoleProtocol=${spec.consoleProtocol}`);
     vm = await VM.create({
       vmid,
       node: spec.node,

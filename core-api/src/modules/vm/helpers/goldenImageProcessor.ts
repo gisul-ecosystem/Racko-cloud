@@ -18,6 +18,7 @@ import {
   summarizeDiskPlacement,
 } from './cloneDiagnostics';
 import { withCloneWorkerRetry } from './cloneWorkerRetry';
+import { allocateVerifiedVmid } from './vmidAllocator';
 import type { IVMJob } from '../vmJob.model';
 
 let seedVmidMutex = Promise.resolve();
@@ -97,8 +98,7 @@ async function cloneSeedVm(params: {
     await new Promise<void>((resolve, reject) => {
       seedVmidMutex = seedVmidMutex.then(async () => {
         try {
-          const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-          vmid = response.data.data;
+          vmid = await allocateVerifiedVmid(params.node);
 
           const cloneBody: Record<string, unknown> = {
             newid: vmid,

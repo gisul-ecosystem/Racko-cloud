@@ -191,6 +191,8 @@ async function startIpPolling(
         }
       }
 
+      logger.info(`[BulkVM] [vmid=${vmid}] STEP: startIpPolling attempt ${attempt}/${maxRetries} | data: interfacesReturned=${interfaces.length} seenIps=${seenIps.join(',')||'none'} expectedIp=${vm.ipAddress} matched=${!!foundIp}`);
+
       if (foundIp) {
         await VM.findByIdAndUpdate(vmObjectId, { ipAddress: foundIp });
         logger.debug('[VMConsolePoll] Private IP resolved — waiting post-boot grace', {
@@ -207,7 +209,9 @@ async function startIpPolling(
         await sleep(cloudbaseGraceMs);
 
         // Flag the VM as console-ready. The frontend / openConsole gate on this flag.
+        const consoleReadyAt = new Date().toISOString();
         await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
+        logger.info(`[BulkVM] [vmid=${vmid}] STEP: consoleReady set to true | data: timestamp=${consoleReadyAt} ipAddress=${foundIp}`);
         logger.debug('[VMConsolePoll] consoleReady=true', {
           vmId: vmObjectId.toString(),
           vmid,
@@ -973,6 +977,108 @@ export class VMService {
   }
 
   /**
+   * Bulk start VMs — processes all in parallel batches server-side.
+   * Returns per-VM results so the UI can show which succeeded/failed.
+   */
+  async bulkStartVMs(
+    vmIds: string[],
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ succeeded: number; failed: number; errors: Array<{ vmId: string; message: string }> }> {
+    const authReq = req as AuthenticatedRequest;
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+    const uniqueIds = [...new Set(vmIds)].map((id) => new mongoose.Types.ObjectId(id));
+
+    const vms = await VM.find({ _id: { $in: uniqueIds } });
+    for (const vm of vms) {
+      assertOwnership(vm, adminId.toString(), authReq.user.role);
+    }
+
+    const results = await Promise.allSettled(
+      vms
+        .filter((vm) => vm.status !== 'running')
+        .map((vm) => this.powerOnStoppedVm(vm, adminId, { ipAddress: ip, userAgent: ua }))
+    );
+
+    let succeeded = 0;
+    const errors: Array<{ vmId: string; message: string }> = [];
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]!;
+      if (r.status === 'fulfilled') {
+        succeeded++;
+      } else {
+        const vm = vms.filter((v) => v.status !== 'running')[i];
+        errors.push({
+          vmId: vm?._id.toString() ?? 'unknown',
+          message: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        });
+      }
+    }
+
+    logger.info('[VMBulkStart] Bulk start completed', {
+      adminId: adminId.toString(),
+      requested: uniqueIds.length,
+      succeeded,
+      failed: errors.length,
+    });
+
+    return { succeeded, failed: errors.length, errors };
+  }
+
+  /**
+   * Bulk stop VMs — processes all in parallel batches server-side.
+   * Returns per-VM results so the UI can show which succeeded/failed.
+   */
+  async bulkStopVMs(
+    vmIds: string[],
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ succeeded: number; failed: number; errors: Array<{ vmId: string; message: string }> }> {
+    const authReq = req as AuthenticatedRequest;
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+    const uniqueIds = [...new Set(vmIds)].map((id) => new mongoose.Types.ObjectId(id));
+
+    const vms = await VM.find({ _id: { $in: uniqueIds } });
+    for (const vm of vms) {
+      assertOwnership(vm, adminId.toString(), authReq.user.role);
+    }
+
+    const results = await Promise.allSettled(
+      vms
+        .filter((vm) => vm.status !== 'stopped')
+        .map((vm) => this.gracefulShutdownVm(vm, adminId, { ipAddress: ip, userAgent: ua }))
+    );
+
+    let succeeded = 0;
+    const errors: Array<{ vmId: string; message: string }> = [];
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]!;
+      if (r.status === 'fulfilled') {
+        succeeded++;
+      } else {
+        const vm = vms.filter((v) => v.status !== 'stopped')[i];
+        errors.push({
+          vmId: vm?._id.toString() ?? 'unknown',
+          message: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        });
+      }
+    }
+
+    logger.info('[VMBulkStop] Bulk stop completed', {
+      adminId: adminId.toString(),
+      requested: uniqueIds.length,
+      succeeded,
+      failed: errors.length,
+    });
+
+    return { succeeded, failed: errors.length, errors };
+  }
+
+  /**
    * Start a VM (graceful).
    */
   /**
@@ -1003,6 +1109,7 @@ export class VMService {
         {}
       );
       upid = response.data.data;
+      logger.info(`[BulkVM] [vmName=unknown vmid=${vm.vmid}] STEP: POST /status/start sent | data: timestamp=${new Date().toISOString()} upid=${upid}`);
     }
 
     let finalUpid = upid;
@@ -1119,6 +1226,7 @@ export class VMService {
 
     if (operation === 'start') {
       const pollTrigger = `power-on:${operation}:${audit.userAgent}`;
+      logger.info(`[BulkVM] [vmid=${vm.vmid}] STEP: startIpPolling begins | data: vmid=${vm.vmid} ipAddress=${vm.ipAddress ?? 'unknown'} trigger=${pollTrigger}`);
       void startIpPolling(vm, pollTrigger, { mode: 'cold-start' }).catch((err: unknown) => {
         logger.error('[VMConsolePoll] Unhandled error in IP polling', {
           vmId: vmIdStr,

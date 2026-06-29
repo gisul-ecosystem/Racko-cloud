@@ -28,6 +28,7 @@ export async function allocateIP(reservationKey: string): Promise<{ ip: string; 
   }
 
   logger.info('[IPAllocator] IP reserved', { ip: record.ip, gateway: record.gateway, reservationKey });
+  logger.info(`[BulkVM] [vmid=${reservationKey}] STEP: allocateIP called | data: ip=${record.ip} gateway=${record.gateway}`);
   return { ip: record.ip, gateway: record.gateway };
 }
 
@@ -57,6 +58,7 @@ export async function confirmIP(ip: string, mongoVmId: string): Promise<void> {
     }
   );
   logger.info('[IPAllocator] IP confirmed/assigned', { ip, mongoVmId });
+  logger.info(`[BulkVM] [vmid=${mongoVmId}] STEP: confirmIP called — IP promoted to assigned | data: ip=${ip} mongoVmId=${mongoVmId}`);
 }
 
 /**

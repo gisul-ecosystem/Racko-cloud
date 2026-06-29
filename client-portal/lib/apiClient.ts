@@ -34,25 +34,39 @@ interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
 }
 
+// Refresh token queue — ensures only one refresh runs at a time.
+// All concurrent requests that hit 401 wait for the single in-flight refresh.
+let refreshPromise: Promise<string | null> | null = null;
+
 async function refreshAccessToken(): Promise<string | null> {
-  try {
-    const res = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/refresh`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-    });
+  // If a refresh is already in progress, wait for it instead of racing
+  if (refreshPromise) return refreshPromise;
 
-    if (res.status === 401) return null;
+  refreshPromise = (async () => {
+    try {
+      const res = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/refresh`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+      });
 
-    const data = (await res.json()) as { data?: { accessToken?: string } };
-    const newToken = data.data?.accessToken ?? null;
-    if (!res.ok) return null;
+      if (res.status === 401) return null;
 
-    if (newToken) setAccessToken(newToken);
-    return newToken;
-  } catch {
-    return null;
-  }
+      const data = (await res.json()) as { data?: { accessToken?: string } };
+      const newToken = data.data?.accessToken ?? null;
+      if (!res.ok) return null;
+
+      if (newToken) setAccessToken(newToken);
+      return newToken;
+    } catch {
+      return null;
+    } finally {
+      // Always clear the promise so the next genuine refresh can run
+      refreshPromise = null;
+    }
+  })();
+
+  return refreshPromise;
 }
 
 /** Restore session on app load; returns null when no cookie (expected, not an error). */
