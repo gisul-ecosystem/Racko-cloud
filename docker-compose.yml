@@ -1,6 +1,6 @@
 services:
   core-api:
-    image: ${DOCKERHUB_USERNAME}/racko-core-api:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-core-api:${IMAGE_TAG:-dev}
     env_file:
       - .env
     environment:
@@ -14,7 +14,7 @@ services:
       - "${CORE_API_PORT:-8001}:8001"
 
   cloud-automation:
-    image: ${DOCKERHUB_USERNAME}/racko-cloud-automation:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-dev}
     env_file:
       - .env
     environment:
@@ -23,17 +23,17 @@ services:
       - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
 
   cloud-automation-aws:
-    image: ${DOCKERHUB_USERNAME}/racko-cloud-automation-aws:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-dev}
     env_file:
       - .env
     environment:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
-      CLIENT_PORTAL_URL: ${FRONTEND_URL}
+      CLIENT_PORTAL_URL: ${CLIENT_PORTAL_URL:-${FRONTEND_URL}}
     ports:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
 
   cloud-gateway:
-    image: ${DOCKERHUB_USERNAME}/racko-cloud-gateway:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-cloud-gateway:${IMAGE_TAG:-dev}
     env_file:
       - .env
     environment:
@@ -47,12 +47,13 @@ services:
       - "${GATEWAY_PORT:-8000}:8000"
 
   client-portal:
-    image: ${DOCKERHUB_USERNAME}/racko-client-portal:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-client-portal:${IMAGE_TAG:-dev}
     env_file:
       - .env
     environment:
       HOSTNAME: 0.0.0.0
       PORT: ${CLIENT_PORTAL_PORT:-3000}
+      GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
     depends_on:
       - cloud-gateway
     ports:
