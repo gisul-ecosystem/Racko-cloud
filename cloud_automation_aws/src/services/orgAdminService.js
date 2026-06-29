@@ -14,6 +14,7 @@ import UserSpend from '../models/UserSpend.js';
 import BudgetEvent from '../models/BudgetEvent.js';
 import { generateAndLogConsoleUrl } from './consoleAccessService.js';
 import { cleanupUserResources, cleanupAllUsers } from './resourceCleanupService.js';
+import { countCleanupDeleted } from '../utils/cleanupMetrics.js';
 import { syncRequestUserSpend, fetchUserSpend } from './costTrackingService.js';
 import { attachLiveUsageToUsers } from './userLiveUsageService.js';
 import {
@@ -131,18 +132,6 @@ function mapUsersFromRequest(request, spendRecords = []) {
       policies,
     };
   });
-}
-
-function countCleanupDeleted(results) {
-  if (!results || typeof results !== 'object') return 0;
-
-  let count = 0;
-  for (const value of Object.values(results)) {
-    if (!value || typeof value !== 'object' || value.error) continue;
-    count += Number(value.terminated || 0);
-    count += Number(value.deleted || 0);
-  }
-  return count;
 }
 
 export async function listAllRequests({ status, region, search } = {}) {
