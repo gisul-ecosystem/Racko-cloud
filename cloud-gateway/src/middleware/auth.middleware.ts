@@ -3,7 +3,7 @@ import jwt from 'jsonwebtoken';
 import { config } from '../config';
 import { UnauthorizedError } from '../utils/errors';
 import type { AuthenticatedRequest } from '../types';
-
+ 
 interface AccessTokenPayload {
   userId: string;
   role: string;
