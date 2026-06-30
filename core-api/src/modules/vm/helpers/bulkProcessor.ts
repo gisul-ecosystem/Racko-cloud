@@ -4,6 +4,7 @@ import { logger } from '../../../utils/logger';
 import { generatePassword } from '../../../utils/crypto';
 import { config } from '../../../config';
 import { VM } from '../vm.model';
+import { IpAddress } from '../ipAddress.model';
 import { VMJob } from '../vmJob.model';
 import { VMEvent } from '../vmEvent.model';
 import { selectNodesForBulk, selectNode } from './placementEngine';
@@ -13,13 +14,17 @@ import { scheduleHyperVEnable } from './hypervQueue';
 import { scheduleSoftwareInstall } from './softwareQueue';
 import { softwareService } from '../../software/software.service';
 import { buildGoldenTemplate, deleteGoldenTemplate } from './goldenImageProcessor';
-import { bulkCloneDiagLog, fetchSourceVmDiagnostics, resolveCloneErrorMessage, shouldAttemptConnectivityReroute, summarizeDiskPlacement, type BulkClonePath, } from './cloneDiagnostics';
+import {
+  bulkCloneDiagLog, fetchSourceVmDiagnostics, resolveCloneErrorMessage, shouldAttemptConnectivityReroute, summarizeDiskPlacement, resolveCloneStorage, type BulkClonePath,
+} from './cloneDiagnostics';
 import { ProxmoxConnectionError } from '../../../utils/errors';
 import type { IVMJob } from '../vmJob.model';
 import type { BulkVMSpec } from '../vm.types';
 import { notificationService } from '../../notification/notification.service';
 import { isCancelling, finalizeCancelledJob } from './jobCancelCheck';
 import { finalizeOrderAfterProvisionJob } from '../../order/orderPlanProvisioning.service';
+import { allocateVerifiedVmid } from './vmidAllocator';
+import { allocateIP, confirmIP, updateIpVmId } from '../ipAllocator.service';
 
 // QUEUE_SLOT: replace direct async call with message queue job (RabbitMQ/BullMQ)
 // EVENT_SLOT: emit 'vm.bulk_created' event to message queue
@@ -164,6 +169,7 @@ export async function processBulkCreation(
           memoryGb: specs.memoryGb,
           diskGb: specs.diskGb,
           cloneType: specs.cloneType,
+          templateNode: specs.templateNode,
         },
         count
       );
@@ -507,24 +513,20 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
   const consolePassword =
     spec.passwordMode === 'dynamic' ? generatePassword() : (spec.consolePassword ?? '');
 
-  // Select storage pool for dedicated clones only.
-  // Linked clones must use template storage — Proxmox enforces this, never send storage for them.
-  // For dedicated clones: prefer shared storage (Ceph/NFS) for live-migration support,
-  // fall back to local storage sorted by most free space.
+  // Resolve the correct storage pool for this clone.
+  // resolveCloneStorage: prefers shared (Ceph/NFS), falls back to template's own storage.
+  // For linked clones returns undefined — Proxmox enforces template storage automatically.
   let storagePool: string | undefined;
-
-  if (spec.cloneType === 'dedicated_storage' && !spec.softwarePreInstalled) {
-    const nodeResourcesResponse = await proxmoxClient.get<{
-      data: Array<{ storage: string; avail: number; active: number; enabled: number; content: string; shared?: number; type?: string }>;
-    }>(`/nodes/${spec.node}/storage`);
-
-    const eligible = nodeResourcesResponse.data.data
-      .filter((s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images'));
-
-    const shared = eligible.filter((s) => s.shared === 1).sort((a, b) => b.avail - a.avail);
-    const local = eligible.filter((s) => s.shared !== 1).sort((a, b) => b.avail - a.avail);
-
-    storagePool = (shared[0] ?? local[0])?.storage;
+  if (!spec.softwarePreInstalled) {
+    // Diagnostics already fetched above — reuse scsi0 from it if available
+    let templateScsi0: string | undefined;
+    try {
+      const diag = await fetchSourceVmDiagnostics(spec.node, sourceTemplateId);
+      templateScsi0 = diag.scsi0;
+    } catch {
+      // non-fatal — resolveCloneStorage handles undefined scsi0 gracefully
+    }
+    storagePool = await resolveCloneStorage(spec.node, templateScsi0, spec.cloneType);
   }
 
   let vmid!: number;
@@ -537,8 +539,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     await new Promise<void>((resolve, reject) => {
       vmidMutex = vmidMutex.then(async () => {
         try {
-          const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-          vmid = response.data.data;
+          vmid = await allocateVerifiedVmid(spec.node);
 
           const cloneBody: Record<string, unknown> = {
             newid: vmid,
@@ -564,11 +565,14 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
             softwarePreInstalled: spec.softwarePreInstalled ?? false,
           });
 
+          logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: sending clone POST to Proxmox | data: ${JSON.stringify(cloneBody)}`);
+
           const cloneResponse = await proxmoxClient.post<{ data: string }>(
             cloneEndpoint,
             cloneBody
           );
           cloneUpid = cloneResponse.data.data;
+          logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: clone task started | data: upid=${cloneUpid}`);
           bulkCloneDiagLog('clone task started', {
             jobId: spec.jobId.toString(),
             clonePath,
@@ -596,7 +600,10 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
 
     // Poll inside the retry wrapper — a worker error here triggers a retry
     // with a brand-new VMID on the next iteration.
+    const cloneStartMs = Date.now();
     cloneResult = await pollTaskWithCleanup(cloneUpid, spec.node, vmid, true);
+    const cloneDurationMs = Date.now() - cloneStartMs;
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: clone task polling finished | data: result=${cloneResult} durationMs=${cloneDurationMs}`);
   }, { jobId: spec.jobId.toString(), vmName: spec.vmName, node: spec.node });
 
   bulkCloneDiagLog('clone task finished', {
@@ -662,72 +669,97 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     return vm._id;
   }
 
-  // Inject the cloud-init password + apply any spec overrides. cloudbase-init sets
-  // the password for the template's built-in account (no ciuser rename).
-  const configUpdates: Record<string, unknown> = {
-    cipassword: consolePassword,
-  };
-  if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;
-  if (spec.memoryGb !== spec.templateMemoryGb) configUpdates['memory'] = Math.round(spec.memoryGb * 1024);
+  // Allocate a public IP from the pool before configuring the VM.
+  // If anything fails after this point, releaseIP is called in the catch below.
+  const { ip: allocatedIP, gateway: allocatedGateway } = await allocateIP(vmid.toString());
+  logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: allocateIP returned | data: ip=${allocatedIP} gateway=${allocatedGateway}`);
 
-  await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
-
-  // Regenerate the cloud-init drive so the new credentials take effect.
-  // Best-effort: templates without a cloud-init drive return 404 — log and continue.
+  let vm!: InstanceType<typeof VM>;
   try {
-    await proxmoxClient.put(`/nodes/${spec.node}/qemu/${vmid}/cloudinit`, {});
-  } catch (err) {
-    logger.warn('[BulkVM] cloud-init regenerate failed — continuing', {
-      vmName: spec.vmName,
+    // Inject the cloud-init password + apply any spec overrides. cloudbase-init sets
+    // the password for the template's built-in account (no ciuser rename).
+    const configUpdates: Record<string, unknown> = {
+      cipassword: consolePassword,
+      ipconfig0: `ip=${allocatedIP}/24,gw=${allocatedGateway}`,
+      nameserver: '8.8.8.8',
+    };
+    if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;
+    if (spec.memoryGb !== spec.templateMemoryGb) configUpdates['memory'] = Math.round(spec.memoryGb * 1024);
+
+    const maskedConfigUpdates = { ...configUpdates, cipassword: '*****' };
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: sending POST /config | data: ${JSON.stringify(maskedConfigUpdates)}`);
+    const configResponse = await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: POST /config response | data: status=success responseStatus=${(configResponse as { status?: number }).status ?? 'unknown'}`);
+
+    if (spec.cloneType === 'dedicated_storage' && spec.diskGb > spec.templateDiskGb) {
+      const extraGb = spec.diskGb - spec.templateDiskGb;
+      const resizeResponse = await proxmoxClient.put<{ data: string }>(
+        `/nodes/${spec.node}/qemu/${vmid}/resize`,
+        { disk: 'scsi0', size: `+${extraGb}G` }
+      );
+      const resizeResult = await pollTaskWithCleanup(resizeResponse.data.data, spec.node, vmid, false);
+      if (resizeResult === 'unknown') {
+        logger.warn('[BulkVM] Disk resize task outcome unknown', {
+          vmName: spec.vmName,
+          vmid,
+          node: spec.node,
+        });
+      }
+    }
+
+    const hyperVBakedIn = spec.softwarePreInstalled && spec.enableVirtualization;
+
+    logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: calling VM.create (MongoDB) | data: vmid=${vmid} ipAddress=${allocatedIP} consoleUsername=${consoleUsername} consoleProtocol=${spec.consoleProtocol}`);
+    vm = await VM.create({
       vmid,
       node: spec.node,
-      error: err instanceof Error ? err.message : String(err),
+      adminId: spec.adminId,
+      name: spec.vmName,
+      description: spec.description,
+      templateId: spec.templateId,
+      templateName: spec.templateName,
+      cloneType: spec.cloneType,
+      allocatedCpu: spec.cpuCores,
+      allocatedMemoryGb: spec.memoryGb,
+      allocatedDiskGb: spec.diskGb,
+      status: 'stopped',
+      proxmoxStatus: 'stopped',
+      ipAddress: allocatedIP,
+      consoleUsername,
+      consolePassword,
+      consoleProtocol: spec.consoleProtocol,
+      jobId: spec.jobId,
+      haEnabled: false,
+      enableVirtualization: spec.enableVirtualization ?? false,
+      hyperVStatus: hyperVBakedIn ? 'enabled' : spec.enableVirtualization ? 'pending' : 'disabled',
+      hyperVStatusChangedAt: new Date(),
+      hyperVAttemptCount: 0,
+      softwareInstalls: await buildSoftwareInstallsWithNames(spec),
     });
-  }
 
-  if (spec.cloneType === 'dedicated_storage' && spec.diskGb > spec.templateDiskGb) {
-    const extraGb = spec.diskGb - spec.templateDiskGb;
-    const resizeResponse = await proxmoxClient.put<{ data: string }>(
-      `/nodes/${spec.node}/qemu/${vmid}/resize`,
-      { disk: 'scsi0', size: `+${extraGb}G` }
-    );
-    const resizeResult = await pollTaskWithCleanup(resizeResponse.data.data, spec.node, vmid, false);
-    if (resizeResult === 'unknown') {
-      logger.warn('[BulkVM] Disk resize task outcome unknown', {
-        vmName: spec.vmName,
+    // Swap the temporary Proxmox-vmid reservation key for the real MongoDB ObjectId,
+    // then confirm so the IP moves from reserved → assigned.
+    await updateIpVmId(allocatedIP, vm._id.toString());
+    await confirmIP(allocatedIP, vm._id.toString());
+  } catch (err) {
+    // Release by IP directly — the vmId stored on the record may still be the
+    // temporary Proxmox vmid string so we cannot rely on releaseIP(vmid).
+    await IpAddress.findOneAndUpdate(
+      { ip: allocatedIP },
+      {
+        $set: { status: 'available' },
+        $unset: { vmId: 1, reservedAt: 1, assignedAt: 1 },
+      }
+    ).catch((releaseErr: unknown) => {
+      logger.warn('[BulkVM] Failed to release IP after VM creation error', {
         vmid,
         node: spec.node,
+        allocatedIP,
+        error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
       });
-    }
+    });
+    throw err;
   }
-
-  const hyperVBakedIn = spec.softwarePreInstalled && spec.enableVirtualization;
-
-  const vm = await VM.create({
-    vmid,
-    node: spec.node,
-    adminId: spec.adminId,
-    name: spec.vmName,
-    description: spec.description,
-    templateId: spec.templateId,
-    templateName: spec.templateName,
-    cloneType: spec.cloneType,
-    allocatedCpu: spec.cpuCores,
-    allocatedMemoryGb: spec.memoryGb,
-    allocatedDiskGb: spec.diskGb,
-    status: 'stopped',
-    proxmoxStatus: 'stopped',
-    consoleUsername,
-    consolePassword,
-    consoleProtocol: spec.consoleProtocol,
-    jobId: spec.jobId,
-    haEnabled: false,
-    enableVirtualization: spec.enableVirtualization ?? false,
-    hyperVStatus: hyperVBakedIn ? 'enabled' : spec.enableVirtualization ? 'pending' : 'disabled',
-    hyperVStatusChangedAt: new Date(),
-    hyperVAttemptCount: 0,
-    softwareInstalls: await buildSoftwareInstallsWithNames(spec),
-  });
 
   await VMEvent.create({
     vmId: vm._id,

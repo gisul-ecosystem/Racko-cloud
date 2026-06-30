@@ -131,27 +131,41 @@ export async function validateResources(
   }
 
   if (dto.cloneType === 'dynamic_storage') {
-    // Linked clone: no storage reservation — only need at least 1 online node
-    const perNode = Math.ceil(count / onlineNodes.length);
-    const nodeAllocations = onlineNodes
-      .map((node, idx) => ({
-        node: node.node,
-        vmCount:
-          idx === onlineNodes.length - 1
-            ? count - perNode * (onlineNodes.length - 1)
-            : perNode,
-      }))
-      .filter((a) => a.vmCount > 0);
+    // Linked clone: all VMs must go on the template's node — Proxmox enforces this.
+    // If templateNode is known, pin to it. Otherwise allow any online node.
+    if (templateNode) {
+      const node = onlineNodes.find((n) => n.node === templateNode);
+      if (!node) {
+        return {
+          canCreate: false,
+          requestedCount: count,
+          maxPossibleCount: 0,
+          reason: `Template node "${templateNode}" is offline or unavailable.`,
+          nodeAllocations: [],
+        };
+      }
+      return {
+        canCreate: true,
+        requestedCount: count,
+        maxPossibleCount: count,
+        nodeAllocations: [{ node: templateNode, vmCount: count }],
+      };
+    }
 
+    // No templateNode known — fall back to first online node
     return {
       canCreate: true,
       requestedCount: count,
       maxPossibleCount: count,
-      nodeAllocations,
+      nodeAllocations: [{ node: onlineNodes[0]!.node, vmCount: count }],
     };
   }
 
-  // dedicated_storage: check actual resource availability across all nodes
+  // dedicated_storage: check actual resource availability on template node only
+  const targetNodes = templateNode
+    ? onlineNodes.filter((n) => n.node === templateNode)
+    : onlineNodes;
+
   const totalRequiredStorageGb = diskGb * count;
   const totalRequiredRamGb = memoryGb * count;
   const totalRequiredCpu = cpuCores * count;
@@ -162,7 +176,7 @@ export async function validateResources(
 
   const nodeCapacities: Array<{ node: string; maxVms: number }> = [];
 
-  for (const node of onlineNodes) {
+  for (const node of targetNodes) {
     const nodeFreeStorageGb = node.storage.freeGb;
     const nodeFreeRamGb = effectiveFreeRamGb(node);
     const nodeFreeCpu = effectiveFreeCpu(node);

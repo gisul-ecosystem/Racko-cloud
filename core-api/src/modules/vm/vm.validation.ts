@@ -213,6 +213,15 @@ export const bulkDeleteVMsSchema = z.object({
   }),
 });
 
+export const bulkPowerVMsSchema = z.object({
+  body: z.object({
+    vmIds: z
+      .array(mongoObjectId)
+      .min(1, 'At least one VM must be specified')
+      .max(100, 'Cannot power on/off more than 100 VMs at once'),
+  }),
+});
+
 // ─── Assign VMs ───────────────────────────────────────────────────────────────
 
 export const assignVMsSchema = z.object({

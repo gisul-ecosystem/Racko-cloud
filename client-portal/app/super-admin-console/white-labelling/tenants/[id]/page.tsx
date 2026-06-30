@@ -15,6 +15,7 @@ import {
   Play,
   Plus,
   RefreshCw,
+  Server,
   Settings,
   Shield,
   Trash2,
@@ -30,6 +31,7 @@ import {
   fetchTenant,
   fetchTenantAdmins,
   fetchTenantServices,
+  fetchTenantVms,
   fetchSuperAdminOrders,
   removeTenantService,
   setTenantAdminActive,
@@ -45,8 +47,12 @@ import type {
   VmManagementLimits,
   VmManagementPricing,
   SuperAdminOrder,
+  SuperAdminTenantVm,
 } from '../../../../../lib/tenantTypes';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
+import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
+import type { VMStatus } from '@/lib/vmApi';
+import { deleteVM } from '@/lib/vmApi';
 import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ErrorState } from '../../../../../components/dashboard/ErrorState';
 import { TenantStatusBadge } from '../../../../../components/super-admin-console/white-labelling/TenantStatusBadge';
@@ -56,7 +62,22 @@ import { ServiceConfigSummary } from '../../../../../components/super-admin-cons
 import { BrandingUploadSection } from '../../../../../components/super-admin-console/white-labelling/BrandingUploadSection';
 import { TenantWalletPanel } from '../../../../../components/super-admin-console/white-labelling/TenantWalletPanel';
 
-type Tab = 'general' | 'services' | 'wallet' | 'orders' | 'admins';
+type Tab = 'general' | 'services' | 'wallet' | 'orders' | 'admins' | 'vms';
+
+const VM_STATUS_VALUES: VMStatus[] = [
+  'running',
+  'stopped',
+  'creating',
+  'paused',
+  'suspended',
+  'error',
+  'deleting',
+  'deleted',
+];
+
+function isVmStatus(status: string): status is VMStatus {
+  return VM_STATUS_VALUES.includes(status as VMStatus);
+}
 
 const DEFAULT_VM_LIMITS: VmManagementLimits = {
   maxVms: 50,
@@ -107,6 +128,12 @@ export default function TenantDetailPage() {
   const [tenantOrders, setTenantOrders] = useState<SuperAdminOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
   const [ordersError, setOrdersError] = useState<string | null>(null);
+
+  const [tenantVms, setTenantVms] = useState<SuperAdminTenantVm[]>([]);
+  const [vmsLoading, setVmsLoading] = useState(false);
+  const [vmsError, setVmsError] = useState<string | null>(null);
+  const [deletingVmId, setDeletingVmId] = useState<string | null>(null);
+  const [vmDeleteTarget, setVmDeleteTarget] = useState<SuperAdminTenantVm | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -290,6 +317,40 @@ export default function TenantDetailPage() {
     if (tab === 'orders') void loadTenantOrders();
   }, [tab, loadTenantOrders]);
 
+  const loadTenantVms = useCallback(async () => {
+    setVmsLoading(true);
+    setVmsError(null);
+    try {
+      const result = await fetchTenantVms(tenantId);
+      setTenantVms(result.vms);
+    } catch (err) {
+      setVmsError(err instanceof ApiError ? err.message : 'Failed to load VMs.');
+    } finally {
+      setVmsLoading(false);
+    }
+  }, [tenantId]);
+
+  useEffect(() => {
+    if (tab === 'vms') void loadTenantVms();
+  }, [tab, loadTenantVms]);
+
+  const handleDeleteVm = async () => {
+    if (!vmDeleteTarget) return;
+
+    const vm = vmDeleteTarget;
+    setDeletingVmId(vm.id);
+    try {
+      await deleteVM(vm.id);
+      setTenantVms((prev) => prev.filter((v) => v.id !== vm.id));
+      setVmDeleteTarget(null);
+      flash('VM deleted successfully.');
+    } catch (err) {
+      flashErr(err instanceof ApiError ? err.message : 'Failed to delete VM.');
+    } finally {
+      setDeletingVmId(null);
+    }
+  };
+
   const serviceIcon = (key: ServiceKey) =>
     key === 'vm-management' ? MonitorCheck : Cloud;
 
@@ -313,6 +374,7 @@ export default function TenantDetailPage() {
     { id: 'wallet', label: 'Wallet', icon: Wallet },
     { id: 'orders', label: 'Orders', icon: MonitorCheck },
     { id: 'admins', label: 'Tenant Admins', icon: Users },
+    { id: 'vms', label: 'Assigned VMs', icon: Server },
   ];
 
   return (
@@ -358,7 +420,7 @@ export default function TenantDetailPage() {
         </div>
       )}
 
-      <div className="flex gap-1 rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
+      <div className="flex flex-wrap gap-1 rounded-lg border border-gray-200 bg-white p-1 shadow-sm">
         {tabs.map(({ id, label, icon: Icon }) => (
           <button
             key={id}
@@ -799,6 +861,150 @@ export default function TenantDetailPage() {
         </div>
       )}
 
+      {tab === 'vms' && (
+        <div className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-gray-500">
+              VMs provisioned for this tenant via orders and their end-user assignments.
+            </p>
+            <button
+              type="button"
+              onClick={() => void loadTenantVms()}
+              disabled={vmsLoading}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600 shadow-sm hover:bg-gray-50 disabled:opacity-50"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${vmsLoading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+          </div>
+
+          {vmsLoading ? (
+            <div className="flex justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+            </div>
+          ) : vmsError ? (
+            <ErrorState title="VMs unavailable" message={vmsError} onRetry={() => void loadTenantVms()} />
+          ) : tenantVms.length === 0 ? (
+            <WhiteLabellingEmptyState
+              icon={Server}
+              title="No VMs assigned yet"
+              description="VMs appear here after tenant orders are fulfilled and provisioned."
+            />
+          ) : (
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b border-gray-100 bg-gray-50 text-left text-xs font-medium uppercase tracking-wide text-gray-500">
+                      <th className="px-4 py-3">VM</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3">Specs</th>
+                      <th className="px-4 py-3">Plan</th>
+                      <th className="px-4 py-3">Assigned to</th>
+                      <th className="px-4 py-3">IP</th>
+                      <th className="px-4 py-3">Created</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tenantVms.map((vm) => (
+                      <tr key={vm.id} className="border-b border-gray-50 align-top">
+                        <td className="px-4 py-3">
+                          <p className="font-medium text-gray-900">{vm.name}</p>
+                          <p className="text-xs text-gray-500">{vm.templateName}</p>
+                          <p className="mt-0.5 font-mono text-[10px] text-gray-400">
+                            {vm.node} · vmid {vm.vmid}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3">
+                          {isVmStatus(vm.status) ? (
+                            <VMStatusBadge status={vm.status} />
+                          ) : (
+                            <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                              {vm.status}
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-600">
+                          {vm.allocatedCpu} vCPU · {vm.allocatedMemoryGb} GB RAM
+                          <br />
+                          {vm.allocatedDiskGb} GB disk
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-600">
+                          {vm.planStatus ? (
+                            <>
+                              <span
+                                className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+                                  vm.planStatus === 'active'
+                                    ? 'bg-green-50 text-green-700'
+                                    : 'bg-orange-50 text-orange-700'
+                                }`}
+                              >
+                                {vm.planStatus}
+                              </span>
+                              {vm.billingPeriod ? (
+                                <p className="mt-1">{formatBillingPeriod(vm.billingPeriod)}</p>
+                              ) : null}
+                              {vm.planPeriodEnd ? (
+                                <p className="mt-0.5 text-gray-500">
+                                  until {new Date(vm.planPeriodEnd).toLocaleDateString()}
+                                </p>
+                              ) : null}
+                            </>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          {vm.assignment ? (
+                            <div>
+                              <p className="font-medium text-gray-900">{vm.assignment.email}</p>
+                              <p
+                                className={
+                                  vm.assignment.isActive ? 'text-green-600' : 'text-gray-500'
+                                }
+                              >
+                                {vm.assignment.isActive ? 'Active user' : 'Inactive user'}
+                              </p>
+                            </div>
+                          ) : (
+                            <span className="rounded-full bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-700">
+                              Unassigned
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-mono text-xs text-gray-600">
+                          {vm.ipAddress ?? '—'}
+                        </td>
+                        <td className="px-4 py-3 text-xs text-gray-500">
+                          {new Date(vm.createdAt).toLocaleString()}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => setVmDeleteTarget(vm)}
+                            disabled={deletingVmId === vm.id || vm.status === 'deleting'}
+                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                            title="Delete VM"
+                          >
+                            {deletingVmId === vm.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3.5 w-3.5" />
+                            )}
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
       {assignOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/40 p-4">
           <div className="my-8 w-full max-w-2xl rounded-xl border border-gray-200 bg-white shadow-xl">
@@ -976,6 +1182,59 @@ export default function TenantDetailPage() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {vmDeleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Trash2 className="h-4 w-4 text-red-600" />
+                <h2 className="text-base font-semibold text-gray-900">Delete VM</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setVmDeleteTarget(null)}
+                disabled={deletingVmId === vmDeleteTarget.id}
+                className="rounded p-1 text-gray-400 transition hover:bg-gray-100 disabled:opacity-50"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-gray-600">
+                Delete VM{' '}
+                <span className="font-medium text-gray-900">&quot;{vmDeleteTarget.name}&quot;</span>{' '}
+                (vmid {vmDeleteTarget.vmid})? This will stop and purge it from Proxmox.
+              </p>
+              <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-700">
+                This action cannot be undone. The VM will be removed from the cluster and deleted
+                from the platform.
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setVmDeleteTarget(null)}
+                  disabled={deletingVmId === vmDeleteTarget.id}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteVm()}
+                  disabled={deletingVmId === vmDeleteTarget.id}
+                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deletingVmId === vmDeleteTarget.id && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                  Delete VM
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

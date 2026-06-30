@@ -13,6 +13,7 @@ import {
   assignVMsSchema,
   bulkAssignPairsSchema,
   bulkDeleteVMsSchema,
+  bulkPowerVMsSchema,
   templateSelectionSchema,
   userIdParamSchema,
   vmConsoleSchema,
@@ -165,6 +166,22 @@ router.post(
   requireRole('admin', 'super_admin'),
   validateRequest(bulkDeleteVMsSchema),
   (req, res, next) => vmController.bulkDeleteVMs(req, res, next)
+);
+
+// POST /api/v1/vms/bulk-start — start multiple VMs server-side (no N parallel client requests)
+router.post(
+  '/bulk-start',
+  requireRole('admin', 'super_admin'),
+  validateRequest(bulkPowerVMsSchema),
+  (req, res, next) => vmController.bulkStartVMs(req, res, next)
+);
+
+// POST /api/v1/vms/bulk-stop — stop multiple VMs server-side
+router.post(
+  '/bulk-stop',
+  requireRole('admin', 'super_admin'),
+  validateRequest(bulkPowerVMsSchema),
+  (req, res, next) => vmController.bulkStopVMs(req, res, next)
 );
 
 // POST /api/v1/vms — create VM(s)

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-
+ 
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   PORT: z.string().regex(/^\d+$/).transform(Number).default('8001'),
@@ -38,6 +38,10 @@ const envSchema = z.object({
 
   // Frontend
   FRONTEND_URL: z.string().url('FRONTEND_URL must be a valid URL'),
+
+  // Gateway / API base
+  GATEWAY_URL: z.string().url('GATEWAY_URL must be a valid URL').optional().default('http://localhost:8000'),
+  API_URL: z.string().url('API_URL must be a valid URL').optional(),
 
   // Account lockout
   MAX_LOGIN_ATTEMPTS: z.string().regex(/^\d+$/).transform(Number).default('5'),

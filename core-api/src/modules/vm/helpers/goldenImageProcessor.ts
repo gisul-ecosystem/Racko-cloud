@@ -14,9 +14,11 @@ import {
   bulkCloneDiagLog,
   fetchSourceVmDiagnostics,
   resolveCloneErrorMessage,
+  resolveCloneStorage,
   summarizeDiskPlacement,
 } from './cloneDiagnostics';
 import { withCloneWorkerRetry } from './cloneWorkerRetry';
+import { allocateVerifiedVmid } from './vmidAllocator';
 import type { IVMJob } from '../vmJob.model';
 
 let seedVmidMutex = Promise.resolve();
@@ -41,26 +43,24 @@ async function cloneSeedVm(params: {
   templateCpuCores: number;
   templateMemoryGb: number;
 }): Promise<number> {
+  // Golden seed is always a full clone — resolve storage from template's own disk.
+  // Prefers shared storage (Ceph/NFS), falls back to template's storage pool.
   let storagePool: string | undefined;
-
-  if (params.cloneType === 'dedicated_storage') {
-    const nodeResourcesResponse = await proxmoxClient.get<{
-      data: Array<{ storage: string; avail: number; active: number; enabled: number; content: string; shared?: number }>;
-    }>(`/nodes/${params.node}/storage`);
-
-    const eligible = nodeResourcesResponse.data.data
-      .filter((s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images'));
-
-    const shared = eligible.filter((s) => s.shared === 1).sort((a, b) => b.avail - a.avail);
-    const local = eligible.filter((s) => s.shared !== 1).sort((a, b) => b.avail - a.avail);
-    storagePool = (shared[0] ?? local[0])?.storage;
-    goldenLog('1/8 clone-seed', 'storage pool selected', {
-      jobId: params.jobId,
-      node: params.node,
-      storagePool: storagePool ?? 'none',
-      cloneType: params.cloneType,
-    });
+  let templateScsi0: string | undefined;
+  try {
+    const diag = await fetchSourceVmDiagnostics(params.node, params.sourceTemplateId);
+    templateScsi0 = diag.scsi0;
+  } catch {
+    // non-fatal — resolveCloneStorage handles undefined gracefully
   }
+  storagePool = await resolveCloneStorage(params.node, templateScsi0, 'dedicated_storage');
+  goldenLog('1/8 clone-seed', 'storage pool resolved', {
+    jobId: params.jobId,
+    node: params.node,
+    storagePool: storagePool ?? 'none (proxmox default)',
+    templateScsi0: templateScsi0 ?? 'unknown',
+    cloneType: params.cloneType,
+  });
 
   let vmid!: number;
   let cloneUpid!: string;
@@ -98,8 +98,7 @@ async function cloneSeedVm(params: {
     await new Promise<void>((resolve, reject) => {
       seedVmidMutex = seedVmidMutex.then(async () => {
         try {
-          const response = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
-          vmid = response.data.data;
+          vmid = await allocateVerifiedVmid(params.node);
 
           const cloneBody: Record<string, unknown> = {
             newid: vmid,
