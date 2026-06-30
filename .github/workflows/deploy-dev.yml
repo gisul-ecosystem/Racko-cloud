@@ -1,0 +1,172 @@
+# GitHub secrets:
+#   DOCKERHUB_USERNAME          (shared across all branches)
+#   DOCKERHUB_TOKEN             (shared across all branches)
+#   VM_HOST_DEV
+#   VM_USER_DEV
+#   VM_SSH_KEY_DEV
+#   NEXT_PUBLIC_API_URL_DEV
+
+name: Build & Deploy Dev via SSH
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+env:
+  DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+  DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+  IMAGE_TAG: ${{ github.sha }}
+
+jobs:
+  build-core-api:
+    name: Build & Push core-api
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build core-api image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:dev -f core-api/Dockerfile core-api/
+
+      - name: Push core-api image
+        run: |
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:dev
+
+  build-cloud-gateway:
+    name: Build & Push cloud-gateway
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build cloud-gateway image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:dev -f cloud-gateway/Dockerfile cloud-gateway/
+
+      - name: Push cloud-gateway image
+        run: |
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:dev
+
+  build-cloud-automation:
+    name: Build & Push cloud-automation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build cloud-automation image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:dev -f cloud_automation/Dockerfile cloud_automation/
+
+      - name: Push cloud-automation image
+        run: |
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:dev
+
+  build-cloud-automation-aws:
+    name: Build & Push cloud-automation-aws
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build cloud-automation-aws image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:dev -f cloud_automation_aws/Dockerfile cloud_automation_aws/
+
+      - name: Push cloud-automation-aws image
+        run: |
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:dev
+
+  build-client-portal:
+    name: Build & Push client-portal
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build client-portal image
+        run: |
+          docker build \
+            --build-arg NEXT_PUBLIC_GATEWAY_URL="${{ secrets.NEXT_PUBLIC_API_URL_DEV }}" \
+            -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }} \
+            -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:dev \
+            -f client-portal/Dockerfile client-portal/
+
+      - name: Push client-portal image
+        run: |
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:dev
+
+  deploy:
+    name: Deploy to Dev VM
+    runs-on: ubuntu-latest
+    needs:
+      - build-core-api
+      - build-cloud-gateway
+      - build-cloud-automation
+      - build-cloud-automation-aws
+      - build-client-portal
+
+    env:
+      VM_HOST: ${{ secrets.VM_HOST_DEV }}
+      VM_USER: ${{ secrets.VM_USER_DEV }}
+      VM_SSH_KEY: ${{ secrets.VM_SSH_KEY_DEV }}
+      DEPLOY_PATH: /opt/racko
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${VM_SSH_KEY}" > ~/.ssh/vm_key
+          chmod 600 ~/.ssh/vm_key
+          ssh-keyscan -H "${VM_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload files to VM
+        run: |
+          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" "mkdir -p ${DEPLOY_PATH}"
+          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no docker-compose.yml "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/docker-compose.yml"
+          echo "docker-compose.yml uploaded to ${DEPLOY_PATH}"
+
+      - name: Deploy on VM (pull new images + restart)
+        run: |
+          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" \
+            "set -e; \
+             cd ${DEPLOY_PATH}; \
+             export DOCKERHUB_USERNAME='${DOCKERHUB_USERNAME}'; \
+             export IMAGE_TAG='dev'; \
+             echo 'Docker login...'; \
+             echo '${DOCKERHUB_TOKEN}' | docker login -u '${DOCKERHUB_USERNAME}' --password-stdin; \
+             echo 'Deploying...'; \
+             sudo docker-compose -f docker-compose.yml down --remove-orphans; \
+             sudo docker-compose -f docker-compose.yml pull; \
+             sudo docker-compose -f docker-compose.yml up -d; \
+             sudo docker-compose -f docker-compose.yml ps"
+
+      - name: Summary
+        run: |
+          echo "Build & Deploy Dev Complete!"
+          echo "Client portal:  http://${VM_HOST}:3000"
+          echo "Cloud gateway:  http://${VM_HOST}:8000"
+          echo "Core API:       http://${VM_HOST}:8001"
+          echo "Azure service:  http://${VM_HOST}:3002"
+          echo "AWS service:    http://${VM_HOST}:3003"

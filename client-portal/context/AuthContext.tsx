@@ -16,6 +16,7 @@ import {
   ApiError,
   SESSION_EXPIRED_EVENT,
   tryRestoreSession,
+  logAuthToken,
 } from '../lib/apiClient';
 
 export type UserRole = 'super_admin' | 'admin' | 'user';
@@ -107,6 +108,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const refreshToken = useCallback(async (): Promise<boolean> => {
+    logAuthToken('refresh:auth-context-start', {});
     try {
       const res = await apiRequest<RefreshResponse>('/api/v1/auth/refresh', {
         method: 'POST',
@@ -114,12 +116,19 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       });
 
       const newToken = res.data?.accessToken;
-      if (!newToken) return false;
+      if (!newToken) {
+        logAuthToken('refresh:auth-context-failed', { reason: 'missing_access_token_in_response' });
+        return false;
+      }
 
       setAccessToken(newToken);
       scheduleTokenRefresh(newToken);
+      logAuthToken('refresh:auth-context-success', { accessTokenLength: newToken.length });
       return true;
-    } catch {
+    } catch (error) {
+      logAuthToken('refresh:auth-context-failed', {
+        message: error instanceof Error ? error.message : 'unknown_error',
+      });
       return false;
     }
   }, [scheduleTokenRefresh]);
@@ -144,12 +153,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false;
 
     async function restoreSession() {
+      logAuthToken('session:restore-start', {
+        visibleCookieNames: typeof document !== 'undefined'
+          ? document.cookie.split(';').map((p) => p.trim().split('=')[0]).filter(Boolean)
+          : [],
+      });
       try {
         const token = await tryRestoreSession();
 
         if (cancelled) return;
 
         if (!token) {
+          logAuthToken('session:restore-failed', { reason: 'no_access_token_from_refresh' });
           setState({ user: null, isLoading: false, isAuthenticated: false });
           return;
         }
@@ -159,6 +174,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // Fetch current user
         const userRes = await apiRequest<{ data: { user: AuthUser } }>('/api/v1/auth/me');
         if (cancelled) return;
+
+        logAuthToken('session:restore-success', {
+          userId: userRes.data.user.id,
+          accessTokenLength: token.length,
+        });
 
         setState({
           user: userRes.data.user,
@@ -179,6 +199,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [scheduleTokenRefresh]);
 
   const login = useCallback(async (email: string, password: string): Promise<void> => {
+    logAuthToken('login:start', {
+      gatewayBaseUrl: typeof window !== 'undefined' ? window.location.origin : null,
+    });
     const res = await apiRequest<LoginResponse>('/api/v1/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password }),
@@ -187,6 +210,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const { accessToken, user } = res.data;
     setAccessToken(accessToken);
+
+    logAuthToken('login:success', {
+      userId: user.id,
+      role: user.role,
+      accessTokenLength: accessToken.length,
+    });
 
     setState({ user, isLoading: false, isAuthenticated: true });
     scheduleTokenRefresh(accessToken);

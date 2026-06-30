@@ -12,11 +12,50 @@ import { config } from '../config';
 import { ForbiddenError } from '../utils/errors';
 import type { AuthenticatedRequest } from '../types';
 import { injectTenantHeader, requireTenantBearer } from '../middleware/tenantAuth.middleware';
+import { logger } from '../utils/logger';
 
 const router = Router();
 
+const AUTH_TOKEN_PATHS = new Set([
+  '/api/v1/auth/login',
+  '/api/v1/auth/refresh',
+  '/api/v1/auth/logout',
+]);
+
+function getCookieNames(cookieHeader: string | undefined): string[] {
+  if (!cookieHeader) return [];
+  return cookieHeader
+    .split(';')
+    .map((part) => part.trim().split('=')[0] ?? '')
+    .filter((name) => name.length > 0);
+}
+
+function logGatewayAuthToken(
+  phase: string,
+  req: Request,
+  extra: Record<string, unknown> = {}
+): void {
+  if (!AUTH_TOKEN_PATHS.has(req.path)) return;
+
+  const cookieHeader = req.headers.cookie ?? '';
+  logger.info(`[auth-token] gateway:${phase}`, {
+    path: req.path,
+    method: req.method,
+    origin: req.headers.origin ?? null,
+    cookieHeaderPresent: cookieHeader.length > 0,
+    cookieNames: getCookieNames(cookieHeader),
+    hasRefreshTokenCookie: cookieHeader.includes('refreshToken='),
+    ...extra,
+  });
+}
+
 const proxyOnHandlers = {
-  proxyRes: (proxyRes: import('http').IncomingMessage) => {
+  proxyReq: (proxyReq: import('http').ClientRequest, req: Request) => {
+    logGatewayAuthToken('proxyReq', req, {
+      cookieHeaderForwarded: !!(proxyReq.getHeader('cookie') ?? req.headers.cookie),
+    });
+  },
+  proxyRes: (proxyRes: import('http').IncomingMessage, req: Request) => {
     const setCookie = proxyRes.headers['set-cookie'];
     if (setCookie) {
       proxyRes.headers['set-cookie'] = setCookie.map((cookie) =>
@@ -25,6 +64,14 @@ const proxyOnHandlers = {
           .replace(/;\s*Path=[^;]*/gi, '; Path=/')
       );
     }
+
+    logGatewayAuthToken('proxyRes', req, {
+      statusCode: proxyRes.statusCode ?? null,
+      setCookieCount: setCookie?.length ?? 0,
+      setRefreshTokenCookie: Array.isArray(setCookie)
+        ? setCookie.some((cookie) => cookie.startsWith('refreshToken='))
+        : false,
+    });
   },
   error: (_err: Error, _req: unknown, res: unknown) => {
     (res as Response).status(502).json({
@@ -66,6 +113,8 @@ const tenantWalletProxy = createMountedCoreApiProxy('/api/v1/tenant-wallet');
 const tenantOrdersProxy = createMountedCoreApiProxy('/api/v1/tenant-orders');
 const tenantPlansProxy = createMountedCoreApiProxy('/api/v1/tenant-plans');
 const tenantNotificationsProxy = createMountedCoreApiProxy('/api/v1/tenant-notifications');
+const tenantUsersProxy = createMountedCoreApiProxy('/api/v1/tenant-users');
+const tenantVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-vms');
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -230,6 +279,8 @@ router.use('/api/v1/tenant-wallet', requireTenantBearer, tenantWalletProxy);
 router.use('/api/v1/tenant-orders', requireTenantBearer, tenantOrdersProxy);
 router.use('/api/v1/tenant-plans', requireTenantBearer, tenantPlansProxy);
 router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificationsProxy);
+router.use('/api/v1/tenant-users', requireTenantBearer, tenantUsersProxy);
+router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

@@ -11,6 +11,7 @@ node_modules/
 
 # Build output
 dist/
+!agent/dist/
 build/
 out/
 
@@ -36,5 +37,7 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 
-# Coverage
-coverage/
+# TLS certificates (keep certs/.gitkeep)
+certs/*.pem
+certs/*.crt
+certs/*.key

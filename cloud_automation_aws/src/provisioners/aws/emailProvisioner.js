@@ -1,7 +1,4 @@
-import crypto from 'crypto';
 import nodemailer from 'nodemailer';
-import { isPerUserCosting } from '../../utils/costingMode.js';
-import { provisioningConfig } from '../../config/provisioning.js';
 
 function buildTransport() {
   const host = process.env.SMTP_HOST;
@@ -18,162 +15,65 @@ function buildTransport() {
   });
 }
 
-function buildAccessToken(requestId, username) {
-  const secret =
-    process.env.PROVISION_ACCESS_TOKEN_SECRET ||
-    process.env.AWS_SECRET_ACCESS_KEY ||
-    'dev-secret';
-  return crypto
-    .createHmac('sha256', secret)
-    .update(`${requestId}:${username}`)
-    .digest('hex')
-    .slice(0, 32);
-}
-
-export function buildCredentialsEmailHtml({
-  request,
-  users,
-  awsAccountId,
-  allowedServices,
-  region,
-  identityCenterUrl,
-  perUserAccess = false,
-}) {
-  const userRows = users
-    .map(
-      (user) => `
-      <tr>
-        <td style="padding:12px;border:1px solid #e5e7eb;font-family:monospace;">
-          ${user.username}
-        </td>
-        <td style="padding:12px;border:1px solid #e5e7eb;">
-          ${user.email}
-        </td>
-        <td style="padding:12px;border:1px solid #e5e7eb;">
-          <span style="background:#fef2f2;color:#B91C1C;padding:4px 8px;border-radius:4px;font-size:12px;">
-            Check email for activation link
-          </span>
-        </td>
-        <td style="padding:12px;border:1px solid #e5e7eb;">
-          <a href="${identityCenterUrl}"
-             style="background:#B91C1C;color:#fff;padding:8px 16px;border-radius:6px;text-decoration:none;font-size:13px;">
-            Sign In
-          </a>
-        </td>
-      </tr>`
-    )
-    .join('');
-
+function buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsAccountId, allowedServices }) {
   return `
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"/></head>
 <body style="font-family:Arial,sans-serif;color:#111827;background:#f9fafb;margin:0;padding:0;">
   <div style="max-width:720px;margin:32px auto;background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-
-    <!-- Header -->
     <div style="background:#B91C1C;padding:32px;">
       <h1 style="color:#fff;margin:0;font-size:24px;">✅ AWS Lab Access Ready</h1>
-      <p style="color:#fca5a5;margin:8px 0 0;">
-        Your lab environment has been provisioned. Follow the steps below to sign in.
-      </p>
+      <p style="color:#fca5a5;margin:8px 0 0;">Magic Link Access — ${labRoles.length} users provisioned</p>
     </div>
-
     <div style="padding:32px;">
-
-      <!-- Lab details -->
       <table style="width:100%;margin-bottom:24px;font-size:14px;">
-        <tr>
-          <td style="padding:8px 0;color:#6b7280;">AWS Account ID</td>
-          <td style="padding:8px 0;font-weight:600;">${awsAccountId}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;color:#6b7280;">Region</td>
-          <td style="padding:8px 0;font-weight:600;">${region}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;color:#6b7280;">Access Mode</td>
-          <td style="padding:8px 0;font-weight:600;">
-            ${perUserAccess ? 'Per-user permission sets' : 'Shared account'}
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;color:#6b7280;">Allowed Services</td>
-          <td style="padding:8px 0;font-weight:600;">${allowedServices.join(', ')}</td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;color:#6b7280;">Lab Expires</td>
-          <td style="padding:8px 0;font-weight:600;">
-            ${new Date(request.endDate).toDateString()}
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:8px 0;color:#6b7280;">Identity Center URL</td>
-          <td style="padding:8px 0;">
-            <a href="${identityCenterUrl}" style="color:#B91C1C;">${identityCenterUrl}</a>
-          </td>
-        </tr>
+        <tr><td style="padding:8px 0;color:#6b7280;width:180px;">AWS Account</td><td style="font-weight:600;">${awsAccountId}</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;">Region</td><td style="font-weight:600;">${request.region}</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;">Services</td><td style="font-weight:600;">${allowedServices.join(', ')}</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;">Users</td><td style="font-weight:600;">${labRoles.length} lab users</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;">Access Type</td><td style="font-weight:600;">🔗 Magic Link (12hr sessions)</td></tr>
+        <tr><td style="padding:8px 0;color:#6b7280;">Lab Expires</td><td style="font-weight:600;">${new Date(request.endDate).toDateString()}</td></tr>
       </table>
 
-      <!-- How to sign in -->
-      <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:20px;margin-bottom:24px;">
-        <h3 style="color:#B91C1C;margin:0 0 12px;font-size:15px;">
-          🔐 How to sign in (3 steps)
-        </h3>
-        <ol style="margin:0;padding-left:20px;font-size:13px;color:#374151;line-height:2;">
-          <li>
-            <strong>Check your email</strong> — AWS has sent an activation email
-            to each user's email address listed below. Click the activation link
-            to set your password.
-          </li>
-          <li>
-            <strong>Go to Identity Center:</strong>
-            <a href="${identityCenterUrl}" style="color:#B91C1C;">
-              ${identityCenterUrl}
-            </a>
-          </li>
-          <li>
-            <strong>Enter your username</strong> (from the table below) and the
-            password you set in step 1. Select your AWS account and permission set.
-          </li>
-        </ol>
-        <p style="margin:12px 0 0;font-size:12px;color:#6b7280;">
-          ⚠️ If you don't see the activation email, check your spam folder or
-          click "Forgot password?" on the sign-in page to resend it.
+      <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:24px;margin-bottom:24px;text-align:center;">
+        <h2 style="color:#B91C1C;margin:0 0 8px;">🖥️ Open Your Manage Portal</h2>
+        <p style="color:#374151;font-size:13px;margin:0 0 16px;">
+          Log in to generate one-click AWS console links for each lab user.
         </p>
+        <a href="${portalUrl}" style="background:#B91C1C;color:#fff;padding:14px 40px;border-radius:8px;text-decoration:none;font-size:15px;font-weight:600;display:inline-block;margin-bottom:16px;">
+          Open Manage Portal →
+        </a>
+        <div style="background:#fff;border:1px solid #e5e7eb;border-radius:6px;padding:16px;text-align:left;display:inline-block;min-width:280px;">
+          <p style="margin:0 0 8px;font-size:13px;color:#6b7280;">Portal credentials:</p>
+          <table style="font-size:13px;">
+            <tr><td style="padding:4px 16px 4px 0;color:#6b7280;">Username</td><td style="font-family:monospace;font-weight:600;">${portalSession.username}</td></tr>
+            <tr><td style="padding:4px 16px 4px 0;color:#6b7280;">Password</td><td style="font-family:monospace;font-weight:600;">${portalSession.password}</td></tr>
+          </table>
+        </div>
       </div>
 
-      <!-- User table -->
-      <h2 style="font-size:15px;margin-bottom:12px;">Lab Users</h2>
-      <table style="width:100%;border-collapse:collapse;font-size:13px;">
-        <thead>
-          <tr style="background:#f9fafb;">
-            <th style="padding:12px;border:1px solid #e5e7eb;text-align:left;">Username</th>
-            <th style="padding:12px;border:1px solid #e5e7eb;text-align:left;">Activation Email Sent To</th>
-            <th style="padding:12px;border:1px solid #e5e7eb;text-align:left;">Status</th>
-            <th style="padding:12px;border:1px solid #e5e7eb;text-align:left;">Sign In</th>
-          </tr>
-        </thead>
-        <tbody>${userRows}</tbody>
-      </table>
+      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:20px;margin-bottom:24px;">
+        <h3 style="color:#166534;margin:0 0 12px;font-size:14px;">How to give users access</h3>
+        <ol style="margin:0;padding-left:20px;font-size:13px;color:#374151;line-height:2.2;">
+          <li>Open the manage portal with credentials above</li>
+          <li>Find the lab user in the table</li>
+          <li>Click <strong>Launch AWS Console</strong></li>
+          <li>Copy the magic link and share with that lab user</li>
+          <li>Lab user clicks link → directly into AWS console (no password)</li>
+          <li>Links expire after 12 hours — regenerate as needed</li>
+        </ol>
+      </div>
 
-      <!-- Forgot password fallback -->
-      <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:16px;margin-top:24px;">
-        <h3 style="color:#166534;margin:0 0 8px;font-size:13px;">
-          Didn't receive the activation email?
-        </h3>
+      <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:16px;">
+        <h3 style="color:#92400e;margin:0 0 8px;font-size:13px;">⚠️ Magic Link Info</h3>
         <p style="font-size:13px;color:#374151;margin:0;">
-          Go to
-          <a href="${identityCenterUrl}" style="color:#B91C1C;">${identityCenterUrl}</a>,
-          enter your username, and click <strong>"Forgot password?"</strong> —
-          AWS will resend the activation link to your email.
+          Each magic link is valid for 12 hours. When a link expires, return to the manage portal and click Launch AWS Console to generate a fresh link. Budget and cleanup controls are available in the manage portal.
         </p>
       </div>
 
       <p style="color:#9ca3af;font-size:12px;margin-top:24px;border-top:1px solid #f3f4f6;padding-top:16px;">
-        This is an automated message from Racko Cloud Automation.<br/>
-        Lab access expires on ${new Date(request.endDate).toDateString()}.<br/>
-        Do not reply to this email.
+        Racko Cloud Automation · Lab expires ${new Date(request.endDate).toDateString()} · Do not reply
       </p>
     </div>
   </div>
@@ -181,31 +81,182 @@ export function buildCredentialsEmailHtml({
 </html>`;
 }
 
-export async function sendCredentialsEmail(request, context) {
-  const { awsAccountId, identityUsers } = context;
-  const perUserAccess = isPerUserCosting(context.costingMode ?? request.costingMode);
-  const allowedServices = (request.selectedServices || []).map((e) => e.serviceName);
-  const identityCenterUrl =
-    process.env.AWS_IDENTITY_CENTER_START_URL ||
-    provisioningConfig.identityCenterStartUrl ||
-    'https://console.aws.amazon.com/singlesignon';
+function buildIdentityCenterEmail({ request, identityUsers, portalSession, portalUrl }) {
+  const userRows = identityUsers
+    .map(
+      (user) => `
+    <tr>
+      <td style="padding:10px;border:1px solid #e2e8f0;font-weight:bold;">
+        User ${user.userIndex + 1}
+      </td>
+      <td style="padding:10px;border:1px solid #e2e8f0;">
+        <a href="${user.consoleUrl}" style="color:#FF9900;">${user.consoleUrl}</a>
+      </td>
+      <td style="padding:10px;border:1px solid #e2e8f0;">
+        <code style="background:#F5F7FA;padding:2px 8px;border-radius:4px;">${user.username}</code>
+      </td>
+      <td style="padding:10px;border:1px solid #e2e8f0;">
+        <code style="background:#F5F7FA;padding:2px 8px;border-radius:4px;">${user.password}</code>
+      </td>
+    </tr>`
+    )
+    .join('');
 
-  const html = buildCredentialsEmailHtml({
-    request,
-    users: identityUsers,
-    awsAccountId,
-    allowedServices,
-    region: request.region,
-    identityCenterUrl,
-    perUserAccess,
+  return `
+<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;max-width:700px;margin:auto;padding:20px;">
+  <div style="background:#0F2744;padding:24px;border-radius:8px 8px 0 0;">
+    <h1 style="color:#FF9900;margin:0;">Your AWS Lab is Ready</h1>
+    <p style="color:#CBD5E0;margin:8px 0 0;">
+      Request ID: ${request._id} &nbsp;·&nbsp;
+      Valid until: ${new Date(request.endDate).toLocaleDateString()}
+    </p>
+  </div>
+  <div style="padding:24px;border:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
+    <p>Your AWS lab environment has been provisioned with ${identityUsers.length} user account(s).
+    Each user can log in directly using the credentials below —
+    no additional setup or MFA required.</p>
+
+    <table style="width:100%;border-collapse:collapse;margin:20px 0;">
+      <thead>
+        <tr style="background:#0F2744;">
+          <th style="padding:10px;color:#FF9900;text-align:left;border:1px solid #e2e8f0;">User</th>
+          <th style="padding:10px;color:#FF9900;text-align:left;border:1px solid #e2e8f0;">Console URL</th>
+          <th style="padding:10px;color:#FF9900;text-align:left;border:1px solid #e2e8f0;">Username</th>
+          <th style="padding:10px;color:#FF9900;text-align:left;border:1px solid #e2e8f0;">Password</th>
+        </tr>
+      </thead>
+      <tbody>${userRows}</tbody>
+    </table>
+
+    <div style="background:#E8F5ED;border-left:4px solid #1A6B3A;padding:12px;border-radius:4px;margin:16px 0;">
+      <strong style="color:#1A6B3A;">How to access AWS:</strong>
+      <ol style="color:#1A1A2E;margin:8px 0 0;padding-left:20px;line-height:1.8;">
+        <li>Click the Console URL for your assigned user</li>
+        <li>Enter the Username and Password exactly as shown above</li>
+        <li>You are now in your AWS lab environment</li>
+        <li>You can log back in anytime using the same credentials</li>
+      </ol>
+    </div>
+
+    <div style="background:#FFF3CD;border-left:4px solid #856404;padding:12px;border-radius:4px;margin:16px 0;">
+      <strong style="color:#856404;">Important:</strong>
+      <ul style="color:#1A1A2E;margin:8px 0 0;padding-left:20px;line-height:1.8;">
+        <li>Share each user's credentials only with that specific user</li>
+        <li>Credentials expire on ${new Date(request.endDate).toLocaleDateString()}</li>
+        <li>Do not share passwords publicly</li>
+      </ul>
+    </div>
+
+    <div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:16px;margin-top:24px;">
+      <h3 style="color:#B91C1C;margin:0 0 8px;font-size:13px;">Manage Portal Access</h3>
+      <p style="font-size:13px;color:#374151;margin:0 0 12px;">
+        As admin you can manage all users, view costs, suspend/reinstate, and trigger cleanup from the manage portal.
+      </p>
+      <a href="${portalUrl}" style="background:#B91C1C;color:#fff;padding:10px 24px;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600;display:inline-block;">
+        Open Manage Portal →
+      </a>
+      <div style="margin-top:12px;font-size:12px;color:#6b7280;">
+        Login: <strong>${portalSession.username}</strong> / <strong>${portalSession.password}</strong>
+      </div>
+    </div>
+
+    <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;">
+    <p style="color:#666;font-size:12px;margin:0;">
+      Racko Cloud Automation Platform · These accounts will be automatically deleted when the lab ends.
+    </p>
+  </div>
+</body>
+</html>`;
+}
+
+function buildReinstateCredentialsEmail({ request, user, newPassword }) {
+  return `
+<!DOCTYPE html>
+<html>
+<body style="font-family:Arial,sans-serif;max-width:600px;margin:auto;padding:20px;">
+  <h2 style="color:#0F2744;">AWS Lab Access Restored</h2>
+  <p>Access for <strong>${user.username}</strong> has been reinstated. Use these updated credentials:</p>
+  <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+    <tr><td style="padding:8px;color:#666;">Console URL</td><td><a href="${user.consoleUrl}">${user.consoleUrl}</a></td></tr>
+    <tr><td style="padding:8px;color:#666;">Username</td><td><code>${user.username}</code></td></tr>
+    <tr><td style="padding:8px;color:#666;">Password</td><td><code>${newPassword}</code></td></tr>
+  </table>
+  <p style="color:#666;font-size:12px;">Lab expires ${new Date(request.endDate).toLocaleDateString()}</p>
+</body>
+</html>`;
+}
+
+async function sendEmail({ to, subject, html }) {
+  const transport = buildTransport();
+  if (!transport) {
+    console.log('[emailProvisioner] SMTP not configured — email not sent');
+    return { sent: false, mode: 'console' };
+  }
+
+  await transport.verify();
+  await transport.sendMail({
+    from: `"Racko Cloud" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
+    to,
+    subject,
+    html,
   });
+
+  return { sent: true, mode: 'smtp' };
+}
+
+export async function sendReinstateCredentialsEmail(request, user, newPassword) {
+  const html = buildReinstateCredentialsEmail({ request, user, newPassword });
+  const recipient = String(request.customerEmail).trim();
+
+  try {
+    const result = await sendEmail({
+      to: recipient,
+      subject: `AWS Lab Access Restored — ${user.username}`,
+      html,
+    });
+    console.log(`[emailProvisioner] Reinstate email sent to ${recipient}`);
+    return result;
+  } catch (err) {
+    console.error('[emailProvisioner] Reinstate email failed:', err.message);
+    return { sent: false, error: err.message };
+  }
+}
+
+export async function sendCredentialsEmail(request, context) {
+  const {
+    awsAccountId,
+    labRoles = [],
+    identityUsers = [],
+    portalSession,
+    isMagicLink,
+  } = context;
+
+  const allowedServices = (request.selectedServices || []).map((entry) => entry.serviceName);
+  const portalUrl = `${process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'}/manage-users/aws?token=${portalSession.token}`;
+
+  const html = isMagicLink
+    ? buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsAccountId, allowedServices })
+    : buildIdentityCenterEmail({
+        request,
+        identityUsers,
+        portalSession,
+        portalUrl,
+      });
 
   const recipient = String(request.customerEmail).trim();
   const transport = buildTransport();
 
   if (!transport) {
-    console.log(`[emailProvisioner] SMTP not configured — credentials for ${recipient}:`);
-    identityUsers.forEach((u) => console.log(`  ${u.username} → ${u.email}`));
+    console.log('[emailProvisioner] SMTP not configured');
+    console.log(`Portal URL: ${portalUrl}`);
+    console.log(`Portal login: ${portalSession.username} / ${portalSession.password}`);
+    if (!isMagicLink) {
+      identityUsers.forEach((user) =>
+        console.log(`IAM User: ${user.username} → ${user.consoleUrl} / ${user.password}`)
+      );
+    }
     return { sent: false, mode: 'console' };
   }
 
@@ -213,24 +264,24 @@ export async function sendCredentialsEmail(request, context) {
     await transport.verify();
   } catch (err) {
     console.error('[emailProvisioner] SMTP verify failed:', err.message);
-    identityUsers.forEach((u) => console.log(`  ${u.username} → ${u.email}`));
     return { sent: false, mode: 'console', error: err.message };
   }
 
   await transport.sendMail({
     from: `"Racko Cloud" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
     to: recipient,
-    subject: '✅ AWS Lab Access — Activate your accounts',
+    subject: `✅ AWS Lab Access Ready — ${isMagicLink ? 'Magic Link' : 'Direct IAM'} Access`,
     html,
   });
 
-  console.log(`[emailProvisioner] Credentials email sent to ${recipient}`);
+  console.log(`[emailProvisioner] Email sent to ${recipient}`);
   return { sent: true, mode: 'smtp' };
 }
 
-export function verifyAccessToken(requestId, username, token) {
-  const expected = buildAccessToken(requestId, username);
-  const provided = String(token || '');
-  if (provided.length !== expected.length) return false;
-  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+// Backward-compatible export for tests
+export function buildCredentialsEmailHtml(props) {
+  return buildMagicLinkEmail({
+    ...props,
+    portalUrl: `${process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'}/manage-users/aws?token=${props.portalSession.token}`,
+  });
 }

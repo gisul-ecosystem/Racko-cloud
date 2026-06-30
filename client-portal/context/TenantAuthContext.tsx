@@ -14,6 +14,7 @@ import {
   persistTenantSession,
   TENANT_SESSION_EXPIRED_EVENT,
 } from '../lib/tenantPortalApiClient';
+import { getTenantDefaultDashboardPath } from '../lib/tenantPortalRoutes';
 import { tenantLogin as apiTenantLogin } from '../lib/tenantPortalApi';
 import { ApiError } from '../lib/apiClient';
 import type { TenantPortalUser } from '../types/tenantPortal';
@@ -74,7 +75,7 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
           isLoading: false,
           isAuthenticated: true,
         });
-        router.push('/tenant/dashboard/wallet');
+        router.push(getTenantDefaultDashboardPath(tenantUser.role));
       } catch (err) {
         if (err instanceof ApiError) throw err;
         throw new ApiError('Login failed.', 500);

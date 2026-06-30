@@ -30,24 +30,61 @@ import {
 import type { RegisterDto, LoginDto, LoginResult, TokenValidationResult } from './auth.types';
 import type { UserRole } from '../../types';
 
-// Cookie config for refresh token — maxAge derived from JWT_REFRESH_EXPIRES_IN env var
-const REFRESH_COOKIE_OPTIONS = {
-  httpOnly: true,
-  secure: config.NODE_ENV === 'production',
-  sameSite: 'strict' as const,
-  maxAge: parseDuration(config.JWT_REFRESH_EXPIRES_IN),
-  path: '/',
-};
+/** Secure only on HTTPS — HTTP sites must not set Secure cookies. */
+function isRefreshCookieSecure(): boolean {
+  try {
+    return new URL(config.FRONTEND_URL).protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
 
-const REFRESH_COOKIE_CLEAR_OPTIONS = {
-  httpOnly: true,
-  secure: config.NODE_ENV === 'production',
-  sameSite: 'strict' as const,
-  path: '/',
-};
+function getRefreshCookieOptions() {
+  return {
+    httpOnly: true,
+    secure: isRefreshCookieSecure(),
+    sameSite: 'strict' as const,
+    maxAge: parseDuration(config.JWT_REFRESH_EXPIRES_IN),
+    path: '/',
+  };
+}
+
+function getRefreshCookieClearOptions() {
+  return {
+    httpOnly: true,
+    secure: isRefreshCookieSecure(),
+    sameSite: 'strict' as const,
+    path: '/',
+  };
+}
 
 function clearRefreshCookie(res: Response): void {
-  res.clearCookie('refreshToken', REFRESH_COOKIE_CLEAR_OPTIONS);
+  res.clearCookie('refreshToken', getRefreshCookieClearOptions());
+}
+
+function getCookieDebugMeta(req: Request): {
+  cookieHeaderPresent: boolean;
+  cookieNames: string[];
+  hasRefreshTokenCookie: boolean;
+  refreshTokenLength: number;
+} {
+  const cookieHeader = req.headers.cookie ?? '';
+  const cookieNames = cookieHeader
+    .split(';')
+    .map((part) => part.trim().split('=')[0] ?? '')
+    .filter((name) => name.length > 0);
+  const rawRefreshToken = req.cookies?.['refreshToken'] as string | undefined;
+
+  return {
+    cookieHeaderPresent: cookieHeader.length > 0,
+    cookieNames,
+    hasRefreshTokenCookie: !!rawRefreshToken,
+    refreshTokenLength: rawRefreshToken?.length ?? 0,
+  };
+}
+
+function logAuthToken(event: string, meta: Record<string, unknown>): void {
+  logger.info(`[auth-token] ${event}`, meta);
 }
 
 export class AuthService {
@@ -346,7 +383,23 @@ export class AuthService {
     await user.save();
 
     // Set refresh token in HttpOnly cookie — never in response body
-    res.cookie('refreshToken', refreshTokenJwt, REFRESH_COOKIE_OPTIONS);
+    res.cookie('refreshToken', refreshTokenJwt, getRefreshCookieOptions());
+
+    logAuthToken('login:refresh-cookie-set', {
+      userId: user._id.toString(),
+      ...getCookieDebugMeta(req),
+      cookieOptions: {
+        httpOnly: true,
+        secure: isRefreshCookieSecure(),
+        sameSite: 'strict',
+        path: '/',
+        maxAgeMs: parseDuration(config.JWT_REFRESH_EXPIRES_IN),
+      },
+      refreshTokenJwtLength: refreshTokenJwt.length,
+      accessTokenLength: accessToken.length,
+      nodeEnv: config.NODE_ENV,
+      frontendUrl: config.FRONTEND_URL,
+    });
 
     await AuditLog.create({
       userId: user._id,
@@ -378,16 +431,30 @@ export class AuthService {
     const ip = getClientIp(req);
     const userAgent = req.headers['user-agent'] ?? 'unknown';
     const fingerprint = generateFingerprint(req);
+    const cookieMeta = getCookieDebugMeta(req);
+
+    logAuthToken('refresh:request', {
+      ip,
+      userAgent,
+      origin: req.headers.origin ?? null,
+      referer: req.headers.referer ?? null,
+      ...cookieMeta,
+    });
 
     const rawRefreshToken = req.cookies?.['refreshToken'] as string | undefined;
 
     if (!rawRefreshToken) {
+      logAuthToken('refresh:failed', { reason: 'no_refresh_token_cookie', ...cookieMeta });
       throw new UnauthorizedError('No refresh token provided.');
     }
 
     // Verify JWT signature
     const payload = verifyRefreshToken(rawRefreshToken);
     if (!payload) {
+      logAuthToken('refresh:failed', {
+        reason: 'invalid_or_expired_refresh_jwt',
+        refreshTokenLength: rawRefreshToken.length,
+      });
       clearRefreshCookie(res);
       throw new UnauthorizedError('Invalid or expired refresh token.');
     }
@@ -401,12 +468,22 @@ export class AuthService {
     const tokenDoc = await Token.findOne({ tokenHash: hashedToken });
 
     if (!tokenDoc) {
+      logAuthToken('refresh:failed', {
+        reason: 'refresh_token_not_found_in_db',
+        userId: payload.userId,
+        family: payload.family,
+      });
       clearRefreshCookie(res);
       throw new UnauthorizedError('Refresh token not found.');
     }
 
     // TOKEN THEFT DETECTION: if revoked token is used, revoke entire family
     if (tokenDoc.isRevoked) {
+      logAuthToken('refresh:failed', {
+        reason: 'token_theft_detected_revoked_token_reused',
+        userId: payload.userId,
+        family: payload.family,
+      });
       logger.warn('Token theft detected — revoking entire family', {
         userId: payload.userId,
         family: payload.family,
@@ -429,6 +506,11 @@ export class AuthService {
 
     // Check token expiry
     if (tokenDoc.expiresAt < new Date()) {
+      logAuthToken('refresh:failed', {
+        reason: 'refresh_token_expired',
+        userId: payload.userId,
+        expiresAt: tokenDoc.expiresAt.toISOString(),
+      });
       clearRefreshCookie(res);
       throw new UnauthorizedError('Refresh token expired.');
     }
@@ -436,6 +518,12 @@ export class AuthService {
     // Verify user still exists and is active
     const user = await User.findById(payload.userId);
     if (!user || !user.isActive) {
+      logAuthToken('refresh:failed', {
+        reason: 'user_not_found_or_inactive',
+        userId: payload.userId,
+        userFound: !!user,
+        userActive: user?.isActive ?? false,
+      });
       clearRefreshCookie(res);
       throw new UnauthorizedError('User not found or inactive.');
     }
@@ -478,7 +566,21 @@ export class AuthService {
     });
 
     // Update cookie
-    res.cookie('refreshToken', newRefreshTokenJwt, REFRESH_COOKIE_OPTIONS);
+    res.cookie('refreshToken', newRefreshTokenJwt, getRefreshCookieOptions());
+
+    logAuthToken('refresh:success', {
+      userId: user._id.toString(),
+      family: payload.family,
+      accessTokenLength: newAccessToken.length,
+      newRefreshTokenJwtLength: newRefreshTokenJwt.length,
+      cookieOptions: {
+        httpOnly: true,
+        secure: isRefreshCookieSecure(),
+        sameSite: 'strict',
+        path: '/',
+        maxAgeMs: parseDuration(config.JWT_REFRESH_EXPIRES_IN),
+      },
+    });
 
     await AuditLog.create({
       userId: user._id,

@@ -1,94 +1,94 @@
-import {
-  DeleteAccountAssignmentCommand,
-  CreateAccountAssignmentCommand,
-} from '@aws-sdk/client-sso-admin';
-import { ssoAdminClient, SSO_INSTANCE_ARN } from '../config/aws.js';
 import Request from '../models/Request.js';
 import BudgetEvent from '../models/BudgetEvent.js';
 import UserSpend from '../models/UserSpend.js';
+import {
+  suspendIdentityUser,
+  reinstateIdentityUser,
+} from '../provisioners/aws/identityProvisioner.js';
+import { sendReinstateCredentialsEmail } from '../provisioners/aws/emailProvisioner.js';
 
-export async function suspendUser(request, user) {
-  if (!user.permissionSetArn && !request.permissionSetArns?.[0]) return;
+function resolveUsername(user, userIndex) {
+  return user.username || `labuser${userIndex + 1}`;
+}
 
-  const permissionSetArn = user.permissionSetArn || request.permissionSetArns[0];
-
+export async function suspendUser(request, user, accessType) {
   try {
-    await ssoAdminClient.send(
-      new DeleteAccountAssignmentCommand({
-        InstanceArn: SSO_INSTANCE_ARN,
-        TargetId: request.awsAccountId,
-        TargetType: 'AWS_ACCOUNT',
-        PermissionSetArn: permissionSetArn,
-        PrincipalType: 'USER',
-        PrincipalId: user.userId,
-      })
-    );
-
-    await Request.findOneAndUpdate(
-      { _id: request._id, 'identityUsers.userId': user.userId },
-      {
-        $set: {
-          'identityUsers.$.budgetExceeded': true,
-          'identityUsers.$.suspended': true,
-        },
-      }
-    );
+    if (accessType === 'identity_center') {
+      await suspendIdentityUser(request, user.userIndex);
+      await Request.findOneAndUpdate(
+        { _id: request._id, 'identityUsers.userIndex': user.userIndex },
+        {
+          $set: {
+            'identityUsers.$.suspended': true,
+            'identityUsers.$.budgetExceeded': true,
+          },
+        }
+      );
+    } else {
+      await Request.findOneAndUpdate(
+        { _id: request._id, 'labRoles.userIndex': user.userIndex },
+        {
+          $set: {
+            'labRoles.$.suspended': true,
+            'labRoles.$.budgetExceeded': true,
+          },
+        }
+      );
+    }
 
     await BudgetEvent.create({
       requestId: request._id,
-      username: user.username,
-      userId: user.userId,
+      username: resolveUsername(user, user.userIndex),
+      userId: user.userId || String(user.userIndex),
       spendUsd: user.currentSpend || 0,
       budgetUsd: request.perUserBudgetUsd,
       action: 'suspended',
       reason: 'Budget exceeded',
     });
 
-    console.log(`[budgetEnforcement] Suspended user ${user.username} — budget exceeded`);
+    console.log(`[budgetEnforcement] Suspended user ${user.userIndex + 1} (${accessType})`);
   } catch (err) {
-    console.error(`[budgetEnforcement] Failed to suspend ${user.username}:`, err.message);
+    console.error('[budgetEnforcement] Suspend failed:', err.message);
   }
 }
 
-export async function reinstateUser(request, user) {
-  const permissionSetArn = user.permissionSetArn || request.permissionSetArns?.[0];
-  if (!permissionSetArn) return;
-
+export async function reinstateUser(request, user, accessType) {
   try {
-    await ssoAdminClient.send(
-      new CreateAccountAssignmentCommand({
-        InstanceArn: SSO_INSTANCE_ARN,
-        TargetId: request.awsAccountId,
-        TargetType: 'AWS_ACCOUNT',
-        PermissionSetArn: permissionSetArn,
-        PrincipalType: 'USER',
-        PrincipalId: user.userId,
-      })
-    );
+    if (accessType === 'identity_center') {
+      const newPassword = await reinstateIdentityUser(request, user.userIndex);
+      const updatedUser = {
+        ...user,
+        password: newPassword,
+        consoleUrl:
+          user.consoleUrl ||
+          `https://${user.accountId || user.awsAccountId || request.awsAccountId}.signin.aws.amazon.com/console`,
+      };
+      await sendReinstateCredentialsEmail(request, updatedUser, newPassword);
+    }
 
+    const field = accessType === 'magic_link' ? 'labRoles' : 'identityUsers';
     await Request.findOneAndUpdate(
-      { _id: request._id, 'identityUsers.userId': user.userId },
+      { _id: request._id, [`${field}.userIndex`]: user.userIndex },
       {
         $set: {
-          'identityUsers.$.budgetExceeded': false,
-          'identityUsers.$.suspended': false,
+          [`${field}.$.suspended`]: false,
+          [`${field}.$.budgetExceeded`]: false,
+          [`${field}.$.currentSpend`]: 0,
         },
       }
     );
 
     await BudgetEvent.create({
       requestId: request._id,
-      username: user.username,
-      userId: user.userId,
+      username: resolveUsername(user, user.userIndex),
+      userId: user.userId || String(user.userIndex),
       spendUsd: 0,
       budgetUsd: request.perUserBudgetUsd,
       action: 'reinstated',
       reason: 'Budget renewed by admin',
     });
-
-    console.log(`[budgetEnforcement] Reinstated user ${user.username}`);
   } catch (err) {
-    console.error(`[budgetEnforcement] Failed to reinstate ${user.username}:`, err.message);
+    console.error('[budgetEnforcement] Reinstate failed:', err.message);
   }
 }
 
@@ -99,24 +99,22 @@ export async function checkAndEnforceBudgets() {
   });
 
   for (const request of requests) {
-    for (const user of request.identityUsers || []) {
-      if (!user.userId) continue;
+    const accessType = request.accessType || 'magic_link';
+    const users =
+      accessType === 'magic_link' ? request.labRoles || [] : request.identityUsers || [];
+
+    for (const user of users) {
+      if (user.userIndex === undefined) continue;
 
       const today = new Date().toISOString().split('T')[0];
-      const spendRecord = await UserSpend.findOne({
-        requestId: request._id,
-        username: user.username,
-        date: today,
-      });
-
+      const username = resolveUsername(user, user.userIndex);
+      const spendRecord = await UserSpend.findOne({ requestId: request._id, username, date: today });
       const currentSpend = spendRecord?.spendUsd || 0;
-      user.currentSpend = currentSpend;
 
       if (currentSpend >= request.perUserBudgetUsd && !user.suspended) {
-        console.log(
-          `[budgetEnforcement] ${user.username} exceeded budget: $${currentSpend} >= $${request.perUserBudgetUsd}`
-        );
-        await suspendUser(request, user);
+        console.log(`[budgetEnforcement] ${username} exceeded $${request.perUserBudgetUsd}`);
+        user.currentSpend = currentSpend;
+        await suspendUser(request, user, accessType);
       }
     }
   }
