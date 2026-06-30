@@ -4,10 +4,11 @@ FROM node:20-alpine AS builder
 
 WORKDIR /app
 
-COPY package.json package-lock.json ./
+COPY client-portal/package.json ./
+COPY client-portal/package-lock.json* ./
 RUN npm ci
 
-COPY . .
+COPY client-portal/ ./
 
 ARG NEXT_PUBLIC_GATEWAY_URL
 ARG NEXT_PUBLIC_TENANT_DEV_DOMAIN

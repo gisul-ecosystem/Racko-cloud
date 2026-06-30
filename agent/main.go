@@ -24,7 +24,24 @@ func main() {
 		log.Fatalf("[main] Failed to load config: %v", err)
 	}
 
-	// ── 2. Dispatch: service vs interactive ───────────────────────────────────
+	// ── 2. --install flag: explicit install mode (Linux/macOS CLI) ───────────
+	//
+	// Usage:
+	//   sudo ACCOUNT_TOKEN=<token> PLATFORM_URL=<url> ./racko-agent --install
+	//   sudo ENROLLMENT_KEY=<key>  PLATFORM_URL=<url> ./racko-agent --install
+	//
+	// This installs the binary + config and registers a systemd service,
+	// then exits. The service then starts the agent on its own.
+	if len(os.Args) > 1 && os.Args[1] == "--install" {
+		install.ElevateIfNeeded()
+		if err := install.Install(cfg); err != nil {
+			log.Fatalf("[main] Installation failed: %v", err)
+		}
+		log.Println("[main] Installation complete. Service started.")
+		return
+	}
+
+	// ── 3. Dispatch: Windows service vs interactive ───────────────────────────
 	if winsvc.IsWindowsService() {
 		// Running as a Windows service — use SCM handler (fixes error 1053)
 		if err := winsvc.Run(func(done <-chan struct{}) {
@@ -35,17 +52,17 @@ func main() {
 		return
 	}
 
-	// ── 3. Interactive (double-clicked / terminal) ────────────────────────────
-	// Inno Setup handles installation. When the user runs the binary directly,
-	// show the installer GUI so they can paste their token.
+	// ── 4. Interactive (double-clicked on Windows / terminal on Linux) ────────
+	//
+	// Windows: no --install flag → show Inno Setup GUI so user can paste token.
+	// Linux:   no --install flag and not running as systemd service → print help.
 	install.ElevateIfNeeded()
-
 	if install.ShouldSelfInstall() {
 		install.RunInstallerGUI(cfg)
 		return
 	}
 
-	// Terminal mode (e.g. running directly after Inno Setup for debugging)
+	// ── 5. Running as a service (systemd set INVOCATION_ID) ──────────────────
 	done := make(chan struct{})
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -54,6 +71,7 @@ func main() {
 		log.Printf("[main] Signal %s — shutting down…", sig)
 		close(done)
 	}()
+
 	runAgent(cfg, done)
 }
 
