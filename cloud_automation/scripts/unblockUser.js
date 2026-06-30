@@ -2,7 +2,7 @@ require('dotenv').config();
 const { DateTime } = require('luxon');
 const db = require('../src/db/postgres');
 const { createGraphClient } = require('../src/provisioners/azure/userProvisioner');
-
+ 
 const parseArgs = () => {
   const args = process.argv.slice(2);
   const options = {
