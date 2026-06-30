@@ -65,6 +65,7 @@ export interface OrgAdminLiveSummary {
   resources: OrgAdminLiveResource[];
   totalLiveCost: number;
   totalMinutesSpent: number;
+  activeSessions?: number;
 }
 
 export interface OrgAdminRequestDetail {
@@ -78,9 +79,16 @@ export interface OrgAdminRequestDetail {
   status: string;
   expiryDate: string | null;
   enableDailyUsage: boolean;
+  hasUsageWindows?: boolean;
+  dailyLimitHours?: number | null;
   dailyLimitMinutes: number;
   usageSchedule: unknown;
+  usageWindows?: unknown[];
   enforceInAzure: boolean;
+  resourceCleanupEnabled?: boolean;
+  resourceCleanupIntervalHours?: number | null;
+  cleanupEnabled?: boolean;
+  cleanupIntervalHours?: number | null;
   createdAt: string;
   liveSummary?: OrgAdminLiveSummary | null;
 }
@@ -98,6 +106,9 @@ export interface OrgAdminUser {
   usedTodayMinutes: number;
   remainingMinutes: number | null;
   blockedUntil: string | null;
+  dailyLimitReached?: boolean;
+  sessionExpiresAt?: string | null;
+  totalSessions?: number;
   hasActiveSession: boolean;
   sessionActive?: boolean;
   sessionStartedAt?: string | null;

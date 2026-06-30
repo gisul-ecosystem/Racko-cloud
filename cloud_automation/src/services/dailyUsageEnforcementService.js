@@ -184,6 +184,13 @@ async function handleLimitReached({
 
   try {
     const { graphClient } = createGraphClient();
+
+    try {
+      await graphClient.api(`/users/${azureUserId}/revokeSignInSessions`).post({});
+    } catch (err) {
+      logEvent('error', 'revoke_sessions_failed', { userId, error: err.message });
+    }
+
     await graphClient
       .api(`/users/${azureUserId}`)
       .patch({ accountEnabled: false });

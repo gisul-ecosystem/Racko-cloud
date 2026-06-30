@@ -197,7 +197,7 @@ INSERT INTO public.service_instance_role_mapping (service_id, instance_option, a
 SELECT s.id, m.instance_option, m.azure_role, true
 FROM public.services s
 CROSS JOIN (VALUES
-  ('Embeddings',   'Cognitive Services User'),
+  ('Embeddings',   'Cognitive Services OpenAI Contributor'),
   ('GPT-4o',       'Cognitive Services OpenAI Contributor'),
   ('GPT-4.1',      'Cognitive Services OpenAI Contributor'),
   ('GPT-4 Turbo',  'Cognitive Services OpenAI Contributor')
@@ -222,7 +222,7 @@ INSERT INTO public.service_instance_role_mapping (service_id, instance_option, a
 SELECT s.id, m.instance_option, m.azure_role, true
 FROM public.services s
 CROSS JOIN (VALUES
-  ('Basic',       'Search Index Data Contributor'),
+  ('Basic',       'Search Service Contributor'),
   ('Standard S1', 'Search Service Contributor'),
   ('Standard S2', 'Search Service Contributor')
 ) AS m(instance_option, azure_role)
@@ -246,7 +246,7 @@ INSERT INTO public.service_instance_role_mapping (service_id, instance_option, a
 SELECT s.id, m.instance_option, m.azure_role, true
 FROM public.services s
 CROSS JOIN (VALUES
-  ('Free',     'Cognitive Services User'),
+  ('Free',     'Cognitive Services Contributor'),
   ('Standard', 'Cognitive Services Contributor')
 ) AS m(instance_option, azure_role)
 WHERE s.name ILIKE '%AI Vision%'

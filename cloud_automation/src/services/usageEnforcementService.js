@@ -511,10 +511,77 @@ async function enforceBlockedAzureUsers() {
   }
 }
 
+async function revokeAzureAccessForUser({ requestId, userId }) {
+  const result = await db.query(
+    `
+      SELECT
+        au.azure_user_id,
+        au.username,
+        r.enforce_in_azure,
+        EXISTS (
+          SELECT 1
+          FROM request_usage_windows ruw
+          WHERE ruw.request_id = r.id
+            AND ruw.daily_limit_hours IS NOT NULL
+        ) AS has_usage_windows
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      WHERE r.id = $1 AND au.id = $2
+    `,
+    [requestId, userId]
+  );
+
+  if (!result.rows.length || !result.rows[0].azure_user_id) {
+    return { success: false, message: 'User not found.' };
+  }
+
+  const data = result.rows[0];
+  const shouldRevoke = data.enforce_in_azure === true || data.has_usage_windows === true;
+
+  if (!shouldRevoke) {
+    return { success: true, message: 'Azure enforcement disabled for this request.', enforced: false };
+  }
+
+  const azureActions = await revokeAzureAccess({
+    azureUserId: data.azure_user_id,
+    userId,
+    requestId
+  });
+
+  await db.query(
+    `
+      INSERT INTO usage_enforcement_logs (
+        request_id,
+        user_id,
+        action,
+        details,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, NOW())
+    `,
+    [
+      requestId,
+      userId,
+      'force_logout_azure_revoked',
+      JSON.stringify({
+        azureActions,
+        azureUsername: data.username
+      })
+    ]
+  );
+
+  return {
+    success: true,
+    enforced: true,
+    azureActions
+  };
+}
+
 module.exports = {
   enforceUsageLimit,
   enforceScheduleViolation,
   enforceBlockedAzureUsers,
   revokeAzureAccess,
+  revokeAzureAccessForUser,
   restoreAzureAccess
 };

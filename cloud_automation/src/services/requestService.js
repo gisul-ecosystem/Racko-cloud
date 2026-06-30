@@ -3,7 +3,7 @@ const AppError = require('../utils/AppError');
 const db = require('../db/postgres');
 const pricingService = require('./pricingService');
 const { assertProvisionableLocation } = require('./azureLocationService');
-const { applyTierRolesToAssignments } = require('./instanceRoleMappingService');
+const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 
@@ -551,6 +551,9 @@ async function createRequest({
 
     // Tier-automated services: instance selection drives RBAC role (overrides manual picks)
     await applyTierRolesToAssignments(client, roleAssignments, validServiceIds, selectedInstances);
+
+    // Ensure all auto_assign default roles (control + data plane) are included
+    await ensureAutoAssignRolesForServices(client, roleAssignments, validServiceIds);
 
     // Insert all role assignments into database
     for (const [sid, rolesSet] of roleAssignments.entries()) {

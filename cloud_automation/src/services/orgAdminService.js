@@ -12,6 +12,15 @@ const { attachLiveUsageToUsers } = require('./userLiveUsageService');
 const { getResourceGroupCosts } = require('./azureCostManagementService');
 const { formatMinutes } = require('../utils/formatMinutes');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const {
+  loadUsageWindowsByRequest,
+  evaluateWindowDailyLimitAccess,
+  getTodayWindowConfig
+} = require('./usageWindowAccessService');
+const {
+  resolveScheduleForRequest,
+  getTodayLimitMinutes
+} = require('../utils/usageSchedule');
 
 let armClient = null;
 
@@ -119,6 +128,7 @@ const mapUserUsage = (row) => {
     usedTodayMinutes: Number(access.usedMinutes || 0),
     remainingMinutes: access.remainingMinutes,
     blockedUntil: row.blocked_until,
+    lastResetDate: row.last_reset_date,
     hasActiveSession: false,
     sessionActive: false,
     sessionStartedAt: null,
@@ -207,7 +217,11 @@ const getResourceGroupDetail = async (requestId) => {
         r.usage_schedule,
         r.enforce_in_azure,
         r.costing_mode,
-        r.created_at
+        r.created_at,
+        r.resource_cleanup_enabled,
+        r.resource_cleanup_interval_hours,
+        r.cleanup_enabled,
+        r.cleanup_interval_hours
       FROM requests r
       WHERE r.id = $1
       LIMIT 1
@@ -220,6 +234,16 @@ const getResourceGroupDetail = async (requestId) => {
   if (!request) {
     throw new AppError('Resource group request not found.', 404);
   }
+
+  const usageWindowsByRequest = await loadUsageWindowsByRequest([requestId]);
+  const usageWindows = usageWindowsByRequest.get(requestId) || [];
+  const todayWindowConfig = getTodayWindowConfig(usageWindows);
+  const hasUsageWindows = usageWindows.length > 0;
+  const hasDailyLimitWindows = usageWindows.some(
+    (window) => window.daily_limit_hours != null && Number(window.daily_limit_hours) > 0
+  );
+  const hasUsageTracking =
+    request.enable_daily_usage === true || hasDailyLimitWindows;
 
   const usersResult = await db.query(
     `
@@ -298,28 +322,77 @@ const getResourceGroupDetail = async (requestId) => {
     { liveResourceCountByUser }
   );
 
-  const users = enrichedUsers.map((user) => {
-    const todayMinutes = Math.round(Number(user.todayMinutes || 0));
-    const lifetimeMinutes = Math.round(Number(user.totalMinutesSpent || 0));
-    const displayStatus = deriveUserDisplayStatus({
-      azureAccountEnabled: user.azureAccountEnabled,
-      budgetExceeded: user.budgetExceeded,
-      hasOpenSession: user.hasActiveSession === true,
-      expiryDate: user.expiryDate
-    });
+  const users = await Promise.all(
+    enrichedUsers.map(async (user) => {
+      const todayMinutes = Math.round(Number(user.todayMinutes || 0));
+      const lifetimeMinutes = Math.round(Number(user.totalMinutesSpent || 0));
+      const activeSessionMinutes = Math.round(Number(user.activeSessionMinutes || 0));
+      let usedTodayMinutes = todayMinutes;
+      let remainingMinutes = user.remainingMinutes ?? null;
+      let dailyLimitMinutes = Number(user.dailyLimitMinutes || 0);
+      let limitReached = false;
 
-    return {
-      ...user,
-      status: displayStatus,
-      displayStatus,
-      todayMinutes,
-      lifetimeMinutes,
-      todayFormatted: formatMinutes(todayMinutes),
-      lifetimeFormatted: formatMinutes(lifetimeMinutes),
-      hasActiveSession: user.hasActiveSession === true,
-      sessionActive: user.hasActiveSession === true
-    };
-  });
+      if (hasDailyLimitWindows) {
+        const windowAccess = await evaluateWindowDailyLimitAccess({
+          requestId,
+          userId: user.id,
+          windows: usageWindows
+        });
+        usedTodayMinutes = Math.round(Number(windowAccess.consumedMinutes || 0));
+        remainingMinutes =
+          windowAccess.remainingMinutes != null
+            ? Math.round(Number(windowAccess.remainingMinutes))
+            : null;
+        dailyLimitMinutes = Number(windowAccess.limitMinutes || 0);
+        limitReached = windowAccess.limitReached === true || windowAccess.allowed === false;
+      } else if (request.enable_daily_usage === true) {
+        const access = evaluateUsageAccess({
+          request,
+          user: {
+            used_today_minutes: user.usedTodayMinutes,
+            blocked_until: user.blockedUntil,
+            last_reset_date: user.lastResetDate
+          },
+          currentSessionMinutes: activeSessionMinutes
+        });
+        usedTodayMinutes = Math.round(Number(access.usedMinutes || 0));
+        remainingMinutes =
+          access.remainingMinutes != null ? Math.round(Number(access.remainingMinutes)) : null;
+        dailyLimitMinutes = Number(access.limitMinutes || 0);
+        limitReached = access.reason === 'limit_exceeded' || access.reason === 'blocked';
+      }
+
+      const displayStatus = deriveUserDisplayStatus({
+        azureAccountEnabled: user.azureAccountEnabled,
+        budgetExceeded: user.budgetExceeded,
+        hasOpenSession: user.hasActiveSession === true,
+        expiryDate: user.expiryDate
+      });
+
+      return {
+        ...user,
+        status: displayStatus,
+        displayStatus,
+        enableDailyUsage: hasUsageTracking,
+        dailyLimitMinutes,
+        usedTodayMinutes,
+        remainingMinutes,
+        dailyLimitReached: limitReached,
+        todayMinutes,
+        lifetimeMinutes,
+        todayFormatted: formatMinutes(todayMinutes),
+        lifetimeFormatted: formatMinutes(lifetimeMinutes),
+        hasActiveSession: user.hasActiveSession === true,
+        sessionActive: user.hasActiveSession === true,
+        sessionExpiresAt:
+          remainingMinutes != null && user.hasActiveSession
+            ? new Date(Date.now() + remainingMinutes * 60 * 1000).toISOString()
+            : null
+      };
+    })
+  );
+
+  const activeSessions = users.filter((user) => user.hasActiveSession).length;
 
   return {
     request: {
@@ -332,12 +405,28 @@ const getResourceGroupDetail = async (requestId) => {
       location: request.location,
       status: request.status,
       expiryDate: request.expiry_date,
-      enableDailyUsage: request.enable_daily_usage === true,
-      dailyLimitMinutes: Number(request.daily_limit_minutes || 0),
+      enableDailyUsage: hasUsageTracking,
+      hasUsageWindows,
+      dailyLimitHours: todayWindowConfig?.dailyLimitHours ?? null,
+      dailyLimitMinutes: hasDailyLimitWindows
+        ? Math.round(Number(todayWindowConfig?.dailyLimitHours || 0) * 60)
+        : Number(request.daily_limit_minutes || 0),
       usageSchedule: request.usage_schedule,
-      enforceInAzure: request.enforce_in_azure === true,
+      usageWindows,
+      enforceInAzure: request.enforce_in_azure === true || hasDailyLimitWindows,
+      resourceCleanupEnabled: request.resource_cleanup_enabled === true,
+      resourceCleanupIntervalHours:
+        request.resource_cleanup_interval_hours != null
+          ? Number(request.resource_cleanup_interval_hours)
+          : null,
+      cleanupEnabled: request.cleanup_enabled === true,
+      cleanupIntervalHours:
+        request.cleanup_interval_hours != null ? Number(request.cleanup_interval_hours) : null,
       createdAt: request.created_at,
-      liveSummary
+      liveSummary: {
+        ...liveSummary,
+        activeSessions
+      }
     },
     users
   };
@@ -625,7 +714,11 @@ const getUserAzureCost = async (requestId, userId) => {
 const getDailyUsageForRequest = async (requestId) => {
   const requestResult = await db.query(
     `
-      SELECT id
+      SELECT
+        id,
+        enable_daily_usage,
+        daily_limit_minutes,
+        usage_schedule
       FROM requests
       WHERE id = $1
       LIMIT 1
@@ -637,33 +730,98 @@ const getDailyUsageForRequest = async (requestId) => {
     throw new AppError('Resource group request not found.', 404);
   }
 
-  const { rows: windowRows } = await db.query(
-    `
-      SELECT timezone
-      FROM request_usage_windows
-      WHERE request_id = $1
-      LIMIT 1
-    `,
-    [requestId]
+  const request = requestResult.rows[0];
+  const usageWindowsByRequest = await loadUsageWindowsByRequest([requestId]);
+  const usageWindows = usageWindowsByRequest.get(requestId) || [];
+  const todayWindowConfig = getTodayWindowConfig(usageWindows);
+  const hasDailyLimitWindows = usageWindows.some(
+    (window) => window.daily_limit_hours != null && Number(window.daily_limit_hours) > 0
   );
 
-  const tz = windowRows[0]?.timezone || 'Asia/Kolkata';
-  const nowInTz = DateTime.now().setZone(tz);
-  const todayDate = nowInTz.toISODate();
-  const dayOfWeek = nowInTz.weekday % 7;
+  if (hasDailyLimitWindows) {
+    const tz = todayWindowConfig?.timezone || 'Asia/Kolkata';
+    const todayDate = todayWindowConfig?.todayDate || DateTime.now().setZone(tz).toISODate();
+    const dailyLimitHours = todayWindowConfig?.dailyLimitHours ?? null;
+    const dailyLimitMinutes = dailyLimitHours ? dailyLimitHours * 60 : null;
 
-  const { rows: todayWindow } = await db.query(
-    `
-      SELECT daily_limit_hours, window_start_time, window_end_time
-      FROM request_usage_windows
-      WHERE request_id = $1
-        AND day_of_week = $2
-    `,
-    [requestId, dayOfWeek]
-  );
+    const { rows: users } = await db.query(
+      `
+        SELECT
+          au.id,
+          au.username,
+          au.azure_user_id,
+          au.azure_account_enabled,
+          COALESCE(dut.consumed_minutes, 0) AS tracked_consumed_minutes,
+          COALESCE(dut.limit_reached, FALSE) AS limit_reached,
+          dut.tracking_date
+        FROM azure_users au
+        LEFT JOIN daily_usage_tracking dut
+          ON dut.azure_user_id = au.id
+         AND dut.tracking_date = $1
+        WHERE au.request_id = $2
+          AND COALESCE(au.is_deleted, FALSE) = FALSE
+        ORDER BY au.username
+      `,
+      [todayDate, requestId]
+    );
 
-  const dailyLimitHours = todayWindow[0]?.daily_limit_hours ?? null;
-  const dailyLimitMinutes = dailyLimitHours ? dailyLimitHours * 60 : null;
+    const data = await Promise.all(
+      users.map(async (user) => {
+        const windowAccess = await evaluateWindowDailyLimitAccess({
+          requestId,
+          userId: user.id,
+          windows: usageWindows
+        });
+        const consumedMinutes = Number(windowAccess.consumedMinutes || 0);
+        const remainingMinutes = windowAccess.remainingMinutes;
+        const roundedConsumed = Math.round(consumedMinutes);
+        const roundedRemaining = remainingMinutes !== null ? Math.round(remainingMinutes) : null;
+
+        return {
+          userId: user.id,
+          username: user.username,
+          email: user.username,
+          accountEnabled: user.azure_account_enabled !== false,
+          limitReached: windowAccess.limitReached === true,
+          dailyLimitHours: dailyLimitHours !== null ? Number(dailyLimitHours) : null,
+          consumedMinutes: roundedConsumed,
+          remainingMinutes: roundedRemaining,
+          consumedFormatted: formatMinutes(roundedConsumed),
+          remainingFormatted: roundedRemaining !== null ? formatMinutes(roundedRemaining) : null,
+          todayWindow: todayWindowConfig?.todayWindow
+            ? {
+                start: todayWindowConfig.todayWindow.window_start_time,
+                end: todayWindowConfig.todayWindow.window_end_time
+              }
+            : null
+        };
+      })
+    );
+
+    return {
+      data,
+      timezone: tz,
+      date: todayDate
+    };
+  }
+
+  if (request.enable_daily_usage !== true) {
+    return {
+      data: [],
+      timezone: 'Asia/Kolkata',
+      date: DateTime.now().setZone('Asia/Kolkata').toISODate()
+    };
+  }
+
+  const schedule = resolveScheduleForRequest(request);
+  const tz = schedule?.timezone || 'Asia/Kolkata';
+  const todayDate = DateTime.now().setZone(tz).toISODate();
+  const dailyLimitMinutes = schedule
+    ? getTodayLimitMinutes(schedule)
+    : Number(request.daily_limit_minutes || 0);
+  const dailyLimitHours = dailyLimitMinutes ? dailyLimitMinutes / 60 : null;
+  const dayStart = DateTime.now().setZone(tz).startOf('day').toUTC().toISO();
+  const dayEnd = DateTime.now().setZone(tz).endOf('day').toUTC().toISO();
 
   const { rows: users } = await db.query(
     `
@@ -672,22 +830,16 @@ const getDailyUsageForRequest = async (requestId) => {
         au.username,
         au.azure_user_id,
         au.azure_account_enabled,
-        COALESCE(dut.consumed_minutes, 0) AS tracked_consumed_minutes,
-        COALESCE(dut.limit_reached, FALSE) AS limit_reached,
-        dut.tracking_date
+        au.used_today_minutes,
+        au.blocked_until,
+        au.last_reset_date
       FROM azure_users au
-      LEFT JOIN daily_usage_tracking dut
-        ON dut.azure_user_id = au.id
-       AND dut.tracking_date = $1
-      WHERE au.request_id = $2
+      WHERE au.request_id = $1
         AND COALESCE(au.is_deleted, FALSE) = FALSE
       ORDER BY au.username
     `,
-    [todayDate, requestId]
+    [requestId]
   );
-
-  const dayStart = nowInTz.startOf('day').toUTC().toISO();
-  const dayEnd = nowInTz.endOf('day').toUTC().toISO();
 
   const data = await Promise.all(
     users.map(async (user) => {
@@ -705,10 +857,14 @@ const getDailyUsageForRequest = async (requestId) => {
         [user.id, dayStart, dayEnd]
       );
 
-      const consumedMinutes = parseFloat(sessionRows[0]?.total_minutes ?? 0);
-      const remainingMinutes = dailyLimitMinutes
-        ? Math.max(0, dailyLimitMinutes - consumedMinutes)
-        : null;
+      const consumedMinutes = parseFloat(sessionRows[0]?.total_minutes ?? user.used_today_minutes ?? 0);
+      const access = evaluateUsageAccess({
+        request,
+        user,
+        currentSessionMinutes: 0,
+        at: new Date()
+      });
+      const remainingMinutes = access.remainingMinutes;
       const roundedConsumed = Math.round(consumedMinutes);
       const roundedRemaining = remainingMinutes !== null ? Math.round(remainingMinutes) : null;
 
@@ -717,16 +873,16 @@ const getDailyUsageForRequest = async (requestId) => {
         username: user.username,
         email: user.username,
         accountEnabled: user.azure_account_enabled !== false,
-        limitReached: user.limit_reached,
+        limitReached: access.reason === 'limit_exceeded' || access.reason === 'blocked',
         dailyLimitHours: dailyLimitHours !== null ? Number(dailyLimitHours) : null,
         consumedMinutes: roundedConsumed,
         remainingMinutes: roundedRemaining,
         consumedFormatted: formatMinutes(roundedConsumed),
         remainingFormatted: roundedRemaining !== null ? formatMinutes(roundedRemaining) : null,
-        todayWindow: todayWindow[0]
+        todayWindow: access.activeSlot
           ? {
-              start: todayWindow[0].window_start_time,
-              end: todayWindow[0].window_end_time
+              start: access.activeSlot.start,
+              end: access.activeSlot.end
             }
           : null
       };

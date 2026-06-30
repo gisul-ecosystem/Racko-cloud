@@ -171,8 +171,12 @@ export function OrgAdminUsersTable({
   const [loadingAzureCostUserId, setLoadingAzureCostUserId] = useState<number | null>(null);
   const [dailyUsage, setDailyUsage] = useState<Record<number, OrgAdminDailyUsageEntry>>({});
 
+  const showUsageTracking = Boolean(
+    request?.enableDailyUsage || request?.hasUsageWindows || request?.dailyLimitMinutes
+  );
+
   useEffect(() => {
-    if (!requestId) return undefined;
+    if (!requestId || !showUsageTracking) return undefined;
 
     const fetchDailyUsage = async () => {
       try {
@@ -195,7 +199,7 @@ export function OrgAdminUsersTable({
     }, 60_000);
 
     return () => window.clearInterval(interval);
-  }, [requestId]);
+  }, [requestId, showUsageTracking]);
 
   async function handleFetchAzureCost(event: React.MouseEvent, user: OrgAdminUser) {
     event.stopPropagation();
@@ -271,8 +275,9 @@ export function OrgAdminUsersTable({
         <div className="border-b border-gray-100 px-6 py-4">
           <h2 className="text-sm font-semibold text-gray-900">Provisioned Users</h2>
           <p className="mt-0.5 text-xs text-gray-500">
-            Session and time data refresh every minute. Azure cost shows cached spend from the hourly
-            budget sync; use Azure cost for live billing detail.
+            {showUsageTracking
+              ? 'Session and daily usage data refresh every minute when this panel is open.'
+              : 'Azure cost shows cached spend from the hourly budget sync; use Azure cost for live billing detail.'}
           </p>
         </div>
       )}
@@ -318,8 +323,15 @@ export function OrgAdminUsersTable({
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{user.username}</p>
                       <p className="font-mono text-xs text-gray-500">{user.azureUserId || '—'}</p>
-                      {dailyUsage[user.id] && <DailyUsageBar usage={dailyUsage[user.id]!} />}
-                      {dailyUsage[user.id]?.limitReached && (
+                      {user.dailyLimitReached && (
+                        <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-600">
+                          Daily limit reached
+                        </span>
+                      )}
+                      {(showUsageTracking ? dailyUsage[user.id] : null) && (
+                        <DailyUsageBar usage={dailyUsage[user.id]!} />
+                      )}
+                      {dailyUsage[user.id]?.limitReached && !user.dailyLimitReached && (
                         <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-600">
                           Blocked today
                         </span>
@@ -404,6 +416,19 @@ export function OrgAdminUsersTable({
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
                             Active
                           </span>
+                          {user.sessionExpiresAt && showUsageTracking && (
+                            <p className="mt-0.5 text-[11px] text-gray-400">
+                              ~{formatMinutes(
+                                Math.max(
+                                  0,
+                                  Math.round(
+                                    (new Date(user.sessionExpiresAt).getTime() - Date.now()) / 60000
+                                  )
+                                )
+                              )}{' '}
+                              left today
+                            </p>
+                          )}
                           {user.sessionStartedAt && (
                             <p className="mt-0.5 text-[11px] text-gray-400">
                               since {formatDateTime(user.sessionStartedAt)}

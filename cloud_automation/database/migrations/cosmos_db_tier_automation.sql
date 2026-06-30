@@ -38,7 +38,7 @@ INSERT INTO public.service_instance_role_mapping (service_id, instance_option, a
 SELECT s.id, m.instance_option, m.azure_role, true
 FROM public.services s
 CROSS JOIN (VALUES
-  ('Serverless',             'Cosmos DB Account Reader Role'),
+  ('Serverless',             'Cosmos DB Operator'),
   ('Provisioned Throughput', 'Cosmos DB Operator'),
   ('Autoscale',              'Cosmos DB Operator')
 ) AS m(instance_option, azure_role)

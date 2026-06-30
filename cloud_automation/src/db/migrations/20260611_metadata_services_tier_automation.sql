@@ -86,7 +86,7 @@ WHERE s.name ILIKE '%Azure DevOps%' ON CONFLICT (service_id,instance_option) DO 
 
 INSERT INTO service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
 SELECT s.id, m.instance_option, m.azure_role, true FROM services s
-CROSS JOIN (VALUES ('Embeddings','Cognitive Services User'),('GPT-4o','Cognitive Services OpenAI Contributor'),('GPT-4.1','Cognitive Services OpenAI Contributor'),('GPT-4 Turbo','Cognitive Services OpenAI Contributor')) m(instance_option,azure_role)
+CROSS JOIN (VALUES ('Embeddings','Cognitive Services OpenAI Contributor'),('GPT-4o','Cognitive Services OpenAI Contributor'),('GPT-4.1','Cognitive Services OpenAI Contributor'),('GPT-4 Turbo','Cognitive Services OpenAI Contributor')) m(instance_option,azure_role)
 WHERE s.name ILIKE '%OpenAI Service%' ON CONFLICT (service_id,instance_option) DO UPDATE SET azure_role=EXCLUDED.azure_role,tier_automated=EXCLUDED.tier_automated;
 
 INSERT INTO service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
@@ -96,7 +96,7 @@ WHERE s.name ILIKE '%AI Foundry%' ON CONFLICT (service_id,instance_option) DO UP
 
 INSERT INTO service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
 SELECT s.id, m.instance_option, m.azure_role, true FROM services s
-CROSS JOIN (VALUES ('Basic','Search Index Data Contributor'),('Standard S1','Search Service Contributor'),('Standard S2','Search Service Contributor')) m(instance_option,azure_role)
+CROSS JOIN (VALUES ('Basic','Search Service Contributor'),('Standard S1','Search Service Contributor'),('Standard S2','Search Service Contributor')) m(instance_option,azure_role)
 WHERE s.name ILIKE '%AI Search%' ON CONFLICT (service_id,instance_option) DO UPDATE SET azure_role=EXCLUDED.azure_role,tier_automated=EXCLUDED.tier_automated;
 
 INSERT INTO service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
@@ -106,7 +106,7 @@ WHERE s.name ILIKE '%Machine Learning%' ON CONFLICT (service_id,instance_option)
 
 INSERT INTO service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
 SELECT s.id, m.instance_option, m.azure_role, true FROM services s
-CROSS JOIN (VALUES ('Free','Cognitive Services User'),('Standard','Cognitive Services Contributor')) m(instance_option,azure_role)
+CROSS JOIN (VALUES ('Free','Cognitive Services Contributor'),('Standard','Cognitive Services Contributor')) m(instance_option,azure_role)
 WHERE s.name ILIKE '%AI Vision%' OR s.name ILIKE '%AI Language%' OR s.name ILIKE '%AI Speech%' OR s.name ILIKE '%Document Intelligence%'
 ON CONFLICT (service_id,instance_option) DO UPDATE SET azure_role=EXCLUDED.azure_role,tier_automated=EXCLUDED.tier_automated;
 
