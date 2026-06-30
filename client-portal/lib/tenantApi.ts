@@ -11,6 +11,7 @@ import type {
   SuperAdminOrder,
   SuperAdminOrderStatus,
   SuperAdminOverview,
+  SuperAdminTenantVmsResult,
   SuperAdminWalletTransactionsResult,
   Tenant,
   TenantAdmin,
@@ -141,6 +142,14 @@ export async function fetchTenantAdmins(tenantId: string): Promise<TenantAdmin[]
     )
   );
   return data.admins;
+}
+
+export async function fetchTenantVms(tenantId: string): Promise<SuperAdminTenantVmsResult> {
+  return unwrap(
+    apiRequest<ApiEnvelope<SuperAdminTenantVmsResult>>(
+      `/api/v1/tenants/${tenantId}/vms`
+    )
+  );
 }
 
 export async function setTenantAdminActive(

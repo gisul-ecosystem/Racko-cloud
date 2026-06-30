@@ -235,3 +235,37 @@ export interface SuperAdminOrder {
   createdAt: string;
   updatedAt: string;
 }
+
+export interface SuperAdminTenantVmAssignment {
+  tenantUserId: string;
+  email: string;
+  isActive: boolean;
+}
+
+export interface SuperAdminTenantVm {
+  id: string;
+  vmid: number;
+  node: string;
+  name: string;
+  description?: string;
+  status: string;
+  proxmoxStatus: string;
+  ipAddress?: string;
+  templateName: string;
+  orderId: string | null;
+  cloneType: 'dedicated_storage' | 'dynamic_storage';
+  allocatedCpu: number;
+  allocatedMemoryGb: number;
+  allocatedDiskGb: number;
+  planStatus?: 'active' | 'expired' | null;
+  planPeriodEnd?: string | null;
+  billingPeriod?: BillingPeriod | null;
+  assignment?: SuperAdminTenantVmAssignment | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SuperAdminTenantVmsResult {
+  vms: SuperAdminTenantVm[];
+  total: number;
+}

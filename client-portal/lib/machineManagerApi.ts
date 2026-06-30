@@ -5,7 +5,7 @@ import { apiRequest } from './apiClient';
 export type MachineOS = 'windows' | 'linux' | 'macos';
 export type MachineStatus = 'pending' | 'online' | 'offline';
 export type JobStatus = 'pending' | 'installing' | 'success' | 'failed' | 'retrying';
-export type InstallMethod = 'apt' | 'brew' | 'choco' | 'msi' | 'exe' | 'zip' | 'script';
+export type InstallMethod = 'apt' | 'brew' | 'choco' | 'winget' | 'msi' | 'exe' | 'zip' | 'script';
 
 export interface IMachine {
   _id: string;

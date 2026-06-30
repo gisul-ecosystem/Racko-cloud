@@ -1,5 +1,6 @@
 import type { Request } from 'express';
 import mongoose from 'mongoose';
+import { Tenant } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { VM, type IVM } from '../vm/vm.model';
 import { vmService } from '../vm/vm.service';
@@ -15,6 +16,7 @@ import type {
   TenantVmDetails,
   TenantVmListFilters,
   TenantVmSummary,
+  SuperAdminTenantVmSummary,
 } from './tenantVm.types';
 
 function buildPlatformVmRequest(req: Request, adminId: mongoose.Types.ObjectId): Request {
@@ -132,6 +134,42 @@ export class TenantVmService {
     const vms = await VM.find(query).sort({ createdAt: -1 });
     const assignmentMap = await this.loadAssignmentMap(vms);
     return vms.map((vm) => this.toTenantVmSummary(vm, assignmentMap, actor));
+  }
+
+  /**
+   * List all VMs provisioned for a tenant (super-admin white-labelling console).
+   */
+  async listVmsForSuperAdmin(
+    tenantId: mongoose.Types.ObjectId,
+    filters?: TenantVmListFilters
+  ): Promise<SuperAdminTenantVmSummary[]> {
+    const tenant = await Tenant.findById(tenantId).select('_id').lean();
+    if (!tenant) {
+      throw new NotFoundError('Tenant not found.');
+    }
+
+    const actor: TenantVmActor = {
+      id: 'super-admin',
+      tenantId: tenantId.toString(),
+      role: 'tenant_admin',
+    };
+
+    const query: Record<string, unknown> = {
+      tenantId,
+      status: { $nin: ['deleted', 'deleting', 'delete_failed'] },
+    };
+
+    if (filters?.status) query['status'] = filters.status;
+    if (filters?.node) query['node'] = filters.node;
+
+    const vms = await VM.find(query).sort({ createdAt: -1 });
+    const assignmentMap = await this.loadAssignmentMap(vms);
+
+    return vms.map((vm) => ({
+      ...this.toTenantVmSummary(vm, assignmentMap, actor),
+      templateName: vm.templateName,
+      orderId: vm.orderId?.toString() ?? null,
+    }));
   }
 
   async getVmDetails(actor: TenantVmActor, vmId: string, req: Request): Promise<TenantVmDetails> {

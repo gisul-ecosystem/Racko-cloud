@@ -66,6 +66,12 @@ export interface TenantVmSummary {
   updatedAt: Date;
 }
 
+/** Super-admin tenant detail view — extends tenant portal summary with provisioning metadata. */
+export interface SuperAdminTenantVmSummary extends TenantVmSummary {
+  templateName: string;
+  orderId: string | null;
+}
+
 export interface TenantVmDetails {
   vm: TenantVmSummary;
   liveStatus?: VMStatus;
