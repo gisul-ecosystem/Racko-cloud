@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service';
 import type { AuthenticatedRequest } from '../../types';
+import { logger } from '../../utils/logger';
 
 // Consistent response shape
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
@@ -29,11 +30,24 @@ export class AuthController {
 
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      logger.info('[auth-token] login:controller', {
+        origin: req.headers.origin ?? null,
+        cookieHeaderPresent: !!(req.headers.cookie?.length),
+        cookieNames: (req.headers.cookie ?? '')
+          .split(';')
+          .map((part) => part.trim().split('=')[0] ?? '')
+          .filter(Boolean),
+      });
       const result = await authService.login(
         req.body as { email: string; password: string },
         req,
         res
       );
+      logger.info('[auth-token] login:controller-success', {
+        userId: result.user.id,
+        accessTokenLength: result.accessToken.length,
+        setCookieHeaderPresent: !!res.getHeader('set-cookie'),
+      });
       success(res, 'Login successful.', { accessToken: result.accessToken, user: result.user });
     } catch (error) {
       next(error);
@@ -42,9 +56,22 @@ export class AuthController {
 
   async refreshToken(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      logger.info('[auth-token] refresh:controller', {
+        origin: req.headers.origin ?? null,
+        cookieHeaderPresent: !!(req.headers.cookie?.length),
+        hasRefreshTokenCookie: !!req.cookies?.['refreshToken'],
+        refreshTokenLength: (req.cookies?.['refreshToken'] as string | undefined)?.length ?? 0,
+      });
       const result = await authService.refreshToken(req, res);
+      logger.info('[auth-token] refresh:controller-success', {
+        accessTokenLength: result.accessToken.length,
+        setCookieHeaderPresent: !!res.getHeader('set-cookie'),
+      });
       success(res, 'Token refreshed.', { accessToken: result.accessToken });
     } catch (error) {
+      logger.warn('[auth-token] refresh:controller-failed', {
+        message: error instanceof Error ? error.message : 'unknown_error',
+      });
       next(error);
     }
   }

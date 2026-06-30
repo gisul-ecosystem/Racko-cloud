@@ -84,7 +84,7 @@ app.use(
 
 // 3. CORS — strict origin whitelist, no wildcards
 const allowedOrigins = config.NODE_ENV === 'development'
-  ? ['http://localhost:3000', 'http://localhost:3001']
+  ? ['http://localhost:3000', 'http://localhost:3001', config.FRONTEND_URL]
   : [config.FRONTEND_URL];
 
 app.use(
