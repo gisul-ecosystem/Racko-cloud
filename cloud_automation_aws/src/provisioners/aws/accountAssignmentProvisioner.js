@@ -1,14 +1,13 @@
 import {
   CreateAccountAssignmentCommand,
   DescribeAccountAssignmentCreationStatusCommand,
+  ListAccountAssignmentsCommand,
 } from '@aws-sdk/client-sso-admin';
 import { ssoAdminClient, SSO_INSTANCE_ARN, formatIdentityCenterError } from '../../config/aws.js';
 import { pollUntil } from '../../utils/polling.js';
 
 async function waitForAssignment(requestId) {
-  if (!requestId) {
-    throw new Error('Account assignment request id is missing');
-  }
+  if (!requestId) return;
 
   return pollUntil(
     async () => {
@@ -57,6 +56,35 @@ export async function assignUsersToAccount(request, awsAccountId, identityUsers,
     const targetAccountId = user.awsAccountId || awsAccountId;
     if (!targetAccountId) {
       throw new Error(`No AWS account ID available for user ${user.username || user.userId}`);
+    }
+
+    try {
+      const { AccountAssignments } = await ssoAdminClient.send(
+        new ListAccountAssignmentsCommand({
+          InstanceArn: SSO_INSTANCE_ARN,
+          AccountId: targetAccountId,
+          PermissionSetArn: resolvedPermissionSetArn,
+        })
+      );
+      const alreadyAssigned = (AccountAssignments ?? []).some(
+        (a) => a.PrincipalId === user.userId && a.PrincipalType === 'USER'
+      );
+      if (alreadyAssigned) {
+        console.log(
+          `[PermissionSet] User ${user.userId} already assigned to account ${targetAccountId} — skipping`
+        );
+        assignments.push({
+          userId: user.userId,
+          username: user.username,
+          permissionSetArn: resolvedPermissionSetArn,
+          assignmentId: null,
+          status: 'SUCCEEDED',
+          targetAccountId,
+        });
+        continue;
+      }
+    } catch (e) {
+      console.warn('[PermissionSet] Could not check existing assignments:', e.message);
     }
 
     const response = await ssoAdminClient.send(

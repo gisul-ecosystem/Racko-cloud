@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, Monitor, MonitorCheck, Palette } from 'lucide-react';
+import { Cloud, Monitor, MonitorCheck, Palette, Server } from 'lucide-react';
 
 const services = [
   {
@@ -17,6 +17,13 @@ const services = [
     href: '/super-admin-console/azure/org-admin',
     icon: Cloud,
     description: 'Manage Azure cloud services and resources',
+  },
+  {
+    id: 'aws',
+    name: 'AWS Lab Management',
+    href: '/super-admin-console/aws/org-admin',
+    icon: Server,
+    description: 'Oversee AWS lab requests, manage users, budgets and cleanup',
   },
   {
     id: 'machine-manager',

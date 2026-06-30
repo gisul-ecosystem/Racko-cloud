@@ -5,30 +5,71 @@ services:
     build:
       context: .
       dockerfile: core-api/Dockerfile
-    ports:
-      - '8001:5000'
+    image: gisuldocker/racko-core-api:${IMAGE_TAG:-dev}
+    env_file:
+      - .env
     environment:
-      - NODE_ENV=production
+      NODE_ENV: production
+      PORT: ${CORE_API_PORT:-8001}
+      JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
+      TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
     volumes:
       - tenant-assets:/data/tenant-assets
+      - ./agent/dist:/agent/dist:ro
+    ports:
+      - "${CORE_API_PORT:-8001}:8001"
+
+  cloud-automation:
+    image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-dev}
+    env_file:
+      - .env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_PORT:-3002}
+    ports:
+      - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
+
+  cloud-automation-aws:
+    image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-dev}
+    env_file:
+      - .env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
+      CLIENT_PORTAL_URL: ${CLIENT_PORTAL_URL:-${FRONTEND_URL}}
+    ports:
+      - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
 
   cloud-gateway:
     build:
       context: .
       dockerfile: cloud-gateway/Dockerfile
-    ports:
-      - '8000:8000'
+    image: gisuldocker/racko-cloud-gateway:${IMAGE_TAG:-dev}
+    env_file:
+      - .env
+    environment:
+      PORT: ${GATEWAY_PORT:-8000}
+      JWT_ACCESS_EXPIRES_IN: ${GATEWAY_JWT_ACCESS_EXPIRES_IN:-15m}
     depends_on:
       - core-api
+      - cloud-automation
+      - cloud-automation-aws
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
 
   client-portal:
     build:
       context: .
       dockerfile: client-portal/Dockerfile
-    ports:
-      - '3000:3000'
+    image: gisuldocker/racko-client-portal:${IMAGE_TAG:-dev}
+    env_file:
+      - .env
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: ${CLIENT_PORTAL_PORT:-3000}
+      GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
     depends_on:
       - cloud-gateway
+    ports:
+      - "${CLIENT_PORTAL_PORT:-3000}:3000"
 
 volumes:
   tenant-assets:

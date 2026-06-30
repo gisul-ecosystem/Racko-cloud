@@ -76,7 +76,6 @@ export default function SuperAdminSoftwareCatalogPage() {
   const [version, setVersion] = useState('');
   const [selectedOS, setSelectedOS] = useState<MachineOS[]>([]);
   const [installMethod, setInstallMethod] = useState<InstallMethod>('choco');
-  const [wingetId, setWingetId] = useState('');
   const [aptName, setAptName] = useState('');
   const [brewName, setBrewName] = useState('');
   const [chocoName, setChocoName] = useState('');
@@ -108,7 +107,6 @@ export default function SuperAdminSoftwareCatalogPage() {
         version: version.trim(),
         supportedOS: selectedOS,
         installMethod,
-        wingetId:    wingetId.trim()    || undefined,
         aptName:     aptName.trim()     || undefined,
         brewName:    brewName.trim()    || undefined,
         chocoName:   chocoName.trim()   || undefined,
@@ -119,7 +117,7 @@ export default function SuperAdminSoftwareCatalogPage() {
       addToast('success', `${name.trim()} added to catalog.`);
       // Reset form
       setName(''); setVersion(''); setSelectedOS([]); setInstallMethod('choco');
-      setWingetId(''); setAptName(''); setBrewName(''); setChocoName('');
+      setAptName(''); setBrewName(''); setChocoName('');
       setFileUrl(''); setFileName(''); setInstallArgs('');
       refetch();
     } catch (err) {

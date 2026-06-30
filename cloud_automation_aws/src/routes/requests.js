@@ -13,6 +13,10 @@ router.post('/requests', async (req, res, next) => {
 
     res.status(201).json({
       success: true,
+      data: {
+        requestId: request._id,
+        estimatedPrice: request.estimatedPrice,
+      },
       requestId: request._id,
       estimatedPrice: request.estimatedPrice,
     });
@@ -23,8 +27,12 @@ router.post('/requests', async (req, res, next) => {
 
 router.get('/requests', async (req, res, next) => {
   try {
-    const requests = await getAllRequests();
-    res.json({ success: true, requests });
+    const rackoUserId = String(req.headers['x-user-id'] || '').trim() || undefined;
+    const role = String(req.headers['x-user-role'] || '').trim().toLowerCase();
+    const isSuperAdmin = role === 'super_admin';
+
+    const requests = await getAllRequests({ rackoUserId, isSuperAdmin });
+    res.json({ success: true, data: requests, count: requests.length });
   } catch (err) {
     next(err);
   }
@@ -57,7 +65,7 @@ router.post('/requests/:id/sync-spend', async (req, res, next) => {
   }
 });
 
-router.post('/requests/:id/users/:userId/reinstate', async (req, res, next) => {
+router.post('/requests/:id/users/:userIndex/reinstate', async (req, res, next) => {
   try {
     const request = await Request.findById(req.params.id);
     if (!request) {
@@ -71,13 +79,14 @@ router.post('/requests/:id/users/:userId/reinstate', async (req, res, next) => {
       });
     }
 
-    const user = request.identityUsers.find((entry) => entry.userId === req.params.userId);
-    if (!user) {
+    const userIndex = Number(req.params.userIndex);
+    const role = request.labRoles?.find((entry) => entry.userIndex === userIndex);
+    if (!role) {
       return res.status(404).json({ success: false, message: 'User not found' });
     }
 
-    await reinstateUser(request, user);
-    res.json({ success: true, message: `User ${user.username} reinstated` });
+    await reinstateUser(request, role);
+    res.json({ success: true, message: `User labuser${userIndex + 1} reinstated` });
   } catch (err) {
     next(err);
   }

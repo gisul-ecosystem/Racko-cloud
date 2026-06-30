@@ -74,6 +74,7 @@ export interface IVM extends Document {
 
   // Assignment
   assignedTo?: mongoose.Types.ObjectId;
+  assignedTenantUserId?: mongoose.Types.ObjectId | null;
 
   // HA slot
   haEnabled: boolean;
@@ -253,6 +254,12 @@ const vmSchema = new Schema<IVM>(
       index: true,
       default: null,
     },
+    assignedTenantUserId: {
+      type: Schema.Types.ObjectId,
+      ref: 'TenantUser',
+      index: true,
+      default: null,
+    },
     haEnabled: {
       type: Boolean,
       default: false,
@@ -342,6 +349,7 @@ vmSchema.index({ hyperVStatus: 1, hyperVStatusChangedAt: 1 });
 vmSchema.pre('save', function (next) {
   if (this.isModified('status') && (this.status === 'deleted' || this.status === 'deleting')) {
     this.assignedTo = undefined;
+    this.assignedTenantUserId = undefined;
   }
   next();
 });

@@ -103,6 +103,33 @@ export async function getRegions(): Promise<Array<{ code: string; name: string }
   return response.regions ?? [];
 }
 
+export interface AwsAvailableRegion {
+  code: string;
+  name: string;
+  location: string;
+  basePrice?: number;
+  currency?: string;
+}
+
+export async function getAvailableRegions(
+  serviceIds: string[],
+  instanceSelections?: string
+): Promise<AwsAvailableRegion[]> {
+  const params = new URLSearchParams({
+    serviceIds: serviceIds.join(','),
+  });
+
+  if (instanceSelections) {
+    params.set('instanceSelections', instanceSelections);
+  }
+
+  const response = await apiRequest<ApiResponse<{ regions: AwsAvailableRegion[] }>>(
+    `${awsPath('/available-regions')}?${params.toString()}`
+  );
+
+  return response.regions ?? [];
+}
+
 export async function calculatePricingEstimate(
   payload: AwsPricingEstimatePayload
 ): Promise<AwsPricingEstimateResponse> {
@@ -112,37 +139,76 @@ export async function calculatePricingEstimate(
   });
 }
 
+export interface AwsUsageWindow {
+  dayOfWeek?: number;
+  day_of_week?: number;
+  windowStartTime?: string;
+  window_start_time?: string;
+  windowEndTime?: string;
+  window_end_time?: string;
+  timezone?: string;
+  dailyLimitHours?: number;
+  daily_limit_hours?: number | null;
+}
+
 export interface AwsCreateRequestPayload {
-  customerEmail: string;
-  accountCount: number;
-  costingMode: 'shared' | 'per_user';
-  startDate: string;
-  endDate: string;
-  enableDailyUsage: boolean;
-  usageWindows: Array<{ day: string; startTime: string; endTime: string }>;
-  timezone: string;
-  cleanupEnabled: boolean;
+  customerEmail?: string;
+  customer_email?: string;
+  accountCount?: number;
+  account_count?: number;
+  costingMode?: 'shared' | 'per_user';
+  costing_mode?: 'shared' | 'per_user';
+  startDate?: string;
+  start_date?: string;
+  endDate?: string;
+  end_date?: string;
+  enableDailyUsage?: boolean;
+  enable_daily_usage?: boolean;
+  usageWindows?: AwsUsageWindow[];
+  usage_windows?: AwsUsageWindow[];
+  timezone?: string;
+  enableResourceCleanup?: boolean;
+  enable_resource_cleanup?: boolean;
+  resourceCleanupIntervalHours?: number;
+  resource_cleanup_interval_hours?: number;
+  cleanupEnabled?: boolean;
   cleanupIntervalHours?: number;
   perUserBudgetUsd?: number;
-  selectedServices: Array<{
+  per_user_budget_usd?: number;
+  selectedServices?: Array<{
     serviceId: string;
     serviceName: string;
     instanceType: string | null;
     pricePerDay: number;
+    pricingType?: 'instance' | 'flat_rate';
   }>;
-  permissions: Array<{
+  selected_services?: Array<{
+    serviceId: string;
+    serviceName: string;
+    instanceType: string | null;
+    pricePerDay: number;
+    pricingType?: 'instance' | 'flat_rate';
+  }>;
+  permissions?: Array<{
     serviceId: string;
     serviceName: string;
     policies: string[];
   }>;
+  selectedPermissions?: Record<string, string[]>;
+  selected_permissions?: Record<string, string[]>;
   region: string;
-  estimatedPrice: number;
+  estimatedPrice?: number;
+  estimated_price?: number;
 }
 
 export interface AwsCreateRequestResponse {
   success: boolean;
-  requestId: string;
-  estimatedPrice: number;
+  data?: {
+    requestId: string;
+    estimatedPrice: number;
+  };
+  requestId?: string;
+  estimatedPrice?: number;
 }
 
 export interface AwsRequestRecord {
@@ -165,6 +231,14 @@ export interface AwsRequestRecord {
     suspended?: boolean;
     currentSpend?: number;
   }>;
+  labRoles?: Array<{
+    userIndex: number;
+    roleName: string;
+    roleArn: string;
+    suspended?: boolean;
+    currentSpend?: number;
+    budgetExceeded?: boolean;
+  }>;
   selectedServices: Array<{
     serviceId: string;
     serviceName: string;
@@ -183,11 +257,54 @@ export async function createRequest(
   });
 }
 
-export async function getRequests(): Promise<AwsRequestRecord[]> {
-  const response = await apiRequest<ApiResponse<{ requests: AwsRequestRecord[] }>>(
+export interface AwsRequest {
+  _id: string;
+  customer_email?: string;
+  customerEmail?: string;
+  status: 'Pending' | 'Provisioning' | 'Completed' | 'Failed' | 'Expired' | string;
+  estimated_price?: number;
+  estimatedPrice?: number;
+  account_count?: number;
+  accountCount?: number;
+  region: string;
+  costing_mode?: 'shared' | 'per_user';
+  costingMode?: 'shared' | 'per_user';
+  selected_services?: Array<{ serviceId: string; instanceType?: string }>;
+  selectedServices?: Array<{ serviceId: string; instanceType?: string; serviceName?: string }>;
+  created_at?: string;
+  createdAt?: string;
+  provision_status?: {
+    overall: 'idle' | 'running' | 'completed' | 'failed';
+  };
+}
+
+/** List all provisioning requests for the authenticated user (mirrors Azure listRequests). */
+export async function listRequests(): Promise<AwsRequest[]> {
+  const response = await apiRequest<{ success: boolean; data: AwsRequest[]; count: number }>(
     awsPath('/requests')
   );
-  return response.requests ?? [];
+  return response.data ?? [];
+}
+
+export async function getRequests(): Promise<AwsRequestRecord[]> {
+  const data = await listRequests();
+  return data.map((request) => ({
+    _id: request._id,
+    customerEmail: request.customerEmail ?? request.customer_email ?? '',
+    accountCount: request.accountCount ?? request.account_count ?? 0,
+    costingMode: request.costingMode ?? request.costing_mode ?? 'shared',
+    startDate: '',
+    endDate: '',
+    region: request.region,
+    estimatedPrice: request.estimatedPrice ?? request.estimated_price ?? 0,
+    status: request.status,
+    selectedServices: (request.selectedServices ?? request.selected_services ?? []).map((s) => ({
+      serviceId: String(s.serviceId),
+      serviceName: 'serviceName' in s ? String(s.serviceName ?? '') : '',
+      instanceType: s.instanceType,
+    })),
+    createdAt: request.createdAt ?? request.created_at ?? '',
+  }));
 }
 
 export async function getRequestById(id: string): Promise<AwsRequestRecord> {
@@ -280,9 +397,9 @@ export async function syncRequestSpend(
 
 export async function reinstateRequestUser(
   requestId: string,
-  userId: string
+  userIndex: number
 ): Promise<{ success: boolean; message: string }> {
-  return apiRequest(awsPath(`/requests/${requestId}/users/${userId}/reinstate`), {
+  return apiRequest(awsPath(`/requests/${requestId}/users/${userIndex}/reinstate`), {
     method: 'POST',
   });
 }
