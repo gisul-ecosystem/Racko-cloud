@@ -185,6 +185,8 @@ export interface RequiredResources {
   memoryGb: number;
   diskGb: number;
   cloneType: 'dedicated_storage' | 'dynamic_storage';
+  /** The Proxmox node the template lives on — pins placement to this node. */
+  templateNode?: string;
 }
 
 export interface ResourceValidationResult {

@@ -154,6 +154,48 @@ export class VMController {
   }
 
   /**
+   * POST /api/v1/vms/bulk-start
+   */
+  async bulkStartVMs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { vmIds } = req.body as { vmIds: string[] };
+
+      logger.info('[VMBulkStart] Bulk start requested', {
+        userId: authReq.user.userId,
+        count: vmIds.length,
+      });
+
+      const result = await vmService.bulkStartVMs(vmIds, adminId, req);
+      success(res, `${result.succeeded} VM(s) started.`, result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * POST /api/v1/vms/bulk-stop
+   */
+  async bulkStopVMs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const { vmIds } = req.body as { vmIds: string[] };
+
+      logger.info('[VMBulkStop] Bulk stop requested', {
+        userId: authReq.user.userId,
+        count: vmIds.length,
+      });
+
+      const result = await vmService.bulkStopVMs(vmIds, adminId, req);
+      success(res, `${result.succeeded} VM(s) stopped.`, result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
    * DELETE /api/v1/vms/:vmId
    */
   async deleteVM(req: Request, res: Response, next: NextFunction): Promise<void> {
