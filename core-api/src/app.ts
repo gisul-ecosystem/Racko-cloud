@@ -41,6 +41,8 @@ import tenantUserRoutes from './modules/tenantUser/tenantUser.routes';
 import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
+import ipPoolRoutes from './modules/vm/ipPool.routes';
+import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
 
 const app = express();
 
@@ -84,7 +86,7 @@ app.use(
 
 // 3. CORS — strict origin whitelist, no wildcards
 const allowedOrigins = config.NODE_ENV === 'development'
-  ? ['http://localhost:3000', 'http://localhost:3001']
+  ? ['http://localhost:3000', 'http://localhost:3001', config.FRONTEND_URL]
   : [config.FRONTEND_URL];
 
 app.use(
@@ -161,6 +163,8 @@ app.use('/api/v1/admin-vm-templates', adminVmTemplateRoutes);
 app.use('/api/v1/machines', machineRouter);
 app.use('/api/v1/agent', agentRouter);
 app.use('/api/v1/software-catalog', softwareCatalogRoutes);
+app.use('/api/v1/ip-pool', ipPoolRoutes);
+app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
 
 // Start background services
 startNodeMonitoring();

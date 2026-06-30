@@ -2,7 +2,8 @@ import { Router } from 'express';
 import ServiceCategory from '../models/ServiceCategory.js';
 import Service from '../models/Service.js';
 import ServicePricing from '../models/ServicePricing.js';
-import { syncAWSCatalog, REGION_NAME_MAP } from '../services/catalogSyncService.js';
+import { syncAWSCatalog } from '../services/catalogSyncService.js';
+import { getAvailableRegions, listRegionsWithNames } from '../services/awsRegionService.js';
 import { getPricingForService, calculateEstimate } from '../services/pricingService.js';
 
 const router = Router();
@@ -72,9 +73,31 @@ router.get('/pricing', async (req, res, next) => {
   }
 });
 
-router.get('/regions', (req, res) => {
-  const regions = Object.entries(REGION_NAME_MAP).map(([code, name]) => ({ code, name }));
-  res.json({ success: true, regions });
+router.get('/regions', async (req, res, next) => {
+  try {
+    const regions = await listRegionsWithNames();
+    res.json({ success: true, regions });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/available-regions', async (req, res, next) => {
+  try {
+    const { serviceIds, instanceSelections } = req.query;
+
+    if (!serviceIds) {
+      return res.status(400).json({
+        success: false,
+        message: 'serviceIds query parameter is required',
+      });
+    }
+
+    const regions = await getAvailableRegions(serviceIds, instanceSelections);
+    res.json({ success: true, regions });
+  } catch (err) {
+    next(err);
+  }
 });
 
 router.post('/admin/sync-services', async (req, res, next) => {

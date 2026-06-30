@@ -63,7 +63,7 @@ export default function AwsRequestStatusPage() {
   const [spend, setSpend] = useState([]);
   const [spendLoading, setSpendLoading] = useState(false);
   const [spendSyncing, setSpendSyncing] = useState(false);
-  const [reinstatingUserId, setReinstatingUserId] = useState(null);
+  const [reinstatingUserIndex, setReinstatingUserIndex] = useState(null);
 
   const {
     snapshot,
@@ -115,16 +115,16 @@ export default function AwsRequestStatusPage() {
     }
   };
 
-  const reinstateUser = async (userId) => {
+  const reinstateUser = async (userIndex) => {
     if (!requestId) return;
-    setReinstatingUserId(userId);
+    setReinstatingUserIndex(userIndex);
     try {
-      await reinstateRequestUser(requestId, userId);
+      await reinstateRequestUser(requestId, userIndex);
       await loadSpend();
       const updated = await getRequestById(requestId);
       setRequest(updated);
     } finally {
-      setReinstatingUserId(null);
+      setReinstatingUserIndex(null);
     }
   };
 
@@ -260,7 +260,7 @@ export default function AwsRequestStatusPage() {
             </div>
           )}
 
-          {isComplete && request.identityUsers?.length > 0 && (
+          {isComplete && request.labRoles?.length > 0 && (
             <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
               <h2 className="mb-4 text-sm font-semibold text-gray-900">Lab users</h2>
               <div className="overflow-x-auto">
@@ -268,18 +268,22 @@ export default function AwsRequestStatusPage() {
                   <thead>
                     <tr className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-500">
                       <th className="px-3 py-2 font-medium">Username</th>
-                      <th className="px-3 py-2 font-medium">Activation email</th>
+                      <th className="px-3 py-2 font-medium">IAM Role</th>
                       <th className="px-3 py-2 font-medium">Status</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {request.identityUsers.map((user) => (
-                      <tr key={user.userId || user.username} className="border-b border-gray-100 last:border-0">
-                        <td className="px-3 py-3 font-mono text-gray-900">{user.username}</td>
-                        <td className="px-3 py-3 text-gray-700">{user.email || '—'}</td>
+                    {request.labRoles.map((role) => (
+                      <tr key={role.roleArn || role.userIndex} className="border-b border-gray-100 last:border-0">
+                        <td className="px-3 py-3 font-mono text-gray-900">
+                          labuser{role.userIndex + 1}
+                        </td>
+                        <td className="px-3 py-3 font-mono text-xs text-gray-700">{role.roleName}</td>
                         <td className="px-3 py-3">
-                          {user.needsActivation ? (
-                            <span className="text-xs text-[#B91C1C]">⚠️ Awaiting email activation</span>
+                          {role.suspended ? (
+                            <span className="rounded-full border border-red-200 bg-red-50 px-2.5 py-0.5 text-xs font-medium text-red-700">
+                              Suspended
+                            </span>
                           ) : (
                             <span className="rounded-full border border-green-200 bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
                               Active
@@ -292,8 +296,8 @@ export default function AwsRequestStatusPage() {
                 </table>
               </div>
               <p className="mt-4 text-xs text-gray-500">
-                AWS sends activation emails to each user address above. Check your inbox (including spam),
-                or use Forgot password on the Identity Center sign-in page to resend.
+                Use the manage portal link from your email to generate AWS console magic links for
+                each lab user.
               </p>
             </div>
           )}
@@ -370,11 +374,13 @@ export default function AwsRequestStatusPage() {
                             {user.suspended && (
                               <button
                                 type="button"
-                                disabled={reinstatingUserId === user.userId}
-                                onClick={() => void reinstateUser(user.userId)}
+                                disabled={reinstatingUserIndex === Number(user.userId)}
+                                onClick={() => void reinstateUser(Number(user.userId))}
                                 className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
                               >
-                                {reinstatingUserId === user.userId ? 'Reinstating…' : 'Reinstate'}
+                                {reinstatingUserIndex === Number(user.userId)
+                                  ? 'Reinstating…'
+                                  : 'Reinstate'}
                               </button>
                             )}
                           </td>

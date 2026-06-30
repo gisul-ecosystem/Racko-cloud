@@ -8,6 +8,7 @@ import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import { ApiError } from '../../../../lib/apiClient';
+import { getGatewayBaseUrl } from '../../../../lib/gatewayUrl';
 import {
   createMachine,
   pushAgentToVMs,
@@ -321,6 +322,13 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
       // Create machine record to get accountToken
       const m = await createMachine({ name: name.trim(), ipAddress: '0.0.0.0', os });
       setMachine(m);
+
+      // Linux: skip binary download but still start polling for agent connection
+      if (os === 'linux') {
+        startPolling(m._id);
+        return;
+      }
+
       // Issue short-lived download token then navigate browser to download
       const { downloadToken } = await issueAgentDownloadToken(m._id, os);
       window.location.href = buildPublicDownloadUrl(downloadToken) + `&os=${os}`;
@@ -334,6 +342,9 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   };
 
   const STEPS = ['Download Agent', 'Install Software', 'Status'];
+  const linuxInstallCommand = machine
+    ? `curl -fsSL ${getGatewayBaseUrl()}/api/v1/agent/install/linux?token=${machine.accountToken} | sudo bash`
+    : '';
 
   return (
     <div>
@@ -345,11 +356,15 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
             <Monitor className="h-8 w-8 text-[#B91C1C]" />
           </div>
           <h2 className="text-lg font-semibold text-gray-900">Download Agent</h2>
-          <p className="mt-2 text-sm text-gray-500">
-            Name your machine, pick OS, then download. Run the installer — it will ask for your account token.
-          </p>
+          {os === 'linux' ? (
+            <p className="mt-2 text-sm text-gray-500">Copy the command below and run it on your Linux machine.</p>
+          ) : (
+            <p className="mt-2 text-sm text-gray-500">
+              Name your machine, pick OS, then download. Run the installer — it will ask for your account token.
+            </p>
+          )}
 
-          {!waiting ? (
+          {!machine ? (
             <div className="mx-auto mt-6 max-w-sm space-y-4 text-left">
               <div>
                 <label className={labelClass}>Machine name <span className="text-red-500">*</span></label>
@@ -370,32 +385,32 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
                 Download Agent
               </button>
 
-              {/* Token display — shown after machine is created */}
-              {machine && (
-                <div className="rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">Your Account Token</p>
-                  <div className="flex items-center gap-2">
-                    <code className="flex-1 overflow-x-auto rounded bg-white px-3 py-2 text-sm font-mono text-gray-900 border border-gray-200 whitespace-nowrap">
-                      {machine.accountToken}
-                    </code>
-                    <button
-                      onClick={() => { copyToClipboard(machine.accountToken); addToast('success', 'Token copied!'); }}
-                      className="shrink-0 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-600 hover:bg-gray-50"
-                    >
-                      Copy
-                    </button>
-                  </div>
-                  <p className="mt-2 text-xs text-gray-400">
-                    Paste this token when the installer asks for it.
-                  </p>
+              {os === 'windows' && (
+                <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 text-xs text-gray-500 leading-relaxed">
+                  Double-click <code className="font-mono">racko-agent.exe</code> → click Yes on UAC prompt → paste your token → click Install.
                 </div>
               )}
-
-              <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 text-xs text-gray-500 leading-relaxed">
-                {os === 'windows'
-                  ? <>Double-click <code className="font-mono">racko-agent.exe</code> → click Yes on UAC prompt → paste your token → click Install.</>
-                  : <>Run: <code className="font-mono">ACCOUNT_TOKEN=&lt;token&gt; sudo ./racko-agent</code></>
-                }
+            </div>
+          ) : os === 'linux' ? (
+            <div className="mx-auto mt-6 max-w-sm text-left">
+              <p className="mb-2 text-xs font-medium text-gray-700">Run this on your Linux machine:</p>
+              <div className="flex items-start justify-between gap-3 rounded-lg bg-gray-900 px-4 py-3">
+                <code className="select-all break-all font-mono text-xs leading-relaxed text-green-400">
+                  {linuxInstallCommand}
+                </code>
+                <button
+                  onClick={() => void navigator.clipboard.writeText(linuxInstallCommand)}
+                  className="shrink-0 rounded bg-gray-700 px-2 py-1 text-xs text-gray-300 transition hover:bg-gray-600"
+                >
+                  Copy
+                </button>
+              </div>
+              <p className="mt-2 text-xs text-gray-400">
+                Downloads and installs the agent as a systemd service. Requires sudo.
+              </p>
+              <div className="mt-3 flex items-center gap-2 text-xs text-gray-500">
+                <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" />
+                Waiting for agent to connect...
               </div>
             </div>
           ) : timedOut ? (
@@ -405,7 +420,7 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
               </div>
               <p className="text-sm font-semibold text-gray-900">Agent didn&apos;t connect within 5 minutes.</p>
               <div className="rounded-lg border border-gray-100 bg-gray-50 p-4 text-left text-xs text-gray-600 space-y-1">
-                <p className="font-medium text-gray-700 mb-2">Check the following:</p>
+                <p className="mb-2 font-medium text-gray-700">Check the following:</p>
                 <p>• The installer ran successfully and the service is running</p>
                 <p>• The token was pasted correctly (no extra spaces)</p>
                 <p>• The machine can reach the platform URL</p>
@@ -431,7 +446,7 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
                 <div className="w-full max-w-sm rounded-xl border border-gray-200 bg-gray-50 p-4 text-left">
                   <p className="mb-2 text-xs font-medium uppercase tracking-wide text-gray-500">Account Token</p>
                   <div className="flex items-center gap-2">
-                    <code className="flex-1 overflow-x-auto rounded bg-white px-3 py-2 text-sm font-mono text-gray-900 border border-gray-200 whitespace-nowrap">
+                    <code className="flex-1 overflow-x-auto rounded border border-gray-200 bg-white px-3 py-2 text-sm font-mono text-gray-900 whitespace-nowrap">
                       {machine.accountToken}
                     </code>
                     <button

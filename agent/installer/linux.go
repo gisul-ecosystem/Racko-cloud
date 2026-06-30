@@ -37,11 +37,20 @@ func runApt(pkg SoftwarePackage) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// Update package lists before installing
+	updateOut, err := runCmd(pm, "update", "-y")
+	if err != nil {
+		// Non-fatal — log and continue, install may still work
+		updateOut += "\n[warn] apt update failed, continuing anyway\n"
+	}
+
 	args := []string{"install", "-y", name}
 	if pkg.InstallArgs != "" {
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
-	return runCmd(pm, args...)
+	installOut, err := runCmd(pm, args...)
+	return updateOut + installOut, err
 }
 
 func runShellScript(pkg SoftwarePackage) (string, error) {

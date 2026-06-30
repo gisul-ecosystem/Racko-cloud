@@ -11,7 +11,7 @@ export function PricingSummary({
   loading,
   error,
 }) {
-  const pricedLines = breakdown.filter((entry) => !entry.flatRate && entry.cost > 0);
+  const pricedLines = breakdown.filter((entry) => entry.cost > 0 || entry.flatRate);
 
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
@@ -40,9 +40,10 @@ export function PricingSummary({
                       className="flex items-start justify-between gap-3 text-xs"
                     >
                       <span className="text-gray-600">
-                        {entry.serviceName} {entry.instanceType} × {entry.accountCount} user
-                        {entry.accountCount !== 1 ? 's' : ''} × {entry.durationDays} day
-                        {entry.durationDays !== 1 ? 's' : ''}
+                        {entry.serviceName} {entry.instanceType}
+                        {entry.flatRate
+                          ? ` × ${entry.durationDays} day${entry.durationDays !== 1 ? 's' : ''}`
+                          : ` × ${entry.accountCount} user${entry.accountCount !== 1 ? 's' : ''} × ${entry.durationDays} day${entry.durationDays !== 1 ? 's' : ''}`}
                       </span>
                       <span className="shrink-0 font-medium text-gray-900">
                         {formatCurrency(entry.cost)}
@@ -66,6 +67,9 @@ export function PricingSummary({
                 {duration != null && `${duration} day${duration !== 1 ? 's' : ''}`}
               </p>
             )}
+            <p className="text-xs text-gray-400">
+              Flat-rate services (S3, Lambda) are estimated. Actual cost depends on usage.
+            </p>
           </div>
         ) : (
           <p className="text-sm text-gray-400">

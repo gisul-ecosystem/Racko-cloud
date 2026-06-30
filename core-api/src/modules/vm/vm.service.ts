@@ -27,6 +27,8 @@ import { processBulkCreation } from './helpers/bulkProcessor';
 import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
 import { processVmClone } from './helpers/cloneProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
+import { releaseIP } from './ipAllocator.service';
+import { ProxmoxNodeService } from '../proxmoxNode/proxmoxNode.service';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
@@ -128,7 +130,7 @@ interface ConsolePollOptions {
 }
 
 async function startIpPolling(
-  vm: Pick<IVM, '_id' | 'node' | 'vmid'>,
+  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress'>,
   trigger = 'unknown',
   options: ConsolePollOptions = {}
 ): Promise<void> {
@@ -182,13 +184,15 @@ async function startIpPolling(
           }
         }
         const match = iface['ip-addresses']?.find(
-          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'].startsWith('10.100.')
+          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'] === vm.ipAddress
         );
         if (match) {
           foundIp = match['ip-address'];
           break;
         }
       }
+
+      logger.info(`[BulkVM] [vmid=${vmid}] STEP: startIpPolling attempt ${attempt}/${maxRetries} | data: interfacesReturned=${interfaces.length} seenIps=${seenIps.join(',')||'none'} expectedIp=${vm.ipAddress} matched=${!!foundIp}`);
 
       if (foundIp) {
         await VM.findByIdAndUpdate(vmObjectId, { ipAddress: foundIp });
@@ -206,7 +210,9 @@ async function startIpPolling(
         await sleep(cloudbaseGraceMs);
 
         // Flag the VM as console-ready. The frontend / openConsole gate on this flag.
+        const consoleReadyAt = new Date().toISOString();
         await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
+        logger.info(`[BulkVM] [vmid=${vmid}] STEP: consoleReady set to true | data: timestamp=${consoleReadyAt} ipAddress=${foundIp}`);
         logger.debug('[VMConsolePoll] consoleReady=true', {
           vmId: vmObjectId.toString(),
           vmid,
@@ -218,7 +224,7 @@ async function startIpPolling(
         return;
       }
 
-      logger.warn('[VMConsolePoll] Guest agent responded but no 10.100.* IP yet', {
+      logger.warn('[VMConsolePoll] Guest agent responded but assigned IP not seen yet', {
         vmId: vmObjectId.toString(),
         vmid,
         node,
@@ -293,7 +299,14 @@ function assertOwnership(vm: IVM, requestingUserId: string, requestingRole: stri
 
 async function fetchProxmoxTemplates(): Promise<ProxmoxTemplate[]> {
   const nodesResponse = await proxmoxClient.get<{ data: ProxmoxNodeRaw[] }>('/nodes');
-  const onlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+  const allOnlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+
+  // Only query nodes registered as active in the platform — avoids 30s timeouts from dead nodes.
+  // Falls back to all online nodes if none are registered yet.
+  const activeNodeNames = await ProxmoxNodeService.getActiveNodeNames();
+  const onlineNodes = activeNodeNames.length > 0
+    ? allOnlineNodes.filter((n) => activeNodeNames.includes(n.node))
+    : allOnlineNodes;
 
   const results = await Promise.allSettled(
     onlineNodes.map((node) =>
@@ -862,6 +875,17 @@ export class VMService {
     vm.lastError = undefined;
     await vm.save();
 
+    // Release the public IP back to the pool
+    try {
+      await releaseIP(vm._id.toString());
+    } catch (releaseErr) {
+      logger.warn('[VMDelete] Failed to release public IP — continuing', {
+        vmId: vmId.toString(),
+        vmid: vm.vmid,
+        error: releaseErr instanceof Error ? releaseErr.message : String(releaseErr),
+      });
+    }
+
     await VMEvent.create({
       vmId: vm._id,
       vmid: vm.vmid,
@@ -961,6 +985,108 @@ export class VMService {
   }
 
   /**
+   * Bulk start VMs — processes all in parallel batches server-side.
+   * Returns per-VM results so the UI can show which succeeded/failed.
+   */
+  async bulkStartVMs(
+    vmIds: string[],
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ succeeded: number; failed: number; errors: Array<{ vmId: string; message: string }> }> {
+    const authReq = req as AuthenticatedRequest;
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+    const uniqueIds = [...new Set(vmIds)].map((id) => new mongoose.Types.ObjectId(id));
+
+    const vms = await VM.find({ _id: { $in: uniqueIds } });
+    for (const vm of vms) {
+      assertOwnership(vm, adminId.toString(), authReq.user.role);
+    }
+
+    const results = await Promise.allSettled(
+      vms
+        .filter((vm) => vm.status !== 'running')
+        .map((vm) => this.powerOnStoppedVm(vm, adminId, { ipAddress: ip, userAgent: ua }))
+    );
+
+    let succeeded = 0;
+    const errors: Array<{ vmId: string; message: string }> = [];
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]!;
+      if (r.status === 'fulfilled') {
+        succeeded++;
+      } else {
+        const vm = vms.filter((v) => v.status !== 'running')[i];
+        errors.push({
+          vmId: vm?._id.toString() ?? 'unknown',
+          message: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        });
+      }
+    }
+
+    logger.info('[VMBulkStart] Bulk start completed', {
+      adminId: adminId.toString(),
+      requested: uniqueIds.length,
+      succeeded,
+      failed: errors.length,
+    });
+
+    return { succeeded, failed: errors.length, errors };
+  }
+
+  /**
+   * Bulk stop VMs — processes all in parallel batches server-side.
+   * Returns per-VM results so the UI can show which succeeded/failed.
+   */
+  async bulkStopVMs(
+    vmIds: string[],
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<{ succeeded: number; failed: number; errors: Array<{ vmId: string; message: string }> }> {
+    const authReq = req as AuthenticatedRequest;
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+    const uniqueIds = [...new Set(vmIds)].map((id) => new mongoose.Types.ObjectId(id));
+
+    const vms = await VM.find({ _id: { $in: uniqueIds } });
+    for (const vm of vms) {
+      assertOwnership(vm, adminId.toString(), authReq.user.role);
+    }
+
+    const results = await Promise.allSettled(
+      vms
+        .filter((vm) => vm.status !== 'stopped')
+        .map((vm) => this.gracefulShutdownVm(vm, adminId, { ipAddress: ip, userAgent: ua }))
+    );
+
+    let succeeded = 0;
+    const errors: Array<{ vmId: string; message: string }> = [];
+
+    for (let i = 0; i < results.length; i++) {
+      const r = results[i]!;
+      if (r.status === 'fulfilled') {
+        succeeded++;
+      } else {
+        const vm = vms.filter((v) => v.status !== 'stopped')[i];
+        errors.push({
+          vmId: vm?._id.toString() ?? 'unknown',
+          message: r.reason instanceof Error ? r.reason.message : String(r.reason),
+        });
+      }
+    }
+
+    logger.info('[VMBulkStop] Bulk stop completed', {
+      adminId: adminId.toString(),
+      requested: uniqueIds.length,
+      succeeded,
+      failed: errors.length,
+    });
+
+    return { succeeded, failed: errors.length, errors };
+  }
+
+  /**
    * Start a VM (graceful).
    */
   /**
@@ -991,6 +1117,7 @@ export class VMService {
         {}
       );
       upid = response.data.data;
+      logger.info(`[BulkVM] [vmName=unknown vmid=${vm.vmid}] STEP: POST /status/start sent | data: timestamp=${new Date().toISOString()} upid=${upid}`);
     }
 
     let finalUpid = upid;
@@ -1107,6 +1234,7 @@ export class VMService {
 
     if (operation === 'start') {
       const pollTrigger = `power-on:${operation}:${audit.userAgent}`;
+      logger.info(`[BulkVM] [vmid=${vm.vmid}] STEP: startIpPolling begins | data: vmid=${vm.vmid} ipAddress=${vm.ipAddress ?? 'unknown'} trigger=${pollTrigger}`);
       void startIpPolling(vm, pollTrigger, { mode: 'cold-start' }).catch((err: unknown) => {
         logger.error('[VMConsolePoll] Unhandled error in IP polling', {
           vmId: vmIdStr,
@@ -1813,7 +1941,7 @@ export class VMService {
       for (const iface of interfaces) {
         if (iface.name === 'lo') continue;
         const ipv4 = iface['ip-addresses']?.find(
-          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'].startsWith('10.100.')
+          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'] === vm.ipAddress
         );
         if (ipv4) {
           ipAddress = ipv4['ip-address'];

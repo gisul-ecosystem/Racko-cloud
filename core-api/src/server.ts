@@ -4,6 +4,7 @@ import { config } from './config';
 import { connectDatabase } from './config/database';
 import { initializeSendGrid } from './config/sendgrid';
 import { logger } from './utils/logger';
+import { startIpCleanupCron } from './modules/vm/ipAllocator.service';
 
 async function bootstrap(): Promise<void> {
   // Connect to MongoDB
@@ -11,6 +12,9 @@ async function bootstrap(): Promise<void> {
 
   // Initialize SendGrid
   initializeSendGrid();
+
+  // Start background cron to reclaim stale IP reservations
+  startIpCleanupCron();
 
   const server = app.listen(config.PORT, () => {
     logger.info(`core-api running on port ${config.PORT}`, {

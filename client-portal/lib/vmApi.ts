@@ -389,6 +389,28 @@ export async function bulkDeleteVMs(vmIds: string[]): Promise<{ jobId: string }>
   return res.data;
 }
 
+export interface BulkPowerResult {
+  succeeded: number;
+  failed: number;
+  errors: Array<{ vmId: string; message: string }>;
+}
+
+export async function bulkStartVMs(vmIds: string[]): Promise<BulkPowerResult> {
+  const res = await apiRequest<ApiResponse<BulkPowerResult>>('/api/v1/vms/bulk-start', {
+    method: 'POST',
+    body: JSON.stringify({ vmIds }),
+  });
+  return res.data;
+}
+
+export async function bulkStopVMs(vmIds: string[]): Promise<BulkPowerResult> {
+  const res = await apiRequest<ApiResponse<BulkPowerResult>>('/api/v1/vms/bulk-stop', {
+    method: 'POST',
+    body: JSON.stringify({ vmIds }),
+  });
+  return res.data;
+}
+
 // ─── VM power operations ──────────────────────────────────────────────────────
 
 export async function startVM(vmId: string): Promise<VMOperationResult> {

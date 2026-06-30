@@ -1,6 +1,6 @@
 import { Resend } from "resend";
 import { NextResponse } from "next/server";
-
+ 
 function getResend(): Resend | null {
   const key = process.env.RESEND_API_KEY?.trim();
   if (!key) return null;

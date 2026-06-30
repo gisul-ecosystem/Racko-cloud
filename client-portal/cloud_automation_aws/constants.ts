@@ -25,12 +25,16 @@ export const COMMON_TIMEZONES = [
   'Australia/Sydney',
 ] as const;
 
+/** Organization admin portal API (super_admin via cloud-gateway). */
+export const AWS_ORG_ADMIN_API_PREFIX = '/api/v1/cloud-automation-aws/org-admin';
+
 /** Client routes for the AWS services area. */
 export const AWS_ROUTES = {
   dashboard: '/console/aws',
   createRequest: '/console/aws/requests/new',
   requests: '/console/aws/requests',
   requestStatus: (id: string) => `/console/aws/requests/${id}`,
+  orgAdmin: '/super-admin-console/aws/org-admin',
   consoleHub: '/console',
 } as const;
 

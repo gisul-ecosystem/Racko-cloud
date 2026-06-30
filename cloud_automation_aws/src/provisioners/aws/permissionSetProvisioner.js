@@ -1,6 +1,8 @@
 import {
   AttachManagedPolicyToPermissionSetCommand,
   CreatePermissionSetCommand,
+  DescribePermissionSetCommand,
+  ListPermissionSetsCommand,
   PutInlinePolicyToPermissionSetCommand,
 } from '@aws-sdk/client-sso-admin';
 import { ssoAdminClient, SSO_INSTANCE_ARN, formatIdentityCenterError } from '../../config/aws.js';
@@ -107,6 +109,37 @@ function collectManagedPolicies(request) {
   return [...policies];
 }
 
+async function findExistingPermissionSet(permissionSetName) {
+  let nextToken = undefined;
+
+  do {
+    const { PermissionSets, NextToken } = await ssoAdminClient.send(
+      new ListPermissionSetsCommand({
+        InstanceArn: SSO_INSTANCE_ARN,
+        NextToken: nextToken,
+        MaxResults: 100,
+      })
+    );
+
+    for (const arn of PermissionSets ?? []) {
+      const { PermissionSet } = await ssoAdminClient.send(
+        new DescribePermissionSetCommand({
+          InstanceArn: SSO_INSTANCE_ARN,
+          PermissionSetArn: arn,
+        })
+      );
+      if (PermissionSet.Name === permissionSetName) {
+        console.log(`[PermissionSet] Found existing permission set for ${permissionSetName}: ${arn}`);
+        return arn;
+      }
+    }
+
+    nextToken = NextToken;
+  } while (nextToken);
+
+  return null;
+}
+
 export async function createPermissionSet(request, awsAccountId, options = {}) {
   if (!SSO_INSTANCE_ARN) {
     throw new Error('AWS_SSO_INSTANCE_ARN is not configured');
@@ -137,6 +170,17 @@ export async function createPermissionSet(request, awsAccountId, options = {}) {
   const permissionSetName = `RackoLab-${String(request._id).slice(-8)}${nameSuffix}`.slice(0, 32);
   const sessionDuration = 'PT8H';
 
+  const existingArn = await findExistingPermissionSet(permissionSetName);
+  if (existingArn) {
+    console.log(`[PermissionSet] Reusing existing permission set ${existingArn} for request ${requestId}`);
+    return {
+      permissionSetArn: existingArn,
+      permissionSetName,
+      managedPolicies: requestedPolicies,
+    };
+  }
+
+  console.log(`[PermissionSet] Creating new permission set for request ${requestId}`);
   const created = await ssoAdminClient.send(
     new CreatePermissionSetCommand({
       InstanceArn: SSO_INSTANCE_ARN,
