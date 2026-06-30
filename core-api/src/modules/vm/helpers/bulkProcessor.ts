@@ -680,7 +680,6 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     // the password for the template's built-in account (no ciuser rename).
     const configUpdates: Record<string, unknown> = {
       cipassword: consolePassword,
-      net0: 'virtio,bridge=vmbr0,firewall=1',
       ipconfig0: `ip=${allocatedIP}/24,gw=${allocatedGateway}`,
       nameserver: '8.8.8.8',
     };
@@ -691,27 +690,6 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: sending POST /config | data: ${JSON.stringify(maskedConfigUpdates)}`);
     const configResponse = await proxmoxClient.post(`/nodes/${spec.node}/qemu/${vmid}/config`, configUpdates);
     logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: POST /config response | data: status=success responseStatus=${(configResponse as { status?: number }).status ?? 'unknown'}`);
-
-    // Regenerate the cloud-init drive so the new credentials take effect.
-    // Best-effort: templates without a cloud-init drive return 404 — log and continue.
-    try {
-      logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: sending PUT /cloudinit | data: timestamp=${new Date().toISOString()}`);
-      const cloudinitResponse = await proxmoxClient.put<{ data: string | null }>(`/nodes/${spec.node}/qemu/${vmid}/cloudinit`, {});
-      const cloudinitUpid = cloudinitResponse.data?.data;
-      if (cloudinitUpid) {
-        logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: PUT /cloudinit response — returned UPID | data: upid=${cloudinitUpid} — polling it`);
-        await pollTaskWithCleanup(cloudinitUpid, spec.node, vmid, false);
-      } else {
-        logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: PUT /cloudinit response — no UPID returned (empty/immediate response) | data: ignoring, continuing`);
-      }
-    } catch (err) {
-      logger.warn('[BulkVM] cloud-init regenerate failed — continuing', {
-        vmName: spec.vmName,
-        vmid,
-        node: spec.node,
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
 
     if (spec.cloneType === 'dedicated_storage' && spec.diskGb > spec.templateDiskGb) {
       const extraGb = spec.diskGb - spec.templateDiskGb;
