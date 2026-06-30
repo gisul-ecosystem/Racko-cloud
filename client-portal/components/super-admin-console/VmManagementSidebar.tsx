@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, MonitorCheck, Bell, Package, Layers, Globe, ChevronLeft } from 'lucide-react';
+import { LayoutDashboard, MonitorCheck, Bell, Package, Layers, Globe, Server, ChevronLeft } from 'lucide-react';
 
 interface VmManagementSidebarProps {
   sidebarOpen: boolean;
@@ -16,6 +16,7 @@ const navLinks = [
   { href: '/super-admin-console/vm-management/software', label: 'Software', icon: Package, exact: false },
   { href: '/super-admin-console/vm-management/templates', label: 'Templates', icon: Layers, exact: false },
   { href: '/super-admin-console/vm-management/ip-management', label: 'IP Pool', icon: Globe, exact: false },
+  { href: '/super-admin-console/vm-management/nodes', label: 'Nodes', icon: Server, exact: false },
 ];
 
 export function VmManagementSidebar({ sidebarOpen, onCloseSidebar }: VmManagementSidebarProps) {

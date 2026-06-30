@@ -28,6 +28,7 @@ import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
 import { processVmClone } from './helpers/cloneProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
 import { releaseIP } from './ipAllocator.service';
+import { ProxmoxNodeService } from '../proxmoxNode/proxmoxNode.service';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
@@ -298,7 +299,14 @@ function assertOwnership(vm: IVM, requestingUserId: string, requestingRole: stri
 
 async function fetchProxmoxTemplates(): Promise<ProxmoxTemplate[]> {
   const nodesResponse = await proxmoxClient.get<{ data: ProxmoxNodeRaw[] }>('/nodes');
-  const onlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+  const allOnlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+
+  // Only query nodes registered as active in the platform — avoids 30s timeouts from dead nodes.
+  // Falls back to all online nodes if none are registered yet.
+  const activeNodeNames = await ProxmoxNodeService.getActiveNodeNames();
+  const onlineNodes = activeNodeNames.length > 0
+    ? allOnlineNodes.filter((n) => activeNodeNames.includes(n.node))
+    : allOnlineNodes;
 
   const results = await Promise.allSettled(
     onlineNodes.map((node) =>

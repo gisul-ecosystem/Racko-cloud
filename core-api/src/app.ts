@@ -42,6 +42,7 @@ import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
+import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
 
 const app = express();
 
@@ -163,6 +164,7 @@ app.use('/api/v1/machines', machineRouter);
 app.use('/api/v1/agent', agentRouter);
 app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 app.use('/api/v1/ip-pool', ipPoolRoutes);
+app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
 
 // Start background services
 startNodeMonitoring();
