@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, ChevronLeft, ClipboardList, LayoutDashboard } from 'lucide-react';
+import { Building2, ChevronLeft, ClipboardList, LayoutDashboard, type LucideIcon } from 'lucide-react';
 import { fetchSuperAdminOrders } from '@/lib/tenantApi';
 
 interface WhiteLabellingSidebarProps {
@@ -11,7 +11,15 @@ interface WhiteLabellingSidebarProps {
   onCloseSidebar: () => void;
 }
 
-const navLinks = [
+type NavLink = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  exact: boolean;
+  showPendingBadge?: boolean;
+};
+
+const navLinks: NavLink[] = [
   {
     href: '/super-admin-console/white-labelling',
     label: 'Overview',
@@ -31,7 +39,7 @@ const navLinks = [
     exact: false,
     showPendingBadge: true,
   },
-] as const;
+];
 
 export function WhiteLabellingSidebar({ sidebarOpen, onCloseSidebar }: WhiteLabellingSidebarProps) {
   const pathname = usePathname();
