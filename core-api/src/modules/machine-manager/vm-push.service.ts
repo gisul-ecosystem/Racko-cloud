@@ -1,4 +1,5 @@
 import { execSync } from 'child_process';
+import { NodeSSH } from 'node-ssh';
 import { logger } from '../../utils/logger';
 import { config } from '../../config';
 
@@ -25,7 +26,7 @@ class VMPushService {
   private readonly platformUrl: string;
 
   constructor() {
-    this.platformUrl = config.FRONTEND_URL ?? 'http://localhost:8000';
+    this.platformUrl = config.GATEWAY_URL ?? config.FRONTEND_URL ?? 'http://localhost:8000';
   }
 
   async pushAgent(target: VMPushTarget): Promise<VMPushResult> {
@@ -60,19 +61,33 @@ class VMPushService {
    * In production, replace with SSH key-based auth or a proper SSH library.
    */
   private async pushLinux(target: VMPushTarget): Promise<void> {
-    const installScript = this.buildLinuxInstallScript(target.accountToken);
+    const ssh = new NodeSSH();
 
-    // TODO: Replace sshpass with an SSH library (e.g. node-ssh) for production.
-    // sshpass is a quick bootstrap solution — requires sshpass installed on the server.
-    const cmd = [
-      'sshpass', '-p', `'${target.password}'`,
-      'ssh', '-o', 'StrictHostKeyChecking=no',
-      '-o', 'ConnectTimeout=10',
-      `${target.username}@${target.ipAddress}`,
-      `'${installScript}'`,
-    ].join(' ');
+    try {
+      await ssh.connect({
+        host: target.ipAddress,
+        username: target.username,
+        password: target.password,
+        readyTimeout: 10000,
+      });
 
-    execSync(cmd, { timeout: 60000, stdio: 'pipe' });
+      const installCmd = this.buildLinuxInstallScript(target.accountToken);
+      const result = await ssh.execCommand(installCmd, {
+        execOptions: { pty: true },
+      });
+
+      if (result.code !== 0 && result.code !== null) {
+        throw new Error(`Install failed (exit ${result.code}): ${result.stderr}`);
+      }
+
+      logger.info('[VMPush] Linux agent installed via SSH', {
+        machineId: target.machineId,
+        ip: target.ipAddress,
+        stdout: result.stdout?.slice(0, 500),
+      });
+    } finally {
+      ssh.dispose();
+    }
   }
 
   /**
@@ -111,27 +126,7 @@ class VMPushService {
   }
 
   private buildLinuxInstallScript(accountToken: string): string {
-    const downloadUrl = `${this.platformUrl}/api/v1/agent/download?os=linux&token=${accountToken}`;
-    return [
-      `curl -fsSL '${downloadUrl}' -o /tmp/racko-agent`,
-      'chmod +x /tmp/racko-agent',
-      // Install as a systemd service
-      'sudo mv /tmp/racko-agent /usr/local/bin/racko-agent',
-      'sudo tee /etc/systemd/system/racko-agent.service > /dev/null << EOF',
-      '[Unit]',
-      'Description=Racko Agent',
-      'After=network.target',
-      '[Service]',
-      'ExecStart=/usr/local/bin/racko-agent',
-      'Restart=always',
-      'RestartSec=10',
-      '[Install]',
-      'WantedBy=multi-user.target',
-      'EOF',
-      'sudo systemctl daemon-reload',
-      'sudo systemctl enable racko-agent',
-      'sudo systemctl start racko-agent',
-    ].join(' && ');
+    return `curl -fsSL '${this.platformUrl}/api/v1/agent/install/linux?token=${accountToken}' | sudo bash`;
   }
 
   private buildWindowsInstallScript(accountToken: string): string {

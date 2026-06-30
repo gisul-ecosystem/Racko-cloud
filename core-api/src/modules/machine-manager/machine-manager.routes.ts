@@ -120,6 +120,12 @@ machineRouter.delete(
 
 // ─── Agent routes (no JWT auth — uses accountToken in body) ──────────────────
 
+// GET /api/v1/agent/install/linux?token=<accountToken> — serves shell install script (public)
+agentRouter.get(
+  '/install/linux',
+  (req, res, next) => machineManagerController.serveLinuxInstallScript(req, res, next)
+);
+
 // GET /api/v1/agent/binary/:os — serves pre-built agent binary (public, no auth)
 agentRouter.get(
   '/binary/:os',
