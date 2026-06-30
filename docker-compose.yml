@@ -2,7 +2,7 @@ services:
   core-api:
     image: gisuldocker/racko-core-api:${IMAGE_TAG:-dev}
     env_file:
-      - .env
+      - core-api/.env
     environment:
       PORT: ${CORE_API_PORT:-8001}
       JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
@@ -16,7 +16,7 @@ services:
   cloud-automation:
     image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-dev}
     env_file:
-      - .env
+      - cloud-automation/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_PORT:-3002}
     ports:
@@ -25,7 +25,7 @@ services:
   cloud-automation-aws:
     image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-dev}
     env_file:
-      - .env
+      - cloud-automation-aws/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
       CLIENT_PORTAL_URL: ${CLIENT_PORTAL_URL:-${FRONTEND_URL}}
@@ -35,7 +35,7 @@ services:
   cloud-gateway:
     image: gisuldocker/racko-cloud-gateway:${IMAGE_TAG:-dev}
     env_file:
-      - .env
+      - cloud-gateway/.env
     environment:
       PORT: ${GATEWAY_PORT:-8000}
       JWT_ACCESS_EXPIRES_IN: ${GATEWAY_JWT_ACCESS_EXPIRES_IN:-15m}
@@ -49,7 +49,7 @@ services:
   client-portal:
     image: gisuldocker/racko-client-portal:${IMAGE_TAG:-dev}
     env_file:
-      - .env
+      - client-portal/.env
     environment:
       HOSTNAME: 0.0.0.0
       PORT: ${CLIENT_PORTAL_PORT:-3000}
