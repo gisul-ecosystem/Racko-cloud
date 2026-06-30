@@ -1,6 +1,7 @@
 import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { logger } from '../../../utils/logger';
 import { config } from '../../../config';
+import { ProxmoxNodeService } from '../../proxmoxNode/proxmoxNode.service';
 import type { ProxmoxNodeRaw, ProxmoxStorageRaw, NodeResources, StoragePool } from '../vm.types';
 
 function bytesToGb(bytes: number): number {
@@ -14,8 +15,16 @@ function bytesToGb(bytes: number): number {
  * Returns NodeResources[] sorted by placement score descending.
  */
 export async function fetchNodeCapacities(): Promise<NodeResources[]> {
+  // Use only nodes registered and marked active in the platform.
+  // Falls back to all Proxmox online nodes if none are registered yet.
+  const activeNodeNames = await ProxmoxNodeService.getActiveNodeNames();
+
   const nodesResponse = await proxmoxClient.get<{ data: ProxmoxNodeRaw[] }>('/nodes');
-  const onlineNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+  const allProxmoxNodes = nodesResponse.data.data.filter((n) => n.status === 'online');
+
+  const onlineNodes = activeNodeNames.length > 0
+    ? allProxmoxNodes.filter((n) => activeNodeNames.includes(n.node))
+    : allProxmoxNodes;
 
   if (onlineNodes.length === 0) return [];
 

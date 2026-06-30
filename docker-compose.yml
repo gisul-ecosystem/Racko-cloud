@@ -1,14 +1,20 @@
+version: '3.9'
+
 services:
   core-api:
+    build:
+      context: .
+      dockerfile: core-api/Dockerfile
     image: gisuldocker/racko-core-api:${IMAGE_TAG:-dev}
     env_file:
       - core-api/.env
     environment:
+      NODE_ENV: production
       PORT: ${CORE_API_PORT:-8001}
       JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
       TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
     volumes:
-      - tenant_assets:/data/tenant-assets
+      - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
     ports:
       - "${CORE_API_PORT:-8001}:8001"
@@ -33,6 +39,9 @@ services:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
 
   cloud-gateway:
+    build:
+      context: .
+      dockerfile: cloud-gateway/Dockerfile
     image: gisuldocker/racko-cloud-gateway:${IMAGE_TAG:-dev}
     env_file:
       - cloud-gateway/.env
@@ -47,6 +56,9 @@ services:
       - "${GATEWAY_PORT:-8000}:8000"
 
   client-portal:
+    build:
+      context: .
+      dockerfile: client-portal/Dockerfile
     image: gisuldocker/racko-client-portal:${IMAGE_TAG:-dev}
     env_file:
       - client-portal/.env
@@ -60,4 +72,4 @@ services:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
 
 volumes:
-  tenant_assets:
+  tenant-assets:

@@ -76,6 +76,10 @@ interface RequestOptions extends RequestInit {
   skipAuth?: boolean;
 }
 
+// Refresh token queue — ensures only one refresh runs at a time.
+// All concurrent requests that hit 401 wait for the single in-flight refresh.
+let refreshPromise: Promise<string | null> | null = null;
+
 async function refreshAccessToken(): Promise<string | null> {
   const url = `${getGatewayBaseUrl()}/api/v1/auth/refresh`;
 

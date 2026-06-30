@@ -10,9 +10,9 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
-import { startVM, stopVM, bulkDeleteVMs } from '../../../../lib/vmApi';
+import { bulkDeleteVMs, bulkStartVMs, bulkStopVMs } from '../../../../lib/vmApi';
 import { ApiError } from '../../../../lib/apiClient';
-import { Server, Plus, RefreshCw, Play, Square, Trash2, X } from 'lucide-react';
+import { Server, Plus, RefreshCw, Play, Square, Trash2, X, Download } from 'lucide-react';
 import type { VMStatus, CloneType, IVM } from '../../../../lib/vmApi';
 
 const STATUS_OPTIONS = [
@@ -73,6 +73,30 @@ export default function VMListPage() {
 
   const clearSelection = () => setSelected(new Set());
 
+  // Export VM credentials to CSV (opens as Excel-compatible download)
+  const exportCredentials = useCallback(() => {
+    if (vms.length === 0) return;
+    const headers = ['VM Name', 'IP Address', 'Username', 'Password', 'Status', 'Node'];
+    const rows = vms.map((vm) => [
+      vm.name,
+      vm.ipAddress ?? '',
+      vm.consoleUsername ?? '',
+      vm.consolePassword ?? '',
+      vm.status,
+      vm.node,
+    ]);
+    const csv = [headers, ...rows]
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vm-credentials-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [vms]);
+
   // Derive what actions are valid for current selection
   const selectedVMs = vms.filter((v) => selected.has(v._id));
   const allStopped = selectedVMs.every((v) => v.status === 'stopped');
@@ -95,22 +119,17 @@ export default function VMListPage() {
         return;
       }
 
-      const results = await Promise.allSettled(
-        selectedVMs.map((vm) => {
-          if (action === 'start') return startVM(vm._id);
-          return stopVM(vm._id);
-        })
-      );
+      // Bulk start/stop — single server-side request, no token race
+      const result = action === 'start'
+        ? await bulkStartVMs(selectedVMs.map((vm) => vm._id))
+        : await bulkStopVMs(selectedVMs.map((vm) => vm._id));
 
-      const succeeded = results.filter((r) => r.status === 'fulfilled').length;
-      const failed = results.filter((r) => r.status === 'rejected').length;
-
-      if (failed === 0) {
-        addToast('success', `${succeeded} VM${succeeded !== 1 ? 's' : ''} ${action === 'start' ? 'started' : 'stopped'} successfully.`);
-      } else if (succeeded === 0) {
-        addToast('error', `Failed to ${action} all ${failed} VM${failed !== 1 ? 's' : ''}.`);
+      if (result.failed === 0) {
+        addToast('success', `${result.succeeded} VM${result.succeeded !== 1 ? 's' : ''} ${action === 'start' ? 'started' : 'stopped'} successfully.`);
+      } else if (result.succeeded === 0) {
+        addToast('error', `Failed to ${action} all ${result.failed} VM${result.failed !== 1 ? 's' : ''}.`);
       } else {
-        addToast('warning' as 'error', `${succeeded} succeeded, ${failed} failed.`);
+        addToast('warning' as 'error', `${result.succeeded} succeeded, ${result.failed} failed.`);
       }
 
       clearSelection();
@@ -163,6 +182,14 @@ export default function VMListPage() {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
+          </button>
+          <button
+            onClick={exportCredentials}
+            disabled={loading || vms.length === 0}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition disabled:opacity-40"
+          >
+            <Download className="w-3.5 h-3.5" />
+            Export Credentials
           </button>
           <Link
             href="/dashboard/admin/vms/create"

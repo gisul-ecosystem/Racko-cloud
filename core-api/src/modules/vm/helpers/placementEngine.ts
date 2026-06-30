@@ -7,6 +7,7 @@ import type { NodeResources, RequiredResources, StoragePool } from '../vm.types'
 
 /**
  * Select the best single node for VM placement.
+ * If templateNode is provided, always returns that node (template-aware placement).
  * excludeNodes: optional list of node names to skip (used for rerouting after failure).
  */
 export async function selectNode(
@@ -14,6 +15,21 @@ export async function selectNode(
   excludeNodes: string[] = []
 ): Promise<NodeResources> {
   const allNodes = await fetchNodeCapacities();
+
+  // Template-aware: pin to template node if specified
+  if (required.templateNode) {
+    const templateNodeResources = allNodes.find((n) => n.node === required.templateNode);
+    if (!templateNodeResources) {
+      throw new InsufficientResourcesError(
+        `Template node "${required.templateNode}" is offline or unavailable.`,
+        1,
+        0,
+        'nodes'
+      );
+    }
+    return templateNodeResources;
+  }
+
   const filtered = excludeNodes.length > 0
     ? allNodes.filter((n) => !excludeNodes.includes(n.node))
     : allNodes;
@@ -34,14 +50,44 @@ export async function selectNode(
 }
 
 /**
- * Select nodes for bulk VM creation, distributing VMs intelligently across nodes.
- * Returns array of {node, vmCount} allocations.
+ * Select nodes for bulk VM creation.
+ * If templateNode is provided (always the case for Proxmox clone flows),
+ * all VMs are pinned to that node — template-aware placement.
+ * Cross-node distribution only happens when shared storage (Ceph/NFS) is
+ * confirmed, which requires explicit multi-node setup.
  */
 export async function selectNodesForBulk(
   required: RequiredResources,
   count: number
 ): Promise<Array<{ node: string; vmCount: number }>> {
   const allNodes = await fetchNodeCapacities();
+
+  // Template-aware placement: always clone on the template's node.
+  // Linked clones require same-node (Proxmox enforces this).
+  // Dedicated clones with local storage also require same-node.
+  // Only distribute across nodes if shared storage is present — handled at
+  // the storage selection layer, not here.
+  if (required.templateNode) {
+    const templateNodeResources = allNodes.find((n) => n.node === required.templateNode);
+    if (!templateNodeResources) {
+      throw new InsufficientResourcesError(
+        `Template node "${required.templateNode}" is offline or unavailable.`,
+        count,
+        0,
+        'nodes'
+      );
+    }
+
+    logger.info('[Placement] Template-aware placement — pinning all VMs to template node', {
+      templateNode: required.templateNode,
+      count,
+      cloneType: required.cloneType,
+    });
+
+    return [{ node: required.templateNode, vmCount: count }];
+  }
+
+  // Legacy fallback (no templateNode provided): distribute across eligible nodes
   const eligible = filterEligibleNodes(allNodes, required);
 
   if (eligible.length === 0) {
@@ -70,7 +116,6 @@ export async function selectNodesForBulk(
       const cpuCapacity = Math.floor(effectiveFreeCpu(node) / required.cpuCores);
       nodeCapacity = Math.min(storageCapacity, ramCapacity, cpuCapacity);
     } else {
-      // dynamic_storage: distribute proportionally by score
       const totalScore = eligible.reduce((sum, n) => sum + n.score, 0);
       const proportion = totalScore > 0 ? node.score / totalScore : 1 / eligible.length;
       nodeCapacity = Math.ceil(count * proportion);
@@ -81,22 +126,6 @@ export async function selectNodesForBulk(
     const vmCount = Math.min(nodeCapacity, remaining);
     allocations.push({ node: node.node, vmCount });
     remaining -= vmCount;
-  }
-
-  if (remaining > 0 && required.cloneType === 'dedicated_storage') {
-    const maxPossible = count - remaining;
-    if (maxPossible === 0) {
-      throw new InsufficientResourcesError(
-        `Insufficient resources. You can create maximum ${maxPossible} VMs with these specs.`,
-        count,
-        maxPossible,
-        'storage'
-      );
-    }
-    logger.warn('Partial bulk allocation due to insufficient resources', {
-      requested: count,
-      allocated: maxPossible,
-    });
   }
 
   return allocations.filter((a) => a.vmCount > 0);
