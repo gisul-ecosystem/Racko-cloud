@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { machineManagerService } from './machine-manager.service';
+import { MachineModel } from './machine-manager.model';
+import { config } from '../../config';
 import type { AuthenticatedRequest } from '../../types';
 import type {
   CreateMachineInput,
@@ -179,7 +181,7 @@ export class MachineManagerController {
       };
 
       const entry = fileMap[osParam] ?? fileMap['windows'];
-      const binaryPath = path.resolve(process.cwd(), '..', 'agent', 'installer', 'dist', entry.file);
+      const binaryPath = path.resolve(process.cwd(), '..', 'agent', 'dist', entry.file);
 
       if (!fs.existsSync(binaryPath)) {
         res.status(404).json({
@@ -252,6 +254,56 @@ export class MachineManagerController {
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="${entry.name}"`);
       fs.createReadStream(binaryPath).pipe(res);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/v1/agent/install/linux?token=<accountToken>
+   * Serves a shell script that downloads the agent binary and installs it.
+   * The accountToken is embedded in the script so the agent can self-register.
+   * Usage: curl -fsSL <url> | sudo bash
+   */
+  async serveLinuxInstallScript(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const accountToken = req.query['token'] as string;
+      if (!accountToken) {
+        res.status(400).json({ success: false, message: 'token query param required.' });
+        return;
+      }
+
+      // Just check token exists — no need to consume it, script download is idempotent
+      const doc = await MachineModel.findOne({ accountToken });
+      if (!doc) {
+        res.status(404).json({ success: false, message: 'Invalid token.' });
+        return;
+      }
+
+      const platformUrl = config.GATEWAY_URL ?? config.API_URL ?? config.FRONTEND_URL ?? 'http://localhost:8000';
+
+      const script = `#!/bin/bash
+set -euo pipefail
+
+PLATFORM_URL="${platformUrl}"
+ACCOUNT_TOKEN="${accountToken}"
+BINARY_URL="${platformUrl}/api/v1/agent/binary/linux"
+INSTALL_DIR="/tmp"
+BINARY_PATH="$INSTALL_DIR/racko-agent"
+
+echo "[racko] Downloading agent..."
+curl -fsSL "$BINARY_URL" -o "$BINARY_PATH"
+chmod +x "$BINARY_PATH"
+
+echo "[racko] Installing agent..."
+PLATFORM_URL="$PLATFORM_URL" ACCOUNT_TOKEN="$ACCOUNT_TOKEN" "$BINARY_PATH" --install
+
+echo "[racko] Done. Check status: systemctl status racko-agent"
+`;
+
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.send(script);
     } catch (err) {
       next(err);
     }

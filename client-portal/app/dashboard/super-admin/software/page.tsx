@@ -8,12 +8,12 @@ import { Package, Plus, Pencil, PowerOff, RefreshCw, X, Check } from 'lucide-rea
 interface SoftwareItem {
   _id: string;
   name: string;
-  slug: string;
-  description?: string;
-  version?: string;
-  installScript: string;
-  estimatedMinutes: number;
-  isActive: boolean;
+  version: string;
+  supportedOS: string[];
+  installMethod: string;
+  aptName?: string;
+  installScript?: string;
+  isActive?: boolean;
   createdAt: string;
 }
 
@@ -32,6 +32,8 @@ const EMPTY_FORM = {
   description: '',
   version: '',
   installScript: '',
+  aptName: '',
+  supportedOS: ['windows'] as string[],
 };
 
 type FormState = typeof EMPTY_FORM;
@@ -50,18 +52,20 @@ function SoftwareModal({
   const isEdit = !!initial;
   const [form, setForm] = useState<FormState>(
     initial
-      ? {
+        ? {
           name: initial.name,
-          description: initial.description ?? '',
+          description: (initial as SoftwareItem & { description?: string }).description ?? '',
           version: initial.version ?? '',
-          installScript: initial.installScript,
+          installScript: initial.installScript ?? '',
+          aptName: initial.aptName ?? '',
+          supportedOS: initial.supportedOS ?? ['windows'],
         }
       : EMPTY_FORM
   );
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  function set(field: keyof FormState, value: string) {
+  function set<K extends keyof FormState>(field: K, value: FormState[K]) {
     setForm((prev) => ({ ...prev, [field]: value }));
   }
 
@@ -69,20 +73,23 @@ function SoftwareModal({
     setError(null);
     setSaving(true);
     try {
-      const body = {
+      const isLinux = (form.supportedOS as string[]).includes('linux');
+      const isWindows = (form.supportedOS as string[]).includes('windows');
+      const body: Record<string, unknown> = {
         name: form.name.trim(),
-        ...(form.description.trim() ? { description: form.description.trim() } : {}),
-        ...(form.version.trim() ? { version: form.version.trim() } : {}),
-        installScript: form.installScript.trim(),
+        version: form.version.trim() || 'latest',
+        supportedOS: form.supportedOS,
+        installMethod: isLinux && !isWindows ? 'apt' : 'script',
+        ...(form.aptName?.trim() ? { aptName: form.aptName.trim() } : {}),
       };
 
       if (isEdit) {
-        await apiRequest(`/api/v1/software/${initial!._id}`, {
+        await apiRequest(`/api/v1/software-catalog/${initial!._id}`, {
           method: 'PATCH',
           body: JSON.stringify(body),
         });
       } else {
-        await apiRequest('/api/v1/software', {
+        await apiRequest('/api/v1/software-catalog', {
           method: 'POST',
           body: JSON.stringify(body),
         });
@@ -97,7 +104,7 @@ function SoftwareModal({
 
   const valid =
     form.name.trim().length > 0 &&
-    form.installScript.trim().length > 0;
+    (form.supportedOS as string[]).length > 0;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
@@ -138,6 +145,32 @@ function SoftwareModal({
           </div>
 
           <div>
+            <label className={labelClass}>Supported OS</label>
+            <div className="flex gap-2">
+              {(['windows', 'linux'] as const).map(os => (
+                <button
+                  key={os}
+                  type="button"
+                  onClick={() => set('supportedOS',
+                    (form.supportedOS as string[]).includes(os)
+                      ? (form.supportedOS as string[]).filter(o => o !== os)
+                      : [...(form.supportedOS as string[]), os]
+                  )}
+                  className={`px-3 py-1.5 text-xs font-medium rounded-lg border transition ${
+                    (form.supportedOS as string[]).includes(os)
+                      ? os === 'linux'
+                        ? 'bg-orange-100 text-orange-700 border-orange-200'
+                        : 'bg-blue-100 text-blue-700 border-blue-200'
+                      : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'
+                  }`}
+                >
+                  {os === 'linux' ? 'Linux' : 'Windows'}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
             <label className={labelClass}>Description <span className="text-gray-400">(optional)</span></label>
             <input
               type="text"
@@ -147,6 +180,22 @@ function SoftwareModal({
               className={inputClass}
             />
           </div>
+
+          {(form.supportedOS as string[]).includes('linux') && (
+            <div>
+              <label className={labelClass}>apt package name <span className="text-gray-400">(Linux)</span></label>
+              <input
+                type="text"
+                value={form.aptName as string}
+                onChange={(e) => set('aptName', e.target.value)}
+                placeholder="nginx"
+                className={inputClass}
+              />
+              <p className="text-xs text-gray-400 mt-1">
+                Agent runs <code className="bg-gray-100 px-1 rounded">apt-get install -y &lt;package&gt;</code> on Linux machines.
+              </p>
+            </div>
+          )}
 
           <div>
             <label className={labelClass}>
@@ -210,10 +259,10 @@ export default function SoftwareManagementPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await apiRequest<ApiResponse<{ software: SoftwareItem[] }>>(
-        '/api/v1/software/all'
+      const res = await apiRequest<ApiResponse<{ catalog: SoftwareItem[] }>>(
+        '/api/v1/software-catalog'
       );
-      setItems(res.data.software);
+      setItems(res.data.catalog);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load software.');
     } finally {
@@ -226,7 +275,7 @@ export default function SoftwareManagementPage() {
   async function handleDeactivate(id: string) {
     setDeactivating(id);
     try {
-      await apiRequest(`/api/v1/software/${id}`, { method: 'DELETE' });
+      await apiRequest(`/api/v1/software-catalog/${id}`, { method: 'DELETE' });
       await load();
     } catch {
       // best-effort
@@ -329,7 +378,7 @@ export default function SoftwareManagementPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
-                {['Name', 'Version', 'Script preview', ''].map((h) => (
+                {['Name', 'Version', 'OS', 'Script preview', ''].map((h) => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wide first:px-6">
                     {h}
                   </th>
@@ -341,13 +390,26 @@ export default function SoftwareManagementPage() {
                 <tr key={sw._id} className="border-b border-gray-50 hover:bg-gray-50 transition-colors last:border-0">
                   <td className="px-6 py-3.5">
                     <p className="font-medium text-gray-900">{sw.name}</p>
-                    {sw.description && (
-                      <p className="text-xs text-gray-400 truncate max-w-[200px]">{sw.description}</p>
+                    {(sw as SoftwareItem & { description?: string }).description && (
+                      <p className="text-xs text-gray-400 truncate max-w-[200px]">{(sw as SoftwareItem & { description?: string }).description}</p>
                     )}
                   </td>
                   <td className="px-4 py-3.5 text-xs text-gray-500">{sw.version ?? '—'}</td>
+                  <td className="px-4 py-3.5">
+                    <div className="flex gap-1">
+                      {sw.supportedOS?.map(os => (
+                        <span key={os} className={`px-2 py-0.5 text-xs font-medium rounded-full border ${
+                          os === 'linux' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                          os === 'windows' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                          'bg-gray-100 text-gray-600 border-gray-200'
+                        }`}>
+                          {os}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
                   <td className="px-4 py-3.5 text-xs text-gray-400 font-mono truncate max-w-[260px]">
-                    {sw.installScript.split('\n')[0]}
+                    {sw.installScript?.split('\n')[0] ?? sw.aptName ?? sw.installMethod}
                   </td>
                   <td className="px-4 py-3.5">
                     <div className="flex items-center gap-2 justify-end">
@@ -393,9 +455,22 @@ export default function SoftwareManagementPage() {
                 <tr key={sw._id} className="border-b border-gray-50 last:border-0 opacity-60">
                   <td className="px-6 py-3.5">
                     <p className="font-medium text-gray-700">{sw.name}</p>
-                    <p className="text-xs text-gray-400 font-mono">{sw.slug}</p>
+                    <p className="text-xs text-gray-400 font-mono">{sw.installMethod}</p>
                   </td>
                   <td className="px-4 py-3.5 text-xs text-gray-400">{sw.version ?? '—'}</td>
+                  <td className="px-4 py-3.5">
+                    <div className="flex gap-1">
+                      {sw.supportedOS?.map(os => (
+                        <span key={os} className={`px-2 py-0.5 text-xs font-medium rounded-full border ${
+                          os === 'linux' ? 'bg-orange-100 text-orange-700 border-orange-200' :
+                          os === 'windows' ? 'bg-blue-100 text-blue-700 border-blue-200' :
+                          'bg-gray-100 text-gray-600 border-gray-200'
+                        }`}>
+                          {os}
+                        </span>
+                      ))}
+                    </div>
+                  </td>
                   <td className="px-4 py-3.5">
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-500">
                       <Check className="w-3 h-3" /> Inactive
