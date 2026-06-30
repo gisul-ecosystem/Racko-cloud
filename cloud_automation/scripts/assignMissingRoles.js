@@ -9,7 +9,7 @@ const {
   roleAssignmentIdFromSeed
 } = require('../src/provisioners/azure/roleProvisioner');
 const { getResourceGroupNameForUser } = require('../src/services/userResourceGroupService');
-
+ 
 const DEFAULT_ROLES = [
   'Azure AI Developer',
   'AzureML Compute Operator',
