@@ -6,7 +6,7 @@ import hpp from 'hpp';
 import morgan from 'morgan';
 import cookieParser from 'cookie-parser';
 import { v4 as uuidv4 } from 'uuid';
-import { config } from './config';
+import { allowedOrigins, config } from './config';
 import { logger } from './utils/logger';
 import { sanitizeInput } from './middleware/sanitize.middleware';
 import { globalErrorHandler, notFoundHandler } from './middleware/error.middleware';
@@ -85,16 +85,17 @@ app.use(
 );
 
 // 3. CORS — strict origin whitelist, no wildcards
-const allowedOrigins = config.NODE_ENV === 'development'
-  ? ['http://localhost:3000', 'http://localhost:3001', config.FRONTEND_URL]
-  : [config.FRONTEND_URL];
+const corsOrigins =
+  config.NODE_ENV === 'development'
+    ? ['http://localhost:3000', 'http://localhost:3001', ...allowedOrigins]
+    : allowedOrigins;
 
 app.use(
   cors({
     origin: (origin, callback) => {
       // Allow requests with no origin (server-to-server, curl in dev)
       if (!origin && config.NODE_ENV === 'development') return callback(null, true);
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      if (!origin || corsOrigins.includes(origin)) return callback(null, true);
       callback(new Error(`CORS: origin ${origin} not allowed`));
     },
     credentials: true,
