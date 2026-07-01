@@ -133,6 +133,8 @@ router.post('/api/v1/auth/login', loginFailedRateLimiter, loginSlowDown, coreApi
 router.post('/api/v1/auth/verify-email', verifyEmailRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/refresh', coreApiProxy);
 router.post('/api/v1/auth/logout', coreApiProxy);
+router.post('/api/v1/auth/forgot-password', coreApiProxy);
+router.post('/api/v1/auth/reset-password', coreApiProxy);
 
 // ─── PROTECTED AUTH ROUTES ────────────────────────────────────────────────────
 router.get('/api/v1/auth/me', authMiddleware, verifyMiddleware, coreApiProxy);

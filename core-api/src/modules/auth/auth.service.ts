@@ -17,6 +17,7 @@ import {
   sendVerificationEmail,
   sendLoginAlertEmail,
   sendAccountLockedEmail,
+  sendPasswordResetEmail,
 } from '../../utils/email/sender';
 import { logger } from '../../utils/logger';
 import { config } from '../../config';
@@ -659,6 +660,86 @@ export class AuthService {
       role: payload.role as UserRole,
       sessionId: payload.sessionId,
     };
+  }
+
+  /**
+   * Forgot password — sends a reset link via email.
+   * Always returns the same generic message to prevent email enumeration.
+   */
+  async forgotPassword(email: string, req: Request): Promise<void> {
+    const ip = getClientIp(req);
+    const userAgent = req.headers['user-agent'] ?? 'unknown';
+    const fingerprint = generateFingerprint(req);
+
+    const user = await User.findOne({ email: email.toLowerCase().trim() });
+
+    // Always log and return — never reveal whether email exists
+    if (!user || !user.isEmailVerified || !user.isActive) {
+      await AuditLog.create({
+        event: 'PASSWORD_RESET_REQUESTED',
+        ipAddress: ip,
+        userAgent,
+        deviceFingerprint: fingerprint,
+        metadata: { email, reason: 'user_not_found_or_inactive' },
+      });
+      return; // Silent — same response as success
+    }
+
+    const rawToken = generateSecureToken(32);
+    const hashedToken = hashToken(rawToken);
+
+    user.passwordResetToken = hashedToken;
+    user.passwordResetExpires = new Date(Date.now() + 1 * 60 * 1000); // 1 minute
+    await user.save();
+
+    await sendPasswordResetEmail(user.email, rawToken);
+
+    await AuditLog.create({
+      userId: user._id,
+      event: 'PASSWORD_RESET_REQUESTED',
+      ipAddress: ip,
+      userAgent,
+      deviceFingerprint: fingerprint,
+      metadata: { email },
+    });
+  }
+
+  /**
+   * Reset password using the token from the email link.
+   * Revokes all existing sessions after successful reset.
+   */
+  async resetPassword(token: string, newPassword: string, req: Request): Promise<void> {
+    const ip = getClientIp(req);
+    const userAgent = req.headers['user-agent'] ?? 'unknown';
+    const fingerprint = generateFingerprint(req);
+
+    const hashedToken = hashToken(token);
+
+    const user = await User.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: new Date() },
+    }).select('+password +passwordResetToken +passwordResetExpires');
+
+    if (!user) {
+      throw new AppError('Password reset link is invalid or has expired.', 400, 'INVALID_TOKEN');
+    }
+
+    // Set new password — pre-save hook hashes with argon2id and sets passwordChangedAt
+    user.password = newPassword;
+    user.passwordResetToken = undefined;
+    user.passwordResetExpires = undefined;
+    await user.save();
+
+    // Revoke all active refresh tokens for this user — forces re-login everywhere
+    await Token.updateMany({ userId: user._id, isRevoked: false }, { isRevoked: true });
+
+    await AuditLog.create({
+      userId: user._id,
+      event: 'PASSWORD_RESET_SUCCESS',
+      ipAddress: ip,
+      userAgent,
+      deviceFingerprint: fingerprint,
+    });
   }
 
   /**

@@ -3,7 +3,13 @@ import { authController } from './auth.controller';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireInternalSecret } from '../../middleware/internalSecret.middleware';
-import { registerSchema, loginSchema, verifyEmailSchema } from './auth.validation';
+import {
+  registerSchema,
+  loginSchema,
+  verifyEmailSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
+} from './auth.validation';
 
 const router = Router();
 
@@ -30,6 +36,14 @@ router.post('/refresh', (req, res, next) => {
 // Cookie-only — no access token required so sign-out always clears the session
 router.post('/logout', (req, res, next) => {
   authController.logout(req, res, next);
+});
+
+router.post('/forgot-password', validateRequest(forgotPasswordSchema), (req, res, next) => {
+  authController.forgotPassword(req, res, next);
+});
+
+router.post('/reset-password', validateRequest(resetPasswordSchema), (req, res, next) => {
+  authController.resetPassword(req, res, next);
 });
 
 // Protected routes

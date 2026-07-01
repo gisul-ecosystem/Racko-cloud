@@ -31,10 +31,10 @@ const envSchema = z.object({
   ARGON2_TIME_COST: z.string().regex(/^\d+$/).transform(Number).default('3'),
   ARGON2_PARALLELISM: z.string().regex(/^\d+$/).transform(Number).default('4'),
 
-  // SendGrid
-  SENDGRID_API_KEY: z.string().min(1, 'SENDGRID_API_KEY is required'),
-  SENDGRID_FROM_EMAIL: z.string().email('SENDGRID_FROM_EMAIL must be a valid email'),
-  SENDGRID_FROM_NAME: z.string().min(1, 'SENDGRID_FROM_NAME is required'),
+  // Email (Resend)
+  RESEND_API_KEY: z.string().min(1, 'RESEND_API_KEY is required'),
+  EMAIL_FROM_ADDRESS: z.string().email('EMAIL_FROM_ADDRESS must be a valid email'),
+  EMAIL_FROM_NAME: z.string().min(1, 'EMAIL_FROM_NAME is required'),
 
   // Frontend
   FRONTEND_URL: z.string().url('FRONTEND_URL must be a valid URL'),
