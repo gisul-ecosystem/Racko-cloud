@@ -38,6 +38,8 @@ const envSchema = z.object({
 
   // Frontend
   FRONTEND_URL: z.string().url('FRONTEND_URL must be a valid URL'),
+  /** Comma-separated browser origins (tenant domains). Defaults to FRONTEND_URL only. */
+  ALLOWED_ORIGINS: z.string().optional(),
 
   // Gateway / API base
   GATEWAY_URL: z.string().url('GATEWAY_URL must be a valid URL').optional().default('http://localhost:8000'),
@@ -187,3 +189,8 @@ if (!parsed.success) {
 
 export const config = parsed.data;
 export type Config = typeof config;
+
+export const allowedOrigins = (config.ALLOWED_ORIGINS ?? config.FRONTEND_URL)
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);

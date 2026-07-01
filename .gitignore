@@ -41,3 +41,5 @@ Thumbs.db
 certs/*.pem
 certs/*.crt
 certs/*.key
+
+nginx.conf
