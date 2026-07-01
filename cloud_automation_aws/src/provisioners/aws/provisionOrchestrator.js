@@ -16,6 +16,7 @@ import {
   logStepStart,
   updateStep,
 } from '../../services/progressTracker.js';
+import { createNotification } from '../../services/notificationService.js';
 
 function mapIdentityUsersForStorage(users = []) {
   return users.map((user) => ({
@@ -228,10 +229,26 @@ export async function run(requestId) {
     }
 
     console.log(`[orchestrator] Provisioning completed for ${requestId} (${request.accessType})`);
-    return complete(requestId);
+    const completedRequest = await complete(requestId);
+
+    await createNotification({
+      type: 'provisioning_complete',
+      title: 'AWS Lab provisioned successfully',
+      message: `Lab for ${completedRequest.customerEmail} provisioned — ${completedRequest.accountCount} users, ${completedRequest.region}, ${completedRequest.accessType === 'magic_link' ? 'Magic Link' : 'Identity Center'} access`,
+      requestId: completedRequest._id,
+    });
+
+    return completedRequest;
   } catch (err) {
     console.error(`[orchestrator] Failed for ${requestId}:`, err.message);
     await fail(requestId, err.message || 'Provisioning failed');
+
+    await createNotification({
+      type: 'provisioning_failed',
+      title: 'AWS Lab provisioning failed',
+      message: `Lab for ${request.customerEmail} failed at step ${request.currentStep || 0}: ${err.message}`,
+      requestId: request._id,
+    });
     request = await Request.findById(requestId);
     if (request) {
       await rollbackAll(request, context, isMagicLink);

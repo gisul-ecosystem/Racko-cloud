@@ -15,6 +15,7 @@ import BudgetEvent from '../models/BudgetEvent.js';
 import { generateAndLogConsoleUrl } from './consoleAccessService.js';
 import { cleanupUserResources, cleanupAllUsers } from './resourceCleanupService.js';
 import { countCleanupDeleted } from '../utils/cleanupMetrics.js';
+import { createNotification } from './notificationService.js';
 import { syncRequestUserSpend, fetchUserSpend } from './costTrackingService.js';
 import { attachLiveUsageToUsers } from './userLiveUsageService.js';
 import {
@@ -285,7 +286,16 @@ export async function generateUserConsoleUrl(requestId, userIndex) {
   }
 
   const sessionName = `racko-admin-u${userIndex + 1}-${String(requestId).slice(-6)}`;
-  return generateAndLogConsoleUrl(requestId, userIndex, role.roleArn, sessionName, durationSeconds);
+  const result = await generateAndLogConsoleUrl(requestId, userIndex, role.roleArn, sessionName, durationSeconds);
+
+  await createNotification({
+    type: 'console_access',
+    title: 'AWS Console access generated',
+    message: `Magic link generated for labuser${userIndex + 1} in Lab #${String(requestId).slice(-6)} by admin`,
+    requestId,
+  });
+
+  return result;
 }
 
 export async function suspendLabUser(requestId, userIndex) {
@@ -322,12 +332,13 @@ export async function reinstateLabUser(requestId, userIndex) {
     if (user.budgetExceeded) {
       const { reinstateUser } = await import('./budgetEnforcementService.js');
       await reinstateUser(request, user, accessType);
-    } else {
-      const { reinstateIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
-      const { sendReinstateCredentialsEmail } = await import('../provisioners/aws/emailProvisioner.js');
-      const newPassword = await reinstateIdentityUser(request, userIndex);
-      await sendReinstateCredentialsEmail(request, { ...user, password: newPassword }, newPassword);
+      return;
     }
+
+    const { reinstateIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
+    const { sendReinstateCredentialsEmail } = await import('../provisioners/aws/emailProvisioner.js');
+    const newPassword = await reinstateIdentityUser(request, userIndex);
+    await sendReinstateCredentialsEmail(request, { ...user, password: newPassword }, newPassword);
   } else {
     await Request.findOneAndUpdate(
       { _id: requestId, [`${field}.userIndex`]: userIndex },
@@ -351,6 +362,13 @@ export async function reinstateLabUser(requestId, userIndex) {
     },
     { arrayFilters: [{ 'state.userId': resolveUsageUserId(request, userIndex) }] }
   );
+
+  await createNotification({
+    type: 'user_reinstated',
+    title: 'User reinstated',
+    message: `labuser${userIndex + 1} reinstated by admin in Lab #${String(requestId).slice(-6)}`,
+    requestId,
+  });
 }
 
 export async function deleteLabUser(requestId, userIndex) {
@@ -495,14 +513,31 @@ export async function renewUserBudget(requestId, userIndex, topUpAmount) {
     reason: `Budget renewed by org admin. Top-up: $${amount}`,
   });
 
+  await createNotification({
+    type: 'budget_renewed',
+    title: 'Budget renewed',
+    message: `Budget renewed for labuser${userIndex + 1} in Lab #${String(requestId).slice(-6)} — +$${amount} added by org admin`,
+    requestId,
+  });
+
   return { newTotalBudget: newBudget, topUpAmount: amount };
 }
 
 export async function triggerUserCleanup(requestId, userIndex) {
   const results = await cleanupUserResources(requestId, userIndex);
+  const deletedCount = countCleanupDeleted(results);
+
+  await createNotification({
+    type: 'cleanup_ran',
+    title: 'AWS resource cleanup completed',
+    message: `Lab cleanup ran for labuser${userIndex + 1} — ${deletedCount} resource(s) removed`,
+    requestId,
+    metadata: results,
+  });
+
   return {
     results,
-    deletedCount: countCleanupDeleted(results),
+    deletedCount,
   };
 }
 

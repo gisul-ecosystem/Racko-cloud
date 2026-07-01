@@ -86,6 +86,14 @@ const enforceBudgetExceededForUser = async (user) => {
       reason: 'missing_user_email'
     });
   }
+
+  const { createNotification, NotificationType } = require('./notificationService');
+  await createNotification({
+    type: NotificationType.BUDGET_EXCEEDED,
+    title: 'Budget exceeded',
+    message: `${user.username} exceeded $${user.per_user_budget_usd} budget in Lab #${requestId} — account suspended`,
+    requestId
+  });
 };
 
 module.exports = {

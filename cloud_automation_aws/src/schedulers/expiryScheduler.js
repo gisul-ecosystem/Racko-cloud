@@ -2,6 +2,7 @@ import Request from '../models/Request.js';
 import { runExpiryCleanupForRequest } from '../services/labExpiryCleanupService.js';
 import { sendLabExpiryCleanupEmail } from '../services/cleanupEmailService.js';
 import { buildRequestLabel } from '../utils/cleanupMetrics.js';
+import { createNotification } from '../services/notificationService.js';
 
 let isRunning = false;
 
@@ -45,6 +46,13 @@ export async function runExpiryCheck() {
         }
 
         console.log(`[expiryScheduler] Expired and cleaned request ${request._id}`);
+
+        await createNotification({
+          type: 'lab_expired',
+          title: 'AWS Lab expired',
+          message: `AWS Lab for ${request.customerEmail} has expired`,
+          requestId: request._id,
+        });
       } catch (err) {
         console.error(`[expiryScheduler] Failed for ${request._id}:`, err.message);
 

@@ -2,6 +2,7 @@ const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const accessPortalService = require('./accessPortalService');
 const { enqueueEmail } = require('./emailQueueService');
+const { createNotification, NotificationType } = require('./notificationService');
 const {
   buildCredentialEmailHtml,
 } = require('./email/credentialEmailService');
@@ -41,7 +42,8 @@ const getRequestById = async (client, requestId) => {
       customer_email,
       account_count,
       status,
-      expiry_date
+      expiry_date,
+      location
     FROM requests
     WHERE id = $1
   `;
@@ -219,6 +221,13 @@ const sendCredentials = async (requestId) => {
         logCredentialEvent('info', 'credential_delivery_email_success', {
           requestId,
           recipientEmail: request.customer_email
+        });
+
+        await createNotification({
+          type: NotificationType.PROVISIONING_COMPLETE,
+          title: 'Lab provisioned successfully',
+          message: `Lab #${requestId} provisioned for ${request.customer_email} — ${request.account_count} users in ${request.location}`,
+          requestId: Number(requestId)
         });
       },
       onFailure: async (error) => {

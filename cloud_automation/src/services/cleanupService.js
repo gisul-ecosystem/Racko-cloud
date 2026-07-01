@@ -1,5 +1,6 @@
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
+const { createNotification, NotificationType } = require('./notificationService');
 const {
   createCleanupClients,
   deleteResourceGroupWithRetry,
@@ -497,6 +498,13 @@ const cleanupRequestById = async (requestId, trigger = 'manual') => {
       await finalizeClient.query('COMMIT');
 
       await logCleanup(requestId, 'cleanup_completed', 'success');
+
+      await createNotification({
+        type: NotificationType.LAB_EXPIRED,
+        title: 'Lab expired',
+        message: `Lab #${requestId} for ${request.customer_email || 'customer'} has expired and been cleaned up`,
+        requestId
+      });
 
       return {
         expired: updatedRequest.expired,

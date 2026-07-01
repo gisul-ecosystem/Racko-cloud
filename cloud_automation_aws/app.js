@@ -17,6 +17,7 @@ import { startSessionScheduler } from './src/schedulers/sessionScheduler.js';
 import { startExpiryScheduler } from './src/schedulers/expiryScheduler.js';
 import managePortalRoutes from './src/routes/managePortal.js';
 import orgAdminRoutes from './src/routes/orgAdmin.js';
+import notificationRoutes from './src/routes/notifications.js';
 
 const app = express();
 
@@ -28,6 +29,7 @@ app.use('/api', requestRoutes);
 app.use('/api', provisionRoutes);
 app.use('/api', managePortalRoutes);
 app.use('/api', orgAdminRoutes);
+app.use('/api', notificationRoutes);
 
 app.all('*', (req, res) => {
   res.status(404).json({
