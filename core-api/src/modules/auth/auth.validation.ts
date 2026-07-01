@@ -39,6 +39,24 @@ export const verifyEmailSchema = z.object({
   }),
 });
 
+export const forgotPasswordSchema = z.object({
+  body: z.object({
+    email: z
+      .string()
+      .min(1, 'Email is required')
+      .email('Invalid email format')
+      .toLowerCase()
+      .trim(),
+  }),
+});
+
+export const resetPasswordSchema = z.object({
+  body: z.object({
+    token: z.string().min(1, 'Token is required').max(256, 'Invalid token'),
+    password: passwordSchema,
+  }),
+});
+
 export type RegisterInput = z.infer<typeof registerSchema>['body'];
 export type LoginInput = z.infer<typeof loginSchema>['body'];
 export type VerifyEmailInput = z.infer<typeof verifyEmailSchema>['body'];

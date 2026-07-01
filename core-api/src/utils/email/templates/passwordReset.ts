@@ -1,25 +1,24 @@
 import { config } from '../../../config';
 
-export interface VerifyEmailTemplateData {
+export interface PasswordResetTemplateData {
   rawToken: string;
   platformName?: string;
 }
 
-export function buildVerifyEmailTemplate(data: VerifyEmailTemplateData): {
+export function buildPasswordResetTemplate(data: PasswordResetTemplateData): {
   subject: string;
   html: string;
   text: string;
 } {
   const platformName = data.platformName ?? config.EMAIL_FROM_NAME;
-  const verifyUrl = `${config.FRONTEND_URL}/verify-email?token=${data.rawToken}`;
-  const expiryHours = config.EMAIL_VERIFICATION_EXPIRES_HOURS;
+  const resetUrl = `${config.FRONTEND_URL}/reset-password?token=${data.rawToken}`;
 
   const html = `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Verify your email</title>
+  <title>Reset your password</title>
 </head>
 <body style="margin:0;padding:0;background-color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
   <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;padding:40px 0;">
@@ -35,19 +34,19 @@ export function buildVerifyEmailTemplate(data: VerifyEmailTemplateData): {
           <!-- Body -->
           <tr>
             <td style="padding:40px;">
-              <p style="margin:0 0 8px;font-size:24px;font-weight:700;color:#18181b;">Verify your email address</p>
-              <p style="margin:0 0 24px;font-size:15px;color:#71717a;line-height:1.6;">Thanks for signing up. Click the button below to verify your email address and activate your account.</p>
+              <p style="margin:0 0 8px;font-size:24px;font-weight:700;color:#18181b;">Reset your password</p>
+              <p style="margin:0 0 24px;font-size:15px;color:#71717a;line-height:1.6;">We received a request to reset the password for your account. Click the button below to set a new password. This link is valid for <strong style="color:#18181b;">1 minute</strong> and can only be used once.</p>
               <table cellpadding="0" cellspacing="0" style="margin:0 0 32px;">
                 <tr>
                   <td style="background:#B91C1C;border-radius:6px;">
-                    <a href="${verifyUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">Verify Email Address</a>
+                    <a href="${resetUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">Reset Password</a>
                   </td>
                 </tr>
               </table>
               <p style="margin:0 0 8px;font-size:13px;color:#a1a1aa;">If the button doesn't work, copy and paste this link into your browser:</p>
-              <p style="margin:0 0 24px;font-size:13px;color:#B91C1C;word-break:break-all;">${verifyUrl}</p>
+              <p style="margin:0 0 24px;font-size:13px;color:#B91C1C;word-break:break-all;">${resetUrl}</p>
               <hr style="border:none;border-top:1px solid #e4e4e7;margin:0 0 24px;" />
-              <p style="margin:0;font-size:13px;color:#a1a1aa;">This link expires in ${expiryHours} hours. If you didn't create an account, you can safely ignore this email.</p>
+              <p style="margin:0;font-size:13px;color:#a1a1aa;">If you didn't request a password reset, you can safely ignore this email. Your password will not change.</p>
             </td>
           </tr>
           <!-- Footer -->
@@ -63,16 +62,14 @@ export function buildVerifyEmailTemplate(data: VerifyEmailTemplateData): {
 </body>
 </html>`;
 
-  const text = `Verify your email — ${platformName}
+  const text = `Reset your password — ${platformName}
 
-Thanks for signing up. Please verify your email address to activate your account.
+We received a request to reset your password.
 
-Verification link:
-${verifyUrl}
+Reset link (valid for 1 minute, single-use):
+${resetUrl}
 
-This link expires in ${expiryHours} hours.
+If you didn't request a password reset, ignore this email. Your password will not change.`;
 
-If you didn't create an account with ${platformName}, you can safely ignore this email.`;
-
-  return { subject: `Verify your email — ${platformName}`, html, text };
+  return { subject: `Reset your password — ${platformName}`, html, text };
 }

@@ -19,6 +19,8 @@ export interface IUser extends Document {
   emailVerificationToken?: string;
   emailVerificationExpires?: Date;
   passwordChangedAt?: Date;
+  passwordResetToken?: string;
+  passwordResetExpires?: Date;
   createdBy?: mongoose.Types.ObjectId;  // admin who provisioned this user (null for self-registered)
   enrollmentKey: string;                // used for VM template agent auto-registration
   // MFA_SLOT: mfaEnabled: boolean (default: false)
@@ -91,6 +93,14 @@ const userSchema = new Schema<IUser, IUserModel>(
       type: Date,
     },
     passwordChangedAt: {
+      type: Date,
+    },
+    passwordResetToken: {
+      type: String,
+      select: false,
+      index: true,
+    },
+    passwordResetExpires: {
       type: Date,
     },
     createdBy: {

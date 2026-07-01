@@ -95,6 +95,27 @@ export class AuthController {
     }
   }
 
+  async forgotPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email } = req.body as { email: string };
+      await authService.forgotPassword(email, req);
+      // Always same response — prevents email enumeration
+      success(res, 'If an account with that email exists, a reset link has been sent.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async resetPassword(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { token, password } = req.body as { token: string; password: string };
+      await authService.resetPassword(token, password, req);
+      success(res, 'Password reset successful. You can now log in with your new password.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getCurrentUser(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as AuthenticatedRequest;
