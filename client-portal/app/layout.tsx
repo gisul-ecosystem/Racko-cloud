@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import { DemoModalProvider } from "@/components/ui/DemoModalContext";
 import ConditionalShell from "@/components/layout/ConditionalShell";
 import { GeistMono, GeistSans, fontVariables } from "@/lib/fonts";
-import { AuthProvider } from "@/context/AuthContext";
+import AuthProviderGate from "@/components/layout/AuthProviderGate";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -34,11 +34,11 @@ export default function RootLayout({
     >
       <body className="bg-bg-900 text-text-body font-sans antialiased">
         <DemoModalProvider>
-          <AuthProvider>
+          <AuthProviderGate>
             <ConditionalShell>
               {children}
             </ConditionalShell>
-          </AuthProvider>
+          </AuthProviderGate>
         </DemoModalProvider>
       </body>
     </html>
