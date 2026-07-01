@@ -343,6 +343,10 @@ export function RequestWorkspace() {
       access_type: accessType,
       start_date: startDate,
       end_date: endDate,
+      timezone:
+        typeof Intl !== 'undefined'
+          ? Intl.DateTimeFormat().resolvedOptions().timeZone
+          : timezone,
       enable_daily_usage: enableDailyUsage && normalizedUsageWindows.length > 0,
       usage_windows: normalizedUsageWindows,
       enable_resource_cleanup: enableResourceCleanup,

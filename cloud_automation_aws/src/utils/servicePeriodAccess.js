@@ -1,3 +1,5 @@
+import { formatServiceDateTime, resolveRequestTimezone } from './serviceDateTime.js';
+
 function accessError(message, statusCode = 403) {
   const err = new Error(message);
   err.statusCode = statusCode;
@@ -5,6 +7,7 @@ function accessError(message, statusCode = 403) {
 }
 
 export function evaluateServicePeriodAccess(request, at = new Date()) {
+  const timezone = resolveRequestTimezone(request);
   const start = request?.startDate ? new Date(request.startDate) : null;
   const end = request?.endDate ? new Date(request.endDate) : null;
 
@@ -24,7 +27,7 @@ export function evaluateServicePeriodAccess(request, at = new Date()) {
     return {
       allowed: false,
       reason: 'before_start',
-      message: `Lab access opens on ${start.toLocaleString()}.`,
+      message: `Lab access opens on ${formatServiceDateTime(start, timezone)}.`,
       startsAt: start,
       endsAt: end,
     };
