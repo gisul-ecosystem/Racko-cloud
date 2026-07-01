@@ -1,6 +1,7 @@
 const https = require('https');
 const { createDefaultHttpClient } = require('@azure/core-rest-pipeline');
 const { ClientSecretCredential } = require('@azure/identity');
+const { Client } = require('@microsoft/microsoft-graph-client');
 const AppError = require('../utils/AppError');
 const {
   logAzureEvent,
@@ -123,8 +124,35 @@ const ensureAzureManagementAccess = async () => {
   };
 };
 
+/**
+ * Microsoft Graph client for sign-in monitoring and account enforcement.
+ *
+ * Required Microsoft Graph API permissions (application permissions, admin consent):
+ *   AuditLog.Read.All — read sign-in logs (/auditLogs/signIns)
+ *   Directory.Read.All — read user info
+ *   User.ReadWrite.All — disable/enable accounts, revoke sessions
+ *
+ * Verify in Azure Portal → App registrations → API permissions.
+ * Smoke test: GET https://graph.microsoft.com/v1.0/auditLogs/signIns?$top=1
+ */
+const createGraphClient = () => {
+  const { tenantId, clientId, clientSecret } = getAzureContext();
+
+  const credential = createAzureCredential({ tenantId, clientId, clientSecret });
+
+  return Client.initWithMiddleware({
+    authProvider: {
+      getAccessToken: async () => {
+        const token = await credential.getToken('https://graph.microsoft.com/.default');
+        return token.token;
+      }
+    }
+  });
+};
+
 module.exports = {
   createAzureCredential,
+  createGraphClient,
   ensureAzureManagementAccess,
   getAzureContext,
   validateAzureEnv

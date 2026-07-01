@@ -1,4 +1,5 @@
 const db = require('../db/postgres');
+const { DateTime } = require('luxon');
 const { getHourlyRateForProvisionedResources } = require('./estimatePricingService');
 const { getProvisionedResourcesForRequest } = require('./serviceResourceProvisionService');
 
@@ -7,8 +8,7 @@ const ACTIVE_RESOURCE_STATUSES = new Set(['policy_configured', 'provisioned']);
 const roundCurrency = (value) => Number(Number(value || 0).toFixed(4));
 
 const getSessionStatsByUser = async (requestId) => {
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
+  const todayStart = DateTime.now().setZone('Asia/Kolkata').startOf('day').toUTC().toISO();
 
   const result = await db.query(
     `
@@ -41,12 +41,13 @@ const getSessionStatsByUser = async (requestId) => {
           0
         ) AS active_session_minutes,
         COUNT(*) FILTER (WHERE uus.logout_at IS NULL) AS active_session_count,
-        MAX(uus.login_at) FILTER (WHERE uus.logout_at IS NULL) AS active_login_at
+        MAX(uus.login_at) FILTER (WHERE uus.logout_at IS NULL) AS active_login_at,
+        MAX(COALESCE(uus.last_seen_at, uus.login_at)) FILTER (WHERE uus.logout_at IS NULL) AS active_last_seen_at
       FROM user_usage_sessions uus
       WHERE uus.request_id = $1
       GROUP BY uus.user_id
     `,
-    [requestId, todayStart.toISOString()]
+    [requestId, todayStart]
   );
 
   return new Map(
@@ -57,7 +58,8 @@ const getSessionStatsByUser = async (requestId) => {
         todayMinutes: Number(row.today_minutes || 0),
         activeSessionMinutes: Number(row.active_session_minutes || 0),
         activeSessionCount: Number(row.active_session_count || 0),
-        activeLoginAt: row.active_login_at
+        activeLoginAt: row.active_login_at,
+        activeLastSeenAt: row.active_last_seen_at
       }
     ])
   );
@@ -87,22 +89,29 @@ const attachLiveUsageToUsers = async (requestId, users, location, options = {}) 
   const liveUsage = await getLiveUsageForRequest(requestId, location);
 
   const enrichedUsers = users.map((user) => {
-    const sessionStats = liveUsage.sessionStatsByUser.get(user.id) || {
+    const userId = Number(user.id);
+    const sessionStats = liveUsage.sessionStatsByUser.get(userId) || {
       totalMinutesSpent: 0,
       todayMinutes: 0,
       activeSessionMinutes: 0,
       activeSessionCount: 0,
-      activeLoginAt: null
+      activeLoginAt: null,
+      activeLastSeenAt: null
     };
 
+    const storedTodayMinutes = Number(user.usedTodayMinutes || 0);
+    const sessionTodayMinutes = Number(sessionStats.todayMinutes || 0);
+    const todayMinutes = Math.max(storedTodayMinutes, sessionTodayMinutes);
     const lifetimeMinutes = Number(sessionStats.totalMinutesSpent || 0);
-    const totalHours = lifetimeMinutes / 60;
+    const activeSessionMinutes = Number(sessionStats.activeSessionMinutes || 0);
+    const hasActiveSession = sessionStats.activeSessionCount > 0;
     const liveCost =
-      liveUsage.hourlyResourceRate > 0 && totalHours > 0
-        ? roundCurrency(liveUsage.hourlyResourceRate * totalHours)
+      liveUsage.hourlyResourceRate > 0 && activeSessionMinutes > 0
+        ? roundCurrency((activeSessionMinutes / 60) * liveUsage.hourlyResourceRate)
         : 0;
 
     const liveResourceCount =
+      liveResourceCountByUser?.get(userId) ??
       liveResourceCountByUser?.get(user.id) ??
       user.liveResourceCount ??
       liveUsage.resourceCount;
@@ -112,13 +121,16 @@ const attachLiveUsageToUsers = async (requestId, users, location, options = {}) 
       liveResourceCount,
       resourceCount: liveResourceCount,
       totalMinutesSpent: Number(lifetimeMinutes.toFixed(2)),
-      todayMinutes: Number(sessionStats.todayMinutes.toFixed(2)),
-      activeSessionMinutes: Number(sessionStats.activeSessionMinutes.toFixed(2)),
+      todayMinutes: Number(todayMinutes.toFixed(2)),
+      usedTodayMinutes: Number(Math.max(storedTodayMinutes, todayMinutes).toFixed(2)),
+      activeSessionMinutes: Number(activeSessionMinutes.toFixed(2)),
       hourlyResourceRate: liveUsage.hourlyResourceRate,
       liveCost,
-      hasActiveSession: sessionStats.activeSessionCount > 0,
-      sessionActive: sessionStats.activeSessionCount > 0,
-      sessionStartedAt: sessionStats.activeLoginAt || null
+      hasActiveSession,
+      sessionActive: hasActiveSession,
+      sessionStartedAt: sessionStats.activeLoginAt || null,
+      lastSeenAt: sessionStats.activeLastSeenAt || null,
+      isOnline: hasActiveSession
     };
   });
 

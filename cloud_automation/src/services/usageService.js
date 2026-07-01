@@ -160,9 +160,10 @@ async function startUsageSession({ requestId, userId }) {
       INSERT INTO user_usage_sessions (
         request_id,
         user_id,
-        login_at
+        login_at,
+        last_seen_at
       )
-      VALUES ($1, $2, NOW())
+      VALUES ($1, $2, NOW(), NOW())
       RETURNING id, login_at
       `,
       [requestId, userId]

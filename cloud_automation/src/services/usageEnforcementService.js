@@ -4,6 +4,7 @@ const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const { getTodayLimitMinutes, resolveScheduleForRequest } = require('../utils/usageSchedule');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
+const { getLiveSessionMinutes, resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
 
 /**
  * Create Microsoft Graph client
@@ -160,8 +161,8 @@ async function enforceUsageLimit({ requestId, userId }) {
       };
     }
 
-    // Verify user exceeded limit
-    const usedMinutes = Number(data.used_today_minutes || 0);
+    const liveSessionMins = await getLiveSessionMinutes(requestId, userId);
+    const usedMinutes = Number(data.used_today_minutes || 0) + liveSessionMins;
     const schedule = resolveScheduleForRequest(data);
     const limitMinutes = schedule
       ? getTodayLimitMinutes(schedule)
@@ -193,22 +194,56 @@ async function enforceUsageLimit({ requestId, userId }) {
       UPDATE azure_users
       SET 
         blocked_until = (CURRENT_DATE + INTERVAL '1 day'),
+        blocked_reason = 'daily_limit_reached',
+        used_today_minutes = $3,
+        azure_account_enabled = false,
         status = 'Blocked'
       WHERE id = $1 AND request_id = $2
       `,
-      [userId, requestId]
+      [userId, requestId, usedMinutes]
     );
 
     // Close all active sessions
     await db.query(
       `
       UPDATE user_usage_sessions
-      SET logout_at = NOW()
+      SET
+        logout_at = NOW(),
+        minutes_used = EXTRACT(EPOCH FROM (NOW() - login_at)) / 60,
+        ended_reason = 'daily_limit_reached'
       WHERE request_id = $1 
         AND user_id = $2 
         AND logout_at IS NULL
       `,
       [requestId, userId]
+    );
+
+    const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
+    const { DateTime } = require('luxon');
+    const windowResult = await db.query(
+      `SELECT timezone FROM request_usage_windows WHERE request_id = $1 LIMIT 1`,
+      [requestId]
+    );
+    const tz =
+      windowResult.rows[0]?.timezone ||
+      resolveScheduleForRequest(data)?.timezone ||
+      'Asia/Kolkata';
+    const trackingDate = DateTime.now().setZone(tz).toISODate();
+    const consumedMinutes = await getConsumedMinutesToday(userId, trackingDate, tz);
+
+    await db.query(
+      `
+      INSERT INTO daily_usage_tracking
+        (request_id, azure_user_id, tracking_date, consumed_minutes, limit_reached_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (azure_user_id, tracking_date)
+      DO UPDATE SET
+        consumed_minutes = EXCLUDED.consumed_minutes,
+        limit_reached = TRUE,
+        limit_reached_at = NOW(),
+        updated_at = NOW()
+      `,
+      [requestId, userId, trackingDate, consumedMinutes]
     );
 
     // Log enforcement action
@@ -577,11 +612,151 @@ async function revokeAzureAccessForUser({ requestId, userId }) {
   };
 }
 
+/**
+ * Check all active sessions against daily limits including live elapsed time.
+ * Revokes Azure access when limit is reached.
+ */
+async function enforceUsageLimits() {
+  const users = await db.query(
+    `
+      SELECT
+        au.id AS user_id,
+        au.request_id,
+        au.username,
+        au.azure_user_id,
+        au.used_today_minutes,
+        au.last_reset_date,
+        au.blocked_until,
+        au.azure_account_enabled,
+        r.enable_daily_usage,
+        r.daily_limit_minutes,
+        r.usage_schedule,
+        r.enforce_in_azure,
+        uus.id AS active_session_id,
+        uus.login_at AS session_started_at
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      LEFT JOIN user_usage_sessions uus
+        ON uus.user_id = au.id
+       AND uus.request_id = au.request_id
+       AND uus.logout_at IS NULL
+      WHERE r.enable_daily_usage = true
+        AND COALESCE(r.daily_limit_minutes, 0) > 0
+        AND r.status = 'Completed'
+        AND COALESCE(r.expired, false) = false
+        AND (r.expiry_date IS NULL OR r.expiry_date > NOW())
+        AND COALESCE(au.is_deleted, false) = false
+        AND COALESCE(au.azure_account_enabled, true) = true
+        AND au.status != 'Blocked'
+    `
+  );
+
+  for (const user of users.rows) {
+    if (!user.enforce_in_azure) {
+      continue;
+    }
+
+    const request = {
+      enable_daily_usage: user.enable_daily_usage,
+      daily_limit_minutes: user.daily_limit_minutes,
+      usage_schedule: user.usage_schedule
+    };
+
+    const refreshedUser = await resetDailyCountersIfNeeded(
+      request,
+      user,
+      user.user_id,
+      user.request_id
+    );
+
+    let liveSessionMins = 0;
+    if (user.active_session_id && user.session_started_at) {
+      liveSessionMins = Math.floor(
+        (Date.now() - new Date(user.session_started_at).getTime()) / 60000
+      );
+    }
+
+    const access = evaluateUsageAccess({
+      request,
+      user: refreshedUser,
+      currentSessionMinutes: liveSessionMins
+    });
+
+    if (access.allowed) {
+      continue;
+    }
+
+    if (access.reason !== 'limit_exceeded' && access.reason !== 'blocked') {
+      continue;
+    }
+
+    console.log(
+      `[usageEnforcement] ${user.username} exceeded daily limit: ${access.usedMinutes}/${access.limitMinutes} mins`
+    );
+
+    await enforceUsageLimit({
+      requestId: user.request_id,
+      userId: user.user_id
+    });
+  }
+}
+
+async function restoreExpiredUsers() {
+  const users = await db.query(
+    `
+      SELECT
+        au.id AS user_id,
+        au.request_id,
+        au.azure_user_id,
+        au.username
+      FROM azure_users au
+      WHERE COALESCE(au.azure_account_enabled, true) = false
+        AND au.blocked_reason = 'daily_limit_reached'
+        AND au.blocked_until IS NOT NULL
+        AND au.blocked_until <= NOW()
+        AND COALESCE(au.is_deleted, false) = false
+    `
+  );
+
+  for (const user of users.rows) {
+    try {
+      if (user.azure_user_id) {
+        await restoreAzureAccess({
+          azureUserId: user.azure_user_id,
+          userId: user.user_id,
+          requestId: user.request_id
+        });
+      }
+
+      await db.query(
+        `
+          UPDATE azure_users
+          SET azure_account_enabled = true,
+              blocked_reason = NULL,
+              blocked_until = NULL,
+              used_today_minutes = 0,
+              status = 'Created'
+          WHERE id = $1
+        `,
+        [user.user_id]
+      );
+
+      console.log(`[usageEnforcement] Restored access for ${user.username}`);
+    } catch (error) {
+      console.error(`[usageEnforcement] Restore failed for ${user.username}:`, error.message);
+    }
+  }
+
+  return users.rows.length;
+}
+
 module.exports = {
   enforceUsageLimit,
+  enforceUsageLimits,
   enforceScheduleViolation,
   enforceBlockedAzureUsers,
   revokeAzureAccess,
   revokeAzureAccessForUser,
-  restoreAzureAccess
+  restoreAzureAccess,
+  restoreExpiredUsers
 };
