@@ -157,16 +157,6 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     }
   }, [selectedRequestId, refreshDetail]);
 
-  useEffect(() => {
-    if (selectedRequestId == null) return undefined;
-
-    const intervalId = window.setInterval(() => {
-      void refreshDetail();
-    }, 60_000);
-
-    return () => window.clearInterval(intervalId);
-  }, [selectedRequestId, refreshDetail]);
-
   const selectRequest = useCallback((requestId: number | null) => {
     setSelectedRequestId(requestId);
     setActionError(null);

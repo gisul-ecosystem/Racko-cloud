@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ChevronRight, Loader2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { OrgAdminBudgetTab } from './OrgAdminBudgetTab';
@@ -54,6 +54,18 @@ export function OrgAdminRequestDetailPanel({
 }: OrgAdminRequestDetailPanelProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('users');
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (activeTab !== 'users') {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      onRetry();
+    }, 60_000);
+
+    return () => window.clearInterval(intervalId);
+  }, [activeTab, onRetry]);
 
   const infoItems = [
     { label: 'Request', value: `#${request.id}` },

@@ -76,7 +76,7 @@ const getLiveResourceCountsByUser = async (users, sharedResourceGroup) => {
   for (const user of users) {
     const rgName = user.azure_resource_group_name || sharedResourceGroup;
     const rgKey = rgName ? String(rgName).toLowerCase() : '';
-    countsByUser.set(user.id, countsByRg.get(rgKey) ?? 0);
+    countsByUser.set(Number(user.id), countsByRg.get(rgKey) ?? 0);
   }
 
   return countsByUser;
@@ -132,7 +132,7 @@ const mapUserUsage = (row) => {
     hasActiveSession: false,
     sessionActive: false,
     sessionStartedAt: null,
-    lastLoginAt: row.last_login_at,
+    lastLoginAt: row.last_signin_at || row.last_session_login_at,
     resourceGroup: row.azure_resource_group_name || null,
     roles,
     azureAccountEnabled: row.azure_account_enabled !== false,
@@ -279,7 +279,8 @@ const getResourceGroupDetail = async (requestId) => {
           FROM user_usage_sessions uus
           WHERE uus.request_id = au.request_id
             AND uus.user_id = au.id
-        ) AS last_login_at,
+        ) AS last_session_login_at,
+        au.last_signin_at,
         COALESCE(
           (
             SELECT json_agg(

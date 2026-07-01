@@ -80,27 +80,36 @@ function DailyUsageBar({ usage }: { usage: OrgAdminDailyUsageEntry }) {
 }
 
 function TimeSpentCell({ user }: { user: OrgAdminUser }) {
-  const todayMinutes = user.todayMinutes ?? user.usedTodayMinutes ?? 0;
+  const usedTodayMinutes = user.usedTodayMinutes ?? user.todayMinutes ?? 0;
+  const todayMinutes = user.todayMinutes ?? usedTodayMinutes;
   const lifetimeMinutes = user.lifetimeMinutes ?? user.totalMinutesSpent ?? 0;
   const todayLabel = user.todayFormatted ?? formatMinutes(todayMinutes);
   const lifetimeLabel = user.lifetimeFormatted ?? formatMinutes(lifetimeMinutes);
+  const liveSessionMins = user.activeSessionMinutes ?? 0;
+  const remainingMins = user.remainingMinutes;
+  const limitMins = user.dailyLimitMinutes ?? 0;
 
-  if (todayMinutes <= 0 && lifetimeMinutes <= 0 && !user.hasActiveSession) {
-    return <span className="text-gray-400">0m</span>;
+  if (usedTodayMinutes <= 0 && lifetimeMinutes <= 0 && !user.hasActiveSession) {
+    return <span className="text-gray-400">0m used</span>;
   }
 
   return (
     <div>
-      <p className="font-medium text-gray-900">{todayLabel}</p>
-      <p className="text-[11px] text-gray-400">today</p>
-      {lifetimeMinutes > 0 && lifetimeMinutes !== todayMinutes && (
-        <p className="mt-0.5 text-[11px] text-gray-500">{lifetimeLabel} total</p>
+      <p className="font-medium text-gray-900">{formatMinutes(usedTodayMinutes)} used</p>
+      {limitMins > 0 && remainingMins != null && (
+        <p className="text-[11px] text-gray-500">{formatMinutes(remainingMins)} remaining</p>
       )}
-      {user.hasActiveSession && (user.activeSessionMinutes ?? 0) > 0 && (
+      {user.hasActiveSession && liveSessionMins > 0 && (
         <p className="mt-0.5 inline-flex items-center gap-1 text-xs text-green-700">
           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
-          Live +{formatMinutes(user.activeSessionMinutes)}
+          Live: {formatMinutes(liveSessionMins)}
         </p>
+      )}
+      {lifetimeMinutes > 0 && lifetimeMinutes !== usedTodayMinutes && (
+        <p className="mt-0.5 text-[11px] text-gray-400">{lifetimeLabel} total</p>
+      )}
+      {!user.hasActiveSession && todayLabel !== formatMinutes(usedTodayMinutes) && (
+        <p className="text-[11px] text-gray-400">{todayLabel} today</p>
       )}
     </div>
   );
@@ -414,7 +423,7 @@ export function OrgAdminUsersTable({
                         <div>
                           <span className="inline-flex items-center gap-1 text-xs font-medium text-green-700">
                             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
-                            Active
+                            Online
                           </span>
                           {user.sessionExpiresAt && showUsageTracking && (
                             <p className="mt-0.5 text-[11px] text-gray-400">
@@ -431,7 +440,7 @@ export function OrgAdminUsersTable({
                           )}
                           {user.sessionStartedAt && (
                             <p className="mt-0.5 text-[11px] text-gray-400">
-                              since {formatDateTime(user.sessionStartedAt)}
+                              Since {formatDateTime(user.sessionStartedAt)}
                             </p>
                           )}
                         </div>

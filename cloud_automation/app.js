@@ -115,6 +115,25 @@ const startServer = () => {
   startResourceCleanupScheduler();
   startBudgetSpendSyncScheduler();
   startWindowEnforcementScheduler();
+
+  if (process.env.USAGE_TRACKING_DEBUG === 'true') {
+    setInterval(async () => {
+      try {
+        const sessions = await pool.query(
+          'SELECT COUNT(*) FROM user_usage_sessions WHERE logout_at IS NULL'
+        );
+        const usage = await pool.query(
+          'SELECT username, used_today_minutes FROM azure_users WHERE used_today_minutes > 0 LIMIT 10'
+        );
+        console.log(
+          `[DEBUG] Open sessions: ${sessions.rows[0].count}, Users with usage: ${usage.rows.length}`
+        );
+      } catch (error) {
+        console.error('[DEBUG] Usage tracking check failed:', error.message);
+      }
+    }, 60000);
+  }
+
   server = app.listen(port, () => {
     console.log(`Service Catalog API listening on port ${port}`);
 
