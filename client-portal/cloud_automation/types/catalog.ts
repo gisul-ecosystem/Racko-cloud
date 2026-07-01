@@ -27,6 +27,8 @@ export interface ServiceRoleMapping {
   id?: number;
   serviceId: number;
   azure_role: string;
+  auto_assign?: boolean;
+  role_purpose?: string | null;
 }
 
 export interface CatalogInstance {
@@ -166,4 +168,6 @@ export interface AdminAccessRequestPayload {
 export interface ServiceRole {
   id: number;
   azure_role: string;
+  auto_assign?: boolean;
+  role_purpose?: string | null;
 }

@@ -1,5 +1,7 @@
 import Request from '../models/Request.js';
 import { cleanupUserResources } from '../services/resourceCleanupService.js';
+import { sendResourceCleanupEmail } from '../services/cleanupEmailService.js';
+import { buildRequestLabel, countCleanupDeleted } from '../utils/cleanupMetrics.js';
 
 let isRunning = false;
 
@@ -14,6 +16,7 @@ export async function runCleanupCheck() {
     const requests = await Request.find({
       status: 'Completed',
       cleanupEnabled: true,
+      enableResourceCleanup: { $ne: true },
       endDate: { $gte: new Date() },
     });
 
@@ -25,6 +28,9 @@ export async function runCleanupCheck() {
         request.accessType === 'identity_center'
           ? request.identityUsers || []
           : request.labRoles || [];
+
+      let requestDeletedCount = 0;
+      let requestHadCleanup = false;
 
       for (const role of users) {
         if (role.suspended) continue;
@@ -41,12 +47,48 @@ export async function runCleanupCheck() {
             `[cleanupScheduler] Cleaning request ${request._id} user ${role.userIndex + 1}`
           );
           try {
-            await cleanupUserResources(String(request._id), role.userIndex);
+            const results = await cleanupUserResources(String(request._id), role.userIndex);
+            requestDeletedCount += countCleanupDeleted(results);
+            requestHadCleanup = true;
             cleaned++;
           } catch (err) {
             console.error(
               `[cleanupScheduler] Failed for ${request._id} user ${role.userIndex}:`,
               err.message
+            );
+          }
+        }
+      }
+
+      if (requestHadCleanup) {
+        const intervalHours = request.cleanupIntervalHours || 2;
+        const nextCleanupAt = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
+
+        await Request.findByIdAndUpdate(request._id, {
+          cleanupNextRunAt: nextCleanupAt,
+          updatedAt: now,
+          $push: {
+            cleanupLogs: {
+              ranAt: now,
+              message: `Scheduled cleanup removed ${requestDeletedCount} resource(s) across lab users`,
+            },
+          },
+        });
+
+        if (request.customerEmail) {
+          try {
+            await sendResourceCleanupEmail({
+              to: request.customerEmail,
+              requestLabel: buildRequestLabel(request),
+              deletedCount: requestDeletedCount,
+              cleanedAt: now,
+              nextCleanupAt,
+              intervalHours,
+            });
+          } catch (emailErr) {
+            console.error(
+              `[cleanupScheduler] Cleanup email failed for ${request._id}:`,
+              emailErr.message
             );
           }
         }

@@ -197,6 +197,8 @@ const requestSchema = new mongoose.Schema(
     cleanupEnabled: { type: Boolean, default: false },
     cleanupIntervalHours: { type: Number },
     cleanupNextRunAt: Date,
+    cleanupCompleted: { type: Boolean, default: false },
+    expiryCleanupAt: Date,
     cleanupLogs: [cleanupLogSchema],
 
     perUserBudgetUsd: { type: Number, default: null },

@@ -15,8 +15,8 @@ export const FORM_STEPS = [
 
 export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
   return (
-    <nav aria-label="Request form progress" className="overflow-x-auto">
-      <ol className="flex min-w-max items-center gap-1">
+    <nav aria-label="Request form progress" className="w-full">
+      <ol className="flex w-full items-start">
         {FORM_STEPS.map((step, index) => {
           const completed = step.id < currentStep;
           const active = step.id === currentStep;
@@ -24,37 +24,46 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
           const showConnector = index < FORM_STEPS.length - 1;
 
           return (
-            <li key={step.id} className="flex items-center">
+            <li key={step.id} className="flex min-w-0 flex-1 items-start">
               <button
                 type="button"
                 disabled={!reachable}
                 onClick={() => reachable && onStepClick(step.id)}
-                className={`flex items-center gap-2 rounded-lg px-2 py-1.5 text-xs font-medium transition ${
-                  active
-                    ? 'text-[#B91C1C]'
-                    : completed
-                      ? 'text-gray-700 hover:text-[#B91C1C]'
-                      : reachable
-                        ? 'text-gray-500 hover:text-gray-700'
-                        : 'cursor-not-allowed text-gray-300'
+                title={step.label}
+                className={`flex w-full min-w-0 flex-col items-center px-0.5 transition ${
+                  reachable ? 'cursor-pointer' : 'cursor-not-allowed'
                 }`}
               >
                 <span
-                  className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full border text-[11px] font-semibold ${
-                    active
-                      ? 'border-[#B91C1C] bg-[#B91C1C] text-white'
-                      : completed
-                        ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
-                        : 'border-gray-200 bg-white text-gray-400'
+                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors ${
+                    completed
+                      ? 'bg-[#B91C1C] text-white'
+                      : active
+                        ? 'border-2 border-[#B91C1C] text-[#B91C1C]'
+                        : 'border-2 border-gray-200 text-gray-400'
                   }`}
                 >
-                  {completed ? <Check className="h-3.5 w-3.5" /> : step.id}
+                  {completed ? <Check className="h-4 w-4" /> : step.id}
                 </span>
-                <span className="hidden sm:inline">{step.label}</span>
-              </button>
-              {showConnector && (
                 <span
-                  className={`mx-1 hidden h-px w-4 sm:block ${
+                  className={`mt-1.5 max-w-full truncate text-center text-[10px] font-medium leading-tight sm:text-xs ${
+                    active
+                      ? 'text-[#B91C1C]'
+                      : completed
+                        ? 'text-gray-600'
+                        : reachable
+                          ? 'text-gray-500'
+                          : 'text-gray-300'
+                  }`}
+                >
+                  {step.label}
+                </span>
+              </button>
+
+              {showConnector && (
+                <div
+                  aria-hidden="true"
+                  className={`mx-1 mt-4 h-0.5 min-w-[6px] flex-1 shrink ${
                     completed ? 'bg-[#B91C1C]' : 'bg-gray-200'
                   }`}
                 />

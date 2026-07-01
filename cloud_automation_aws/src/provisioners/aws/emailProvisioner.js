@@ -188,6 +188,20 @@ function buildReinstateCredentialsEmail({ request, user, newPassword }) {
 </html>`;
 }
 
+const MAX_EMAIL_ATTEMPTS = 3;
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+function isRetryableEmailError(error) {
+  const statusCode = Number(error?.statusCode || error?.responseCode || error?.status);
+  const errorCode = String(error?.code || '').toUpperCase();
+
+  return (
+    [421, 450, 451, 452, 454, 455, 500, 502, 503, 504].includes(statusCode) ||
+    ['ETIMEDOUT', 'ECONNRESET', 'ESOCKET', 'EAUTH', 'ECONNECTION'].includes(errorCode)
+  );
+}
+
 async function sendEmail({ to, subject, html }) {
   const transport = buildTransport();
   if (!transport) {
@@ -204,6 +218,26 @@ async function sendEmail({ to, subject, html }) {
   });
 
   return { sent: true, mode: 'smtp' };
+}
+
+export async function sendEmailWithRetry({ to, subject, html }) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= MAX_EMAIL_ATTEMPTS; attempt += 1) {
+    try {
+      return await sendEmail({ to, subject, html });
+    } catch (error) {
+      lastError = error;
+
+      if (attempt === MAX_EMAIL_ATTEMPTS || !isRetryableEmailError(error)) {
+        throw error;
+      }
+
+      await sleep(500 * 2 ** (attempt - 1));
+    }
+  }
+
+  throw lastError;
 }
 
 export async function sendReinstateCredentialsEmail(request, user, newPassword) {

@@ -7,8 +7,7 @@ const usageService = require('./usageService');
 const { resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
 const {
   loadUsageWindowsByRequest,
-  isWithinUsageWindow,
-  isDailyHourLimitReachedToday
+  evaluateWindowDailyLimitAccess
 } = require('./usageWindowAccessService');
 
 /**
@@ -285,7 +284,6 @@ const monitorAzureSignIns = async () => {
       // Get user from map
       const user = trackedUsersMap.get(normalizedUserId);
       const usageWindows = usageWindowsByRequest.get(user.request_id) || [];
-      const windowTimezone = usageWindows[0]?.timezone || 'Asia/Kolkata';
 
       if (await isSignInAlreadyProcessed(signInId)) {
         continue;
@@ -307,18 +305,12 @@ const monitorAzureSignIns = async () => {
           at: loginTime
         });
       } else if (user.has_usage_windows) {
-        const withinWindow = isWithinUsageWindow(usageWindows, loginTime);
-        const limitReached = await isDailyHourLimitReachedToday(user.id, windowTimezone);
-
-        access = {
-          allowed: withinWindow && !limitReached,
-          reason: limitReached ? 'daily_hour_limit_reached' : withinWindow ? 'ok' : 'outside_window',
-          message: limitReached
-            ? 'Daily hour limit reached for today.'
-            : withinWindow
-              ? 'Access allowed.'
-              : 'Sign-in outside scheduled usage window.'
-        };
+        access = await evaluateWindowDailyLimitAccess({
+          requestId: user.request_id,
+          userId: user.id,
+          windows: usageWindows,
+          at: loginTime
+        });
       } else {
         access = { allowed: true, reason: 'ok' };
       }
@@ -329,7 +321,7 @@ const monitorAzureSignIns = async () => {
         );
 
         if (user.enable_daily_usage && user.enforce_in_azure) {
-          if (access.reason === 'limit_exceeded') {
+          if (access.reason === 'limit_exceeded' || access.reason === 'daily_hour_limit_reached') {
             usageEnforcementService
               .enforceUsageLimit({ requestId: user.request_id, userId: user.id })
               .catch((error) => console.error('[SIGNIN_MONITOR] Enforcement error:', error.message));
@@ -344,6 +336,10 @@ const monitorAzureSignIns = async () => {
               })
               .catch((error) => console.error('[SIGNIN_MONITOR] Schedule enforcement error:', error.message));
           }
+        } else if (user.has_usage_windows && access.reason === 'limit_exceeded') {
+          usageEnforcementService
+            .enforceUsageLimit({ requestId: user.request_id, userId: user.id })
+            .catch((error) => console.error('[SIGNIN_MONITOR] Window limit enforcement error:', error.message));
         }
 
         await markSignInProcessed({

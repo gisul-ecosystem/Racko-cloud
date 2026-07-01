@@ -249,7 +249,9 @@ const getServiceBundle = async () => {
         SELECT
           id,
           service_id,
-          azure_role
+          azure_role,
+          COALESCE(auto_assign, false) AS auto_assign,
+          role_purpose
         FROM service_role_mapping
         ORDER BY service_id, azure_role
       `
@@ -328,7 +330,9 @@ const getServiceBundle = async () => {
   const roles = rolesResult.rows.map((row) => ({
     id: Number(row.id),
     serviceId: Number(row.service_id),
-    azure_role: row.azure_role
+    azure_role: row.azure_role,
+    auto_assign: Boolean(row.auto_assign),
+    role_purpose: row.role_purpose || null
   }));
 
   const regions = regionsResult.rows.map((row) => ({
@@ -480,7 +484,9 @@ const getServiceRoles = async (serviceId) => {
     `
       SELECT
         id,
-        azure_role
+        azure_role,
+        COALESCE(auto_assign, false) AS auto_assign,
+        role_purpose
       FROM service_role_mapping
       WHERE service_id = $1
       ORDER BY azure_role
@@ -490,7 +496,9 @@ const getServiceRoles = async (serviceId) => {
 
   return result.rows.map((row) => ({
     id: Number(row.id),
-    azure_role: row.azure_role
+    azure_role: row.azure_role,
+    auto_assign: Boolean(row.auto_assign),
+    role_purpose: row.role_purpose || null
   }));
 };
 
