@@ -64,6 +64,21 @@ export function OrgAdminRequestDetailPanel({
       value: request.expiryDate ? new Date(request.expiryDate).toLocaleDateString() : '—',
     },
     { label: 'Users', value: String(request.userCount) },
+    ...(requestDetail?.liveSummary?.activeSessions
+      ? [{ label: 'Live sessions', value: String(requestDetail.liveSummary.activeSessions) }]
+      : []),
+    ...(requestDetail?.enableDailyUsage
+      ? [
+          {
+            label: 'Daily usage',
+            value: requestDetail.dailyLimitHours
+              ? `${requestDetail.dailyLimitHours}h/day`
+              : requestDetail.dailyLimitMinutes
+                ? `${Math.round(requestDetail.dailyLimitMinutes / 60)}h/day`
+                : 'Window only',
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -138,6 +153,7 @@ export function OrgAdminRequestDetailPanel({
           {activeTab === 'cleanup' && (
             <OrgAdminCleanupTab
               users={users}
+              request={requestDetail}
               requestId={request.id}
               saving={saving}
               onToggleCleanup={onToggleCleanup}

@@ -1,5 +1,8 @@
 import cron from 'node-cron';
 import Request from '../models/Request.js';
+import { runScheduledResourceCleanupForRequest } from '../services/labExpiryCleanupService.js';
+import { sendResourceCleanupEmail } from '../services/cleanupEmailService.js';
+import { buildRequestLabel } from '../utils/cleanupMetrics.js';
 
 let scheduledTask = null;
 
@@ -20,50 +23,35 @@ const logEvent = (level, event, details = {}) => {
   console.log(message);
 };
 
-function deleteResourcesInAccount(accountId) {
-  console.log('[ResourceCleanup] deleteResourcesInAccount stub for accountId:', accountId);
-}
-
 async function processResourceCleanup(request) {
   const requestId = request._id;
   logEvent('info', 'resource_cleanup_started', { requestId: String(requestId) });
 
-  const accountIds = request.awsAccountIds?.length
-    ? request.awsAccountIds
-    : request.awsAccountId
-      ? [request.awsAccountId]
-      : request.provisionedResources?.accounts?.map((entry) => entry.awsAccountId) || [];
+  const result = await runScheduledResourceCleanupForRequest(request);
 
-  for (const accountId of accountIds) {
-    if (accountId) {
-      deleteResourcesInAccount(accountId);
+  if (result.customerEmail) {
+    try {
+      await sendResourceCleanupEmail({
+        to: result.customerEmail,
+        requestLabel: buildRequestLabel(request),
+        deletedCount: result.deletedCount,
+        cleanedAt: result.cleanedAt,
+        nextCleanupAt: result.nextCleanupAt,
+        intervalHours: result.intervalHours,
+      });
+    } catch (emailErr) {
+      logEvent('error', 'resource_cleanup_email_failed', {
+        requestId: String(requestId),
+        error: emailErr.message,
+      });
     }
   }
 
-  const intervalHours =
-    request.resourceCleanupIntervalHours || request.cleanupIntervalHours || 4;
-  const now = new Date();
-  const nextRun = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
-
-  await Request.findByIdAndUpdate(requestId, {
-    resourceCleanupLastRanAt: now,
-    resourceCleanupNextRunAt: nextRun,
-    cleanupNextRunAt: nextRun,
-    $push: {
-      cleanupLogs: {
-        ranAt: now,
-        message: 'Resource cleanup ran',
-      },
-    },
-    updatedAt: now,
-  });
-
   logEvent('info', 'resource_cleanup_success', {
     requestId: String(requestId),
-    nextRun: nextRun.toISOString(),
+    deletedCount: result.deletedCount,
+    nextRun: result.nextCleanupAt.toISOString(),
   });
-
-  console.log('[Email] Cleanup notification to', request.customerEmail);
 }
 
 async function runResourceCleanupPoll() {
@@ -72,17 +60,10 @@ async function runResourceCleanupPoll() {
 
   const due = await Request.find({
     status: 'Completed',
-    $or: [{ enableResourceCleanup: true }, { cleanupEnabled: true }],
-    $and: [
-      {
-        $or: [
-          { resourceCleanupNextRunAt: { $lte: now } },
-          { cleanupNextRunAt: { $lte: now } },
-        ],
-      },
-    ],
+    enableResourceCleanup: true,
+    resourceCleanupNextRunAt: { $lte: now },
     endDate: { $gte: now },
-  }).sort({ resourceCleanupNextRunAt: 1, cleanupNextRunAt: 1 });
+  }).sort({ resourceCleanupNextRunAt: 1 });
 
   for (const request of due) {
     try {

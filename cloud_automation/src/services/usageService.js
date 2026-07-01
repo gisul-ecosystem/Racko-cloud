@@ -7,6 +7,10 @@ const {
   getTodayLimitMinutes,
   resolveScheduleForRequest
 } = require('../utils/usageSchedule');
+const {
+  loadUsageWindowsByRequest,
+  evaluateWindowDailyLimitAccess
+} = require('./usageWindowAccessService');
 
 async function getLiveSessionMinutes(client, requestId, userId) {
   const activeSessionResult = await client.query(
@@ -495,25 +499,80 @@ async function getActiveSessions() {
       au.used_today_minutes,
       au.last_reset_date,
       au.blocked_until,
+      au.azure_user_id,
+      EXISTS (
+        SELECT 1
+        FROM request_usage_windows ruw
+        WHERE ruw.request_id = r.id
+          AND ruw.daily_limit_hours IS NOT NULL
+      ) AS has_usage_windows,
       FLOOR(EXTRACT(EPOCH FROM (NOW() - uus.login_at)) / 60) as current_session_minutes
     FROM user_usage_sessions uus
     JOIN requests r ON r.id = uus.request_id
     JOIN azure_users au ON au.id = uus.user_id AND au.request_id = uus.request_id
     WHERE uus.logout_at IS NULL
-      AND r.enable_daily_usage = true
+      AND r.status NOT IN ('Cancelled', 'Expired')
+      AND COALESCE(r.expired, false) = false
+      AND (
+        r.enable_daily_usage = true
+        OR EXISTS (
+          SELECT 1
+          FROM request_usage_windows ruw
+          WHERE ruw.request_id = r.id
+            AND ruw.daily_limit_hours IS NOT NULL
+        )
+      )
     ORDER BY uus.login_at ASC
     `
   );
 
-  return result.rows.map((row) => {
+  const usageWindowsByRequest = await loadUsageWindowsByRequest([
+    ...new Set(result.rows.map((row) => row.request_id))
+  ]);
+
+  const mapped = [];
+
+  for (const row of result.rows) {
     const currentSessionMinutes = Number(row.current_session_minutes || 0);
+
+    if (row.has_usage_windows) {
+      const windows = usageWindowsByRequest.get(row.request_id) || [];
+      const windowAccess = await evaluateWindowDailyLimitAccess({
+        requestId: row.request_id,
+        userId: row.user_id,
+        windows,
+        at: new Date()
+      });
+
+      mapped.push({
+        sessionId: row.session_id,
+        requestId: row.request_id,
+        userId: row.user_id,
+        loginAt: row.login_at,
+        enforceInAzure: true,
+        currentSessionMinutes,
+        usedTodayMinutes: Number(windowAccess.consumedMinutes || 0),
+        dailyLimitMinutes: Number(windowAccess.limitMinutes || 0),
+        totalUsedMinutes: Number(windowAccess.consumedMinutes || 0),
+        withinWindow: windowAccess.withinWindow,
+        access: {
+          allowed: windowAccess.allowed,
+          reason: windowAccess.reason,
+          message: windowAccess.message,
+          remainingMinutes: windowAccess.remainingMinutes
+        },
+        request: row
+      });
+      continue;
+    }
+
     const access = evaluateUsageAccess({
       request: row,
       user: row,
       currentSessionMinutes
     });
 
-    return {
+    mapped.push({
       sessionId: row.session_id,
       requestId: row.request_id,
       userId: row.user_id,
@@ -526,8 +585,10 @@ async function getActiveSessions() {
       withinWindow: access.withinWindow,
       access,
       request: row
-    };
-  });
+    });
+  }
+
+  return mapped;
 }
 
 /**
@@ -639,9 +700,9 @@ async function forceLogoutUser({ requestId, userId }) {
 
     // Trigger Azure enforcement asynchronously
     usageEnforcementService
-      .enforceUsageLimit({ requestId, userId })
+      .revokeAzureAccessForUser({ requestId, userId })
       .catch((error) => {
-        console.error('[FORCE_LOGOUT] Error enforcing usage limit:', error);
+        console.error('[FORCE_LOGOUT] Error revoking Azure access:', error);
       });
 
     return {

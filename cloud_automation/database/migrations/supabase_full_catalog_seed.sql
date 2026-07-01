@@ -59,10 +59,10 @@ INSERT INTO public.services (
 ('Azure Functions', 'Compute', 'Contributor', 'Serverless compute', 0.00, true, true, 'Contributor', false, true, true, true, true),
 
 -- Storage & Databases
-('Azure Blob Storage', 'Storage & Databases', 'Storage Blob Data Contributor', 'Object storage', 0.02, true, true, 'Storage Blob Data Contributor', false, true, true, true, true),
+('Azure Blob Storage', 'Storage & Databases', 'Storage Account Contributor', 'Object storage', 0.02, true, true, 'Storage Account Contributor', false, true, true, true, true),
 ('Azure SQL Database', 'Storage & Databases', 'SQL DB Contributor', 'Managed SQL database', 0.15, true, true, 'SQL DB Contributor', false, true, true, true, true),
 ('Azure Cosmos DB', 'Storage & Databases', 'Cosmos DB Operator', 'Globally distributed NoSQL', 0.25, true, true, 'Cosmos DB Operator', false, true, true, true, true),
-('Azure Data Lake Storage', 'Storage & Databases', 'Storage Blob Data Contributor', 'Big data analytics storage', 0.03, true, true, 'Storage Blob Data Contributor', false, true, true, true, true),
+('Azure Data Lake Storage', 'Storage & Databases', 'Storage Account Contributor', 'Big data analytics storage', 0.03, true, true, 'Storage Account Contributor', false, true, true, true, true),
 
 -- Networking
 ('Azure Virtual Network (VNet)', 'Networking', 'Network Contributor', 'Private networking', 0.00, true, true, 'Network Contributor', false, true, true, true, false),
@@ -73,11 +73,11 @@ INSERT INTO public.services (
 
 -- Security & Identity
 ('Microsoft Entra ID (Azure AD)', 'Security & Identity', 'User Administrator', 'Identity and access management', 0.00, true, true, 'User Administrator', false, false, false, true, true),
-('Azure Key Vault', 'Security & Identity', 'Key Vault Secrets Officer', 'Secrets and certificates', 0.03, true, true, 'Key Vault Secrets Officer', false, true, true, true, true),
+('Azure Key Vault', 'Security & Identity', 'Contributor', 'Secrets and certificates', 0.03, true, true, 'Contributor', false, true, true, true, true),
 ('Microsoft Defender for Cloud', 'Security & Identity', 'Security Admin', 'Threat protection', 0.15, true, true, 'Security Admin', false, true, true, true, false),
 
 -- Integration & Messaging
-('Azure Service Bus', 'Integration & Messaging', 'Azure Service Bus Data Owner', 'Enterprise messaging', 0.05, true, true, 'Azure Service Bus Data Owner', false, true, true, true, true),
+('Azure Service Bus', 'Integration & Messaging', 'Contributor', 'Enterprise messaging', 0.05, true, true, 'Contributor', false, true, true, true, true),
 ('Azure Event Grid', 'Integration & Messaging', 'EventGrid Contributor', 'Event routing', 0.00, true, true, 'EventGrid Contributor', false, true, true, true, true),
 ('Azure Logic Apps', 'Integration & Messaging', 'Logic App Contributor', 'Workflow automation', 0.08, true, true, 'Logic App Contributor', false, true, true, true, true),
 
@@ -90,7 +90,7 @@ INSERT INTO public.services (
 ('Azure OpenAI Service', 'AI & Machine Learning', 'Cognitive Services OpenAI Contributor', 'GPT models and generative AI', 0.20, true, true, 'Cognitive Services OpenAI Contributor', false, true, true, true, true),
 ('Azure AI Foundry', 'AI & Machine Learning', 'Azure AI Developer', 'Build and manage AI solutions', 0.15, true, true, 'Azure AI Developer', false, true, true, true, true),
 ('Azure AI Search', 'AI & Machine Learning', 'Search Service Contributor', 'Vector and enterprise search', 0.12, true, true, 'Search Service Contributor', false, true, true, true, true),
-('Azure Machine Learning', 'AI & Machine Learning', 'AzureML Data Scientist', 'ML model training and deployment', 0.18, true, true, 'AzureML Data Scientist', false, true, true, true, true),
+('Azure Machine Learning', 'AI & Machine Learning', 'Contributor', 'ML model training and deployment', 0.18, true, true, 'Contributor', false, true, true, true, true),
 ('Azure AI Vision', 'AI & Machine Learning', 'Cognitive Services Contributor', 'Image analysis and OCR', 0.05, true, true, 'Cognitive Services Contributor', false, true, true, true, true),
 ('Azure AI Language', 'AI & Machine Learning', 'Cognitive Services Contributor', 'Text analytics and NLP', 0.05, true, true, 'Cognitive Services Contributor', false, true, true, true, true),
 ('Azure AI Speech', 'AI & Machine Learning', 'Cognitive Services Contributor', 'Speech-to-text and text-to-speech', 0.05, true, true, 'Cognitive Services Contributor', false, true, true, true, true),
@@ -114,81 +114,89 @@ END $$;
 -- ============================================================
 -- STEP 4: RBAC role mapping (suggested role + common alternates)
 -- ============================================================
-INSERT INTO public.service_role_mapping (service_id, azure_role, role_type, scope_type, auto_assign, created_at)
-SELECT s.id, r.azure_role, 'builtin', 'resource_group', r.azure_role = s.default_role, NOW()
+ALTER TABLE public.service_role_mapping
+  ADD COLUMN IF NOT EXISTS role_purpose TEXT;
+
+INSERT INTO public.service_role_mapping (service_id, azure_role, role_type, scope_type, auto_assign, role_purpose, created_at)
+SELECT s.id, r.azure_role, 'builtin', 'resource_group', r.auto_assign, r.role_purpose, NOW()
 FROM public.services s
 JOIN (
   VALUES
     -- Compute
-    ('Azure Virtual Machines (VMs)', 'Virtual Machine Contributor'),
-    ('Azure Virtual Machines (VMs)', 'Virtual Machine User Login'),
-    ('Azure Virtual Machines (VMs)', 'Virtual Machine Administrator Login'),
-    ('Azure Kubernetes Service (AKS)', 'Azure Kubernetes Service Cluster Admin Role'),
-    ('Azure Kubernetes Service (AKS)', 'Azure Kubernetes Service Cluster User Role'),
-    ('Azure App Service', 'Website Contributor'),
-    ('Azure App Service', 'Contributor'),
-    ('Azure Functions', 'Contributor'),
-    ('Azure Functions', 'Website Contributor'),
+    ('Azure Virtual Machines (VMs)', 'Virtual Machine Contributor', true, 'control_plane'),
+    ('Azure Virtual Machines (VMs)', 'Virtual Machine User Login', false, 'control_plane'),
+    ('Azure Virtual Machines (VMs)', 'Virtual Machine Administrator Login', false, 'control_plane'),
+    ('Azure Kubernetes Service (AKS)', 'Azure Kubernetes Service Cluster Admin Role', true, 'control_plane'),
+    ('Azure Kubernetes Service (AKS)', 'Azure Kubernetes Service Cluster User Role', false, 'control_plane'),
+    ('Azure App Service', 'Website Contributor', true, 'control_plane'),
+    ('Azure App Service', 'Contributor', false, 'control_plane'),
+    ('Azure Functions', 'Contributor', true, 'control_plane'),
+    ('Azure Functions', 'Website Contributor', false, 'control_plane'),
 
     -- Storage & Databases
-    ('Azure Blob Storage', 'Storage Blob Data Contributor'),
-    ('Azure Blob Storage', 'Storage Blob Data Reader'),
-    ('Azure Blob Storage', 'Storage Blob Data Owner'),
-    ('Azure SQL Database', 'SQL DB Contributor'),
-    ('Azure Cosmos DB', 'Cosmos DB Operator'),
-    ('Azure Cosmos DB', 'Cosmos DB Account Reader Role'),
-    ('Azure Data Lake Storage', 'Storage Blob Data Contributor'),
+    ('Azure Blob Storage', 'Storage Account Contributor', true, 'control_plane'),
+    ('Azure Blob Storage', 'Storage Blob Data Contributor', true, 'data_plane'),
+    ('Azure Blob Storage', 'Storage Blob Data Reader', false, 'data_plane'),
+    ('Azure Blob Storage', 'Storage Blob Data Owner', false, 'data_plane'),
+    ('Azure SQL Database', 'SQL DB Contributor', true, 'control_plane'),
+    ('Azure Cosmos DB', 'Cosmos DB Operator', true, 'control_plane'),
+    ('Azure Cosmos DB', 'Cosmos DB Account Reader Role', false, 'control_plane'),
+    ('Azure Data Lake Storage', 'Storage Account Contributor', true, 'control_plane'),
+    ('Azure Data Lake Storage', 'Storage Blob Data Contributor', true, 'data_plane'),
 
     -- Networking
-    ('Azure Virtual Network (VNet)', 'Network Contributor'),
-    ('Azure Virtual Network (VNet)', 'Network Reader'),
-    ('Azure CDN', 'CDN Endpoint Contributor'),
-    ('Azure Load Balancer', 'Network Contributor'),
-    ('Azure Application Gateway', 'Application Gateway Contributor'),
-    ('Azure ExpressRoute', 'Network Contributor'),
+    ('Azure Virtual Network (VNet)', 'Network Contributor', true, 'control_plane'),
+    ('Azure Virtual Network (VNet)', 'Network Reader', false, 'control_plane'),
+    ('Azure CDN', 'CDN Endpoint Contributor', true, 'control_plane'),
+    ('Azure Load Balancer', 'Network Contributor', true, 'control_plane'),
+    ('Azure Application Gateway', 'Application Gateway Contributor', true, 'control_plane'),
+    ('Azure ExpressRoute', 'Network Contributor', true, 'control_plane'),
 
     -- Security & Identity
-    ('Microsoft Entra ID (Azure AD)', 'User Administrator'),
-    ('Microsoft Entra ID (Azure AD)', 'Directory Readers'),
-    ('Azure Key Vault', 'Key Vault Secrets Officer'),
-    ('Azure Key Vault', 'Key Vault Secrets User'),
-    ('Azure Key Vault', 'Key Vault Reader'),
-    ('Microsoft Defender for Cloud', 'Security Admin'),
-    ('Microsoft Defender for Cloud', 'Security Reader'),
+    ('Microsoft Entra ID (Azure AD)', 'User Administrator', true, 'control_plane'),
+    ('Microsoft Entra ID (Azure AD)', 'Directory Readers', false, 'control_plane'),
+    ('Azure Key Vault', 'Contributor', true, 'control_plane'),
+    ('Azure Key Vault', 'Key Vault Secrets Officer', true, 'data_plane'),
+    ('Azure Key Vault', 'Key Vault Secrets User', false, 'data_plane'),
+    ('Azure Key Vault', 'Key Vault Reader', false, 'data_plane'),
+    ('Microsoft Defender for Cloud', 'Security Admin', true, 'control_plane'),
+    ('Microsoft Defender for Cloud', 'Security Reader', false, 'control_plane'),
 
     -- Integration & Messaging
-    ('Azure Service Bus', 'Azure Service Bus Data Owner'),
-    ('Azure Service Bus', 'Azure Service Bus Data Sender'),
-    ('Azure Service Bus', 'Azure Service Bus Data Receiver'),
-    ('Azure Event Grid', 'EventGrid Contributor'),
-    ('Azure Logic Apps', 'Logic App Contributor'),
+    ('Azure Service Bus', 'Contributor', true, 'control_plane'),
+    ('Azure Service Bus', 'Azure Service Bus Data Owner', true, 'data_plane'),
+    ('Azure Service Bus', 'Azure Service Bus Data Sender', false, 'data_plane'),
+    ('Azure Service Bus', 'Azure Service Bus Data Receiver', false, 'data_plane'),
+    ('Azure Event Grid', 'EventGrid Contributor', true, 'control_plane'),
+    ('Azure Logic Apps', 'Logic App Contributor', true, 'control_plane'),
 
     -- Monitoring & DevOps
-    ('Azure Monitor', 'Monitoring Contributor'),
-    ('Azure Monitor', 'Monitoring Reader'),
-    ('Application Insights', 'Monitoring Contributor'),
-    ('Application Insights', 'Monitoring Reader'),
-    ('Azure DevOps', 'Project Administrator'),
-    ('Azure DevOps', 'Contributor'),
+    ('Azure Monitor', 'Monitoring Contributor', true, 'control_plane'),
+    ('Azure Monitor', 'Monitoring Reader', false, 'control_plane'),
+    ('Application Insights', 'Monitoring Contributor', true, 'control_plane'),
+    ('Application Insights', 'Monitoring Reader', false, 'control_plane'),
+    ('Azure DevOps', 'Project Administrator', true, 'control_plane'),
+    ('Azure DevOps', 'Contributor', false, 'control_plane'),
 
     -- AI & Machine Learning
-    ('Azure OpenAI Service', 'Cognitive Services OpenAI Contributor'),
-    ('Azure OpenAI Service', 'Cognitive Services User'),
-    ('Azure AI Foundry', 'Azure AI Developer'),
-    ('Azure AI Search', 'Search Service Contributor'),
-    ('Azure AI Search', 'Search Index Data Contributor'),
-    ('Azure Machine Learning', 'AzureML Data Scientist'),
-    ('Azure Machine Learning', 'AzureML Compute Operator'),
-    ('Azure AI Vision', 'Cognitive Services Contributor'),
-    ('Azure AI Vision', 'Cognitive Services User'),
-    ('Azure AI Language', 'Cognitive Services Contributor'),
-    ('Azure AI Language', 'Cognitive Services User'),
-    ('Azure AI Speech', 'Cognitive Services Contributor'),
-    ('Azure AI Speech', 'Cognitive Services User'),
-    ('Azure Bot Service', 'Contributor'),
-    ('Azure AI Document Intelligence', 'Cognitive Services Contributor'),
-    ('Azure AI Document Intelligence', 'Cognitive Services User')
-) AS r(service_name, azure_role) ON s.name = r.service_name;
+    ('Azure OpenAI Service', 'Cognitive Services OpenAI Contributor', true, 'control_plane'),
+    ('Azure OpenAI Service', 'Cognitive Services User', false, 'data_plane'),
+    ('Azure AI Foundry', 'Azure AI Developer', true, 'control_plane'),
+    ('Azure AI Search', 'Search Service Contributor', true, 'control_plane'),
+    ('Azure AI Search', 'Search Index Data Contributor', false, 'data_plane'),
+    ('Azure Machine Learning', 'Contributor', true, 'control_plane'),
+    ('Azure Machine Learning', 'AzureML Data Scientist', true, 'data_plane'),
+    ('Azure Machine Learning', 'AzureML Compute Operator', false, 'data_plane'),
+    ('Azure AI Vision', 'Cognitive Services Contributor', true, 'control_plane'),
+    ('Azure AI Vision', 'Cognitive Services User', false, 'data_plane'),
+    ('Azure AI Language', 'Cognitive Services Contributor', true, 'control_plane'),
+    ('Azure AI Language', 'Cognitive Services User', false, 'data_plane'),
+    ('Azure AI Speech', 'Cognitive Services Contributor', true, 'control_plane'),
+    ('Azure AI Speech', 'Cognitive Services User', false, 'data_plane'),
+    ('Azure Bot Service', 'Contributor', true, 'control_plane'),
+    ('Azure AI Document Intelligence', 'Cognitive Services Contributor', true, 'control_plane'),
+    ('Azure AI Document Intelligence', 'Cognitive Services User', false, 'data_plane')
+) AS r(service_name, azure_role, auto_assign, role_purpose) ON s.name = r.service_name;
 
 -- ============================================================
 -- STEP 5: Instance options

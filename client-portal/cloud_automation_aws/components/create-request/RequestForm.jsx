@@ -53,8 +53,6 @@ export function RequestForm({
   onCustomerEmailChange,
   accountCount,
   onAccountCountChange,
-  costingMode,
-  onCostingModeChange,
   accessType,
   onAccessTypeChange,
   startDate,
@@ -127,7 +125,7 @@ export function RequestForm({
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="rounded-xl border border-gray-200 bg-white px-3 py-4 shadow-sm sm:px-5">
         <RequestStepper
           currentStep={currentStep}
           maxReachableStep={maxReachableStep}
@@ -180,45 +178,6 @@ export function RequestForm({
                 onChange={(event) => onAccountCountChange(Number(event.target.value))}
                 required
               />
-            </div>
-            <div className="sm:col-span-2">
-              <span className={labelClass}>Account costing mode</span>
-              <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/40">
-                  <input
-                    type="radio"
-                    name="costingMode"
-                    value="shared"
-                    checked={costingMode === 'shared'}
-                    onChange={() => onCostingModeChange('shared')}
-                    className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
-                  />
-                  <span>
-                    <span className="block text-sm font-medium text-gray-900">Shared account</span>
-                    <span className="mt-1 block text-xs text-gray-500">
-                      Shared = all users in one AWS account. Best for shared labs and total request
-                      costing.
-                    </span>
-                  </span>
-                </label>
-                <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/40">
-                  <input
-                    type="radio"
-                    name="costingMode"
-                    value="per_user"
-                    checked={costingMode === 'per_user'}
-                    onChange={() => onCostingModeChange('per_user')}
-                    className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
-                  />
-                  <span>
-                    <span className="block text-sm font-medium text-gray-900">Per-user accounts</span>
-                    <span className="mt-1 block text-xs text-gray-500">
-                      Per User = one AWS account per user (stronger isolation, required for per-user
-                      budgets).
-                    </span>
-                  </span>
-                </label>
-              </div>
             </div>
 
             <div className="sm:col-span-2">
@@ -555,12 +514,6 @@ export function RequestForm({
                 is automatically disabled and they receive an email notification. An admin must
                 renew their budget to restore access.
               </p>
-              {costingMode === 'shared' && (
-                <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  ⚠ Per-user budgets work best with Per User costing mode. In Shared mode, budget
-                  tracking is per-account, not per-user.
-                </div>
-              )}
             </div>
           )}
         </section>

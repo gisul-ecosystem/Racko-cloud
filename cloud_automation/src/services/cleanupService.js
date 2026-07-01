@@ -469,6 +469,26 @@ const cleanupRequestById = async (requestId, trigger = 'manual') => {
       resourceGroupsDeleted
     } = await executeAzureResourceCleanup(requestId, request);
 
+    await db.query(
+      `
+        DELETE FROM user_role_assignments
+        WHERE request_id = $1
+      `,
+      [requestId]
+    );
+
+    await db.query(
+      `
+        UPDATE azure_users
+        SET
+          azure_account_enabled = FALSE,
+          status = 'Expired',
+          is_deleted = TRUE
+        WHERE request_id = $1
+      `,
+      [requestId]
+    );
+
     const finalizeClient = await db.connect();
 
     try {

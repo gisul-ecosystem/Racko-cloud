@@ -6,7 +6,7 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /cosmos\s*db/i,
     mappings: [
-      { instanceOption: 'Serverless', azureRole: 'Cosmos DB Account Reader Role' },
+      { instanceOption: 'Serverless', azureRole: 'Cosmos DB Operator' },
       { instanceOption: 'Provisioned Throughput', azureRole: 'Cosmos DB Operator' },
       { instanceOption: 'Autoscale', azureRole: 'Cosmos DB Operator' }
     ]
@@ -105,7 +105,7 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /openai service/i,
     mappings: [
-      { instanceOption: 'Embeddings', azureRole: 'Cognitive Services User' },
+      { instanceOption: 'Embeddings', azureRole: 'Cognitive Services OpenAI Contributor' },
       { instanceOption: 'GPT-4o', azureRole: 'Cognitive Services OpenAI Contributor' },
       { instanceOption: 'GPT-4.1', azureRole: 'Cognitive Services OpenAI Contributor' },
       { instanceOption: 'GPT-4 Turbo', azureRole: 'Cognitive Services OpenAI Contributor' }
@@ -122,7 +122,7 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /ai search/i,
     mappings: [
-      { instanceOption: 'Basic', azureRole: 'Search Index Data Contributor' },
+      { instanceOption: 'Basic', azureRole: 'Search Service Contributor' },
       { instanceOption: 'Standard S1', azureRole: 'Search Service Contributor' },
       { instanceOption: 'Standard S2', azureRole: 'Search Service Contributor' }
     ]
@@ -138,28 +138,28 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /ai vision/i,
     mappings: [
-      { instanceOption: 'Free', azureRole: 'Cognitive Services User' },
+      { instanceOption: 'Free', azureRole: 'Cognitive Services Contributor' },
       { instanceOption: 'Standard', azureRole: 'Cognitive Services Contributor' }
     ]
   },
   {
     servicePattern: /ai language/i,
     mappings: [
-      { instanceOption: 'Free', azureRole: 'Cognitive Services User' },
+      { instanceOption: 'Free', azureRole: 'Cognitive Services Contributor' },
       { instanceOption: 'Standard', azureRole: 'Cognitive Services Contributor' }
     ]
   },
   {
     servicePattern: /ai speech/i,
     mappings: [
-      { instanceOption: 'Free', azureRole: 'Cognitive Services User' },
+      { instanceOption: 'Free', azureRole: 'Cognitive Services Contributor' },
       { instanceOption: 'Standard', azureRole: 'Cognitive Services Contributor' }
     ]
   },
   {
     servicePattern: /document intelligence/i,
     mappings: [
-      { instanceOption: 'Free', azureRole: 'Cognitive Services User' },
+      { instanceOption: 'Free', azureRole: 'Cognitive Services Contributor' },
       { instanceOption: 'Standard', azureRole: 'Cognitive Services Contributor' }
     ]
   },

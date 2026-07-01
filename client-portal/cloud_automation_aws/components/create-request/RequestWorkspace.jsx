@@ -120,7 +120,6 @@ export function RequestWorkspace() {
   const [region, setRegion] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
-  const [costingMode, setCostingMode] = useState('shared');
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
   const [accessType, setAccessType] = useState(() => {
@@ -340,7 +339,7 @@ export function RequestWorkspace() {
     const payload = {
       customer_email: customerEmail.trim(),
       account_count: accountCount,
-      costing_mode: costingMode,
+      costing_mode: 'shared',
       access_type: accessType,
       start_date: startDate,
       end_date: endDate,
@@ -419,8 +418,6 @@ export function RequestWorkspace() {
               onCustomerEmailChange={setCustomerEmail}
               accountCount={accountCount}
               onAccountCountChange={setAccountCount}
-              costingMode={costingMode}
-              onCostingModeChange={setCostingMode}
               accessType={accessType}
               onAccessTypeChange={setAccessType}
               startDate={startDate}

@@ -98,33 +98,83 @@ const buildMappingIndex = (rows) => {
   return byServiceId;
 };
 
-const resolveRoleForInstance = ({ serviceId, serviceName, instanceOption, mappingIndex }) => {
+const resolveRolesForInstance = ({ serviceId, serviceName, instanceOption, mappingIndex }) => {
   const normalizedOption = normalizeInstanceOption(instanceOption).toLowerCase();
 
   if (!normalizedOption) {
-    return null;
+    return [];
   }
 
   const serviceMappings = mappingIndex?.get(Number(serviceId));
   const mapped = serviceMappings?.get(normalizedOption);
 
-  if (mapped) {
-    return mapped;
+  if (mapped?.azureRole) {
+    return [mapped.azureRole];
   }
 
   const fallback = findTierRoleFallbacks(serviceName).find(
     (entry) => entry.instanceOption.toLowerCase() === normalizedOption
   );
 
-  if (!fallback) {
+  if (!fallback?.azureRole) {
+    return [];
+  }
+
+  return [fallback.azureRole];
+};
+
+const getAutoAssignRolesForServices = async (client, serviceIds) => {
+  if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+    return new Map();
+  }
+
+  const result = await client.query(
+    `
+      SELECT service_id, azure_role
+      FROM service_role_mapping
+      WHERE service_id = ANY($1::int[])
+        AND COALESCE(auto_assign, false) = true
+      ORDER BY service_id, azure_role
+    `,
+    [serviceIds]
+  );
+
+  const byServiceId = new Map();
+  for (const row of result.rows) {
+    const serviceId = Number(row.service_id);
+    if (!byServiceId.has(serviceId)) {
+      byServiceId.set(serviceId, []);
+    }
+    byServiceId.get(serviceId).push(row.azure_role);
+  }
+
+  return byServiceId;
+};
+
+const mergeAutoAssignRoles = (roleAssignments, autoAssignByServiceId) => {
+  for (const [serviceId, roles] of autoAssignByServiceId.entries()) {
+    if (!roleAssignments.has(serviceId)) {
+      roleAssignments.set(serviceId, new Set());
+    }
+
+    for (const role of roles) {
+      roleAssignments.get(serviceId).add(role);
+    }
+  }
+};
+
+/** @deprecated use resolveRolesForInstance */
+const resolveRoleForInstance = (params) => {
+  const roles = resolveRolesForInstance(params);
+  if (roles.length === 0) {
     return null;
   }
 
   return {
-    serviceId: Number(serviceId),
-    serviceName,
-    instanceOption: fallback.instanceOption,
-    azureRole: fallback.azureRole,
+    serviceId: Number(params.serviceId),
+    serviceName: params.serviceName,
+    instanceOption: params.instanceOption,
+    azureRole: roles[0],
     tierAutomated: true
   };
 };
@@ -159,18 +209,29 @@ const resolveTierRoles = async (client, serviceIds, selectedInstances = []) => {
       continue;
     }
 
-    const mapping = resolveRoleForInstance({
+    const tierRoles = resolveRolesForInstance({
       serviceId,
       serviceName: serviceNamesById.get(serviceId),
       instanceOption,
       mappingIndex
     });
 
-    if (mapping?.tierAutomated && mapping.azureRole) {
+    if (tierRoles.length === 0) {
+      continue;
+    }
+
+    const mapping = mappingIndex?.get(serviceId)?.get(instanceOption.toLowerCase());
+    const tierAutomated = mapping?.tierAutomated ?? true;
+
+    if (!tierAutomated) {
+      continue;
+    }
+
+    for (const azureRole of tierRoles) {
       resolved.push({
         serviceId,
         instanceOption,
-        azureRole: mapping.azureRole,
+        azureRole,
         tierAutomated: true
       });
     }
@@ -181,15 +242,28 @@ const resolveTierRoles = async (client, serviceIds, selectedInstances = []) => {
 
 const applyTierRolesToAssignments = async (client, roleAssignments, validServiceIds, selectedInstances) => {
   const tierRoles = await resolveTierRoles(client, validServiceIds, selectedInstances);
+  const autoAssignByServiceId = await getAutoAssignRolesForServices(client, validServiceIds);
 
   for (const tierRole of tierRoles) {
-    roleAssignments.set(tierRole.serviceId, new Set([tierRole.azureRole]));
+    if (!roleAssignments.has(tierRole.serviceId)) {
+      roleAssignments.set(tierRole.serviceId, new Set());
+    }
+
+    roleAssignments.get(tierRole.serviceId).add(tierRole.azureRole);
     console.log(
       `[TIER_ROLE_AUTO_ASSIGNED] Service ${tierRole.serviceId} (${tierRole.instanceOption}): ${tierRole.azureRole}`
     );
   }
 
+  mergeAutoAssignRoles(roleAssignments, autoAssignByServiceId);
+
   return tierRoles;
+};
+
+const ensureAutoAssignRolesForServices = async (client, roleAssignments, serviceIds) => {
+  const autoAssignByServiceId = await getAutoAssignRolesForServices(client, serviceIds);
+  mergeAutoAssignRoles(roleAssignments, autoAssignByServiceId);
+  return autoAssignByServiceId;
 };
 
 module.exports = {
@@ -197,7 +271,10 @@ module.exports = {
   loadInstanceRoleMappings,
   buildMappingIndex,
   resolveRoleForInstance,
+  resolveRolesForInstance,
   resolveTierRoles,
   applyTierRolesToAssignments,
+  getAutoAssignRolesForServices,
+  ensureAutoAssignRolesForServices,
   findTierRoleFallbacks
 };

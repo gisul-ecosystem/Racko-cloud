@@ -48,6 +48,15 @@ function resolveTierAutomatedServices(
   return automated;
 }
 
+function resolveAutoAssignRoles(
+  catalog: ServiceCatalogResponse,
+  serviceId: number
+): string[] {
+  return catalog.roles
+    .filter((entry) => entry.serviceId === serviceId && entry.auto_assign)
+    .map((entry) => entry.azure_role);
+}
+
 function resolveSelectedRoles(
   catalog: ServiceCatalogResponse,
   serviceIds: number[],
@@ -64,22 +73,32 @@ function resolveSelectedRoles(
           entry.tierAutomated
       );
 
+      const roles = new Set<string>();
+
       if (mapping?.azureRole) {
-        return { serviceId, roles: [mapping.azureRole] };
+        roles.add(mapping.azureRole);
       }
 
       const manual = manualRoles[serviceId];
       if (manual?.length) {
-        return { serviceId, roles: manual };
+        for (const role of manual) {
+          roles.add(role);
+        }
       }
 
-      const service = catalog.services.find((entry) => entry.id === serviceId);
-      const defaultRole = service?.default_role || service?.azure_role;
-      if (defaultRole) {
-        return { serviceId, roles: [defaultRole] };
+      if (roles.size === 0) {
+        const service = catalog.services.find((entry) => entry.id === serviceId);
+        const defaultRole = service?.default_role || service?.azure_role;
+        if (defaultRole) {
+          roles.add(defaultRole);
+        }
       }
 
-      return { serviceId, roles: [] };
+      for (const autoRole of resolveAutoAssignRoles(catalog, serviceId)) {
+        roles.add(autoRole);
+      }
+
+      return { serviceId, roles: [...roles] };
     })
     .filter((entry) => entry.roles.length > 0);
 }
