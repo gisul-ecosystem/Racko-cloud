@@ -30,6 +30,8 @@ const serviceRoutes = require('./src/routes/serviceRoutes');
 const jobRoutes = require('./src/routes/jobRoutes');
 const AppError = require('./src/utils/AppError');
 const pool = require('./src/config/database');
+const { resumeOutboundEmailJobs } = require('./src/services/emailQueueService');
+const { resumeProvisioningJobs } = require('./src/services/provisioningJobService');
 
 const app = express();
 
@@ -114,6 +116,14 @@ const startServer = () => {
   startWindowEnforcementScheduler();
   server = app.listen(port, () => {
     console.log(`Service Catalog API listening on port ${port}`);
+
+    resumeOutboundEmailJobs().catch((error) => {
+      console.error('Failed to resume outbound email jobs:', error?.message || error);
+    });
+
+    resumeProvisioningJobs().catch((error) => {
+      console.error('Failed to resume provisioning jobs:', error?.message || error);
+    });
   });
 
   return server;

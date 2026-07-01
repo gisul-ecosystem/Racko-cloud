@@ -28,6 +28,11 @@ import {
 
 const POLL_INTERVAL_MS = 4000;
 
+function isAccessLinkDeliveryPending(snapshot: ProvisionSnapshot | null): boolean {
+  const status = String(snapshot?.credentials?.deliveryStatus ?? '').toLowerCase();
+  return status === 'queued';
+}
+
 interface UseProvisionStatusOptions {
   requestId: number;
   initialSnapshot?: ProvisionSnapshot | null;
@@ -88,6 +93,7 @@ export function useProvisionStatus({
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const overridesRef = useRef<StepCompletionOverrides>({});
   const isCompleteRef = useRef(false);
+  const deliveryPendingRef = useRef(false);
 
   const appendEvent = useCallback((event: OrchestrationEvent) => {
     setEvents((current) => [event, ...current].slice(0, 40));
@@ -95,6 +101,7 @@ export function useProvisionStatus({
 
   const loadSnapshot = useCallback(async () => {
     const nextSnapshot = await fetchProvisionSnapshot(requestId);
+    deliveryPendingRef.current = isAccessLinkDeliveryPending(nextSnapshot);
     setSnapshot(nextSnapshot);
     setError(null);
     return nextSnapshot;
@@ -201,7 +208,7 @@ export function useProvisionStatus({
     void refresh();
 
     pollRef.current = setInterval(() => {
-      if (!isCompleteRef.current) {
+      if (!isCompleteRef.current || deliveryPendingRef.current) {
         void refresh();
       }
     }, POLL_INTERVAL_MS);
@@ -212,7 +219,7 @@ export function useProvisionStatus({
   }, [requestId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (isCompleteRef.current && pollRef.current) {
+    if (isCompleteRef.current && !deliveryPendingRef.current && pollRef.current) {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
