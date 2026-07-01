@@ -58,7 +58,10 @@ const createSmtpTransport = () => {
       host: smtpConfig.host,
       port: smtpConfig.port,
       secure: smtpConfig.secure,
-      auth: smtpConfig.auth
+      auth: smtpConfig.auth,
+      connectionTimeout: 30_000,
+      greetingTimeout: 30_000,
+      socketTimeout: 60_000
     }),
     from: smtpConfig.from
   };

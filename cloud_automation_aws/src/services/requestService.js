@@ -1,4 +1,6 @@
 import mongoose from 'mongoose';
+import { DateTime } from 'luxon';
+import { parseServiceDateTime } from '../utils/serviceDateTime.js';
 import Request from '../models/Request.js';
 import Service from '../models/Service.js';
 import { DEFAULT_IAM_POLICIES } from '../config/iamPolicies.js';
@@ -257,16 +259,19 @@ export const createRequest = async (payload, userId) => {
     throw validationError('start_date and end_date are required');
   }
 
-  const start = new Date(input.startDate);
-  const end = new Date(input.endDate);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
+  const start = parseServiceDateTime(input.startDate, input.timezone);
+  const end = parseServiceDateTime(input.endDate, input.timezone);
+  if (!start || !end) {
+    throw validationError('start_date and end_date must be valid datetimes');
+  }
+
+  const today = DateTime.now().setZone(input.timezone).startOf('day');
 
   if (end < start) {
     throw validationError('end_date must be on or after start_date');
   }
 
-  if (end <= today) {
+  if (end <= today.toJSDate()) {
     throw validationError('end_date must be after today');
   }
 

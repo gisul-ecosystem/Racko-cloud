@@ -3,6 +3,7 @@ const AppError = require('../utils/AppError');
 const { sendCredentialEmailWithRetry } = require('./email/credentialEmailService');
 
 const activeJobs = new Set();
+const STALE_SENDING_JOB_MS = 5 * 60 * 1000;
 
 const logEmailQueueEvent = (level, event, details = {}) => {
   const entry = {
@@ -21,6 +22,33 @@ const logEmailQueueEvent = (level, event, details = {}) => {
   }
 
   console.log(message);
+};
+
+const syncCredentialDeliveryStatus = async (requestId, deliveryStatus) => {
+  if (!requestId) {
+    return;
+  }
+
+  const sentAt = deliveryStatus === 'sent' ? new Date() : null;
+
+  await db.query(
+    `
+      UPDATE credential_delivery
+      SET
+        delivery_status = $2,
+        sent_at = COALESCE($3, sent_at)
+      WHERE request_id = $1
+    `,
+    [requestId, deliveryStatus, sentAt]
+  );
+};
+
+const syncRelatedDeliveryStatus = async (job, deliveryStatus) => {
+  if (job?.related_type !== 'credential_delivery' || !job?.related_id) {
+    return;
+  }
+
+  await syncCredentialDeliveryStatus(job.related_id, deliveryStatus);
 };
 
 const ensureTable = async () => {
@@ -100,7 +128,7 @@ const processEmailJob = async (jobId, callbacks = {}) => {
     await client.query('BEGIN');
     const result = await client.query(
       `
-        SELECT id, recipient_email, subject, html, attempts
+        SELECT id, recipient_email, subject, html, attempts, status, related_type, related_id
         FROM outbound_email_jobs
         WHERE id = $1
         FOR UPDATE
@@ -111,6 +139,11 @@ const processEmailJob = async (jobId, callbacks = {}) => {
     const job = result.rows[0];
 
     if (!job) {
+      await client.query('ROLLBACK');
+      return;
+    }
+
+    if (['sent', 'failed'].includes(job.status)) {
       await client.query('ROLLBACK');
       return;
     }
@@ -148,6 +181,8 @@ const processEmailJob = async (jobId, callbacks = {}) => {
         [jobId]
       );
 
+      await syncRelatedDeliveryStatus(job, 'sent');
+
       if (typeof callbacks.onSuccess === 'function') {
         try {
           await callbacks.onSuccess(job);
@@ -173,6 +208,8 @@ const processEmailJob = async (jobId, callbacks = {}) => {
         `,
         [jobId, error?.message || 'Unknown email queue failure']
       );
+
+      await syncRelatedDeliveryStatus(job, 'failed');
 
       if (typeof callbacks.onFailure === 'function') {
         try {
@@ -205,7 +242,49 @@ const processEmailJob = async (jobId, callbacks = {}) => {
   }
 };
 
+const resumeOutboundEmailJobs = async () => {
+  await ensureTable();
+
+  await db.query(
+    `
+      UPDATE outbound_email_jobs
+      SET status = 'queued',
+          updated_at = NOW()
+      WHERE status = 'sending'
+        AND updated_at < NOW() - ($1 * INTERVAL '1 millisecond')
+    `,
+    [STALE_SENDING_JOB_MS]
+  );
+
+  const result = await db.query(
+    `
+      SELECT id
+      FROM outbound_email_jobs
+      WHERE status = 'queued'
+      ORDER BY created_at ASC
+    `
+  );
+
+  for (const row of result.rows) {
+    if (!activeJobs.has(row.id)) {
+      setImmediate(() => {
+        processEmailJob(row.id).catch((error) => {
+          logEmailQueueEvent('error', 'email_job_resume_failed', {
+            jobId: row.id,
+            message: error?.message
+          });
+        });
+      });
+    }
+  }
+
+  logEmailQueueEvent('info', 'email_jobs_resumed', {
+    queuedCount: result.rows.length
+  });
+};
+
 module.exports = {
   enqueueEmail,
-  processEmailJob
+  processEmailJob,
+  resumeOutboundEmailJobs
 };
