@@ -34,7 +34,6 @@ services:
       - cloud-automation-aws/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
-      CLIENT_PORTAL_URL: ${CLIENT_PORTAL_URL:-${FRONTEND_URL}}
     ports:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
  
