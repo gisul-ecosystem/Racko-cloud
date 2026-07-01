@@ -121,22 +121,23 @@ export class TenantBrandingAssetService {
     const doc = await TenantBrandingAsset.findOne({
       tenantId: new mongoose.Types.ObjectId(tenantId),
       assetType,
-    }).lean();
+    });
 
     if (!doc) {
       return null;
     }
 
     const ext = extensionForMime(doc.mimeType);
-    const docUpdatedMs = doc.updatedAt ? new Date(doc.updatedAt).getTime() : 0;
+    const docUpdatedMs = doc.updatedAt ? doc.updatedAt.getTime() : 0;
+    const assetBuffer = Buffer.isBuffer(doc.data) ? doc.data : Buffer.from(doc.data);
     const cached = await readFromVolumeIfExists(tenantId, assetType, ext);
 
     if (cached && (!docUpdatedMs || cached.mtimeMs >= docUpdatedMs)) {
       return { buffer: cached.buffer, mimeType: doc.mimeType, filename: doc.filename };
     }
 
-    await writeToVolume(tenantId, assetType, doc.data, ext);
-    return { buffer: doc.data, mimeType: doc.mimeType, filename: doc.filename };
+    await writeToVolume(tenantId, assetType, assetBuffer, ext);
+    return { buffer: assetBuffer, mimeType: doc.mimeType, filename: doc.filename };
   }
 
   async uploadAsset(
