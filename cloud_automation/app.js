@@ -32,6 +32,7 @@ const AppError = require('./src/utils/AppError');
 const pool = require('./src/config/database');
 const { resumeOutboundEmailJobs } = require('./src/services/emailQueueService');
 const { resumeProvisioningJobs } = require('./src/services/provisioningJobService');
+const { getSmtpConfigStatus } = require('./src/services/email/smtpEnv');
 
 const app = express();
 
@@ -116,6 +117,15 @@ const startServer = () => {
   startWindowEnforcementScheduler();
   server = app.listen(port, () => {
     console.log(`Service Catalog API listening on port ${port}`);
+
+    const smtpStatus = getSmtpConfigStatus();
+    if (smtpStatus.configured) {
+      console.log('SMTP email delivery is configured.');
+    } else {
+      console.warn(
+        `SMTP email delivery is NOT configured. Missing: ${smtpStatus.missingVars.join(', ')}`
+      );
+    }
 
     resumeOutboundEmailJobs().catch((error) => {
       console.error('Failed to resume outbound email jobs:', error?.message || error);

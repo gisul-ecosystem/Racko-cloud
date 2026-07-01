@@ -5,7 +5,7 @@
 #   VM_USER_DEV        — SSH user (e.g. ubuntu)
 #   VM_SSH_KEY_DEV     — Private SSH key for the VM user
 #
-# Service env files live on the VM under /opt/racko/*/env — not in GitHub secrets.
+# Service env files live on the VM under /opt/racko/<service>/.env — not in GitHub secrets.
 # client-portal image bakes NEXT_PUBLIC_GATEWAY_URL=http://cloud-gateway:8000 (Docker internal).
 # Nginx must proxy /api/ → :8000 on dev.racko.ai and each tenant domain.
  
