@@ -1,54 +1,9 @@
 const nodemailer = require('nodemailer');
-const AppError = require('../../utils/AppError');
+const { validateSmtpEnv } = require('./smtpEnv');
 
-const REQUIRED_SMTP_ENV_VARS = ['SMTP_HOST', 'SMTP_PORT', 'SMTP_USER', 'SMTP_PASS', 'SMTP_FROM'];
 const MAX_ATTEMPTS = 3;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const getTrimmedEnvValue = (name) => {
-  const value = process.env[name];
-  return typeof value === 'string' ? value.trim() : '';
-};
-
-const validateSmtpEnv = () => {
-  const smtpPassword = getTrimmedEnvValue('SMTP_PASS') || getTrimmedEnvValue('SMTP_PASSWORD');
-  const smtpFrom = getTrimmedEnvValue('SMTP_FROM') || getTrimmedEnvValue('SMTP_USER');
-  const envValues = REQUIRED_SMTP_ENV_VARS.reduce((accumulator, name) => {
-    accumulator[name] = getTrimmedEnvValue(name);
-    return accumulator;
-  }, {});
-
-  envValues.SMTP_PASS = smtpPassword;
-  envValues.SMTP_FROM = smtpFrom;
-
-  const missingVars = REQUIRED_SMTP_ENV_VARS.filter((name) => !envValues[name]);
-
-  if (missingVars.length > 0) {
-    throw new AppError(`Missing required SMTP environment variable(s): ${missingVars.join(', ')}`, 500);
-  }
-
-  const smtpPort = Number(envValues.SMTP_PORT);
-
-  if (!Number.isInteger(smtpPort) || smtpPort <= 0) {
-    throw new AppError('SMTP_PORT must be a positive integer.', 500);
-  }
-
-  const secure = process.env.SMTP_SECURE === undefined
-    ? smtpPort === 465
-    : ['true', '1', 'yes'].includes(String(process.env.SMTP_SECURE).trim().toLowerCase());
-
-  return {
-    host: envValues.SMTP_HOST,
-    port: smtpPort,
-    secure,
-    auth: {
-      user: envValues.SMTP_USER,
-      pass: envValues.SMTP_PASS
-    },
-    from: envValues.SMTP_FROM
-  };
-};
 
 const createSmtpTransport = () => {
   const smtpConfig = validateSmtpEnv();

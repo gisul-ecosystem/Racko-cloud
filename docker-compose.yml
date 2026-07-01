@@ -22,7 +22,7 @@ services:
   cloud-automation:
     image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-dev}
     env_file:
-      - cloud-automation/.env
+      - cloud_automation/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_PORT:-3002}
     ports:
@@ -31,7 +31,7 @@ services:
   cloud-automation-aws:
     image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-dev}
     env_file:
-      - cloud-automation-aws/.env
+      - cloud_automation_aws/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
     ports:
