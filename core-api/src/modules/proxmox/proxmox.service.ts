@@ -398,6 +398,7 @@ export const proxmoxService = new ProxmoxService();
 // Import here to avoid circular deps — NodeAlert is a standalone model
 import { NodeAlert } from '../../models/nodeAlert.model';
 import { config } from '../../config';
+import { ProxmoxNodeService } from '../proxmoxNode/proxmoxNode.service';
 
 /**
  * Start periodic node resource monitoring.
@@ -435,7 +436,14 @@ async function runMonitoringCycle(): Promise<void> {
     return;
   }
 
-  const onlineNodes = nodes.filter((n) => n.status === 'online');
+  // Only monitor nodes that are registered as active in the platform.
+  // Falls back to all online nodes if none are registered yet.
+  const activeNodeNames = await ProxmoxNodeService.getActiveNodeNames();
+  const onlineNodes = nodes.filter((n) => {
+    if (n.status !== 'online') return false;
+    if (activeNodeNames.length > 0) return activeNodeNames.includes(n.node);
+    return true;
+  });
   let alertsCreated = 0;
   let alertsResolved = 0;
 
