@@ -1,10 +1,13 @@
-# GitHub secrets:
-#   DOCKERHUB_USERNAME          (shared across all branches)
-#   DOCKERHUB_TOKEN             (shared across all branches)
-#   VM_HOST_DEV
-#   VM_USER_DEV
-#   VM_SSH_KEY_DEV
-#   NEXT_PUBLIC_API_URL_DEV
+# GitHub secrets (Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME   — Docker Hub username
+#   DOCKERHUB_TOKEN    — Docker Hub access token (read/write)
+#   VM_HOST_DEV        — VM public IP or hostname (e.g. 103.99.38.157)
+#   VM_USER_DEV        — SSH user (e.g. ubuntu)
+#   VM_SSH_KEY_DEV     — Private SSH key for the VM user
+#
+# Service env files live on the VM under /opt/racko/*/env — not in GitHub secrets.
+# client-portal image bakes NEXT_PUBLIC_GATEWAY_URL=http://cloud-gateway:8000 (Docker internal).
+# Nginx must proxy /api/ → :8000 on dev.racko.ai and each tenant domain.
  
 name: Build & Deploy Dev via SSH
  
@@ -104,7 +107,7 @@ jobs:
       - name: Build client-portal image
         run: |
           docker build \
-            --build-arg NEXT_PUBLIC_GATEWAY_URL="${{ secrets.NEXT_PUBLIC_API_URL_DEV }}" \
+            --build-arg NEXT_PUBLIC_GATEWAY_URL=http://cloud-gateway:8000 \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }} \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:dev \
             -f client-portal/Dockerfile client-portal/
