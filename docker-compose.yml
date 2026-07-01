@@ -1,5 +1,5 @@
 version: '3.9'
-
+ 
 services:
   core-api:
     build:
@@ -18,7 +18,7 @@ services:
       - ./agent/dist:/agent/dist:ro
     ports:
       - "${CORE_API_PORT:-8001}:8001"
-
+ 
   cloud-automation:
     image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-dev}
     env_file:
@@ -27,7 +27,7 @@ services:
       PORT: ${CLOUD_AUTOMATION_PORT:-3002}
     ports:
       - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
-
+ 
   cloud-automation-aws:
     image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-dev}
     env_file:
@@ -37,7 +37,7 @@ services:
       CLIENT_PORTAL_URL: ${CLIENT_PORTAL_URL:-${FRONTEND_URL}}
     ports:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
-
+ 
   cloud-gateway:
     build:
       context: .
@@ -54,7 +54,7 @@ services:
       - cloud-automation-aws
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
-
+ 
   client-portal:
     build:
       context: .
@@ -70,6 +70,6 @@ services:
       - cloud-gateway
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
-
+ 
 volumes:
   tenant-assets:

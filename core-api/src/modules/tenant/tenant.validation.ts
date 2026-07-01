@@ -72,6 +72,20 @@ export const updateTenantSchema = z.object({
     }),
 });
 
+export const listTenantVmsSchema = z.object({
+  params: tenantIdRouteParamSchema.shape.params,
+  query: z.object({
+    status: z
+      .enum(['creating', 'running', 'stopped', 'paused', 'suspended', 'error', 'deleting', 'delete_failed'])
+      .optional(),
+    node: z
+      .string()
+      .max(63, 'Node name too long')
+      .regex(/^[a-zA-Z0-9-]+$/, 'Invalid node name')
+      .optional(),
+  }),
+});
+
 export const createTenantAdminSchema = z.object({
   params: z.object({
     tenantId: z.string().min(1, 'Tenant id is required'),

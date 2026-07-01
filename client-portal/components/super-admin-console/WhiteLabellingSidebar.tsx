@@ -1,15 +1,25 @@
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Building2, ChevronLeft, ClipboardList, LayoutDashboard } from 'lucide-react';
+import { Building2, ChevronLeft, ClipboardList, LayoutDashboard, type LucideIcon } from 'lucide-react';
+import { fetchSuperAdminOrders } from '@/lib/tenantApi';
 
 interface WhiteLabellingSidebarProps {
   sidebarOpen: boolean;
   onCloseSidebar: () => void;
 }
 
-const navLinks = [
+type NavLink = {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+  exact: boolean;
+  showPendingBadge?: boolean;
+};
+
+const navLinks: NavLink[] = [
   {
     href: '/super-admin-console/white-labelling',
     label: 'Overview',
@@ -27,11 +37,28 @@ const navLinks = [
     label: 'Orders',
     icon: ClipboardList,
     exact: false,
+    showPendingBadge: true,
   },
 ];
 
 export function WhiteLabellingSidebar({ sidebarOpen, onCloseSidebar }: WhiteLabellingSidebarProps) {
   const pathname = usePathname();
+  const [pendingOrderCount, setPendingOrderCount] = useState(0);
+
+  const loadPendingOrderCount = useCallback(async () => {
+    try {
+      const orders = await fetchSuperAdminOrders('pending_approval');
+      setPendingOrderCount(orders.length);
+    } catch {
+      setPendingOrderCount(0);
+    }
+  }, []);
+
+  useEffect(() => {
+    void loadPendingOrderCount();
+    const interval = setInterval(() => void loadPendingOrderCount(), 30_000);
+    return () => clearInterval(interval);
+  }, [loadPendingOrderCount, pathname]);
 
   return (
     <>
@@ -54,8 +81,9 @@ export function WhiteLabellingSidebar({ sidebarOpen, onCloseSidebar }: WhiteLabe
             <p className="mt-0.5 text-xs text-gray-400">Tenant management</p>
           </div>
           <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
-            {navLinks.map(({ href, label, icon: Icon, exact }) => {
+            {navLinks.map(({ href, label, icon: Icon, exact, showPendingBadge }) => {
               const isActive = exact ? pathname === href : pathname?.startsWith(href);
+              const badgeCount = showPendingBadge ? pendingOrderCount : 0;
               return (
                 <Link
                   key={href}
@@ -69,7 +97,17 @@ export function WhiteLabellingSidebar({ sidebarOpen, onCloseSidebar }: WhiteLabe
                   <Icon
                     className={`h-4 w-4 shrink-0 ${isActive ? 'text-[#B91C1C]' : 'text-gray-400'}`}
                   />
-                  {label}
+                  <span className="flex-1">{label}</span>
+                  {badgeCount > 0 ? (
+                    <span
+                      className={`inline-flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[10px] font-bold leading-none ${
+                        isActive ? 'bg-[#B91C1C] text-white' : 'bg-red-100 text-[#B91C1C]'
+                      }`}
+                      aria-label={`${badgeCount} pending order${badgeCount === 1 ? '' : 's'}`}
+                    >
+                      {badgeCount > 99 ? '99+' : badgeCount}
+                    </span>
+                  ) : null}
                 </Link>
               );
             })}

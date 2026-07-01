@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { tenantController } from './tenant.controller';
 import { tenantServiceConfigController } from './tenantServiceConfig.controller';
+import { tenantVmController } from '../tenantVm/tenantVm.controller';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
@@ -9,6 +10,7 @@ import {
   createTenantSchema,
   createTenantAdminSchema,
   listTenantsSchema,
+  listTenantVmsSchema,
   tenantIdParamSchema,
   updateTenantSchema,
 } from './tenant.validation';
@@ -48,6 +50,14 @@ router.get(
   validateRequest(listTenantServicesRequestSchema),
   (req, res, next) => {
     tenantServiceConfigController.listServices(req, res, next);
+  }
+);
+
+router.get(
+  '/:tenantId/vms',
+  validateRequest(listTenantVmsSchema),
+  (req, res, next) => {
+    tenantVmController.listVmsForSuperAdmin(req, res, next);
   }
 );
 

@@ -5,6 +5,7 @@ import { TenantServiceConfig } from '../../models/tenantServiceConfig.model';
 import { Tenant } from '../../models/tenant.model';
 import { User } from '../../models/user.model';
 import { Notification } from '../notification/notification.model';
+import { VM } from '../vm/vm.model';
 import { vmService } from '../vm/vm.service';
 import { walletService } from '../wallet/wallet.service';
 import { logger } from '../../utils/logger';
@@ -137,22 +138,75 @@ async function getActiveVmManagementConfig(tenantId: string) {
   return config;
 }
 
-async function getTenantOrderUsage(tenantId: string): Promise<TenantOrderUsage> {
-  const orders = await Order.find({
-    tenantId: new mongoose.Types.ObjectId(tenantId),
-    status: { $in: ['pending_approval', 'provisioning', 'fulfilled'] },
-  })
-    .select('count specs')
-    .lean();
+const EXCLUDED_VM_STATUSES = ['deleted', 'deleting', 'delete_failed'] as const;
 
-  return orders.reduce<TenantOrderUsage>(
-    (acc, order) => ({
-      vmCount: acc.vmCount + order.count,
-      totalVcpu: acc.totalVcpu + order.specs.cpuCores * order.count,
-      totalRamGb: acc.totalRamGb + order.specs.memoryGb * order.count,
-      totalDiskGb: acc.totalDiskGb + order.specs.diskGb * order.count,
-    }),
-    { vmCount: 0, totalVcpu: 0, totalRamGb: 0, totalDiskGb: 0 }
+async function getTenantVmResourceUsage(
+  tenantObjectId: mongoose.Types.ObjectId
+): Promise<TenantOrderUsage> {
+  const [result] = await VM.aggregate<{
+    vmCount: number;
+    totalVcpu: number;
+    totalRamGb: number;
+    totalDiskGb: number;
+  }>([
+    {
+      $match: {
+        tenantId: tenantObjectId,
+        status: { $nin: EXCLUDED_VM_STATUSES },
+      },
+    },
+    {
+      $group: {
+        _id: null,
+        vmCount: { $sum: 1 },
+        totalVcpu: { $sum: '$allocatedCpu' },
+        totalRamGb: { $sum: '$allocatedMemoryGb' },
+        totalDiskGb: { $sum: '$allocatedDiskGb' },
+      },
+    },
+  ]);
+
+  return {
+    vmCount: result?.vmCount ?? 0,
+    totalVcpu: result?.totalVcpu ?? 0,
+    totalRamGb: result?.totalRamGb ?? 0,
+    totalDiskGb: result?.totalDiskGb ?? 0,
+  };
+}
+
+function addOrderReservationUsage(
+  acc: TenantOrderUsage,
+  order: { count: number; specs: IOrderSpecs }
+): TenantOrderUsage {
+  return {
+    vmCount: acc.vmCount + order.count,
+    totalVcpu: acc.totalVcpu + order.specs.cpuCores * order.count,
+    totalRamGb: acc.totalRamGb + order.specs.memoryGb * order.count,
+    totalDiskGb: acc.totalDiskGb + order.specs.diskGb * order.count,
+  };
+}
+
+/**
+ * Tenant quota usage for limit checks when placing new orders.
+ * - Active provisioned VMs (by tenantId) — decreases when a VM is deleted
+ * - Plus in-flight orders not yet fulfilled (pending approval/payment/provisioning)
+ */
+async function getTenantOrderUsage(tenantId: string): Promise<TenantOrderUsage> {
+  const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
+
+  const [vmUsage, reservedOrders] = await Promise.all([
+    getTenantVmResourceUsage(tenantObjectId),
+    Order.find({
+      tenantId: tenantObjectId,
+      status: { $in: ['pending_approval', 'pending_payment', 'provisioning'] },
+    })
+      .select('count specs')
+      .lean(),
+  ]);
+
+  return reservedOrders.reduce(
+    (acc, order) => addOrderReservationUsage(acc, order),
+    vmUsage
   );
 }
 

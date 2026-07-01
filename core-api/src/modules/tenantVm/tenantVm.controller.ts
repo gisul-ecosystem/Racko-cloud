@@ -32,6 +32,24 @@ export class TenantVmController {
     }
   }
 
+  async listVmsForSuperAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { tenantId } = req.params as { tenantId: string };
+      const query = req.query as { status?: string; node?: string };
+      const filters: TenantVmListFilters = {};
+      if (query.status) filters.status = query.status;
+      if (query.node) filters.node = query.node;
+
+      const vms = await tenantVmService.listVmsForSuperAdmin(
+        new mongoose.Types.ObjectId(tenantId),
+        filters
+      );
+      success(res, 'Tenant VMs retrieved.', { vms, total: vms.length });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getVmDetails(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { vmId } = req.params as { vmId: string };
