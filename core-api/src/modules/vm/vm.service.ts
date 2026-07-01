@@ -174,7 +174,9 @@ async function startIpPolling(
       );
       const interfaces = res.data.data.result ?? [];
 
-      let foundIp: string | undefined;
+      // Collect all seen IPv4s for logging only — we no longer match against vm.ipAddress
+      // because the IP is already known from the pool and stored in DB before the VM starts.
+      // We just need to confirm the guest agent is up and the VM has finished booting.
       const seenIps: string[] = [];
       for (const iface of interfaces) {
         if (iface.name === 'lo') continue;
@@ -183,58 +185,26 @@ async function startIpPolling(
             seenIps.push(`${iface.name}:${addr['ip-address']}`);
           }
         }
-        const match = iface['ip-addresses']?.find(
-          (a) => a['ip-address-type'] === 'ipv4' && a['ip-address'] === vm.ipAddress
-        );
-        if (match) {
-          foundIp = match['ip-address'];
-          break;
-        }
       }
 
-      logger.info(`[BulkVM] [vmid=${vmid}] STEP: startIpPolling attempt ${attempt}/${maxRetries} | data: interfacesReturned=${interfaces.length} seenIps=${seenIps.join(',')||'none'} expectedIp=${vm.ipAddress} matched=${!!foundIp}`);
+      logger.info(`[BulkVM] [vmid=${vmid}] STEP: startIpPolling attempt ${attempt}/${maxRetries} | data: guestAgentResponded=true interfacesReturned=${interfaces.length} seenIps=${seenIps.join(',') || 'none'} assignedIp=${vm.ipAddress}`);
 
-      if (foundIp) {
-        await VM.findByIdAndUpdate(vmObjectId, { ipAddress: foundIp });
-        logger.debug('[VMConsolePoll] Private IP resolved — waiting post-boot grace', {
-          vmId: vmObjectId.toString(),
-          vmid,
-          node,
-          trigger,
-          attempt,
-          ipAddress: foundIp,
-          proxmoxPowerState: 'status' in proxmoxLive ? proxmoxLive.status : null,
-          allIpv4Seen: seenIps,
-          cloudbaseGraceMs,
-        });
-        await sleep(cloudbaseGraceMs);
-
-        // Flag the VM as console-ready. The frontend / openConsole gate on this flag.
-        const consoleReadyAt = new Date().toISOString();
-        await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
-        logger.info(`[BulkVM] [vmid=${vmid}] STEP: consoleReady set to true | data: timestamp=${consoleReadyAt} ipAddress=${foundIp}`);
-        logger.debug('[VMConsolePoll] consoleReady=true', {
-          vmId: vmObjectId.toString(),
-          vmid,
-          node,
-          trigger,
-          attempt,
-          ipAddress: foundIp,
-        });
-        return;
-      }
-
-      logger.warn('[VMConsolePoll] Guest agent responded but assigned IP not seen yet', {
+      // Guest agent responded — VM is booted and ready. IP is already correct in DB.
+      await sleep(cloudbaseGraceMs);
+      const consoleReadyAt = new Date().toISOString();
+      await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
+      logger.info(`[BulkVM] [vmid=${vmid}] STEP: consoleReady set to true | data: timestamp=${consoleReadyAt} assignedIp=${vm.ipAddress}`);
+      logger.debug('[VMConsolePoll] consoleReady=true — guest agent confirmed boot', {
         vmId: vmObjectId.toString(),
         vmid,
         node,
         trigger,
         attempt,
-        interfaceCount: interfaces.length,
+        assignedIp: vm.ipAddress,
         allIpv4Seen: seenIps,
-        proxmoxPowerState: 'status' in proxmoxLive ? proxmoxLive.status : null,
-        proxmoxProbeError: 'error' in proxmoxLive ? proxmoxLive.error : null,
+        cloudbaseGraceMs,
       });
+      return;
     } catch (err) {
       // Guest agent not ready yet, VM still booting, transient Proxmox error, etc.
       logger.warn('[VMConsolePoll] Guest-agent poll failed — will retry', {
