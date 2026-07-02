@@ -28,6 +28,7 @@ const orgAdminRoutes = require('./src/routes/orgAdminRoutes');
 const adminAccessRequestRoutes = require('./src/routes/adminAccessRequestRoutes');
 const serviceRoutes = require('./src/routes/serviceRoutes');
 const jobRoutes = require('./src/routes/jobRoutes');
+const notificationRoutes = require('./src/routes/notificationRoutes');
 const AppError = require('./src/utils/AppError');
 const pool = require('./src/config/database');
 const { resumeOutboundEmailJobs } = require('./src/services/emailQueueService');
@@ -85,6 +86,7 @@ app.use('/api/services', serviceRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/org-admin', orgAdminRoutes);
+app.use('/api', notificationRoutes);
 
 app.all('*', (req, res, next) => {
   next(new AppError(`Route not found: ${req.originalUrl}`, 404));

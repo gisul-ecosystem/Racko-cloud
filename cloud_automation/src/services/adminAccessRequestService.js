@@ -2,6 +2,7 @@ const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const roleProvisionService = require('./roleProvisionService');
 const { sendAdminAccessDecisionEmail } = require('./email/adminAccessRequestEmailService');
+const { createNotification, NotificationType } = require('./notificationService');
 
 const mapRow = (row) => ({
   id: row.id,
@@ -346,7 +347,16 @@ const createAdminAccessRequest = async ({
     ]
   );
 
-  return mapRow(result.rows[0]);
+  const accessRequest = mapRow(result.rows[0]);
+
+  await createNotification({
+    type: NotificationType.ACCESS_REQUEST,
+    title: 'New admin access request',
+    message: `New admin access request for Lab #${accessRequest.requestId || 'pending'} from ${email}`,
+    requestId: accessRequest.requestId
+  });
+
+  return accessRequest;
 };
 
 const linkAdminAccessRequestsToRequest = async ({ customerEmail, requestId, client = db }) => {
@@ -539,6 +549,15 @@ const reviewAdminAccessRequest = async ({ id, status, reviewedBy, reviewNotes })
       accessRequestId: updatedRequest.id,
       status: updatedRequest.status,
       message: emailError?.message
+    });
+  }
+
+  if (updatedRequest.status === 'approved') {
+    await createNotification({
+      type: NotificationType.ACCESS_REQUEST_REVIEWED,
+      title: 'Admin access approved',
+      message: `Access request #${updatedRequest.id} approved`,
+      requestId: updatedRequest.requestId
     });
   }
 

@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import { verifyManagePortalLogin, getManagePortalData } from '../services/managePortalService.js';
 
 import { generateAndLogConsoleUrl } from '../services/consoleAccessService.js';
+import { createNotification } from '../services/notificationService.js';
 
 import {
   getUserSessionStats,
@@ -183,6 +184,13 @@ router.post('/manage/aws/request/:id/users/:userIndex/console-url', authMiddlewa
       sessionName,
       durationSeconds
     );
+
+    await createNotification({
+      type: 'console_access',
+      title: 'AWS Console access generated',
+      message: `Magic link generated for labuser${userIndex + 1} in Lab #${String(req.params.id).slice(-6)} by admin`,
+      requestId: req.params.id,
+    });
 
     res.json({
       success: true,

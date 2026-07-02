@@ -1,5 +1,6 @@
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
+const { createNotification, NotificationType } = require('./notificationService');
 const { provisionResourceGroup, preflightAzureManagementAccess } = require('../provisioners/azure/resourceGroupProvisioner');
 const { assertProvisionableLocation } = require('./azureLocationService');
 const {
@@ -282,6 +283,19 @@ const provisionRequestResourceGroup = async (requestId) => {
       errorCode: error?.code,
       statusCode: error?.statusCode || error?.status,
       message: error?.message
+    });
+
+    const requestResult = await db.query(
+      `SELECT id, customer_email FROM requests WHERE id = $1 LIMIT 1`,
+      [requestId]
+    );
+    const failedRequest = requestResult.rows[0];
+
+    await createNotification({
+      type: NotificationType.PROVISIONING_FAILED,
+      title: 'Lab provisioning failed',
+      message: `Lab #${requestId}${failedRequest?.customer_email ? ` for ${failedRequest.customer_email}` : ''} failed: ${error.message}`,
+      requestId: Number(requestId) || null
     });
 
     throw error;

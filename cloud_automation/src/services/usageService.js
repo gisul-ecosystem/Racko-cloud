@@ -1,6 +1,7 @@
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const usageEnforcementService = require('./usageEnforcementService');
+const { createNotification, NotificationType } = require('./notificationService');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
 const {
@@ -692,6 +693,19 @@ async function forceLogoutUser({ requestId, userId }) {
     );
 
     await client.query('COMMIT');
+
+    const usernameResult = await db.query(
+      `SELECT username FROM azure_users WHERE id = $1 AND request_id = $2 LIMIT 1`,
+      [userId, requestId]
+    );
+    const username = usernameResult.rows[0]?.username || `user-${userId}`;
+
+    await createNotification({
+      type: NotificationType.FORCE_LOGOUT,
+      title: 'User force logged out',
+      message: `${username} was force logged out of Lab #${requestId} by admin`,
+      requestId: Number(requestId)
+    });
 
     console.log(
       `[FORCE_LOGOUT] Closed ${activeSessionsResult.rows.length} session(s) for user ${userId}. ` +

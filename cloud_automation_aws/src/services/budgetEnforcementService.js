@@ -6,6 +6,7 @@ import {
   reinstateIdentityUser,
 } from '../provisioners/aws/identityProvisioner.js';
 import { sendReinstateCredentialsEmail } from '../provisioners/aws/emailProvisioner.js';
+import { createNotification } from './notificationService.js';
 
 function resolveUsername(user, userIndex) {
   return user.username || `labuser${userIndex + 1}`;
@@ -47,6 +48,18 @@ export async function suspendUser(request, user, accessType) {
     });
 
     console.log(`[budgetEnforcement] Suspended user ${user.userIndex + 1} (${accessType})`);
+
+    await createNotification({
+      type: 'user_suspended',
+      title: 'User suspended — budget exceeded',
+      message: `${resolveUsername(user, user.userIndex)} exceeded $${request.perUserBudgetUsd} budget ($${(user.currentSpend || 0).toFixed(2)} spent) in AWS Lab — access suspended`,
+      requestId: request._id,
+      metadata: {
+        username: resolveUsername(user, user.userIndex),
+        spendUsd: user.currentSpend || 0,
+        budgetUsd: request.perUserBudgetUsd,
+      },
+    });
   } catch (err) {
     console.error('[budgetEnforcement] Suspend failed:', err.message);
   }
@@ -86,6 +99,13 @@ export async function reinstateUser(request, user, accessType) {
       budgetUsd: request.perUserBudgetUsd,
       action: 'reinstated',
       reason: 'Budget renewed by admin',
+    });
+
+    await createNotification({
+      type: 'user_reinstated',
+      title: 'User reinstated',
+      message: `${resolveUsername(user, user.userIndex)} reinstated in AWS Lab #${String(request._id).slice(-6)}`,
+      requestId: request._id,
     });
   } catch (err) {
     console.error('[budgetEnforcement] Reinstate failed:', err.message);

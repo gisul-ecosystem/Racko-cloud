@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const db = require('../db/postgres');
 const { runResourceCleanupForRequest } = require('../services/resourceCleanupService');
 const { sendResourceCleanupEmail } = require('../services/email/resourceCleanupEmailService');
+const { createNotification, NotificationType } = require('../services/notificationService');
 
 let scheduledTask = null;
 
@@ -76,6 +77,13 @@ async function processResourceCleanup(req) {
         intervalHours: resource_cleanup_interval_hours
       });
     }
+
+    await createNotification({
+      type: NotificationType.CLEANUP_RAN,
+      title: 'Resource cleanup completed',
+      message: `Lab #${id} resources cleaned — ${deleted.length} resources removed`,
+      requestId: id
+    });
 
     logEvent('info', 'resource_cleanup_success', {
       requestId: id,

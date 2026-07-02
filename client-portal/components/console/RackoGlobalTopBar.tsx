@@ -4,7 +4,8 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { Menu, Search } from 'lucide-react';
 import { ConsoleProfileMenu } from './ConsoleProfileMenu';
-import { NotificationBell } from './NotificationBell';
+import { NotificationBell as GlobalNotificationBell } from './NotificationBell';
+import CloudAutomationNotificationBell from '../shared/NotificationBell';
 
 interface RackoGlobalTopBarProps {
   onToggleSidebar: () => void;
@@ -14,6 +15,7 @@ interface RackoGlobalTopBarProps {
   searchQuery?: string;
   onSearchChange?: (query: string) => void;
   searchPlaceholder?: string;
+  notificationApiBase?: string;
 }
 
 export function RackoGlobalTopBar({
@@ -24,6 +26,7 @@ export function RackoGlobalTopBar({
   searchQuery = '',
   onSearchChange,
   searchPlaceholder = 'Search...',
+  notificationApiBase,
 }: RackoGlobalTopBarProps) {
   return (
     <header className="sticky top-0 z-10 border-b border-gray-200 bg-white">
@@ -82,7 +85,11 @@ export function RackoGlobalTopBar({
         )}
 
         <div className="ml-auto flex shrink-0 items-center gap-2 sm:gap-3">
-          <NotificationBell />
+          {notificationApiBase ? (
+            <CloudAutomationNotificationBell apiBase={notificationApiBase} />
+          ) : (
+            <GlobalNotificationBell />
+          )}
           <ConsoleProfileMenu />
         </div>
       </div>

@@ -2,6 +2,7 @@ const { Client } = require('@microsoft/microsoft-graph-client');
 const { createAzureCredential } = require('../config/azure');
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
+const { createNotification, NotificationType } = require('./notificationService');
 const { getTodayLimitMinutes, resolveScheduleForRequest } = require('../utils/usageSchedule');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { getLiveSessionMinutes, resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
@@ -276,6 +277,13 @@ async function enforceUsageLimit({ requestId, userId }) {
       `[ENFORCEMENT] Azure access revoked for user ${userId} (${data.username}). ` +
       `Account disabled. RBAC assignments preserved.`
     );
+
+    await createNotification({
+      type: NotificationType.DAILY_LIMIT_REACHED,
+      title: 'Daily usage limit reached',
+      message: `${data.username} has reached the daily limit (${usedMinutes} mins used) in Lab #${requestId}`,
+      requestId
+    });
 
     return {
       success: true,

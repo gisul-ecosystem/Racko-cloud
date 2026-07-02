@@ -1,7 +1,9 @@
 import Request from '../models/Request.js';
+import cron from 'node-cron';
 import { cleanupUserResources } from '../services/resourceCleanupService.js';
 import { sendResourceCleanupEmail } from '../services/cleanupEmailService.js';
 import { buildRequestLabel, countCleanupDeleted } from '../utils/cleanupMetrics.js';
+import { createNotification } from '../services/notificationService.js';
 
 let isRunning = false;
 
@@ -92,6 +94,14 @@ export async function runCleanupCheck() {
             );
           }
         }
+
+        await createNotification({
+          type: 'cleanup_ran',
+          title: 'AWS resource cleanup completed',
+          message: `Lab cleanup ran for ${buildRequestLabel(request)} — ${requestDeletedCount} resource(s) removed`,
+          requestId: request._id,
+          metadata: { deletedCount: requestDeletedCount },
+        });
       }
     }
 
@@ -109,4 +119,27 @@ export function startCleanupScheduler() {
   setInterval(runCleanupCheck, 5 * 60 * 1000);
   console.log('[cleanupScheduler] Started — checking every 5 minutes');
   runCleanupCheck();
+
+  cron.schedule('0 9 * * *', async () => {
+    try {
+      const expiringSoon = await Request.find({
+        status: 'Completed',
+        endDate: {
+          $gte: new Date(),
+          $lte: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        },
+      });
+
+      for (const request of expiringSoon) {
+        await createNotification({
+          type: 'lab_expiring_soon',
+          title: 'AWS Lab expiring in 24 hours',
+          message: `AWS Lab for ${request.customerEmail} (${request.region}) expires in less than 24 hours`,
+          requestId: request._id,
+        });
+      }
+    } catch (err) {
+      console.error('[cleanupScheduler] Expiry warning check failed:', err.message);
+    }
+  });
 }

@@ -3,6 +3,7 @@ import Request from '../models/Request.js';
 import { runScheduledResourceCleanupForRequest } from '../services/labExpiryCleanupService.js';
 import { sendResourceCleanupEmail } from '../services/cleanupEmailService.js';
 import { buildRequestLabel } from '../utils/cleanupMetrics.js';
+import { createNotification } from '../services/notificationService.js';
 
 let scheduledTask = null;
 
@@ -51,6 +52,14 @@ async function processResourceCleanup(request) {
     requestId: String(requestId),
     deletedCount: result.deletedCount,
     nextRun: result.nextCleanupAt.toISOString(),
+  });
+
+  await createNotification({
+    type: 'cleanup_ran',
+    title: 'AWS resource cleanup completed',
+    message: `Lab cleanup ran for ${buildRequestLabel(request)} — ${result.deletedCount} resource(s) removed`,
+    requestId,
+    metadata: { deletedCount: result.deletedCount },
   });
 }
 
