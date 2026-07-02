@@ -340,4 +340,20 @@ router.post(
   (req, res, next) => vmController.cancelSoftwareInstalls(req, res, next)
 );
 
+// PATCH /api/v1/vms/:vmId/restrict
+router.patch(
+  '/:vmId/restrict',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.restrictVM(req, res, next)
+);
+
+// PATCH /api/v1/vms/:vmId/unrestrict
+router.patch(
+  '/:vmId/unrestrict',
+  requireRole('admin', 'super_admin'),
+  validateRequest(vmIdParamSchema),
+  (req, res, next) => vmController.unrestrictVM(req, res, next)
+);
+
 export default router;

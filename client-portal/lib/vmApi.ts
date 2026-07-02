@@ -98,6 +98,7 @@ export interface IVM {
     stopTime: string;
     timezone: string;
   };
+  isRestricted?: boolean;
 }
 
 export interface VMLiveStatus {
@@ -142,6 +143,7 @@ export interface VMDetails {
       timezone: string;
     };
     canResume?: boolean;
+    isRestricted: boolean;
     createdAt: string;
     updatedAt: string;
   };
@@ -330,11 +332,13 @@ export async function fetchMyVMs(filters?: {
   status?: string;
   cloneType?: string;
   node?: string;
+  isRestricted?: boolean;
 }): Promise<IVM[]> {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.cloneType) params.set('cloneType', filters.cloneType);
   if (filters?.node) params.set('node', filters.node);
+  if (typeof filters?.isRestricted === 'boolean') params.set('isRestricted', String(filters.isRestricted));
   const qs = params.toString();
   const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
     `/api/v1/vms${qs ? `?${qs}` : ''}`
@@ -381,18 +385,24 @@ export async function deleteVM(vmId: string): Promise<void> {
   await apiRequest(`/api/v1/vms/${vmId}`, { method: 'DELETE' });
 }
 
-export async function bulkDeleteVMs(vmIds: string[]): Promise<{ jobId: string }> {
-  const res = await apiRequest<ApiResponse<{ jobId: string }>>('/api/v1/vms/bulk-delete', {
+export interface BulkPowerResult {
+  succeeded: number;
+  failed: number;
+  restrictedSkipped: number;
+  errors: Array<{ vmId: string; message: string }>;
+}
+
+export interface BulkDeleteResult {
+  jobId: string;
+  restrictedSkipped: number;
+}
+
+export async function bulkDeleteVMs(vmIds: string[]): Promise<BulkDeleteResult> {
+  const res = await apiRequest<ApiResponse<BulkDeleteResult>>('/api/v1/vms/bulk-delete', {
     method: 'POST',
     body: JSON.stringify({ vmIds }),
   });
   return res.data;
-}
-
-export interface BulkPowerResult {
-  succeeded: number;
-  failed: number;
-  errors: Array<{ vmId: string; message: string }>;
 }
 
 export async function bulkStartVMs(vmIds: string[]): Promise<BulkPowerResult> {
@@ -409,6 +419,16 @@ export async function bulkStopVMs(vmIds: string[]): Promise<BulkPowerResult> {
     body: JSON.stringify({ vmIds }),
   });
   return res.data;
+}
+
+// ─── VM Restriction ───────────────────────────────────────────────────────────
+
+export async function restrictVM(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/${vmId}/restrict`, { method: 'PATCH' });
+}
+
+export async function unrestrictVM(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/${vmId}/unrestrict`, { method: 'PATCH' });
 }
 
 // ─── VM power operations ──────────────────────────────────────────────────────

@@ -132,6 +132,7 @@ export interface VMFilters {
   status?: string;
   cloneType?: 'dedicated_storage' | 'dynamic_storage';
   node?: string;
+  isRestricted?: boolean;
 }
 
 /** Per-VM console credential summary returned alongside a job. */
@@ -290,6 +291,7 @@ export interface VMDetails {
       timezone: string;
     };
     canResume?: boolean;
+    isRestricted: boolean;
     createdAt: Date;
     updatedAt: Date;
   };

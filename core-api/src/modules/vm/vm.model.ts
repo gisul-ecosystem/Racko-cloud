@@ -93,6 +93,9 @@ export interface IVM extends Document {
   // Software installation (Windows — Chocolatey)
   softwareInstalls: SoftwareInstall[];
 
+  // Restriction lock — prevents all power/delete actions until removed
+  isRestricted: boolean;
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -296,6 +299,11 @@ const vmSchema = new Schema<IVM>(
     hyperVCancelled: {
       type: Boolean,
       default: false,
+    },
+    isRestricted: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
     softwareInstalls: {
       type: [

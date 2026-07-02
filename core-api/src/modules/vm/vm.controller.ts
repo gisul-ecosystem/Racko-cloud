@@ -147,7 +147,7 @@ export class VMController {
       });
 
       const result = await vmService.bulkDeleteVMs(vmIds, adminId, req);
-      success(res, 'Bulk delete job started.', { jobId: result.jobId }, 202);
+      success(res, 'Bulk delete job started.', { jobId: result.jobId, restrictedSkipped: result.restrictedSkipped }, 202);
     } catch (error) {
       next(error);
     }
@@ -421,12 +421,14 @@ export class VMController {
     try {
       const authReq = req as AuthenticatedRequest;
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
-      const query = req.query as { status?: string; cloneType?: string; node?: string };
+      const query = req.query as { status?: string; cloneType?: string; node?: string; isRestricted?: string };
 
       const filters: VMFilters = {};
       if (query.status) filters.status = query.status;
       if (query.cloneType) filters.cloneType = query.cloneType as VMFilters['cloneType'];
       if (query.node) filters.node = query.node;
+      if (query.isRestricted === 'true') filters.isRestricted = true;
+      else if (query.isRestricted === 'false') filters.isRestricted = false;
 
       const vms = await vmService.getMyVMs(adminId, filters);
       success(res, 'VMs retrieved.', { vms, total: vms.length });
@@ -693,6 +695,40 @@ export class VMController {
       const userId = new mongoose.Types.ObjectId(authReq.user.userId);
       const vms = await vmService.getMyAssignedVMs(userId);
       success(res, 'Assigned VMs retrieved.', { vms, total: vms.length });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/vms/:vmId/restrict
+   */
+  async restrictVM(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('[VMRestrict] Restrict requested', { userId: authReq.user.userId, vmId: vmId.toString() });
+      await vmService.restrictVM(vmId, adminId, req);
+      success(res, 'VM restricted successfully.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/vms/:vmId/unrestrict
+   */
+  async unrestrictVM(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      logger.info('[VMRestrict] Unrestrict requested', { userId: authReq.user.userId, vmId: vmId.toString() });
+      await vmService.unrestrictVM(vmId, adminId, req);
+      success(res, 'VM unrestricted successfully.');
     } catch (error) {
       next(error);
     }
