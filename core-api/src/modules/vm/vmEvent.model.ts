@@ -17,7 +17,9 @@ export type VMEventType =
   | 'HYPERV_ENABLED'
   | 'HYPERV_ENABLE_FAILED'
   | 'HYPERV_DISABLED'
-  | 'HYPERV_DISABLE_FAILED';
+  | 'HYPERV_DISABLE_FAILED'
+  | 'VM_RESTRICTED'
+  | 'VM_UNRESTRICTED';
 
 export interface IVMEvent extends Document {
   _id: mongoose.Types.ObjectId;
@@ -76,6 +78,8 @@ const vmEventSchema = new Schema<IVMEvent>(
         'HYPERV_ENABLE_FAILED',
         'HYPERV_DISABLED',
         'HYPERV_DISABLE_FAILED',
+        'VM_RESTRICTED',
+        'VM_UNRESTRICTED',
       ],
       required: true,
       index: true,

@@ -11,6 +11,7 @@ import {
   Layers,
   Plus,
   Server,
+  Shield,
   UserCheck,
   Users,
 } from 'lucide-react';
@@ -71,6 +72,11 @@ const navLinks: NavLink[] = [
     href: '/dashboard/admin/assign-vms/bulk',
     label: 'Bulk Assign',
     icon: <Users className="h-4 w-4" />,
+  },
+  {
+    href: '/dashboard/admin/vms/restricted',
+    label: 'Restricted VMs',
+    icon: <Shield className="h-4 w-4" />,
   },
 ];
 
