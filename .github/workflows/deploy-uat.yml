@@ -162,7 +162,7 @@ jobs:
              echo 'Cleaning Docker logs...'; \
              sudo find /var/lib/docker/containers -name '*.log' -delete; \
              echo 'Cleaning journal logs...'; \
-             sudo journalctl --vacuum=100M; \
+             sudo journalctl --vacuum-size=100M; \
              echo 'Cleaning apt cache...'; \
              sudo apt clean; \
              sudo apt autoclean; \
