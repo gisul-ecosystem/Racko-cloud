@@ -4,7 +4,7 @@ import { handleRazorpayWebhook } from './webhookHandler';
 const router = Router();
 
 // Test endpoint to verify webhook reception
-router.get('/test', (req, res) => {
+router.get('/test', (_req, res) => {
   res.json({ 
     success: true, 
     message: 'Webhook endpoint is accessible',
