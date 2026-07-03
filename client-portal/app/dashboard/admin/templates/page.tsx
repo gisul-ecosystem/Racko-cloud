@@ -1,17 +1,20 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useAuth } from '../../../../context/AuthContext';
 import {
   fetchAdminVmTemplates,
+  fetchAdminVmTemplateStreamTicket,
   fetchMyVMs,
   createAdminVmTemplate,
   deleteAdminVmTemplate,
   type AdminVmTemplate,
+  type AdminVmTemplateBuildStep,
   type IVM,
 } from '../../../../lib/vmApi';
 import { ApiError } from '../../../../lib/apiClient';
+import { getSseGatewayBaseUrl } from '../../../../lib/gatewayUrl';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
@@ -24,6 +27,9 @@ const STATUS_STYLES: Record<string, string> = {
   failed:   'bg-red-50 text-red-700 border-red-200',
 };
 
+const SSE_MAX_RECONNECT_ATTEMPTS = 8;
+const SSE_POLL_INTERVAL_MS = 12_000;
+
 function StatusBadge({ status }: { status: string }) {
   return (
     <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full border ${STATUS_STYLES[status] ?? 'bg-gray-50 text-gray-600 border-gray-200'}`}>
@@ -32,6 +38,64 @@ function StatusBadge({ status }: { status: string }) {
       {status === 'failed'   && <AlertCircle className="w-3 h-3" />}
       {status}
     </span>
+  );
+}
+
+// ─── Build step metro progress ────────────────────────────────────────────────
+
+const BUILD_STEPS: { key: AdminVmTemplateBuildStep; label: string }[] = [
+  { key: 'stopping_source', label: 'Stopping source VM' },
+  { key: 'cloning',         label: 'Cloning VM' },
+  { key: 'starting_source', label: 'Starting source VM' },
+  { key: 'running_sysprep', label: 'Running Sysprep' },
+  { key: 'converting',      label: 'Converting to template' },
+];
+
+function BuildStepProgress({
+  buildStep,
+  errorMessage,
+}: {
+  buildStep: AdminVmTemplateBuildStep;
+  errorMessage?: string | null;
+}) {
+  const currentIdx = BUILD_STEPS.findIndex((s) => s.key === buildStep);
+
+  return (
+    <div className="flex flex-col gap-1.5 py-1">
+      {BUILD_STEPS.map((step, idx) => {
+        const isDone = currentIdx > idx;
+        const isActive = currentIdx === idx;
+        const isFailed = isActive && !!errorMessage;
+
+        return (
+          <div key={step.key} className="flex items-center gap-2">
+            {/* Step dot */}
+            <div className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 border transition-colors ${
+              isFailed
+                ? 'bg-red-100 border-red-300'
+                : isDone
+                ? 'bg-green-500 border-green-500'
+                : isActive
+                ? 'bg-blue-100 border-blue-400'
+                : 'bg-gray-100 border-gray-200'
+            }`}>
+              {isFailed && <AlertCircle className="w-3 h-3 text-red-500" />}
+              {!isFailed && isDone && <Check className="w-3 h-3 text-white" />}
+              {!isFailed && isActive && <Loader2 className="w-3 h-3 text-blue-500 animate-spin" />}
+            </div>
+            {/* Label */}
+            <span className={`text-xs ${
+              isFailed ? 'text-red-600 font-medium' :
+              isDone   ? 'text-green-700' :
+              isActive ? 'text-blue-700 font-medium' :
+              'text-gray-400'
+            }`}>
+              {step.label}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -194,23 +258,152 @@ export default function AdminTemplatesPage() {
     if (isAuthenticated) void loadTemplates();
   }, [isAuthenticated, loadTemplates]);
 
-  const pollAttemptsRef = useRef(0);
-  useEffect(() => {
-    const hasCreating = templates.some((t) => t.status === 'creating');
-    if (!hasCreating) {
-      pollAttemptsRef.current = 0;
-      return;
-    }
-    if (pollAttemptsRef.current >= 20) return;
+  // Stable key — only changes when the SET of creating templates changes (new one added
+  // or one finishes). Does NOT re-run when buildStep changes (that would close/reopen the
+  // SSE connection on each step, which is wrong). One persistent connection per template.
+  const creatingIds = templates
+    .filter((t) => t.status === 'creating')
+    .map((t) => t._id)
+    .sort()
+    .join(',');
 
-    const timer = setInterval(() => {
-      pollAttemptsRef.current += 1;
-      loadTemplates().catch(() => {
-        pollAttemptsRef.current = 20;
+  useEffect(() => {
+    const creatingTemplates = templates.filter((t) => t.status === 'creating');
+    if (creatingTemplates.length === 0) return;
+
+    const cleanups: Array<() => void> = [];
+
+    for (const tpl of creatingTemplates) {
+      let source: EventSource | null = null;
+      let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+      let pollInterval: ReturnType<typeof setInterval> | null = null;
+      let disposed = false;
+      let terminal = false;
+      let attempt = 0;
+
+      const stopPolling = () => {
+        if (pollInterval) {
+          clearInterval(pollInterval);
+          pollInterval = null;
+        }
+      };
+
+      const startPolling = () => {
+        if (pollInterval || disposed || terminal) return;
+
+        pollInterval = setInterval(() => {
+          if (disposed || terminal) {
+            stopPolling();
+            return;
+          }
+
+          void fetchAdminVmTemplates()
+            .then((data) => {
+              if (disposed || terminal) return;
+
+              setTemplates(data);
+
+              const updated = data.find((t) => t._id === tpl._id);
+              if (updated && (updated.status === 'ready' || updated.status === 'failed')) {
+                terminal = true;
+                stopPolling();
+                source?.close();
+                source = null;
+              }
+            })
+            .catch(() => {
+              // ignore transient poll failures
+            });
+        }, SSE_POLL_INTERVAL_MS);
+      };
+
+      const scheduleReconnect = () => {
+        if (disposed || terminal) return;
+
+        attempt += 1;
+        if (attempt >= SSE_MAX_RECONNECT_ATTEMPTS) {
+          startPolling();
+          return;
+        }
+
+        const delay = Math.min(1000 * 2 ** (attempt - 1), 10_000);
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, delay);
+      };
+
+      const connect = () => {
+        if (disposed || terminal) return;
+
+        void (async () => {
+          try {
+            const { streamToken } = await fetchAdminVmTemplateStreamTicket(tpl._id);
+            if (disposed || terminal) return;
+
+            const url = `${getSseGatewayBaseUrl()}/api/v1/admin-vm-templates/${tpl._id}/stream?streamToken=${encodeURIComponent(streamToken)}`;
+
+            source = new EventSource(url, { withCredentials: true });
+
+            source.onopen = () => {
+              attempt = 0;
+              stopPolling();
+            };
+
+            source.onmessage = (e: MessageEvent) => {
+              try {
+                const update = JSON.parse(e.data as string) as {
+                  buildStep: AdminVmTemplateBuildStep;
+                  status: 'creating' | 'ready' | 'failed';
+                  errorMessage?: string;
+                };
+
+                setTemplates((prev) =>
+                  prev.map((t) =>
+                    t._id === tpl._id
+                      ? { ...t, buildStep: update.buildStep, status: update.status, errorMessage: update.errorMessage ?? null }
+                      : t
+                  )
+                );
+
+                if (update.status === 'ready' || update.status === 'failed') {
+                  terminal = true;
+                  stopPolling();
+                  source?.close();
+                  source = null;
+                  void loadTemplates();
+                }
+              } catch (err) {
+                console.error('[SSE][Client] Failed to parse message', { templateId: tpl._id, data: e.data, err });
+              }
+            };
+
+            source.onerror = () => {
+              source?.close();
+              source = null;
+              scheduleReconnect();
+            };
+          } catch {
+            scheduleReconnect();
+          }
+        })();
+      };
+
+      connect();
+
+      cleanups.push(() => {
+        disposed = true;
+        if (reconnectTimer) clearTimeout(reconnectTimer);
+        stopPolling();
+        source?.close();
       });
-    }, 10000);
-    return () => clearInterval(timer);
-  }, [templates, loadTemplates]);
+    }
+
+    return () => {
+      cleanups.forEach((fn) => fn());
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [creatingIds]);
 
   function openCreateModal() {
     setShowCreate(true);
@@ -342,11 +535,20 @@ export default function AdminTemplatesPage() {
                         )}
                       </td>
                       <td className="px-4 py-3.5">
-                        <StatusBadge status={tpl.status} />
-                        {tpl.status === 'failed' && tpl.errorMessage && (
-                          <p className="text-xs text-red-500 mt-1 max-w-xs truncate" title={tpl.errorMessage}>
-                            {tpl.errorMessage}
-                          </p>
+                        {tpl.status === 'creating' && tpl.buildStep !== null ? (
+                          <BuildStepProgress
+                            buildStep={tpl.buildStep}
+                            errorMessage={tpl.errorMessage}
+                          />
+                        ) : (
+                          <>
+                            <StatusBadge status={tpl.status} />
+                            {tpl.status === 'failed' && tpl.errorMessage && (
+                              <p className="text-xs text-red-500 mt-1 max-w-xs truncate" title={tpl.errorMessage}>
+                                {tpl.errorMessage}
+                              </p>
+                            )}
+                          </>
                         )}
                       </td>
                       <td className="px-4 py-3.5">

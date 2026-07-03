@@ -4,7 +4,7 @@
 
 export const HYPERV_STATE_SCRIPT = [
   "$ErrorActionPreference='Stop'",
-  "$s=(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V).State.ToString().Trim()",
+  "$s=(Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V | Select-Object -ExpandProperty State).ToString().Trim()",
   "if($s -eq 'Enabled'){'HYPERV_STATE=ON'}else{'HYPERV_STATE=OFF'}",
 ].join('; ');
 

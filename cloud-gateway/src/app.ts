@@ -35,10 +35,16 @@ app.use(tenantResolver);
 app.use(loggerMiddleware);
 
 // 5. User ID-based rate limit — per-user independent buckets, falls back to IP for unauthenticated requests
-// Skip rate limiting for auth token endpoints — secured by their own mechanisms, no rate limit needed
+// Skip rate limiting for auth token endpoints and long-lived SSE streams.
 const RATE_LIMIT_SKIP_PATHS = new Set(['/api/v1/auth/refresh', '/api/v1/auth/validate']);
+
+function isRateLimitExemptPath(path: string): boolean {
+  if (RATE_LIMIT_SKIP_PATHS.has(path)) return true;
+  return /^\/api\/v1\/admin-vm-templates\/[a-f\d]{24}\/stream$/i.test(path);
+}
+
 app.use((req, res, next) => {
-  if (RATE_LIMIT_SKIP_PATHS.has(req.path)) return next();
+  if (isRateLimitExemptPath(req.path)) return next();
   return userRateLimiter(req, res, next);
 });
 
