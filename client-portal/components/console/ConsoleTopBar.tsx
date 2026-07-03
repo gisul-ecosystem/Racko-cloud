@@ -2,9 +2,10 @@
 
 import { useConsoleShell } from './ConsoleContext';
 import { RackoGlobalTopBar } from './RackoGlobalTopBar';
+import { ConsoleSearchDropdown } from './ConsoleSearchDropdown';
 
 export function ConsoleTopBar() {
-  const { searchQuery, setSearchQuery, toggleSidebar } = useConsoleShell();
+  const { searchQuery, setSearchQuery, isSearchOpen, setSearchOpen, toggleSidebar } = useConsoleShell();
 
   return (
     <RackoGlobalTopBar
@@ -14,6 +15,9 @@ export function ConsoleTopBar() {
       showSearch
       searchQuery={searchQuery}
       onSearchChange={setSearchQuery}
+      isSearchOpen={isSearchOpen}
+      onSearchOpen={setSearchOpen}
+      searchDropdown={<ConsoleSearchDropdown />}
     />
   );
 }

@@ -16,6 +16,12 @@ const envSchema = z.object({
     .url('CLOUD_AUTOMATION_AWS_URL must be a valid URL')
     .default('http://localhost:3003'),
 
+  // Cloud automation GCP (GCP access management)
+  CLOUD_AUTOMATION_GCP_URL: z
+    .string()
+    .url('CLOUD_AUTOMATION_GCP_URL must be a valid URL')
+    .default('http://localhost:3004'),
+
   // JWT
   JWT_ACCESS_SECRET: z.string().min(64, 'JWT_ACCESS_SECRET must be at least 64 characters'),
   JWT_ACCESS_EXPIRES_IN: z.string().default('15m'),

@@ -39,10 +39,13 @@ function blockLabAndPortalRoutes(req: Request, _res: Response, next: NextFunctio
   next();
 }
 
-/** AWS routes share the Azure prefix; skip them so the AWS proxy can handle the request. */
-function skipAwsAutomationPaths(req: Request, _res: Response, next: NextFunction): void {
+/** AWS/GCP routes share the Azure prefix; skip them so their proxies can handle the request. */
+function skipSiblingAutomationPaths(req: Request, _res: Response, next: NextFunction): void {
   const path = req.path.split('?')[0] ?? req.path;
-  if (path.startsWith('/api/v1/cloud-automation-aws')) {
+  if (
+    path.startsWith('/api/v1/cloud-automation-aws') ||
+    path.startsWith('/api/v1/cloud-automation-gcp')
+  ) {
     return next('route');
   }
   next();
@@ -92,7 +95,7 @@ const cloudAutomationProxy = createProxyMiddleware({
 // Type 1 — Racko JWT + role guard; all admin cloud_automation APIs except lab/portal routes.
 router.use(
   GATEWAY_PREFIX,
-  skipAwsAutomationPaths,
+  skipSiblingAutomationPaths,
   authMiddleware,
   verifyMiddleware,
   requireRole('admin', 'super_admin'),

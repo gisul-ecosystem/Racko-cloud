@@ -1,6 +1,4 @@
-import { syncRequestUserSpend } from '../services/costTrackingService.js';
 import { checkAndEnforceBudgets } from '../services/budgetEnforcementService.js';
-import Request from '../models/Request.js';
 
 let isRunning = false;
 
@@ -16,20 +14,9 @@ export async function runBudgetSync() {
   isRunning = true;
 
   try {
-    console.log('[budgetScheduler] Starting cost sync...');
-
-    const activeRequests = await Request.find({
-      status: 'Completed',
-      endDate: { $gte: new Date() },
-    });
-
-    for (const request of activeRequests) {
-      await syncRequestUserSpend(String(request._id));
-    }
-
+    console.log('[budgetScheduler] Enforcing budgets after cost sync...');
     await checkAndEnforceBudgets();
-
-    console.log(`[budgetScheduler] Sync complete for ${activeRequests.length} requests`);
+    console.log('[budgetScheduler] Budget enforcement complete');
   } catch (err) {
     console.error('[budgetScheduler] Error:', err.message);
   } finally {
@@ -46,7 +33,7 @@ export function startBudgetScheduler() {
   const intervalMinutes = Number(process.env.BUDGET_POLL_INTERVAL_MINUTES || 15);
   const INTERVAL_MS = intervalMinutes * 60 * 1000;
 
-  console.log(`[budgetScheduler] Started — polling every ${intervalMinutes} minutes`);
+  console.log(`[budgetScheduler] Started — enforcing budgets every ${intervalMinutes} minutes`);
   setInterval(runBudgetSync, INTERVAL_MS);
 
   runBudgetSync();

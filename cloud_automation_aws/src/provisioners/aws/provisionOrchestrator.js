@@ -7,6 +7,8 @@ import { createManagePortalSession } from '../../services/managePortalService.js
 import { sendCredentialsEmail } from './emailProvisioner.js';
 import { resolveLabAccount } from './accountProvisioner.js';
 import { applyScpRestrictions, isScpStepComplete, rollbackScpResources } from './scpProvisioner.js';
+import { deployAutoTagger } from './autoTaggerProvisioner.js';
+import { activateCostAllocationTags } from '../../services/costTrackingService.js';
 import Request from '../../models/Request.js';
 import {
   complete,
@@ -139,6 +141,48 @@ export async function run(requestId) {
       context.awsAccountId = request.awsAccountId;
     }
 
+    // Step 1b — Flag billing access requirement and activate cost allocation tags (once per request).
+    if (!request.provisionStatus?.costAllocationTagsActivated) {
+      // NOTE: IAM user access to billing CANNOT be activated via SDK.
+      // It requires root account login → Account Settings →
+      // "IAM User and Role Access to Billing Information" → Activate.
+      // Future: CloudFormation StackSets can automate this via a custom resource.
+      const billingWarning =
+        'IAM billing access must be activated manually in each lab account root settings before cost tracking works.';
+
+      await Request.findByIdAndUpdate(requestId, {
+        $set: {
+          'provisionStatus.billingIamAccessEnabled': false,
+          'provisionStatus.billingWarning': billingWarning,
+        },
+        updatedAt: new Date(),
+      });
+
+      console.warn(`[Provisioner] Account ${context.awsAccountId} needs IAM billing access activated.`);
+      console.warn(
+        '[Provisioner] Root login → Account Settings → IAM User and Role Access to Billing → Activate'
+      );
+
+      const tagActivated = await activateCostAllocationTags(context.awsAccountId);
+      if (!tagActivated) {
+        await Request.findByIdAndUpdate(requestId, {
+          $set: { 'provisionStatus.billingAccessWarning': true },
+          updatedAt: new Date(),
+        });
+      } else {
+        await Request.findByIdAndUpdate(requestId, {
+          $set: {
+            'provisionStatus.billingIamAccessEnabled': true,
+            'provisionStatus.costAllocationTagsActivated': true,
+            'provisionStatus.billingAccessWarning': false,
+          },
+          updatedAt: new Date(),
+        });
+      }
+
+      request = await Request.findById(requestId);
+    }
+
     if (!isScpStepComplete(request.provisionedResources)) {
       context.scpResult = await runStep(requestId, 'SCP', 'Apply SCP restrictions', 2, async () => {
         try {
@@ -165,13 +209,24 @@ export async function run(requestId) {
       );
     }
 
+    const labAccounts = buildLabAccounts(request, context.awsAccountId);
+    await runStep(requestId, 'AUTOTAG', 'Deploy auto-tagger Lambda', 3, async () => {
+      const deployments = [];
+      for (const account of labAccounts) {
+        const deployment = await deployAutoTagger(account.accountId, requestId);
+        deployments.push(deployment);
+      }
+      console.log('[Orchestrator] Auto-tagger deployed to all lab accounts');
+      return { accountCount: deployments.length, deployments };
+    });
+
     const hasUsers = isMagicLink ? request.labRoles?.length : request.identityUsers?.length;
 
     if (!hasUsers) {
       context.identityUsers = [];
       context.labRoles = [];
 
-      await runStep(requestId, 'ROLES', 'Create lab users/roles', 3, async () => {
+      await runStep(requestId, 'ROLES', 'Create lab users/roles', 4, async () => {
         if (isMagicLink) {
           context.labRoles = await createLabRoles(request);
           await Request.findByIdAndUpdate(requestId, {
@@ -181,8 +236,7 @@ export async function run(requestId) {
           return { count: context.labRoles.length, type: 'iam_roles' };
         }
 
-        const accounts = buildLabAccounts(request, context.awsAccountId);
-        context.identityUsers = await provisionIdentityUsers(request, accounts);
+        context.identityUsers = await provisionIdentityUsers(request, labAccounts);
         await Request.findByIdAndUpdate(requestId, {
           identityUsers: mapIdentityUsersForStorage(context.identityUsers),
           updatedAt: new Date(),
@@ -196,12 +250,12 @@ export async function run(requestId) {
     }
 
     if (!isMagicLink) {
-      await runStep(requestId, 'POLICY', 'Assign permissions', 4, async () => {
+      await runStep(requestId, 'POLICY', 'Assign permissions', 5, async () => {
         console.log('[Orchestrator] Step 4 skipped for IAM User path — policies attached in Step 3');
         return { skipped: true, reason: 'iam_user_inline_policies' };
       });
     } else if (isMagicLink) {
-      await runStep(requestId, 'POLICY', 'Attach permissions', 4, async () => ({
+      await runStep(requestId, 'POLICY', 'Attach permissions', 5, async () => ({
         attached: true,
         roleCount: context.labRoles.length,
       }));
@@ -212,11 +266,11 @@ export async function run(requestId) {
         requestId,
         'PORTAL',
         'Create manage portal access',
-        5,
+        6,
         () => createManagePortalSession(request)
       );
 
-      await runStep(requestId, 'EMAIL', 'Send credentials email', 6, () =>
+      await runStep(requestId, 'EMAIL', 'Send credentials email', 7, () =>
         sendCredentialsEmail(request, {
           awsAccountId: context.awsAccountId,
           labRoles: context.labRoles,

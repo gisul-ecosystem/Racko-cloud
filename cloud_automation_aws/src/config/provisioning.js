@@ -1,10 +1,11 @@
 export const PROVISION_STEPS = {
-  ACCOUNT: { step: 1, progress: 20, name: 'Prepare lab account' },
-  SCP: { step: 2, progress: 35, name: 'Apply SCP restrictions' },
-  ROLES: { step: 3, progress: 60, name: 'Create IAM lab roles' },
-  POLICY: { step: 4, progress: 80, name: 'Attach permissions' },
-  PORTAL: { step: 5, progress: 90, name: 'Create manage portal access' },
-  EMAIL: { step: 6, progress: 100, name: 'Send credentials email' },
+  ACCOUNT: { step: 1, progress: 15, name: 'Prepare lab account' },
+  SCP: { step: 2, progress: 25, name: 'Apply SCP restrictions' },
+  AUTOTAG: { step: 3, progress: 40, name: 'Deploy auto-tagger Lambda' },
+  ROLES: { step: 4, progress: 55, name: 'Create IAM lab roles' },
+  POLICY: { step: 5, progress: 75, name: 'Attach permissions' },
+  PORTAL: { step: 6, progress: 90, name: 'Create manage portal access' },
+  EMAIL: { step: 7, progress: 100, name: 'Send credentials email' },
 };
 
 export const provisioningConfig = {

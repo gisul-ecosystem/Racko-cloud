@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { BookOpen, Server, Globe, ArrowRight } from 'lucide-react';
+import { BookOpen, Server, Globe, Cloud, ArrowRight } from 'lucide-react';
 
 const sections = [
   {
@@ -26,6 +26,30 @@ const sections = [
       { href: '/console/docs/esi/adding-servers', label: 'Adding Servers' },
       { href: '/console/docs/esi/console-access', label: 'Browser Console' },
       { href: '/console/docs/esi/faq', label: 'FAQ' },
+    ],
+  },
+  {
+    icon: Cloud,
+    title: 'Azure Services',
+    description: 'Provision Azure lab environments, manage access, and track live provisioning.',
+    color: 'bg-sky-50 text-sky-600',
+    links: [
+      { href: '/console/docs/azure/getting-started', label: 'Getting Started' },
+      { href: '/console/docs/azure/creating-requests', label: 'Creating Requests' },
+      { href: '/console/docs/azure/request-status', label: 'Request Status' },
+      { href: '/console/docs/azure/faq', label: 'FAQ' },
+    ],
+  },
+  {
+    icon: Server,
+    title: 'AWS Services',
+    description: 'Provision AWS lab environments, configure IAM access, and monitor spend.',
+    color: 'bg-orange-50 text-orange-600',
+    links: [
+      { href: '/console/docs/aws/getting-started', label: 'Getting Started' },
+      { href: '/console/docs/aws/creating-requests', label: 'Creating Requests' },
+      { href: '/console/docs/aws/request-status', label: 'Request Status' },
+      { href: '/console/docs/aws/faq', label: 'FAQ' },
     ],
   },
 ];

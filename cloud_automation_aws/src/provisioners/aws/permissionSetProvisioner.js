@@ -8,7 +8,7 @@ import {
 import { ssoAdminClient, SSO_INSTANCE_ARN, formatIdentityCenterError } from '../../config/aws.js';
 import { deriveUsername } from '../../config/scpPolicies.js';
 import {
-  INLINE_IAM_POLICIES,
+  buildPermissionPolicy,
   INLINE_IAM_POLICY_ALIASES,
 } from '../../config/iamPolicies.js';
 import { withRetry } from '../../utils/retry.js';
@@ -65,13 +65,10 @@ const MANAGED_AWS_POLICIES = new Set(['ReadOnlyAccess']);
 
 function partitionPolicies(policyNames) {
   const managedPolicies = [];
-  const inlineStatements = [];
 
   for (const policyName of policyNames) {
-    const inlineKey = resolveInlinePolicyName(policyName);
-    const inlinePolicy = INLINE_IAM_POLICIES[inlineKey];
-    if (inlinePolicy) {
-      inlineStatements.push(...inlinePolicy.Statement);
+    const resolved = resolveInlinePolicyName(policyName);
+    if (/FullAccess|ReadOnlyAccess/.test(resolved) || INLINE_IAM_POLICY_ALIASES[policyName]) {
       continue;
     }
 
@@ -85,12 +82,7 @@ function partitionPolicies(policyNames) {
     );
   }
 
-  const inlinePolicy =
-    inlineStatements.length > 0
-      ? { Version: '2012-10-17', Statement: inlineStatements }
-      : null;
-
-  return { managedPolicies, inlinePolicy };
+  return { managedPolicies };
 }
 
 function collectManagedPolicies(request) {
@@ -150,20 +142,15 @@ export async function createPermissionSet(request, awsAccountId, options = {}) {
   const requestId = String(request._id);
 
   const requestedPolicies = collectManagedPolicies(request);
-  const { managedPolicies, inlinePolicy } = partitionPolicies(requestedPolicies);
+  const { managedPolicies } = partitionPolicies(requestedPolicies);
 
+  const basePolicy = buildPermissionPolicy(request);
   const tagStatements = buildTagEnforcementStatement(targetUsername, requestId);
   const mergedInlinePolicy = {
     Version: '2012-10-17',
     Statement: [
-      ...(inlinePolicy?.Statement || []),
-      ...tagStatements,
-      {
-        Sid: 'AllowCostExplorerRead',
-        Effect: 'Allow',
-        Action: ['ce:GetCostAndUsage', 'ce:GetCostForecast'],
-        Resource: '*',
-      },
+      ...basePolicy.Statement,
+      tagStatements[0],
     ],
   };
 

@@ -203,6 +203,12 @@ const requestSchema = new mongoose.Schema(
 
     perUserBudgetUsd: { type: Number, default: null },
 
+    totalSpend: { type: Number, default: 0 },
+    spendLastUpdated: Date,
+    finalSpend: { type: mongoose.Schema.Types.Mixed },
+    totalFinalSpend: { type: Number, default: 0 },
+    expiredAt: Date,
+
     selectedServices: [selectedServiceSchema],
     permissions: [permissionSchema],
     selectedPermissions: {
@@ -225,6 +231,10 @@ const requestSchema = new mongoose.Schema(
         enum: ['idle', 'running', 'completed', 'failed'],
         default: 'idle',
       },
+      billingIamAccessEnabled: { type: Boolean, default: false },
+      billingAccessWarning: { type: Boolean, default: false },
+      billingWarning: String,
+      costAllocationTagsActivated: { type: Boolean, default: false },
       steps: {
         create_account: { type: provisionStepSchema, default: () => ({}) },
         apply_scp: { type: provisionStepSchema, default: () => ({}) },

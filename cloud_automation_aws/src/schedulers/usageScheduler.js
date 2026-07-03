@@ -1,7 +1,12 @@
 import cron from 'node-cron';
 import { DateTime } from 'luxon';
 import Request from '../models/Request.js';
-import { monitorAwsConsoleLogins, monitorIdleUsageSessions, monitorStaleSessions } from '../services/awsConsoleLoginMonitor.js';
+import {
+  monitorAwsConsoleLogins,
+  monitorAwsUserActivity,
+  monitorIdleUsageSessions,
+  monitorStaleSessions,
+} from '../services/awsConsoleLoginMonitor.js';
 import { syncActiveMagicLinkUsageSessions } from '../services/sessionTrackingService.js';
 import {
   handleDailyLimitReached,
@@ -63,13 +68,13 @@ async function enforceDailyLimitsForRequest(request) {
 
 async function monitorUsageSessions() {
   await monitorAwsConsoleLogins();
+  await monitorAwsUserActivity();
   await monitorIdleUsageSessions();
   await monitorActiveSessions();
   await monitorStaleSessions();
 
   const requests = await Request.find({
     status: 'Completed',
-    $or: [{ enableDailyUsage: true }, { 'usageWindows.0': { $exists: true } }],
     startDate: { $lte: new Date() },
     endDate: { $gte: new Date() },
   }).select('_id accessType');

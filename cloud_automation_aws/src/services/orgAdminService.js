@@ -5,8 +5,8 @@ import {
 } from '@aws-sdk/client-iam';
 import { iamClient } from '../config/aws.js';
 import {
-  INLINE_IAM_POLICIES,
-  INLINE_IAM_POLICY_ALIASES,
+  buildPermissionPolicy,
+  buildPermissionPolicyFromPolicyNames,
   SERVICE_IAM_POLICIES,
 } from '../config/iamPolicies.js';
 import Request from '../models/Request.js';
@@ -18,6 +18,7 @@ import { countCleanupDeleted } from '../utils/cleanupMetrics.js';
 import { createNotification } from './notificationService.js';
 import { syncRequestUserSpend, fetchUserSpend } from './costTrackingService.js';
 import { attachLiveUsageToUsers } from './userLiveUsageService.js';
+import { syncRecentActivityForRequest } from './awsConsoleLoginMonitor.js';
 import {
   getUserSessionStats,
   syncActiveMagicLinkUsageSessions,
@@ -48,36 +49,12 @@ function createError(message, statusCode = 400) {
   return error;
 }
 
-function buildPolicyDocumentFromNames(policies = []) {
-  const statements = [];
-
-  for (const policyName of policies) {
-    const inlineKey = INLINE_IAM_POLICY_ALIASES[policyName] || policyName;
-    const inline = INLINE_IAM_POLICIES[inlineKey];
-    if (inline) {
-      statements.push(...inline.Statement);
-    }
+function buildPolicyDocumentFromNames(policies = [], request = null) {
+  if (request?.permissions?.length) {
+    return buildPermissionPolicy(request);
   }
 
-  if (statements.length === 0) {
-    statements.push({
-      Effect: 'Allow',
-      Action: ['*:Describe*', '*:List*', '*:Get*'],
-      Resource: '*',
-    });
-  }
-
-  statements.push({
-    Sid: 'AllowTagging',
-    Effect: 'Allow',
-    Action: ['ec2:CreateTags', 'rds:AddTagsToResource', 's3:PutObjectTagging'],
-    Resource: '*',
-  });
-
-  return {
-    Version: '2012-10-17',
-    Statement: statements,
-  };
+  return buildPermissionPolicyFromPolicyNames(policies);
 }
 
 function resolveUserPolicies(role, request) {
@@ -116,7 +93,7 @@ function mapUsersFromRequest(request, spendRecords = []) {
       username,
       roleName: role.roleName || username,
       roleArn: role.roleArn,
-      userId: role.userId,
+      userId: role.userId || role.username || userIdFromIndex(role.userIndex),
       email: role.email,
       consoleUrl: role.consoleUrl,
       password: role.password,
@@ -183,6 +160,9 @@ export async function getRequestDetail(requestId) {
   const today = new Date().toISOString().split('T')[0];
   const spendRecords = await UserSpend.find({ requestId, date: today });
   await syncActiveMagicLinkUsageSessions(requestId);
+  await syncRecentActivityForRequest(requestId).catch((err) => {
+    console.warn(`[orgAdmin] Activity sync failed for ${requestId}:`, err.message);
+  });
   const requestForUsage = await Request.findById(requestId);
   const baseUsers = mapUsersFromRequest(requestForUsage || request, spendRecords);
 
