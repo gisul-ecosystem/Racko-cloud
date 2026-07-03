@@ -382,7 +382,9 @@ export class VMService {
 
     // Super-admin enabled templates (shared across all admins)
     const enabledVmids = new Set(enabledDocs.map((d) => d.vmid));
-    const sharedTemplates = all.filter((t) => enabledVmids.has(t.vmid));
+    const sharedTemplates = all
+      .filter((t) => enabledVmids.has(t.vmid))
+      .map((t) => ({ ...t, isCustom: false }));
 
     // Admin's own custom templates merged into the same shape — deduped against shared
     const proxmoxByVmid = new Map(all.map((t) => [t.vmid, t]));
@@ -402,6 +404,7 @@ export class VMService {
           maxdisk: proxmox.maxdisk,
           status: proxmox.status,
           template: 1,
+          isCustom: true,
         };
       });
 
@@ -576,6 +579,13 @@ export class VMService {
     adminId: mongoose.Types.ObjectId,
     req: Request
   ): Promise<{ jobId: string }> {
+    // Validate count against configured maximum
+    if (dto.count > config.VM_MAX_BULK_COUNT) {
+      throw new ValidationError(
+        `Cannot create more than ${config.VM_MAX_BULK_COUNT} VMs at once.`
+      );
+    }
+
     // Get template details — validates template exists and is enabled for admins
     const templateDetails = await this.getTemplateDetails(dto.templateId, req);
 

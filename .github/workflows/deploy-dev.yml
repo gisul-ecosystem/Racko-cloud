@@ -107,6 +107,7 @@ jobs:
       - name: Build client-portal image
         run: |
           docker build \
+            --build-arg NEXT_PUBLIC_VM_MAX_BULK_COUNT=50 \
             --build-arg NEXT_PUBLIC_GATEWAY_URL=https://api-dev.racko.ai \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }} \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:dev \
