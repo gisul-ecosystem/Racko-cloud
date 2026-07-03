@@ -154,6 +154,20 @@ jobs:
         run: |
           ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" \
             "set -e; \
+             echo 'Cleaning up Docker system...'; \
+             sudo docker system prune -a --volumes -f; \
+             sudo docker container prune -f; \
+             sudo docker image prune -a -f; \
+             sudo docker volume prune -f; \
+             echo 'Cleaning Docker logs...'; \
+             sudo find /var/lib/docker/containers -name '*.log' -delete; \
+             echo 'Cleaning journal logs...'; \
+             sudo journalctl --vacuum=100M; \
+             echo 'Cleaning apt cache...'; \
+             sudo apt clean; \
+             sudo apt autoclean; \
+             echo 'Disk usage after cleanup:'; \
+             df -h; \
              cd ${DEPLOY_PATH}; \
              export DOCKERHUB_USERNAME='${DOCKERHUB_USERNAME}'; \
              export IMAGE_TAG='qa'; \
