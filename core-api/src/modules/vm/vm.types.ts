@@ -12,6 +12,7 @@ export interface ProxmoxTemplate {
   maxdisk: number;   // allocated disk bytes
   status: string;
   template: number;  // 1 = is template
+  isCustom?: boolean; // true if this is an admin-created custom template
 }
 
 export interface ProxmoxTask {
@@ -132,6 +133,7 @@ export interface VMFilters {
   status?: string;
   cloneType?: 'dedicated_storage' | 'dynamic_storage';
   node?: string;
+  isRestricted?: boolean;
 }
 
 /** Per-VM console credential summary returned alongside a job. */
@@ -290,6 +292,7 @@ export interface VMDetails {
       timezone: string;
     };
     canResume?: boolean;
+    isRestricted: boolean;
     createdAt: Date;
     updatedAt: Date;
   };

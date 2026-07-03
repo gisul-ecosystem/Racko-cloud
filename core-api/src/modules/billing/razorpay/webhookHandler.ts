@@ -39,7 +39,15 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
   const rawBody = req.body as Buffer;
   const signature = req.headers['x-razorpay-signature'] as string | undefined;
 
+  // Enhanced logging for debugging
+  logger.info('Razorpay webhook received', {
+    hasSignature: !!signature,
+    bodyLength: rawBody.length,
+    headers: req.headers,
+  });
+
   if (!verifySignature(rawBody, signature)) {
+    logger.error('Invalid webhook signature', { signature, hasSecret: !!config.RAZORPAY_WEBHOOK_SECRET });
     res.status(400).json({ success: false, message: 'Invalid webhook signature.' });
     return;
   }
@@ -47,7 +55,14 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
   let body: RazorpayWebhookBody;
   try {
     body = JSON.parse(rawBody.toString('utf8')) as RazorpayWebhookBody;
+    logger.info('Webhook payload parsed', { 
+      event: body.event, 
+      paymentId: body.payload?.payment?.entity?.id,
+      amount: body.payload?.payment?.entity?.amount,
+      notes: body.payload?.payment?.entity?.notes
+    });
   } catch {
+    logger.error('Invalid webhook payload', { rawBody: rawBody.toString('utf8').substring(0, 200) });
     res.status(400).json({ success: false, message: 'Invalid webhook payload.' });
     return;
   }
@@ -59,8 +74,10 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
 
   try {
     await WebhookEvent.create({ eventId });
+    logger.info('Webhook event recorded successfully', { eventId });
   } catch (error: unknown) {
     if (error instanceof Error && error.message.includes('duplicate key')) {
+      logger.warn('Duplicate webhook event detected', { eventId });
       res.status(200).json({ success: true, message: 'Already processed.' });
       return;
     }
@@ -71,9 +88,16 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
 
   if (eventName === 'payment.captured' && payment) {
     const notes = payment.notes ?? {};
+    logger.info('Processing payment.captured event', {
+      eventId,
+      tenantId: notes['tenantId'],
+      purpose: notes['purpose'],
+      amount: payment.amount,
+    });
+    
     if (notes['purpose'] === 'wallet_topup' && notes['tenantId'] && payment.amount) {
       try {
-        await walletService.creditWallet(
+        const result = await walletService.creditWallet(
           notes['tenantId'],
           payment.amount / 100,
           'topup_razorpay',
@@ -82,14 +106,35 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
             externalReference: payment.id ?? null,
           }
         );
+        logger.info('Wallet credited successfully', {
+          eventId,
+          tenantId: notes['tenantId'],
+          amount: payment.amount / 100,
+          newBalance: result.balance,
+          transactionId: result.transactionId,
+        });
       } catch (error) {
         logger.error('Failed to credit wallet from Razorpay webhook', {
           eventId,
           tenantId: notes['tenantId'],
+          amount: payment.amount,
           error: error instanceof Error ? error.message : String(error),
+          stack: error instanceof Error ? error.stack : undefined,
         });
       }
+    } else {
+      logger.warn('Payment event conditions not met', {
+        eventId,
+        hasPurpose: !!notes['purpose'],
+        purpose: notes['purpose'],
+        hasTenantId: !!notes['tenantId'],
+        tenantId: notes['tenantId'],
+        hasAmount: !!payment.amount,
+        amount: payment.amount,
+      });
     }
+  } else {
+    logger.info('Ignoring webhook event', { eventName, hasPayment: !!payment });
   }
 
   res.status(200).json({ success: true, message: 'Webhook processed.' });

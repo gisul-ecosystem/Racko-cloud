@@ -42,8 +42,15 @@ certs/*.pem
 certs/*.crt
 certs/*.key
 
-nginx.conf
+# Nginx configuration files (environment-specific)
+*.conf
+nginx-*.conf
+
+# Environment example templates (never commit with real values)
+*.env.example
+.env.*.example
 
 # GCP service account keys
 gcp-key.json
 cloud_automation_gcp/gcp-key.json
+

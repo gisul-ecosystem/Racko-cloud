@@ -73,3 +73,16 @@ export function getGatewayBaseUrl(): string {
   }
   return getServerGatewayBaseUrl();
 }
+
+/**
+ * Direct gateway URL for browser SSE streams.
+ * Bypasses Next.js rewrites, which buffer long-lived text/event-stream responses.
+ */
+export function getSseGatewayBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    const configured = process.env['NEXT_PUBLIC_GATEWAY_URL']?.trim();
+    if (configured) return stripTrailingSlash(configured);
+    return DEFAULT_GATEWAY;
+  }
+  return getServerGatewayBaseUrl();
+}

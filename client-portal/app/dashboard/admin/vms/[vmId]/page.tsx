@@ -8,6 +8,7 @@ import {
   fetchVMDetails, fetchVMStatus, fetchVMEvents, startVM, stopVM,
   forceStopVM, hibernateVM, restartVM, resetVM, deleteVM,
   enableVirtualization, disableVirtualization, cancelVirtualization, cancelSoftwareInstalls,
+  restrictVM, unrestrictVM,
   type VMDetails, type VMLiveStatus, type VMEvent, type HyperVStatus, type SoftwareInstallEntry,
 } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
@@ -20,6 +21,7 @@ import {
   RefreshCw, Trash2, Cpu, MemoryStick, HardDrive,
   Network, Clock, Server, Activity, Monitor,
   KeyRound, Eye, EyeOff, Copy, Check as CheckIcon, Loader2,
+  Shield, ShieldOff,
 } from 'lucide-react';
 
 type PowerOp = 'start' | 'stop' | 'hibernate' | 'force-stop' | 'restart' | 'reset' | 'delete';
@@ -208,6 +210,8 @@ export default function VMDetailPage() {
   const [pendingOp, setPendingOp] = useState<PowerOp | null>(null);
   const [opLoading, setOpLoading] = useState(false);
   const [virtLoading, setVirtLoading] = useState(false);
+  const [restrictLoading, setRestrictLoading] = useState(false);
+  const [pendingOpWhileRestricted, setPendingOpWhileRestricted] = useState<PowerOp | null>(null);
 
   const load = useCallback(async (isBackground = false) => {
     if (!vmId || !isAuthenticated) return;
@@ -317,6 +321,51 @@ export default function VMDetailPage() {
     timer = setTimeout(() => void tick(), delay);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [isSoftwareInProgress, load]);
+
+  async function handleToggleRestrict() {
+    if (!vmId || !details) return;
+    setRestrictLoading(true);
+    try {
+      if (details.vm.isRestricted) {
+        await unrestrictVM(vmId);
+        addToast('success', 'VM restriction removed.');
+      } else {
+        await restrictVM(vmId);
+        addToast('success', 'VM restricted. All power actions are now blocked.');
+      }
+      await load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to update restriction.');
+    } finally {
+      setRestrictLoading(false);
+    }
+  }
+
+  // When an action is attempted on a restricted VM, show the restriction modal.
+  // If user chooses "Remove & Continue", unrestrict first then proceed.
+  async function handleRemoveRestrictionAndContinue() {
+    if (!vmId || !pendingOpWhileRestricted) return;
+    setRestrictLoading(true);
+    try {
+      await unrestrictVM(vmId);
+      await load();
+      addToast('success', 'Restriction removed.');
+      setPendingOp(pendingOpWhileRestricted);
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to remove restriction.');
+    } finally {
+      setRestrictLoading(false);
+      setPendingOpWhileRestricted(null);
+    }
+  }
+
+  function requestOp(op: PowerOp) {
+    if (details?.vm.isRestricted) {
+      setPendingOpWhileRestricted(op);
+    } else {
+      setPendingOp(op);
+    }
+  }
 
   async function handleVirtEnable() {
     if (!vmId) return;
@@ -464,6 +513,20 @@ export default function VMDetailPage() {
         />
       )}
 
+      {/* Restriction modal — shown when an action is attempted on a restricted VM */}
+      {pendingOpWhileRestricted && (
+        <ConfirmModal
+          open
+          title="VM is Restricted"
+          description={`"${vm.name}" is on your restricted list. Remove the restriction to perform this action.`}
+          confirmLabel="Remove Restriction & Continue"
+          confirmVariant="warning"
+          loading={restrictLoading}
+          onConfirm={() => void handleRemoveRestrictionAndContinue()}
+          onCancel={() => setPendingOpWhileRestricted(null)}
+        />
+      )}
+
       {/* Back + header */}
       <div className="flex items-start justify-between mb-6">
         <div>
@@ -490,6 +553,27 @@ export default function VMDetailPage() {
           >
             <RefreshCw className={`w-3.5 h-3.5 ${liveLoading ? 'animate-spin' : ''}`} />
             Refresh
+          </button>
+          {/* Restrict toggle */}
+          <button
+            onClick={() => void handleToggleRestrict()}
+            disabled={restrictLoading}
+            title={vm.isRestricted ? 'Remove restriction from this VM' : 'Restrict this VM — blocks all power & delete actions'}
+            aria-label={vm.isRestricted ? 'Remove restriction' : 'Restrict VM'}
+            className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-lg border transition disabled:opacity-40 ${
+              vm.isRestricted
+                ? 'text-amber-700 bg-amber-50 border-amber-200 hover:bg-amber-100'
+                : 'text-gray-600 bg-white border-gray-200 hover:bg-gray-50'
+            }`}
+          >
+            {restrictLoading ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : vm.isRestricted ? (
+              <Shield className="w-3.5 h-3.5" />
+            ) : (
+              <ShieldOff className="w-3.5 h-3.5" />
+            )}
+            {vm.isRestricted ? 'Restricted' : 'Restrict'}
           </button>
           {(() => {
             const consoleProtocol = vm.consoleProtocol ?? 'rdp';
@@ -534,36 +618,41 @@ export default function VMDetailPage() {
             );
           })()}
           {isStopped && (
-            <button onClick={() => setPendingOp('start')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition">
+            <button onClick={() => requestOp('start')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition">
               <Play className="w-3.5 h-3.5" /> {canResume ? 'Resume' : 'Start'}
             </button>
           )}
           {isRunning && (
             <>
-              <button onClick={() => setPendingOp('stop')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition">
+              <button onClick={() => requestOp('stop')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-50 rounded-lg transition">
                 <Square className="w-3.5 h-3.5" /> Stop
               </button>
-              <button onClick={() => setPendingOp('hibernate')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg transition">
+              <button onClick={() => requestOp('hibernate')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 hover:bg-indigo-100 rounded-lg transition">
                 <Moon className="w-3.5 h-3.5" /> Hibernate
               </button>
-              <button onClick={() => setPendingOp('force-stop')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 hover:bg-orange-100 rounded-lg transition">
+              <button onClick={() => requestOp('force-stop')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 hover:bg-orange-100 rounded-lg transition">
                 <Zap className="w-3.5 h-3.5" /> Force Stop
               </button>
-              <button onClick={() => setPendingOp('restart')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg transition">
+              <button onClick={() => requestOp('restart')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-blue-700 bg-blue-50 border border-blue-200 hover:bg-blue-100 rounded-lg transition">
                 <RotateCcw className="w-3.5 h-3.5" /> Restart
               </button>
-              <button onClick={() => setPendingOp('reset')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-yellow-700 bg-yellow-50 border border-yellow-200 hover:bg-yellow-100 rounded-lg transition">
+              <button onClick={() => requestOp('reset')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-yellow-700 bg-yellow-50 border border-yellow-200 hover:bg-yellow-100 rounded-lg transition">
                 <RefreshCw className="w-3.5 h-3.5" /> Reset
               </button>
             </>
           )}
-          <button onClick={() => setPendingOp('delete')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition">
+          <button onClick={() => requestOp('delete')} className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-red-700 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg transition">
             <Trash2 className="w-3.5 h-3.5" /> Delete
           </button>
         </div>
         {consolePreparing && (
           <p className="text-xs text-amber-600 max-w-[280px] text-right">
             VM is booting and setting up credentials. Console will be available shortly.
+          </p>
+        )}
+        {vm.isRestricted && (
+          <p className="text-xs text-amber-600 max-w-[280px] text-right">
+            This VM is restricted. All power and delete actions are blocked.
           </p>
         )}
         </div>

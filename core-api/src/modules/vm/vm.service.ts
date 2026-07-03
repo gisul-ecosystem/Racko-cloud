@@ -382,7 +382,9 @@ export class VMService {
 
     // Super-admin enabled templates (shared across all admins)
     const enabledVmids = new Set(enabledDocs.map((d) => d.vmid));
-    const sharedTemplates = all.filter((t) => enabledVmids.has(t.vmid));
+    const sharedTemplates = all
+      .filter((t) => enabledVmids.has(t.vmid))
+      .map((t) => ({ ...t, isCustom: false }));
 
     // Admin's own custom templates merged into the same shape — deduped against shared
     const proxmoxByVmid = new Map(all.map((t) => [t.vmid, t]));
@@ -402,6 +404,7 @@ export class VMService {
           maxdisk: proxmox.maxdisk,
           status: proxmox.status,
           template: 1,
+          isCustom: true,
         };
       });
 
@@ -576,6 +579,13 @@ export class VMService {
     adminId: mongoose.Types.ObjectId,
     req: Request
   ): Promise<{ jobId: string }> {
+    // Validate count against configured maximum
+    if (dto.count > config.VM_MAX_BULK_COUNT) {
+      throw new ValidationError(
+        `Cannot create more than ${config.VM_MAX_BULK_COUNT} VMs at once.`
+      );
+    }
+
     // Get template details — validates template exists and is enabled for admins
     const templateDetails = await this.getTemplateDetails(dto.templateId, req);
 
@@ -706,6 +716,10 @@ export class VMService {
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
 
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (vm.isRestricted) {
+      throw new VMOperationError('VM is restricted. Remove the restriction before performing any actions.', vm.status, vm.status);
+    }
 
     // Idempotency guards — prevent double-deletion races
     if (vm.status === 'deleting') {
@@ -883,7 +897,7 @@ export class VMService {
     vmIds: string[],
     adminId: mongoose.Types.ObjectId,
     req: Request
-  ): Promise<{ jobId: string }> {
+  ): Promise<{ jobId: string; restrictedSkipped: number }> {
     const authReq = req as AuthenticatedRequest;
     const uniqueIds = [...new Set(vmIds)].map((id) => new mongoose.Types.ObjectId(id));
 
@@ -902,16 +916,27 @@ export class VMService {
       assertOwnership(vm, adminId.toString(), authReq.user.role);
     }
 
+    // Filter out restricted VMs — they are silently excluded from bulk operations
+    const restrictedVms = vms.filter((vm) => vm.isRestricted);
+    const eligibleVms = vms.filter((vm) => !vm.isRestricted);
+    const restrictedSkipped = restrictedVms.length;
+
+    if (eligibleVms.length === 0) {
+      throw new ValidationError('All selected VMs are restricted. Remove restrictions before performing bulk actions.');
+    }
+
+    const eligibleIds = eligibleVms.map((vm) => vm._id);
+
     const job = await VMJob.create({
       adminId,
       type: 'bulk_delete',
       status: 'pending',
-      total: uniqueIds.length,
+      total: eligibleIds.length,
       completed: 0,
       failed: 0,
-      pending: uniqueIds.length,
+      pending: eligibleIds.length,
       vmIds: [],
-      targetVmIds: uniqueIds,
+      targetVmIds: eligibleIds,
       failedVmids: [],
       requestedSpecs: {
         templateId: 0,
@@ -925,7 +950,7 @@ export class VMService {
         templateCpuCores: 0,
         templateMemoryGb: 0,
         namePrefix: 'delete',
-        count: uniqueIds.length,
+        count: eligibleIds.length,
         consoleUsername: 'n/a',
         passwordMode: 'fixed',
         consoleProtocol: 'rdp',
@@ -939,7 +964,8 @@ export class VMService {
     logger.info('[VMDelete] Bulk delete job created', {
       jobId: job._id.toString(),
       adminId: adminId.toString(),
-      count: uniqueIds.length,
+      count: eligibleIds.length,
+      restrictedSkipped,
     });
 
     processBulkDeletion(job, adminId, authReq.user.role, this.deleteVM.bind(this)).catch(
@@ -951,7 +977,7 @@ export class VMService {
       }
     );
 
-    return { jobId: job._id.toString() };
+    return { jobId: job._id.toString(), restrictedSkipped };
   }
 
   /**
@@ -962,7 +988,7 @@ export class VMService {
     vmIds: string[],
     adminId: mongoose.Types.ObjectId,
     req: Request
-  ): Promise<{ succeeded: number; failed: number; errors: Array<{ vmId: string; message: string }> }> {
+  ): Promise<{ succeeded: number; failed: number; restrictedSkipped: number; errors: Array<{ vmId: string; message: string }> }> {
     const authReq = req as AuthenticatedRequest;
     const ip = getClientIp(req);
     const ua = getUserAgent(req);
@@ -973,8 +999,11 @@ export class VMService {
       assertOwnership(vm, adminId.toString(), authReq.user.role);
     }
 
+    const restrictedSkipped = vms.filter((vm) => vm.isRestricted).length;
+    const eligibleVms = vms.filter((vm) => !vm.isRestricted);
+
     const results = await Promise.allSettled(
-      vms
+      eligibleVms
         .filter((vm) => vm.status !== 'running')
         .map((vm) => this.powerOnStoppedVm(vm, adminId, { ipAddress: ip, userAgent: ua }))
     );
@@ -987,7 +1016,7 @@ export class VMService {
       if (r.status === 'fulfilled') {
         succeeded++;
       } else {
-        const vm = vms.filter((v) => v.status !== 'running')[i];
+        const vm = eligibleVms.filter((v) => v.status !== 'running')[i];
         errors.push({
           vmId: vm?._id.toString() ?? 'unknown',
           message: r.reason instanceof Error ? r.reason.message : String(r.reason),
@@ -1000,9 +1029,10 @@ export class VMService {
       requested: uniqueIds.length,
       succeeded,
       failed: errors.length,
+      restrictedSkipped,
     });
 
-    return { succeeded, failed: errors.length, errors };
+    return { succeeded, failed: errors.length, restrictedSkipped, errors };
   }
 
   /**
@@ -1013,7 +1043,7 @@ export class VMService {
     vmIds: string[],
     adminId: mongoose.Types.ObjectId,
     req: Request
-  ): Promise<{ succeeded: number; failed: number; errors: Array<{ vmId: string; message: string }> }> {
+  ): Promise<{ succeeded: number; failed: number; restrictedSkipped: number; errors: Array<{ vmId: string; message: string }> }> {
     const authReq = req as AuthenticatedRequest;
     const ip = getClientIp(req);
     const ua = getUserAgent(req);
@@ -1024,8 +1054,11 @@ export class VMService {
       assertOwnership(vm, adminId.toString(), authReq.user.role);
     }
 
+    const restrictedSkipped = vms.filter((vm) => vm.isRestricted).length;
+    const eligibleVms = vms.filter((vm) => !vm.isRestricted);
+
     const results = await Promise.allSettled(
-      vms
+      eligibleVms
         .filter((vm) => vm.status !== 'stopped')
         .map((vm) => this.gracefulShutdownVm(vm, adminId, { ipAddress: ip, userAgent: ua }))
     );
@@ -1038,7 +1071,7 @@ export class VMService {
       if (r.status === 'fulfilled') {
         succeeded++;
       } else {
-        const vm = vms.filter((v) => v.status !== 'stopped')[i];
+        const vm = eligibleVms.filter((v) => v.status !== 'stopped')[i];
         errors.push({
           vmId: vm?._id.toString() ?? 'unknown',
           message: r.reason instanceof Error ? r.reason.message : String(r.reason),
@@ -1051,9 +1084,10 @@ export class VMService {
       requested: uniqueIds.length,
       succeeded,
       failed: errors.length,
+      restrictedSkipped,
     });
 
-    return { succeeded, failed: errors.length, errors };
+    return { succeeded, failed: errors.length, restrictedSkipped, errors };
   }
 
   /**
@@ -1260,6 +1294,9 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    if (vm.isRestricted) {
+      throw new VMOperationError('VM is restricted. Remove the restriction before performing any actions.', vm.status, vm.status);
+    }
     await assertUserCanPowerVm(vm._id, authReq.user.role);
 
     if (vm.status === 'running') {
@@ -1370,6 +1407,9 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    if (vm.isRestricted) {
+      throw new VMOperationError('VM is restricted. Remove the restriction before performing any actions.', vm.status, vm.status);
+    }
     await assertUserCanPowerVm(vm._id, authReq.user.role);
 
     if (vm.status === 'stopped') {
@@ -1399,6 +1439,9 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    if (vm.isRestricted) {
+      throw new VMOperationError('VM is restricted. Remove the restriction before performing any actions.', vm.status, vm.status);
+    }
 
     if (vm.status === 'stopped') {
       throw new VMOperationError('VM is already stopped.', vm.status, 'running');
@@ -1539,6 +1582,9 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    if (vm.isRestricted) {
+      throw new VMOperationError('VM is restricted. Remove the restriction before performing any actions.', vm.status, vm.status);
+    }
     await assertUserCanPowerVm(vm._id, authReq.user.role);
 
     if (vm.status !== 'running') {
@@ -1601,6 +1647,9 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    if (vm.isRestricted) {
+      throw new VMOperationError('VM is restricted. Remove the restriction before performing any actions.', vm.status, vm.status);
+    }
 
     if (vm.status !== 'running') {
       throw new VMOperationError('VM must be running to reset.', vm.status, 'running');
@@ -1750,6 +1799,9 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+    if (vm.isRestricted) {
+      throw new VMOperationError('VM is restricted. Remove the restriction before performing any actions.', vm.status, vm.status);
+    }
 
     if (vm.status !== 'running') {
       const proxmoxLive = await probeProxmoxPowerState(vm.node, vm.vmid);
@@ -2044,8 +2096,91 @@ export class VMService {
     if (filters?.status) query['status'] = filters.status;
     if (filters?.cloneType) query['cloneType'] = filters.cloneType;
     if (filters?.node) query['node'] = filters.node;
+    if (typeof filters?.isRestricted === 'boolean') {
+      query['isRestricted'] = filters.isRestricted;
+    }
 
     return VM.find(query).sort({ createdAt: -1 }).lean();
+  }
+
+  /**
+   * Restrict a VM — blocks all power/delete actions until unrestricted.
+   * Writes an audit event. Admin/super_admin only (assertOwnership enforced).
+   */
+  async restrictVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<void> {
+    const authReq = req as AuthenticatedRequest;
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (vm.isRestricted) return; // idempotent
+
+    vm.isRestricted = true;
+    await vm.save();
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'VM_RESTRICTED',
+      status: 'success',
+      details: { node: vm.node },
+      ipAddress: ip,
+      userAgent: ua,
+    });
+
+    logger.info('[VMRestrict] VM restricted', {
+      vmId: vmId.toString(),
+      vmid: vm.vmid,
+      adminId: adminId.toString(),
+    });
+  }
+
+  /**
+   * Unrestrict a VM — lifts the restriction lock and re-enables power/delete actions.
+   * Writes an audit event. Admin/super_admin only (assertOwnership enforced).
+   */
+  async unrestrictVM(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request
+  ): Promise<void> {
+    const authReq = req as AuthenticatedRequest;
+    const ip = getClientIp(req);
+    const ua = getUserAgent(req);
+
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
+    assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (!vm.isRestricted) return; // idempotent
+
+    vm.isRestricted = false;
+    await vm.save();
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'VM_UNRESTRICTED',
+      status: 'success',
+      details: { node: vm.node },
+      ipAddress: ip,
+      userAgent: ua,
+    });
+
+    logger.info('[VMRestrict] VM unrestricted', {
+      vmId: vmId.toString(),
+      vmid: vm.vmid,
+      adminId: adminId.toString(),
+    });
   }
 
   /**
@@ -2130,6 +2265,7 @@ export class VMService {
         automationManaged: automationPower.automationManaged,
         automationSchedule: automationPower.automationSchedule,
         canResume: vm.isHibernated && vm.status === 'stopped',
+        isRestricted: vm.isRestricted ?? false,
         createdAt: vm.createdAt,
         updatedAt: vm.updatedAt,
       },

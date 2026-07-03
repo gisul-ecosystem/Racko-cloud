@@ -56,14 +56,15 @@ const services = [
     description: 'Guides and reference for VPS, Elastic Server, AWS, and Azure services',
     available: true,
   },
-  {
-    id: 'machine-manager',
-    name: 'Machine Manager',
-    href: '/console/machine-manager',
-    icon: Monitor,
-    description: 'Install and manage software on any machine',
-    available: true,
-  },
+  // Machine Manager — commented out until implementation is ready
+  // {
+  //   id: 'machine-manager',
+  //   name: 'Machine Manager',
+  //   href: '/console/machine-manager',
+  //   icon: Monitor,
+  //   description: 'Install and manage software on any machine',
+  //   available: true,
+  // },
 ] as const;
 
 export default function ConsolePage() {
