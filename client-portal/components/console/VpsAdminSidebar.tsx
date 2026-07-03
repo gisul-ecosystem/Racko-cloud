@@ -38,11 +38,11 @@ const navLinks: NavLink[] = [
     label: 'Create VM',
     icon: <Plus className="h-4 w-4" />,
   },
-  {
-    href: '/dashboard/admin/clone-vms',
-    label: 'Clone VMs',
-    icon: <Copy className="h-4 w-4" />,
-  },
+  // {
+  //   href: '/dashboard/admin/clone-vms',
+  //   label: 'Clone VMs',
+  //   icon: <Copy className="h-4 w-4" />,
+  // },
   {
     href: '/dashboard/admin/jobs',
     label: 'Jobs',
