@@ -108,6 +108,7 @@ jobs:
         run: |
           docker build \
             --build-arg NEXT_PUBLIC_GATEWAY_URL=http://cloud-gateway:8000 \
+            --build-arg NEXT_PUBLIC_VM_MAX_BULK_COUNT=50 \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }} \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:dev \
             -f client-portal/Dockerfile client-portal/

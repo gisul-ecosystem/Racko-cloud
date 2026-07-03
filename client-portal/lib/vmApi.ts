@@ -12,6 +12,7 @@ export interface ProxmoxTemplate {
   maxdisk: number;   // allocated disk bytes
   status: string;
   template: number;
+  isCustom?: boolean; // true if admin-created custom template
 }
 
 export interface TemplateDetails {
