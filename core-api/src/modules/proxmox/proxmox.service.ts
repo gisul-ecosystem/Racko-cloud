@@ -147,13 +147,22 @@ function transformVM(raw: ProxmoxVMRaw): VMSummary {
 export class ProxmoxService {
   /**
    * Fetch all nodes in the cluster.
-   * Right now returns 1 node; when more nodes are added, same code returns N.
-   * NEVER hardcode node names — always discover dynamically.
+   * Filters by nodes registered as active in the platform (via ProxmoxNode DB).
+   * Falls back to all Proxmox-known nodes if none are registered yet.
    */
   async getNodes(): Promise<ProxmoxNodeRaw[]> {
     try {
       const response = await proxmoxClient.get<{ data: ProxmoxNodeRaw[] }>('/nodes');
-      return response.data.data;
+      const allNodes = response.data.data;
+
+      // Filter to only nodes the super admin has selected/registered.
+      // Falls back to all nodes if the DB is empty (first-run / not configured yet).
+      const activeNodeNames = await ProxmoxNodeService.getActiveNodeNames();
+      if (activeNodeNames.length > 0) {
+        return allNodes.filter((n) => activeNodeNames.includes(n.node));
+      }
+
+      return allNodes;
     } catch (error) {
       if (error instanceof ProxmoxConnectionError || error instanceof ProxmoxNodeNotFoundError) {
         throw error;
