@@ -5,6 +5,7 @@ import { Cloud, Globe, Monitor, Server, BookOpen } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
+import { GCP_ROUTES, GCP_SERVICE } from '../../cloud_automation_gcp/constants';
 
 const services = [
   {
@@ -40,11 +41,19 @@ const services = [
     available: true,
   },
   {
+    id: GCP_SERVICE.id,
+    name: GCP_SERVICE.name,
+    href: GCP_ROUTES.dashboard,
+    icon: Globe,
+    description: GCP_SERVICE.description,
+    available: true,
+  },
+  {
     id: 'docs',
     name: 'Documentation',
     href: '/console/docs',
     icon: BookOpen,
-    description: 'Guides and reference for VPS Hosting and Elastic Server Import',
+    description: 'Guides and reference for VPS, Elastic Server, AWS, and Azure services',
     available: true,
   },
   {

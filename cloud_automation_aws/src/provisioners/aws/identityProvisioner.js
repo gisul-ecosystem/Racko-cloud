@@ -11,10 +11,11 @@ import {
   ListAttachedUserPoliciesCommand,
   UpdateLoginProfileCommand,
   PutUserPolicyCommand,
+  TagUserCommand,
 } from '@aws-sdk/client-iam';
 import { AssumeRoleCommand } from '@aws-sdk/client-sts';
 import { iamClient, stsClient, MASTER_ACCOUNT_ID } from '../../config/aws.js';
-import { INLINE_IAM_POLICIES, INLINE_IAM_POLICY_ALIASES } from '../../config/iamPolicies.js';
+import { getManagedPoliciesForRequest } from '../../config/iamPolicies.js';
 import { generatePassword } from '../../utils/passwordGenerator.js';
 import Request from '../../models/Request.js';
 
@@ -29,59 +30,13 @@ function buildConsoleUrl(accountId) {
   return `https://${accountId}.signin.aws.amazon.com/console`;
 }
 
-function buildInlineUserPolicy(request) {
-  const statements = [];
+const BASELINE_MANAGED_POLICIES = [
+  'arn:aws:iam::aws:policy/IAMUserChangePassword',
+  'arn:aws:iam::aws:policy/ReadOnlyAccess',
+];
 
-  for (const entry of request.permissions || []) {
-    for (const policyName of entry.policies || []) {
-      const inlineKey = INLINE_IAM_POLICY_ALIASES[policyName] || policyName;
-      const inlinePolicy = INLINE_IAM_POLICIES[inlineKey];
-      if (inlinePolicy) {
-        statements.push(...inlinePolicy.Statement);
-      }
-    }
-  }
-
-  if (statements.length === 0) {
-    statements.push({
-      Effect: 'Allow',
-      Action: ['*:Describe*', '*:List*', '*:Get*'],
-      Resource: '*',
-    });
-  }
-
-  statements.push({
-    Sid: 'AllowTagging',
-    Effect: 'Allow',
-    Action: ['ec2:CreateTags', 'rds:AddTagsToResource', 's3:PutObjectTagging'],
-    Resource: '*',
-  });
-
-  return {
-    Version: '2012-10-17',
-    Statement: statements,
-  };
-}
-
-function collectManagedPolicyArns(request) {
-  const policies = new Set(['arn:aws:iam::aws:policy/IAMUserChangePassword']);
-
-  for (const entry of request.permissions || []) {
-    for (const policy of entry.policies || []) {
-      if (!policy) continue;
-      if (policy.startsWith('arn:')) {
-        policies.add(policy);
-      } else if (policy === 'ReadOnlyAccess') {
-        policies.add('arn:aws:iam::aws:policy/ReadOnlyAccess');
-      }
-    }
-  }
-
-  if (policies.size === 1) {
-    policies.add('arn:aws:iam::aws:policy/ReadOnlyAccess');
-  }
-
-  return [...policies];
+function getAllManagedPoliciesForUser(request) {
+  return [...new Set([...BASELINE_MANAGED_POLICIES, ...getManagedPoliciesForRequest(request)])];
 }
 
 async function getIamClientForAccount(accountId) {
@@ -125,24 +80,80 @@ async function userExists(iamClient, username) {
 }
 
 async function attachLabPolicies(iamClient, username, request) {
-  const managedPolicies = collectManagedPolicyArns(request);
+  const allManagedPolicies = getAllManagedPoliciesForUser(request);
 
-  for (const policyArn of managedPolicies) {
+  for (const policyArn of allManagedPolicies) {
     await iamClient.send(
       new AttachUserPolicyCommand({
         UserName: username,
         PolicyArn: policyArn,
       })
     );
+    console.log(`[IdentityProvisioner] Attached managed policy ${policyArn} to ${username}`);
   }
+
+  const requestId = String(request._id);
+  const smallInlinePolicy = {
+    Version: '2012-10-17',
+    Statement: [
+      {
+        Sid: 'EnforceRackoTagOnCreate',
+        Effect: 'Deny',
+        Action: [
+          'ec2:RunInstances',
+          'rds:CreateDBInstance',
+          's3:CreateBucket',
+          'lambda:CreateFunction',
+          'dynamodb:CreateTable',
+        ],
+        Resource: '*',
+        Condition: {
+          Null: { 'aws:RequestTag/racko:request': 'true' },
+        },
+      },
+      {
+        Sid: 'AllowTagOnCreate',
+        Effect: 'Allow',
+        Action: [
+          'ec2:RunInstances',
+          'rds:CreateDBInstance',
+          's3:CreateBucket',
+          'lambda:CreateFunction',
+          'dynamodb:CreateTable',
+        ],
+        Resource: '*',
+        Condition: {
+          StringEquals: { 'aws:RequestTag/racko:request': requestId },
+        },
+      },
+      {
+        Sid: 'RackoTagging',
+        Effect: 'Allow',
+        Action: [
+          'ec2:CreateTags',
+          'ec2:DeleteTags',
+          'rds:AddTagsToResource',
+          's3:PutBucketTagging',
+          's3:PutObjectTagging',
+          'lambda:TagResource',
+          'dynamodb:TagResource',
+          'tag:TagResources',
+          'tag:GetResources',
+        ],
+        Resource: '*',
+      },
+    ],
+  };
 
   await iamClient.send(
     new PutUserPolicyCommand({
       UserName: username,
       PolicyName: 'RackoLabPermissions',
-      PolicyDocument: JSON.stringify(buildInlineUserPolicy(request)),
+      PolicyDocument: JSON.stringify(smallInlinePolicy),
     })
   );
+
+  console.log(`[IdentityProvisioner] Attached inline RackoLabPermissions to ${username}`);
 }
 
 async function createIamUser(accountId, userIndex, requestId, request) {
@@ -183,6 +194,18 @@ async function createIamUser(accountId, userIndex, requestId, request) {
         PasswordResetRequired: false,
       })
     );
+    await iamClient.send(
+      new TagUserCommand({
+        UserName: username,
+        Tags: [
+          { Key: 'racko:request', Value: requestId },
+          { Key: 'racko:user-index', Value: String(userIndex + 1) },
+          { Key: 'racko:managed', Value: 'true' },
+          { Key: 'racko:access-type', Value: 'identity_center' },
+        ],
+      })
+    );
+    console.log(`[IdentityProvisioner] Re-applied tags to existing user ${username}`);
     console.log(`[IdentityProvisioner] IAM user ${username} already exists — password refreshed`);
   }
 
@@ -199,7 +222,7 @@ async function createIamUser(accountId, userIndex, requestId, request) {
     budgetExceeded: false,
     currentSpend: 0,
     needsActivation: false,
-    policies: collectManagedPolicyArns(request),
+    policies: getAllManagedPoliciesForUser(request),
   };
 }
 

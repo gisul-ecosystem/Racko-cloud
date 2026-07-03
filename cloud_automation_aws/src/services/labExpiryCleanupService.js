@@ -1,3 +1,4 @@
+import { fetchFinalSpend } from './costTrackingService.js';
 import Request from '../models/Request.js';
 import { cleanupAllUsers } from './resourceCleanupService.js';
 import { rollbackLabRoles } from '../provisioners/aws/iamRoleProvisioner.js';
@@ -16,6 +17,13 @@ export async function runExpiryCleanupForRequest(request) {
   const provisionedResources = request.provisionedResources || {};
 
   console.log(`[labExpiryCleanup] Starting full cleanup for request ${requestId}`);
+
+  try {
+    await fetchFinalSpend(request);
+    console.log(`[labExpiryCleanup] Final spend stored for request ${requestId}`);
+  } catch (err) {
+    console.error(`[labExpiryCleanup] Final spend fetch failed for ${requestId}:`, err.message);
+  }
 
   const resourceResults = await cleanupAllUsers(requestId);
   const deletedCount = countCleanupDeleted(resourceResults);
@@ -45,6 +53,7 @@ export async function runExpiryCleanupForRequest(request) {
 
   await Request.findByIdAndUpdate(requestId, {
     status: 'Expired',
+    expiredAt: now,
     cleanupCompleted: true,
     expiryCleanupAt: now,
     cleanupEnabled: false,

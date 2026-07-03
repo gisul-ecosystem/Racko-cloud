@@ -43,3 +43,7 @@ certs/*.crt
 certs/*.key
 
 nginx.conf
+
+# GCP service account keys
+gcp-key.json
+cloud_automation_gcp/gcp-key.json

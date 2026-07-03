@@ -6,10 +6,11 @@ const STEP_MESSAGES = {
   0: 'Waiting to start provisioning.',
   1: 'Preparing lab account access…',
   2: 'Applying SCP service restrictions…',
-  3: 'Creating IAM lab roles…',
-  4: 'Attaching permissions to lab roles…',
-  5: 'Creating manage portal access…',
-  6: 'Sending credentials email…',
+  3: 'Deploying auto-tagger Lambda…',
+  4: 'Creating IAM lab roles…',
+  5: 'Attaching permissions to lab roles…',
+  6: 'Creating manage portal access…',
+  7: 'Sending credentials email…',
 };
 
 export async function logStepStart(requestId, step, stepName, metadata = {}) {
@@ -111,10 +112,11 @@ export function buildStepStatuses(request) {
   const steps = [
     { key: 'account', label: 'Account', step: 1 },
     { key: 'scp', label: 'SCP', step: 2 },
-    { key: 'roles', label: 'Roles', step: 3 },
-    { key: 'permissions', label: 'Permissions', step: 4 },
-    { key: 'portal', label: 'Portal', step: 5 },
-    { key: 'email', label: 'Email', step: 6 },
+    { key: 'autotag', label: 'Auto-tagger', step: 3 },
+    { key: 'roles', label: 'Roles', step: 4 },
+    { key: 'permissions', label: 'Permissions', step: 5 },
+    { key: 'portal', label: 'Portal', step: 6 },
+    { key: 'email', label: 'Email', step: 7 },
   ];
 
   const current = request.currentStep || 0;

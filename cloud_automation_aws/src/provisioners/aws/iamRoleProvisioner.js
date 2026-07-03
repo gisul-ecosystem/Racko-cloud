@@ -5,7 +5,7 @@ import {
   DeleteRolePolicyCommand,
 } from '@aws-sdk/client-iam';
 import { iamClient, MASTER_ACCOUNT_ID } from '../../config/aws.js';
-import { INLINE_IAM_POLICIES, INLINE_IAM_POLICY_ALIASES } from '../../config/iamPolicies.js';
+import { buildPermissionPolicy } from '../../config/iamPolicies.js';
 import { magicLinkSessionSeconds } from '../../utils/magicLinkSession.js';
 
 function buildRoleName(request, userIndex) {
@@ -29,44 +29,10 @@ function buildTrustPolicy() {
   };
 }
 
-function buildPermissionPolicy(request) {
-  const statements = [];
-
-  for (const entry of request.permissions || []) {
-    for (const policyName of entry.policies || []) {
-      const inlineKey = INLINE_IAM_POLICY_ALIASES[policyName] || policyName;
-      const inlinePolicy = INLINE_IAM_POLICIES[inlineKey];
-      if (inlinePolicy) {
-        statements.push(...inlinePolicy.Statement);
-      }
-    }
-  }
-
-  if (statements.length === 0) {
-    statements.push({
-      Effect: 'Allow',
-      Action: ['*:Describe*', '*:List*', '*:Get*'],
-      Resource: '*',
-    });
-  }
-
-  statements.push({
-    Sid: 'AllowTagging',
-    Effect: 'Allow',
-    Action: ['ec2:CreateTags', 'rds:AddTagsToResource', 's3:PutObjectTagging'],
-    Resource: '*',
-  });
-
-  return {
-    Version: '2012-10-17',
-    Statement: statements,
-  };
-}
-
 export async function createLabRole(request, userIndex) {
   const roleName = buildRoleName(request, userIndex);
   const trustPolicy = buildTrustPolicy();
-  const permissionPolicy = buildPermissionPolicy(request);
+  const permissionPolicy = buildPermissionPolicy(request, roleName);
 
   try {
     const created = await iamClient.send(

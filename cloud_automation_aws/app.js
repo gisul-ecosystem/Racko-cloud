@@ -15,6 +15,7 @@ import { startUsageScheduler } from './src/schedulers/usageScheduler.js';
 import { startResourceCleanupScheduler } from './src/schedulers/resourceCleanupScheduler.js';
 import { startSessionScheduler } from './src/schedulers/sessionScheduler.js';
 import { startExpiryScheduler } from './src/schedulers/expiryScheduler.js';
+import { startCostTrackingScheduler } from './src/schedulers/costTrackingScheduler.js';
 import managePortalRoutes from './src/routes/managePortal.js';
 import orgAdminRoutes from './src/routes/orgAdmin.js';
 import notificationRoutes from './src/routes/notifications.js';
@@ -57,7 +58,8 @@ startUsageScheduler();
 startResourceCleanupScheduler();
 startSessionScheduler();
 startExpiryScheduler();
-console.log('[Schedulers] Window enforcement, usage tracking, session expiry, lab expiry, and resource cleanup started');
+startCostTrackingScheduler();
+console.log('[Schedulers] Window enforcement, usage tracking, session expiry, lab expiry, resource cleanup, and cost tracking started');
 
 const port = Number(process.env.PORT || 3003);
 
