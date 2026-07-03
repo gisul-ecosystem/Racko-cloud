@@ -2,7 +2,20 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronLeft, BookOpen, Server, Globe, HelpCircle, Terminal, Layers, Clock, UploadCloud, Monitor } from 'lucide-react';
+import {
+  ChevronLeft,
+  BookOpen,
+  Server,
+  Globe,
+  HelpCircle,
+  Terminal,
+  Layers,
+  Clock,
+  UploadCloud,
+  Monitor,
+  FileText,
+  Activity,
+} from 'lucide-react';
 
 interface NavSection {
   title: string;
@@ -28,6 +41,24 @@ const navSections: NavSection[] = [
       { href: '/console/docs/esi/adding-servers', label: 'Adding Servers', icon: <UploadCloud className="h-4 w-4" /> },
       { href: '/console/docs/esi/console-access', label: 'Browser Console', icon: <Monitor className="h-4 w-4" /> },
       { href: '/console/docs/esi/faq', label: 'FAQ', icon: <HelpCircle className="h-4 w-4" /> },
+    ],
+  },
+  {
+    title: 'Azure Services',
+    links: [
+      { href: '/console/docs/azure/getting-started', label: 'Getting Started', icon: <BookOpen className="h-4 w-4" /> },
+      { href: '/console/docs/azure/creating-requests', label: 'Creating Requests', icon: <FileText className="h-4 w-4" /> },
+      { href: '/console/docs/azure/request-status', label: 'Request Status', icon: <Activity className="h-4 w-4" /> },
+      { href: '/console/docs/azure/faq', label: 'FAQ', icon: <HelpCircle className="h-4 w-4" /> },
+    ],
+  },
+  {
+    title: 'AWS Services',
+    links: [
+      { href: '/console/docs/aws/getting-started', label: 'Getting Started', icon: <BookOpen className="h-4 w-4" /> },
+      { href: '/console/docs/aws/creating-requests', label: 'Creating Requests', icon: <FileText className="h-4 w-4" /> },
+      { href: '/console/docs/aws/request-status', label: 'Request Status', icon: <Activity className="h-4 w-4" /> },
+      { href: '/console/docs/aws/faq', label: 'FAQ', icon: <HelpCircle className="h-4 w-4" /> },
     ],
   },
 ];

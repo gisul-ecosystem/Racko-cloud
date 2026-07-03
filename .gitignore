@@ -49,3 +49,8 @@ nginx-*.conf
 # Environment example templates (never commit with real values)
 *.env.example
 .env.*.example
+
+# GCP service account keys
+gcp-key.json
+cloud_automation_gcp/gcp-key.json
+

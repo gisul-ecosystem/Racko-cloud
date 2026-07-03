@@ -113,7 +113,7 @@ export function useOrgAdminPortal() {
 
     const intervalId = window.setInterval(() => {
       void refreshDetail();
-    }, 60_000);
+    }, 30_000);
 
     return () => window.clearInterval(intervalId);
   }, [selectedRequestId, refreshDetail]);

@@ -1,8 +1,16 @@
 'use client';
 
 import Link from 'next/link';
-import { AlertTriangle, Globe, RefreshCw, Server } from 'lucide-react';
+import { AlertTriangle, Cloud, Globe, RefreshCw, Server } from 'lucide-react';
 import { useMemo } from 'react';
+import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
+import { RequestStatusBadge } from '../../cloud_automation/components/RequestStatusBadge';
+import { getCreatedAt, getCustomerEmail, getRequestStatus } from '../../cloud_automation/utils/formatters';
+import { useProvisioningRequests } from '../../cloud_automation/hooks/useProvisioningRequests';
+import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
+import { AwsRequestStatusBadge } from '../../cloud_automation_aws/components/AwsRequestStatusBadge';
+import { useAwsRequests } from '../../cloud_automation_aws/hooks/useAwsRequests';
+import type { AwsRequest } from '../../cloud_automation_aws/api/client';
 import { useAuth } from '../../context/AuthContext';
 import { useMyVMs } from '../../hooks/useVMs';
 import { useExternalVMs } from '../../hooks/useExternalVMs';
@@ -14,7 +22,7 @@ import type { VMStatus } from '../../lib/vmApi';
 
 const PAGE_SIZE = 6;
 
-type RecentResourceKind = 'vps' | 'elastic';
+type RecentResourceKind = 'vps' | 'elastic' | 'aws' | 'azure';
 
 interface RecentResource {
   id: string;
@@ -26,6 +34,21 @@ interface RecentResource {
   href: string;
   vpsStatus?: VMStatus;
   elasticProtocol?: ExternalVMProtocol;
+  awsStatus?: string;
+  azureStatus?: string;
+}
+
+function getAwsRequestName(request: AwsRequest): string {
+  const email = request.customer_email ?? request.customerEmail;
+  if (email) {
+    return email.length <= 32 ? email : `${email.slice(0, 32)}…`;
+  }
+  const id = String(request._id);
+  return id.length > 12 ? `AWS Request ${id.slice(0, 8)}…` : `AWS Request ${id}`;
+}
+
+function getAwsCreatedAt(request: AwsRequest): string {
+  return request.created_at ?? request.createdAt ?? new Date(0).toISOString();
 }
 
 function formatDateTime(value: string) {
@@ -53,7 +76,7 @@ function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
 }
 
 function ResourceIcon({ kind }: { kind: RecentResourceKind }) {
-  const Icon = kind === 'vps' ? Server : Globe;
+  const Icon = kind === 'vps' ? Server : kind === 'elastic' ? Globe : Cloud;
   return (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
       <Icon className="h-4 w-4" />
@@ -71,8 +94,20 @@ export function RecentResourcesTable() {
     error: elasticError,
     refetch: refetchElastic,
   } = useExternalVMs(isAuthenticated);
+  const {
+    requests: awsRequests,
+    loading: awsLoading,
+    error: awsError,
+    refetch: refetchAws,
+  } = useAwsRequests(isAuthenticated);
+  const {
+    requests: azureRequests,
+    loading: azureLoading,
+    error: azureError,
+    refetch: refetchAzure,
+  } = useProvisioningRequests(isAuthenticated);
 
-  const loading = vpsLoading || elasticLoading;
+  const loading = vpsLoading || elasticLoading || awsLoading || azureLoading;
   const query = searchQuery.trim().toLowerCase();
 
   const { recent, total } = useMemo(() => {
@@ -97,6 +132,26 @@ export function RecentResourcesTable() {
         href: `/console/elastic-servers/${vm._id}/console`,
         elasticProtocol: vm.protocol,
       })),
+      ...awsRequests.map((request) => ({
+        id: `aws-${request._id}`,
+        kind: 'aws' as const,
+        name: getAwsRequestName(request),
+        serviceLabel: AWS_SERVICE.name,
+        detail: request.region ?? '—',
+        lastActivityAt: getAwsCreatedAt(request),
+        href: AWS_ROUTES.requestStatus(String(request._id)),
+        awsStatus: request.status ?? 'Unknown',
+      })),
+      ...azureRequests.map((request) => ({
+        id: `azure-${request.id}`,
+        kind: 'azure' as const,
+        name: getCustomerEmail(request),
+        serviceLabel: AZURE_SERVICE.name,
+        detail: request.location ?? '—',
+        lastActivityAt: getCreatedAt(request) ?? new Date(0).toISOString(),
+        href: AZURE_ROUTES.requestStatus(request.id),
+        azureStatus: getRequestStatus(request),
+      })),
     ];
 
     const filtered = query
@@ -113,15 +168,18 @@ export function RecentResourcesTable() {
     );
 
     return { recent: sorted.slice(0, PAGE_SIZE), total: sorted.length };
-  }, [vms, externalVms, query]);
+  }, [vms, externalVms, awsRequests, azureRequests, query]);
 
   const refetch = () => {
     void refetchVps();
     void refetchElastic();
+    void refetchAws();
+    void refetchAzure();
   };
 
-  const bothFailed = Boolean(vpsError && elasticError) && recent.length === 0;
-  const partialError = Boolean(vpsError || elasticError) && recent.length > 0;
+  const sourceErrors = [vpsError, elasticError, awsError, azureError].filter(Boolean);
+  const allFailed = sourceErrors.length === 4 && recent.length === 0;
+  const partialError = sourceErrors.length > 0 && recent.length > 0;
 
   return (
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -131,13 +189,13 @@ export function RecentResourcesTable() {
 
       {loading ? (
         <TableSkeleton rows={PAGE_SIZE} cols={5} embedded />
-      ) : bothFailed ? (
+      ) : allFailed ? (
         <div className="p-12 text-center">
           <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-red-50">
             <AlertTriangle className="h-6 w-6 text-red-500" />
           </div>
           <p className="text-sm font-medium text-gray-900">Failed to load resources</p>
-          <p className="mt-1 text-xs text-gray-500">{vpsError || elasticError}</p>
+          <p className="mt-1 text-xs text-gray-500">{sourceErrors[0]}</p>
           <button
             type="button"
             onClick={refetch}
@@ -214,6 +272,10 @@ export function RecentResourcesTable() {
                         <VMStatusBadge status={item.vpsStatus} />
                       ) : item.elasticProtocol ? (
                         <ProtocolBadge protocol={item.elasticProtocol} />
+                      ) : item.kind === 'aws' && item.awsStatus ? (
+                        <AwsRequestStatusBadge status={item.awsStatus} />
+                      ) : item.kind === 'azure' && item.azureStatus ? (
+                        <RequestStatusBadge status={item.azureStatus} />
                       ) : (
                         'N/A'
                       )}

@@ -2,9 +2,9 @@ import { CloudTrailClient, LookupEventsCommand } from '@aws-sdk/client-cloudtrai
 import { DateTime } from 'luxon';
 import Request from '../models/Request.js';
 import SessionLog from '../models/SessionLog.js';
-import { getProvisionedUsers } from '../utils/provisionedUsers.js';
 import {
   evaluateDailyUsageAccess,
+  computeMagicLinkDurationSeconds,
   getRequestTimezone,
 } from '../utils/usageWindowAccess.js';
 import {
@@ -16,7 +16,6 @@ import {
   expireMagicLinkSessionsForUser,
   startDirectIamSession,
 } from './sessionTrackingService.js';
-import { computeMagicLinkDurationSeconds } from '../utils/usageWindowAccess.js';
 
 const cloudTrailCredentials = {
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
@@ -30,6 +29,15 @@ function cloudTrailClientForRegion(region) {
   });
 }
 
+function getActiveTrackingRequestsQuery() {
+  const now = new Date();
+  return {
+    status: 'Completed',
+    startDate: { $lte: now },
+    endDate: { $gte: now },
+  };
+}
+
 function resolveCloudTrailRegions(requests) {
   const regions = new Set(['us-east-1']);
 
@@ -41,6 +49,8 @@ function resolveCloudTrailRegions(requests) {
     if (request.region) {
       regions.add(request.region);
     }
+    // Console activity for regional services is often logged in us-west-2 / home region.
+    regions.add('us-west-2');
   }
 
   return [...regions];
@@ -69,6 +79,39 @@ async function lookupConsoleLoginEvents(regions, since) {
       }
     } catch (err) {
       console.warn(`[ConsoleLoginMonitor] CloudTrail lookup failed in ${region}:`, err.message);
+    }
+  }
+
+  return events;
+}
+
+async function lookupEventsByUsername(regions, username, since) {
+  const events = [];
+
+  for (const region of regions) {
+    try {
+      const response = await cloudTrailClientForRegion(region).send(
+        new LookupEventsCommand({
+          LookupAttributes: [{ AttributeKey: 'Username', AttributeValue: username }],
+          StartTime: since,
+          EndTime: new Date(),
+          MaxResults: 20,
+        })
+      );
+
+      for (const wrapper of response.Events || []) {
+        if (!wrapper.CloudTrailEvent) continue;
+        try {
+          events.push(JSON.parse(wrapper.CloudTrailEvent));
+        } catch {
+          // ignore malformed events
+        }
+      }
+    } catch (err) {
+      console.warn(
+        `[ConsoleLoginMonitor] Username activity lookup failed for ${username} in ${region}:`,
+        err.message
+      );
     }
   }
 
@@ -118,6 +161,7 @@ function buildConsoleUserLookupMap(requests) {
         username: userIdFromIndex(role.userIndex),
         roleName: role.roleName,
         accessType: 'magic_link',
+        cloudTrailUsernames: [role.roleName.toLowerCase(), userIdFromIndex(role.userIndex).toLowerCase()],
       });
     }
 
@@ -130,6 +174,7 @@ function buildConsoleUserLookupMap(requests) {
         userId: user.userId || user.username,
         username: user.username,
         accessType: 'identity_center',
+        cloudTrailUsernames: [user.username.toLowerCase()],
       });
     }
   }
@@ -177,6 +222,30 @@ function resolveUserFromEvent(event, userLookup) {
   return null;
 }
 
+const BACKGROUND_CONSOLE_EVENTS = new Set([
+  'ListManagedNotificationEvents',
+  'GetAccountColor',
+  'GetAccountPlanState',
+  'GetSigninToken',
+]);
+
+function isTrackableActivityEvent(event) {
+  if (!event || event.errorCode || event.errorMessage) {
+    return false;
+  }
+
+  if (event.eventName === 'ConsoleLogin') {
+    return event.responseElements?.ConsoleLogin === 'Success';
+  }
+
+  if (BACKGROUND_CONSOLE_EVENTS.has(String(event.eventName || ''))) {
+    return false;
+  }
+
+  const source = String(event.eventSource || '');
+  return source.endsWith('.amazonaws.com');
+}
+
 async function isEventProcessed(requestId, eventId) {
   const request = await Request.findById(requestId).select('processedCloudTrailEvents').lean();
   return (request?.processedCloudTrailEvents || []).some((entry) => entry.eventId === eventId);
@@ -195,13 +264,216 @@ async function markEventProcessed(requestId, eventId, userId) {
   });
 }
 
+async function hasOpenSession(requestId, userInfo) {
+  const request = await Request.findById(requestId).select('usageSessions').lean();
+  const openUsageSession = (request?.usageSessions || []).some(
+    (session) => session.userId === userInfo.userId && !session.logoutAt
+  );
+  if (openUsageSession) {
+    return true;
+  }
+
+  const activeSessionLog = await SessionLog.exists({
+    requestId,
+    userIndex: userInfo.userIndex,
+    status: 'active',
+  });
+
+  return Boolean(activeSessionLog);
+}
+
+async function ensureUserSessionStarted(request, userInfo, startedAt, { source = 'cloudtrail' } = {}) {
+  if (await hasOpenSession(String(request._id), userInfo)) {
+    return false;
+  }
+
+  const access = evaluateDailyUsageAccess(request, userInfo.userId, startedAt);
+  if (!access.allowed) {
+    console.log(
+      `[ConsoleLoginMonitor] Session denied for ${userInfo.username} (${source}): ${access.reason}`
+    );
+    return false;
+  }
+
+  if (userInfo.accessType === 'identity_center') {
+    const durationSeconds = computeMagicLinkDurationSeconds(request, userInfo.userId, startedAt);
+    const expiresAt =
+      durationSeconds > 0 ? new Date(startedAt.getTime() + durationSeconds * 1000) : null;
+
+    await startDirectIamSession(userInfo.requestId, userInfo.userIndex, startedAt, expiresAt);
+  } else {
+    await endUsageSessionIfActive({
+      requestId: userInfo.requestId,
+      userId: userInfo.userId,
+    }).catch(() => null);
+
+    await startUsageSession({
+      requestId: userInfo.requestId,
+      userId: userInfo.userId,
+      username: userInfo.username,
+      loginAt: startedAt,
+    });
+  }
+
+  console.log(
+    `[ConsoleLoginMonitor] Session started for ${userInfo.username} at ${startedAt.toISOString()} (${source})`
+  );
+  return true;
+}
+
+async function startSessionsFromEvents(events, userLookup, { dedupeEvents = false } = {}) {
+  let sessionsCreated = 0;
+
+  for (const event of events) {
+    if (!isTrackableActivityEvent(event)) continue;
+
+    const userInfo = resolveUserFromEvent(event, userLookup);
+    if (!userInfo) continue;
+
+    const eventId = event.eventID;
+    if (dedupeEvents && eventId) {
+      if (await isEventProcessed(userInfo.requestId, eventId)) {
+        continue;
+      }
+    }
+
+    const request = await Request.findById(userInfo.requestId);
+    if (!request) continue;
+
+    const activityTime = new Date(event.eventTime || Date.now());
+    const started = await ensureUserSessionStarted(request, userInfo, activityTime, {
+      source: event.eventName === 'ConsoleLogin' ? 'console_login' : 'api_activity',
+    });
+
+    if (!started) continue;
+
+    if (dedupeEvents && eventId) {
+      await markEventProcessed(userInfo.requestId, eventId, userInfo.userId);
+    }
+
+    sessionsCreated += 1;
+  }
+
+  return sessionsCreated;
+}
+
+export async function syncRecentActivityForRequest(requestId) {
+  const request = await Request.findById(requestId).lean();
+  if (!request || request.status !== 'Completed') {
+    return { synced: 0 };
+  }
+
+  const userLookup = buildConsoleUserLookupMap([request]);
+  if (!userLookup.size) {
+    return { synced: 0 };
+  }
+
+  const lookbackMinutes = Number(process.env.AWS_ACTIVITY_SYNC_LOOKBACK_MINUTES || 20);
+  const since = new Date(Date.now() - lookbackMinutes * 60 * 1000);
+  const regions = resolveCloudTrailRegions([request]);
+  let synced = 0;
+
+  for (const userInfo of userLookup.values()) {
+    if (await hasOpenSession(String(request._id), userInfo)) {
+      continue;
+    }
+
+    const usernames = [...new Set(userInfo.cloudTrailUsernames || [userInfo.username.toLowerCase()])];
+    let latestEvent = null;
+
+    for (const username of usernames) {
+      const events = await lookupEventsByUsername(regions, username, since);
+      for (const event of events) {
+        if (!isTrackableActivityEvent(event)) continue;
+        const eventTime = new Date(event.eventTime || Date.now());
+        if (!latestEvent || eventTime > new Date(latestEvent.eventTime || 0)) {
+          latestEvent = event;
+        }
+      }
+    }
+
+    if (!latestEvent) continue;
+
+    const hydratedRequest = await Request.findById(requestId);
+    if (!hydratedRequest) continue;
+
+    const started = await ensureUserSessionStarted(
+      hydratedRequest,
+      userInfo,
+      new Date(latestEvent.eventTime || Date.now()),
+      { source: 'org_admin_sync' }
+    );
+
+    if (started) {
+      synced += 1;
+    }
+  }
+
+  return { synced };
+}
+
+export async function monitorAwsUserActivity() {
+  const requests = await Request.find(getActiveTrackingRequestsQuery()).lean();
+  if (!requests.length) {
+    return { checked: 0, sessionsCreated: 0 };
+  }
+
+  const userLookup = buildConsoleUserLookupMap(requests);
+  if (!userLookup.size) {
+    return { checked: 0, sessionsCreated: 0 };
+  }
+
+  const lookbackMinutes = Number(process.env.AWS_ACTIVITY_MONITOR_LOOKBACK_MINUTES || 10);
+  const since = new Date(Date.now() - lookbackMinutes * 60 * 1000);
+  const regions = resolveCloudTrailRegions(requests);
+  const recentEvents = await lookupRecentUserEvents(regions, since);
+  const sessionsFromEvents = await startSessionsFromEvents(recentEvents, userLookup);
+
+  let sessionsFromUsers = 0;
+  for (const userInfo of userLookup.values()) {
+    if (await hasOpenSession(userInfo.requestId, userInfo)) {
+      continue;
+    }
+
+    const usernames = [...new Set(userInfo.cloudTrailUsernames || [userInfo.username.toLowerCase()])];
+    let latestEvent = null;
+
+    for (const username of usernames) {
+      const events = await lookupEventsByUsername(regions, username, since);
+      for (const event of events) {
+        if (!isTrackableActivityEvent(event)) continue;
+        const eventTime = new Date(event.eventTime || Date.now());
+        if (!latestEvent || eventTime > new Date(latestEvent.eventTime || 0)) {
+          latestEvent = event;
+        }
+      }
+    }
+
+    if (!latestEvent) continue;
+
+    const request = await Request.findById(userInfo.requestId);
+    if (!request) continue;
+
+    const started = await ensureUserSessionStarted(
+      request,
+      userInfo,
+      new Date(latestEvent.eventTime || Date.now()),
+      { source: 'username_activity' }
+    );
+
+    if (started) {
+      sessionsFromUsers += 1;
+    }
+  }
+
+  return {
+    checked: userLookup.size,
+    sessionsCreated: sessionsFromEvents + sessionsFromUsers,
+  };
+}
+
 export async function monitorAwsConsoleLogins() {
-  const requests = await Request.find({
-    status: 'Completed',
-    $or: [{ enableDailyUsage: true }, { 'usageWindows.0': { $exists: true } }],
-    startDate: { $lte: new Date() },
-    endDate: { $gte: new Date() },
-  }).lean();
+  const requests = await Request.find(getActiveTrackingRequestsQuery()).lean();
 
   if (!requests.length) {
     return { fetched: 0, sessionsCreated: 0 };
@@ -216,88 +488,25 @@ export async function monitorAwsConsoleLogins() {
   const since = new Date(Date.now() - lookbackMinutes * 60 * 1000);
   const regions = resolveCloudTrailRegions(requests);
 
-  const events = await lookupConsoleLoginEvents(regions, since);
-  if (!events.length) {
+  const wrappers = await lookupConsoleLoginEvents(regions, since);
+  if (!wrappers.length) {
     return { fetched: 0, sessionsCreated: 0, regions };
   }
 
-  let sessionsCreated = 0;
+  const events = wrappers
+    .map((wrapper) => {
+      if (!wrapper.CloudTrailEvent) return null;
+      try {
+        return JSON.parse(wrapper.CloudTrailEvent);
+      } catch {
+        return null;
+      }
+    })
+    .filter(Boolean);
 
-  for (const wrapper of events) {
-    if (!wrapper.CloudTrailEvent) continue;
+  const sessionsCreated = await startSessionsFromEvents(events, userLookup, { dedupeEvents: true });
 
-    let event;
-    try {
-      event = JSON.parse(wrapper.CloudTrailEvent);
-    } catch {
-      continue;
-    }
-
-    if (event.errorCode || event.errorMessage) continue;
-    if (event.responseElements?.ConsoleLogin !== 'Success') continue;
-
-    const userInfo = resolveUserFromEvent(event, userLookup);
-    if (!userInfo) continue;
-
-    const eventId = event.eventID || wrapper.EventId;
-    if (!eventId) continue;
-
-    if (await isEventProcessed(userInfo.requestId, eventId)) {
-      continue;
-    }
-
-    const request = await Request.findById(userInfo.requestId);
-    if (!request) continue;
-
-    const loginTime = new Date(event.eventTime || wrapper.EventTime || Date.now());
-    const access = evaluateDailyUsageAccess(request, userInfo.userId, loginTime);
-
-    await markEventProcessed(userInfo.requestId, eventId, userInfo.userId);
-
-    if (!access.allowed) {
-      console.log(
-        `[ConsoleLoginMonitor] Login denied for ${userInfo.username}: ${access.reason}`
-      );
-      continue;
-    }
-
-    const openSession = (request.usageSessions || []).find(
-      (session) => session.userId === userInfo.userId && !session.logoutAt
-    );
-
-    if (openSession) {
-      continue;
-    }
-
-    if (userInfo.accessType === 'identity_center') {
-      const durationSeconds = computeMagicLinkDurationSeconds(request, userInfo.userId, loginTime);
-      const expiresAt =
-        durationSeconds > 0
-          ? new Date(loginTime.getTime() + durationSeconds * 1000)
-          : null;
-
-      await startDirectIamSession(userInfo.requestId, userInfo.userIndex, loginTime, expiresAt);
-    } else {
-      await endUsageSessionIfActive({
-        requestId: userInfo.requestId,
-        userId: userInfo.userId,
-      }).catch(() => null);
-
-      await startUsageSession({
-        requestId: userInfo.requestId,
-        userId: userInfo.userId,
-        username: userInfo.username,
-        loginAt: loginTime,
-      });
-    }
-
-    sessionsCreated += 1;
-    console.log(
-      `[ConsoleLoginMonitor] Session started for ${userInfo.username} at ${loginTime.toISOString()}`
-    );
-  }
-
-  return { fetched: events.length, sessionsCreated, regions };
+  return { fetched: wrappers.length, sessionsCreated, regions };
 }
 
 export async function monitorIdleUsageSessions() {

@@ -11,6 +11,7 @@ import { logger } from './utils/logger';
 import { config } from './config';
 import cloudAutomationRoutes from './routes/cloudAutomation.routes';
 import cloudAutomationAwsRoutes from './routes/cloudAutomationAws.routes';
+import cloudAutomationGcpRoutes from './routes/cloudAutomationGcp.routes';
 import managePortalRoutes from './routes/managePortal.routes';
 import orgAdminPortalRoutes from './routes/orgAdminPortal.routes';
 import proxyRoutes from './routes/proxy.routes';
@@ -62,9 +63,10 @@ app.get('/health', (_req, res) => {
 app.use(managePortalRoutes);
 // Organization admin APIs (JWT super_admin; enforced by cloud_automation)
 app.use(orgAdminPortalRoutes);
-// Cloud automation AWS — register before Azure routes because
-// /api/v1/cloud-automation-aws is a prefix of /api/v1/cloud-automation.
+// Cloud automation AWS/GCP — register before Azure routes because
+// /api/v1/cloud-automation-aws and /api/v1/cloud-automation-gcp are prefixes of /api/v1/cloud-automation.
 app.use(cloudAutomationAwsRoutes);
+app.use(cloudAutomationGcpRoutes);
 // Cloud automation (Type 1 admin APIs) — must register before core-api catch-all
 app.use(cloudAutomationRoutes);
 app.use(proxyRoutes);

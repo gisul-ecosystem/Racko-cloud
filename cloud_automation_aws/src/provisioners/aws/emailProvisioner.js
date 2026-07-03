@@ -15,6 +15,78 @@ function buildTransport() {
   });
 }
 
+function buildRequiredTagsSection({ request, labRoles = [], identityUsers = [] }) {
+  const requestId = String(request._id);
+
+  const users = labRoles.length
+    ? labRoles.map((role) => ({
+        label: `User ${role.userIndex + 1}`,
+        userIndex: role.userIndex,
+        username: null,
+      }))
+    : identityUsers.map((user) => ({
+        label: `User ${user.userIndex + 1}`,
+        userIndex: user.userIndex,
+        username: user.username || null,
+      }));
+
+  const perUserRows = users
+    .flatMap((user) => {
+      const rows = [
+        `<tr>
+          <td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;">${user.label}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;"><code>racko:user-index</code></td>
+          <td style="padding:8px;border:1px solid #e5e7eb;font-family:monospace;">${user.userIndex + 1}</td>
+        </tr>`,
+      ];
+
+      if (user.username) {
+        rows.push(`<tr>
+          <td style="padding:8px;border:1px solid #e5e7eb;font-weight:600;">${user.label}</td>
+          <td style="padding:8px;border:1px solid #e5e7eb;"><code>racko:user</code></td>
+          <td style="padding:8px;border:1px solid #e5e7eb;font-family:monospace;">${user.username}</td>
+        </tr>`);
+      }
+
+      return rows;
+    })
+    .join('');
+
+  return `
+      <div style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:20px;margin-bottom:24px;">
+        <h3 style="color:#1e40af;margin:0 0 8px;font-size:14px;">🏷️ Required Tags for Creating Resources</h3>
+        <p style="font-size:13px;color:#374151;margin:0 0 12px;">
+          When creating EC2, RDS, S3, Lambda, DynamoDB, EKS, and other AWS resources, you <strong>must</strong> apply these tags at creation time. Without them, resource creation will be denied by IAM policy.
+        </p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:12px;">
+          <tr style="background:#dbeafe;">
+            <th style="padding:8px;border:1px solid #93c5fd;text-align:left;color:#1e40af;">Tag Key</th>
+            <th style="padding:8px;border:1px solid #93c5fd;text-align:left;color:#1e40af;">Value</th>
+          </tr>
+          <tr>
+            <td style="padding:8px;border:1px solid #e5e7eb;"><code>racko:request</code></td>
+            <td style="padding:8px;border:1px solid #e5e7eb;font-family:monospace;">${requestId}</td>
+          </tr>
+        </table>
+        ${
+          users.length
+            ? `<p style="font-size:12px;color:#6b7280;margin:0 0 8px;">Per-user tags (use the values for your assigned user):</p>
+        <table style="width:100%;border-collapse:collapse;font-size:13px;">
+          <tr style="background:#dbeafe;">
+            <th style="padding:8px;border:1px solid #93c5fd;text-align:left;color:#1e40af;">User</th>
+            <th style="padding:8px;border:1px solid #93c5fd;text-align:left;color:#1e40af;">Tag Key</th>
+            <th style="padding:8px;border:1px solid #93c5fd;text-align:left;color:#1e40af;">Value</th>
+          </tr>
+          ${perUserRows}
+        </table>`
+            : ''
+        }
+        <p style="font-size:12px;color:#6b7280;margin:12px 0 0;">
+          Supported services are auto-tagged after creation by the Racko auto-tagger, but tags must be present at create time to pass IAM checks.
+        </p>
+      </div>`;
+}
+
 function buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsAccountId, allowedServices }) {
   return `
 <!DOCTYPE html>
@@ -64,6 +136,8 @@ function buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsA
           <li>Links expire after 12 hours — regenerate as needed</li>
         </ol>
       </div>
+
+      ${buildRequiredTagsSection({ request, labRoles })}
 
       <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:16px;">
         <h3 style="color:#92400e;margin:0 0 8px;font-size:13px;">⚠️ Magic Link Info</h3>
@@ -139,6 +213,8 @@ function buildIdentityCenterEmail({ request, identityUsers, portalSession, porta
         <li>You can log back in anytime using the same credentials</li>
       </ol>
     </div>
+
+    ${buildRequiredTagsSection({ request, identityUsers })}
 
     <div style="background:#FFF3CD;border-left:4px solid #856404;padding:12px;border-radius:4px;margin:16px 0;">
       <strong style="color:#856404;">Important:</strong>
