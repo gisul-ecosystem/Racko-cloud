@@ -21,6 +21,8 @@ const inputClass =
 
 const labelClass = 'block text-xs font-medium text-gray-700 mb-1';
 
+const MAX_VM_COUNT = Number(process.env['NEXT_PUBLIC_VM_MAX_BULK_COUNT']) || 50;
+
 export default function CreateVMPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -103,7 +105,7 @@ export default function CreateVMPage() {
   function canProceedStep2() {
     const err = validateName(name);
     const consoleOk = passwordMode === 'dynamic' || consolePassword.length > 0;
-    return !err && count >= 1 && count <= 100 &&
+    return !err && count >= 1 && count <= MAX_VM_COUNT &&
       !cpuError && !ramError && !diskError &&
       safeCpu >= minCpu && safeRam >= minRam && safeDisk >= minDisk &&
       consoleOk;
@@ -189,27 +191,47 @@ export default function CreateVMPage() {
             <div className="space-y-2">
               {templates.map((tpl) => {
                 const isSelected = selectedTemplateId === tpl.vmid;
+                const isCustom = tpl.isCustom === true;
                 return (
                   <button
                     key={tpl.vmid}
                     onClick={() => setSelectedTemplateId(tpl.vmid)}
                     className={`w-full text-left px-4 py-3.5 rounded-xl border transition-all ${
                       isSelected
-                        ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                        ? isCustom
+                          ? 'border-purple-500 bg-purple-50 ring-1 ring-purple-500'
+                          : 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                        : isCustom
+                        ? 'border-purple-200 bg-purple-50/40 hover:border-purple-300 hover:bg-purple-50'
                         : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-3">
-                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${isSelected ? 'bg-blue-100' : 'bg-gray-100'}`}>
-                          <Server className={`w-4 h-4 ${isSelected ? 'text-blue-600' : 'text-gray-500'}`} />
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                          isSelected
+                            ? isCustom ? 'bg-purple-100' : 'bg-blue-100'
+                            : isCustom ? 'bg-purple-100' : 'bg-gray-100'
+                        }`}>
+                          <Server className={`w-4 h-4 ${
+                            isSelected
+                              ? isCustom ? 'text-purple-600' : 'text-blue-600'
+                              : isCustom ? 'text-purple-500' : 'text-gray-500'
+                          }`} />
                         </div>
                         <div>
-                          <p className="text-sm font-medium text-gray-900">{tpl.name}</p>
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-gray-900">{tpl.name}</p>
+                            {isCustom && (
+                              <span className="text-xs font-medium text-purple-700 bg-purple-100 border border-purple-200 rounded-full px-2 py-0.5">
+                                Custom
+                              </span>
+                            )}
+                          </div>
                           <p className="text-xs text-gray-400">Node: {tpl.node} · ID: {tpl.vmid}</p>
                         </div>
                       </div>
-                      {isSelected && <Check className="w-4 h-4 text-blue-600" />}
+                      {isSelected && <Check className={`w-4 h-4 ${isCustom ? 'text-purple-600' : 'text-blue-600'}`} />}
                     </div>
                   </button>
                 );
@@ -275,13 +297,13 @@ export default function CreateVMPage() {
 
           {/* Count */}
           <div>
-            <label className={labelClass}>Count <span className="text-gray-400">(1–100)</span></label>
+            <label className={labelClass}>Count <span className="text-gray-400">(1–{MAX_VM_COUNT})</span></label>
             <input
               type="number"
               min={1}
-              max={100}
+              max={MAX_VM_COUNT}
               value={count}
-              onChange={(e) => setCount(Math.max(1, Math.min(100, parseInt(e.target.value) || 1)))}
+              onChange={(e) => setCount(Math.max(1, Math.min(MAX_VM_COUNT, parseInt(e.target.value) || 1)))}
               className={inputClass}
             />
             {count > 1 && (
