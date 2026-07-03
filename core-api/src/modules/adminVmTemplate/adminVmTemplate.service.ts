@@ -3,8 +3,11 @@ import { AdminVmTemplate } from './adminVmTemplate.model';
 import { VM } from '../vm/vm.model';
 import { proxmoxClient } from '../../utils/proxmoxClient';
 import { pollTask } from '../vm/helpers/taskPoller';
+import { runSysprepAndShutdown } from '../vm/helpers/softwareProvisioner';
 import { logger } from '../../utils/logger';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
+import type { AdminVmTemplateBuildStep } from './adminVmTemplate.model';
+import { emitTemplateBuildEvent } from './adminVmTemplate.events';
 
 function serialize(doc: InstanceType<typeof AdminVmTemplate>) {
   return {
@@ -16,6 +19,7 @@ function serialize(doc: InstanceType<typeof AdminVmTemplate>) {
     proxmoxVmid: doc.proxmoxVmid ?? null,
     node: doc.node ?? null,
     status: doc.status,
+    buildStep: doc.buildStep ?? null,
     errorMessage: doc.errorMessage ?? null,
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
@@ -83,14 +87,20 @@ export class AdminVmTemplateService {
   ): Promise<void> {
     let newVmid: number | undefined;
 
+    const setStep = (step: AdminVmTemplateBuildStep) => {
+      emitTemplateBuildEvent(docId.toString(), { buildStep: step, status: 'creating' });
+      return AdminVmTemplate.findByIdAndUpdate(docId, { buildStep: step });
+    };
+
     try {
-      // 1. Stop source VM if running — ensures disk consistency before clone
+      // Step 1 — Stop source VM if running (ensures disk consistency)
       const statusResp = await proxmoxClient.get<{ data: { status: string } }>(
         `/nodes/${node}/qemu/${sourceVmid}/status/current`
       );
       const wasRunning = statusResp.data.data.status === 'running';
 
       if (wasRunning) {
+        await setStep('stopping_source');
         const shutdownResp = await proxmoxClient.post<{ data: string }>(
           `/nodes/${node}/qemu/${sourceVmid}/status/shutdown`,
           {}
@@ -100,27 +110,26 @@ export class AdminVmTemplateService {
           throw new Error('Failed to stop source VM before cloning.');
         }
         logger.info('[AdminVmTemplate] Source VM stopped before clone', {
-          docId: docId.toString(),
-          sourceVmid,
+          docId: docId.toString(), sourceVmid,
         });
       }
 
-      // 2. Get next available Proxmox VMID
+      // Step 2 — Full clone source VM into new VMID
+      await setStep('cloning');
       const nextIdResp = await proxmoxClient.get<{ data: number }>('/cluster/nextid');
       newVmid = nextIdResp.data.data;
 
-      // 3. Full clone of the source VM into a new VMID
       const cloneResp = await proxmoxClient.post<{ data: string }>(
         `/nodes/${node}/qemu/${sourceVmid}/clone`,
         { newid: newVmid, name: `admin-tpl-${newVmid}`, full: 1 }
       );
       const clonePoll = await pollTask(cloneResp.data.data, node);
-
       if (clonePoll.result !== 'success') {
         throw new Error(`Proxmox clone task failed (${clonePoll.exitstatus ?? 'unknown'}).`);
       }
 
-      // 4. Restart source VM if it was running before
+      // Step 3 — Restart source VM if it was running
+      await setStep('starting_source');
       if (wasRunning) {
         try {
           const startResp = await proxmoxClient.post<{ data: string }>(
@@ -129,8 +138,7 @@ export class AdminVmTemplateService {
           );
           await pollTask(startResp.data.data, node);
           logger.info('[AdminVmTemplate] Source VM restarted after clone', {
-            docId: docId.toString(),
-            sourceVmid,
+            docId: docId.toString(), sourceVmid,
           });
         } catch (restartErr) {
           // Non-fatal — template clone succeeded, log and continue
@@ -142,16 +150,36 @@ export class AdminVmTemplateService {
         }
       }
 
-      // 5. Convert the clone to a template
+      // Step 4 — Boot clone and run Sysprep to generalize the image
+      await setStep('running_sysprep');
+      await runSysprepAndShutdown(node, newVmid, docId.toString());
+      logger.info('[AdminVmTemplate] Sysprep completed on clone', {
+        docId: docId.toString(), newVmid, node,
+      });
+
+      // Step 5 — Convert the shut-down Sysprep'd clone to a Proxmox template
+      // Clear cloud-init fields inherited from the source VM before converting.
+      // ipconfig0 and cipassword are instance-specific — the template must not carry them.
+      // VMs created from this template will have their own IP and password injected at creation.
+      await setStep('converting');
+      await proxmoxClient.post(`/nodes/${node}/qemu/${newVmid}/config`, {
+        delete: 'ipconfig0,cipassword',
+      });
+      logger.info('[AdminVmTemplate] Cleared cloud-init IP and password from clone', {
+        docId: docId.toString(), newVmid, node,
+      });
+
       await proxmoxClient.post(`/nodes/${node}/qemu/${newVmid}/template`, {});
 
-      // 6. Mark as ready
+      // Mark as ready and clear build step
       await AdminVmTemplate.findByIdAndUpdate(docId, {
         proxmoxVmid: newVmid,
         node,
         status: 'ready',
+        buildStep: null,
         errorMessage: undefined,
       });
+      emitTemplateBuildEvent(docId.toString(), { buildStep: null, status: 'ready' });
 
       logger.info('[AdminVmTemplate] Template created', {
         docId: docId.toString(),
@@ -163,22 +191,32 @@ export class AdminVmTemplateService {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error('[AdminVmTemplate] Template creation failed', {
-        docId: docId.toString(),
-        sourceVmid,
-        node,
-        error: message,
+        docId: docId.toString(), sourceVmid, node, error: message,
       });
 
-      // If clone succeeded but convert failed, clean up the orphaned clone
+      // Clean up orphaned clone if it was created
       if (newVmid !== undefined) {
         try {
+          // Ensure clone is stopped before deleting
+          try {
+            const cloneStatus = await proxmoxClient.get<{ data: { status: string } }>(
+              `/nodes/${node}/qemu/${newVmid}/status/current`
+            );
+            if (cloneStatus.data.data.status === 'running') {
+              const stopResp = await proxmoxClient.post<{ data: string }>(
+                `/nodes/${node}/qemu/${newVmid}/status/stop`, {}
+              );
+              await pollTask(stopResp.data.data, node);
+            }
+          } catch {
+            // best-effort stop
+          }
           const delResp = await proxmoxClient.delete<{ data: string }>(
             `/nodes/${node}/qemu/${newVmid}`
           );
           await pollTask(delResp.data.data, node);
           logger.info('[AdminVmTemplate] Cleaned up orphaned clone after failure', {
-            docId: docId.toString(),
-            newVmid,
+            docId: docId.toString(), newVmid,
           });
         } catch (cleanupErr) {
           logger.warn('[AdminVmTemplate] Failed to clean up orphaned clone', {
@@ -191,8 +229,10 @@ export class AdminVmTemplateService {
 
       await AdminVmTemplate.findByIdAndUpdate(docId, {
         status: 'failed',
+        buildStep: null,
         errorMessage: message,
       });
+      emitTemplateBuildEvent(docId.toString(), { buildStep: null, status: 'failed', errorMessage: message });
     }
   }
 

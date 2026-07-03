@@ -4,10 +4,9 @@ import { useState, useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '../../../../../context/AuthContext';
 import { useTemplates, useTemplateDetails } from '../../../../../hooks/useTemplates';
-import { createVM, fetchSoftwareCatalog, type SoftwareCatalogItem } from '../../../../../lib/vmApi';
+import { createVM } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
-import { isWindowsTemplate } from '../../../../../components/dashboard/HyperVStatusBadge';
 import {
   Server, ChevronRight, ChevronLeft, Check,
   Cpu, MemoryStick, HardDrive, Layers,
@@ -62,32 +61,8 @@ export default function CreateVMPage() {
   const [passwordMode, setPasswordMode] = useState<PasswordMode>('fixed');
   const [consolePassword, setConsolePassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [enableVirtualization, setEnableVirtualization] = useState(false);
-  const [selectedSoftwareIds, setSelectedSoftwareIds] = useState<string[]>([]);
-  const [softwareCatalog, setSoftwareCatalog] = useState<SoftwareCatalogItem[]>([]);
-  const [softwareLoading, setSoftwareLoading] = useState(false);
   const [nameError, setNameError] = useState('');
   const [submitting, setSubmitting] = useState(false);
-
-  // Hyper-V is Windows-only — only show the option for Windows templates.
-  const showVirtualizationOption = isWindowsTemplate(templateDetails?.osType);
-
-  useEffect(() => {
-    if (!showVirtualizationOption) {
-      setEnableVirtualization(false);
-      setSelectedSoftwareIds([]);
-    }
-  }, [showVirtualizationOption]);
-
-  // Load software catalog when a Windows template is selected
-  useEffect(() => {
-    if (!showVirtualizationOption) { setSoftwareCatalog([]); return; }
-    setSoftwareLoading(true);
-    fetchSoftwareCatalog()
-      .then(setSoftwareCatalog)
-      .catch(() => setSoftwareCatalog([]))
-      .finally(() => setSoftwareLoading(false));
-  }, [showVirtualizationOption]);
 
   // Validation helpers
   const minCpu = templateDetails?.cpuCores ?? 1;
@@ -149,8 +124,6 @@ export default function CreateVMPage() {
         ...(ramOverride && safeRam > minRam ? { memoryGb: safeRam } : {}),
         ...(diskOverride && safeDisk > minDisk ? { diskGb: safeDisk } : {}),
         ...(description ? { description } : {}),
-        ...(showVirtualizationOption && enableVirtualization ? { enableVirtualization: true } : {}),
-        ...(showVirtualizationOption && selectedSoftwareIds.length > 0 ? { softwareIds: selectedSoftwareIds } : {}),
       };
 
       const result = await createVM(dto);
@@ -399,82 +372,6 @@ export default function CreateVMPage() {
             </div>
           </div>
 
-          {/* Virtualization (Hyper-V) — Windows templates only */}
-          {showVirtualizationOption && (
-            <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
-              <label className="flex items-start gap-3 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={enableVirtualization}
-                  onChange={(e) => setEnableVirtualization(e.target.checked)}
-                  className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                />
-                <span>
-                  <span className="text-sm font-medium text-gray-900">Enable virtualization (Hyper-V)</span>
-                  <p className="text-xs text-gray-500 mt-1">
-                    Turns on Hyper-V inside this Windows VM after creation. The VM is started and
-                    rebooted automatically — this can take a few minutes. Status is shown on the VM page.
-                  </p>
-                </span>
-              </label>
-            </div>
-          )}
-
-          {/* Software installation — Windows templates only */}
-          {showVirtualizationOption && (
-            <div className="p-4 rounded-xl border border-gray-200 bg-gray-50">
-              <p className="text-sm font-medium text-gray-900 mb-1">Software installation</p>
-              <p className="text-xs text-gray-500 mb-3">
-                Selected software will be installed automatically via Chocolatey after VM creation.
-              </p>
-              {softwareLoading ? (
-                <div className="space-y-2">
-                  {[1, 2].map((i) => (
-                    <div key={i} className="h-9 bg-gray-200 rounded-lg animate-pulse" />
-                  ))}
-                </div>
-              ) : softwareCatalog.length === 0 ? (
-                <p className="text-xs text-gray-400">No software packages available. Ask a super admin to add some.</p>
-              ) : (
-                <div className="grid grid-cols-1 gap-2">
-                  {softwareCatalog.map((sw) => {
-                    const checked = selectedSoftwareIds.includes(sw._id);
-                    return (
-                      <label
-                        key={sw._id}
-                        className={`flex items-center gap-3 px-3 py-2.5 rounded-lg border cursor-pointer transition-all ${
-                          checked
-                            ? 'border-blue-500 bg-blue-50'
-                            : 'border-gray-200 bg-white hover:border-gray-300'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) =>
-                            setSelectedSoftwareIds((prev) =>
-                              e.target.checked ? [...prev, sw._id] : prev.filter((id) => id !== sw._id)
-                            )
-                          }
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                        />
-                        <div className="flex-1 min-w-0">
-                          <span className="text-sm font-medium text-gray-900">{sw.name}</span>
-                          {sw.version && (
-                            <span className="ml-2 text-xs text-gray-400">{sw.version}</span>
-                          )}
-                          {sw.description && (
-                            <p className="text-xs text-gray-500 truncate">{sw.description}</p>
-                          )}
-                        </div>
-                      </label>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-
           {/* Description */}
           <div>
             <label className={labelClass}>Description <span className="text-gray-400">(optional)</span></label>
@@ -593,18 +490,6 @@ export default function CreateVMPage() {
               { label: 'Disk', value: cloneType === 'dedicated_storage' ? `${safeDisk} GB` : 'Shared (dynamic)' },
               { label: 'Console User', value: templateDetails.defaultUsername },
               { label: 'Password', value: passwordMode === 'dynamic' ? 'Auto-generated per VM' : 'Custom (set)' },
-              ...(showVirtualizationOption
-                ? [{ label: 'Virtualization', value: enableVirtualization ? 'Enabled (Hyper-V)' : 'Disabled' }]
-                : []),
-              ...(showVirtualizationOption && selectedSoftwareIds.length > 0
-                ? [{
-                    label: 'Software',
-                    value: softwareCatalog
-                      .filter((s) => selectedSoftwareIds.includes(s._id))
-                      .map((s) => s.name)
-                      .join(', '),
-                  }]
-                : []),
               ...(description ? [{ label: 'Description', value: description }] : []),
             ].map(({ label, value }) => (
               <div key={label} className="flex items-start justify-between py-2 border-b border-gray-50 last:border-0">
