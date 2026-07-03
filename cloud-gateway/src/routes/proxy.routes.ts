@@ -276,6 +276,8 @@ router.get('/api/v1/tenant-branding/asset', injectTenantHeader, coreApiProxy);
 
 // Razorpay wallet webhook (no auth; signature verified by core-api)
 router.post('/webhooks/razorpay', coreApiProxy);
+router.get('/webhooks/razorpay/test', coreApiProxy);
+router.post('/webhooks/razorpay/test-credit', coreApiProxy);
 
 // ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
 router.use('/api/v1/tenant-wallet', requireTenantBearer, tenantWalletProxy);
