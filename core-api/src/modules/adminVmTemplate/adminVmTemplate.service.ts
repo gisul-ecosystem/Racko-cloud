@@ -150,12 +150,31 @@ export class AdminVmTemplateService {
         }
       }
 
-      // Step 4 — Boot clone and run Sysprep to generalize the image
-      await setStep('running_sysprep');
-      await runSysprepAndShutdown(node, newVmid, docId.toString());
-      logger.info('[AdminVmTemplate] Sysprep completed on clone', {
-        docId: docId.toString(), newVmid, node,
+      // Detect OS type from the cloned VM config to decide whether Sysprep is needed.
+      // Windows guests require Sysprep to generalize the image (strip SID, hostname, etc.).
+      // Linux guests rely on cloud-init running on first boot — no equivalent step needed.
+      const cloneConfigResp = await proxmoxClient.get<{ data: { ostype?: string } }>(
+        `/nodes/${node}/qemu/${newVmid}/config`
+      );
+      const ostype = cloneConfigResp.data.data.ostype ?? '';
+      const isWindows = /^win/i.test(ostype);
+
+      logger.info('[AdminVmTemplate] Detected OS type from clone config', {
+        docId: docId.toString(), newVmid, ostype, isWindows,
       });
+
+      // Step 4 — Boot clone and run Sysprep (Windows only)
+      if (isWindows) {
+        await setStep('running_sysprep');
+        await runSysprepAndShutdown(node, newVmid, docId.toString());
+        logger.info('[AdminVmTemplate] Sysprep completed on clone', {
+          docId: docId.toString(), newVmid, node,
+        });
+      } else {
+        logger.info('[AdminVmTemplate] Skipping Sysprep — non-Windows OS, cloud-init will generalize on first boot', {
+          docId: docId.toString(), newVmid, node, ostype,
+        });
+      }
 
       // Step 5 — Convert the shut-down Sysprep'd clone to a Proxmox template
       // Clear cloud-init fields inherited from the source VM before converting.

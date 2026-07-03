@@ -147,6 +147,14 @@ function CreateTemplateModal({ vms, vmsLoading, onClose, onCreated }: CreateModa
         </div>
 
         <form onSubmit={(e) => void handleSubmit(e)} className="px-6 py-5 space-y-4">
+          {/* Info notice — shown always so admin is aware before proceeding */}
+          <div className="flex gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-lg">
+            <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+            <p className="text-xs text-amber-700 leading-relaxed">
+              Creating a template will temporarily <span className="font-semibold">shut down your source VM</span> during cloning, then automatically restart it. For Windows VMs, Sysprep will also run on the clone.
+            </p>
+          </div>
+
           {error && (
             <p className="text-sm text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
               {error}
