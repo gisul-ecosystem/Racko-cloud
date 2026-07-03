@@ -733,6 +733,14 @@ export async function deleteVmAutomation(automationId: string): Promise<void> {
 
 export type AdminVmTemplateStatus = 'creating' | 'ready' | 'failed';
 
+export type AdminVmTemplateBuildStep =
+  | 'stopping_source'
+  | 'cloning'
+  | 'starting_source'
+  | 'running_sysprep'
+  | 'converting'
+  | null;
+
 export interface AdminVmTemplate {
   _id: string;
   adminId: string;
@@ -742,6 +750,7 @@ export interface AdminVmTemplate {
   proxmoxVmid: number | null;
   node: string | null;
   status: AdminVmTemplateStatus;
+  buildStep: AdminVmTemplateBuildStep;
   errorMessage: string | null;
   createdAt: string;
   updatedAt: string;
@@ -767,4 +776,14 @@ export async function createAdminVmTemplate(
 
 export async function deleteAdminVmTemplate(templateId: string): Promise<void> {
   await apiRequest(`/api/v1/admin-vm-templates/${templateId}`, { method: 'DELETE' });
+}
+
+export async function fetchAdminVmTemplateStreamTicket(
+  templateId: string
+): Promise<{ streamToken: string; expiresIn: number }> {
+  const res = await apiRequest<ApiResponse<{ streamToken: string; expiresIn: number }>>(
+    `/api/v1/admin-vm-templates/${templateId}/stream-ticket`,
+    { method: 'POST' }
+  );
+  return res.data;
 }

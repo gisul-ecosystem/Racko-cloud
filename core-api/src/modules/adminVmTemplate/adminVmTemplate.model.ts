@@ -2,6 +2,14 @@ import mongoose, { Document, Schema } from 'mongoose';
 
 export type AdminVmTemplateStatus = 'creating' | 'ready' | 'failed';
 
+export type AdminVmTemplateBuildStep =
+  | 'stopping_source'
+  | 'cloning'
+  | 'starting_source'
+  | 'running_sysprep'
+  | 'converting'
+  | null;
+
 export interface IAdminVmTemplate extends Document {
   _id: mongoose.Types.ObjectId;
   adminId: mongoose.Types.ObjectId;
@@ -11,6 +19,7 @@ export interface IAdminVmTemplate extends Document {
   proxmoxVmid: number;
   node: string;
   status: AdminVmTemplateStatus;
+  buildStep: AdminVmTemplateBuildStep;
   errorMessage?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -29,6 +38,11 @@ const adminVmTemplateSchema = new Schema<IAdminVmTemplate>(
       enum: ['creating', 'ready', 'failed'],
       default: 'creating',
       index: true,
+    },
+    buildStep: {
+      type: String,
+      enum: ['stopping_source', 'cloning', 'starting_source', 'running_sysprep', 'converting', null],
+      default: null,
     },
     errorMessage: { type: String },
   },

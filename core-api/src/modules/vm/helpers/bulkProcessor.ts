@@ -49,6 +49,78 @@ export async function processBulkCreation(
   const count = specs.count;
   const hasSoftware = (specs.softwareIds?.length ?? 0) > 0;
 
+  const hasVirtualization = specs.enableVirtualization === true;
+
+  // Bulk + virtualization only (no software) → golden image path
+  // Enable HyperV once on the seed, convert to template, clone all VMs from it.
+  // Every clone gets HyperV baked in — no per-VM HyperV jobs needed.
+  if (count > 1 && hasVirtualization && !hasSoftware) {
+    logger.info('[Golden] bulk job — virtualization-only golden image path', {
+      jobId: jobId.toString(),
+      count,
+      templateId: specs.templateId,
+      templateNode: specs.templateNode,
+      templateName: specs.templateName,
+      enableVirtualization: true,
+      cloneType: specs.cloneType,
+      cpuCores: specs.cpuCores,
+      memoryGb: specs.memoryGb,
+      diskGb: specs.diskGb,
+    });
+
+    try {
+      await VMJob.findByIdAndUpdate(jobId, { status: 'processing' });
+      void notificationService.notifyJobStarted(jobId);
+      const { goldenTemplateVmid, node } = await buildGoldenTemplate(job, adminId);
+
+      logger.info('[Golden] virtualization golden template ready, starting clones', {
+        jobId: jobId.toString(),
+        goldenTemplateVmid,
+        node,
+        vmCount: count,
+      });
+
+      const vmSpecs = buildVmSpecsForGoldenClone(job, adminId, node, goldenTemplateVmid);
+      await runBatchClone(jobId, vmSpecs, { allowReroute: false });
+
+      const afterGolden = await VMJob.findById(jobId).select('status').lean();
+      if (afterGolden && !['cancelled', 'cancelling'].includes(afterGolden.status)) {
+        await finalizeJobStatus(jobId);
+      }
+      void notificationService.notifyJobFinished(jobId);
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error('[Golden] virtualization bulk creation failed', {
+        jobId: jobId.toString(),
+        error: errorMsg,
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      await VMJob.findByIdAndUpdate(jobId, {
+        status: 'failed',
+        completedAt: new Date(),
+        phase: undefined,
+        $push: {
+          jobErrors: {
+            index: 0,
+            vmName: `${specs.namePrefix}-*`,
+            error: errorMsg,
+            node: specs.templateNode,
+          },
+        },
+      });
+      void notificationService.notifyJobFinished(jobId);
+    } finally {
+      const updatedJob = await VMJob.findById(jobId).lean();
+      if (updatedJob?.goldenTemplateVmid && updatedJob.goldenTemplateNode) {
+        await deleteGoldenTemplate(updatedJob.goldenTemplateNode, updatedJob.goldenTemplateVmid, jobId.toString());
+      }
+      await VMJob.findByIdAndUpdate(jobId, {
+        $unset: { phase: 1, goldenTemplateVmid: 1, goldenTemplateNode: 1 },
+      });
+    }
+    return;
+  }
+
   // Bulk + software → golden image path (install once, clone many)
   if (count > 1 && hasSoftware) {
     logger.info('[Golden][Diag] bulk job — entering golden image path', {

@@ -216,8 +216,24 @@ router.patch('/api/v1/vm-automations/:automationId', authMiddleware, verifyMiddl
 router.delete('/api/v1/vm-automations/:automationId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
 // ─── ADMIN VM TEMPLATE ROUTES (admin + super_admin) ──────────────────────────
+// SSE stream route — NO gateway auth. core-api verifies the ?streamToken= ticket.
+// Must be registered before other :templateId routes to avoid being shadowed.
+// Dedicated proxy — no shared proxyRes handler; SSE body must pass through untouched.
+const sseProxy = createProxyMiddleware({
+  target: config.CORE_API_URL,
+  changeOrigin: true,
+  timeout: 0,
+  proxyTimeout: 0,
+  selfHandleResponse: false,
+  on: {
+    error: proxyOnHandlers.error,
+  },
+});
+router.get('/api/v1/admin-vm-templates/:templateId/stream', sseProxy);
+
 router.get('/api/v1/admin-vm-templates', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/admin-vm-templates', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/admin-vm-templates/:templateId/stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/admin-vm-templates/:templateId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
 // ─── EXTERNAL VM ROUTES (admin + super_admin) ────────────────────────────────
@@ -276,6 +292,8 @@ router.get('/api/v1/tenant-branding/asset', injectTenantHeader, coreApiProxy);
 
 // Razorpay wallet webhook (no auth; signature verified by core-api)
 router.post('/webhooks/razorpay', coreApiProxy);
+router.get('/webhooks/razorpay/test', coreApiProxy);
+router.post('/webhooks/razorpay/test-credit', coreApiProxy);
 
 // ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
 router.use('/api/v1/tenant-wallet', requireTenantBearer, tenantWalletProxy);

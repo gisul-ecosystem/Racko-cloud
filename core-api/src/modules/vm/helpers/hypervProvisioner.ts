@@ -410,7 +410,13 @@ export async function provisionHyperVForVM(params: {
     const enable = await runPowerShell(
       node,
       vmid,
-      "$ErrorActionPreference='Stop'; Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart | Out-Null",
+      [
+        "$ErrorActionPreference='Stop'",
+        "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -All -NoRestart | Out-Null",
+        "Enable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -NoRestart | Out-Null",
+        "Enable-WindowsOptionalFeature -Online -FeatureName VirtualMachinePlatform -NoRestart | Out-Null",
+        "Enable-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux -NoRestart | Out-Null",
+      ].join('; '),
       'enable',
       vmObjectId
     );
@@ -476,7 +482,11 @@ export async function disableHyperVForVM(params: {
     const disable = await runPowerShell(
       node,
       vmid,
-      "$ErrorActionPreference='Stop'; Disable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -NoRestart | Out-Null",
+      [
+        "$ErrorActionPreference='Stop'",
+        "Disable-WindowsOptionalFeature -Online -FeatureName Microsoft-Hyper-V -NoRestart | Out-Null",
+        "Disable-WindowsOptionalFeature -Online -FeatureName HypervisorPlatform -NoRestart | Out-Null",
+      ].join('; '),
       'disable',
       vmObjectId
     );
