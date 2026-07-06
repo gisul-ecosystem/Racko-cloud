@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Loader2, Trash2 } from 'lucide-react';
+import { Loader2, Pause, Trash2 } from 'lucide-react';
 import type { OrgAdminRequestDetail, OrgAdminUser } from '../../types/orgAdmin';
 
 interface OrgAdminCleanupTabProps {
@@ -22,6 +22,12 @@ export function OrgAdminCleanupTab({
 }: OrgAdminCleanupTabProps) {
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
 
+  const autoCleanupEnabled = request?.resourceCleanupEnabled === true;
+  const cleanupAction = request?.resourceCleanupAction === 'pause' ? 'pause' : 'delete';
+  const isPause = cleanupAction === 'pause';
+  const cleanupActionLabel = isPause ? 'Pause' : 'Delete';
+  const autoActionLabel = isPause ? 'Auto pause' : 'Auto cleanup';
+
   async function handleToggle(userId: number, disabled: boolean) {
     setBusyUserId(userId);
     try {
@@ -32,7 +38,13 @@ export function OrgAdminCleanupTab({
   }
 
   async function handleCleanup(userId: number) {
-    if (!window.confirm("Delete all Azure resources inside this user's lab right now?")) {
+    if (
+      !window.confirm(
+        isPause
+          ? "Pause all Azure resources inside this user's lab right now?"
+          : "Delete all Azure resources inside this user's lab right now?"
+      )
+    ) {
       return;
     }
     setBusyUserId(userId);
@@ -49,37 +61,49 @@ export function OrgAdminCleanupTab({
     );
   }
 
-  const autoCleanupEnabled = request?.resourceCleanupEnabled === true;
-
   return (
     <div className="space-y-4 px-6 py-5">
       <div>
-        <h3 className="text-sm font-semibold text-gray-900">Resource Cleanup</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="text-sm font-semibold text-gray-900">Resource Cleanup</h3>
+          <span
+            className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+              isPause ? 'bg-amber-100 text-amber-800' : 'bg-red-100 text-red-700'
+            }`}
+          >
+            {cleanupActionLabel} mode
+          </span>
+        </div>
         <p className="mt-1 text-xs text-gray-500">
-          Deletes Azure resources created by each user inside their resource group. RBAC role
-          assignments are preserved so users can recreate resources after cleanup. When the lab
-          expires, all resource group permissions are removed from Azure automatically.
+          {isPause
+            ? 'Pauses Azure resources created by each user inside their resource group (VMs deallocated, SQL paused, AKS scaled to zero, App Services stopped). RBAC role assignments are preserved so users can recreate or resume resources after cleanup.'
+            : 'Deletes Azure resources created by each user inside their resource group. RBAC role assignments are preserved so users can recreate resources after cleanup.'}{' '}
+          When the lab expires, all resource group permissions are removed from Azure automatically.
         </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-4 rounded-lg border border-gray-100 bg-gray-50 px-4 py-3.5">
         <div>
-          <p className="text-xs text-gray-500">Scheduled auto cleanup</p>
+          <p className="text-xs text-gray-500">
+            Scheduled auto {isPause ? 'pause' : 'cleanup'}
+          </p>
           <p className="text-sm font-semibold text-gray-900">
             {autoCleanupEnabled ? 'Enabled' : 'Disabled'}
             {autoCleanupEnabled && request?.resourceCleanupIntervalHours
-              ? ` · every ${request.resourceCleanupIntervalHours}h`
+              ? ` · ${cleanupActionLabel.toLowerCase()} every ${request.resourceCleanupIntervalHours}h`
               : ''}
           </p>
         </div>
         <span
           className={`ml-auto inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
             autoCleanupEnabled
-              ? 'bg-green-100 text-green-700'
+              ? isPause
+                ? 'bg-amber-100 text-amber-800'
+                : 'bg-green-100 text-green-700'
               : 'bg-gray-100 text-gray-600'
           }`}
         >
-          {autoCleanupEnabled ? 'Auto cleanup active' : 'Manual cleanup only'}
+          {autoCleanupEnabled ? `${autoActionLabel} active` : 'Manual only'}
         </span>
       </div>
 
@@ -103,11 +127,15 @@ export function OrgAdminCleanupTab({
               <div>
                 {cleanupDisabled ? (
                   <span className="inline-flex rounded-full bg-red-100 px-2.5 py-0.5 text-xs font-medium text-red-700">
-                    Cleanup disabled
+                    {isPause ? 'Auto pause disabled' : 'Cleanup disabled'}
                   </span>
                 ) : (
-                  <span className="inline-flex rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                    Auto cleanup active
+                  <span
+                    className={`inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                      isPause ? 'bg-amber-100 text-amber-800' : 'bg-green-100 text-green-700'
+                    }`}
+                  >
+                    {autoActionLabel} active
                   </span>
                 )}
               </div>
@@ -122,7 +150,7 @@ export function OrgAdminCleanupTab({
                     onChange={(event) => void handleToggle(user.id, !event.target.checked)}
                   />
                   <span
-                    className={`relative h-5 w-9 rounded-full transition ${cleanupDisabled ? 'bg-gray-300' : 'bg-green-500'}`}
+                    className={`relative h-5 w-9 rounded-full transition ${cleanupDisabled ? 'bg-gray-300' : isPause ? 'bg-amber-500' : 'bg-green-500'}`}
                   >
                     <span
                       className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow transition ${cleanupDisabled ? 'left-0.5' : 'left-[18px]'}`}
@@ -135,14 +163,20 @@ export function OrgAdminCleanupTab({
                   type="button"
                   disabled={busy}
                   onClick={() => void handleCleanup(user.id)}
-                  className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-white px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 disabled:opacity-50"
+                  className={`inline-flex items-center gap-1 rounded-lg border bg-white px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
+                    isPause
+                      ? 'border-amber-200 text-amber-800 hover:bg-amber-50'
+                      : 'border-red-200 text-red-700 hover:bg-red-50'
+                  }`}
                 >
                   {busy ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : isPause ? (
+                    <Pause className="h-3.5 w-3.5" />
                   ) : (
                     <Trash2 className="h-3.5 w-3.5" />
                   )}
-                  Clean now
+                  {isPause ? 'Pause now' : 'Delete now'}
                 </button>
               </div>
             </div>

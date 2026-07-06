@@ -6,16 +6,26 @@ import { formatCurrency } from '../../utils/formatters';
 interface PricingSummaryProps {
   totalPrice: number | null;
   currency?: string;
-  duration?: number;
+  durationHours?: number;
   accountCount?: number;
   loading: boolean;
   error: string | null;
 }
 
+function formatDurationHours(hours: number): string {
+  if (hours < 24) {
+    const rounded = Math.round(hours * 10) / 10;
+    return `${rounded} hour${rounded !== 1 ? 's' : ''}`;
+  }
+
+  const days = Math.round((hours / 24) * 10) / 10;
+  return `${days} day${days !== 1 ? 's' : ''} (${Math.round(hours)} hrs)`;
+}
+
 export function PricingSummary({
   totalPrice,
   currency = 'USD',
-  duration,
+  durationHours,
   accountCount,
   loading,
   error,
@@ -39,11 +49,11 @@ export function PricingSummary({
               {formatCurrency(totalPrice)}
               <span className="ml-1 text-sm font-normal text-gray-400">{currency}</span>
             </p>
-            {(duration != null || accountCount != null) && (
+            {(durationHours != null || accountCount != null) && (
               <p className="text-xs text-gray-500">
                 {accountCount != null && `${accountCount} account${accountCount !== 1 ? 's' : ''}`}
-                {accountCount != null && duration != null && ' · '}
-                {duration != null && `${duration} day${duration !== 1 ? 's' : ''}`}
+                {accountCount != null && durationHours != null && ' · '}
+                {durationHours != null && formatDurationHours(durationHours)}
               </p>
             )}
           </div>

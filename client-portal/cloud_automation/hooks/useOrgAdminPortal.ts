@@ -13,6 +13,7 @@ import {
   listOrgRequests,
   renewOrgAdminUserBudget,
   reviewOrgAccessRequest,
+  reprovisionOrgAdminRoles,
   triggerOrgAdminCleanup,
   updateOrgAdminCleanupSettings,
   updateOrgAdminUserRoles,
@@ -62,6 +63,7 @@ interface UseOrgAdminPortalResult {
     payload: { cleanupDisabled?: boolean; cleanupIntervalOverride?: number | null }
   ) => Promise<boolean>;
   triggerCleanup: (userId: number) => Promise<boolean>;
+  reprovisionRoles: () => Promise<boolean>;
   clearActionFeedback: () => void;
 }
 
@@ -155,6 +157,16 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       setUsers([]);
       setDetailError(null);
     }
+  }, [selectedRequestId, refreshDetail]);
+
+  useEffect(() => {
+    if (selectedRequestId == null) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      void refreshDetail();
+    }, 30_000);
+
+    return () => window.clearInterval(intervalId);
   }, [selectedRequestId, refreshDetail]);
 
   const selectRequest = useCallback((requestId: number | null) => {
@@ -369,7 +381,10 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
 
       try {
         const result = await triggerOrgAdminCleanup(selectedRequestId, userId);
-        setActionSuccess(`Cleanup completed. ${result.deletedCount} resource(s) removed.`);
+        const count = result.action === 'pause' ? result.pausedCount : result.deletedCount;
+        const verb = result.action === 'pause' ? 'paused' : 'deleted';
+        const actionLabel = result.action === 'pause' ? 'Pause' : 'Cleanup';
+        setActionSuccess(`${actionLabel} completed. ${count} resource(s) ${verb}.`);
         await refreshDetail();
         return true;
       } catch (err) {
@@ -381,6 +396,26 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     },
     [selectedRequestId, refreshDetail, handleApiError]
   );
+
+  const reprovisionRoles = useCallback(async () => {
+    if (selectedRequestId == null) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await reprovisionOrgAdminRoles(selectedRequestId);
+      setActionSuccess(result.message || 'Roles re-provisioned successfully.');
+      await refreshDetail();
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to re-provision roles.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, refreshDetail, handleApiError]);
 
   return {
     requests,
@@ -410,6 +445,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     renewBudget,
     updateCleanupSettings,
     triggerCleanup,
+    reprovisionRoles,
     clearActionFeedback,
   };
 }

@@ -1,11 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ChevronRight, Loader2 } from 'lucide-react';
+import { ChevronRight, Loader2, RefreshCw } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { OrgAdminBudgetTab } from './OrgAdminBudgetTab';
 import { OrgAdminCleanupTab } from './OrgAdminCleanupTab';
 import { OrgAdminUsersTable } from './OrgAdminUsersTable';
+import { CustomRolesTab } from './CustomRolesTab';
+import { CustomServicesTab } from './CustomServicesTab';
 import type {
   OrgAdminAzureRoleOption,
   OrgAdminMonitoringResponse,
@@ -15,7 +17,7 @@ import type {
   OrgAdminUserAzureCost,
 } from '../../types/orgAdmin';
 
-type DetailTab = 'users' | 'cleanup' | 'budget';
+type DetailTab = 'users' | 'cleanup' | 'budget' | 'custom-roles' | 'custom-services';
 
 interface OrgAdminRequestDetailPanelProps {
   request: OrgAdminRequestSummary;
@@ -33,6 +35,7 @@ interface OrgAdminRequestDetailPanelProps {
   onRenewBudget: (userId: number, topUpAmount: number) => Promise<boolean>;
   onToggleCleanup: (userId: number, disabled: boolean) => Promise<boolean>;
   onManualCleanup: (userId: number) => Promise<boolean>;
+  onReprovisionRoles: () => Promise<boolean>;
 }
 
 export function OrgAdminRequestDetailPanel({
@@ -51,6 +54,7 @@ export function OrgAdminRequestDetailPanel({
   onRenewBudget,
   onToggleCleanup,
   onManualCleanup,
+  onReprovisionRoles,
 }: OrgAdminRequestDetailPanelProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('users');
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
@@ -62,10 +66,22 @@ export function OrgAdminRequestDetailPanel({
 
     const intervalId = window.setInterval(() => {
       onRetry();
-    }, 60_000);
+    }, 30_000);
 
     return () => window.clearInterval(intervalId);
   }, [activeTab, onRetry]);
+
+  const handleReprovisionRoles = async () => {
+    if (
+      !window.confirm(
+        `Re-provision all roles for request #${request.id}? This will assign all missing dependency roles.`
+      )
+    ) {
+      return;
+    }
+
+    await onReprovisionRoles();
+  };
 
   const infoItems = [
     { label: 'Request', value: `#${request.id}` },
@@ -107,12 +123,26 @@ export function OrgAdminRequestDetailPanel({
           ))}
         </div>
 
-        <div className="flex flex-wrap gap-1">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleReprovisionRoles()}
+            disabled={saving}
+            className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-3.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <RefreshCw className={`h-3.5 w-3.5 ${saving ? 'animate-spin' : ''}`} />
+            Fix Roles
+          </button>
+        </div>
+
+        <div className="mt-3 flex flex-wrap gap-1">
           {(
             [
               { id: 'users' as const, label: 'Users' },
               { id: 'cleanup' as const, label: 'Cleanup' },
               { id: 'budget' as const, label: 'Budget' },
+              { id: 'custom-roles' as const, label: 'Custom Roles' },
+              { id: 'custom-services' as const, label: 'Custom Services' },
             ] as const
           ).map((tab) => (
             <button
@@ -180,6 +210,14 @@ export function OrgAdminRequestDetailPanel({
               saving={saving}
               onRenewBudget={onRenewBudget}
             />
+          )}
+
+          {activeTab === 'custom-roles' && (
+            <CustomRolesTab requestId={request.id} users={users} />
+          )}
+
+          {activeTab === 'custom-services' && (
+            <CustomServicesTab requestId={request.id} />
           )}
         </>
       )}

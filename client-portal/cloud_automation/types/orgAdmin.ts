@@ -87,6 +87,7 @@ export interface OrgAdminRequestDetail {
   enforceInAzure: boolean;
   resourceCleanupEnabled?: boolean;
   resourceCleanupIntervalHours?: number | null;
+  resourceCleanupAction?: 'delete' | 'pause';
   cleanupEnabled?: boolean;
   cleanupIntervalHours?: number | null;
   createdAt: string;
@@ -248,4 +249,42 @@ export interface OrgAdminDailyUsageResponse {
 export interface OrgAdminAzureRolesResponse {
   success: boolean;
   data: OrgAdminAzureRoleOption[];
+}
+
+export interface OrgAdminCustomRoleDefinition {
+  id: number;
+  name: string;
+  description: string | null;
+  permissions: string[];
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrgAdminCustomRoleAssignment {
+  id: number;
+  request_id: number;
+  azure_user_id: string;
+  username: string;
+  custom_role_def_id: number | null;
+  custom_role_name: string;
+  azure_role_def_id: string | null;
+  permissions: string[];
+  assigned_by: string | null;
+  assigned_at: string;
+  revoked_at: string | null;
+  status: string;
+}
+
+export interface OrgAdminCustomService {
+  id: number;
+  name: string;
+  description: string | null;
+  category: string;
+  price_per_user: number;
+  icon: string;
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }

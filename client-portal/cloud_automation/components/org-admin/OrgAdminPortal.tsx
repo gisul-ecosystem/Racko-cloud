@@ -56,6 +56,7 @@ export function OrgAdminPortal() {
     renewBudget,
     updateCleanupSettings,
     triggerCleanup,
+    reprovisionRoles,
     clearActionFeedback,
   } = useOrgAdminPortal();
 
@@ -349,6 +350,7 @@ export function OrgAdminPortal() {
                     onRenewBudget={renewBudget}
                     onToggleCleanup={handleToggleCleanup}
                     onManualCleanup={triggerCleanup}
+                    onReprovisionRoles={reprovisionRoles}
                   />
                 )}
               </div>

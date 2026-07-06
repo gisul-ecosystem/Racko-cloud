@@ -217,6 +217,19 @@ export async function provisionUsers(requestId: number): Promise<ProvisionStepSt
   );
 }
 
+/** POST /api/provision/request/:id/reprovision-roles — assign missing dependency roles. */
+export async function reprovisionRequestRoles(requestId: number) {
+  return apiRequest<{
+    success: boolean;
+    message: string;
+    usersProcessed: number;
+    rolesAssigned: number;
+    rolesProvisioned?: string[];
+  }>(cloudAutomationPath(`/provision/request/${requestId}/reprovision-roles`), {
+    method: 'POST',
+  });
+}
+
 /** POST /api/provision/request/:id/roles */
 export async function provisionRoles(requestId: number): Promise<ProvisionStepStatus> {
   return apiRequest<ProvisionStepStatus>(

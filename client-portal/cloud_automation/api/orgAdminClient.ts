@@ -4,6 +4,9 @@ import type {
   OrgAdminAccessRequest,
   OrgAdminAzureRoleOption,
   OrgAdminAzureRolesResponse,
+  OrgAdminCustomRoleAssignment,
+  OrgAdminCustomRoleDefinition,
+  OrgAdminCustomService,
   OrgAdminDailyUsageResponse,
   OrgAdminErrorKind,
   OrgAdminMonitoringResponse,
@@ -200,7 +203,13 @@ export async function updateOrgAdminCleanupSettings(
 export async function triggerOrgAdminCleanup(
   requestId: number,
   userId: number
-): Promise<{ success: boolean; deletedCount: number }> {
+): Promise<{
+  success: boolean;
+  action: 'delete' | 'pause';
+  affectedCount: number;
+  deletedCount: number;
+  pausedCount: number;
+}> {
   return orgAdminRequest(
     `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/trigger-cleanup`,
     { method: 'POST' }
@@ -220,4 +229,181 @@ export function parseRolesInput(input: string): string[] {
 
 export function formatRolesForInput(roles: { role: string }[]): string {
   return roles.map((entry) => entry.role).join('\n');
+}
+
+export async function listOrgCustomRoles(): Promise<OrgAdminCustomRoleDefinition[]> {
+  const response = await orgAdminRequest<{ success: boolean; roles: OrgAdminCustomRoleDefinition[] }>(
+    '/custom-roles'
+  );
+  return response.roles ?? [];
+}
+
+export async function createOrgCustomRole(body: {
+  name: string;
+  description?: string;
+  permissions: string[];
+}): Promise<OrgAdminCustomRoleDefinition> {
+  const response = await orgAdminRequest<{ success: boolean; role: OrgAdminCustomRoleDefinition }>(
+    '/custom-roles',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  );
+  return response.role;
+}
+
+export async function updateOrgCustomRole(
+  id: number,
+  body: { name?: string; description?: string; permissions?: string[] }
+): Promise<OrgAdminCustomRoleDefinition> {
+  const response = await orgAdminRequest<{ success: boolean; role: OrgAdminCustomRoleDefinition }>(
+    `/custom-roles/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }
+  );
+  return response.role;
+}
+
+export async function deleteOrgCustomRole(id: number): Promise<void> {
+  await orgAdminRequest(`/custom-roles/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listOrgCustomRoleAssignments(
+  requestId: number
+): Promise<OrgAdminCustomRoleAssignment[]> {
+  const response = await orgAdminRequest<{
+    success: boolean;
+    assignments: OrgAdminCustomRoleAssignment[];
+  }>(`/resource-groups/${encodeURIComponent(requestId)}/custom-role-assignments`);
+  return response.assignments ?? [];
+}
+
+export async function assignOrgCustomRole(
+  requestId: number,
+  azureUserId: string,
+  body: {
+    customRoleDefId?: number | null;
+    permissions?: string[] | null;
+    resourceGroupName: string;
+    username: string;
+  }
+): Promise<OrgAdminCustomRoleAssignment> {
+  const response = await orgAdminRequest<{
+    success: boolean;
+    assignment: OrgAdminCustomRoleAssignment;
+  }>(
+    `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(azureUserId)}/assign-custom-role`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  );
+  return response.assignment;
+}
+
+export async function revokeOrgCustomRoleAssignment(assignmentId: number): Promise<void> {
+  await orgAdminRequest(`/custom-role-assignments/${encodeURIComponent(assignmentId)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listOrgCustomServices(): Promise<OrgAdminCustomService[]> {
+  const response = await orgAdminRequest<{ success: boolean; services: OrgAdminCustomService[] }>(
+    '/custom-services'
+  );
+  return response.services ?? [];
+}
+
+export async function createOrgCustomService(body: {
+  name: string;
+  description?: string;
+  category?: string;
+  pricePerUser?: number;
+  icon?: string;
+}): Promise<OrgAdminCustomService> {
+  const response = await orgAdminRequest<{ success: boolean; service: OrgAdminCustomService }>(
+    '/custom-services',
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  );
+  return response.service;
+}
+
+export async function updateOrgCustomService(
+  id: number,
+  body: Partial<{
+    name: string;
+    description: string;
+    category: string;
+    pricePerUser: number;
+    icon: string;
+  }>
+): Promise<OrgAdminCustomService> {
+  const response = await orgAdminRequest<{ success: boolean; service: OrgAdminCustomService }>(
+    `/custom-services/${encodeURIComponent(id)}`,
+    {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }
+  );
+  return response.service;
+}
+
+export async function deleteOrgCustomService(id: number): Promise<void> {
+  await orgAdminRequest(`/custom-services/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function listOrgRequestCustomServices(
+  requestId: number
+): Promise<OrgAdminCustomService[]> {
+  const response = await orgAdminRequest<{ success: boolean; services: OrgAdminCustomService[] }>(
+    `/resource-groups/${encodeURIComponent(requestId)}/custom-services`
+  );
+  return response.services ?? [];
+}
+
+export async function addOrgCustomServiceToRequest(
+  requestId: number,
+  serviceId: number
+): Promise<void> {
+  await orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/custom-services/${encodeURIComponent(serviceId)}`,
+    { method: 'POST' }
+  );
+}
+
+export async function removeOrgCustomServiceFromRequest(
+  requestId: number,
+  serviceId: number
+): Promise<void> {
+  await orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/custom-services/${encodeURIComponent(serviceId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+export interface OrgAdminReprovisionRolesResponse {
+  success: boolean;
+  message: string;
+  usersProcessed: number;
+  rolesAssigned: number;
+  rolesProvisioned?: string[];
+}
+
+export async function reprovisionOrgAdminRoles(
+  requestId: number
+): Promise<OrgAdminReprovisionRolesResponse> {
+  return orgAdminRequest<OrgAdminReprovisionRolesResponse>(
+    `/resource-groups/${encodeURIComponent(requestId)}/reprovision-roles`,
+    { method: 'POST' }
+  );
 }
