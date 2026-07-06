@@ -70,9 +70,90 @@ function VmManagementLimitsSummary({ limits }: { limits: Record<string, unknown>
   );
 }
 
-function VmManagementPricingSummary({ pricing }: { pricing: Record<string, unknown> }) {
-  const fixedPlans = Array.isArray(pricing['fixedPlans']) ? pricing['fixedPlans'] : [];
+function VmManagementPricingSummary({ pricing, limits }: { pricing: Record<string, unknown>; limits: Record<string, unknown> }) {
+  const templatePricingRaw = pricing['templatePricing'];
+  const hasTemplatePricing =
+    templatePricingRaw &&
+    typeof templatePricingRaw === 'object' &&
+    !Array.isArray(templatePricingRaw) &&
+    Object.keys(templatePricingRaw as object).length > 0;
 
+  // Build a map of templateId -> name from limits.allowedTemplateIds if available
+  // (names aren't stored in pricing, so we show ID-based labels)
+  const allowedIds = Array.isArray(limits['allowedTemplateIds'])
+    ? (limits['allowedTemplateIds'] as number[])
+    : [];
+
+  if (hasTemplatePricing) {
+    const map = templatePricingRaw as Record<string, Record<string, unknown>>;
+    const entries = Object.entries(map);
+
+    return (
+      <div className="space-y-3">
+        {entries.length === 0 ? (
+          <p className="text-xs text-gray-500">No per-template pricing configured yet.</p>
+        ) : (
+          entries.map(([templateId, p]) => {
+            const qDisc = (p['billingDiscounts'] as Record<string, unknown> | undefined)?.['quarterly'];
+            const yDisc = (p['billingDiscounts'] as Record<string, unknown> | undefined)?.['yearly'];
+            const qPct = Number(qDisc ?? 0) * 100;
+            const yPct = Number(yDisc ?? 0) * 100;
+
+            return (
+              <div
+                key={templateId}
+                className="rounded-md border border-gray-100 bg-white px-3 py-2.5 text-xs"
+              >
+                <p className="mb-1.5 font-semibold text-gray-800">
+                  Template ID {templateId}
+                  {allowedIds.length > 0 && !allowedIds.includes(Number(templateId)) && (
+                    <span className="ml-1.5 rounded-full bg-orange-50 px-1.5 py-0.5 text-orange-600">
+                      not in allowlist
+                    </span>
+                  )}
+                </p>
+                <dl className="space-y-1">
+                  <div className="flex items-center justify-between">
+                    <dt className="text-gray-500">CPU</dt>
+                    <dd className="font-medium text-gray-800">
+                      {formatInrPerMonth(p['cpuRatePerCoreMonthly'], 'core')}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <dt className="text-gray-500">RAM</dt>
+                    <dd className="font-medium text-gray-800">
+                      {formatInrPerMonth(p['ramRatePerGbMonthly'], 'GB')}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <dt className="text-gray-500">Disk</dt>
+                    <dd className="font-medium text-gray-800">
+                      {formatInrPerMonth(p['diskRatePerGbMonthly'], 'GB')}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between border-t border-gray-100 pt-1">
+                    <dt className="text-gray-500">Quarterly discount</dt>
+                    <dd className="font-medium text-gray-800">
+                      {qPct > 0 ? `${Math.round(qPct)}%` : '—'}
+                    </dd>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <dt className="text-gray-500">Yearly discount</dt>
+                    <dd className="font-medium text-gray-800">
+                      {yPct > 0 ? `${Math.round(yPct)}%` : '—'}
+                    </dd>
+                  </div>
+                </dl>
+              </div>
+            );
+          })
+        )}
+      </div>
+    );
+  }
+
+  // Fallback: legacy flat pricing display
+  const fixedPlans = Array.isArray(pricing['fixedPlans']) ? pricing['fixedPlans'] : [];
   return (
     <>
       <dl>
@@ -82,9 +163,11 @@ function VmManagementPricingSummary({ pricing }: { pricing: Record<string, unkno
         <StatRow
           label="Quarterly discount"
           value={
-            Number(pricing['billingDiscounts'] &&
-              typeof pricing['billingDiscounts'] === 'object' &&
-              (pricing['billingDiscounts'] as Record<string, unknown>)['quarterly']) > 0
+            Number(
+              pricing['billingDiscounts'] &&
+                typeof pricing['billingDiscounts'] === 'object' &&
+                (pricing['billingDiscounts'] as Record<string, unknown>)['quarterly']
+            ) > 0
               ? `${Math.round(Number((pricing['billingDiscounts'] as Record<string, unknown>)['quarterly']) * 100)}%`
               : '—'
           }
@@ -92,9 +175,11 @@ function VmManagementPricingSummary({ pricing }: { pricing: Record<string, unkno
         <StatRow
           label="Yearly discount"
           value={
-            Number(pricing['billingDiscounts'] &&
-              typeof pricing['billingDiscounts'] === 'object' &&
-              (pricing['billingDiscounts'] as Record<string, unknown>)['yearly']) > 0
+            Number(
+              pricing['billingDiscounts'] &&
+                typeof pricing['billingDiscounts'] === 'object' &&
+                (pricing['billingDiscounts'] as Record<string, unknown>)['yearly']
+            ) > 0
               ? `${Math.round(Number((pricing['billingDiscounts'] as Record<string, unknown>)['yearly']) * 100)}%`
               : '—'
           }
@@ -171,7 +256,7 @@ export function ServiceConfigSummary({ serviceKey, limits, pricing }: ServiceCon
       </SummaryCard>
       <SummaryCard title="Pricing">
         {isVmManagement ? (
-          <VmManagementPricingSummary pricing={pricing} />
+          <VmManagementPricingSummary pricing={pricing} limits={limits} />
         ) : (
           <GenericKeyValueSummary data={pricing} />
         )}

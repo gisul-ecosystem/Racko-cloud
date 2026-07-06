@@ -663,9 +663,9 @@ export default function TenantDetailPage() {
                     <VmManagementConfigPanel
                       tenantId={tenantId}
                       initialPricing={{
-                        cpuRatePerCoreMonthly: Number(config.pricing['cpuRatePerCoreMonthly'] ?? 500),
-                        ramRatePerGbMonthly: Number(config.pricing['ramRatePerGbMonthly'] ?? 100),
-                        diskRatePerGbMonthly: Number(config.pricing['diskRatePerGbMonthly'] ?? 10),
+                        cpuRatePerCoreMonthly: Number(config.pricing['cpuRatePerCoreMonthly'] ?? 0),
+                        ramRatePerGbMonthly: Number(config.pricing['ramRatePerGbMonthly'] ?? 0),
+                        diskRatePerGbMonthly: Number(config.pricing['diskRatePerGbMonthly'] ?? 0),
                         billingDiscounts: {
                           quarterly: Number(
                             (config.pricing['billingDiscounts'] as Record<string, unknown> | undefined)
@@ -679,6 +679,12 @@ export default function TenantDetailPage() {
                         fixedPlans: Array.isArray(config.pricing['fixedPlans'])
                           ? (config.pricing['fixedPlans'] as VmManagementPricing['fixedPlans'])
                           : [],
+                        templatePricing:
+                          config.pricing['templatePricing'] &&
+                          typeof config.pricing['templatePricing'] === 'object' &&
+                          !Array.isArray(config.pricing['templatePricing'])
+                            ? (config.pricing['templatePricing'] as VmManagementPricing['templatePricing'])
+                            : {},
                       }}
                       onFlash={flash}
                       onFlashErr={flashErr}

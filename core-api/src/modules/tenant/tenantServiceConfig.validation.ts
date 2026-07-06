@@ -4,10 +4,23 @@ import { tenantIdRouteParamSchema } from './tenant.validation';
 
 export const serviceKeyParamSchema = z.enum(SERVICE_CATALOG);
 
+const templateItemPricingSchema = z.object({
+  cpuRatePerCoreMonthly: z.number().int().nonnegative().default(0),
+  ramRatePerGbMonthly: z.number().int().nonnegative().default(0),
+  diskRatePerGbMonthly: z.number().int().nonnegative().default(0),
+  billingDiscounts: z
+    .object({
+      quarterly: z.number().min(0).max(1).default(0),
+      yearly: z.number().min(0).max(1).default(0),
+    })
+    .optional()
+    .default({ quarterly: 0, yearly: 0 }),
+});
+
 export const vmManagementPricingSchema = z.object({
-  cpuRatePerCoreMonthly: z.number().nonnegative(),
-  ramRatePerGbMonthly: z.number().nonnegative(),
-  diskRatePerGbMonthly: z.number().nonnegative(),
+  cpuRatePerCoreMonthly: z.number().int().nonnegative().optional().default(0),
+  ramRatePerGbMonthly: z.number().int().nonnegative().optional().default(0),
+  diskRatePerGbMonthly: z.number().int().nonnegative().optional().default(0),
   billingDiscounts: z
     .object({
       quarterly: z.number().min(0).max(1).default(0),
@@ -27,6 +40,8 @@ export const vmManagementPricingSchema = z.object({
     )
     .optional()
     .default([]),
+  /** Per-template pricing map: keys are templateId as string */
+  templatePricing: z.record(z.string(), templateItemPricingSchema).optional().default({}),
 });
 
 const vmManagementLimitsSchema = z.object({
@@ -86,7 +101,7 @@ export const updateServiceConfigRequestSchema = z.object({
 
 export const updateVmManagementPricingRequestSchema = z.object({
   params: tenantIdRouteParamSchema.shape.params,
-  body: vmManagementPricingSchema,
+  body: vmManagementPricingSchema.partial(),
 });
 
 export const updateVmManagementAllowedTemplatesRequestSchema = z.object({
