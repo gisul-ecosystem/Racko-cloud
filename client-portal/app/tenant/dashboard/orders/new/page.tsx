@@ -132,12 +132,47 @@ export default function TenantPlaceOrderPage() {
     };
   }, [selectedId, count, billingPeriod, specs]);
 
-  const billingDiscounts = useMemo(
-    () => parseBillingDiscounts(catalogPricing?.billingDiscounts),
-    [catalogPricing]
-  );
+  const billingDiscounts = useMemo(() => {
+    // Use per-template discounts for the selected template when available
+    if (selectedId && catalogPricing?.templatePricing?.[String(selectedId)]) {
+      return parseBillingDiscounts(
+        catalogPricing.templatePricing[String(selectedId)].billingDiscounts
+      );
+    }
+    return parseBillingDiscounts(catalogPricing?.billingDiscounts);
+  }, [catalogPricing, selectedId]);
 
   const billingHelper = billingPeriodHelperText(billingPeriod, billingDiscounts);
+
+  // Instant local estimate — recalculates on every spec / count / period change
+  // without waiting for the backend quote round-trip.
+  const localEstimate = useMemo(() => {
+    if (!selectedId || !specs || !catalogPricing) return 0;
+
+    // Resolve effective per-unit rates for this template
+    const tplPricing = catalogPricing.templatePricing?.[String(selectedId)];
+    const cpuRate = tplPricing?.cpuRatePerCoreMonthly ?? catalogPricing.cpuRatePerCoreMonthly ?? 0;
+    const ramRate = tplPricing?.ramRatePerGbMonthly   ?? catalogPricing.ramRatePerGbMonthly   ?? 0;
+    const diskRate = tplPricing?.diskRatePerGbMonthly ?? catalogPricing.diskRatePerGbMonthly  ?? 0;
+
+    const perVmMonthly =
+      specs.cpuCores * cpuRate +
+      specs.memoryGb * ramRate +
+      specs.diskGb   * diskRate;
+
+    const monthly = perVmMonthly * count;
+
+    // Apply billing period multiplier + discount
+    if (billingPeriod === 'quarterly') {
+      const disc = billingDiscounts.quarterly ?? 0;
+      return monthly * 3 * (1 - disc);
+    }
+    if (billingPeriod === 'yearly') {
+      const disc = billingDiscounts.yearly ?? 0;
+      return monthly * 12 * (1 - disc);
+    }
+    return monthly;
+  }, [selectedId, specs, count, billingPeriod, catalogPricing, billingDiscounts]);
 
   useEffect(() => {
     if (!orderInput || tenantUser?.role !== 'tenant_admin') return;
@@ -179,6 +214,7 @@ export default function TenantPlaceOrderPage() {
       ...(prev ?? selected.baselineSpecs),
       [key]: Math.max(min, value),
     }));
+    setQuotedTotal(null); // clear stale quote immediately
   }
 
   async function handleSubmit(e: React.FormEvent) {
@@ -244,7 +280,7 @@ export default function TenantPlaceOrderPage() {
     );
   }
 
-  const estimatedTotal = quotedTotal ?? (selected ? count * selected.pricePerVm : 0);
+  const estimatedTotal = quotedTotal ?? localEstimate;
 
   return (
     <div className="space-y-6">
@@ -286,7 +322,10 @@ export default function TenantPlaceOrderPage() {
                 <button
                   key={period}
                   type="button"
-                  onClick={() => setBillingPeriod(period)}
+                  onClick={() => {
+                    setBillingPeriod(period);
+                    setQuotedTotal(null);
+                  }}
                   className={`rounded-lg border px-4 py-2 text-sm font-medium transition ${
                     isSelected
                       ? 'border text-gray-900'
@@ -419,15 +458,21 @@ export default function TenantPlaceOrderPage() {
               min={1}
               step={1}
               value={count}
-              onChange={(e) => setCount(Math.max(1, parseInt(e.target.value, 10) || 1))}
+              onChange={(e) => {
+                setCount(Math.max(1, parseInt(e.target.value, 10) || 1));
+                setQuotedTotal(null);
+              }}
               className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-sm"
             />
           </div>
           <div className="text-sm text-gray-600">
-            {quoteLoading ? 'Calculating…' : 'Estimated total:'}{' '}
+            Estimated total:{' '}
             <span className="text-base font-semibold text-gray-900">
               {formatMoney(estimatedTotal, currency)}
             </span>
+            {quoteLoading && (
+              <span className="ml-2 text-xs text-gray-400">Confirming…</span>
+            )}
           </div>
           <button
             type="submit"

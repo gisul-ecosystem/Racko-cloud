@@ -19,6 +19,7 @@ import type {
   TenantsListResult,
   TenantStatus,
   TenantWalletBalance,
+  TemplateItemPricing,
   UpdateServiceConfigInput,
   UpdateTenantInput,
   VmManagementPlatformTemplates,
@@ -197,6 +198,19 @@ export async function updateVmManagementPricing(
     apiRequest<ApiEnvelope<{ config: TenantServiceConfig }>>(
       `/api/v1/tenants/${tenantId}/services/vm-management/pricing`,
       { method: 'PATCH', body: JSON.stringify(pricing) }
+    )
+  );
+  return data.config;
+}
+
+export async function updateVmManagementTemplatePricing(
+  tenantId: string,
+  templatePricing: Record<string, TemplateItemPricing>
+): Promise<TenantServiceConfig> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ config: TenantServiceConfig }>>(
+      `/api/v1/tenants/${tenantId}/services/vm-management/pricing`,
+      { method: 'PATCH', body: JSON.stringify({ templatePricing }) }
     )
   );
   return data.config;

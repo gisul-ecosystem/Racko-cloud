@@ -77,6 +77,18 @@ export interface VmManagementPricing {
     diskGb: number;
     priceMonthly: number;
   }>;
+  /** Per-template pricing: keyed by templateId (as string) */
+  templatePricing?: Record<string, TemplateItemPricing>;
+}
+
+export interface TemplateItemPricing {
+  cpuRatePerCoreMonthly: number;
+  ramRatePerGbMonthly: number;
+  diskRatePerGbMonthly: number;
+  billingDiscounts: {
+    quarterly: number;
+    yearly: number;
+  };
 }
 
 export interface CreateTenantInput {

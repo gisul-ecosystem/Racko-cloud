@@ -24,6 +24,15 @@ interface VmManagementPricing {
     quarterly: number;
     yearly: number;
   };
+  templatePricing?: Record<string, {
+    cpuRatePerCoreMonthly: number;
+    ramRatePerGbMonthly: number;
+    diskRatePerGbMonthly: number;
+    billingDiscounts?: {
+      quarterly: number;
+      yearly: number;
+    };
+  }>;
 }
 
 interface BillingDiscounts {
@@ -83,7 +92,20 @@ export interface PlaceOrderInput {
   billingPeriod?: BillingPeriod;
 }
 
-function getBillingDiscounts(pricing: Record<string, unknown>): BillingDiscounts {
+function getBillingDiscounts(pricing: Record<string, unknown>, templateId?: number): BillingDiscounts {
+  // Use per-template discounts if available
+  if (templateId && pricing['templatePricing']) {
+    const tplMap = pricing['templatePricing'] as Record<string, Record<string, unknown>>;
+    const tpl = tplMap[String(templateId)];
+    if (tpl) {
+      const raw = tpl['billingDiscounts'] as Record<string, unknown> | undefined;
+      return {
+        quarterly: typeof raw?.['quarterly'] === 'number' ? raw['quarterly'] : 0,
+        yearly: typeof raw?.['yearly'] === 'number' ? raw['yearly'] : 0,
+      };
+    }
+  }
+  // Fallback to flat discounts
   const raw = pricing['billingDiscounts'] as Record<string, unknown> | undefined;
   return {
     quarterly: typeof raw?.['quarterly'] === 'number' ? raw['quarterly'] : 0,
@@ -111,11 +133,26 @@ function buildSuperAdminRequest(userId: string): Request {
   } as unknown as Request;
 }
 
-function computePerVmCost(specs: IOrderSpecs, pricing: VmManagementPricing): number {
+function computePerVmCost(
+  specs: IOrderSpecs,
+  pricing: VmManagementPricing,
+  templateId?: number
+): number {
+  // Use per-template pricing if available
+  if (templateId && pricing.templatePricing && pricing.templatePricing[String(templateId)]) {
+    const tplPricing = pricing.templatePricing[String(templateId)];
+    return (
+      specs.cpuCores * (tplPricing.cpuRatePerCoreMonthly ?? 0) +
+      specs.memoryGb * (tplPricing.ramRatePerGbMonthly ?? 0) +
+      specs.diskGb * (tplPricing.diskRatePerGbMonthly ?? 0)
+    );
+  }
+
+  // Fallback to flat pricing for backward compatibility
   return (
-    specs.cpuCores * pricing.cpuRatePerCoreMonthly +
-    specs.memoryGb * pricing.ramRatePerGbMonthly +
-    specs.diskGb * pricing.diskRatePerGbMonthly
+    specs.cpuCores * (pricing.cpuRatePerCoreMonthly ?? 0) +
+    specs.memoryGb * (pricing.ramRatePerGbMonthly ?? 0) +
+    specs.diskGb * (pricing.diskRatePerGbMonthly ?? 0)
   );
 }
 
@@ -361,9 +398,19 @@ export class OrderService {
         cpuRatePerCoreMonthly: Number(pricing['cpuRatePerCoreMonthly'] ?? 0),
         ramRatePerGbMonthly: Number(pricing['ramRatePerGbMonthly'] ?? 0),
         diskRatePerGbMonthly: Number(pricing['diskRatePerGbMonthly'] ?? 0),
+        billingDiscounts: getBillingDiscounts(pricing),
         fixedPlans: Array.isArray(pricing['fixedPlans'])
           ? (pricing['fixedPlans'] as unknown[])
           : undefined,
+        templatePricing:
+          pricing['templatePricing'] && typeof pricing['templatePricing'] === 'object'
+            ? (pricing['templatePricing'] as Record<string, {
+                cpuRatePerCoreMonthly: number;
+                ramRatePerGbMonthly: number;
+                diskRatePerGbMonthly: number;
+                billingDiscounts?: { quarterly: number; yearly: number };
+              }>)
+            : undefined,
       },
     };
   }
@@ -398,8 +445,17 @@ export class OrderService {
       name: templateName,
       node: template.node,
       baselineSpecs,
-      pricePerVm: computePerVmCost(specs, pricing),
-      pricing,
+      pricePerVm: computePerVmCost(specs, pricing, templateId),
+      pricing: {
+        cpuRatePerCoreMonthly: pricing.templatePricing?.[String(templateId)]?.cpuRatePerCoreMonthly
+          ?? pricing.cpuRatePerCoreMonthly,
+        ramRatePerGbMonthly: pricing.templatePricing?.[String(templateId)]?.ramRatePerGbMonthly
+          ?? pricing.ramRatePerGbMonthly,
+        diskRatePerGbMonthly: pricing.templatePricing?.[String(templateId)]?.diskRatePerGbMonthly
+          ?? pricing.diskRatePerGbMonthly,
+        billingDiscounts: pricing.templatePricing?.[String(templateId)]?.billingDiscounts
+          ?? pricing.billingDiscounts,
+      },
     };
   }
 
@@ -437,7 +493,7 @@ export class OrderService {
           name: template.name,
           node: template.node,
           baselineSpecs,
-          pricePerVm: computePerVmCost(baselineSpecs, pricing),
+          pricePerVm: computePerVmCost(baselineSpecs, pricing, template.vmid),
         });
       } catch (error) {
         logger.warn('Skipping template in tenant catalog', {
@@ -464,7 +520,6 @@ export class OrderService {
 
     const serviceConfig = await getActiveVmManagementConfig(tenantId);
     const pricing = serviceConfig.pricing as unknown as VmManagementPricing;
-    const discounts = getBillingDiscounts(serviceConfig.pricing as Record<string, unknown>);
     const allowedTemplateIds = getAllowedTemplateIds(serviceConfig.limits as Record<string, unknown>);
 
     if (allowedTemplateIds.length > 0 && !allowedTemplateIds.includes(templateId)) {
@@ -482,8 +537,9 @@ export class OrderService {
       requestedSpecs
     );
 
-    const perVmCost = computePerVmCost(specs, pricing);
+    const perVmCost = computePerVmCost(specs, pricing, templateId);
     const monthlyTotal = perVmCost * count;
+    const discounts = getBillingDiscounts(serviceConfig.pricing as Record<string, unknown>, templateId);
     const amount = applyBillingPeriodMultiplier(monthlyTotal, billingPeriod, discounts);
     return {
       amount,

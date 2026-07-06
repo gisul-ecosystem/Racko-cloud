@@ -80,6 +80,12 @@ export interface VmManagementPricing {
   diskRatePerGbMonthly: number;
   billingDiscounts?: BillingDiscounts;
   fixedPlans?: unknown[];
+  templatePricing?: Record<string, {
+    cpuRatePerCoreMonthly: number;
+    ramRatePerGbMonthly: number;
+    diskRatePerGbMonthly: number;
+    billingDiscounts?: BillingDiscounts;
+  }>;
 }
 
 export interface TenantOrderTemplate {

@@ -153,7 +153,11 @@ export class TenantServiceConfigService {
         ? await normalizeVmManagementLimits(mergedLimits as Record<string, unknown>)
         : mergedLimits;
 
-    assertValidMergedConfig(serviceKey, resolvedLimits, mergedPricing);
+    // Only validate limits+pricing integrity when limits are explicitly being updated,
+    // to avoid spurious Required errors on pricing-only or status-only updates.
+    if (updates.limits !== undefined) {
+      assertValidMergedConfig(serviceKey, resolvedLimits, mergedPricing);
+    }
 
     if (updates.limits !== undefined) {
       config.limits = resolvedLimits;
