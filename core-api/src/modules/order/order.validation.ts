@@ -3,7 +3,7 @@ import { z } from 'zod';
 const orderSpecFields = {
   cpuCores: z.number().int().min(1).max(128).optional(),
   memoryGb: z.number().min(0.5).max(512).optional(),
-  diskGb: z.number().int().min(10).max(10000).optional(),
+  diskGb: z.number().min(1).max(10000).optional(),
 };
 
 export const placeOrderBodySchema = z.object({
