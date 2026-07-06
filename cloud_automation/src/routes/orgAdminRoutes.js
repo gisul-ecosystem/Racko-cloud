@@ -1,8 +1,11 @@
 const express = require('express');
 const orgAdminController = require('../controllers/orgAdminController');
+const orgAdminCustomRoutes = require('./orgAdminCustomRoutes');
 const { requireSuperAdmin } = require('../middleware/requireSuperAdmin');
 
 const router = express.Router();
+
+router.use(orgAdminCustomRoutes);
 
 router.get('/requests', requireSuperAdmin, orgAdminController.listRequests);
 router.get('/resource-groups', requireSuperAdmin, orgAdminController.listResourceGroups);
@@ -55,6 +58,11 @@ router.get(
   '/resource-groups/:requestId/daily-usage',
   requireSuperAdmin,
   orgAdminController.getDailyUsage
+);
+router.post(
+  '/resource-groups/:requestId/reprovision-roles',
+  requireSuperAdmin,
+  orgAdminController.reprovisionRolesForRequest
 );
 router.get('/azure/roles', requireSuperAdmin, orgAdminController.listAzureRoles);
 router.get('/access-requests', requireSuperAdmin, orgAdminController.listAccessRequests);

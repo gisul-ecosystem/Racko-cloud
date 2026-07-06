@@ -141,12 +141,15 @@ const attachLiveUsageToUsers = async (requestId, users, location, options = {}) 
     (sum, user) => sum + Number(user.totalMinutesSpent || 0),
     0
   );
+  const azureResourceCount = liveResourceCountByUser
+    ? [...liveResourceCountByUser.values()].reduce((sum, count) => sum + Number(count || 0), 0)
+    : liveUsage.resourceCount;
 
   return {
     users: enrichedUsers,
     liveSummary: {
       hourlyResourceRate: liveUsage.hourlyResourceRate,
-      resourceCount: liveUsage.resourceCount,
+      resourceCount: azureResourceCount,
       resources: liveUsage.resources,
       totalLiveCost,
       totalMinutesSpent: Number(totalMinutesSpent.toFixed(2))

@@ -16,7 +16,26 @@ const provisionRolesForRequest = async (req, res, next) => {
     res.status(200).json({
       success: true,
       usersProcessed: result.usersProcessed,
-      rolesAssigned: result.rolesAssigned
+      rolesAssigned: result.rolesAssigned,
+      rolesProvisioned: result.rolesProvisioned
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reprovisionRolesForRequest = async (req, res, next) => {
+  try {
+    validateRequestId(req.params.id);
+
+    const result = await roleProvisionService.reprovisionRolesForRequest(Number(req.params.id));
+
+    res.status(200).json({
+      success: true,
+      message: `Roles re-provisioned — ${result.rolesAssigned} assignments successful`,
+      usersProcessed: result.usersProcessed,
+      rolesAssigned: result.rolesAssigned,
+      rolesProvisioned: result.rolesProvisioned
     });
   } catch (error) {
     next(error);
@@ -40,5 +59,6 @@ const getRoleAssignmentsForRequest = async (req, res, next) => {
 
 module.exports = {
   getRoleAssignmentsForRequest,
-  provisionRolesForRequest
+  provisionRolesForRequest,
+  reprovisionRolesForRequest
 };

@@ -2,10 +2,8 @@ const { DateTime } = require('luxon');
 const db = require('../db/postgres');
 const { createGraphClient } = require('../provisioners/azure/userProvisioner');
 const {
-  deleteResourcesInsideRG,
-  deleteUserResourcesInSharedRG
+  runResourceActionForUser
 } = require('./resourceCleanupService');
-const { isPerUserCosting } = require('../utils/costingMode');
 const { getResourceGroupNameForUser } = require('./userResourceGroupService');
 const { getUserEmailFromGraph } = require('./budgetEnforcementService');
 const { sendDailyLimitReachedEmail } = require('./email/dailyLimitEmailService');
@@ -235,7 +233,7 @@ async function handleLimitReached({
   try {
     const { rows: reqRows } = await db.query(
       `
-        SELECT costing_mode, azure_resource_group_name
+        SELECT costing_mode, azure_resource_group_name, resource_cleanup_action
         FROM requests
         WHERE id = $1
       `,
@@ -243,31 +241,30 @@ async function handleLimitReached({
     );
     const req = reqRows[0];
     const resourceGroupName = await getResourceGroupNameForUser(requestId, userId);
-    let deleted = [];
+    const resolvedAction = req?.resource_cleanup_action === 'pause' ? 'pause' : 'delete';
+    const affected = await runResourceActionForUser({
+      costingMode: req?.costing_mode,
+      perUserResourceGroupName: resourceGroupName,
+      sharedResourceGroupName: req?.azure_resource_group_name,
+      entraObjectId: azureUserId,
+      action: resolvedAction
+    });
 
-    if (isPerUserCosting(req?.costing_mode) && resourceGroupName) {
-      deleted = await deleteResourcesInsideRG(resourceGroupName);
-    } else if (req?.azure_resource_group_name && azureUserId) {
-      deleted = await deleteUserResourcesInSharedRG(
-        req.azure_resource_group_name,
-        azureUserId
-      );
-    }
-
-    if (deleted.length || resourceGroupName || req?.azure_resource_group_name) {
+    if (affected.length || resourceGroupName || req?.azure_resource_group_name) {
       await db.query(
         `
           INSERT INTO resource_cleanup_logs
             (request_id, ran_at, resources_deleted, user_count, status)
           VALUES ($1, NOW(), $2, 1, 'success')
         `,
-        [requestId, JSON.stringify(deleted)]
+        [requestId, JSON.stringify(affected)]
       );
 
       logEvent('info', 'resource_cleanup_on_limit', {
         userId,
+        action: resolvedAction,
         resourceGroupName: resourceGroupName || req?.azure_resource_group_name,
-        deletedCount: deleted.length
+        affectedCount: affected.length
       });
     }
   } catch (err) {

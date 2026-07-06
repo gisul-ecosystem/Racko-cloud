@@ -1,5 +1,6 @@
 const AppError = require('../utils/AppError');
 const orgAdminService = require('../services/orgAdminService');
+const roleProvisionService = require('../services/roleProvisionService');
 
 const getSuperAdminActor = (req) => {
   const userId = req.rackoUser?.userId;
@@ -309,6 +310,7 @@ const triggerUserCleanup = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
     const userId = Number(req.params.userId);
+    const { action } = req.body || {};
 
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new AppError('Request id must be a positive integer.', 400);
@@ -318,9 +320,33 @@ const triggerUserCleanup = async (req, res, next) => {
       throw new AppError('User id must be a positive integer.', 400);
     }
 
-    const result = await orgAdminService.triggerUserCleanup(requestId, userId);
+    if (action !== undefined && action !== 'pause' && action !== 'delete') {
+      throw new AppError("action must be 'pause' or 'delete' when provided.", 400);
+    }
+
+    const result = await orgAdminService.triggerUserCleanup(requestId, userId, { action });
 
     res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reprovisionRolesForRequest = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await roleProvisionService.reprovisionRolesForRequest(requestId);
+
+    res.status(200).json({
+      success: true,
+      message: `Roles re-provisioned — ${result.rolesAssigned} assignments successful`,
+      ...result
+    });
   } catch (error) {
     next(error);
   }
@@ -341,5 +367,6 @@ module.exports = {
   listAzureRoles,
   renewUserBudget,
   updateUserCleanupSettings,
-  triggerUserCleanup
+  triggerUserCleanup,
+  reprovisionRolesForRequest
 };

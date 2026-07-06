@@ -44,7 +44,7 @@ async function processResourceCleanup(req) {
   }
 
   try {
-    const { deleted } = await runResourceCleanupForRequest(id);
+    const { action, affected, deleted } = await runResourceCleanupForRequest(id);
     const now = new Date();
     const nextRun = new Date(now.getTime() + resource_cleanup_interval_hours * 60 * 60 * 1000);
 
@@ -64,7 +64,7 @@ async function processResourceCleanup(req) {
         INSERT INTO resource_cleanup_logs (request_id, ran_at, resources_deleted, user_count, status)
         VALUES ($1, $2, $3, $4, 'success')
       `,
-      [id, now.toISOString(), JSON.stringify(deleted), deleted.length]
+      [id, now.toISOString(), JSON.stringify(affected), affected.length]
     );
 
     if (customer_email) {
@@ -72,6 +72,8 @@ async function processResourceCleanup(req) {
         to: customer_email,
         requestName: requestLabel,
         deletedCount: deleted.length,
+        affectedCount: affected.length,
+        action,
         cleanedAt: now,
         nextCleanupAt: nextRun,
         intervalHours: resource_cleanup_interval_hours
@@ -80,13 +82,18 @@ async function processResourceCleanup(req) {
 
     await createNotification({
       type: NotificationType.CLEANUP_RAN,
-      title: 'Resource cleanup completed',
-      message: `Lab #${id} resources cleaned — ${deleted.length} resources removed`,
+      title: action === 'pause' ? 'Resource pause completed' : 'Resource cleanup completed',
+      message:
+        action === 'pause'
+          ? `Lab #${id} resources paused — ${affected.length} resource action(s) applied`
+          : `Lab #${id} resources cleaned — ${deleted.length} resources removed`,
       requestId: id
     });
 
     logEvent('info', 'resource_cleanup_success', {
       requestId: id,
+      action,
+      affectedCount: affected.length,
       deletedCount: deleted.length,
       nextRun: nextRun.toISOString()
     });

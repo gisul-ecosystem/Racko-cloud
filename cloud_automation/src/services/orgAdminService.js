@@ -12,6 +12,8 @@ const { attachLiveUsageToUsers } = require('./userLiveUsageService');
 const { getResourceGroupCosts } = require('./azureCostManagementService');
 const { formatMinutes } = require('../utils/formatMinutes');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const { filterResourcesForUser, expandDeploymentResources } = require('../utils/resourceOwnership');
+const { listResourcesInResourceGroup } = require('./resourceCleanupService');
 const {
   loadUsageWindowsByRequest,
   evaluateWindowDailyLimitAccess,
@@ -55,8 +57,39 @@ const countResourcesInResourceGroup = async (resourceGroupName) => {
   }
 };
 
-const getLiveResourceCountsByUser = async (users, sharedResourceGroup) => {
+const getLiveResourceCountsByUser = async (users, sharedResourceGroup, costingMode) => {
   const countsByUser = new Map();
+  const isSharedCosting = !isPerUserCosting(costingMode);
+
+  if (isSharedCosting && sharedResourceGroup) {
+    let resources = [];
+
+    try {
+      resources = await listResourcesInResourceGroup(sharedResourceGroup);
+    } catch {
+      resources = [];
+    }
+
+    for (const user of users) {
+      const ownedResources = expandDeploymentResources(
+        resources,
+        filterResourcesForUser(resources, {
+          entraObjectId: user.azure_user_id,
+          username: user.username,
+          userNumber: user.user_number
+        })
+      );
+
+      const count =
+        ownedResources.length ||
+        (users.length === 1 ? resources.length : 0);
+
+      countsByUser.set(Number(user.id), count);
+    }
+
+    return countsByUser;
+  }
+
   const countsByRg = new Map();
   const rgNameByKey = new Map();
 
@@ -220,6 +253,7 @@ const getResourceGroupDetail = async (requestId) => {
         r.created_at,
         r.resource_cleanup_enabled,
         r.resource_cleanup_interval_hours,
+        r.resource_cleanup_action,
         r.cleanup_enabled,
         r.cleanup_interval_hours
       FROM requests r
@@ -261,6 +295,7 @@ const getResourceGroupDetail = async (requestId) => {
         au.budget_exceeded,
         au.cleanup_disabled,
         au.cleanup_interval_override,
+        au.user_number,
         r.expiry_date,
         r.enable_daily_usage,
         r.daily_limit_minutes,
@@ -312,7 +347,8 @@ const getResourceGroupDetail = async (requestId) => {
 
   const liveResourceCountByUser = await getLiveResourceCountsByUser(
     usersResult.rows,
-    request.azure_resource_group_name
+    request.azure_resource_group_name,
+    request.costing_mode
   );
 
   const mappedUsers = usersResult.rows.map(mapUserUsage);
@@ -420,6 +456,7 @@ const getResourceGroupDetail = async (requestId) => {
         request.resource_cleanup_interval_hours != null
           ? Number(request.resource_cleanup_interval_hours)
           : null,
+      resourceCleanupAction: request.resource_cleanup_action === 'pause' ? 'pause' : 'delete',
       cleanupEnabled: request.cleanup_enabled === true,
       cleanupIntervalHours:
         request.cleanup_interval_hours != null ? Number(request.cleanup_interval_hours) : null,
@@ -1095,15 +1132,24 @@ const updateUserCleanupSettings = async (
   );
 };
 
-const triggerUserCleanup = async (requestId, userId) => {
+const triggerUserCleanup = async (requestId, userId, { action } = {}) => {
   const { rows } = await db.query(
     `
       SELECT
         au.azure_resource_group_name,
         au.request_id,
         au.azure_user_id,
+        au.username,
+        au.user_number,
         r.costing_mode,
-        r.azure_resource_group_name AS shared_resource_group_name
+        r.azure_resource_group_name AS shared_resource_group_name,
+        r.resource_cleanup_action,
+        (
+          SELECT COUNT(*)
+          FROM azure_users active_users
+          WHERE active_users.request_id = au.request_id
+            AND COALESCE(active_users.is_deleted, FALSE) = FALSE
+        ) AS active_user_count
       FROM azure_users au
       JOIN requests r ON r.id = au.request_id
       WHERE au.id = $1
@@ -1118,30 +1164,40 @@ const triggerUserCleanup = async (requestId, userId) => {
   }
 
   const user = rows[0];
-  const { deleteResourcesInsideRG, deleteUserResourcesInSharedRG } = require('./resourceCleanupService');
+  const { runResourceActionForUser } = require('./resourceCleanupService');
+  const resolvedAction = action === 'pause' || action === 'delete' ? action : user.resource_cleanup_action || 'delete';
 
-  let deleted = [];
-
-  if (user.costing_mode === 'per_user' && user.azure_resource_group_name) {
-    deleted = await deleteResourcesInsideRG(user.azure_resource_group_name);
-  } else if (user.costing_mode === 'shared' && user.shared_resource_group_name) {
-    deleted = await deleteUserResourcesInSharedRG(
-      user.shared_resource_group_name,
-      user.azure_user_id
-    );
-  }
+  const affected = await runResourceActionForUser({
+    costingMode: user.costing_mode,
+    perUserResourceGroupName: user.azure_resource_group_name,
+    sharedResourceGroupName: user.shared_resource_group_name,
+    entraObjectId: user.azure_user_id,
+    username: user.username,
+    userNumber: user.user_number,
+    activeUserCount: Number(user.active_user_count || 0),
+    action: resolvedAction
+  });
 
   await db.query(
     `
       INSERT INTO resource_cleanup_logs (request_id, ran_at, resources_deleted, user_count, status)
       VALUES ($1, NOW(), $2, 1, 'success')
     `,
-    [user.request_id, JSON.stringify(deleted)]
+    [user.request_id, JSON.stringify(affected)]
   );
 
+  const deletedCount = resolvedAction === 'delete' ? affected.length : 0;
+  const pausedCount =
+    resolvedAction === 'pause'
+      ? affected.filter((entry) => entry.action && entry.action !== 'skipped' && entry.action !== 'failed').length
+      : 0;
+
   return {
-    deletedCount: deleted.length,
-    deleted
+    action: resolvedAction,
+    affectedCount: affected.length,
+    deletedCount,
+    pausedCount,
+    affected
   };
 };
 

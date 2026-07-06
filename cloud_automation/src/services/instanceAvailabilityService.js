@@ -38,32 +38,31 @@ const getAvailableInstancesForLocation = async (location, serviceIds) => {
     return [];
   }
 
-  const [instancesResult, servicesResult] = await Promise.all([
-    db.query(
-      `
-        SELECT
-          id,
-          service_id,
-          option_name,
-          sort_order
-        FROM service_instance_options
-        WHERE service_id = ANY($1::bigint[])
-        ORDER BY service_id, sort_order, option_name
-      `,
-      [resolvedServiceIds]
-    ),
-    db.query(
-      `
-        SELECT
-          id,
-          name,
-          COALESCE(price_per_user, 0) AS price_per_user
-        FROM services
-        WHERE id = ANY($1::int[])
-      `,
-      [resolvedServiceIds]
-    )
-  ]);
+  const instancesResult = await db.query(
+    `
+      SELECT
+        id,
+        service_id,
+        option_name,
+        sort_order
+      FROM service_instance_options
+      WHERE service_id = ANY($1::bigint[])
+      ORDER BY service_id, sort_order, option_name
+    `,
+    [resolvedServiceIds]
+  );
+
+  const servicesResult = await db.query(
+    `
+      SELECT
+        id,
+        name,
+        COALESCE(price_per_user, 0) AS price_per_user
+      FROM services
+      WHERE id = ANY($1::int[])
+    `,
+    [resolvedServiceIds]
+  );
 
   const servicesById = new Map(
     servicesResult.rows.map((row) => [
