@@ -426,7 +426,7 @@ export default function TenantPlaceOrderPage() {
                 [
                   ['cpuCores', 'vCPU', selected.baselineSpecs.cpuCores, 1],
                   ['memoryGb', 'RAM (GB)', selected.baselineSpecs.memoryGb, 0.5],
-                  ['diskGb', 'Disk (GB)', selected.baselineSpecs.diskGb, 1],
+                  ['diskGb', 'Disk (GB)', selected.baselineSpecs.diskGb, 0.5],
                 ] as const
               ).map(([key, label, min, step]) => (
                 <div key={key}>
