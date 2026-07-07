@@ -6,6 +6,10 @@ const API_VERSION = '2023-11-01';
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 400;
+const COST_CACHE_TTL_MS = 15 * 60 * 1000;
+
+/** @type {Map<string, { data: object, fetchedAt: number }>} */
+const costCache = new Map();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -71,7 +75,7 @@ const parseCostQueryResponse = (data) => {
   };
 };
 
-const buildCostQueryBody = ({ resourceGroupName, from, to }) => {
+const buildCostQueryBody = ({ resourceGroupName, from, to, useScopeQuery = false }) => {
   const normalizedResourceGroup = normalizeResourceGroupName(resourceGroupName);
 
   const body = {
@@ -84,16 +88,19 @@ const buildCostQueryBody = ({ resourceGroupName, from, to }) => {
           name: 'PreTaxCost',
           function: 'Sum'
         }
-      },
-      filter: {
-        dimensions: {
-          name: 'ResourceGroupName',
-          operator: 'In',
-          values: [normalizedResourceGroup]
-        }
       }
     }
   };
+
+  if (!useScopeQuery) {
+    body.dataset.filter = {
+      dimensions: {
+        name: 'ResourceGroupName',
+        operator: 'In',
+        values: [normalizedResourceGroup]
+      }
+    };
+  }
 
   if (from && to) {
     body.timePeriod = {
@@ -113,63 +120,78 @@ const queryCostForResourceGroup = async ({ resourceGroupName, from = null, to = 
   }
 
   const { accessToken, subscriptionId } = await getManagementAccessToken();
-  const url = `https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.CostManagement/query?api-version=${API_VERSION}`;
+  const scope = `/subscriptions/${subscriptionId}/resourceGroups/${resourceGroupName}`;
+  const scopeUrl = `https://management.azure.com${scope}/providers/Microsoft.CostManagement/query?api-version=${API_VERSION}`;
+  const subscriptionUrl = `https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.CostManagement/query?api-version=${API_VERSION}`;
   const body = buildCostQueryBody({
     resourceGroupName: normalizedResourceGroup,
     from,
-    to
+    to,
+    useScopeQuery: true
+  });
+  const fallbackBody = buildCostQueryBody({
+    resourceGroupName: normalizedResourceGroup,
+    from,
+    to,
+    useScopeQuery: false
   });
 
   logCostManagementEvent('cost_query_started', {
     resourceGroup: normalizedResourceGroup,
     timeframe: body.timeframe,
     from,
-    to
+    to,
+    scope
   });
 
   let lastError;
 
   for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
-    try {
-      const response = await axios.post(url, body, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          'Content-Type': 'application/json'
-        },
-        timeout: 30000
-      });
+    for (const [url, requestBody] of [
+      [scopeUrl, body],
+      [subscriptionUrl, fallbackBody]
+    ]) {
+      try {
+        const response = await axios.post(url, requestBody, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            'Content-Type': 'application/json'
+          },
+          timeout: 30000
+        });
 
-      const parsed = parseCostQueryResponse(response.data);
+        const parsed = parseCostQueryResponse(response.data);
 
-      logCostManagementEvent('cost_query_completed', {
-        resourceGroup: normalizedResourceGroup,
-        cost: parsed.cost,
-        currency: parsed.currency
-      });
+        logCostManagementEvent('cost_query_completed', {
+          resourceGroup: normalizedResourceGroup,
+          cost: parsed.cost,
+          currency: parsed.currency,
+          endpoint: url.includes('/resourceGroups/') ? 'scope' : 'subscription'
+        });
 
-      return parsed;
-    } catch (error) {
-      lastError = error;
-      const statusCode = Number(error?.response?.status);
+        return parsed;
+      } catch (error) {
+        lastError = error;
+        const statusCode = Number(error?.response?.status);
 
-      if (statusCode === 403) {
-        throw new AppError(
-          'Azure Cost Management access denied. Assign Cost Management Reader to the service principal on the subscription.',
-          502
-        );
+        if (statusCode === 403) {
+          throw new AppError(
+            'Azure Cost Management access denied. Assign Cost Management Reader to the service principal on the subscription.',
+            502
+          );
+        }
+
+        if (statusCode === 404) {
+          continue;
+        }
+
+        if (!RETRYABLE_STATUS_CODES.has(statusCode)) {
+          break;
+        }
       }
+    }
 
-      if (statusCode === 404) {
-        throw new AppError(
-          `Azure cost data is unavailable for resource group '${normalizedResourceGroup}'.`,
-          404
-        );
-      }
-
-      if (!RETRYABLE_STATUS_CODES.has(statusCode) || attempt === MAX_RETRY_ATTEMPTS) {
-        break;
-      }
-
+    if (attempt < MAX_RETRY_ATTEMPTS) {
       await sleep(RETRY_BASE_DELAY_MS * attempt);
     }
   }
@@ -187,7 +209,31 @@ const queryCostForResourceGroup = async ({ resourceGroupName, from = null, to = 
   throw new AppError(message, 502);
 };
 
-const getResourceGroupCosts = async ({ resourceGroupName, requestCreatedAt }) => {
+const buildCostCacheKey = (resourceGroupName, requestCreatedAt) => {
+  const today = toIsoDateStart(new Date());
+  const requestStart = toIsoDateStart(requestCreatedAt);
+  return `${normalizeResourceGroupName(resourceGroupName)}:${today}:${requestStart || 'lifetime'}`;
+};
+
+const getResourceGroupCosts = async ({ resourceGroupName, requestCreatedAt, bypassCache = false }) => {
+  const cacheKey = buildCostCacheKey(resourceGroupName, requestCreatedAt);
+
+  if (!bypassCache) {
+    const cached = costCache.get(cacheKey);
+    if (cached && Date.now() - cached.fetchedAt < COST_CACHE_TTL_MS) {
+      const cacheAgeMinutes = Math.round((Date.now() - cached.fetchedAt) / 60000);
+      logCostManagementEvent('cost_cache_hit', {
+        resourceGroup: normalizeResourceGroupName(resourceGroupName),
+        cacheAgeMinutes
+      });
+      return {
+        ...cached.data,
+        fromCache: true,
+        cacheAge: cacheAgeMinutes
+      };
+    }
+  }
+
   const today = toIsoDateStart(new Date());
   const requestStart = toIsoDateStart(requestCreatedAt);
 
@@ -202,15 +248,45 @@ const getResourceGroupCosts = async ({ resourceGroupName, requestCreatedAt }) =>
       : queryCostForResourceGroup({ resourceGroupName })
   ]);
 
-  return {
+  const costData = {
     monthToDateCost: monthToDate.cost,
     lifetimeCost: lifetime.cost,
-    currency: monthToDate.currency || lifetime.currency || 'USD'
+    currency: monthToDate.currency || lifetime.currency || 'USD',
+    fromCache: false,
+    cacheAge: 0
+  };
+
+  costCache.set(cacheKey, {
+    data: {
+      monthToDateCost: costData.monthToDateCost,
+      lifetimeCost: costData.lifetimeCost,
+      currency: costData.currency
+    },
+    fetchedAt: Date.now()
+  });
+
+  return costData;
+};
+
+const getCachedResourceGroupCosts = (resourceGroupName, requestCreatedAt) => {
+  const cacheKey = buildCostCacheKey(resourceGroupName, requestCreatedAt);
+  const cached = costCache.get(cacheKey);
+  if (!cached) {
+    return null;
+  }
+
+  return {
+    ...cached.data,
+    fromCache: true,
+    cacheAge: Math.round((Date.now() - cached.fetchedAt) / 60000),
+    cacheExpired: Date.now() - cached.fetchedAt >= COST_CACHE_TTL_MS
   };
 };
 
 module.exports = {
   getResourceGroupCosts,
+  getCachedResourceGroupCosts,
   queryCostForResourceGroup,
-  normalizeResourceGroupName
+  normalizeResourceGroupName,
+  COST_CACHE_TTL_MS
 };

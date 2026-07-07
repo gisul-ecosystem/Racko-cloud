@@ -223,7 +223,8 @@ export async function reprovisionRequestRoles(requestId: number) {
     success: boolean;
     message: string;
     usersProcessed: number;
-    rolesAssigned: number;
+    assignmentsMade?: number;
+    rolesAssigned: string[];
     rolesProvisioned?: string[];
   }>(cloudAutomationPath(`/provision/request/${requestId}/reprovision-roles`), {
     method: 'POST',

@@ -1,6 +1,6 @@
 const cron = require('node-cron');
 const db = require('../db/postgres');
-const { runResourceCleanupForRequest } = require('../services/resourceCleanupService');
+const { executeCleanupForRequest } = require('../services/resourceCleanupService');
 const { sendResourceCleanupEmail } = require('../services/email/resourceCleanupEmailService');
 const { createNotification, NotificationType } = require('../services/notificationService');
 
@@ -44,7 +44,8 @@ async function processResourceCleanup(req) {
   }
 
   try {
-    const { action, affected, deleted } = await runResourceCleanupForRequest(id);
+    const cleanupResult = await executeCleanupForRequest(id, 'scheduler');
+    const { action, totalDeleted, affected } = cleanupResult;
     const now = new Date();
     const nextRun = new Date(now.getTime() + resource_cleanup_interval_hours * 60 * 60 * 1000);
 
@@ -61,17 +62,18 @@ async function processResourceCleanup(req) {
 
     await db.query(
       `
-        INSERT INTO resource_cleanup_logs (request_id, ran_at, resources_deleted, user_count, status)
-        VALUES ($1, $2, $3, $4, 'success')
+        INSERT INTO resource_cleanup_logs
+          (request_id, ran_at, resources_deleted, user_count, status, triggered_by, total_deleted)
+        VALUES ($1, $2, $3, $4, 'success', 'scheduler', $5)
       `,
-      [id, now.toISOString(), JSON.stringify(affected), affected.length]
+      [id, now.toISOString(), JSON.stringify(affected), affected.length, totalDeleted]
     );
 
     if (customer_email) {
       await sendResourceCleanupEmail({
         to: customer_email,
         requestName: requestLabel,
-        deletedCount: deleted.length,
+        deletedCount: totalDeleted,
         affectedCount: affected.length,
         action,
         cleanedAt: now,
@@ -86,7 +88,7 @@ async function processResourceCleanup(req) {
       message:
         action === 'pause'
           ? `Lab #${id} resources paused — ${affected.length} resource action(s) applied`
-          : `Lab #${id} resources cleaned — ${deleted.length} resources removed`,
+          : `Lab #${id} resources cleaned — ${totalDeleted} resources removed`,
       requestId: id
     });
 
@@ -94,7 +96,7 @@ async function processResourceCleanup(req) {
       requestId: id,
       action,
       affectedCount: affected.length,
-      deletedCount: deleted.length,
+      deletedCount: totalDeleted,
       nextRun: nextRun.toISOString()
     });
   } catch (err) {
@@ -109,8 +111,8 @@ async function processResourceCleanup(req) {
 
     await db.query(
       `
-        INSERT INTO resource_cleanup_logs (request_id, ran_at, status, error)
-        VALUES ($1, NOW(), 'failed', $2)
+        INSERT INTO resource_cleanup_logs (request_id, ran_at, status, error, triggered_by)
+        VALUES ($1, NOW(), 'failed', $2, 'scheduler')
       `,
       [id, err.message]
     );
@@ -127,36 +129,42 @@ function startResourceCleanupScheduler() {
     return;
   }
 
-  scheduledTask = cron.schedule('*/5 * * * *', () => {
+  scheduledTask = cron.schedule('*/5 * * * *', async () => {
     const now = new Date();
     logEvent('info', 'resource_cleanup_poll_started', { time: now.toISOString() });
 
-    db.query(
-      `
-        SELECT
-          id,
-          resource_cleanup_interval_hours,
-          customer_email
-        FROM requests
-        WHERE resource_cleanup_enabled = TRUE
-          AND resource_cleanup_next_run_at IS NOT NULL
-          AND resource_cleanup_next_run_at <= $1
-          AND status = 'Completed'
-          AND COALESCE(expired, FALSE) = FALSE
-        ORDER BY resource_cleanup_next_run_at ASC, id ASC
-      `,
-      [now.toISOString()]
-    )
-      .then(async ({ rows: due }) => {
-        for (const req of due) {
-          await processResourceCleanup(req);
-        }
+    try {
+      const { rows: dueRequests } = await db.query(
+        `
+          SELECT
+            id,
+            resource_cleanup_interval_hours,
+            customer_email
+          FROM requests
+          WHERE status = 'Completed'
+            AND resource_cleanup_enabled = TRUE
+            AND resource_cleanup_next_run_at IS NOT NULL
+            AND resource_cleanup_next_run_at <= NOW()
+            AND COALESCE(expired, FALSE) = FALSE
+            AND expiry_date > NOW()
+          ORDER BY resource_cleanup_next_run_at ASC, id ASC
+        `
+      );
 
-        logEvent('info', 'resource_cleanup_poll_completed', { processed: due.length });
-      })
-      .catch((err) => {
-        logEvent('error', 'resource_cleanup_poll_error', { error: err.message });
-      });
+      if (dueRequests.length === 0) {
+        console.log('[CleanupScheduler] No requests due for cleanup');
+        logEvent('info', 'resource_cleanup_poll_completed', { processed: 0 });
+        return;
+      }
+
+      for (const req of dueRequests) {
+        await processResourceCleanup(req);
+      }
+
+      logEvent('info', 'resource_cleanup_poll_completed', { processed: dueRequests.length });
+    } catch (err) {
+      logEvent('error', 'resource_cleanup_poll_error', { error: err.message });
+    }
   });
 
   logEvent('info', 'resource_cleanup_scheduler_started');

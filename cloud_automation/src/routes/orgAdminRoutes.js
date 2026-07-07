@@ -49,6 +49,26 @@ router.post(
   requireSuperAdmin,
   orgAdminController.triggerUserCleanup
 );
+router.post(
+  '/resource-groups/:requestId/users/:userId/unblock',
+  requireSuperAdmin,
+  orgAdminController.unblockUser
+);
+router.get(
+  '/resource-groups/:requestId/users/:userId/sessions',
+  requireSuperAdmin,
+  orgAdminController.getUserSessions
+);
+router.get(
+  '/resource-groups/:requestId/cleanup-logs',
+  requireSuperAdmin,
+  orgAdminController.getCleanupLogs
+);
+router.post(
+  '/resource-groups/:requestId/cleanup',
+  requireSuperAdmin,
+  orgAdminController.triggerRequestCleanup
+);
 router.get(
   '/resource-groups/:requestId/users/:userId/azure-cost',
   requireSuperAdmin,

@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   OrgAdminError,
   deleteOrgAdminUser,
@@ -15,6 +15,8 @@ import {
   reviewOrgAccessRequest,
   reprovisionOrgAdminRoles,
   triggerOrgAdminCleanup,
+  triggerOrgRequestCleanup,
+  unblockOrgAdminUser,
   updateOrgAdminCleanupSettings,
   updateOrgAdminUserRoles,
 } from '../api/orgAdminClient';
@@ -56,15 +58,20 @@ interface UseOrgAdminPortalResult {
     reviewNotes?: string
   ) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<OrgAdminMonitoringResponse | null>;
-  fetchUserAzureCost: (userId: number) => Promise<OrgAdminUserAzureCost | null>;
+  fetchUserAzureCost: (userId: number, options?: { refresh?: boolean }) => Promise<OrgAdminUserAzureCost | null>;
   renewBudget: (userId: number, topUpAmount: number) => Promise<boolean>;
   updateCleanupSettings: (
     userId: number,
     payload: { cleanupDisabled?: boolean; cleanupIntervalOverride?: number | null }
   ) => Promise<boolean>;
   triggerCleanup: (userId: number) => Promise<boolean>;
+  triggerRequestCleanup: () => Promise<boolean>;
+  unblockUser: (userId: number, options?: { resetUsage?: boolean }) => Promise<boolean>;
   reprovisionRoles: () => Promise<boolean>;
   clearActionFeedback: () => void;
+  lastUpdatedAt: Date | null;
+  isRefreshing: boolean;
+  hasActiveUsers: boolean;
 }
 
 export function useOrgAdminPortal(): UseOrgAdminPortalResult {
@@ -82,6 +89,16 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const [detailError, setDetailError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshInFlightRef = useRef(false);
+
+  const hasActiveUsers = users.some(
+    (user) =>
+      user.hasActiveSession ||
+      user.displayStatus === 'Active' ||
+      user.status === 'Active'
+  );
 
   const handleApiError = useCallback((err: unknown, fallback: string) => {
     if (err instanceof OrgAdminError) {
@@ -114,17 +131,43 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const refreshDetail = useCallback(async () => {
     if (selectedRequestId == null) return;
 
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setDetailLoading(true);
+    setIsRefreshing(true);
     setDetailError(null);
 
     try {
       const detail = await getOrgResourceGroupDetail(selectedRequestId);
       setRequestDetail(detail.request);
       setUsers(detail.users);
+      setLastUpdatedAt(new Date());
     } catch (err) {
       setDetailError(err instanceof OrgAdminError ? err.message : 'Failed to load request detail.');
     } finally {
+      refreshInFlightRef.current = false;
+      setIsRefreshing(false);
       setDetailLoading(false);
+    }
+  }, [selectedRequestId]);
+
+  const refreshDetailSilent = useCallback(async () => {
+    if (selectedRequestId == null) return;
+
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
+    setIsRefreshing(true);
+
+    try {
+      const detail = await getOrgResourceGroupDetail(selectedRequestId);
+      setRequestDetail(detail.request);
+      setUsers(detail.users);
+      setLastUpdatedAt(new Date());
+    } catch {
+      // Keep stale data during background refresh.
+    } finally {
+      refreshInFlightRef.current = false;
+      setIsRefreshing(false);
     }
   }, [selectedRequestId]);
 
@@ -151,23 +194,27 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
 
   useEffect(() => {
     if (selectedRequestId != null) {
+      setDetailLoading(true);
       void refreshDetail();
     } else {
       setRequestDetail(null);
       setUsers([]);
       setDetailError(null);
+      setLastUpdatedAt(null);
     }
   }, [selectedRequestId, refreshDetail]);
 
   useEffect(() => {
     if (selectedRequestId == null) return undefined;
 
+    const refreshInterval = hasActiveUsers ? 10_000 : 60_000;
+
     const intervalId = window.setInterval(() => {
-      void refreshDetail();
-    }, 30_000);
+      void refreshDetailSilent();
+    }, refreshInterval);
 
     return () => window.clearInterval(intervalId);
-  }, [selectedRequestId, refreshDetail]);
+  }, [selectedRequestId, hasActiveUsers, refreshDetailSilent]);
 
   const selectRequest = useCallback((requestId: number | null) => {
     setSelectedRequestId(requestId);
@@ -286,11 +333,11 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   );
 
   const fetchUserAzureCost = useCallback(
-    async (userId: number) => {
+    async (userId: number, options: { refresh?: boolean } = {}) => {
       if (selectedRequestId == null) return null;
 
       try {
-        const response = await getOrgUserAzureCost(selectedRequestId, userId);
+        const response = await getOrgUserAzureCost(selectedRequestId, userId, options);
         return response.cost ?? null;
       } catch (err) {
         if (err instanceof OrgAdminError) {
@@ -385,7 +432,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         const verb = result.action === 'pause' ? 'paused' : 'deleted';
         const actionLabel = result.action === 'pause' ? 'Pause' : 'Cleanup';
         setActionSuccess(`${actionLabel} completed. ${count} resource(s) ${verb}.`);
-        await refreshDetail();
+        await refreshDetailSilent();
         return true;
       } catch (err) {
         handleApiError(err, 'Failed to trigger cleanup.');
@@ -394,7 +441,52 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         setSaving(false);
       }
     },
-    [selectedRequestId, refreshDetail, handleApiError]
+    [selectedRequestId, refreshDetailSilent, handleApiError]
+  );
+
+  const triggerRequestCleanupAction = useCallback(async () => {
+    if (selectedRequestId == null) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await triggerOrgRequestCleanup(selectedRequestId);
+      const count = result.totalDeleted ?? result.deletedCount ?? 0;
+      const verb = result.action === 'pause' ? 'paused' : 'deleted';
+      setActionSuccess(`Cleanup completed. ${count} resource(s) ${verb}.`);
+      await refreshDetailSilent();
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to trigger request cleanup.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, refreshDetailSilent, handleApiError]);
+
+  const unblockUser = useCallback(
+    async (userId: number, options: { resetUsage?: boolean } = {}) => {
+      if (selectedRequestId == null) return false;
+
+      setSaving(true);
+      setActionError(null);
+      setActionSuccess(null);
+
+      try {
+        const result = await unblockOrgAdminUser(selectedRequestId, userId, options);
+        setActionSuccess(`User "${result.username}" unblocked.`);
+        await refreshDetailSilent();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to unblock user.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, refreshDetailSilent, handleApiError]
   );
 
   const reprovisionRoles = useCallback(async () => {
@@ -406,7 +498,9 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
 
     try {
       const result = await reprovisionOrgAdminRoles(selectedRequestId);
-      setActionSuccess(result.message || 'Roles re-provisioned successfully.');
+      const rolesList =
+        result.rolesAssigned?.length > 0 ? ` Assigned: ${result.rolesAssigned.join(', ')}.` : '';
+      setActionSuccess((result.message || 'Roles re-provisioned successfully.') + rolesList);
       await refreshDetail();
       return true;
     } catch (err) {
@@ -445,7 +539,12 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     renewBudget,
     updateCleanupSettings,
     triggerCleanup,
+    triggerRequestCleanup: triggerRequestCleanupAction,
+    unblockUser,
     reprovisionRoles,
     clearActionFeedback,
+    lastUpdatedAt,
+    isRefreshing,
+    hasActiveUsers,
   };
 }

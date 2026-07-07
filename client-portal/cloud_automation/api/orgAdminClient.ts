@@ -130,10 +130,12 @@ export async function forceOrgAdminLogout(
 
 export async function getOrgUserAzureCost(
   requestId: number,
-  userId: number
+  userId: number,
+  options: { refresh?: boolean } = {}
 ): Promise<OrgAdminUserAzureCostResponse> {
+  const params = options.refresh ? '?refresh=true' : '';
   return orgAdminRequest<OrgAdminUserAzureCostResponse>(
-    `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/azure-cost`
+    `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/azure-cost${params}`
   );
 }
 
@@ -214,6 +216,49 @@ export async function triggerOrgAdminCleanup(
     `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/trigger-cleanup`,
     { method: 'POST' }
   );
+}
+
+export async function triggerOrgRequestCleanup(
+  requestId: number
+): Promise<{
+  success: boolean;
+  action: 'delete' | 'pause';
+  affectedCount: number;
+  deletedCount: number;
+  totalDeleted: number;
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/cleanup`, {
+    method: 'POST',
+  });
+}
+
+export async function unblockOrgAdminUser(
+  requestId: number,
+  userId: number,
+  options: { resetUsage?: boolean } = {}
+): Promise<{ success: boolean; userId: number; username: string }> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/unblock`,
+    {
+      method: 'POST',
+      body: JSON.stringify(options),
+    }
+  );
+}
+
+export async function getOrgUserSessions(
+  requestId: number,
+  userId: number
+): Promise<{ success: boolean; sessions: import('../types/orgAdmin').OrgAdminUserSession[] }> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/sessions`
+  );
+}
+
+export async function getOrgCleanupLogs(
+  requestId: number
+): Promise<{ success: boolean; logs: import('../types/orgAdmin').OrgAdminCleanupLog[] }> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/cleanup-logs`);
 }
 
 export function parseRolesInput(input: string): string[] {
@@ -395,7 +440,8 @@ export interface OrgAdminReprovisionRolesResponse {
   success: boolean;
   message: string;
   usersProcessed: number;
-  rolesAssigned: number;
+  assignmentsMade?: number;
+  rolesAssigned: string[];
   rolesProvisioned?: string[];
 }
 

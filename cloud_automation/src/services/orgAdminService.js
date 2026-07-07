@@ -9,7 +9,11 @@ const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroups, getResourceGroupNameForUser } = require('./userResourceGroupService');
 const { attachLiveUsageToUsers } = require('./userLiveUsageService');
-const { getResourceGroupCosts } = require('./azureCostManagementService');
+const {
+  getResourceGroupCosts,
+  getCachedResourceGroupCosts,
+  COST_CACHE_TTL_MS
+} = require('./azureCostManagementService');
 const { formatMinutes } = require('../utils/formatMinutes');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
 const { filterResourcesForUser, expandDeploymentResources } = require('../utils/resourceOwnership');
@@ -37,38 +41,36 @@ const getArmClient = () => {
   return armClient;
 };
 
-const countResourcesInResourceGroup = async (resourceGroupName) => {
+const formatArmResource = (resource) => ({
+  name: resource.name,
+  type: resource.type?.split('/').pop() || resource.type || 'Unknown',
+  fullType: resource.type || null,
+  location: resource.location || null,
+  id: resource.id || null,
+  provisioningState: resource.properties?.provisioningState || 'Unknown',
+  createdAt: resource.systemData?.createdAt || null,
+  tags: resource.tags || {}
+});
+
+const listResourcesForResourceGroup = async (resourceGroupName) => {
   const normalizedName = String(resourceGroupName || '').trim();
   if (!normalizedName) {
-    return 0;
+    return [];
   }
 
   try {
-    const client = getArmClient();
-    let count = 0;
-
-    for await (const _ of client.resources.listByResourceGroup(normalizedName)) {
-      count += 1;
-    }
-
-    return count;
+    return await listResourcesInResourceGroup(normalizedName);
   } catch {
-    return 0;
+    return [];
   }
 };
 
-const getLiveResourceCountsByUser = async (users, sharedResourceGroup, costingMode) => {
-  const countsByUser = new Map();
+const getLiveResourcesByUser = async (users, sharedResourceGroup, costingMode) => {
+  const resourcesByUser = new Map();
   const isSharedCosting = !isPerUserCosting(costingMode);
 
   if (isSharedCosting && sharedResourceGroup) {
-    let resources = [];
-
-    try {
-      resources = await listResourcesInResourceGroup(sharedResourceGroup);
-    } catch {
-      resources = [];
-    }
+    const resources = await listResourcesForResourceGroup(sharedResourceGroup);
 
     for (const user of users) {
       const ownedResources = expandDeploymentResources(
@@ -80,17 +82,19 @@ const getLiveResourceCountsByUser = async (users, sharedResourceGroup, costingMo
         })
       );
 
-      const count =
-        ownedResources.length ||
-        (users.length === 1 ? resources.length : 0);
+      const userResources =
+        ownedResources.length || (users.length === 1 ? resources : []);
 
-      countsByUser.set(Number(user.id), count);
+      resourcesByUser.set(
+        Number(user.id),
+        userResources.map(formatArmResource)
+      );
     }
 
-    return countsByUser;
+    return resourcesByUser;
   }
 
-  const countsByRg = new Map();
+  const resourcesByRg = new Map();
   const rgNameByKey = new Map();
 
   for (const user of users) {
@@ -102,17 +106,42 @@ const getLiveResourceCountsByUser = async (users, sharedResourceGroup, costingMo
 
   await Promise.all(
     [...rgNameByKey.entries()].map(async ([rgKey, rgName]) => {
-      countsByRg.set(rgKey, await countResourcesInResourceGroup(rgName));
+      const resources = await listResourcesForResourceGroup(rgName);
+      resourcesByRg.set(rgKey, resources.map(formatArmResource));
     })
   );
 
   for (const user of users) {
     const rgName = user.azure_resource_group_name || sharedResourceGroup;
     const rgKey = rgName ? String(rgName).toLowerCase() : '';
-    countsByUser.set(Number(user.id), countsByRg.get(rgKey) ?? 0);
+    resourcesByUser.set(Number(user.id), resourcesByRg.get(rgKey) ?? []);
+  }
+
+  return resourcesByUser;
+};
+
+const getLiveResourceCountsByUser = async (users, sharedResourceGroup, costingMode) => {
+  const resourcesByUser = await getLiveResourcesByUser(users, sharedResourceGroup, costingMode);
+  const countsByUser = new Map();
+
+  for (const [userId, resources] of resourcesByUser.entries()) {
+    countsByUser.set(userId, resources.length);
   }
 
   return countsByUser;
+};
+
+const updateResourceCountHistory = async (userId, currentCount) => {
+  await db.query(
+    `
+      UPDATE azure_users
+      SET peak_resource_count = GREATEST(COALESCE(peak_resource_count, 0), $2),
+          last_resource_count = $2,
+          resources_synced_at = NOW()
+      WHERE id = $1
+    `,
+    [userId, currentCount]
+  );
 };
 
 const deriveUserDisplayStatus = ({ azureAccountEnabled, budgetExceeded, hasOpenSession, expiryDate }) => {
@@ -184,7 +213,8 @@ const mapUserUsage = (row) => {
     lifetimeMinutes: 0,
     todayFormatted: '0m',
     lifetimeFormatted: '0m',
-    liveResourceCount: 0
+    liveResourceCount: 0,
+    peakResourceCount: 0
   };
 };
 
@@ -254,6 +284,8 @@ const getResourceGroupDetail = async (requestId) => {
         r.resource_cleanup_enabled,
         r.resource_cleanup_interval_hours,
         r.resource_cleanup_action,
+        r.resource_cleanup_last_ran_at,
+        r.resource_cleanup_next_run_at,
         r.cleanup_enabled,
         r.cleanup_interval_hours
       FROM requests r
@@ -296,6 +328,9 @@ const getResourceGroupDetail = async (requestId) => {
         au.cleanup_disabled,
         au.cleanup_interval_override,
         au.user_number,
+        au.peak_resource_count,
+        au.last_resource_count,
+        au.resources_synced_at,
         r.expiry_date,
         r.enable_daily_usage,
         r.daily_limit_minutes,
@@ -309,12 +344,20 @@ const getResourceGroupDetail = async (requestId) => {
         ) AS total_budget,
         ubs.currency AS cost_currency,
         ubs.last_synced_at,
+        ubs.sync_error,
+        ubs.last_sync_attempted_at,
         (
           SELECT MAX(uus.login_at)
           FROM user_usage_sessions uus
           WHERE uus.request_id = au.request_id
             AND uus.user_id = au.id
         ) AS last_session_login_at,
+        (
+          SELECT COUNT(*)
+          FROM user_usage_sessions uus_today
+          WHERE uus_today.user_id = au.id
+            AND uus_today.login_at >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date
+        ) AS sessions_today,
         au.last_signin_at,
         COALESCE(
           (
@@ -345,13 +388,34 @@ const getResourceGroupDetail = async (requestId) => {
     ? await getStagingResourceGroups(requestId)
     : [];
 
-  const liveResourceCountByUser = await getLiveResourceCountsByUser(
+  const liveResourcesByUser = await getLiveResourcesByUser(
     usersResult.rows,
     request.azure_resource_group_name,
     request.costing_mode
   );
 
-  const mappedUsers = usersResult.rows.map(mapUserUsage);
+  const liveResourceCountByUser = new Map(
+    [...liveResourcesByUser.entries()].map(([userId, resources]) => [userId, resources.length])
+  );
+
+  await Promise.all(
+    usersResult.rows.map(async (row) => {
+      const liveCount = liveResourceCountByUser.get(Number(row.id)) ?? 0;
+      await updateResourceCountHistory(Number(row.id), liveCount);
+    })
+  );
+
+  const mappedUsers = usersResult.rows.map((row) => ({
+    ...mapUserUsage(row),
+    peakResourceCount: Math.max(
+      Number(row.peak_resource_count || 0),
+      liveResourceCountByUser.get(Number(row.id)) ?? 0
+    ),
+    liveResources: liveResourcesByUser.get(Number(row.id)) ?? [],
+    totalSessionsToday: Number(row.sessions_today || 0),
+    syncError: row.sync_error || null,
+    lastSyncAttemptedAt: row.last_sync_attempted_at || null
+  }));
   const { users: enrichedUsers, liveSummary } = await attachLiveUsageToUsers(
     requestId,
     mappedUsers,
@@ -383,10 +447,13 @@ const getResourceGroupDetail = async (requestId) => {
         dailyLimitMinutes = Number(windowAccess.limitMinutes || 0);
         limitReached = windowAccess.limitReached === true || windowAccess.allowed === false;
       } else if (request.enable_daily_usage === true) {
+        const storedClosedMinutes =
+          user.storedMinsToday ??
+          Math.max(0, Math.round(Number(user.usedTodayMinutes || 0)) - activeSessionMinutes);
         const access = evaluateUsageAccess({
           request,
           user: {
-            used_today_minutes: user.usedTodayMinutes,
+            used_today_minutes: storedClosedMinutes,
             blocked_until: user.blockedUntil,
             last_reset_date: user.lastResetDate
           },
@@ -421,6 +488,12 @@ const getResourceGroupDetail = async (requestId) => {
         lifetimeFormatted: formatMinutes(lifetimeMinutes),
         hasActiveSession: user.hasActiveSession === true,
         sessionActive: user.hasActiveSession === true,
+        liveResources: user.liveResources ?? [],
+        liveResourceCount: user.liveResourceCount ?? user.liveResources?.length ?? 0,
+        totalSessionsToday: user.totalSessionsToday ?? 0,
+        closedSessionCost: user.closedSessionCost ?? 0,
+        totalCostToday: user.totalCostToday ?? user.liveCost ?? 0,
+        syncError: user.syncError ?? null,
         sessionExpiresAt:
           remainingMinutes != null && user.hasActiveSession
             ? new Date(Date.now() + remainingMinutes * 60 * 1000).toISOString()
@@ -457,6 +530,8 @@ const getResourceGroupDetail = async (requestId) => {
           ? Number(request.resource_cleanup_interval_hours)
           : null,
       resourceCleanupAction: request.resource_cleanup_action === 'pause' ? 'pause' : 'delete',
+      resourceCleanupLastRanAt: request.resource_cleanup_last_ran_at || null,
+      resourceCleanupNextRunAt: request.resource_cleanup_next_run_at || null,
       cleanupEnabled: request.cleanup_enabled === true,
       cleanupIntervalHours:
         request.cleanup_interval_hours != null ? Number(request.cleanup_interval_hours) : null,
@@ -626,56 +701,46 @@ const reviewAccessRequest = async ({ id, status, reviewNotes, reviewedBy }) =>
     reviewedBy
   });
 
-const getUserAzureCost = async (requestId, userId) => {
-  const requestResult = await db.query(
-    `
-      SELECT
-        r.id,
-        r.costing_mode,
-        r.created_at
-      FROM requests r
-      WHERE r.id = $1
-      LIMIT 1
-    `,
-    [requestId]
-  );
+const buildAzureCostResponse = ({
+  userId,
+  user,
+  request,
+  resourceGroup,
+  monthToDateCost,
+  lifetimeCost,
+  currency,
+  attributionMethod,
+  resourceGroupTotalCost,
+  sharePercent,
+  queriedAt,
+  fromCache = false,
+  rateLimited = false,
+  cacheAge = null
+}) => ({
+  userId: Number(userId),
+  username: user.username,
+  resourceGroup,
+  costingMode: request.costing_mode,
+  attributionMethod,
+  monthToDateCost,
+  lifetimeCost,
+  currency: currency || 'USD',
+  resourceGroupTotalCost,
+  sharePercent,
+  dataFreshnessNote:
+    'Azure billing data is typically delayed by several hours and may not include the current session.',
+  queriedAt: queriedAt || new Date().toISOString(),
+  fromCache,
+  rateLimited,
+  cacheAge
+});
 
-  const request = requestResult.rows[0];
-
-  if (!request) {
-    throw new AppError('Resource group request not found.', 404);
-  }
-
-  const userResult = await db.query(
-    `
-      SELECT id, username
-      FROM azure_users
-      WHERE request_id = $1
-        AND id = $2
-        AND COALESCE(is_deleted, false) = false
-      LIMIT 1
-    `,
-    [requestId, userId]
-  );
-
-  const user = userResult.rows[0];
-
-  if (!user) {
-    throw new AppError('User not found for this request.', 404);
-  }
-
-  const resourceGroup = await getResourceGroupNameForUser(requestId, userId);
-
-  if (!resourceGroup) {
-    throw new AppError('No Azure resource group is linked to this user yet.', 404);
-  }
-
-  const perUserCosting = isPerUserCosting(request.costing_mode);
-  const costs = await getResourceGroupCosts({
-    resourceGroupName: resourceGroup,
-    requestCreatedAt: request.created_at
-  });
-
+const applySharedCostAttribution = async ({
+  requestId,
+  userId,
+  costs,
+  perUserCosting
+}) => {
   let monthToDateCost = costs.monthToDateCost;
   let lifetimeCost = costs.lifetimeCost;
   let attributionMethod = 'direct';
@@ -733,20 +798,236 @@ const getUserAzureCost = async (requestId, userId) => {
   }
 
   return {
-    userId: Number(userId),
-    username: user.username,
-    resourceGroup,
-    costingMode: request.costing_mode,
-    attributionMethod,
     monthToDateCost,
     lifetimeCost,
-    currency: costs.currency,
+    attributionMethod,
     resourceGroupTotalCost,
-    sharePercent,
-    dataFreshnessNote:
-      'Azure billing data is typically delayed by several hours and may not include the current session.',
-    queriedAt: new Date().toISOString()
+    sharePercent
   };
+};
+
+const getUserAzureCost = async (requestId, userId, { refresh = false } = {}) => {
+  const requestResult = await db.query(
+    `
+      SELECT
+        r.id,
+        r.costing_mode,
+        r.created_at
+      FROM requests r
+      WHERE r.id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  const request = requestResult.rows[0];
+
+  if (!request) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  const userResult = await db.query(
+    `
+      SELECT id, username
+      FROM azure_users
+      WHERE request_id = $1
+        AND id = $2
+        AND COALESCE(is_deleted, false) = false
+      LIMIT 1
+    `,
+    [requestId, userId]
+  );
+
+  const user = userResult.rows[0];
+
+  if (!user) {
+    throw new AppError('User not found for this request.', 404);
+  }
+
+  const resourceGroup = await getResourceGroupNameForUser(requestId, userId);
+
+  if (!resourceGroup) {
+    throw new AppError('No Azure resource group is linked to this user yet.', 404);
+  }
+
+  const perUserCosting = isPerUserCosting(request.costing_mode);
+
+  const dbCostResult = await db.query(
+    `
+      SELECT current_spend, currency, last_synced_at
+      FROM user_budget_spend
+      WHERE azure_user_id = $1
+      LIMIT 1
+    `,
+    [userId]
+  );
+  const dbCost = dbCostResult.rows[0];
+  const dbAgeMs = dbCost?.last_synced_at
+    ? Date.now() - new Date(dbCost.last_synced_at).getTime()
+    : null;
+  const dbIsFresh = dbAgeMs != null && dbAgeMs < COST_CACHE_TTL_MS;
+
+  const returnDbCost = (options = {}) => {
+    const spend = parseFloat(dbCost?.current_spend || 0);
+    return buildAzureCostResponse({
+      userId,
+      user,
+      request,
+      resourceGroup,
+      monthToDateCost: spend,
+      lifetimeCost: spend,
+      currency: dbCost?.currency || 'USD',
+      attributionMethod: perUserCosting ? 'direct' : 'proportional',
+      resourceGroupTotalCost: null,
+      sharePercent: null,
+      queriedAt: dbCost?.last_synced_at || new Date().toISOString(),
+      fromCache: true,
+      cacheAge: dbAgeMs != null ? Math.round(dbAgeMs / 60000) : null,
+      ...options
+    });
+  };
+
+  if (!refresh && dbCost) {
+    console.log(
+      `[azureCost] Serving DB value for user ${userId}${
+        dbIsFresh ? '' : ' (stale — scheduler will refresh)'
+      }`
+    );
+    return returnDbCost();
+  }
+
+  if (!refresh) {
+    const memoryCache = getCachedResourceGroupCosts(resourceGroup, request.created_at);
+    if (memoryCache && !memoryCache.cacheExpired) {
+      const attributed = await applySharedCostAttribution({
+        requestId,
+        userId,
+        costs: memoryCache,
+        perUserCosting
+      });
+
+      return buildAzureCostResponse({
+        userId,
+        user,
+        request,
+        resourceGroup,
+        monthToDateCost: attributed.monthToDateCost,
+        lifetimeCost: attributed.lifetimeCost,
+        currency: memoryCache.currency,
+        attributionMethod: attributed.attributionMethod,
+        resourceGroupTotalCost: attributed.resourceGroupTotalCost,
+        sharePercent: attributed.sharePercent,
+        fromCache: true,
+        cacheAge: memoryCache.cacheAge
+      });
+    }
+  }
+
+  try {
+    const costs = await getResourceGroupCosts({
+      resourceGroupName: resourceGroup,
+      requestCreatedAt: request.created_at,
+      bypassCache: refresh
+    });
+
+    const attributed = await applySharedCostAttribution({
+      requestId,
+      userId,
+      costs,
+      perUserCosting
+    });
+
+    await db.query(
+      `
+        INSERT INTO user_budget_spend
+          (azure_user_id, request_id, current_spend, currency, last_synced_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (azure_user_id)
+        DO UPDATE SET
+          current_spend = EXCLUDED.current_spend,
+          currency = EXCLUDED.currency,
+          last_synced_at = NOW()
+      `,
+      [userId, requestId, attributed.monthToDateCost, costs.currency || 'USD']
+    );
+
+    return buildAzureCostResponse({
+      userId,
+      user,
+      request,
+      resourceGroup,
+      monthToDateCost: attributed.monthToDateCost,
+      lifetimeCost: attributed.lifetimeCost,
+      currency: costs.currency,
+      attributionMethod: attributed.attributionMethod,
+      resourceGroupTotalCost: attributed.resourceGroupTotalCost,
+      sharePercent: attributed.sharePercent,
+      fromCache: costs.fromCache === true,
+      cacheAge: costs.cacheAge ?? null
+    });
+  } catch (err) {
+    const statusCode = err.statusCode || err.response?.status;
+    const isRateLimited =
+      statusCode === 429 ||
+      String(err.message || '')
+        .toLowerCase()
+        .includes('too many requests');
+
+    if (isRateLimited) {
+      console.warn('[azureCost] Rate limited — returning cached/stored value');
+
+      const memoryCache = getCachedResourceGroupCosts(resourceGroup, request.created_at);
+      if (memoryCache) {
+        const attributed = await applySharedCostAttribution({
+          requestId,
+          userId,
+          costs: memoryCache,
+          perUserCosting
+        });
+
+        return buildAzureCostResponse({
+          userId,
+          user,
+          request,
+          resourceGroup,
+          monthToDateCost: attributed.monthToDateCost,
+          lifetimeCost: attributed.lifetimeCost,
+          currency: memoryCache.currency,
+          attributionMethod: attributed.attributionMethod,
+          resourceGroupTotalCost: attributed.resourceGroupTotalCost,
+          sharePercent: attributed.sharePercent,
+          fromCache: true,
+          rateLimited: true,
+          cacheAge: memoryCache.cacheAge
+        });
+      }
+
+      if (dbCost) {
+        return returnDbCost({ rateLimited: true });
+      }
+
+      return buildAzureCostResponse({
+        userId,
+        user,
+        request,
+        resourceGroup,
+        monthToDateCost: 0,
+        lifetimeCost: 0,
+        currency: 'USD',
+        attributionMethod: perUserCosting ? 'direct' : 'proportional',
+        resourceGroupTotalCost: null,
+        sharePercent: null,
+        fromCache: false,
+        rateLimited: true
+      });
+    }
+
+    if (dbCost) {
+      return returnDbCost();
+    }
+
+    throw err;
+  }
 };
 
 const getDailyUsageForRequest = async (requestId) => {
@@ -1180,10 +1461,11 @@ const triggerUserCleanup = async (requestId, userId, { action } = {}) => {
 
   await db.query(
     `
-      INSERT INTO resource_cleanup_logs (request_id, ran_at, resources_deleted, user_count, status)
-      VALUES ($1, NOW(), $2, 1, 'success')
+      INSERT INTO resource_cleanup_logs
+        (request_id, ran_at, resources_deleted, user_count, status, triggered_by, total_deleted)
+      VALUES ($1, NOW(), $2, 1, 'success', 'admin_manual', $3)
     `,
-    [user.request_id, JSON.stringify(affected)]
+    [user.request_id, JSON.stringify(affected), affected.length]
   );
 
   const deletedCount = resolvedAction === 'delete' ? affected.length : 0;
@@ -1199,6 +1481,279 @@ const triggerUserCleanup = async (requestId, userId, { action } = {}) => {
     pausedCount,
     affected
   };
+};
+
+const triggerRequestCleanup = async (requestId, { action, triggeredBy = 'admin_manual' } = {}) => {
+  const { runResourceCleanupForRequest } = require('./resourceCleanupService');
+  const { rows: requestRows } = await db.query(
+    `
+      SELECT resource_cleanup_action, resource_cleanup_interval_hours
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  if (!requestRows.length) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  const request = requestRows[0];
+  const resolvedAction =
+    action === 'pause' || action === 'delete'
+      ? action
+      : request.resource_cleanup_action || 'delete';
+
+  const { affected, deleted } = await runResourceCleanupForRequest(requestId, resolvedAction);
+  const totalDeleted = deleted?.length ?? affected?.length ?? 0;
+
+  await db.query(
+    `
+      INSERT INTO resource_cleanup_logs
+        (request_id, ran_at, resources_deleted, user_count, status, triggered_by, total_deleted)
+      VALUES ($1, NOW(), $2, NULL, 'success', $3, $4)
+    `,
+    [requestId, JSON.stringify(affected), triggeredBy, totalDeleted]
+  );
+
+  if (request.resource_cleanup_interval_hours) {
+    const nextRun = new Date(
+      Date.now() + Number(request.resource_cleanup_interval_hours) * 3600000
+    );
+    await db.query(
+      `
+        UPDATE requests
+        SET resource_cleanup_next_run_at = $1,
+            resource_cleanup_last_ran_at = NOW()
+        WHERE id = $2
+      `,
+      [nextRun.toISOString(), requestId]
+    );
+  }
+
+  return {
+    action: resolvedAction,
+    affectedCount: affected.length,
+    deletedCount: deleted?.length ?? 0,
+    totalDeleted,
+    affected
+  };
+};
+
+const getCleanupLogs = async (requestId, { limit = 20 } = {}) => {
+  const resolvedLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
+
+  const { rows } = await db.query(
+    `
+      SELECT
+        id,
+        ran_at,
+        triggered_by,
+        total_deleted,
+        resources_deleted,
+        user_count,
+        status,
+        error
+      FROM resource_cleanup_logs
+      WHERE request_id = $1
+      ORDER BY ran_at DESC
+      LIMIT $2
+    `,
+    [requestId, resolvedLimit]
+  );
+
+  return rows.map((row) => {
+    let deletedCount = Number(row.total_deleted || 0);
+    if (!deletedCount && row.resources_deleted) {
+      try {
+        const parsed = Array.isArray(row.resources_deleted)
+          ? row.resources_deleted
+          : JSON.parse(row.resources_deleted);
+        deletedCount = Array.isArray(parsed) ? parsed.length : 0;
+      } catch {
+        deletedCount = 0;
+      }
+    }
+
+    return {
+      id: row.id,
+      ranAt: row.ran_at,
+      triggeredBy: row.triggered_by || (row.user_count === 1 ? 'admin_manual' : 'scheduler'),
+      totalDeleted: deletedCount,
+      status: row.status || (row.error ? 'failed' : 'success'),
+      error: row.error || null,
+      details: row.resources_deleted
+    };
+  });
+};
+
+const unblockUser = async ({ requestId, userId, adminEmail, resetUsage = false }) => {
+  const { DateTime } = require('luxon');
+  const { createGraphClient } = require('../provisioners/azure/userProvisioner');
+
+  const userResult = await db.query(
+    `
+      SELECT
+        au.id,
+        au.username,
+        au.azure_user_id,
+        au.request_id,
+        au.azure_account_enabled,
+        au.status,
+        au.blocked_until
+      FROM azure_users au
+      WHERE au.request_id = $1
+        AND au.id = $2
+        AND COALESCE(au.is_deleted, false) = false
+      LIMIT 1
+    `,
+    [requestId, userId]
+  );
+
+  if (!userResult.rows.length) {
+    throw new AppError('User not found for this request.', 404);
+  }
+
+  const user = userResult.rows[0];
+
+  if (!user.azure_user_id) {
+    throw new AppError('User has no Azure account to unblock.', 400);
+  }
+
+  const windowResult = await db.query(
+    `
+      SELECT timezone
+      FROM request_usage_windows
+      WHERE request_id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+  const timezone = windowResult.rows[0]?.timezone || 'Asia/Kolkata';
+  const todayDate = DateTime.now().setZone(timezone).toISODate();
+
+  const { graphClient } = createGraphClient();
+  await graphClient.api(`/users/${user.azure_user_id}`).patch({ accountEnabled: true });
+
+  await db.query(
+    `
+      UPDATE azure_users
+      SET
+        azure_account_enabled = TRUE,
+        blocked_until = NULL,
+        used_today_minutes = CASE WHEN $2 THEN 0 ELSE used_today_minutes END,
+        status = CASE WHEN status = 'Blocked' THEN 'Created' ELSE status END
+      WHERE id = $1
+    `,
+    [userId, resetUsage]
+  );
+
+  if (resetUsage) {
+    await db.query(
+      `
+        INSERT INTO daily_usage_tracking
+          (request_id, azure_user_id, tracking_date, consumed_minutes, limit_reached, limit_reached_at)
+        VALUES ($1, $2, $3, 0, FALSE, NULL)
+        ON CONFLICT (azure_user_id, tracking_date)
+        DO UPDATE SET
+          consumed_minutes = 0,
+          limit_reached = FALSE,
+          limit_reached_at = NULL,
+          updated_at = NOW()
+      `,
+      [requestId, userId, todayDate]
+    );
+  } else {
+    await db.query(
+      `
+        UPDATE daily_usage_tracking
+        SET
+          limit_reached = FALSE,
+          limit_reached_at = NULL,
+          updated_at = NOW()
+        WHERE azure_user_id = $1
+          AND tracking_date = $2
+      `,
+      [userId, todayDate]
+    );
+  }
+
+  await db.query(
+    `
+      INSERT INTO access_portal_audit_logs (request_id, customer_email, actor, action, target_user_id, details)
+      SELECT r.id, r.customer_email, $1, 'user_unblocked', $2, $3::jsonb
+      FROM requests r
+      WHERE r.id = $4
+    `,
+    [adminEmail || 'org-admin', userId, JSON.stringify({ resetUsage }), requestId]
+  );
+
+  return {
+    userId,
+    username: user.username,
+    resetUsage
+  };
+};
+
+const getUserSessions = async (requestId, userId, { limit = 50 } = {}) => {
+  const resolvedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+
+  const userResult = await db.query(
+    `
+      SELECT id, username
+      FROM azure_users
+      WHERE request_id = $1
+        AND id = $2
+        AND COALESCE(is_deleted, false) = false
+      LIMIT 1
+    `,
+    [requestId, userId]
+  );
+
+  if (!userResult.rows.length) {
+    throw new AppError('User not found for this request.', 404);
+  }
+
+  const { rows } = await db.query(
+    `
+      SELECT
+        id,
+        login_at,
+        logout_at,
+        minutes_used,
+        ended_reason,
+        ip_address,
+        CASE
+          WHEN logout_at IS NULL THEN 'Active'
+          ELSE COALESCE(ended_reason, 'closed')
+        END AS status,
+        CASE
+          WHEN logout_at IS NULL
+            THEN FLOOR(EXTRACT(EPOCH FROM (NOW() - login_at)) / 60)
+          ELSE COALESCE(minutes_used, FLOOR(EXTRACT(EPOCH FROM (logout_at - login_at)) / 60))
+        END AS duration_minutes
+      FROM user_usage_sessions
+      WHERE user_id = $1
+        AND login_at >= NOW() - INTERVAL '7 days'
+      ORDER BY login_at DESC
+      LIMIT $2
+    `,
+    [userId, resolvedLimit]
+  );
+
+  const user = userResult.rows[0];
+
+  return rows.map((row) => ({
+    id: row.id,
+    loginAt: row.login_at,
+    logoutAt: row.logout_at,
+    minutesUsed: row.duration_minutes != null ? Number(row.duration_minutes) : null,
+    endedReason: row.ended_reason,
+    ipAddress: row.ip_address,
+    status: row.status,
+    isActive: row.logout_at == null
+  }));
 };
 
 const listAzureRoles = () => [
@@ -1234,5 +1789,9 @@ module.exports = {
   listAzureRoles,
   renewUserBudget,
   updateUserCleanupSettings,
-  triggerUserCleanup
+  triggerUserCleanup,
+  triggerRequestCleanup,
+  getCleanupLogs,
+  getUserSessions,
+  unblockUser
 };

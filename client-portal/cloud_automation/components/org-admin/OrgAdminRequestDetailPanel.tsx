@@ -31,11 +31,16 @@ interface OrgAdminRequestDetailPanelProps {
   onForceLogout: (userId: number) => Promise<boolean>;
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<OrgAdminMonitoringResponse | null>;
-  onFetchAzureCost: (userId: number) => Promise<OrgAdminUserAzureCost | null>;
+  onFetchAzureCost: (userId: number, options?: { refresh?: boolean }) => Promise<OrgAdminUserAzureCost | null>;
   onRenewBudget: (userId: number, topUpAmount: number) => Promise<boolean>;
   onToggleCleanup: (userId: number, disabled: boolean) => Promise<boolean>;
   onManualCleanup: (userId: number) => Promise<boolean>;
+  onRequestCleanup?: () => Promise<boolean>;
+  onUnblock?: (userId: number) => Promise<boolean>;
   onReprovisionRoles: () => Promise<boolean>;
+  lastUpdatedAt?: Date | null;
+  isRefreshing?: boolean;
+  hasActiveUsers?: boolean;
 }
 
 export function OrgAdminRequestDetailPanel({
@@ -54,22 +59,24 @@ export function OrgAdminRequestDetailPanel({
   onRenewBudget,
   onToggleCleanup,
   onManualCleanup,
+  onRequestCleanup,
+  onUnblock,
   onReprovisionRoles,
+  lastUpdatedAt = null,
+  isRefreshing = false,
+  hasActiveUsers = false,
 }: OrgAdminRequestDetailPanelProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>('users');
   const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [, setClockTick] = useState(0);
 
   useEffect(() => {
-    if (activeTab !== 'users') {
-      return undefined;
-    }
-
+    if (!lastUpdatedAt) return undefined;
     const intervalId = window.setInterval(() => {
-      onRetry();
-    }, 30_000);
-
+      setClockTick((tick) => tick + 1);
+    }, 5000);
     return () => window.clearInterval(intervalId);
-  }, [activeTab, onRetry]);
+  }, [lastUpdatedAt]);
 
   const handleReprovisionRoles = async () => {
     if (
@@ -133,6 +140,24 @@ export function OrgAdminRequestDetailPanel({
             <RefreshCw className={`h-3.5 w-3.5 ${saving ? 'animate-spin' : ''}`} />
             Fix Roles
           </button>
+          {hasActiveUsers && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-500" />
+              Live
+            </span>
+          )}
+          {isRefreshing && (
+            <span className="inline-flex items-center gap-1 text-xs text-amber-700">
+              <Loader2 className="h-3 w-3 animate-spin" />
+              Refreshing...
+            </span>
+          )}
+          {lastUpdatedAt && !isRefreshing && (
+            <span className="text-xs text-gray-400">
+              Last updated:{' '}
+              {Math.max(0, Math.round((Date.now() - lastUpdatedAt.getTime()) / 1000))}s ago
+            </span>
+          )}
         </div>
 
         <div className="mt-3 flex flex-wrap gap-1">
@@ -182,8 +207,13 @@ export function OrgAdminRequestDetailPanel({
                 loading={loading}
                 selectedUserId={selectedUserId}
                 saving={saving}
+                isRefreshing={isRefreshing}
+                lastUpdatedAt={lastUpdatedAt}
+                hasActiveUsers={hasActiveUsers}
                 onSelect={setSelectedUserId}
                 onForceLogout={onForceLogout}
+                onUnblock={onUnblock}
+                onTriggerCleanup={onManualCleanup}
                 onUpdateRoles={onUpdateRoles}
                 fetchUserMonitoring={fetchUserMonitoring}
                 onFetchAzureCost={onFetchAzureCost}
@@ -200,6 +230,7 @@ export function OrgAdminRequestDetailPanel({
               saving={saving}
               onToggleCleanup={onToggleCleanup}
               onManualCleanup={onManualCleanup}
+              onRequestCleanup={onRequestCleanup}
             />
           )}
 
