@@ -136,6 +136,7 @@ jobs:
             goos: windows
             goarch: amd64
             ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-dev.racko.ai -H windowsgui'
+            ldflags_url: 'https://api-dev.racko.ai'
 
     steps:
       - name: Checkout
@@ -159,7 +160,7 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "installer\racko-agent-setup.iss"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DPlatformURL=${{ matrix.ldflags_url }}" "installer\racko-agent-setup.iss"
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
