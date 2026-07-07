@@ -145,6 +145,14 @@ export async function fetchJob(id: string): Promise<IJob> {
   return res.data.job;
 }
 
+export async function issueJobStreamTicket(jobId: string): Promise<{ streamToken: string; expiresIn: number }> {
+  const res = await apiRequest<ApiResponse<{ streamToken: string; expiresIn: number }>>(
+    `/api/v1/machines/jobs/${jobId}/stream-ticket`,
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
 // ─── Software Catalog API ─────────────────────────────────────────────────────
 
 export async function fetchSoftwareCatalog(): Promise<ISoftwareCatalog[]> {

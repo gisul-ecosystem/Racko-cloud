@@ -257,6 +257,9 @@ router.post('/api/v1/machines/push-agent', authMiddleware, verifyMiddleware, req
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/jobs/:id/stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// SSE stream — NO gateway auth. core-api validates the ?streamToken= ticket internally.
+router.get('/api/v1/machines/jobs/:id/stream', sseProxy);
 router.get('/api/v1/machines/jobs/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 // Public download-agent redeem — no auth, token validated internally (single-use, 60s TTL)
 router.get('/api/v1/machines/download-agent', coreApiProxy);
@@ -279,6 +282,7 @@ router.post('/api/v1/agent/register', coreApiProxy);
 router.post('/api/v1/agent/enroll', coreApiProxy);
 router.get('/api/v1/agent/binary/:os', coreApiProxy);
 router.get('/api/v1/agent/install/linux', coreApiProxy);
+router.get('/api/v1/agent/connect', coreApiProxy); // WebSocket upgrade — handled via server.on('upgrade') in server.ts
 router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
 router.post('/api/v1/agent/heartbeat', coreApiProxy);
