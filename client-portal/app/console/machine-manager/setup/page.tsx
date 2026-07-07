@@ -20,6 +20,7 @@ import {
   type IMachine,
   type MachineOS,
   type VMPushTarget,
+  type JobStatus,
 } from '../../../../lib/machineManagerApi';
 import {
   Monitor, Server, Layers, Download, Check,
@@ -413,7 +414,6 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const [pushResults, setPushResults] = useState<Array<{ machineId: string; success: boolean; error?: string }>>([]);
   const [pushing, setPushing] = useState(false);
   const [waiting, setWaiting] = useState(false);
-  const [createdJobs, setCreatedJobs] = useState<IJob[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const updateRow = (i: number, field: keyof VMPushTarget, value: string) => {
@@ -566,7 +566,6 @@ function TemplateFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const [loadingKey, setLoadingKey] = useState(true);
   const [os, setOs] = useState<MachineOS>('windows');
   const [enrolledMachines, setEnrolledMachines] = useState<IMachine[]>([]);
-  const [createdJobs, setCreatedJobs] = useState<IJob[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const seenIdsRef = useRef<Set<string>>(new Set());
 
