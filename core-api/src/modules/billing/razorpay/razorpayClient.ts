@@ -43,3 +43,34 @@ export async function createTopupOrder(
     keyId: config.RAZORPAY_KEY_ID,
   };
 }
+
+export async function createAdminTopupOrder(
+  userId: string,
+  amount: number
+): Promise<{
+  razorpayOrderId: string;
+  amount: number;
+  currency: string;
+  keyId: string;
+}> {
+  if (!Number.isFinite(amount) || amount <= 0) {
+    throw new AppError('Amount must be positive.', 400, 'VALIDATION_ERROR');
+  }
+
+  const client = getRazorpayClient();
+  const order = await client.orders.create({
+    amount: Math.round(amount * 100),
+    currency: 'INR',
+    notes: {
+      userId,
+      purpose: 'admin_wallet_topup',
+    },
+  });
+
+  return {
+    razorpayOrderId: order.id,
+    amount,
+    currency: 'INR',
+    keyId: config.RAZORPAY_KEY_ID,
+  };
+}
