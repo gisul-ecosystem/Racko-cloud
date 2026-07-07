@@ -30,11 +30,14 @@ class WSManager {
 
     server.on('upgrade', (req: IncomingMessage, socket, head) => {
       const url = new URL(req.url ?? '', `http://${req.headers.host}`);
+      logger.info('[WSManager] Upgrade event received', { path: url.pathname, url: req.url });
       if (!url.pathname.startsWith('/api/v1/agent/connect')) {
+        logger.warn('[WSManager] Upgrade rejected — not agent connect path', { path: url.pathname });
         socket.destroy();
         return;
       }
       wss.handleUpgrade(req, socket as import('net').Socket, head, (ws: WebSocket) => {
+        logger.info('[WSManager] Upgrade handled, emitting connection', { path: url.pathname });
         wss.emit('connection', ws, req);
       });
     });
