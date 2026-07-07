@@ -3,7 +3,7 @@ const AppError = require('../utils/AppError');
 const db = require('../db/postgres');
 const pricingService = require('./pricingService');
 const { assertProvisionableLocation } = require('./azureLocationService');
-const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices } = require('./instanceRoleMappingService');
+const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 
@@ -25,6 +25,7 @@ async function createRequest({
   perUserBudgetUsd,
   resourceCleanupEnabled,
   resourceCleanupIntervalHours,
+  resourceCleanupAction,
   usageWindows,
   rackoUserId
 }) {
@@ -247,6 +248,8 @@ async function createRequest({
       resolvedResourceCleanupEnabled && resolvedResourceCleanupIntervalHours
         ? new Date(Date.now() + resolvedResourceCleanupIntervalHours * 60 * 60 * 1000).toISOString()
         : null;
+    const resolvedResourceCleanupAction =
+      resourceCleanupAction === 'pause' ? 'pause' : 'delete';
 
     const request =
       await client.query(
@@ -287,7 +290,9 @@ async function createRequest({
 
           resource_cleanup_interval_hours,
 
-          resource_cleanup_next_run_at
+          resource_cleanup_next_run_at,
+
+          resource_cleanup_action
 
         )
 
@@ -310,7 +315,8 @@ async function createRequest({
           $15,
           $16,
           $17,
-          $18
+          $18,
+          $19
 
         )
 
@@ -355,7 +361,9 @@ async function createRequest({
 
           resolvedResourceCleanupIntervalHours,
 
-          resolvedResourceCleanupNextRunAt
+          resolvedResourceCleanupNextRunAt,
+
+          resolvedResourceCleanupAction
 
         ]
       );
@@ -554,6 +562,9 @@ async function createRequest({
 
     // Ensure all auto_assign default roles (control + data plane) are included
     await ensureAutoAssignRolesForServices(client, roleAssignments, validServiceIds);
+
+    // Auto-assign dependency roles required for portal resource creation
+    await applyDependencyRolesToAssignments(client, roleAssignments, validServiceIds);
 
     // Insert all role assignments into database
     for (const [sid, rolesSet] of roleAssignments.entries()) {

@@ -1,5 +1,6 @@
 const AppError = require('../utils/AppError');
 const orgAdminService = require('../services/orgAdminService');
+const roleProvisionService = require('../services/roleProvisionService');
 
 const getSuperAdminActor = (req) => {
   const userId = req.rackoUser?.userId;
@@ -212,7 +213,9 @@ const getUserAzureCost = async (req, res, next) => {
       throw new AppError('User id must be a positive integer.', 400);
     }
 
-    const cost = await orgAdminService.getUserAzureCost(requestId, userId);
+    const cost = await orgAdminService.getUserAzureCost(requestId, userId, {
+      refresh: req.query.refresh === 'true' || req.query.refresh === '1'
+    });
 
     res.status(200).json({
       success: true,
@@ -309,6 +312,7 @@ const triggerUserCleanup = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
     const userId = Number(req.params.userId);
+    const { action } = req.body || {};
 
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new AppError('Request id must be a positive integer.', 400);
@@ -318,7 +322,134 @@ const triggerUserCleanup = async (req, res, next) => {
       throw new AppError('User id must be a positive integer.', 400);
     }
 
-    const result = await orgAdminService.triggerUserCleanup(requestId, userId);
+    if (action !== undefined && action !== 'pause' && action !== 'delete') {
+      throw new AppError("action must be 'pause' or 'delete' when provided.", 400);
+    }
+
+    const result = await orgAdminService.triggerUserCleanup(requestId, userId, { action });
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reprovisionRolesForRequest = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await roleProvisionService.reprovisionRolesForRequest(requestId);
+
+    const db = require('../db/postgres');
+    const assignments = await db.query(
+      `
+        SELECT DISTINCT azure_role
+        FROM user_role_assignments
+        WHERE request_id = $1
+          AND azure_role IS NOT NULL
+        ORDER BY azure_role
+      `,
+      [requestId]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: `Roles re-provisioned — ${result.rolesAssigned} assignments made`,
+      assignmentsMade: result.rolesAssigned,
+      rolesAssigned: assignments.rows.map((row) => row.azure_role),
+      usersProcessed: result.usersProcessed,
+      rolesProvisioned: result.rolesProvisioned
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const unblockUser = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = Number(req.params.userId);
+    const { resetUsage } = req.body || {};
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.unblockUser({
+      requestId,
+      userId,
+      adminEmail: getSuperAdminActor(req),
+      resetUsage: resetUsage === true
+    });
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getUserSessions = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const sessions = await orgAdminService.getUserSessions(requestId, userId);
+
+    res.status(200).json({ success: true, sessions });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getCleanupLogs = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const logs = await orgAdminService.getCleanupLogs(requestId);
+
+    res.status(200).json({ success: true, logs });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const triggerRequestCleanup = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const { action } = req.body || {};
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (action !== undefined && action !== 'pause' && action !== 'delete') {
+      throw new AppError("action must be 'pause' or 'delete' when provided.", 400);
+    }
+
+    const result = await orgAdminService.triggerRequestCleanup(requestId, {
+      action,
+      triggeredBy: 'admin_manual'
+    });
 
     res.status(200).json({ success: true, ...result });
   } catch (error) {
@@ -341,5 +472,10 @@ module.exports = {
   listAzureRoles,
   renewUserBudget,
   updateUserCleanupSettings,
-  triggerUserCleanup
+  triggerUserCleanup,
+  reprovisionRolesForRequest,
+  getUserSessions,
+  getCleanupLogs,
+  triggerRequestCleanup,
+  unblockUser
 };

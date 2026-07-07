@@ -3,8 +3,8 @@
 import { AlertCircle, ChevronDown, Shield } from 'lucide-react';
 import { COMMON_TIMEZONES } from '../../constants';
 import type {
-  AvailableInstance,
   AvailableLocation,
+  CatalogInstance,
   CatalogService,
   SelectedRole,
   ServiceCatalogResponse,
@@ -15,8 +15,12 @@ import type {
 import {
   catalogInstancesForServices,
   formatInstanceGuide,
+  getSelectedPauseCleanupServices,
   isCustomerDetailsComplete,
   normalizeServiceId,
+  DELETE_CLEANUP_ACTION_LABELS,
+  PAUSE_CLEANUP_ACTION_LABELS,
+  supportsPauseCleanup,
 } from '../../utils/requestForm';
 import { formatCatalogServicePrice } from '../../utils/formatters';
 
@@ -71,6 +75,8 @@ interface RequestFormProps {
   onResourceCleanupEnabledChange: (value: boolean) => void;
   resourceCleanupIntervalHours?: number;
   onResourceCleanupIntervalHoursChange: (value: number | undefined) => void;
+  resourceCleanupAction: 'delete' | 'pause';
+  onResourceCleanupActionChange: (value: 'delete' | 'pause') => void;
   perUserBudgetUsd?: number;
   onPerUserBudgetUsdChange: (value: number | undefined) => void;
   adminAccessOpen: boolean;
@@ -163,6 +169,8 @@ export function RequestForm({
   onResourceCleanupEnabledChange,
   resourceCleanupIntervalHours,
   onResourceCleanupIntervalHoursChange,
+  resourceCleanupAction,
+  onResourceCleanupActionChange,
   perUserBudgetUsd,
   onPerUserBudgetUsdChange,
   adminAccessOpen,
@@ -189,6 +197,9 @@ export function RequestForm({
     startDate,
     endDate,
   });
+  const pauseCleanupAvailable = supportsPauseCleanup(catalog, selectedServiceIds);
+  const selectedPauseCleanupServices = getSelectedPauseCleanupServices(catalog, selectedServiceIds);
+  const effectiveCleanupAction = pauseCleanupAvailable ? resourceCleanupAction : 'delete';
   const showServices = detailsComplete;
   const showInstances = showServices && selectedServiceIds.length > 0;
   const showPermissions =
@@ -477,9 +488,78 @@ export function RequestForm({
           </label>
 
           {resourceCleanupEnabled && (
-            <div className="mt-4">
+            <div className="mt-4 space-y-4">
+              {pauseCleanupAvailable && (
+                <div>
+                  <p className={labelClass}>Cleanup action</p>
+                  <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                    <label
+                      className={`flex cursor-pointer gap-3 rounded-lg border p-4 transition ${
+                        resourceCleanupAction === 'delete'
+                          ? 'border-red-300 bg-red-50 ring-1 ring-red-200'
+                          : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="resourceCleanupAction"
+                        value="delete"
+                        checked={resourceCleanupAction === 'delete'}
+                        onChange={() => onResourceCleanupActionChange('delete')}
+                        className="mt-0.5 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900">Delete resources</span>
+                        <span className="mt-1 block text-xs text-gray-500">
+                          Permanently remove all Azure resources in the lab. Users start fresh and
+                          recreate resources from scratch.
+                        </span>
+                      </span>
+                    </label>
+                    <label
+                      className={`flex cursor-pointer gap-3 rounded-lg border p-4 transition ${
+                        resourceCleanupAction === 'pause'
+                          ? 'border-amber-300 bg-amber-50 ring-1 ring-amber-200'
+                          : 'border-gray-200 bg-white hover:border-gray-300'
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="resourceCleanupAction"
+                        value="pause"
+                        checked={resourceCleanupAction === 'pause'}
+                        onChange={() => onResourceCleanupActionChange('pause')}
+                        className="mt-0.5 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-900">Pause resources</span>
+                        <span className="mt-1 block text-xs text-gray-500">
+                          Stop billable compute without deleting. Lab accounts stay active and users
+                          can resume or recreate resources later.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
+                  {selectedPauseCleanupServices.length > 0 && (
+                    <ul className="mt-3 space-y-1 text-xs text-gray-500">
+                      {selectedPauseCleanupServices.map((key) => (
+                        <li key={key}>
+                          •{' '}
+                          {resourceCleanupAction === 'pause'
+                            ? PAUSE_CLEANUP_ACTION_LABELS[key]
+                            : DELETE_CLEANUP_ACTION_LABELS[key]}
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+
+              <div>
               <label className={labelClass} htmlFor="resourceCleanupIntervalHours">
-                Delete all resources inside lab every (hours)
+                {effectiveCleanupAction === 'pause'
+                  ? 'Pause resources inside lab every (hours)'
+                  : 'Delete all resources inside lab every (hours)'}
               </label>
               <input
                 id="resourceCleanupIntervalHours"
@@ -497,11 +577,22 @@ export function RequestForm({
                 }}
               />
               <p className="mt-2 text-xs text-gray-500">
-                Every {resourceCleanupIntervalHours || '?'} hour(s), all Azure resources (VMs,
-                databases, disks, etc.) created inside the lab will be automatically deleted. Lab
-                accounts and access are kept — users can create new resources again immediately
-                after cleanup.
+                {effectiveCleanupAction === 'pause' ? (
+                  <>
+                    Every {resourceCleanupIntervalHours || '?'} hour(s), selected compute services
+                    will be paused or stopped instead of deleted. Lab accounts and access are kept
+                    — users can resume or recreate resources after cleanup.
+                  </>
+                ) : (
+                  <>
+                    Every {resourceCleanupIntervalHours || '?'} hour(s), all Azure resources (VMs,
+                    databases, disks, etc.) created inside the lab will be automatically deleted. Lab
+                    accounts and access are kept — users can create new resources again immediately
+                    after cleanup.
+                  </>
+                )}
               </p>
+              </div>
             </div>
           )}
         </section>
@@ -608,7 +699,7 @@ export function RequestForm({
             {instanceServices.map((service) => {
               const serviceId = normalizeServiceId(service.id);
               const options = catalogInstances.filter(
-                (instance: AvailableInstance) =>
+                (instance: CatalogInstance) =>
                   normalizeServiceId(instance.serviceId) === serviceId
               );
               const selected = selectedInstances.find(
@@ -625,7 +716,12 @@ export function RequestForm({
                   ) : (
                     <div className="grid gap-2 sm:grid-cols-2">
                       {options.map((instance) => {
-                        const price = instance.dailyPrice ?? instance.daily_price;
+                        const price =
+                          instance.hourlyPrice ??
+                          instance.hourly_price ??
+                          (instance.dailyPrice ?? instance.daily_price) != null
+                            ? Number(instance.dailyPrice ?? instance.daily_price) / 24
+                            : null;
                         const active = selected === instance.option_name;
                         const guideText = formatInstanceGuide(instance.guide);
                         return (
@@ -647,7 +743,7 @@ export function RequestForm({
                             )}
                             {price != null && (
                               <span className="mt-1 block text-xs text-gray-400">
-                                ${Number(price).toFixed(3)}/day
+                                ${Number(price).toFixed(3)}/hr
                               </span>
                             )}
                           </button>

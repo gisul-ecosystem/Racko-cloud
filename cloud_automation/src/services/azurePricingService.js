@@ -196,7 +196,7 @@ const selectBestPrice = (items) => {
   }, null);
 };
 
-const retailPriceToDaily = (retailPrice, unitOfMeasure) => {
+const retailPriceToHourly = (retailPrice, unitOfMeasure) => {
   const price = Number(retailPrice);
   if (!Number.isFinite(price) || price < 0) {
     return 0;
@@ -205,25 +205,27 @@ const retailPriceToDaily = (retailPrice, unitOfMeasure) => {
   const unit = String(unitOfMeasure || '').toLowerCase();
 
   if (unit.includes('hour')) {
-    return price * 24;
-  }
-
-  if (unit.includes('month')) {
-    return price / 30;
-  }
-
-  if (unit.includes('day')) {
     return price;
   }
 
+  if (unit.includes('month')) {
+    return price / (30 * 24);
+  }
+
+  if (unit.includes('day')) {
+    return price / 24;
+  }
+
   if (unit.includes('year')) {
-    return price / 365;
+    return price / (365 * 24);
   }
 
   return price;
 };
 
-const selectLowestDailyPrice = (items) => {
+const retailPriceToDaily = (retailPrice, unitOfMeasure) => retailPriceToHourly(retailPrice, unitOfMeasure) * 24;
+
+const selectLowestHourlyPrice = (items) => {
   if (!Array.isArray(items) || items.length === 0) {
     return 0;
   }
@@ -237,14 +239,16 @@ const selectLowestDailyPrice = (items) => {
   let lowest = Number.POSITIVE_INFINITY;
 
   for (const item of candidates) {
-    const dailyPrice = retailPriceToDaily(item.retailPrice, item.unitOfMeasure);
-    if (dailyPrice < lowest) {
-      lowest = dailyPrice;
+    const hourlyPrice = retailPriceToHourly(item.retailPrice, item.unitOfMeasure);
+    if (hourlyPrice < lowest) {
+      lowest = hourlyPrice;
     }
   }
 
   return Number.isFinite(lowest) ? lowest : 0;
 };
+
+const selectLowestDailyPrice = (items) => selectLowestHourlyPrice(items) * 24;
 
 const fetchRetailPriceItems = async (filter) => {
   const normalizedFilter = String(filter || '').trim();
@@ -469,7 +473,9 @@ module.exports = {
   fetchRetailPriceItems,
   getAzureRetailPrice,
   lookupAzureRetailPrice,
+  retailPriceToHourly,
   retailPriceToDaily,
+  selectLowestHourlyPrice,
   selectLowestDailyPrice,
   formatBillingUnit
 };

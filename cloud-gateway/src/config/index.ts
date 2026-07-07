@@ -31,6 +31,7 @@ const envSchema = z.object({
 
   // Timeouts
   REQUEST_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('10000'),
+  AWS_REQUEST_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('30000'),
 
   // Rate limiting
   RATE_LIMIT_WINDOW_MS: z.string().regex(/^\d+$/).transform(Number).default('900000'),

@@ -158,13 +158,15 @@ async function syncAllUserBudgetSpend() {
   }
 
   let spendMap = {};
+  let bulkSyncError = null;
+
   try {
     spendMap = await getAllRGSpendMapWithRetry();
   } catch (err) {
+    bulkSyncError = err.message;
     logEvent('error', 'subscription_cost_query_failed', {
       error: err.message
     });
-    return;
   }
 
   let successCount = 0;
@@ -172,6 +174,22 @@ async function syncAllUserBudgetSpend() {
 
   for (const user of users) {
     try {
+      if (bulkSyncError) {
+        await db.query(
+          `
+            INSERT INTO user_budget_spend (azure_user_id, request_id, last_sync_attempted_at, sync_error)
+            VALUES ($1, $2, NOW(), $3)
+            ON CONFLICT (azure_user_id)
+            DO UPDATE SET
+              sync_error = EXCLUDED.sync_error,
+              last_sync_attempted_at = NOW()
+          `,
+          [user.id, user.request_id, bulkSyncError]
+        );
+        errorCount++;
+        continue;
+      }
+
       const rgKey = String(user.azure_resource_group_name || '').toLowerCase();
       const entry = spendMap[rgKey] || { cost: 0, currency: 'USD' };
       const spend = entry.cost;
@@ -182,14 +200,16 @@ async function syncAllUserBudgetSpend() {
       await db.query(
         `
           INSERT INTO user_budget_spend
-            (azure_user_id, request_id, current_spend, budget_amount, currency, last_synced_at)
-          VALUES ($1, $2, $3, $4, $5, NOW())
+            (azure_user_id, request_id, current_spend, budget_amount, currency, last_synced_at, sync_error, last_sync_attempted_at)
+          VALUES ($1, $2, $3, $4, $5, NOW(), NULL, NOW())
           ON CONFLICT (azure_user_id)
           DO UPDATE SET
             current_spend = EXCLUDED.current_spend,
             budget_amount = EXCLUDED.budget_amount,
             currency = EXCLUDED.currency,
-            last_synced_at = NOW()
+            last_synced_at = NOW(),
+            sync_error = NULL,
+            last_sync_attempted_at = NOW()
         `,
         [user.id, user.request_id, spend, totalBudget, currency]
       );
@@ -201,7 +221,29 @@ async function syncAllUserBudgetSpend() {
         userId: user.id,
         error: err.message
       });
+
+      try {
+        await db.query(
+          `
+            UPDATE user_budget_spend
+            SET sync_error = $1, last_sync_attempted_at = NOW()
+            WHERE azure_user_id = $2
+          `,
+          [err.message, user.id]
+        );
+      } catch {
+        // Non-fatal if cache row does not exist yet.
+      }
     }
+  }
+
+  if (bulkSyncError) {
+    logEvent('error', 'sync_completed_with_errors', {
+      totalUsers: users.length,
+      errorCount: users.length,
+      error: bulkSyncError
+    });
+    return;
   }
 
   logEvent('info', 'sync_completed', {
@@ -217,13 +259,17 @@ const startBudgetSpendSyncScheduler = () => {
     return scheduledTask;
   }
 
-  scheduledTask = cron.schedule('0 * * * *', () => {
+  scheduledTask = cron.schedule('*/15 * * * *', () => {
     syncAllUserBudgetSpend().catch((err) => {
       logEvent('error', 'sync_error', { error: err.message });
     });
   });
 
-  logEvent('info', 'started');
+  syncAllUserBudgetSpend().catch((err) => {
+    logEvent('error', 'initial_sync_error', { error: err.message });
+  });
+
+  logEvent('info', 'started', { intervalMinutes: 15 });
   return scheduledTask;
 };
 

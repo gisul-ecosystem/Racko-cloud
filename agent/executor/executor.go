@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -52,14 +53,36 @@ func (e *Executor) Handle(job poller.Job) {
 			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
 				log.Printf("[executor] Failed to report: %v", err)
 			}
-			return
+			continue
 		}
 
 		log.Printf("[executor] Installing %s v%s via %s", pkg.Name, pkg.Version, pkg.InstallMethod)
 
 		logs, success := retry.Run(
 			func() (string, error) {
-				return installer.Install(*pkg)
+				// Install with 30-minute timeout
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+				defer cancel()
+
+				resultChan := make(chan struct {
+					logs string
+					err  error
+				}, 1)
+
+				go func() {
+					l, e := installer.Install(*pkg)
+					resultChan <- struct {
+						logs string
+						err  error
+					}{l, e}
+				}()
+
+				select {
+				case result := <-resultChan:
+					return result.logs, result.err
+				case <-ctx.Done():
+					return "", fmt.Errorf("install timeout after 30 minutes")
+				}
 			},
 			func(attempt int, logs string) {
 				combinedLogs += logs
@@ -76,11 +99,11 @@ func (e *Executor) Handle(job poller.Job) {
 		combinedLogs += logs
 
 		if !success {
-			log.Printf("[executor] Job %s failed for %s", job.ID, pkg.Name)
+			log.Printf("[executor] Job %s failed for %s — continuing with remaining software", job.ID, pkg.Name)
 			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
 				log.Printf("[executor] Failed to report 'failed': %v", err)
 			}
-			return
+			continue
 		}
 
 		log.Printf("[executor] %s installed successfully", pkg.Name)

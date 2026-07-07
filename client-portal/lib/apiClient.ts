@@ -200,11 +200,10 @@ export async function apiRequest<T>(
       });
 
       if (!retryRes.ok) {
-        const errorData = (await retryRes.json()) as { message?: string; code?: string };
-        throw new ApiError(errorData.message ?? 'Request failed', retryRes.status, errorData.code);
+        throw await parseApiErrorResponse(retryRes);
       }
 
-      return retryRes.json() as Promise<T>;
+      return parseApiSuccessResponse<T>(retryRes);
     }
 
     // Refresh failed — clear token, fire global event, throw
@@ -214,11 +213,34 @@ export async function apiRequest<T>(
   }
 
   if (!res.ok) {
-    const errorData = (await res.json()) as { message?: string; code?: string };
-    throw new ApiError(errorData.message ?? 'Request failed', res.status, errorData.code);
+    throw await parseApiErrorResponse(res);
   }
 
-  return res.json() as Promise<T>;
+  return parseApiSuccessResponse<T>(res);
+}
+
+async function parseApiErrorResponse(res: Response): Promise<ApiError> {
+  try {
+    const errorData = (await res.json()) as { message?: string; code?: string };
+    return new ApiError(errorData.message ?? 'Request failed', res.status, errorData.code);
+  } catch {
+    const timedOut = res.status === 502 || res.status === 504;
+    return new ApiError(
+      timedOut
+        ? 'The service timed out or is temporarily unavailable. Please try again.'
+        : `Request failed (${res.status}).`,
+      res.status,
+      timedOut ? 'BAD_GATEWAY' : undefined
+    );
+  }
+}
+
+async function parseApiSuccessResponse<T>(res: Response): Promise<T> {
+  try {
+    return (await res.json()) as T;
+  } catch {
+    throw new ApiError('The server returned an invalid response. Please try again.', res.status);
+  }
 }
 
 export class ApiError extends Error {

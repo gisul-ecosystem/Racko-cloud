@@ -18,6 +18,7 @@ export interface IMachine extends Document {
   status: MachineStatus;
   adminId: mongoose.Types.ObjectId;
   lastSeen?: Date;
+  deleted: boolean;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -32,6 +33,7 @@ const machineSchema = new Schema<IMachine>(
     status: { type: String, enum: ['pending', 'online', 'offline'], default: 'pending' },
     adminId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     lastSeen: { type: Date },
+    deleted: { type: Boolean, default: false, index: true },
   },
   {
     strict: true,
