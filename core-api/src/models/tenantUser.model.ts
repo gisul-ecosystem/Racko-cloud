@@ -1,0 +1,71 @@
+import mongoose, { Document, Schema } from 'mongoose';
+
+export type TenantUserRole = 'tenant_admin' | 'tenant_user';
+
+export interface ITenantUser extends Document {
+  _id: mongoose.Types.ObjectId;
+  tenantId: mongoose.Types.ObjectId;
+  email: string;
+  passwordHash: string;
+  role: TenantUserRole;
+  isActive: boolean;
+  isEmailVerified: boolean;
+  resetTokenHash: string | null;
+  resetTokenExpiresAt: Date | null;
+  createdBy: mongoose.Types.ObjectId | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+const tenantUserSchema = new Schema<ITenantUser>(
+  {
+    tenantId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Tenant',
+      required: true,
+      index: true,
+    },
+    email: {
+      type: String,
+      required: true,
+      lowercase: true,
+      trim: true,
+    },
+    passwordHash: {
+      type: String,
+      required: true,
+      select: false,
+    },
+    role: {
+      type: String,
+      enum: ['tenant_admin', 'tenant_user'],
+      required: true,
+    },
+    isActive: {
+      type: Boolean,
+      default: true,
+    },
+    isEmailVerified: {
+      type: Boolean,
+      default: true,
+    },
+    resetTokenHash: {
+      type: String,
+      default: null,
+    },
+    resetTokenExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'TenantUser',
+      default: null,
+    },
+  },
+  { timestamps: true }
+);
+
+tenantUserSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+
+export const TenantUser = mongoose.model<ITenantUser>('TenantUser', tenantUserSchema);

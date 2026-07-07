@@ -1,0 +1,56 @@
+# Dependencies
+node_modules/
+
+# Environment variables — never commit real secrets
+.env
+*.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Build output
+dist/
+!agent/dist/
+build/
+out/
+
+# Next.js
+.next/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+.vscode/launch.json
+.idea/
+
+# TypeScript
+*.tsbuildinfo
+
+# TLS certificates (keep certs/.gitkeep)
+certs/*.pem
+certs/*.crt
+certs/*.key
+
+# Nginx configuration files (environment-specific)
+*.conf
+nginx-*.conf
+
+# Environment example templates (never commit with real values)
+*.env.example
+.env.*.example
+
+# GCP service account keys
+gcp-key.json
+cloud_automation_gcp/gcp-key.json
+
