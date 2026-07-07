@@ -5,6 +5,7 @@ import { logger } from '../../utils/logger';
 import type { AuthenticatedRequest } from '../../types';
 import type { CreateVMDto, VMFilters } from './vm.types';
 import type { GuacamoleProtocol } from '../../utils/guacamoleClient';
+import { adminBillingService } from '../adminBilling/adminBilling.service';
 
 // Consistent response shape — matches all other modules
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
@@ -87,7 +88,61 @@ export class VMController {
         cloneType: dto.cloneType,
       });
 
+      // ── Billing: debit admin wallet if pricing is configured ──────────────
+      // Resolve actual specs (use overrides if provided, else fall back to template details)
+      let cpuCores = dto.cpuCores;
+      let memoryGb = dto.memoryGb;
+      let diskGb = dto.diskGb;
+
+      if (!cpuCores || !memoryGb || !diskGb) {
+        try {
+          const details = await vmService.getTemplateDetails(dto.templateId, req);
+          cpuCores = cpuCores ?? details.cpuCores;
+          memoryGb = memoryGb ?? details.memoryGb;
+          diskGb = diskGb ?? details.diskGb;
+        } catch {
+          // If template details fail, proceed without billing
+        }
+      }
+
+      let debitedAmount = 0;
+      if (cpuCores && memoryGb && diskGb) {
+        const quote = await adminBillingService.quoteVmCreation(
+          dto.templateId,
+          cpuCores,
+          memoryGb,
+          diskGb,
+          dto.count ?? 1,
+          'monthly'
+        );
+
+        if (quote.grandTotal > 0) {
+          // Will throw INSUFFICIENT_BALANCE (402) if wallet is too low
+          await adminBillingService.debitWallet(
+            authReq.user.userId,
+            quote.grandTotal,
+            null   // jobId patched in after creation below
+          );
+          debitedAmount = quote.grandTotal;
+        }
+      }
+      // ─────────────────────────────────────────────────────────────────────
+
       const result = await vmService.createVM(dto, adminId, req);
+
+      // Patch the transaction with the real jobId (best-effort, non-blocking)
+      if (debitedAmount > 0) {
+        void adminBillingService
+          .patchLatestTransactionJobId(authReq.user.userId, result.jobId)
+          .catch((err: unknown) =>
+            logger.warn('Failed to patch admin wallet transaction jobId', {
+              userId: authReq.user.userId,
+              jobId: result.jobId,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          );
+      }
+
       success(res, 'VM creation job started.', { jobId: result.jobId }, 202);
     } catch (error) {
       next(error);

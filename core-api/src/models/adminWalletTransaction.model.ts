@@ -7,7 +7,7 @@ export interface IAdminWalletTransaction extends Document {
   userId: mongoose.Types.ObjectId;          // super_admin who owns the wallet
   type: AdminWalletTransactionType;
   amount: number;
-  reason: 'vm_creation' | 'manual_credit' | 'refund';
+  reason: 'vm_creation' | 'manual_credit' | 'razorpay_topup' | 'refund';
   relatedVmJobId: string | null;            // vmApi createVM jobId
   creditedBy: mongoose.Types.ObjectId | null; // for manual credits — who credited
   balanceAfter: number;
@@ -34,7 +34,7 @@ const adminWalletTransactionSchema = new Schema<IAdminWalletTransaction>(
     },
     reason: {
       type: String,
-      enum: ['vm_creation', 'manual_credit', 'refund'],
+      enum: ['vm_creation', 'manual_credit', 'razorpay_topup', 'refund'],
       required: true,
     },
     relatedVmJobId: {

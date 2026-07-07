@@ -82,17 +82,15 @@ export class AdminBillingService {
   async creditWallet(
     userId: string,
     amount: number,
-    creditedBy: string
+    creditedBy: string,
+    reason: 'manual_credit' | 'razorpay_topup' = 'manual_credit'
   ): Promise<AdminWalletPublic> {
     if (amount <= 0) throw new ValidationError('Amount must be positive.');
     const oid = new mongoose.Types.ObjectId(userId);
 
     const wallet = await AdminWallet.findOneAndUpdate(
       { userId: oid },
-      {
-        $inc: { balance: amount },
-        $setOnInsert: { userId: oid, currency: 'INR' },
-      },
+      { $inc: { balance: amount }, $setOnInsert: { userId: oid, currency: 'INR' } },
       { upsert: true, new: true }
     );
     if (!wallet) throw new AppError('Failed to update wallet.', 500, 'INTERNAL_ERROR');
@@ -101,7 +99,7 @@ export class AdminBillingService {
       userId: oid,
       type: 'credit',
       amount,
-      reason: 'manual_credit',
+      reason,
       relatedVmJobId: null,
       creditedBy: new mongoose.Types.ObjectId(creditedBy),
       balanceAfter: wallet.balance,
@@ -139,6 +137,15 @@ export class AdminBillingService {
     });
 
     return { balance: wallet.balance, currency: wallet.currency };
+  }
+
+  /** Patches the jobId on the most recent unlinked debit transaction for a user. */
+  async patchLatestTransactionJobId(userId: string, jobId: string): Promise<void> {
+    await AdminWalletTransaction.findOneAndUpdate(
+      { userId: new mongoose.Types.ObjectId(userId), type: 'debit', relatedVmJobId: null },
+      { $set: { relatedVmJobId: jobId } },
+      { sort: { createdAt: -1 } }
+    );
   }
 
   async listTransactions(
@@ -184,13 +191,9 @@ export class AdminBillingService {
     if (!doc) {
       return { templatePricing: {}, updatedBy: null, updatedAt: null };
     }
-    // Mongoose Map serialises to plain object via toObject — lean() gives a POJO map
     const raw = doc.templatePricing as unknown as Record<string, TemplateRates> | Map<string, TemplateRates>;
     const pricing: Record<string, TemplateRates> =
-      raw instanceof Map
-        ? Object.fromEntries(raw.entries())
-        : (raw ?? {});
-
+      raw instanceof Map ? Object.fromEntries(raw.entries()) : (raw ?? {});
     return {
       templatePricing: pricing,
       updatedBy: doc.updatedBy ? doc.updatedBy.toString() : null,
@@ -204,12 +207,7 @@ export class AdminBillingService {
   ): Promise<AdminPricingPublic> {
     const doc = await AdminPricingConfig.findOneAndUpdate(
       {},
-      {
-        $set: {
-          templatePricing,
-          updatedBy: new mongoose.Types.ObjectId(updatedBy),
-        },
-      },
+      { $set: { templatePricing, updatedBy: new mongoose.Types.ObjectId(updatedBy) } },
       { upsert: true, new: true }
     );
     const raw = doc.templatePricing as unknown as Record<string, TemplateRates> | Map<string, TemplateRates>;
@@ -243,7 +241,6 @@ export class AdminBillingService {
     const rates = this.getRatesForTemplate(templatePricing, templateId);
 
     if (!rates) {
-      // Return a zero-cost quote — pricing not configured yet
       return {
         cpuCores, memoryGb, diskGb, billingPeriod,
         cpuCost: 0, ramCost: 0, diskCost: 0,
@@ -253,13 +250,10 @@ export class AdminBillingService {
     }
 
     const discounts = rates.billingDiscounts ?? { quarterly: 0, yearly: 0 };
-
     const cpuCost = cpuCores * rates.cpuRatePerCoreMonthly;
     const ramCost = memoryGb * rates.ramRatePerGbMonthly;
     const diskCost = diskGb * rates.diskRatePerGbMonthly;
-    const monthlyPerVm = cpuCost + ramCost + diskCost;
-    const monthlyTotal = monthlyPerVm * count;
-
+    const monthlyTotal = (cpuCost + ramCost + diskCost) * count;
     const { multiplied: total, discountPct } = applyBillingMultiplier(monthlyTotal, billingPeriod, discounts);
 
     return {
