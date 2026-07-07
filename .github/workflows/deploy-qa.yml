@@ -131,7 +131,7 @@ jobs:
       VM_HOST: ${{ secrets.VM_HOST_QA }}
       VM_USER: ${{ secrets.VM_USER_QA }}
       VM_SSH_KEY: ${{ secrets.VM_SSH_KEY_QA }}
-      DEPLOY_PATH: /opt/racko-qa
+      DEPLOY_PATH: /opt/racko
 
     steps:
       - name: Checkout
