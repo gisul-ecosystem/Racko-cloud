@@ -101,10 +101,10 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 	// Start heartbeat
 	go heartbeat.Start(cfg, agentID, done)
 
-	// Start polling loop (blocks until done)
+	// Start WebSocket poller (blocks until done)
 	rep := reporter.New(cfg)
 	exec := executor.New(agentID, cfg, rep)
-	p := poller.New(cfg, agentID, exec.Handle)
+	p := poller.NewWS(cfg, agentID, exec.Handle)
 	p.Start(done)
 
 	log.Println("[agent] Stopped.")
