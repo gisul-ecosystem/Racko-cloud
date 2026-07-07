@@ -19,11 +19,28 @@ wsProxy.on('error', (err) => {
   logger.error('[WS Proxy] WebSocket proxy error', { error: (err as Error).message });
 });
 
+wsProxy.on('proxyReqWs', (_proxyReq, req) => {
+  logger.info('[WS Proxy] WebSocket request proxied to core-api', { url: req.url });
+
+});
+
+wsProxy.on('open', () => {
+  logger.info('[WS Proxy] WebSocket connection opened to core-api');
+});
+
+wsProxy.on('close', (_res, socket) => {
+  logger.info('[WS Proxy] WebSocket connection closed');
+  socket.end();
+});
+
 server.on('upgrade', (req, socket, head) => {
   const url = req.url ?? '';
+  logger.info('[WS Proxy] Upgrade request received', { url, remoteAddress: req.socket.remoteAddress });
   if (url.startsWith('/api/v1/agent/connect')) {
+    logger.info('[WS Proxy] Forwarding WebSocket upgrade to core-api', { url, target: config.CORE_API_URL });
     wsProxy.ws(req, socket, head);
   } else {
+    logger.warn('[WS Proxy] Rejecting WebSocket upgrade — unknown path', { url });
     socket.destroy();
   }
 });
