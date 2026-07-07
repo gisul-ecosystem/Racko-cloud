@@ -36,11 +36,12 @@ async function orgAdminRequest<T>(path: string, options: RequestInit = {}): Prom
       throw new AwsOrgAdminError(err.message, err.status, classifyError(err.status));
     }
 
-    throw new AwsOrgAdminError(
-      'Unable to reach the AWS organization admin service. Check your connection and try again.',
-      0,
-      'network'
-    );
+    const message =
+      err instanceof Error && err.message
+        ? `Unable to reach the AWS organization admin service (${err.message}). Check your connection and try again.`
+        : 'Unable to reach the AWS organization admin service. Check your connection and try again.';
+
+    throw new AwsOrgAdminError(message, 0, 'network');
   }
 }
 

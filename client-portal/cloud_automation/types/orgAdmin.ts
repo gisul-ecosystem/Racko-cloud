@@ -50,6 +50,38 @@ export interface OrgAdminRequestSummary {
   resourceGroupCount: number;
 }
 
+export interface OrgAdminLiveAzureResource {
+  name: string;
+  type: string;
+  fullType?: string | null;
+  location?: string | null;
+  id?: string | null;
+  provisioningState: string;
+  createdAt?: string | null;
+  tags?: Record<string, string>;
+}
+
+export interface OrgAdminUserSession {
+  id: number;
+  loginAt: string;
+  logoutAt: string | null;
+  minutesUsed: number | null;
+  endedReason?: string | null;
+  ipAddress?: string | null;
+  status: string;
+  isActive: boolean;
+}
+
+export interface OrgAdminCleanupLog {
+  id: number;
+  ranAt: string;
+  triggeredBy: string;
+  totalDeleted: number;
+  status: string;
+  error?: string | null;
+  details?: unknown;
+}
+
 export interface OrgAdminLiveResource {
   serviceId: number;
   name: string;
@@ -87,6 +119,9 @@ export interface OrgAdminRequestDetail {
   enforceInAzure: boolean;
   resourceCleanupEnabled?: boolean;
   resourceCleanupIntervalHours?: number | null;
+  resourceCleanupAction?: 'delete' | 'pause';
+  resourceCleanupLastRanAt?: string | null;
+  resourceCleanupNextRunAt?: string | null;
   cleanupEnabled?: boolean;
   cleanupIntervalHours?: number | null;
   createdAt: string;
@@ -109,6 +144,7 @@ export interface OrgAdminUser {
   dailyLimitReached?: boolean;
   sessionExpiresAt?: string | null;
   totalSessions?: number;
+  totalSessionsToday?: number;
   hasActiveSession: boolean;
   sessionActive?: boolean;
   sessionStartedAt?: string | null;
@@ -117,14 +153,25 @@ export interface OrgAdminUser {
   roles: OrgAdminRole[];
   liveResourceCount?: number;
   resourceCount?: number;
-  totalMinutesSpent?: number;
+  liveResources?: OrgAdminLiveAzureResource[];
   todayMinutes?: number;
   lifetimeMinutes?: number;
   todayFormatted?: string;
   lifetimeFormatted?: string;
   activeSessionMinutes?: number;
+  liveSessionMins?: number;
   hourlyResourceRate?: number;
+  hourlyRate?: number;
   liveCost?: number;
+  closedSessionCost?: number;
+  totalCostToday?: number;
+  liveCostRate?: string;
+  isOnline?: boolean;
+  lastSeenAt?: string | null;
+  peakResourceCount?: number;
+  syncError?: string | null;
+  lastSyncAttemptedAt?: string | null;
+  totalMinutesSpent?: number;
   azureAccountEnabled?: boolean;
   budgetExceeded?: boolean;
   perUserBudgetUsd?: number | null;
@@ -133,6 +180,7 @@ export interface OrgAdminUser {
   totalBudget?: number | null;
   costCurrency?: string;
   lastCostSyncedAt?: string | null;
+  storedMinsToday?: number;
   cleanupDisabled?: boolean;
   cleanupIntervalOverride?: number | null;
 }
@@ -153,6 +201,9 @@ export interface OrgAdminUserAzureCost {
   sharePercent: number | null;
   dataFreshnessNote: string;
   queriedAt: string;
+  fromCache?: boolean;
+  rateLimited?: boolean;
+  cacheAge?: number | null;
 }
 
 export interface OrgAdminUserAzureCostResponse {
@@ -248,4 +299,42 @@ export interface OrgAdminDailyUsageResponse {
 export interface OrgAdminAzureRolesResponse {
   success: boolean;
   data: OrgAdminAzureRoleOption[];
+}
+
+export interface OrgAdminCustomRoleDefinition {
+  id: number;
+  name: string;
+  description: string | null;
+  permissions: string[];
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface OrgAdminCustomRoleAssignment {
+  id: number;
+  request_id: number;
+  azure_user_id: string;
+  username: string;
+  custom_role_def_id: number | null;
+  custom_role_name: string;
+  azure_role_def_id: string | null;
+  permissions: string[];
+  assigned_by: string | null;
+  assigned_at: string;
+  revoked_at: string | null;
+  status: string;
+}
+
+export interface OrgAdminCustomService {
+  id: number;
+  name: string;
+  description: string | null;
+  category: string;
+  price_per_user: number;
+  icon: string;
+  active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }

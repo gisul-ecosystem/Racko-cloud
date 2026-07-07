@@ -240,6 +240,28 @@ test('validateRequestPayload rejects invalid usage window times', () => {
   );
 });
 
+test('validateRequestPayload accepts resourceCleanupAction pause', () => {
+  assert.doesNotThrow(() =>
+    validateRequestPayload({
+      ...validPayload,
+      resourceCleanupEnabled: true,
+      resourceCleanupIntervalHours: 2,
+      resourceCleanupAction: 'pause'
+    })
+  );
+});
+
+test('validateRequestPayload rejects invalid resourceCleanupAction', () => {
+  expectValidationError(
+    () =>
+      validateRequestPayload({
+        ...validPayload,
+        resourceCleanupAction: 'archive'
+      }),
+    "resourceCleanupAction must be 'delete' or 'pause'"
+  );
+});
+
 test('getZonedParts resolves weekday in timezone', () => {
   const parts = getZonedParts(new Date('2026-06-15T15:00:00Z'), 'UTC');
   assert.equal(parts.weekday, 'monday');

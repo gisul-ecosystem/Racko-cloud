@@ -67,12 +67,13 @@ function resolveConfig(status: string) {
 
 export function RequestStatusBadge({ status }: { status: string }) {
   const cfg = resolveConfig(status);
+  const isActive = status.trim().toLowerCase() === 'active';
 
   return (
     <span
       className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cfg.badge}`}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot} ${isActive ? 'animate-pulse' : ''}`} />
       {cfg.label}
     </span>
   );

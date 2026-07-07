@@ -1,4 +1,72 @@
-import type { CatalogInstance } from '../types/catalog';
+import type { CatalogInstance, CatalogService, ServiceCatalogResponse } from '../types/catalog';
+
+export type PauseCleanupServiceKey = 'vm' | 'sql' | 'aks' | 'app_service' | 'cosmos';
+
+const PAUSE_CLEANUP_SERVICE_MATCHERS: { key: PauseCleanupServiceKey; pattern: RegExp }[] = [
+  { key: 'vm', pattern: /virtual machine|\bvm\b/i },
+  { key: 'sql', pattern: /sql database|azure sql/i },
+  { key: 'aks', pattern: /kubernetes service|\baks\b/i },
+  { key: 'app_service', pattern: /app service/i },
+  { key: 'cosmos', pattern: /cosmos/i },
+];
+
+export const PAUSE_CLEANUP_ACTION_LABELS: Record<PauseCleanupServiceKey, string> = {
+  vm: 'Virtual Machines — deallocate (not delete)',
+  sql: 'Azure SQL — pause serverless databases',
+  aks: 'AKS — stop node pools / scale to 0',
+  app_service: 'App Service — stop web apps',
+  cosmos: 'Cosmos DB — kept (no Azure pause action)',
+};
+
+export const DELETE_CLEANUP_ACTION_LABELS: Record<PauseCleanupServiceKey, string> = {
+  vm: 'Virtual Machines — permanently deleted',
+  sql: 'Azure SQL — databases and servers deleted',
+  aks: 'AKS — clusters and node pools deleted',
+  app_service: 'App Service — web apps deleted',
+  cosmos: 'Cosmos DB — accounts deleted',
+};
+
+export function getServicePauseCleanupKey(
+  service: Pick<CatalogService, 'name' | 'service_name'>
+): PauseCleanupServiceKey | null {
+  const label = `${service.service_name || ''} ${service.name || ''}`;
+
+  for (const { key, pattern } of PAUSE_CLEANUP_SERVICE_MATCHERS) {
+    if (pattern.test(label)) {
+      return key;
+    }
+  }
+
+  return null;
+}
+
+export function getSelectedPauseCleanupServices(
+  catalog: ServiceCatalogResponse,
+  selectedServiceIds: number[]
+): PauseCleanupServiceKey[] {
+  const keys = new Set<PauseCleanupServiceKey>();
+
+  for (const serviceId of selectedServiceIds) {
+    const service = catalog.services.find(
+      (entry) => normalizeServiceId(entry.id) === normalizeServiceId(serviceId)
+    );
+    if (!service) continue;
+
+    const key = getServicePauseCleanupKey(service);
+    if (key) {
+      keys.add(key);
+    }
+  }
+
+  return Array.from(keys);
+}
+
+export function supportsPauseCleanup(
+  catalog: ServiceCatalogResponse,
+  selectedServiceIds: number[]
+): boolean {
+  return getSelectedPauseCleanupServices(catalog, selectedServiceIds).length > 0;
+}
 
 export function buildInstanceSelectionsParam(
   instances: { serviceId: number; instanceOption: string }[]

@@ -23,6 +23,7 @@ const allowedRequestFields = new Set([
   'perUserBudgetUsd',
   'resourceCleanupEnabled',
   'resourceCleanupIntervalHours',
+  'resourceCleanupAction',
   'usageWindows'
 ]);
 
@@ -49,6 +50,7 @@ const validateRequestPayload = (body) => {
     perUserBudgetUsd,
     resourceCleanupEnabled,
     resourceCleanupIntervalHours,
+    resourceCleanupAction,
     usageWindows
   } = body;
 
@@ -159,6 +161,12 @@ const validateRequestPayload = (body) => {
       'Cleanup interval is required when resource cleanup is enabled.',
       400
     );
+  }
+
+  if (resourceCleanupAction !== undefined) {
+    if (resourceCleanupAction !== 'delete' && resourceCleanupAction !== 'pause') {
+      throw new AppError("resourceCleanupAction must be 'delete' or 'pause' when provided.", 400);
+    }
   }
 
   if (usageWindows !== undefined) {
