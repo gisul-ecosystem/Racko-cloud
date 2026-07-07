@@ -136,12 +136,6 @@ jobs:
             goos: windows
             goarch: amd64
             ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-dev.racko.ai -H windowsgui'
-          - os: macos-latest
-            platform: macos
-            output: racko-agent-mac
-            goos: darwin
-            goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-dev.racko.ai'
 
     steps:
       - name: Checkout
@@ -214,11 +208,8 @@ jobs:
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
-          # macOS
-          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
-            agent-artifacts/agent-macos/racko-agent-mac \
-            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-mac"
-          echo "All agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
+          # macOS binary removed — not needed
+          echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
 
   deploy:
     name: Deploy to Dev VM
