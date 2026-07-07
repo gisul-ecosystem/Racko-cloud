@@ -13,7 +13,7 @@ name: Build & Deploy QA via SSH
 
 on:
   push:
-    branches: [qa]
+    branches: [QA]
   workflow_dispatch:
 
 env:
