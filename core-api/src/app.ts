@@ -43,6 +43,7 @@ import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpirySchedul
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
+import adminBillingRoutes from './modules/adminBilling/adminBilling.routes';
 
 const app = express();
 
@@ -166,6 +167,7 @@ app.use('/api/v1/agent', agentRouter);
 app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 app.use('/api/v1/ip-pool', ipPoolRoutes);
 app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
+app.use('/api/v1/admin-billing', adminBillingRoutes);
 
 // Start background services
 startNodeMonitoring();
