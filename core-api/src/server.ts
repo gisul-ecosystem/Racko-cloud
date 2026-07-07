@@ -19,6 +19,10 @@ async function bootstrap(): Promise<void> {
     });
   });
 
+  // Attach WebSocket server for agent connections
+  const { wsManager } = await import('./modules/machine-manager/websocket/wsManager');
+  wsManager.attach(server);
+
   // Graceful shutdown
   const shutdown = async (signal: string): Promise<void> => {
     logger.info(`${signal} received — shutting down gracefully`);
