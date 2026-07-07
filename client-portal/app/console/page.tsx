@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, Globe, Monitor, Server, BookOpen, Wallet } from 'lucide-react';
+import { Cloud, Globe, Server, BookOpen, Wallet } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
@@ -64,6 +64,15 @@ const services = [
     description: 'Guides and reference for VPS, Elastic Server, AWS, and Azure services',
     available: true,
   },
+  // Machine Manager — commented out until implementation is ready
+  // {
+  //   id: 'machine-manager',
+  //   name: 'Machine Manager',
+  //   href: '/console/machine-manager',
+  //   icon: Monitor,
+  //   description: 'Install and manage software on any machine',
+  //   available: true,
+  // },
 ] as const;
 
 export default function ConsolePage() {
