@@ -132,7 +132,8 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
         await adminBillingService.creditWallet(
           notes['userId'],
           payment.amount / 100,
-          notes['userId']   // creditedBy = self (razorpay payment)
+          notes['userId'],   // creditedBy = self (razorpay payment)
+          'razorpay_topup'
         );
         logger.info('Admin wallet credited successfully via Razorpay', {
           eventId,
