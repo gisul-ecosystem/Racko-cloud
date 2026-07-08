@@ -147,6 +147,23 @@ class MachineManagerService {
 
       // One job per software item — enables per-software status tracking
       for (const softwareId of softwareObjectIds) {
+        // Deduplication: return existing job if one is already pending or installing
+        const existing = await JobModel.findOne({
+          machineId: new mongoose.Types.ObjectId(machineId),
+          softwareIds: [softwareId],
+          status: { $in: ['pending', 'installing'] },
+        });
+
+        if (existing) {
+          logger.info('[MachineManager] Duplicate job prevented — returning existing job', {
+            jobId: existing._id.toString(),
+            machineId,
+            softwareId: softwareId.toString(),
+          });
+          jobs.push(this.toJobResponse(existing));
+          continue;
+        }
+
         const doc = await JobModel.create({
           machineId: new mongoose.Types.ObjectId(machineId),
           softwareIds: [softwareId],

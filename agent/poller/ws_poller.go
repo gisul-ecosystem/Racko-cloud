@@ -96,7 +96,6 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 	conn, resp, err := dialer.Dial(u.String(), nil)
 	if err != nil {
 		if resp != nil && resp.StatusCode == 410 {
-			// 410 Gone — agent deleted from platform
 			return &permanentError{msg: "agent deleted (410)"}
 		}
 		return fmt.Errorf("websocket dial: %w", err)
@@ -105,16 +104,20 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 
 	log.Println("[ws-poller] Connected")
 
-	// Start ping/pong handler
+	// Respond to server pings — reset read deadline on each pong
 	conn.SetPongHandler(func(string) error {
 		log.Println("[ws-poller] Pong received")
-		return conn.SetReadDeadline(time.Now().Add(90 * time.Second))
+		return conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 	})
 
-	// Initial read deadline
-	if err := conn.SetReadDeadline(time.Now().Add(90 * time.Second)); err != nil {
+	// Initial read deadline — generous to handle long installs
+	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Minute)); err != nil {
 		return fmt.Errorf("set read deadline: %w", err)
 	}
+
+	// Active ping ticker — keeps connection alive during long installs
+	pingTicker := time.NewTicker(30 * time.Second)
+	defer pingTicker.Stop()
 
 	// Read messages in a loop
 	errChan := make(chan error, 1)
@@ -137,23 +140,29 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 					continue
 				}
 				log.Printf("[ws-poller] Received job id=%s", job.ID)
-				go p.handler(job) // handle job in background
+				go p.handler(job)
 			}
 		}
 	}()
 
-	// Wait for error or done signal
-	select {
-	case err := <-errChan:
-		closeErr := parseCloseError(err)
-		if closeErr != nil && closeErr.Code == 4010 {
-			// 4010 — agent deleted, stop retrying
-			return &permanentError{msg: fmt.Sprintf("agent deleted (close code %d)", closeErr.Code)}
+	// Wait for error, ping tick, or done signal
+	for {
+		select {
+		case err := <-errChan:
+			closeErr := parseCloseError(err)
+			if closeErr != nil && closeErr.Code == 4010 {
+				return &permanentError{msg: fmt.Sprintf("agent deleted (close code %d)", closeErr.Code)}
+			}
+			return fmt.Errorf("read error: %w", err)
+		case <-pingTicker.C:
+			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+				return fmt.Errorf("ping failed: %w", err)
+			}
+			log.Println("[ws-poller] Ping sent")
+		case <-done:
+			log.Println("[ws-poller] Closing connection (done signal)")
+			return conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		}
-		return fmt.Errorf("read error: %w", err)
-	case <-done:
-		log.Println("[ws-poller] Closing connection (done signal)")
-		return conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	}
 }
 

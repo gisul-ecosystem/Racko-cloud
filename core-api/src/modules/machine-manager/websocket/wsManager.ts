@@ -173,12 +173,13 @@ class WSManager {
 
     conn.ws.ping();
 
-    // If no pong within 60s, close the connection
+    // If no pong within 5 minutes, close the connection.
+    // Long installs (e.g. Postman, large software) can take several minutes.
     conn.pongDeadlineTimer = setTimeout(() => {
       logger.warn('[WSManager] Pong timeout, closing connection', { agentId });
       conn.ws.terminate();
       this.handleDisconnect(agentId, 1006, 'pong timeout');
-    }, 60 * 1000);
+    }, 5 * 60 * 1000);
   }
 
   private async handleMessage(agentId: string, data: WebSocket.RawData): Promise<void> {
