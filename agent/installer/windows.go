@@ -135,7 +135,23 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 		// Fallback: try choco from PATH
 		out2, err2 := runCmd("choco", args...)
 		if err2 != nil {
-			return installLog + out + out2, fmt.Errorf("choco install failed: %w", err2)
+			combined := installLog + out + out2
+			// Idempotency: choco can exit non-zero when the package is already installed.
+			// Treat these as success rather than a failure.
+			outLower := strings.ToLower(combined)
+			alreadyInstalledSignals := []string{
+				"already installed",
+				"already exists",
+				"package already installed",
+				"nothing to install",
+				"is already installed",
+			}
+			for _, signal := range alreadyInstalledSignals {
+				if strings.Contains(outLower, signal) {
+					return combined, nil
+				}
+			}
+			return combined, fmt.Errorf("choco install failed: %w", err2)
 		}
 		return installLog + out2, nil
 	}
