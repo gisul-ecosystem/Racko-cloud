@@ -28,10 +28,15 @@ interface OrgAdminRequestDetailDrawerProps {
   onRetry: () => void;
   onSelectUser: (userId: number | null) => void;
   onForceLogout: (userId: number) => Promise<boolean>;
+  onUnblock?: (userId: number) => Promise<boolean>;
+  onTriggerCleanup?: (userId: number) => Promise<boolean>;
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   onDeleteUser: (userId: number) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<OrgAdminMonitoringResponse | null>;
-  onFetchAzureCost: (userId: number) => Promise<OrgAdminUserAzureCost | null>;
+  onFetchAzureCost: (userId: number, options?: { refresh?: boolean }) => Promise<OrgAdminUserAzureCost | null>;
+  lastUpdatedAt?: Date | null;
+  isRefreshing?: boolean;
+  hasActiveUsers?: boolean;
 }
 
 export function OrgAdminRequestDetailDrawer({
@@ -48,10 +53,15 @@ export function OrgAdminRequestDetailDrawer({
   onRetry,
   onSelectUser,
   onForceLogout,
+  onUnblock,
+  onTriggerCleanup,
   onUpdateRoles,
   onDeleteUser,
   fetchUserMonitoring,
   onFetchAzureCost,
+  lastUpdatedAt = null,
+  isRefreshing = false,
+  hasActiveUsers = false,
 }: OrgAdminRequestDetailDrawerProps) {
   const selectedUser = users.find((user) => user.id === selectedUserId) ?? null;
 
@@ -130,8 +140,13 @@ export function OrgAdminRequestDetailDrawer({
                   loading={loading}
                   selectedUserId={selectedUserId}
                   saving={saving}
+                  isRefreshing={isRefreshing}
+                  lastUpdatedAt={lastUpdatedAt}
+                  hasActiveUsers={hasActiveUsers}
                   onSelect={onSelectUser}
                   onForceLogout={onForceLogout}
+                  onUnblock={onUnblock}
+                  onTriggerCleanup={onTriggerCleanup}
                   onUpdateRoles={onUpdateRoles}
                   fetchUserMonitoring={fetchUserMonitoring}
                   onFetchAzureCost={onFetchAzureCost}

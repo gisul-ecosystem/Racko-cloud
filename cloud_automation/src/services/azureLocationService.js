@@ -1,8 +1,8 @@
 const axios = require('axios');
 const { ensureAzureManagementAccess } = require('../config/azure');
 const {
-  getRegionalDailyPricesForServices,
-  getPortalDailyFees
+  getRegionalHourlyPricesForServices,
+  getPortalHourlyFees
 } = require('./estimatePricingService');
 const AppError = require('../utils/AppError');
 const {
@@ -248,19 +248,19 @@ const getLocationsForSelectedServices = async (
     instancesByServiceId,
     selectedInstancesByServiceId
   );
-  const [regionalDailyPrices, portalDailyFee] = await Promise.all([
-    getRegionalDailyPricesForServices(
+  const [regionalHourlyPrices, portalHourlyFee] = await Promise.all([
+    getRegionalHourlyPricesForServices(
       services,
       instancesByServiceId,
       selectedInstancesByServiceId
     ),
-    Promise.resolve(getPortalDailyFees(services))
+    Promise.resolve(getPortalHourlyFees(services))
   ]);
 
   return eligibleLocations
     .map((location) => {
-      const infraPrice = Number(regionalDailyPrices.get(location.arm_region_name) || 0);
-      const basePrice = infraPrice + portalDailyFee;
+      const infraPrice = Number(regionalHourlyPrices.get(location.arm_region_name) || 0);
+      const basePrice = infraPrice + portalHourlyFee;
 
       return {
         ...location,

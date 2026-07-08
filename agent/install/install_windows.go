@@ -10,10 +10,18 @@ import (
 	"github.com/racko-ai/agent/config"
 )
 
-// ShouldSelfInstall on Windows returns true when not running as a service.
-// The winsvc package handles service detection separately; here we return true
-// so that double-clicking the binary launches the Inno Setup installer.
+// ShouldSelfInstall on Windows returns true only when config.json does NOT
+// already exist. If config is present, the agent is already installed and
+// should proceed to the agent loop rather than launching the installer GUI.
 func ShouldSelfInstall() bool {
+	// Check current working directory for config.json (service runs from install dir)
+	if _, err := os.Stat("config.json"); err == nil {
+		return false // already installed, skip GUI
+	}
+	// Also check the default install path
+	if _, err := os.Stat(`C:\ProgramData\racko-agent\config.json`); err == nil {
+		return false // already installed, skip GUI
+	}
 	return true
 }
 

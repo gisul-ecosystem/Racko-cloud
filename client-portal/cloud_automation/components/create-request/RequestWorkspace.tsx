@@ -27,6 +27,7 @@ import {
   defaultEndDate,
   defaultStartDate,
   normalizeServiceId,
+  supportsPauseCleanup,
 } from '../../utils/requestForm';
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
@@ -116,6 +117,7 @@ function validateForm(input: {
   usageWindows: UsageWindow[];
   resourceCleanupEnabled: boolean;
   resourceCleanupIntervalHours?: number;
+  resourceCleanupAction?: 'delete' | 'pause';
   perUserBudgetUsd?: number;
 }): string[] {
   const errors: string[] = [];
@@ -213,6 +215,7 @@ export function RequestWorkspace() {
   const [resourceCleanupIntervalHours, setResourceCleanupIntervalHours] = useState<
     number | undefined
   >(undefined);
+  const [resourceCleanupAction, setResourceCleanupAction] = useState<'delete' | 'pause'>('delete');
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -242,6 +245,17 @@ export function RequestWorkspace() {
     [catalog, selectedServiceIds, selectedInstances, manualRoles]
   );
 
+  const pauseCleanupAvailable = useMemo(
+    () => (catalog ? supportsPauseCleanup(catalog, selectedServiceIds) : false),
+    [catalog, selectedServiceIds]
+  );
+
+  useEffect(() => {
+    if (!pauseCleanupAvailable && resourceCleanupAction === 'pause') {
+      setResourceCleanupAction('delete');
+    }
+  }, [pauseCleanupAvailable, resourceCleanupAction]);
+
   useEffect(() => {
     if (!locations.some((entry) => entry.arm_region_name === location)) {
       setLocation('');
@@ -258,6 +272,7 @@ export function RequestWorkspace() {
       endDate,
       selectedInstances,
       selectedRoles,
+      costingMode,
     };
   }, [
     catalog,
@@ -268,6 +283,7 @@ export function RequestWorkspace() {
     endDate,
     selectedInstances,
     selectedRoles,
+    costingMode,
   ]);
 
   const { pricing, loading: pricingLoading, error: pricingError } = usePricingEstimate(pricingPayload);
@@ -340,7 +356,12 @@ export function RequestWorkspace() {
         costingMode,
         resourceCleanupEnabled,
         ...(resourceCleanupEnabled && resourceCleanupIntervalHours
-          ? { resourceCleanupIntervalHours }
+          ? {
+              resourceCleanupIntervalHours,
+              ...(pauseCleanupAvailable && resourceCleanupAction === 'pause'
+                ? { resourceCleanupAction: 'pause' as const }
+                : {}),
+            }
           : {}),
         ...(perUserBudgetUsd !== undefined ? { perUserBudgetUsd } : {}),
         ...(usageWindows.length > 0
@@ -468,6 +489,8 @@ export function RequestWorkspace() {
               onResourceCleanupEnabledChange={setResourceCleanupEnabled}
               resourceCleanupIntervalHours={resourceCleanupIntervalHours}
               onResourceCleanupIntervalHoursChange={setResourceCleanupIntervalHours}
+              resourceCleanupAction={resourceCleanupAction}
+              onResourceCleanupActionChange={setResourceCleanupAction}
               perUserBudgetUsd={perUserBudgetUsd}
               onPerUserBudgetUsdChange={setPerUserBudgetUsd}
               adminAccessOpen={adminAccessOpen}
@@ -487,7 +510,7 @@ export function RequestWorkspace() {
             <PricingSummary
               totalPrice={totalPrice}
               currency={pricing?.currency}
-              duration={pricing?.duration}
+              durationHours={pricing?.durationHours}
               accountCount={accountCount}
               loading={pricingLoading}
               error={pricingError}

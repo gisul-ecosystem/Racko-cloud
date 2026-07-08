@@ -10,6 +10,7 @@ const {
   roleAssignmentIdFromSeed
 } = require('../provisioners/azure/roleProvisioner');
 const { isPerUserCosting } = require('../utils/costingMode');
+const { getDependencyRolesForServices } = require('./serviceRoleDependencyService');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -33,6 +34,73 @@ const getAzureUsersForRequest = async (client, requestId) => {
   return result.rows;
 };
 
+const getSelectedServicesForRequest = async (client, requestId) => {
+  const result = await client.query(
+    `SELECT DISTINCT rs.service_id, s.name AS service_name
+     FROM request_services rs
+     INNER JOIN services s ON s.id = rs.service_id
+     WHERE rs.request_id = $1
+     ORDER BY s.name`,
+    [requestId]
+  );
+
+  return result.rows.map((row) => ({
+    serviceId: Number(row.service_id),
+    serviceName: row.service_name
+  }));
+};
+
+const augmentRolesWithDependencies = async (client, roles, requestId) => {
+  const selectedServices = await getSelectedServicesForRequest(client, requestId);
+  if (selectedServices.length === 0) {
+    return roles;
+  }
+
+  const serviceIdByName = new Map(selectedServices.map((s) => [s.serviceName, s.serviceId]));
+  const existingRoleKeys = new Set(roles.map((r) => `${r.serviceId}:${r.azureRole.toLowerCase()}`));
+  const augmented = [...roles];
+
+  const dependencies = await getDependencyRolesForServices(
+    client,
+    selectedServices.map((s) => s.serviceName)
+  );
+
+  for (const dep of dependencies) {
+    const serviceId = serviceIdByName.get(dep.serviceName);
+    if (!serviceId) {
+      continue;
+    }
+
+    const key = `${serviceId}:${dep.role.toLowerCase()}`;
+    if (existingRoleKeys.has(key)) {
+      continue;
+    }
+
+    existingRoleKeys.add(key);
+    augmented.push({
+      serviceId,
+      azureRole: dep.role,
+      entraGroupId: null,
+      assignmentMode: 'rbac'
+    });
+    console.log(
+      `[roleProvision] Adding dependency role "${dep.role}" for ${dep.serviceName} — ${dep.reason}`
+    );
+  }
+
+  return augmented;
+};
+
+const backfillRequestServiceRoles = async (client, requestId, roles) => {
+  for (const role of roles) {
+    await client.query(
+      `INSERT INTO request_service_roles (request_id, service_id, azure_role)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (request_id, service_id, azure_role) DO NOTHING`,
+      [requestId, role.serviceId, role.azureRole]
+    );
+  }
+};
 const getSelectedRolesForRequest = async (client, requestId) => {
   const result = await client.query(
     `SELECT
@@ -176,10 +244,13 @@ const provisionRolesForRequest = async (requestId) => {
     const request = await getRequestContext(db, requestId);
     if (!request) throw new AppError('Request not found', 404);
 
-    const [users, roles] = await Promise.all([
+    const [users, baseRoles] = await Promise.all([
       getAzureUsersForRequest(db, requestId),
       getSelectedRolesForRequest(db, requestId)
     ]);
+
+    const roles = await augmentRolesWithDependencies(db, baseRoles, requestId);
+    await backfillRequestServiceRoles(db, requestId, roles);
 
     if (users.length === 0 || roles.length === 0) {
       return {
@@ -348,14 +419,21 @@ const provisionRolesForRequest = async (requestId) => {
     return {
       success: true,
       usersProcessed: users.length,
-      rolesAssigned: pendingDbInserts.length
+      rolesAssigned: pendingDbInserts.length,
+      rolesProvisioned: [...new Set(roles.map((r) => r.azureRole))]
     };
   } catch (error) {
     throw error;
   }
 };
 
+const reprovisionRolesForRequest = async (requestId) => {
+  console.log(`[reprovisionRoles] Re-provisioning roles for request ${requestId}`);
+  return provisionRolesForRequest(requestId);
+};
+
 module.exports = {
   getUserRoleAssignmentsForRequest,
-  provisionRolesForRequest
+  provisionRolesForRequest,
+  reprovisionRolesForRequest
 };

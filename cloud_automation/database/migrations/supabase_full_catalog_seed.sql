@@ -198,6 +198,26 @@ JOIN (
     ('Azure AI Document Intelligence', 'Cognitive Services User', false, 'data_plane')
 ) AS r(service_name, azure_role, auto_assign, role_purpose) ON s.name = r.service_name;
 
+-- Dependency roles (auto-assigned when parent service is selected)
+INSERT INTO public.service_role_mapping (service_id, azure_role, role_type, scope_type, auto_assign, role_purpose, created_at)
+SELECT s.id, r.azure_role, 'builtin', 'resource_group', true, 'dependency', NOW()
+FROM public.services s
+JOIN (
+  VALUES
+    ('Azure Virtual Machines (VMs)',        'Network Contributor'),
+    ('Azure Kubernetes Service (AKS)',       'Network Contributor'),
+    ('Azure Kubernetes Service (AKS)',       'Virtual Machine Contributor'),
+    ('Azure Application Gateway',           'Network Contributor'),
+    ('Azure CDN',                           'Network Contributor'),
+    ('Azure Machine Learning',              'Network Contributor'),
+    ('Azure Machine Learning',              'Storage Account Contributor'),
+    ('Azure Machine Learning',              'Storage Blob Data Contributor'),
+    ('Azure AI Foundry',                    'Storage Account Contributor'),
+    ('Azure AI Foundry',                    'Storage Blob Data Contributor'),
+    ('Azure ExpressRoute',                  'Network Contributor')
+) AS r(service_name, azure_role) ON s.name = r.service_name
+ON CONFLICT DO NOTHING;
+
 -- ============================================================
 -- STEP 5: Instance options
 -- ============================================================

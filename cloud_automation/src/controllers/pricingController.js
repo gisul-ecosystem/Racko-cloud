@@ -10,7 +10,8 @@ const allowedPricingFields = new Set([
   'startDate',
   'endDate',
   'selectedInstances',
-  'selectedRoles'
+  'selectedRoles',
+  'costingMode'
 ]);
 const allowedRetailPricingQueryParams = new Set(['service', 'region', 'sku']);
 const DEFAULT_LOCATION = 'eastus';
@@ -102,7 +103,8 @@ const calculatePricing = async (req, res, next) => {
       startDate: String(req.body.startDate || DEFAULT_START_DATE()),
       endDate: String(req.body.endDate || DEFAULT_END_DATE()),
       selectedInstances: Array.isArray(req.body.selectedInstances) ? req.body.selectedInstances : [],
-      selectedRoles: Array.isArray(req.body.selectedRoles) ? req.body.selectedRoles : []
+      selectedRoles: Array.isArray(req.body.selectedRoles) ? req.body.selectedRoles : [],
+      costingMode: String(req.body.costingMode || 'shared')
     };
 
     console.log(

@@ -13,8 +13,8 @@ const {
 } = require('../utils/instancePolicyRules');
 const {
   fetchRetailPriceItems,
-  retailPriceToDaily,
-  selectLowestDailyPrice
+  retailPriceToHourly,
+  selectLowestHourlyPrice
 } = require('./azurePricingService');
 
 const ROLE_PRICE_MARKUP = 0;
@@ -165,7 +165,7 @@ const buildRetailFilter = (service, instanceOption) => {
   return `serviceName eq '${escapeODataString(azureServiceName)}' and priceType eq 'Consumption'`;
 };
 
-const aggregateDailyPricesByRegion = (items) => {
+const aggregateHourlyPricesByRegion = (items) => {
   const byRegion = new Map();
 
   for (const item of items) {
@@ -174,28 +174,40 @@ const aggregateDailyPricesByRegion = (items) => {
       continue;
     }
 
-    const dailyPrice = retailPriceToDaily(Number(item.retailPrice), item.unitOfMeasure);
-    if (!Number.isFinite(dailyPrice) || dailyPrice < 0) {
+    const hourlyPrice = retailPriceToHourly(Number(item.retailPrice), item.unitOfMeasure);
+    if (!Number.isFinite(hourlyPrice) || hourlyPrice < 0) {
       continue;
     }
 
     const current = byRegion.get(region);
-    if (current === undefined || dailyPrice < current) {
-      byRegion.set(region, dailyPrice);
+    if (current === undefined || hourlyPrice < current) {
+      byRegion.set(region, hourlyPrice);
     }
   }
 
   return byRegion;
 };
 
-const getServiceRegionalDailyPrices = async (service, instanceOption) => {
+const getServiceRegionalHourlyPrices = async (service, instanceOption) => {
   const filter = buildRetailFilter(service, instanceOption);
   if (!filter) {
     return new Map();
   }
 
   const items = await fetchRetailPriceItems(filter);
-  return aggregateDailyPricesByRegion(items);
+  return aggregateHourlyPricesByRegion(items);
+};
+
+/** @deprecated Use getServiceRegionalHourlyPrices */
+const getServiceRegionalDailyPrices = async (service, instanceOption) => {
+  const hourlyByRegion = await getServiceRegionalHourlyPrices(service, instanceOption);
+  const dailyByRegion = new Map();
+
+  for (const [region, hourlyPrice] of hourlyByRegion.entries()) {
+    dailyByRegion.set(region, hourlyPrice * 24);
+  }
+
+  return dailyByRegion;
 };
 
 const mergeRegionalPriceMaps = (maps) => {
@@ -226,32 +238,31 @@ const loadPricingContext = async (serviceIds) => {
     };
   }
 
-  const [servicesResult, instancesResult] = await Promise.all([
-    db.query(
-      `
-        SELECT
-          id,
-          name,
-          azure_role,
-          category,
-          COALESCE(price_per_user, 0) AS price_per_user
-        FROM services
-        WHERE id = ANY($1::int[])
-      `,
-      [normalizedServiceIds]
-    ),
-    db.query(
-      `
-        SELECT
-          service_id,
-          option_name
-        FROM service_instance_options
-        WHERE service_id = ANY($1::bigint[])
-        ORDER BY service_id, sort_order, option_name
-      `,
-      [normalizedServiceIds]
-    )
-  ]);
+  const servicesResult = await db.query(
+    `
+      SELECT
+        id,
+        name,
+        azure_role,
+        category,
+        COALESCE(price_per_user, 0) AS price_per_user
+      FROM services
+      WHERE id = ANY($1::int[])
+    `,
+    [normalizedServiceIds]
+  );
+
+  const instancesResult = await db.query(
+    `
+      SELECT
+        service_id,
+        option_name
+      FROM service_instance_options
+      WHERE service_id = ANY($1::bigint[])
+      ORDER BY service_id, sort_order, option_name
+    `,
+    [normalizedServiceIds]
+  );
 
   const instancesByServiceId = new Map();
   instancesResult.rows.forEach((row) => {
@@ -268,10 +279,13 @@ const loadPricingContext = async (serviceIds) => {
   };
 };
 
-const getPortalDailyFees = (services) =>
+const getPortalHourlyFees = (services) =>
   services.reduce((sum, service) => sum + Math.max(0, Number(service.price_per_user || 0)), 0);
 
-const getRegionalDailyPricesForServices = async (
+/** @deprecated Use getPortalHourlyFees — price_per_user is stored as USD/hr */
+const getPortalDailyFees = (services) => getPortalHourlyFees(services) * 24;
+
+const getRegionalHourlyPricesForServices = async (
   services,
   instancesByServiceId,
   selectedInstancesByServiceId = {}
@@ -284,21 +298,42 @@ const getRegionalDailyPricesForServices = async (
         instancesByServiceId,
         selectedInstancesByServiceId
       );
-      return getServiceRegionalDailyPrices(service, instanceOption);
+      return getServiceRegionalHourlyPrices(service, instanceOption);
     })
   );
 
   return mergeRegionalPriceMaps(priceMaps);
 };
 
-const getDailyPriceForLocation = async (
+/** @deprecated Use getRegionalHourlyPricesForServices */
+const getRegionalDailyPricesForServices = async (
+  services,
+  instancesByServiceId,
+  selectedInstancesByServiceId = {}
+) => {
+  const hourlyMap = await getRegionalHourlyPricesForServices(
+    services,
+    instancesByServiceId,
+    selectedInstancesByServiceId
+  );
+  const dailyMap = new Map();
+
+  for (const [region, hourlyPrice] of hourlyMap.entries()) {
+    dailyMap.set(region, hourlyPrice * 24);
+  }
+
+  return dailyMap;
+};
+
+const getHourlyPriceForLocation = async (
   services,
   instancesByServiceId,
   selectedInstancesByServiceId,
   location
 ) => {
   const normalizedLocation = String(location || '').trim().toLowerCase();
-  let dailyTotal = getPortalDailyFees(services);
+  let infraHourlyTotal = 0;
+  let portalHourlyTotal = getPortalHourlyFees(services);
 
   for (const service of services) {
     const serviceId = Number(service.id);
@@ -316,11 +351,14 @@ const getDailyPriceForLocation = async (
     const items = await fetchRetailPriceItems(
       `${filter} and armRegionName eq '${escapeODataString(normalizedLocation)}'`
     );
-    const dailyPrice = selectLowestDailyPrice(items);
-    dailyTotal += dailyPrice;
+    infraHourlyTotal += selectLowestHourlyPrice(items);
   }
 
-  return dailyTotal;
+  return {
+    infraHourlyTotal,
+    portalHourlyTotal,
+    hourlyTotal: infraHourlyTotal + portalHourlyTotal
+  };
 };
 
 const normalizeSelectedInstances = (selectedInstances) => {
@@ -347,7 +385,8 @@ const calculateEstimate = async ({
   startDate,
   endDate,
   selectedInstances = [],
-  selectedRoles = []
+  selectedRoles = [],
+  costingMode = 'shared'
 }) => {
   const resolvedAccountCount = Number(accountCount);
   if (!Number.isInteger(resolvedAccountCount) || resolvedAccountCount <= 0) {
@@ -367,19 +406,25 @@ const calculateEstimate = async ({
     throw new AppError('endDate must be on or after startDate', 400);
   }
 
-  const durationDays = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / 86400000));
+  const durationMs = end.getTime() - start.getTime();
+  const durationHours = Math.max(1, durationMs / 3600000);
+  const durationDays = Number((durationHours / 24).toFixed(2));
   const roleCount = Array.isArray(selectedRoles) ? selectedRoles.length : 0;
-  const roleMarkupDaily = roleCount * ROLE_PRICE_MARKUP;
+  const roleMarkupHourly = roleCount * ROLE_PRICE_MARKUP;
 
-  const baseDailyPrice =
-    (await getDailyPriceForLocation(
-      services,
-      instancesByServiceId,
-      selectedInstancesByServiceId,
-      location
-    )) + roleMarkupDaily;
+  const { infraHourlyTotal, portalHourlyTotal, hourlyTotal } = await getHourlyPriceForLocation(
+    services,
+    instancesByServiceId,
+    selectedInstancesByServiceId,
+    location
+  );
 
-  const totalPrice = baseDailyPrice * durationDays * resolvedAccountCount;
+  const baseHourlyPrice = hourlyTotal + roleMarkupHourly;
+  const sharedInfra = String(costingMode || 'shared').toLowerCase() !== 'per_user';
+  const infraMultiplier = sharedInfra ? 1 : resolvedAccountCount;
+  const totalPrice =
+    durationHours *
+    (infraHourlyTotal * infraMultiplier + portalHourlyTotal * resolvedAccountCount + roleMarkupHourly);
 
   const lineItems = await Promise.all(
     services.map(async (service) => {
@@ -395,28 +440,34 @@ const calculateEstimate = async ({
             `${filter} and armRegionName eq '${escapeODataString(String(location || '').trim().toLowerCase())}'`
           )
         : [];
-      const infraDaily = selectLowestDailyPrice(items);
-      const portalDaily = Math.max(0, Number(service.price_per_user || 0));
+      const infraHourly = selectLowestHourlyPrice(items);
+      const portalHourly = Math.max(0, Number(service.price_per_user || 0));
 
       return {
         serviceId,
         name: service.name,
         instanceOption: instanceOption || null,
-        infraDailyPrice: Number(infraDaily.toFixed(4)),
-        portalDailyPrice: Number(portalDaily.toFixed(4)),
-        dailyPrice: Number((infraDaily + portalDaily).toFixed(4))
+        infraHourlyPrice: Number(infraHourly.toFixed(6)),
+        portalHourlyPrice: Number(portalHourly.toFixed(6)),
+        hourlyPrice: Number((infraHourly + portalHourly).toFixed(6)),
+        infraDailyPrice: Number((infraHourly * 24).toFixed(4)),
+        portalDailyPrice: Number((portalHourly * 24).toFixed(4)),
+        dailyPrice: Number(((infraHourly + portalHourly) * 24).toFixed(4))
       };
     })
   );
 
   return {
     success: true,
-    basePrice: Number(baseDailyPrice.toFixed(2)),
+    baseHourlyPrice: Number(baseHourlyPrice.toFixed(4)),
+    basePrice: Number(baseHourlyPrice.toFixed(4)),
+    durationHours: Number(durationHours.toFixed(2)),
     duration: durationDays,
     accounts: resolvedAccountCount,
     totalPrice: Number(totalPrice.toFixed(2)),
     currency: 'USD',
     roleCount,
+    costingMode: sharedInfra ? 'shared' : 'per_user',
     services: lineItems
   };
 };
@@ -461,11 +512,10 @@ const getHourlyRateForProvisionedResources = async (provisionedRows, location) =
       const items = await fetchRetailPriceItems(
         `${filter} and armRegionName eq '${escapeODataString(normalizedLocation)}'`
       );
-      const dailyPrice = selectLowestDailyPrice(items);
-      infraHourly = dailyPrice / 24;
+      infraHourly = selectLowestHourlyPrice(items);
     }
 
-    const portalHourly = Math.max(0, Number(service.price_per_user || 0)) / 24;
+    const portalHourly = Math.max(0, Number(service.price_per_user || 0));
     const hourlyRate = infraHourly + portalHourly;
 
     hourlyTotal += hourlyRate;
@@ -488,8 +538,11 @@ const getHourlyRateForProvisionedResources = async (provisionedRows, location) =
 
 module.exports = {
   loadPricingContext,
+  getServiceRegionalHourlyPrices,
   getServiceRegionalDailyPrices,
+  getRegionalHourlyPricesForServices,
   getRegionalDailyPricesForServices,
+  getPortalHourlyFees,
   getPortalDailyFees,
   calculateEstimate,
   getHourlyRateForProvisionedResources

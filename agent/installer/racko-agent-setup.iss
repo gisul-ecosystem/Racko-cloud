@@ -9,6 +9,9 @@
 #define MyServiceName  "RackoAgent"
 #define MyInstallDir   "{commonappdata}\racko-agent"
 #define MyBinaryName   "racko-agent.exe"
+#ifndef PlatformURL
+  #define PlatformURL "http://localhost:8000"
+#endif
 
 [Setup]
 AppId={{B3F2A1C0-4D5E-4F6A-8B9C-1D2E3F4A5B6C}
@@ -140,7 +143,7 @@ begin
   if CurStep = ssPostInstall then
   begin
     ConfigPath := ExpandConstant('{#MyInstallDir}\config.json');
-    ConfigContent := '{"PLATFORM_URL":"' + ExpandConstant('{param:platformurl|http://localhost:8000}') + '",' +
+    ConfigContent := '{"PLATFORM_URL":"' + ExpandConstant('{param:platformurl|{#PlatformURL}}') + '",' +
                      '"ACCOUNT_TOKEN":"' + Trim(TokenEdit.Text) + '"}';
     SaveStringToFile(ConfigPath, ConfigContent, False);
 

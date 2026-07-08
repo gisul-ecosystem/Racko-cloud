@@ -1,8 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
-import { useAuth } from '../../../../context/AuthContext';
+import { useRouter } from 'next/navigation';import { useAuth } from '../../../../context/AuthContext';
 import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
@@ -15,13 +14,11 @@ import {
   fetchEnrollmentKey,
   fetchMachines,
   createJobs,
-  fetchJobs,
   issueAgentDownloadToken,
   buildPublicDownloadUrl,
   getEnrollmentAgentDownloadUrl,
   type IMachine,
   type MachineOS,
-  type IJob,
   type VMPushTarget,
   type JobStatus,
 } from '../../../../lib/machineManagerApi';
@@ -123,14 +120,14 @@ function JobStatusBadge({ status }: { status: JobStatus }) {
   );
 }
 
-// ─── Shared: Install Software + Status steps ──────────────────────────────────
+// ─── Shared: Install Software step ───────────────────────────────────────────
 function SoftwareStep({
-  machines, isAuthenticated, onJobsCreated,
+  machines, isAuthenticated,
 }: {
   machines: IMachine[];
   isAuthenticated: boolean;
-  onJobsCreated: (jobs: IJob[]) => void;
 }) {
+  const router = useRouter();
   const { catalog, loading, error, refetch } = useSoftwareCatalog(isAuthenticated);
   const { addToast } = useToast();
   const [selected, setSelected] = useState<string[]>([]);
@@ -143,9 +140,9 @@ function SoftwareStep({
     if (!selected.length || !machines.length) return;
     setInstalling(true);
     try {
-      const jobs = await createJobs({ machineIds: machines.map((m) => m._id), softwareIds: selected });
-      onJobsCreated(jobs);
-      addToast('success', `${jobs.length} install job(s) queued.`);
+      await createJobs({ machineIds: machines.map((m) => m._id), softwareIds: selected });
+      addToast('success', `${selected.length * machines.length} install job(s) queued.`);
+      router.push('/console/machine-manager/jobs');
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to queue jobs.');
       setInstalling(false);
@@ -198,83 +195,11 @@ function SoftwareStep({
   );
 }
 
-function StatusStep({ createdJobs, machines }: { createdJobs: IJob[]; machines: IMachine[] }) {
-  const router = useRouter();
-  const [jobs, setJobs] = useState<IJob[]>(createdJobs);
-  const [polling, setPolling] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => {
-    const load = async () => {
-      setPolling(true);
-      try {
-        const all = await fetchJobs();
-        const ids = new Set(createdJobs.map((j) => j._id));
-        setJobs(all.filter((j) => ids.has(j._id)));
-      } catch { /* ignore */ }
-      finally { setPolling(false); }
-    };
-    void load();
-    intervalRef.current = setInterval(() => void load(), 5000);
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
-  }, [createdJobs]);
-
-  return (
-    <div>
-      <div className="mb-5 flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-semibold text-gray-900">Installation Status</h2>
-          <p className="mt-0.5 text-sm text-gray-500">Auto-refreshing every 5 seconds.</p>
-        </div>
-        {polling && <RefreshCw className="h-4 w-4 animate-spin text-gray-400" />}
-      </div>
-      <div className="overflow-hidden rounded-xl border border-gray-200">
-        {jobs.length === 0 ? (
-          <div className="p-10 text-center"><p className="text-sm text-gray-400">Waiting for agent to pick up jobs…</p></div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-100 bg-gray-50">
-                  {['Machine', 'IP', 'Packages', 'Status', 'Updated'].map((h) => (
-                    <th key={h} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {jobs.map((j, i) => {
-                  const m = machines.find((x) => x._id === j.machineId);
-                  return (
-                    <tr key={j._id} className={`border-b border-gray-50 ${i % 2 !== 0 ? 'bg-gray-50/40' : ''}`}>
-                      <td className="px-4 py-3 font-medium text-gray-900">{m?.name ?? j.machineId}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-gray-600">{m?.ipAddress ?? '—'}</td>
-                      <td className="px-4 py-3 text-gray-600">{j.softwareIds.length}</td>
-                      <td className="px-4 py-3"><JobStatusBadge status={j.status} /></td>
-                      <td className="px-4 py-3 text-xs text-gray-400">{new Date(j.updatedAt).toLocaleString()}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-      <div className="mt-6 flex justify-end border-t border-gray-100 pt-5">
-        <button onClick={() => router.push('/console/machine-manager/jobs')}
-          className="rounded-lg bg-[#B91C1C] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#a01717]">
-          Done
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ─── FLOW 1: Physical Machine ─────────────────────────────────────────────────
 function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const { addToast } = useToast();
   const [step, setStep] = useState(1);
   const [machine, setMachine] = useState<IMachine | null>(null);
-  const [createdJobs, setCreatedJobs] = useState<IJob[]>([]);
   const [os, setOs] = useState<MachineOS>('windows');
   const [name, setName] = useState('');
   const [creating, setCreating] = useState(false);
@@ -341,7 +266,7 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
     }
   };
 
-  const STEPS = ['Download Agent', 'Install Software', 'Status'];
+  const STEPS = ['Download Agent', 'Install Software'];
   const linuxInstallCommand = machine
     ? `curl -fsSL ${getGatewayBaseUrl()}/api/v1/agent/install/linux?token=${machine.accountToken} | sudo bash`
     : '';
@@ -472,11 +397,10 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
             <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500"><Check className="h-3.5 w-3.5 text-white" /></div>
             <span className="text-sm font-medium text-green-700">{machine.name} connected</span>
           </div>
-          <SoftwareStep machines={[machine]} isAuthenticated={isAuthenticated} onJobsCreated={(jobs) => { setCreatedJobs(jobs); setStep(3); }} />
+          <SoftwareStep machines={[machine]} isAuthenticated={isAuthenticated} />
         </div>
       )}
 
-      {step === 3 && machine && <StatusStep createdJobs={createdJobs} machines={[machine]} />}
     </div>
   );
 }
@@ -490,10 +414,7 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const [pushResults, setPushResults] = useState<Array<{ machineId: string; success: boolean; error?: string }>>([]);
   const [pushing, setPushing] = useState(false);
   const [waiting, setWaiting] = useState(false);
-  const [createdJobs, setCreatedJobs] = useState<IJob[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  useEffect(() => () => { if (intervalRef.current) clearInterval(intervalRef.current); }, []);
 
   const updateRow = (i: number, field: keyof VMPushTarget, value: string) => {
     setVmRows((prev) => prev.map((r, idx) => idx === i ? { ...r, [field]: value } : r));
@@ -531,7 +452,7 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
     }
   };
 
-  const STEPS = ['Add VMs & Push Agent', 'Install Software', 'Status'];
+  const STEPS = ['Add VMs & Push Agent', 'Install Software'];
 
   return (
     <div>
@@ -629,11 +550,10 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
             <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500"><Check className="h-3.5 w-3.5 text-white" /></div>
             <span className="text-sm font-medium text-green-700">All {machines.length} VM{machines.length !== 1 ? 's' : ''} connected</span>
           </div>
-          <SoftwareStep machines={machines} isAuthenticated={isAuthenticated} onJobsCreated={(jobs) => { setCreatedJobs(jobs); setStep(3); }} />
+          <SoftwareStep machines={machines} isAuthenticated={isAuthenticated} />
         </div>
       )}
 
-      {step === 3 && <StatusStep createdJobs={createdJobs} machines={machines} />}
     </div>
   );
 }
@@ -646,7 +566,6 @@ function TemplateFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const [loadingKey, setLoadingKey] = useState(true);
   const [os, setOs] = useState<MachineOS>('windows');
   const [enrolledMachines, setEnrolledMachines] = useState<IMachine[]>([]);
-  const [createdJobs, setCreatedJobs] = useState<IJob[]>([]);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const seenIdsRef = useRef<Set<string>>(new Set());
 
@@ -677,7 +596,7 @@ function TemplateFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
     startPollingForEnrolled();
   };
 
-  const STEPS = ['Download Template Agent', 'Enrolled Machines', 'Install Software', 'Status'];
+  const STEPS = ['Download Template Agent', 'Enrolled Machines', 'Install Software'];
 
   return (
     <div>
@@ -775,11 +694,9 @@ function TemplateFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
       )}
 
       {step === 3 && (
-        <SoftwareStep machines={enrolledMachines} isAuthenticated={isAuthenticated}
-          onJobsCreated={(jobs) => { setCreatedJobs(jobs); setStep(4); }} />
+        <SoftwareStep machines={enrolledMachines} isAuthenticated={isAuthenticated} />
       )}
 
-      {step === 4 && <StatusStep createdJobs={createdJobs} machines={enrolledMachines} />}
     </div>
   );
 }

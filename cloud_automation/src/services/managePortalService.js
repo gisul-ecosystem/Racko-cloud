@@ -1746,7 +1746,7 @@ const updateUserCleanupSettings = async (
   });
 };
 
-const triggerUserCleanup = async (sessionToken, userId) => {
+const triggerUserCleanup = async (sessionToken, userId, { action } = {}) => {
   const session = await requireSession(sessionToken);
   assertAdminPortalSession(session);
 
@@ -1756,8 +1756,17 @@ const triggerUserCleanup = async (sessionToken, userId) => {
         au.azure_resource_group_name,
         au.request_id,
         au.azure_user_id,
+        au.username,
+        au.user_number,
         r.costing_mode,
-        r.azure_resource_group_name AS shared_resource_group_name
+        r.azure_resource_group_name AS shared_resource_group_name,
+        r.resource_cleanup_action,
+        (
+          SELECT COUNT(*)
+          FROM azure_users active_users
+          WHERE active_users.request_id = au.request_id
+            AND COALESCE(active_users.is_deleted, FALSE) = FALSE
+        ) AS active_user_count
       FROM azure_users au
       JOIN requests r ON r.id = au.request_id
       WHERE au.id = $1
@@ -1773,35 +1782,43 @@ const triggerUserCleanup = async (sessionToken, userId) => {
   const user = rows[0];
   validateSessionForRequest(session, user.request_id);
 
-  const { deleteResourcesInsideRG, deleteUserResourcesInSharedRG } = require('./resourceCleanupService');
+  const { runResourceActionForUser } = require('./resourceCleanupService');
+  const resolvedAction = action === 'pause' || action === 'delete' ? action : user.resource_cleanup_action || 'delete';
 
-  let deleted = [];
-
-  if (user.costing_mode === 'per_user' && user.azure_resource_group_name) {
-    deleted = await deleteResourcesInsideRG(user.azure_resource_group_name);
-  } else if (user.costing_mode === 'shared' && user.shared_resource_group_name) {
-    deleted = await deleteUserResourcesInSharedRG(
-      user.shared_resource_group_name,
-      user.azure_user_id
-    );
-  }
+  const affected = await runResourceActionForUser({
+    costingMode: user.costing_mode,
+    perUserResourceGroupName: user.azure_resource_group_name,
+    sharedResourceGroupName: user.shared_resource_group_name,
+    entraObjectId: user.azure_user_id,
+    username: user.username,
+    userNumber: user.user_number,
+    activeUserCount: Number(user.active_user_count || 0),
+    action: resolvedAction
+  });
 
   await db.query(
     `
       INSERT INTO resource_cleanup_logs (request_id, ran_at, resources_deleted, user_count, status)
       VALUES ($1, NOW(), $2, 1, 'success')
     `,
-    [user.request_id, JSON.stringify(deleted)]
+    [user.request_id, JSON.stringify(affected)]
   );
 
   logManagePortalEvent('info', 'manual_cleanup_triggered', {
     userId,
-    deletedCount: deleted.length
+    action: resolvedAction,
+    affectedCount: affected.length
   });
 
   return {
-    deletedCount: deleted.length,
-    deleted
+    action: resolvedAction,
+    affectedCount: affected.length,
+    deletedCount: resolvedAction === 'delete' ? affected.length : 0,
+    pausedCount:
+      resolvedAction === 'pause'
+        ? affected.filter((entry) => entry.action && entry.action !== 'skipped' && entry.action !== 'failed').length
+        : 0,
+    affected
   };
 };
 

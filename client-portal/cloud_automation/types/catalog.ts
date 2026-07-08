@@ -39,6 +39,8 @@ export interface CatalogInstance {
   sort_order?: number;
   daily_price?: number;
   dailyPrice?: number;
+  hourlyPrice?: number;
+  hourly_price?: number;
 }
 
 export interface InstanceRoleMapping {
@@ -71,6 +73,8 @@ export interface AvailableInstance {
   serviceId: number;
   option_name: string;
   guide?: string | { summary?: string; description?: string; tier?: string };
+  hourlyPrice?: number;
+  hourly_price?: number;
   dailyPrice?: number;
   daily_price?: number;
   currency?: string;
@@ -113,18 +117,22 @@ export interface PricingEstimatePayload {
   endDate: string;
   selectedInstances: SelectedInstance[];
   selectedRoles: SelectedRole[];
+  costingMode?: CostingMode;
 }
 
 export interface PricingEstimateResponse {
   success?: boolean;
   services?: unknown[];
+  baseHourlyPrice?: number;
   basePrice?: number;
+  durationHours?: number;
   duration?: number;
   accounts?: number;
   totalPrice?: number;
   estimatedPrice?: number;
   currency?: string;
   roleCount?: number;
+  costingMode?: CostingMode;
 }
 
 export type CostingMode = 'shared' | 'per_user';
@@ -146,6 +154,7 @@ export interface CreateRequestPayload {
   cleanupIntervalHours?: number;
   resourceCleanupEnabled?: boolean;
   resourceCleanupIntervalHours?: number;
+  resourceCleanupAction?: 'delete' | 'pause';
   usageWindows?: UsageWindow[];
   perUserBudgetUsd?: number;
 }

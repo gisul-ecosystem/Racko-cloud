@@ -160,9 +160,13 @@ export async function getRequestDetail(requestId) {
   const today = new Date().toISOString().split('T')[0];
   const spendRecords = await UserSpend.find({ requestId, date: today });
   await syncActiveMagicLinkUsageSessions(requestId);
-  await syncRecentActivityForRequest(requestId).catch((err) => {
+
+  // CloudTrail lookups span multiple regions and can exceed gateway timeouts.
+  // Schedulers also run monitorAwsUserActivity; the portal polls every 30s.
+  void syncRecentActivityForRequest(requestId).catch((err) => {
     console.warn(`[orgAdmin] Activity sync failed for ${requestId}:`, err.message);
   });
+
   const requestForUsage = await Request.findById(requestId);
   const baseUsers = mapUsersFromRequest(requestForUsage || request, spendRecords);
 
