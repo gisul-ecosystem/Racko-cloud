@@ -114,9 +114,44 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /ai foundry/i,
     mappings: [
-      { instanceOption: 'Starter', azureRole: 'Azure AI Developer' },
-      { instanceOption: 'Standard', azureRole: 'Azure AI Developer' },
-      { instanceOption: 'Enterprise', azureRole: 'Azure AI Developer' }
+      {
+        instanceOption: 'Starter',
+        azureRoles: [
+          'Azure AI Developer',
+          'Storage Account Contributor',
+          'Storage Blob Data Contributor',
+          'Key Vault Secrets User',
+          'Key Vault Reader',
+          'Monitoring Reader'
+        ]
+      },
+      {
+        instanceOption: 'Standard',
+        azureRoles: [
+          'Azure AI Developer',
+          'Storage Account Contributor',
+          'Storage Blob Data Contributor',
+          'Key Vault Secrets User',
+          'Key Vault Reader',
+          'Monitoring Reader',
+          'Contributor',
+          'Network Contributor'
+        ]
+      },
+      {
+        instanceOption: 'Enterprise',
+        azureRoles: [
+          'Azure AI Developer',
+          'Storage Account Contributor',
+          'Storage Blob Data Contributor',
+          'Key Vault Secrets User',
+          'Key Vault Reader',
+          'Monitoring Reader',
+          'Contributor',
+          'Network Contributor',
+          'AcrPull'
+        ]
+      }
     ]
   },
   {
@@ -183,11 +218,14 @@ const findTierRoleFallbacks = (serviceName) => {
     return [];
   }
 
-  return entry.mappings.map((mapping) => ({
-    instanceOption: mapping.instanceOption,
-    azureRole: mapping.azureRole,
-    tierAutomated: true
-  }));
+  return entry.mappings.flatMap((mapping) => {
+    const roles = mapping.azureRoles || (mapping.azureRole ? [mapping.azureRole] : []);
+    return roles.map((azureRole) => ({
+      instanceOption: mapping.instanceOption,
+      azureRole,
+      tierAutomated: true
+    }));
+  });
 };
 
 module.exports = {

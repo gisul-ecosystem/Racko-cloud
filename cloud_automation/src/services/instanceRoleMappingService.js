@@ -106,6 +106,19 @@ const resolveRolesForInstance = ({ serviceId, serviceName, instanceOption, mappi
     return [];
   }
 
+  const fallbackEntry = TIER_ROLE_FALLBACKS.find((item) => item.servicePattern.test(String(serviceName || '')));
+  if (fallbackEntry) {
+    const tierMapping = fallbackEntry.mappings.find(
+      (entry) => entry.instanceOption.toLowerCase() === normalizedOption
+    );
+    if (tierMapping?.azureRoles?.length) {
+      return tierMapping.azureRoles;
+    }
+    if (tierMapping?.azureRole) {
+      return [tierMapping.azureRole];
+    }
+  }
+
   const serviceMappings = mappingIndex?.get(Number(serviceId));
   const mapped = serviceMappings?.get(normalizedOption);
 
@@ -122,6 +135,65 @@ const resolveRolesForInstance = ({ serviceId, serviceName, instanceOption, mappi
   }
 
   return [fallback.azureRole];
+};
+
+const finalizeAiFoundryTierRoles = async (client, roleAssignments, validServiceIds, selectedInstances) => {
+  const dbMappings = await loadInstanceRoleMappings(client);
+  const mappingIndex = buildMappingIndex(dbMappings);
+  const serviceNamesById = new Map();
+
+  if (validServiceIds.length > 0) {
+    const servicesResult = await client.query(
+      `
+        SELECT id, name
+        FROM services
+        WHERE id = ANY($1::int[])
+      `,
+      [validServiceIds]
+    );
+
+    for (const row of servicesResult.rows) {
+      serviceNamesById.set(Number(row.id), row.name);
+    }
+  }
+
+  pruneAiFoundryRolesForTier(roleAssignments, selectedInstances, serviceNamesById, mappingIndex);
+};
+
+const pruneAiFoundryRolesForTier = (roleAssignments, selectedInstances, serviceNamesById, mappingIndex) => {
+  for (const item of selectedInstances || []) {
+    const serviceId = Number(item?.serviceId ?? item?.service_id);
+    const instanceOption = normalizeInstanceOption(item?.instanceOption ?? item?.instance_option);
+    const serviceName = serviceNamesById.get(serviceId);
+
+    if (!Number.isInteger(serviceId) || serviceId <= 0 || !instanceOption) {
+      continue;
+    }
+
+    if (!/ai foundry/i.test(String(serviceName || ''))) {
+      continue;
+    }
+
+    const allowedRoles = resolveRolesForInstance({
+      serviceId,
+      serviceName,
+      instanceOption,
+      mappingIndex
+    });
+
+    if (allowedRoles.length === 0) {
+      continue;
+    }
+
+    const allowed = new Set(allowedRoles);
+    const current = roleAssignments.get(serviceId);
+
+    if (!current) {
+      continue;
+    }
+
+    roleAssignments.set(serviceId, new Set([...current].filter((role) => allowed.has(role))));
+  }
 };
 
 const getAutoAssignRolesForServices = async (client, serviceIds) => {
@@ -350,6 +422,7 @@ module.exports = {
   resolveRolesForInstance,
   resolveTierRoles,
   applyTierRolesToAssignments,
+  finalizeAiFoundryTierRoles,
   getAutoAssignRolesForServices,
   ensureAutoAssignRolesForServices,
   resolveAllRolesForService,

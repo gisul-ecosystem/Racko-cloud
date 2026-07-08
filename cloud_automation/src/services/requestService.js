@@ -3,7 +3,7 @@ const AppError = require('../utils/AppError');
 const db = require('../db/postgres');
 const pricingService = require('./pricingService');
 const { assertProvisionableLocation } = require('./azureLocationService');
-const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments } = require('./instanceRoleMappingService');
+const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments, finalizeAiFoundryTierRoles } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 
@@ -565,6 +565,9 @@ async function createRequest({
 
     // Auto-assign dependency roles required for portal resource creation
     await applyDependencyRolesToAssignments(client, roleAssignments, validServiceIds);
+
+    // Enforce AI Foundry tier-specific role sets after all auto-assign merges
+    await finalizeAiFoundryTierRoles(client, roleAssignments, validServiceIds, selectedInstances);
 
     // Insert all role assignments into database
     for (const [sid, rolesSet] of roleAssignments.entries()) {
