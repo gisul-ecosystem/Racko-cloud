@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -51,18 +52,14 @@ func (p *WSPoller) Start(done <-chan struct{}) {
 			return
 		default:
 			if err := p.connect(done); err != nil {
-				// Check for permanent errors (agent deleted)
 				if isPermanentError(err) {
 					log.Printf("[ws-poller] Permanent error: %v — stopping reconnection attempts", err)
 					return
 				}
-
-				// Temporary error — wait and retry with backoff
 				log.Printf("[ws-poller] Connection error: %v — retrying in %s", err, p.backoff.current)
 				time.Sleep(p.backoff.current)
 				p.increaseBackoff()
 			} else {
-				// Connection closed cleanly — reset backoff
 				p.resetBackoff()
 			}
 		}
@@ -70,12 +67,10 @@ func (p *WSPoller) Start(done <-chan struct{}) {
 }
 
 func (p *WSPoller) connect(done <-chan struct{}) error {
-	// Build WebSocket URL: ws://platform/api/v1/agent/connect?agentId=xxx
 	u, err := url.Parse(p.cfg.PlatformURL)
 	if err != nil {
 		return fmt.Errorf("parse platform URL: %w", err)
 	}
-	// Convert http → ws, https → wss
 	switch u.Scheme {
 	case "https":
 		u.Scheme = "wss"
@@ -89,10 +84,7 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 
 	log.Printf("[ws-poller] Connecting to %s", u.String())
 
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-	}
-
+	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, resp, err := dialer.Dial(u.String(), nil)
 	if err != nil {
 		if resp != nil && resp.StatusCode == 410 {
@@ -104,22 +96,40 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 
 	log.Println("[ws-poller] Connected")
 
-	// Respond to server pings — reset read deadline on each pong
-	conn.SetPongHandler(func(string) error {
+	// writeMu serializes all writes — gorilla/websocket requires this.
+	var writeMu sync.Mutex
+
+	safeWrite := func(messageType int, data []byte) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return conn.WriteMessage(messageType, data)
+	}
+
+	// Pong handler: called from the read goroutine — safe to reset deadline,
+	// but sends pong via safeWrite to avoid concurrent write conflict.
+	conn.SetPongHandler(func(appData string) error {
 		log.Println("[ws-poller] Pong received")
-		return conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		return nil
 	})
 
-	// Initial read deadline — generous to handle long installs
+	// Server pings arrive as ping frames — gorilla auto-sends pong by default,
+	// but we override to use our write mutex.
+	conn.SetPingHandler(func(appData string) error {
+		log.Println("[ws-poller] Ping received from server, sending pong")
+		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
+		return safeWrite(websocket.PongMessage, []byte(appData))
+	})
+
 	if err := conn.SetReadDeadline(time.Now().Add(5 * time.Minute)); err != nil {
 		return fmt.Errorf("set read deadline: %w", err)
 	}
 
-	// Active ping ticker — keeps connection alive during long installs
+	// Active ping ticker — agent pings the server every 30s.
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
-	// Read messages in a loop
+	// Read loop runs in a goroutine — only one reader, only one writer at a time.
 	errChan := make(chan error, 1)
 	go func() {
 		for {
@@ -127,12 +137,10 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				Type    string          `json:"type"`
 				Payload json.RawMessage `json:"payload"`
 			}
-
 			if err := conn.ReadJSON(&msg); err != nil {
 				errChan <- err
 				return
 			}
-
 			if msg.Type == "job" {
 				var job Job
 				if err := json.Unmarshal(msg.Payload, &job); err != nil {
@@ -145,7 +153,6 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 		}
 	}()
 
-	// Wait for error, ping tick, or done signal
 	for {
 		select {
 		case err := <-errChan:
@@ -155,13 +162,13 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 			}
 			return fmt.Errorf("read error: %w", err)
 		case <-pingTicker.C:
-			if err := conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			if err := safeWrite(websocket.PingMessage, nil); err != nil {
 				return fmt.Errorf("ping failed: %w", err)
 			}
 			log.Println("[ws-poller] Ping sent")
 		case <-done:
 			log.Println("[ws-poller] Closing connection (done signal)")
-			return conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			return safeWrite(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		}
 	}
 }
@@ -183,9 +190,7 @@ type permanentError struct {
 	msg string
 }
 
-func (e *permanentError) Error() string {
-	return e.msg
-}
+func (e *permanentError) Error() string { return e.msg }
 
 func isPermanentError(err error) bool {
 	_, ok := err.(*permanentError)
