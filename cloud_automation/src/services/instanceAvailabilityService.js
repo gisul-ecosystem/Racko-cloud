@@ -11,13 +11,22 @@ const filterInstancesForLocation = async (location, instances, servicesById) => 
     const service = servicesById.get(serviceId);
     const rule = findInstancePolicyRule(service?.name);
 
-    if (!rule || rule.policyType === 'allowed_vm_sku' || rule.policyType === 'allowed_aks_node_vm_sku') {
+    if (
+      !rule ||
+      rule.policyType === 'allowed_vm_sku' ||
+      rule.policyType === 'allowed_aks_node_vm_sku' ||
+      rule.policyType === 'instance_metadata'
+    ) {
       return true;
     }
 
     const optionName = String(instance.option_name || '').trim();
     if (!optionName) {
       return false;
+    }
+
+    if (typeof rule.resolveAllowedSkus !== 'function') {
+      return true;
     }
 
     const allowedSkus = rule.resolveAllowedSkus(optionName);

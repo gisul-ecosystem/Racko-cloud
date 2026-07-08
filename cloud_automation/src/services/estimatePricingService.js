@@ -222,6 +222,27 @@ const mergeRegionalPriceMaps = (maps) => {
   return merged;
 };
 
+const intersectRegionalPriceMaps = (maps) => {
+  const nonEmptyMaps = (Array.isArray(maps) ? maps : []).filter((priceMap) => priceMap.size > 0);
+
+  if (nonEmptyMaps.length === 0) {
+    return new Map();
+  }
+
+  let intersection = new Set(nonEmptyMaps[0].keys());
+
+  for (let index = 1; index < nonEmptyMaps.length; index += 1) {
+    intersection = new Set([...intersection].filter((region) => nonEmptyMaps[index].has(region)));
+    if (intersection.size === 0) {
+      break;
+    }
+  }
+
+  const merged = mergeRegionalPriceMaps(nonEmptyMaps);
+
+  return new Map([...intersection].map((region) => [region, merged.get(region) || 0]));
+};
+
 const loadPricingContext = async (serviceIds) => {
   const normalizedServiceIds = Array.from(
     new Set(
@@ -542,6 +563,7 @@ module.exports = {
   getServiceRegionalDailyPrices,
   getRegionalHourlyPricesForServices,
   getRegionalDailyPricesForServices,
+  intersectRegionalPriceMaps,
   getPortalHourlyFees,
   getPortalDailyFees,
   calculateEstimate,

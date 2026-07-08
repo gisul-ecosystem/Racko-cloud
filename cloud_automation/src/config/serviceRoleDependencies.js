@@ -33,6 +33,12 @@ Azure DevOps                     Project Administrator                        (n
 Azure OpenAI Service             Cognitive Services OpenAI Contributor        (none)
 Azure AI Foundry                 Azure AI Developer                           + Storage Account Contributor
                                                                                + Storage Blob Data Contributor
+                                                                               + Key Vault Secrets User
+                                                                               + Key Vault Reader
+                                                                               + Monitoring Reader
+                                                                               + Contributor
+                                                                               + Network Contributor
+                                                                               + AcrPull
 Azure AI Search                  Search Service Contributor                   (none)
 Azure Machine Learning           Contributor                                  + Network Contributor
                                  AzureML Data Scientist                       + Storage Account Contributor
@@ -96,11 +102,35 @@ const SERVICE_ROLE_DEPENDENCIES = {
   'Azure AI Foundry': [
     {
       role: 'Storage Account Contributor',
-      reason: 'Required for AI Foundry workspace storage'
+      reason: 'Required to access AI Foundry linked storage account for datasets and models'
     },
     {
       role: 'Storage Blob Data Contributor',
-      reason: 'Required for AI Foundry model and data storage'
+      reason: 'Required to read/write datasets, model artifacts and experiment outputs in blob storage'
+    },
+    {
+      role: 'Key Vault Secrets User',
+      reason: 'Required to read secrets from AI Foundry linked Key Vault'
+    },
+    {
+      role: 'Key Vault Reader',
+      reason: 'Required to list and navigate Key Vault resources linked to AI Foundry workspace'
+    },
+    {
+      role: 'Monitoring Reader',
+      reason: 'Required to read Application Insights metrics and logs linked to AI Foundry'
+    },
+    {
+      role: 'Contributor',
+      reason: 'Required to create and manage compute instances and clusters in AI Foundry'
+    },
+    {
+      role: 'Network Contributor',
+      reason: 'Required for AI Foundry compute cluster VNet integration'
+    },
+    {
+      role: 'AcrPull',
+      reason: 'Required to pull base images from Azure Container Registry for AI Foundry environments'
     }
   ],
 

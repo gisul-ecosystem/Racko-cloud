@@ -342,9 +342,21 @@ const reprovisionRolesForRequest = async (req, res, next) => {
       throw new AppError('Request id must be a positive integer.', 400);
     }
 
+    const db = require('../db/postgres');
+
+    const aiFoundryCheck = await db.query(
+      `
+        SELECT s.name
+        FROM request_services rs
+        JOIN services s ON s.id = rs.service_id
+        WHERE rs.request_id = $1 AND s.name = 'Azure AI Foundry'
+      `,
+      [requestId]
+    );
+
+    const hasAiFoundry = aiFoundryCheck.rows.length > 0;
     const result = await roleProvisionService.reprovisionRolesForRequest(requestId);
 
-    const db = require('../db/postgres');
     const assignments = await db.query(
       `
         SELECT DISTINCT azure_role
@@ -357,12 +369,22 @@ const reprovisionRolesForRequest = async (req, res, next) => {
     );
 
     res.status(200).json({
-      success: true,
-      message: `Roles re-provisioned — ${result.rolesAssigned} assignments made`,
+      success: result.success !== false,
+      message: result.permissionsComplete
+        ? `Roles re-provisioned — ${result.rolesAssigned} assignments made`
+        : `Roles re-provisioned with incomplete resource permissions — ${result.rolesAssigned} assignments made`,
+      hasAiFoundry,
       assignmentsMade: result.rolesAssigned,
       rolesAssigned: assignments.rows.map((row) => row.azure_role),
       usersProcessed: result.usersProcessed,
-      rolesProvisioned: result.rolesProvisioned
+      rolesProvisioned: result.rolesProvisioned,
+      permissionsComplete: result.permissionsComplete,
+      provisioningStatus: result.provisioningStatus,
+      permissionFailures: result.permissionFailures,
+      note: hasAiFoundry
+        ? 'AI Foundry: assigned Azure AI Developer + Storage + Key Vault + Monitoring + Contributor + Network Contributor roles'
+        : undefined,
+      ...result
     });
   } catch (error) {
     next(error);
@@ -457,6 +479,28 @@ const triggerRequestCleanup = async (req, res, next) => {
   }
 };
 
+const repairResourceScopedPermissions = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await roleProvisionService.repairResourceScopedPermissionsForRequest(requestId);
+
+    res.status(200).json({
+      success: result.success,
+      message: result.permissionsComplete
+        ? 'Resource-scoped permissions applied successfully'
+        : 'Some resource permissions could not be applied — see permissionFailures',
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   listResourceGroups,
   listRequests,
@@ -474,6 +518,7 @@ module.exports = {
   updateUserCleanupSettings,
   triggerUserCleanup,
   reprovisionRolesForRequest,
+  repairResourceScopedPermissions,
   getUserSessions,
   getCleanupLogs,
   triggerRequestCleanup,
