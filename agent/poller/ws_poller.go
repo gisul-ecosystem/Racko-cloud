@@ -75,9 +75,12 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 	if err != nil {
 		return fmt.Errorf("parse platform URL: %w", err)
 	}
-	u.Scheme = "ws"
-	if u.Scheme == "https" {
+	// Convert http → ws, https → wss
+	switch u.Scheme {
+	case "https":
 		u.Scheme = "wss"
+	default:
+		u.Scheme = "ws"
 	}
 	u.Path = "/api/v1/agent/connect"
 	q := u.Query()

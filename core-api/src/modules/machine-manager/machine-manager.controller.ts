@@ -5,6 +5,7 @@ import { MachineModel, JobModel } from './machine-manager.model';
 import { config } from '../../config';
 import { jobStatusEmitter } from './job.events';
 import { issueJobStreamTicket, consumeJobStreamTicket } from './job.streamTicket';
+import { logger } from '../../utils/logger';
 import type { AuthenticatedRequest } from '../../types';
 import type {
   CreateMachineInput,
@@ -337,8 +338,11 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   async agentGetJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { agentId } = req.params as { agentId: string };
+      logger.debug('[Agent] Polling for pending job', { agentId });
       const job = await machineManagerService.getPendingJobForAgent(agentId);
-      // Return empty object (not 404) when no job is pending — agent should keep polling
+      if (job) {
+        logger.info('[Agent] Pending job found for agent', { agentId, jobId: job._id, softwareIds: job.softwareIds, status: job.status });
+      }
       success(res, job ? 'Job found.' : 'No pending job.', { job: job ?? null });
     } catch (err) {
       next(err);
@@ -349,7 +353,15 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   async agentJobResult(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const jobId = new mongoose.Types.ObjectId(req.params['jobId'] as string);
-      await machineManagerService.updateJobResult(jobId, req.body as AgentJobResultInput);
+      const body = req.body as AgentJobResultInput;
+      logger.info('[Agent] Job result received', {
+        jobId: jobId.toString(),
+        agentId: body.agentId,
+        status: body.status,
+        logsLength: body.logs?.length ?? 0,
+        logsPreview: body.logs?.slice(0, 300) ?? '',
+      });
+      await machineManagerService.updateJobResult(jobId, body);
       success(res, 'Job result recorded.');
     } catch (err) {
       next(err);

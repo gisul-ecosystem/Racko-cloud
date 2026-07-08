@@ -311,12 +311,23 @@ class MachineManagerService {
   /** Returns the oldest pending job for this agent's machine, or null. */
   async getPendingJobForAgent(agentId: string): Promise<JobResponse | null> {
     const machine = await MachineModel.findOne({ agentId });
-    if (!machine) throw new NotFoundError('Agent not found.');
+    if (!machine) {
+      logger.warn('[Agent] getPendingJobForAgent — agent not found', { agentId });
+      throw new NotFoundError('Agent not found.');
+    }
 
     const job = await JobModel.findOne({
       machineId: machine._id,
       status: 'pending',
     }).sort({ createdAt: 1 });
+
+    logger.debug('[Agent] getPendingJobForAgent result', {
+      agentId,
+      machineId: machine._id.toString(),
+      machineName: machine.name,
+      jobFound: !!job,
+      jobId: job?._id.toString(),
+    });
 
     return job ? this.toJobResponse(job) : null;
   }
