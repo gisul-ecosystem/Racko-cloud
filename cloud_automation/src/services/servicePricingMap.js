@@ -29,7 +29,16 @@ const SERVICE_PRICING_MAP = {
   'document intelligence': 'Foundry Tools',
   'azure ai vision': 'Foundry Tools',
   'azure ai language': 'Foundry Tools',
-  'azure ai speech': 'Foundry Tools'
+  'azure ai speech': 'Foundry Tools',
+  'azure event grid': 'Event Grid',
+  'event grid': 'Event Grid',
+  'azure logic apps': 'Logic Apps',
+  'logic apps': 'Logic Apps',
+  'application insights': 'Azure Monitor',
+  'azure monitor': 'Azure Monitor',
+  'azure devops': 'Azure DevOps',
+  'microsoft entra id (azure ad)': 'Microsoft Entra ID',
+  'entra id': 'Microsoft Entra ID'
 };
 
 const normalizeServiceKey = (value) => {

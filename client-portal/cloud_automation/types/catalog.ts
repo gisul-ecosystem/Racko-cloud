@@ -118,6 +118,7 @@ export interface PricingEstimatePayload {
   selectedInstances: SelectedInstance[];
   selectedRoles: SelectedRole[];
   costingMode?: CostingMode;
+  usageWindows?: UsageWindow[];
 }
 
 export interface PricingEstimateResponse {
@@ -126,6 +127,9 @@ export interface PricingEstimateResponse {
   baseHourlyPrice?: number;
   basePrice?: number;
   durationHours?: number;
+  calendarHours?: number;
+  billableHours?: number;
+  usesUsageWindows?: boolean;
   duration?: number;
   accounts?: number;
   totalPrice?: number;
@@ -133,6 +137,8 @@ export interface PricingEstimateResponse {
   currency?: string;
   roleCount?: number;
   costingMode?: CostingMode;
+  portalHourlyTotal?: number;
+  infraHourlyTotal?: number;
 }
 
 export type CostingMode = 'shared' | 'per_user';

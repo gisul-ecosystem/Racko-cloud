@@ -7,7 +7,13 @@ interface PricingSummaryProps {
   totalPrice: number | null;
   currency?: string;
   durationHours?: number;
+  calendarHours?: number;
+  billableHours?: number;
+  usesUsageWindows?: boolean;
   accountCount?: number;
+  baseHourlyPrice?: number;
+  portalHourlyTotal?: number;
+  infraHourlyTotal?: number;
   loading: boolean;
   error: string | null;
 }
@@ -26,10 +32,18 @@ export function PricingSummary({
   totalPrice,
   currency = 'USD',
   durationHours,
+  calendarHours,
+  billableHours,
+  usesUsageWindows,
   accountCount,
+  baseHourlyPrice,
+  portalHourlyTotal,
+  infraHourlyTotal,
   loading,
   error,
 }: PricingSummaryProps) {
+  const effectiveHours = billableHours ?? durationHours;
+
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
       <h2 className="text-sm font-semibold text-gray-900">Pricing estimate</h2>
@@ -49,11 +63,38 @@ export function PricingSummary({
               {formatCurrency(totalPrice)}
               <span className="ml-1 text-sm font-normal text-gray-400">{currency}</span>
             </p>
-            {(durationHours != null || accountCount != null) && (
+            {(accountCount != null || effectiveHours != null) && (
               <p className="text-xs text-gray-500">
                 {accountCount != null && `${accountCount} account${accountCount !== 1 ? 's' : ''}`}
-                {accountCount != null && durationHours != null && ' · '}
-                {durationHours != null && formatDurationHours(durationHours)}
+                {accountCount != null && effectiveHours != null && ' · '}
+                {effectiveHours != null && formatDurationHours(effectiveHours)}
+                {usesUsageWindows && calendarHours != null && calendarHours !== effectiveHours
+                  ? ` (of ${Math.round(calendarHours)} calendar hrs)`
+                  : !usesUsageWindows
+                    ? ' · assumes 24/7 access'
+                    : ''}
+              </p>
+            )}
+            {baseHourlyPrice != null && (
+              <p className="text-xs text-gray-500">
+                {formatCurrency(baseHourlyPrice)}/hr lab rate
+                {portalHourlyTotal != null || infraHourlyTotal != null ? (
+                  <>
+                    {' '}
+                    (
+                    {[
+                      portalHourlyTotal != null && portalHourlyTotal > 0
+                        ? `${formatCurrency(portalHourlyTotal)} portal`
+                        : null,
+                      infraHourlyTotal != null && infraHourlyTotal > 0
+                        ? `${formatCurrency(infraHourlyTotal)} Azure infra`
+                        : null,
+                    ]
+                      .filter(Boolean)
+                      .join(' + ')}
+                    {accountCount != null && accountCount > 1 ? ` × ${accountCount} accounts` : ''})
+                  </>
+                ) : null}
               </p>
             )}
           </div>
