@@ -247,7 +247,86 @@ const getProvisionedResourcesForRequest = async (requestId) => {
   return result.rows;
 };
 
+const repairInstancePoliciesForRequest = async (requestId) => {
+  const requestResult = await db.query(
+    `
+      SELECT
+        id,
+        location,
+        costing_mode,
+        azure_resource_group_name
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  const request = requestResult.rows[0];
+  if (!request) {
+    throw new AppError('Request not found.', 404);
+  }
+
+  const resourceGroupNames = isPerUserCosting(request.costing_mode)
+    ? (await getStagingResourceGroups(requestId)).map((row) => row.azure_resource_group_name)
+    : request.azure_resource_group_name
+      ? [request.azure_resource_group_name]
+      : [];
+
+  if (resourceGroupNames.length === 0) {
+    throw new AppError('No resource groups found for this request.', 400);
+  }
+
+  const instances = await db.query(
+    `
+      SELECT
+        rsi.service_id,
+        rsi.instance_option,
+        s.name AS service_name
+      FROM request_service_instances rsi
+      INNER JOIN services s ON s.id = rsi.service_id
+      WHERE rsi.request_id = $1
+      ORDER BY s.name
+    `,
+    [requestId]
+  );
+
+  if (instances.rows.length === 0) {
+    return { repaired: 0, resourceGroups: resourceGroupNames };
+  }
+
+  let repaired = 0;
+
+  for (const instance of instances.rows) {
+    for (const resourceGroupName of resourceGroupNames) {
+      await provisionServiceResource({
+        requestId,
+        serviceId: Number(instance.service_id),
+        serviceName: instance.service_name,
+        resourceGroupName,
+        location: request.location,
+        instanceOption: instance.instance_option
+      });
+      repaired += 1;
+    }
+  }
+
+  logEvent('instance_policies_repaired', {
+    requestId,
+    repaired,
+    resourceGroupCount: resourceGroupNames.length,
+    instanceCount: instances.rows.length
+  });
+
+  return {
+    repaired,
+    resourceGroups: resourceGroupNames,
+    location: request.location
+  };
+};
+
 module.exports = {
   provisionServiceResourcesForRequest,
-  getProvisionedResourcesForRequest
+  getProvisionedResourcesForRequest,
+  repairInstancePoliciesForRequest
 };

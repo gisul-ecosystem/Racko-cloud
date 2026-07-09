@@ -1,6 +1,7 @@
 const axios = require('axios');
 const db = require('../db/postgres');
 const { ensureAzureManagementAccess } = require('../config/azure');
+const { getLocationConstraintsForService } = require('../config/serviceResourceProviderMap');
 const {
   getRegionalHourlyPricesForServices,
   getPortalHourlyFees,
@@ -31,6 +32,9 @@ const catalogRegionsCache = {
   expiresAt: 0,
   byServiceName: new Map()
 };
+const azureResourceLocationCache = new Map();
+const providerMetadataCache = new Map();
+const providerMetadataInflight = new Map();
 
 const normalizeServiceName = (value) =>
   String(value || '')
@@ -236,6 +240,195 @@ const intersectRegionNameSets = (regionSets) => {
   return intersection;
 };
 
+const isRegionAgnosticService = (service) => {
+  if (service?.supports_regions === false) {
+    return true;
+  }
+
+  const name = normalizeServiceName(service?.name);
+  return /entra id|azure devops/.test(name);
+};
+
+const normalizeProviderLocationLabel = (locationLabel) =>
+  String(locationLabel || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\([^)]+\)\s*/, '')
+    .replace(/\s+/g, '');
+
+const getCachedAzureResourceLocations = (cacheKey) => {
+  const cached = azureResourceLocationCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.regions;
+  }
+
+  return null;
+};
+
+const setCachedAzureResourceLocations = (cacheKey, regions) => {
+  azureResourceLocationCache.set(cacheKey, {
+    expiresAt: Date.now() + CACHE_TTL_MS,
+    regions
+  });
+};
+
+const getProviderMetadata = async (providerNamespace) => {
+  const normalizedProvider = String(providerNamespace || '').trim();
+  const cacheKey = normalizedProvider.toLowerCase();
+
+  const cached = providerMetadataCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.resourceTypes;
+  }
+
+  if (providerMetadataInflight.has(cacheKey)) {
+    return providerMetadataInflight.get(cacheKey);
+  }
+
+  const fetchPromise = (async () => {
+    const { accessToken, subscriptionId } = await getManagementAccessToken();
+
+    try {
+      const response = await axios.get(
+        `https://management.azure.com/subscriptions/${subscriptionId}/providers/${normalizedProvider}`,
+        {
+          params: { 'api-version': '2021-04-01' },
+          headers: { Authorization: `Bearer ${accessToken}` },
+          timeout: 20000
+        }
+      );
+
+      const resourceTypes = new Map();
+      for (const entry of response.data?.resourceTypes || []) {
+        const resourceType = String(entry?.resourceType || '').trim();
+        if (!resourceType) {
+          continue;
+        }
+
+        resourceTypes.set(resourceType, Array.isArray(entry?.locations) ? entry.locations : []);
+      }
+
+      providerMetadataCache.set(cacheKey, {
+        expiresAt: Date.now() + CACHE_TTL_MS,
+        resourceTypes
+      });
+
+      logAzureEvent(LOG_SERVICE, 'info', 'azure_provider_metadata_fetched', {
+        provider: normalizedProvider,
+        resourceTypeCount: resourceTypes.size
+      });
+
+      return resourceTypes;
+    } catch (error) {
+      logAzureEvent(LOG_SERVICE, 'warn', 'azure_provider_metadata_fetch_failed', {
+        provider: normalizedProvider,
+        ...extractAzureErrorDetails(error)
+      });
+
+      return null;
+    }
+  })();
+
+  providerMetadataInflight.set(cacheKey, fetchPromise);
+
+  try {
+    return await fetchPromise;
+  } finally {
+    providerMetadataInflight.delete(cacheKey);
+  }
+};
+
+const fetchAzureResourceLocationSet = async ({ provider, resourceType, subscriptionRegionNames }) => {
+  const normalizedProvider = String(provider || '').trim();
+  const normalizedResourceType = String(resourceType || '').trim();
+  const cacheKey = `${normalizedProvider.toLowerCase()}/${normalizedResourceType.toLowerCase()}`;
+
+  const cached = getCachedAzureResourceLocations(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const providerMetadata = await getProviderMetadata(normalizedProvider);
+  if (!providerMetadata) {
+    return null;
+  }
+
+  const locationLabels = providerMetadata.get(normalizedResourceType) || [];
+  if (!Array.isArray(locationLabels) || locationLabels.length === 0) {
+    return null;
+  }
+
+  const regions = new Set();
+
+  for (const locationLabel of locationLabels) {
+    const armRegionName = normalizeProviderLocationLabel(locationLabel);
+    if (!armRegionName) {
+      continue;
+    }
+
+    if (subscriptionRegionNames && !subscriptionRegionNames.has(armRegionName)) {
+      continue;
+    }
+
+    if (!isProvisionableLocation({ arm_region_name: armRegionName })) {
+      continue;
+    }
+
+    regions.add(armRegionName);
+  }
+
+  setCachedAzureResourceLocations(cacheKey, regions);
+
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_resource_locations_fetched', {
+    provider: normalizedProvider,
+    resourceType: normalizedResourceType,
+    regionCount: regions.size
+  });
+
+  return regions;
+};
+
+const getDeployableRegionsForService = async (service, subscriptionRegionNames) => {
+  const constraints = getLocationConstraintsForService(service?.name);
+  const locationSets = [];
+
+  for (const { provider, resourceType } of constraints.resourceTypes) {
+    const regions = await fetchAzureResourceLocationSet({
+      provider,
+      resourceType,
+      subscriptionRegionNames
+    });
+    if (regions?.size) {
+      locationSets.push(regions);
+    }
+  }
+
+  return intersectRegionNameSets(locationSets);
+};
+
+const getDeployableRegionsForServices = async (services, subscriptionRegionNames = null) => {
+  const regionConstrainedServices = (Array.isArray(services) ? services : []).filter(
+    (service) => !isRegionAgnosticService(service)
+  );
+
+  if (regionConstrainedServices.length === 0) {
+    return null;
+  }
+
+  const perServiceRegionSets = await Promise.all(
+    regionConstrainedServices.map((service) =>
+      getDeployableRegionsForService(service, subscriptionRegionNames)
+    )
+  );
+
+  const validSets = perServiceRegionSets.filter((regionSet) => regionSet && regionSet.size > 0);
+  if (validSets.length === 0) {
+    return null;
+  }
+
+  return intersectRegionNameSets(validSets);
+};
+
 const resolveInstanceOptionForLocation = (
   serviceId,
   instancesByServiceId,
@@ -256,31 +449,6 @@ const resolveInstanceOptionForLocation = (
 
   const paidOption = options.find((option) => !/free/i.test(String(option?.option_name || '')));
   return (paidOption || options[0])?.option_name || '';
-};
-
-const getCatalogRegionsForService = (serviceName, catalogByServiceName) => {
-  const directKey = normalizeServiceName(serviceName);
-  const directMatch = catalogByServiceName.get(directKey);
-  if (directMatch?.size) {
-    return directMatch;
-  }
-
-  for (const [catalogServiceName, regions] of catalogByServiceName.entries()) {
-    if (directKey.includes(catalogServiceName) || catalogServiceName.includes(directKey)) {
-      return regions;
-    }
-  }
-
-  return new Map();
-};
-
-const isRegionAgnosticService = (service) => {
-  if (service?.supports_regions === false) {
-    return true;
-  }
-
-  const name = normalizeServiceName(service?.name);
-  return /entra id|azure devops/.test(name);
 };
 
 const getCatalogIntersectionForServiceIds = async (serviceIds) => {
@@ -322,88 +490,65 @@ const getCatalogIntersectionForServiceIds = async (serviceIds) => {
   }));
 };
 
-const getRegionsForService = async (
-  service,
-  instancesByServiceId,
-  selectedInstancesByServiceId,
-  catalogByServiceName
-) => {
-  const serviceId = Number(service.id);
-  const instanceOption = resolveInstanceOptionForLocation(
-    serviceId,
-    instancesByServiceId,
-    selectedInstancesByServiceId
-  );
-
-  const retailMap = await getServiceRegionalHourlyPrices(service, instanceOption);
-  if (retailMap.size > 0) {
-    return new Set(retailMap.keys());
-  }
-
-  const catalogRegions = getCatalogRegionsForService(service.name, catalogByServiceName);
-  if (catalogRegions.size > 0) {
-    return new Set(catalogRegions.keys());
-  }
-
-  return null;
-};
-
 const resolveAvailableRegionsForServices = async (
   services,
   instancesByServiceId,
-  selectedInstancesByServiceId
+  selectedInstancesByServiceId,
+  subscriptionRegionNames = null
 ) => {
   const catalogByServiceName = await loadCatalogRegionsByServiceName();
   const regionConstrainedServices = services.filter((service) => !isRegionAgnosticService(service));
 
-  const perServiceRegionSets = await Promise.all(
-    regionConstrainedServices.map((service) =>
-      getRegionsForService(service, instancesByServiceId, selectedInstancesByServiceId, catalogByServiceName)
+  const [deployableRegions, retailIntersection] = await Promise.all([
+    getDeployableRegionsForServices(regionConstrainedServices, subscriptionRegionNames),
+    intersectRegionalPriceMaps(
+      await Promise.all(
+        regionConstrainedServices.map(async (service) => {
+          const serviceId = Number(service.id);
+          const instanceOption = resolveInstanceOptionForLocation(
+            serviceId,
+            instancesByServiceId,
+            selectedInstancesByServiceId
+          );
+          return getServiceRegionalHourlyPrices(service, instanceOption);
+        })
+      )
     )
-  );
+  ]);
 
-  const retailIntersection = intersectRegionalPriceMaps(
-    await Promise.all(
-      regionConstrainedServices.map(async (service) => {
-        const serviceId = Number(service.id);
-        const instanceOption = resolveInstanceOptionForLocation(
-          serviceId,
-          instancesByServiceId,
-          selectedInstancesByServiceId
-        );
-        return getServiceRegionalHourlyPrices(service, instanceOption);
-      })
-    )
-  );
-
-  let availableRegions = intersectRegionNameSets(
-    perServiceRegionSets.filter((regionSet) => regionSet && regionSet.size > 0)
-  );
-
-  if (!availableRegions || availableRegions.size === 0) {
-    if (retailIntersection.size > 0) {
-      availableRegions = new Set(retailIntersection.keys());
-    }
-  }
+  let availableRegions = deployableRegions;
+  let regionSource = 'azure-resource-provider-api';
 
   if (!availableRegions || availableRegions.size === 0) {
     const catalogRows = await getCatalogIntersectionForServiceIds(
       regionConstrainedServices.map((service) => Number(service.id))
     );
+
     if (catalogRows.length > 0) {
       availableRegions = new Set(catalogRows.map((row) => row.arm_region_name));
+      regionSource = 'catalog-intersection';
     }
   }
 
   if (!availableRegions || availableRegions.size === 0) {
     availableRegions = new Set(DEFAULT_FALLBACK_REGIONS);
+    regionSource = 'default-fallback';
   }
+
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_region_source_resolved', {
+    regionSource,
+    deployableRegionCount: deployableRegions?.size || 0,
+    retailRegionCount: retailIntersection.size,
+    availableRegionCount: availableRegions.size,
+    regionConstrainedServiceCount: regionConstrainedServices.length
+  });
 
   return {
     availableRegions,
     retailIntersection,
     catalogByServiceName,
-    regionConstrainedServiceCount: regionConstrainedServices.length
+    regionConstrainedServiceCount: regionConstrainedServices.length,
+    regionSource
   };
 };
 
@@ -542,13 +687,16 @@ const getLocationsForSelectedServices = async (
     return [];
   }
 
-  const [subscriptionLocations, availability] = await Promise.all([
-    getSubscriptionLocations(),
-    resolveAvailableRegionsForServices(services, instancesByServiceId, selectedInstancesByServiceId)
-  ]);
-
+  const subscriptionLocations = await getSubscriptionLocations();
   const subscriptionRegionNames = new Set(
     subscriptionLocations.map((location) => location.arm_region_name)
+  );
+
+  const availability = await resolveAvailableRegionsForServices(
+    services,
+    instancesByServiceId,
+    selectedInstancesByServiceId,
+    subscriptionRegionNames
   );
 
   let candidateRegionNames = availability.availableRegions;
@@ -607,7 +755,7 @@ const getLocationsForSelectedServices = async (
     serviceCount: services.length,
     candidateCount: candidateLocations.length,
     retailRegionCount: availability.retailIntersection.size,
-    source: 'service-regional-intersection'
+    source: availability.regionSource || 'azure-resource-provider-api'
   });
 
   return candidateLocations
@@ -638,10 +786,34 @@ const getLocationsForSelectedServices = async (
     });
 };
 
+const assertLocationAvailableForServices = async (location, services = []) => {
+  assertProvisionableLocation(location);
+
+  const normalizedLocation = String(location || '').trim().toLowerCase();
+  const subscriptionLocations = await getSubscriptionLocations();
+  const subscriptionRegionNames = new Set(
+    subscriptionLocations.map((entry) => entry.arm_region_name)
+  );
+  const deployableRegions = await getDeployableRegionsForServices(services, subscriptionRegionNames);
+
+  if (!deployableRegions || deployableRegions.size === 0) {
+    return;
+  }
+
+  if (!deployableRegions.has(normalizedLocation)) {
+    throw new AppError(
+      `Region '${normalizedLocation}' is not available for the selected services. Choose a region from the available list.`,
+      400
+    );
+  }
+};
+
 module.exports = {
   isProvisionableLocation,
   assertProvisionableLocation,
+  assertLocationAvailableForServices,
   getSubscriptionLocations,
   getLocationsForSelectedServices,
-  resolveAvailableRegionsForServices
+  resolveAvailableRegionsForServices,
+  getDeployableRegionsForServices
 };

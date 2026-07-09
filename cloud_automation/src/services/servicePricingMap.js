@@ -30,6 +30,8 @@ const SERVICE_PRICING_MAP = {
   'azure ai vision': 'Foundry Tools',
   'azure ai language': 'Foundry Tools',
   'azure ai speech': 'Foundry Tools',
+  'azure service bus': 'Service Bus',
+  'service bus': 'Service Bus',
   'azure event grid': 'Event Grid',
   'event grid': 'Event Grid',
   'azure logic apps': 'Logic Apps',
