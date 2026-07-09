@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -44,16 +45,26 @@ func (r *Reporter) Report(jobID, agentID, status, logs string) error {
 	}
 
 	url := fmt.Sprintf("%s/api/v1/agent/jobs/%s/result", r.cfg.PlatformURL, jobID)
+	log.Printf("[reporter] Sending result — job=%s status=%s payloadBytes=%d url=%s",
+		jobID, status, len(body), url)
+
 	resp, err := r.client.Post(url, "application/json", bytes.NewReader(body))
 	if err != nil {
+		log.Printf("[reporter] HTTP error — job=%s status=%s err=%v", jobID, status, err)
 		return fmt.Errorf("http post: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Read response body for detailed error logging
+	respBody, _ := io.ReadAll(resp.Body)
+
 	if resp.StatusCode != http.StatusOK {
+		log.Printf("[reporter] Server rejected result — job=%s status=%s httpStatus=%d responseBody=%s",
+			jobID, status, resp.StatusCode, string(respBody))
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	log.Printf("[reporter] %s — job=%s status=%s", time.Now().Format(time.RFC3339), jobID, status)
+	log.Printf("[reporter] %s — job=%s status=%s ok (payloadBytes=%d)",
+		time.Now().Format(time.RFC3339), jobID, status, len(body))
 	return nil
 }
