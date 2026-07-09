@@ -1,19 +1,23 @@
 package executor
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/racko-ai/agent/config"
 	"github.com/racko-ai/agent/installer"
 	"github.com/racko-ai/agent/poller"
 	"github.com/racko-ai/agent/reporter"
-	"github.com/racko-ai/agent/retry"
 )
+
+// installMu serializes all installs — one package at a time.
+// Package managers share OS-level locks and bandwidth; running them
+// concurrently causes contention, slower downloads, and hangs.
+var installMu sync.Mutex
 
 // Executor processes jobs received from the poller.
 type Executor struct {
@@ -33,75 +37,43 @@ func New(agentID string, cfg *config.Config, r *reporter.Reporter) *Executor {
 }
 
 // Handle is the JobHandler passed to the poller.
+// Jobs run concurrently (one goroutine per job) but installs are serialized
+// via installMu so only one package manager runs at a time.
 func (e *Executor) Handle(job poller.Job) {
-	log.Printf("[executor] %s — received job id=%s packages=%d",
-		time.Now().Format(time.RFC3339), job.ID, len(job.SoftwareIDs))
+	log.Printf("[executor] Job received id=%s packages=%d", job.ID, len(job.SoftwareIDs))
 
-	// Report installing immediately
 	if err := e.rep.Report(job.ID, e.agentID, "installing", ""); err != nil {
-		log.Printf("[executor] Failed to report 'installing': %v", err)
+		log.Printf("[executor] Failed to report 'installing' for job=%s: %v", job.ID, err)
 	}
 
 	var combinedLogs string
 
 	for _, swID := range job.SoftwareIDs {
-		// Fetch full software record from platform so we know the install method,
-		// package name, fileUrl etc.
 		pkg, err := e.fetchSoftware(swID)
 		if err != nil {
+			log.Printf("[executor] Failed to fetch software id=%s: %v", swID, err)
 			combinedLogs += fmt.Sprintf("[error] Could not fetch software %s: %v\n", swID, err)
 			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
-				log.Printf("[executor] Failed to report: %v", err)
+				log.Printf("[executor] Failed to report 'failed' for job=%s: %v", job.ID, err)
 			}
 			continue
 		}
 
-		log.Printf("[executor] Installing %s v%s via %s", pkg.Name, pkg.Version, pkg.InstallMethod)
+		log.Printf("[executor] Job %s waiting for install slot (package=%s)", job.ID, pkg.Name)
 
-		logs, success := retry.Run(
-			func() (string, error) {
-				// Install with 30-minute timeout
-				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-				defer cancel()
+		// Acquire install lock — waits for any other in-progress install to finish.
+		installMu.Lock()
+		log.Printf("[executor] Installing %s v%s via %s (job=%s)", pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
+		logs, err := installer.Install(*pkg)
+		installMu.Unlock()
 
-				resultChan := make(chan struct {
-					logs string
-					err  error
-				}, 1)
+		combinedLogs += truncateLogs(logs, 50*1024) // cap at 50KB per package
 
-				go func() {
-					l, e := installer.Install(*pkg)
-					resultChan <- struct {
-						logs string
-						err  error
-					}{l, e}
-				}()
-
-				select {
-				case result := <-resultChan:
-					return result.logs, result.err
-				case <-ctx.Done():
-					return "", fmt.Errorf("install timeout after 30 minutes")
-				}
-			},
-			func(attempt int, logs string) {
-				combinedLogs += logs
-				status := "retrying"
-				if attempt >= 3 {
-					status = "failed"
-				}
-				if err := e.rep.Report(job.ID, e.agentID, status, combinedLogs); err != nil {
-					log.Printf("[executor] Failed to report '%s': %v", status, err)
-				}
-			},
-		)
-
-		combinedLogs += logs
-
-		if !success {
-			log.Printf("[executor] Job %s failed for %s — continuing with remaining software", job.ID, pkg.Name)
+		if err != nil {
+			log.Printf("[executor] Install failed for %s: %v", pkg.Name, err)
+			log.Printf("[executor] Output:\n%s", logs)
 			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
-				log.Printf("[executor] Failed to report 'failed': %v", err)
+				log.Printf("[executor] Failed to report 'failed' for job=%s: %v", job.ID, err)
 			}
 			continue
 		}
@@ -109,14 +81,13 @@ func (e *Executor) Handle(job poller.Job) {
 		log.Printf("[executor] %s installed successfully", pkg.Name)
 	}
 
-	log.Printf("[executor] Job %s completed", job.ID)
+	log.Printf("[executor] Job %s complete — reporting success", job.ID)
 	if err := e.rep.Report(job.ID, e.agentID, "success", combinedLogs); err != nil {
-		log.Printf("[executor] Failed to report 'success': %v", err)
+		log.Printf("[executor] Failed to report 'success' for job=%s: %v", job.ID, err)
 	}
 }
 
 // fetchSoftware calls GET /api/v1/agent/software-catalog/:id?agentId=xxx
-// to retrieve the full install details for a software item.
 func (e *Executor) fetchSoftware(softwareID string) (*installer.SoftwarePackage, error) {
 	url := fmt.Sprintf("%s/api/v1/agent/software-catalog/%s?agentId=%s",
 		e.cfg.PlatformURL, softwareID, e.agentID)
@@ -145,4 +116,15 @@ func (e *Executor) fetchSoftware(softwareID string) (*installer.SoftwarePackage,
 	}
 
 	return &result.Data.Software, nil
+}
+
+// truncateLogs keeps at most maxBytes of logs, retaining the tail (most recent output).
+// Install logs can be very large — MySQL, Docker etc produce MB of output.
+// We keep the tail because it contains the final result/error, which is most useful.
+func truncateLogs(logs string, maxBytes int) string {
+	if len(logs) <= maxBytes {
+		return logs
+	}
+	truncated := logs[len(logs)-maxBytes:]
+	return "[...truncated, showing last " + fmt.Sprintf("%d", maxBytes/1024) + "KB...]\n" + truncated
 }

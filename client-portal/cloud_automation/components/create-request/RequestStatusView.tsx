@@ -129,6 +129,32 @@ export function RequestStatusView({
             </div>
           )}
 
+          {isComplete && request?.location && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-amber-700" />
+                <div>
+                  <h2 className="text-sm font-semibold text-amber-900">
+                    Use lab region {request.location} in Azure Portal
+                  </h2>
+                  <p className="mt-1 text-sm text-amber-900">
+                    When creating VMs or other resources, set Region to{' '}
+                    <span className="font-medium">{request.location}</span> in Azure Portal. The
+                    portal often defaults to East US, which may not support your selected instance
+                    size.
+                  </p>
+                  <p className="mt-2 text-sm text-amber-900">
+                    For B-series VMs, set Availability options to{' '}
+                    <span className="font-medium">No infrastructure redundancy required</span>.
+                    Availability zones hide B-series sizes. Use an allowed size such as{' '}
+                    <span className="font-medium">Standard_B1s</span> or{' '}
+                    <span className="font-medium">Standard_B1ms</span> — not D-series or other tiers.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-4">
               <div>
@@ -253,6 +279,10 @@ export function RequestStatusView({
                     {
                       label: 'Customer',
                       value: request ? getCustomerEmail(request) : '—',
+                    },
+                    {
+                      label: 'Lab region',
+                      value: request?.location ? String(request.location) : '—',
                     },
                     {
                       label: 'Resource group',

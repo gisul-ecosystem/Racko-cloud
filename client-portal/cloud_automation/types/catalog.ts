@@ -35,7 +35,7 @@ export interface CatalogInstance {
   id?: number;
   serviceId: number;
   option_name: string;
-  guide?: string | { summary?: string; description?: string; tier?: string };
+  guide?: string | { summary?: string; description?: string; tier?: string; portalTips?: string[] };
   sort_order?: number;
   daily_price?: number;
   dailyPrice?: number;
@@ -72,7 +72,7 @@ export interface AvailableLocation {
 export interface AvailableInstance {
   serviceId: number;
   option_name: string;
-  guide?: string | { summary?: string; description?: string; tier?: string };
+  guide?: string | { summary?: string; description?: string; tier?: string; portalTips?: string[] };
   hourlyPrice?: number;
   hourly_price?: number;
   dailyPrice?: number;

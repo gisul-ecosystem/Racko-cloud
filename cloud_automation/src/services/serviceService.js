@@ -527,7 +527,7 @@ const getAvailableLocations = async (serviceIds, selectedInstances = {}) => {
   console.log({
     selectedServiceIds: normalizedServiceIds,
     locationCount: locations.length,
-    source: 'service-regional-intersection'
+    source: 'azure-resource-provider-api'
   });
 
   return locations;

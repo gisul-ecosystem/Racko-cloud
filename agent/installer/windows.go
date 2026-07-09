@@ -5,14 +5,21 @@ package installer
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+// directInstallTimeout is applied to msi/exe/zip/script installs where we
+// spawn the process directly with no built-in timeout of their own.
+const directInstallTimeout = 4 * time.Hour
 
 func installOnPlatform(pkg SoftwarePackage) (string, error) {
 	switch pkg.InstallMethod {
@@ -34,20 +41,14 @@ func installOnPlatform(pkg SoftwarePackage) (string, error) {
 }
 
 // ensureChocolatey installs Chocolatey if not already present.
-// Chocolatey works under the SYSTEM account — winget does not.
 func ensureChocolatey() (string, error) {
-	// Check if choco is already installed
 	if _, err := exec.LookPath("choco"); err == nil {
-		return "", nil // already installed
+		return "", nil
 	}
-
-	// Also check the default install path
 	chocoExe := `C:\ProgramData\chocolatey\bin\choco.exe`
 	if _, err := os.Stat(chocoExe); err == nil {
-		return "", nil // already installed
+		return "", nil
 	}
-
-	// Install Chocolatey via PowerShell
 	installScript := `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`
 	out, err := runCmd("powershell.exe",
 		"-ExecutionPolicy", "Bypass",
@@ -60,18 +61,16 @@ func ensureChocolatey() (string, error) {
 	return out, nil
 }
 
-// runWinget installs via winget. Falls back to choco if winget is not available.
-// Treats "already installed" output as success (idempotent).
+// runWinget installs via winget with no timeout — winget manages itself.
+// Falls back to choco if winget is unavailable.
 func runWinget(pkg SoftwarePackage) (string, error) {
 	wingetID := pkg.WingetID
 	if wingetID == "" {
 		wingetID = pkg.Name
 	}
 
-	// Check if winget is available
 	wingetPath, err := exec.LookPath("winget")
 	if err != nil {
-		// winget not available — fall back to choco if chocoName is provided
 		if pkg.ChocoName != "" || pkg.Name != "" {
 			return runChoco(pkg)
 		}
@@ -97,25 +96,18 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 		return combined, nil
 	}
 
-	// Winget exits non-zero for some "already installed" cases.
-	// Detect these and treat as success.
 	outLower := strings.ToLower(stdout.String() + stderr.String())
-	alreadyInstalledSignals := []string{
-		"no applicable upgrade found",
-		"already installed",
-		"no available upgrade found",
-		"no newer package versions are available",
-	}
 	for _, signal := range alreadyInstalledSignals {
 		if strings.Contains(outLower, signal) {
-			return combined, nil // treat as success
+			return combined, nil
 		}
 	}
 
 	return combined, fmt.Errorf("winget exited with error: %w", err)
 }
+
+// runChoco installs via choco with no timeout — choco manages itself.
 func runChoco(pkg SoftwarePackage) (string, error) {
-	// Auto-install Chocolatey if missing
 	installLog, err := ensureChocolatey()
 	if err != nil {
 		return installLog, fmt.Errorf("ensure chocolatey: %w", err)
@@ -132,22 +124,13 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 
 	out, err := runCmd(`C:\ProgramData\chocolatey\bin\choco.exe`, args...)
 	if err != nil {
-		// Fallback: try choco from PATH
 		out2, err2 := runCmd("choco", args...)
 		if err2 != nil {
 			combined := installLog + out + out2
-			// Idempotency: choco can exit non-zero when the package is already installed.
-			// Treat these as success rather than a failure.
 			outLower := strings.ToLower(combined)
-			alreadyInstalledSignals := []string{
-				"already installed",
-				"already exists",
-				"package already installed",
-				"nothing to install",
-				"is already installed",
-			}
 			for _, signal := range alreadyInstalledSignals {
 				if strings.Contains(outLower, signal) {
+					log.Printf("[choco] Already installed detected for %s — treating as success", name)
 					return combined, nil
 				}
 			}
@@ -158,7 +141,7 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 	return installLog + out, nil
 }
 
-// runMSI downloads and installs a .msi file silently via msiexec.
+// runMSI downloads and installs a .msi file with a 4-hour safety timeout.
 func runMSI(pkg SoftwarePackage) (string, error) {
 	path, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -170,10 +153,10 @@ func runMSI(pkg SoftwarePackage) (string, error) {
 	if pkg.InstallArgs != "" {
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
-	return runCmd("msiexec", args...)
+	return runCmdWithTimeout(directInstallTimeout, "msiexec", args...)
 }
 
-// runEXE downloads and runs a silent .exe installer.
+// runEXE downloads and runs a silent .exe installer with a 4-hour safety timeout.
 func runEXE(pkg SoftwarePackage) (string, error) {
 	path, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -181,15 +164,14 @@ func runEXE(pkg SoftwarePackage) (string, error) {
 	}
 	defer cleanup()
 
-	// Default silent flags — overridden by installArgs if provided
 	args := []string{"/S", "/silent", "/quiet"}
 	if pkg.InstallArgs != "" {
 		args = strings.Fields(pkg.InstallArgs)
 	}
-	return runCmd(path, args...)
+	return runCmdWithTimeout(directInstallTimeout, path, args...)
 }
 
-// runZIP downloads a .zip, extracts it to a temp dir, then runs setup.exe or install.exe.
+// runZIP downloads, extracts, and runs the installer with a 4-hour safety timeout.
 func runZIP(pkg SoftwarePackage) (string, error) {
 	zipPath, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -197,7 +179,6 @@ func runZIP(pkg SoftwarePackage) (string, error) {
 	}
 	defer cleanup()
 
-	// Extract to a sibling temp directory
 	extractDir := zipPath + "_extracted"
 	if err := os.MkdirAll(extractDir, 0o755); err != nil {
 		return "", fmt.Errorf("create extract dir: %w", err)
@@ -208,9 +189,8 @@ func runZIP(pkg SoftwarePackage) (string, error) {
 		return "", fmt.Errorf("extract zip: %w", err)
 	}
 
-	// Look for common installer filenames
-	installer := findInstallerInDir(extractDir, []string{"setup.exe", "install.exe", "installer.exe"})
-	if installer == "" {
+	installerPath := findInstallerInDir(extractDir, []string{"setup.exe", "install.exe", "installer.exe"})
+	if installerPath == "" {
 		return "", fmt.Errorf("no installer found in zip (expected setup.exe, install.exe, or installer.exe)")
 	}
 
@@ -218,10 +198,10 @@ func runZIP(pkg SoftwarePackage) (string, error) {
 	if pkg.InstallArgs != "" {
 		args = strings.Fields(pkg.InstallArgs)
 	}
-	return runCmd(installer, args...)
+	return runCmdWithTimeout(directInstallTimeout, installerPath, args...)
 }
 
-// runPowerShell downloads and executes a .ps1 script with bypass execution policy.
+// runPowerShell downloads and runs a .ps1 script with a 4-hour safety timeout.
 func runPowerShell(pkg SoftwarePackage) (string, error) {
 	path, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -233,11 +213,25 @@ func runPowerShell(pkg SoftwarePackage) (string, error) {
 	if pkg.InstallArgs != "" {
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
-	return runCmd("powershell.exe", args...)
+	return runCmdWithTimeout(directInstallTimeout, "powershell.exe", args...)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
+// alreadyInstalledSignals are choco/winget output strings that indicate the
+// package is already present — treated as success (idempotent installs).
+var alreadyInstalledSignals = []string{
+	"already installed",
+	"already exists",
+	"package already installed",
+	"nothing to install",
+	"is already installed",
+	"no applicable upgrade found",
+	"no available upgrade found",
+	"no newer package versions are available",
+}
+
+// runCmd runs a command with no timeout (for package managers that self-manage).
 func runCmd(name string, args ...string) (string, error) {
 	cmd := exec.Command(name, args...)
 	var stdout, stderr bytes.Buffer
@@ -247,6 +241,29 @@ func runCmd(name string, args ...string) (string, error) {
 	combined := fmt.Sprintf("cmd: %s %v\nstdout:\n%s\nstderr:\n%s",
 		name, args, stdout.String(), stderr.String())
 	if err != nil {
+		log.Printf("[installer] %s failed: %v\noutput: %s", name, err, combined)
+		return combined, fmt.Errorf("%s exited with error: %w", name, err)
+	}
+	return combined, nil
+}
+
+// runCmdWithTimeout runs a command with a hard timeout (for direct installers).
+func runCmdWithTimeout(timeout time.Duration, name string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	combined := fmt.Sprintf("cmd: %s %v\nstdout:\n%s\nstderr:\n%s",
+		name, args, stdout.String(), stderr.String())
+	if ctx.Err() == context.DeadlineExceeded {
+		return combined, fmt.Errorf("%s timed out after %s", name, timeout)
+	}
+	if err != nil {
+		log.Printf("[installer] %s failed: %v\noutput: %s", name, err, combined)
 		return combined, fmt.Errorf("%s exited with error: %w", name, err)
 	}
 	return combined, nil
@@ -296,7 +313,6 @@ func extractZip(zipPath, destDir string) error {
 
 	for _, f := range r.File {
 		fPath := filepath.Join(destDir, filepath.Clean(f.Name))
-		// Guard against zip slip
 		if !strings.HasPrefix(fPath, filepath.Clean(destDir)+string(os.PathSeparator)) {
 			return fmt.Errorf("invalid file path in zip: %s", f.Name)
 		}
@@ -333,7 +349,6 @@ func findInstallerInDir(dir string, names []string) string {
 			return candidate
 		}
 	}
-	// Walk subdirs one level deep
 	entries, _ := os.ReadDir(dir)
 	for _, entry := range entries {
 		if entry.IsDir() {
