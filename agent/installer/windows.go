@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -115,11 +116,16 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 	return combined, fmt.Errorf("winget exited with error: %w", err)
 }
 func runChoco(pkg SoftwarePackage) (string, error) {
+	log.Printf("[choco] Starting install for name=%s chocoName=%s version=%s", pkg.Name, pkg.ChocoName, pkg.Version)
+
 	// Auto-install Chocolatey if missing
+	log.Printf("[choco] Ensuring chocolatey is installed...")
 	installLog, err := ensureChocolatey()
 	if err != nil {
+		log.Printf("[choco] ERROR ensuring chocolatey: %v", err)
 		return installLog, fmt.Errorf("ensure chocolatey: %w", err)
 	}
+	log.Printf("[choco] Chocolatey ready")
 
 	name := pkg.ChocoName
 	if name == "" {
@@ -130,14 +136,16 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
 
-	out, err := runCmd(`C:\ProgramData\chocolatey\bin\choco.exe`, args...)
+	chocoExe := `C:\ProgramData\chocolatey\bin\choco.exe`
+	log.Printf("[choco] Running: %s %v", chocoExe, args)
+	out, err := runCmd(chocoExe, args...)
 	if err != nil {
-		// Fallback: try choco from PATH
+		log.Printf("[choco] Primary choco path failed: %v — trying PATH fallback", err)
 		out2, err2 := runCmd("choco", args...)
 		if err2 != nil {
 			combined := installLog + out + out2
+			log.Printf("[choco] PATH fallback also failed: %v", err2)
 			// Idempotency: choco can exit non-zero when the package is already installed.
-			// Treat these as success rather than a failure.
 			outLower := strings.ToLower(combined)
 			alreadyInstalledSignals := []string{
 				"already installed",
@@ -148,13 +156,16 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 			}
 			for _, signal := range alreadyInstalledSignals {
 				if strings.Contains(outLower, signal) {
+					log.Printf("[choco] Detected already-installed signal '%s' — treating as success", signal)
 					return combined, nil
 				}
 			}
 			return combined, fmt.Errorf("choco install failed: %w", err2)
 		}
+		log.Printf("[choco] PATH fallback succeeded for name=%s", name)
 		return installLog + out2, nil
 	}
+	log.Printf("[choco] Install succeeded for name=%s", name)
 	return installLog + out, nil
 }
 
@@ -239,6 +250,7 @@ func runPowerShell(pkg SoftwarePackage) (string, error) {
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
 func runCmd(name string, args ...string) (string, error) {
+	log.Printf("[runCmd] Executing: %s %v", name, args)
 	cmd := exec.Command(name, args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -247,8 +259,13 @@ func runCmd(name string, args ...string) (string, error) {
 	combined := fmt.Sprintf("cmd: %s %v\nstdout:\n%s\nstderr:\n%s",
 		name, args, stdout.String(), stderr.String())
 	if err != nil {
+		log.Printf("[runCmd] FAILED: %s %v — exitErr=%v", name, args, err)
+		log.Printf("[runCmd] stdout: %s", stdout.String())
+		log.Printf("[runCmd] stderr: %s", stderr.String())
 		return combined, fmt.Errorf("%s exited with error: %w", name, err)
 	}
+	log.Printf("[runCmd] SUCCESS: %s %v", name, args)
+	log.Printf("[runCmd] stdout: %s", stdout.String())
 	return combined, nil
 }
 
