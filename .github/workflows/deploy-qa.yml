@@ -33,11 +33,10 @@ jobs:
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Build core-api image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:qa -f core-api/Dockerfile core-api/
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:qa -f core-api/Dockerfile core-api/
 
       - name: Push core-api image
         run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:${{ env.IMAGE_TAG }}
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:qa
 
   build-cloud-gateway:
@@ -51,11 +50,10 @@ jobs:
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Build cloud-gateway image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:qa -f cloud-gateway/Dockerfile cloud-gateway/
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:qa -f cloud-gateway/Dockerfile cloud-gateway/
 
       - name: Push cloud-gateway image
         run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:${{ env.IMAGE_TAG }}
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:qa
 
   build-cloud-automation:
@@ -69,11 +67,10 @@ jobs:
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Build cloud-automation image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:qa -f cloud_automation/Dockerfile cloud_automation/
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:qa -f cloud_automation/Dockerfile cloud_automation/
 
       - name: Push cloud-automation image
         run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:${{ env.IMAGE_TAG }}
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:qa
 
   build-cloud-automation-aws:
@@ -87,11 +84,10 @@ jobs:
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Build cloud-automation-aws image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:qa -f cloud_automation_aws/Dockerfile cloud_automation_aws/
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:qa -f cloud_automation_aws/Dockerfile cloud_automation_aws/
 
       - name: Push cloud-automation-aws image
         run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:${{ env.IMAGE_TAG }}
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:qa
 
   build-client-portal:
@@ -108,13 +104,11 @@ jobs:
         run: |
           docker build \
             --build-arg NEXT_PUBLIC_GATEWAY_URL=https://api-qa.racko.ai \
-            -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }} \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:qa \
             -f client-portal/Dockerfile client-portal/
 
       - name: Push client-portal image
         run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }}
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:qa
 
   deploy:
