@@ -10,8 +10,10 @@ const {
 } = require('../utils/usageSchedule');
 const {
   loadUsageWindowsByRequest,
-  evaluateWindowDailyLimitAccess
+  evaluateWindowDailyLimitAccess,
+  requestHasUsageWindows
 } = require('./usageWindowAccessService');
+const { isWindowEnforcementPaused } = require('../utils/windowEnforcementPause');
 const { isUniqueOpenSessionViolation } = require('../utils/openSessionConstraint');
 
 async function getLiveSessionMinutes(client, requestId, userId) {
@@ -103,7 +105,8 @@ async function startUsageSession({ requestId, userId }) {
         request_id,
         used_today_minutes,
         last_reset_date,
-        blocked_until
+        blocked_until,
+        window_enforcement_paused_until
       FROM azure_users
       WHERE id = $1 AND request_id = $2
       `,
@@ -115,8 +118,9 @@ async function startUsageSession({ requestId, userId }) {
     }
 
     const user = userResult.rows[0];
+    const enforcementPaused = isWindowEnforcementPaused(user);
 
-    if (request.enable_daily_usage) {
+    if (!enforcementPaused && request.enable_daily_usage) {
       const refreshedUser = await ensureDailyReset(client, request, user, userId, requestId);
       const access = evaluateUsageAccess({
         request,
@@ -127,6 +131,24 @@ async function startUsageSession({ requestId, userId }) {
       if (!access.allowed) {
         console.log(`[SESSION_STARTED] User ${userId} denied: ${access.reason}`);
         throw new AppError(access.message, 403);
+      }
+    } else if (!enforcementPaused) {
+      const hasUsageWindows = await requestHasUsageWindows(requestId);
+
+      if (hasUsageWindows) {
+        const windowsByRequest = await loadUsageWindowsByRequest([requestId]);
+        const windows = windowsByRequest.get(Number(requestId)) || [];
+        const windowAccess = await evaluateWindowDailyLimitAccess({
+          requestId,
+          userId,
+          windows,
+          at: new Date()
+        });
+
+        if (!windowAccess.allowed) {
+          console.log(`[SESSION_STARTED] User ${userId} denied: ${windowAccess.reason}`);
+          throw new AppError(windowAccess.message, 403);
+        }
       }
     }
 
@@ -208,6 +230,19 @@ async function startUsageSession({ requestId, userId }) {
         alreadyActive: true
       };
     }
+
+    await client.query(
+      `
+        UPDATE azure_users
+        SET
+          status = 'Active',
+          azure_account_enabled = TRUE,
+          last_signin_at = NOW()
+        WHERE id = $1
+          AND request_id = $2
+      `,
+      [userId, requestId]
+    );
 
     await client.query('COMMIT');
 
@@ -542,6 +577,7 @@ async function getActiveSessions() {
       au.last_reset_date,
       au.blocked_until,
       au.azure_user_id,
+      au.window_enforcement_paused_until,
       EXISTS (
         SELECT 1
         FROM request_usage_windows ruw
@@ -588,22 +624,34 @@ async function getActiveSessions() {
         at: new Date()
       });
 
+      const enforcementPaused = isWindowEnforcementPaused(row);
+      const effectiveAccess = enforcementPaused
+        ? {
+            ...windowAccess,
+            allowed: true,
+            reason: 'ok',
+            blockedForToday: false,
+            blockedReason: null,
+            message: 'Admin override — window enforcement paused.'
+          }
+        : windowAccess;
+
       mapped.push({
         sessionId: row.session_id,
         requestId: normalizedRequestId,
         userId: normalizedUserId,
         loginAt: row.login_at,
-        enforceInAzure: true,
+        enforceInAzure: !enforcementPaused,
         currentSessionMinutes,
         usedTodayMinutes: Number(windowAccess.consumedMinutes || 0),
         dailyLimitMinutes: Number(windowAccess.limitMinutes || 0),
         totalUsedMinutes: Number(windowAccess.consumedMinutes || 0),
         withinWindow: windowAccess.withinWindow,
         access: {
-          allowed: windowAccess.allowed,
-          reason: windowAccess.reason,
-          message: windowAccess.message,
-          remainingMinutes: windowAccess.remainingMinutes
+          allowed: effectiveAccess.allowed,
+          reason: effectiveAccess.reason,
+          message: effectiveAccess.message,
+          remainingMinutes: effectiveAccess.remainingMinutes
         },
         request: row
       });

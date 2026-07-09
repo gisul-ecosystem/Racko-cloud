@@ -438,7 +438,7 @@ const unblockUser = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
     const userId = Number(req.params.userId);
-    const { resetUsage } = req.body || {};
+    const { resetUsage, pauseWindowEnforcement, pauseWindowHours } = req.body || {};
 
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new AppError('Request id must be a positive integer.', 400);
@@ -452,7 +452,9 @@ const unblockUser = async (req, res, next) => {
       requestId,
       userId,
       adminEmail: getSuperAdminActor(req),
-      resetUsage: resetUsage === true
+      resetUsage: resetUsage !== false,
+      pauseWindowEnforcement: pauseWindowEnforcement !== false,
+      pauseWindowHours: Number(pauseWindowHours) || 24
     });
 
     res.status(200).json({ success: true, ...result });

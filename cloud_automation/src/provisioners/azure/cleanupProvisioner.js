@@ -171,9 +171,33 @@ const deleteResourceGroupWithRetry = async (resourceClient, resourceGroupName, r
   throw lastError;
 };
 
+const startResourceGroupDeletion = async (resourceClient, resourceGroupName, requestId) => {
+  try {
+    await resourceClient.resourceGroups.beginDelete(resourceGroupName);
+    logCleanupProvisionEvent('info', 'cleanup_rg_delete_started', {
+      requestId,
+      resourceGroupName
+    });
+    return true;
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || error?.status);
+    if (statusCode === 404) {
+      return false;
+    }
+
+    logCleanupProvisionEvent('error', 'cleanup_rg_delete_start_failed', {
+      requestId,
+      resourceGroupName,
+      message: error?.message
+    });
+    return false;
+  }
+};
+
 module.exports = {
   createCleanupClients,
   deleteResourceGroupWithRetry,
+  startResourceGroupDeletion,
   deleteRoleAssignmentWithRetry,
   disableAzureUserWithRetry,
   logCleanupProvisionEvent

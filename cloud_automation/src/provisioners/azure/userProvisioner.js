@@ -269,6 +269,7 @@ module.exports = {
   buildBulkUserPayload,
   createGraphClient,
   createGraphUserWithRetry,
+  generateTemporaryPassword,
   getVerifiedDomain,
   logAzureUserEvent,
   getRetryDelayMs

@@ -21,7 +21,8 @@ const { filterResourcesForUser, expandDeploymentResources } = require('../utils/
 const { listResourcesInResourceGroup } = require('./resourceCleanupService');
 const {
   loadUsageWindowsByRequest,
-  evaluateWindowDailyLimitAccess,
+  evaluateWindowDailyLimitAccessBatch,
+  evaluateWindowDailyLimitAccessSync,
   getTodayWindowConfig
 } = require('./usageWindowAccessService');
 const { sumMergedSessionMinutes } = require('../utils/sessionIntervalMerge');
@@ -147,21 +148,63 @@ const updateResourceCountHistory = async (userId, currentCount) => {
   );
 };
 
+const batchUpdateResourceCountHistory = async (liveResourceCountByUser) => {
+  if (!liveResourceCountByUser?.size) {
+    return;
+  }
+
+  const userIds = [];
+  const counts = [];
+
+  for (const [userId, currentCount] of liveResourceCountByUser.entries()) {
+    const normalizedUserId = Number(userId);
+    if (!Number.isFinite(normalizedUserId)) {
+      continue;
+    }
+
+    userIds.push(normalizedUserId);
+    counts.push(Number(currentCount || 0));
+  }
+
+  if (!userIds.length) {
+    return;
+  }
+
+  await db.query(
+    `
+      UPDATE azure_users AS au
+      SET peak_resource_count = GREATEST(COALESCE(au.peak_resource_count, 0), data.current_count),
+          last_resource_count = data.current_count,
+          resources_synced_at = NOW()
+      FROM unnest($1::int[], $2::int[]) AS data(user_id, current_count)
+      WHERE au.id = data.user_id
+    `,
+    [userIds, counts]
+  );
+};
+
+const resourceGroupDetailInflight = new Map();
+
 const deriveUserDisplayStatus = ({
   azureAccountEnabled,
   budgetExceeded,
   hasOpenSession,
+  windowEnforcementPaused = false,
   expiryDate,
   expiresAt,
   expiryTimezone,
   expiryEndTime
 }) => {
-  if (azureAccountEnabled === false || budgetExceeded === true) {
-    return 'Blocked';
-  }
-
   if (hasOpenSession) {
     return 'Active';
+  }
+
+  if (windowEnforcementPaused) {
+    return 'Created';
+  }
+
+  if (azureAccountEnabled === false || budgetExceeded === true) {
+    return 'Blocked';
   }
 
   if (
@@ -216,6 +259,7 @@ const mapUserUsage = (row) => {
     resourceGroup: row.azure_resource_group_name || null,
     roles,
     azureAccountEnabled: row.azure_account_enabled !== false,
+    windowEnforcementPausedUntil: row.window_enforcement_paused_until || null,
     budgetExceeded: row.budget_exceeded === true,
     cleanupDisabled: row.cleanup_disabled === true,
     cleanupIntervalOverride:
@@ -282,7 +326,7 @@ const listResourceGroups = async () => {
   }));
 };
 
-const getResourceGroupDetail = async (requestId) => {
+const loadResourceGroupDetail = async (requestId) => {
   const requestResult = await db.query(
     `
       SELECT
@@ -378,6 +422,7 @@ const getResourceGroupDetail = async (requestId) => {
             AND uus_today.login_at >= (NOW() AT TIME ZONE 'Asia/Kolkata')::date
         ) AS sessions_today,
         au.last_signin_at,
+        au.window_enforcement_paused_until,
         COALESCE(
           (
             SELECT json_agg(
@@ -417,10 +462,7 @@ const getResourceGroupDetail = async (requestId) => {
     [...liveResourcesByUser.entries()].map(([userId, resources]) => [userId, resources.length])
   );
 
-  for (const row of usersResult.rows) {
-    const liveCount = liveResourceCountByUser.get(Number(row.id)) ?? 0;
-    await updateResourceCountHistory(Number(row.id), liveCount);
-  }
+  await batchUpdateResourceCountHistory(liveResourceCountByUser);
 
   const mappedUsers = usersResult.rows.map((row) => ({
     ...mapUserUsage(row),
@@ -433,12 +475,27 @@ const getResourceGroupDetail = async (requestId) => {
     syncError: row.sync_error || null,
     lastSyncAttemptedAt: row.last_sync_attempted_at || null
   }));
+  const usageTimezone =
+    todayWindowConfig?.timezone || usageWindows[0]?.timezone || 'Asia/Kolkata';
   const { users: enrichedUsers, liveSummary } = await attachLiveUsageToUsers(
     requestId,
     mappedUsers,
     request.location,
-    { liveResourceCountByUser }
+    { liveResourceCountByUser, usageTimezone }
   );
+
+  const windowAccessByUser = hasDailyLimitWindows
+    ? await evaluateWindowDailyLimitAccessBatch({
+        userIds: enrichedUsers.map((user) => Number(user.id)),
+        windows: usageWindows,
+        consumedMinutesByUser: new Map(
+          enrichedUsers.map((user) => [
+            Number(user.id),
+            Math.round(Number(user.todayMinutes || 0))
+          ])
+        )
+      })
+    : new Map();
 
   const users = [];
 
@@ -454,12 +511,20 @@ const getResourceGroupDetail = async (requestId) => {
       let blockedReason = null;
       let blockedReasonLabel = null;
 
+      const windowEnforcementPaused =
+        user.windowEnforcementPausedUntil
+        && new Date(user.windowEnforcementPausedUntil).getTime() > Date.now();
+
       if (hasDailyLimitWindows) {
-        const windowAccess = await evaluateWindowDailyLimitAccess({
-          requestId,
-          userId: user.id,
-          windows: usageWindows
-        });
+        const windowAccess = windowAccessByUser.get(Number(user.id)) || {
+          consumedMinutes: 0,
+          remainingMinutes: null,
+          limitMinutes: 0,
+          limitReached: false,
+          blockedForToday: false,
+          blockedReason: null,
+          blockedReasonLabel: null
+        };
         usedTodayMinutes = Math.round(Number(windowAccess.consumedMinutes || 0));
         remainingMinutes =
           windowAccess.remainingMinutes != null
@@ -470,6 +535,9 @@ const getResourceGroupDetail = async (requestId) => {
         blockedForToday = windowAccess.blockedForToday === true;
         blockedReason = windowAccess.blockedReason || null;
         blockedReasonLabel = windowAccess.blockedReasonLabel || null;
+        if (windowEnforcementPaused) {
+          usedTodayMinutes = Math.max(usedTodayMinutes, todayMinutes);
+        }
       } else if (request.enable_daily_usage === true) {
         const storedClosedMinutes =
           user.storedMinsToday ??
@@ -499,10 +567,23 @@ const getResourceGroupDetail = async (requestId) => {
           : null;
       }
 
+      if (windowEnforcementPaused) {
+        blockedForToday = false;
+        blockedReason = null;
+        blockedReasonLabel = null;
+        if (user.hasActiveSession) {
+          limitReached = false;
+        }
+      }
+
+      const effectiveAccountEnabled =
+        windowEnforcementPaused || user.azureAccountEnabled !== false;
+
       const displayStatus = deriveUserDisplayStatus({
-        azureAccountEnabled: user.azureAccountEnabled,
+        azureAccountEnabled: effectiveAccountEnabled,
         budgetExceeded: user.budgetExceeded,
         hasOpenSession: user.hasActiveSession === true,
+        windowEnforcementPaused,
         expiryDate: user.expiryDate,
         expiresAt: request.expires_at,
         expiryTimezone: todayWindowConfig?.timezone || usageWindows[0]?.timezone,
@@ -581,6 +662,22 @@ const getResourceGroupDetail = async (requestId) => {
     },
     users
   };
+};
+
+const getResourceGroupDetail = (requestId) => {
+  const key = String(requestId);
+  const inflight = resourceGroupDetailInflight.get(key);
+
+  if (inflight) {
+    return inflight;
+  }
+
+  const promise = loadResourceGroupDetail(requestId).finally(() => {
+    resourceGroupDetailInflight.delete(key);
+  });
+
+  resourceGroupDetailInflight.set(key, promise);
+  return promise;
 };
 
 const getMonitoringLogs = async (requestId, { userId = null, limit = 50 } = {}) => {
@@ -1313,41 +1410,39 @@ const getDailyUsageForRequest = async (requestId) => {
       [todayDate, requestId]
     );
 
-    const data = await Promise.all(
-      users.map(async (user) => {
-        const windowAccess = await evaluateWindowDailyLimitAccess({
-          requestId,
-          userId: user.id,
-          windows: usageWindows
-        });
-        const consumedMinutes = Number(windowAccess.consumedMinutes || 0);
-        const remainingMinutes = windowAccess.remainingMinutes;
-        const roundedConsumed = Math.round(consumedMinutes);
-        const roundedRemaining = remainingMinutes !== null ? Math.round(remainingMinutes) : null;
+    const data = users.map((user) => {
+      const windowAccess = evaluateWindowDailyLimitAccessSync({
+        windows: usageWindows,
+        consumedMinutes: Number(user.tracked_consumed_minutes || 0),
+        limitReachedInDb: user.limit_reached === true
+      });
+      const consumedMinutes = Number(windowAccess.consumedMinutes || 0);
+      const remainingMinutes = windowAccess.remainingMinutes;
+      const roundedConsumed = Math.round(consumedMinutes);
+      const roundedRemaining = remainingMinutes !== null ? Math.round(remainingMinutes) : null;
 
-        return {
-          userId: user.id,
-          username: user.username,
-          email: user.username,
-          accountEnabled: user.azure_account_enabled !== false,
-          limitReached: windowAccess.limitReached === true,
-          blockedForToday: windowAccess.blockedForToday === true,
-          blockedReason: windowAccess.blockedReason || null,
-          blockedReasonLabel: windowAccess.blockedReasonLabel || null,
-          dailyLimitHours: dailyLimitHours !== null ? Number(dailyLimitHours) : null,
-          consumedMinutes: roundedConsumed,
-          remainingMinutes: roundedRemaining,
-          consumedFormatted: formatMinutes(roundedConsumed),
-          remainingFormatted: roundedRemaining !== null ? formatMinutes(roundedRemaining) : null,
-          todayWindow: todayWindowConfig?.todayWindow
-            ? {
-                start: todayWindowConfig.todayWindow.window_start_time,
-                end: todayWindowConfig.todayWindow.window_end_time
-              }
-            : null
-        };
-      })
-    );
+      return {
+        userId: user.id,
+        username: user.username,
+        email: user.username,
+        accountEnabled: user.azure_account_enabled !== false,
+        limitReached: windowAccess.limitReached === true,
+        blockedForToday: windowAccess.blockedForToday === true,
+        blockedReason: windowAccess.blockedReason || null,
+        blockedReasonLabel: windowAccess.blockedReasonLabel || null,
+        dailyLimitHours: dailyLimitHours !== null ? Number(dailyLimitHours) : null,
+        consumedMinutes: roundedConsumed,
+        remainingMinutes: roundedRemaining,
+        consumedFormatted: formatMinutes(roundedConsumed),
+        remainingFormatted: roundedRemaining !== null ? formatMinutes(roundedRemaining) : null,
+        todayWindow: todayWindowConfig?.todayWindow
+          ? {
+              start: todayWindowConfig.todayWindow.window_start_time,
+              end: todayWindowConfig.todayWindow.window_end_time
+            }
+          : null
+      };
+    });
 
     return {
       data,
@@ -1829,9 +1924,19 @@ const getCleanupLogs = async (requestId, { limit = 20 } = {}) => {
   });
 };
 
-const unblockUser = async ({ requestId, userId, adminEmail, resetUsage = false }) => {
+const unblockUser = async ({
+  requestId,
+  userId,
+  adminEmail,
+  resetUsage = true,
+  pauseWindowEnforcement = true,
+  pauseWindowHours = 24
+}) => {
   const { DateTime } = require('luxon');
-  const { createGraphClient } = require('../provisioners/azure/userProvisioner');
+  const {
+    createGraphClient,
+    generateTemporaryPassword
+  } = require('../provisioners/azure/userProvisioner');
 
   const userResult = await db.query(
     `
@@ -1873,9 +1978,61 @@ const unblockUser = async ({ requestId, userId, adminEmail, resetUsage = false }
   );
   const timezone = windowResult.rows[0]?.timezone || 'Asia/Kolkata';
   const todayDate = DateTime.now().setZone(timezone).toISODate();
+  const pauseUntil =
+    pauseWindowEnforcement === false
+      ? null
+      : DateTime.now()
+          .setZone(timezone)
+          .plus({ hours: Math.max(Number(pauseWindowHours) || 24, 1) })
+          .toUTC()
+          .toISO();
 
+  const newPassword = generateTemporaryPassword();
   const { graphClient } = createGraphClient();
-  await graphClient.api(`/users/${user.azure_user_id}`).patch({ accountEnabled: true });
+
+  try {
+    await graphClient.api(`/users/${user.azure_user_id}/revokeSignInSessions`).post({});
+  } catch (revokeError) {
+    console.warn(
+      `[UNBLOCK] Could not revoke sign-in sessions for user ${userId}: ${revokeError.message}`
+    );
+  }
+
+  let passwordReset = false;
+  try {
+    await graphClient.api(`/users/${user.azure_user_id}`).patch({
+      accountEnabled: true,
+      passwordProfile: {
+        forceChangePasswordNextSignIn: true,
+        password: newPassword
+      }
+    });
+    passwordReset = true;
+  } catch (passwordError) {
+    const insufficientPrivileges = /insufficient privileges/i.test(passwordError.message || '');
+    console.warn(
+      `[UNBLOCK] Password reset failed for user ${userId}: ${passwordError.message}` +
+        (insufficientPrivileges ? ' (falling back to account enable only)' : '')
+    );
+
+    if (!insufficientPrivileges) {
+      throw passwordError;
+    }
+
+    await graphClient.api(`/users/${user.azure_user_id}`).patch({ accountEnabled: true });
+  }
+
+  const verifiedState = await graphClient
+    .api(`/users/${user.azure_user_id}`)
+    .select('accountEnabled,userPrincipalName')
+    .get();
+
+  if (verifiedState.accountEnabled === false) {
+    throw new AppError(
+      'Azure account is still disabled after unblock. Check Graph API User.ReadWrite.All permission.',
+      502
+    );
+  }
 
   await db.query(
     `
@@ -1883,14 +2040,32 @@ const unblockUser = async ({ requestId, userId, adminEmail, resetUsage = false }
       SET
         azure_account_enabled = TRUE,
         blocked_until = NULL,
+        blocked_reason = NULL,
+        blocked_at = NULL,
+        window_enforcement_paused_until = $3,
+        temporary_password = CASE WHEN $4 THEN $5 ELSE temporary_password END,
         used_today_minutes = CASE WHEN $2 THEN 0 ELSE used_today_minutes END,
         status = CASE WHEN status = 'Blocked' THEN 'Created' ELSE status END
       WHERE id = $1
     `,
-    [userId, resetUsage]
+    [userId, resetUsage, pauseUntil, passwordReset, newPassword]
   );
 
   if (resetUsage) {
+    await db.query(
+      `
+        UPDATE user_usage_sessions
+        SET
+          logout_at = login_at,
+          minutes_used = 0,
+          ended_reason = COALESCE(ended_reason, 'admin_reset')
+        WHERE user_id = $1
+          AND DATE(login_at AT TIME ZONE $2) = $3::date
+          AND (logout_at IS NULL OR minutes_used > 0)
+      `,
+      [userId, timezone, todayDate]
+    );
+
     await db.query(
       `
         INSERT INTO daily_usage_tracking
@@ -1927,13 +2102,28 @@ const unblockUser = async ({ requestId, userId, adminEmail, resetUsage = false }
       FROM requests r
       WHERE r.id = $4
     `,
-    [adminEmail || 'org-admin', userId, JSON.stringify({ resetUsage }), requestId]
+    [
+      adminEmail || 'org-admin',
+      userId,
+      JSON.stringify({
+        resetUsage,
+        pauseWindowEnforcement,
+        pauseUntil,
+        passwordReset
+      }),
+      requestId
+    ]
   );
 
   return {
     userId,
     username: user.username,
-    resetUsage
+    resetUsage,
+    pauseWindowEnforcement,
+    windowEnforcementPausedUntil: pauseUntil,
+    temporaryPassword: passwordReset ? newPassword : undefined,
+    userPrincipalName: verifiedState.userPrincipalName || null,
+    passwordReset
   };
 };
 

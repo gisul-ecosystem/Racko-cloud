@@ -124,6 +124,79 @@ function getTodayWindowConfig(windows, at = new Date()) {
   };
 }
 
+async function batchLoadDailyLimitFlags(userIds, todayDate) {
+  if (!userIds.length) {
+    return new Map();
+  }
+
+  const { rows } = await db.query(
+    `
+      SELECT azure_user_id, limit_reached
+      FROM daily_usage_tracking
+      WHERE azure_user_id = ANY($1::int[])
+        AND tracking_date = $2
+    `,
+    [userIds, todayDate]
+  );
+
+  return new Map(rows.map((row) => [Number(row.azure_user_id), row.limit_reached === true]));
+}
+
+function evaluateWindowDailyLimitAccessSync({
+  windows,
+  consumedMinutes,
+  limitReachedInDb = false,
+  at = new Date()
+}) {
+  const config = getTodayWindowConfig(windows, at);
+  const withinWindow = config?.todayWindow ? isWithinUsageWindow(windows, at) : false;
+  const limitMinutes =
+    config?.dailyLimitHours != null ? Math.round(config.dailyLimitHours * 60) : null;
+
+  return computeWindowAccessState({
+    config,
+    withinWindow,
+    consumedMinutes,
+    limitMinutes,
+    limitReachedInDb
+  });
+}
+
+async function evaluateWindowDailyLimitAccessBatch({
+  userIds,
+  windows,
+  consumedMinutesByUser,
+  at = new Date()
+}) {
+  const config = getTodayWindowConfig(windows, at);
+  const limitFlags =
+    config?.todayWindow && userIds.length
+      ? await batchLoadDailyLimitFlags(userIds, config.todayDate)
+      : new Map();
+
+  const withinWindow = config?.todayWindow ? isWithinUsageWindow(windows, at) : false;
+  const limitMinutes =
+    config?.dailyLimitHours != null ? Math.round(config.dailyLimitHours * 60) : null;
+
+  const accessByUser = new Map();
+
+  for (const userId of userIds) {
+    const normalizedUserId = Number(userId);
+    accessByUser.set(
+      normalizedUserId,
+      computeWindowAccessState({
+        config,
+        withinWindow,
+        consumedMinutes: Number(consumedMinutesByUser.get(normalizedUserId) || 0),
+        limitMinutes,
+        limitReachedInDb: limitFlags.get(normalizedUserId) === true
+      })
+    );
+  }
+
+  return accessByUser;
+}
+
 async function evaluateWindowDailyLimitAccess({ requestId, userId, windows, at = new Date() }) {
   const config = getTodayWindowConfig(windows, at);
   const withinWindow = config?.todayWindow ? isWithinUsageWindow(windows, at) : false;
@@ -153,5 +226,7 @@ module.exports = {
   getTodayWindowConfig,
   getBlockedReasonLabel,
   computeWindowAccessState,
-  evaluateWindowDailyLimitAccess
+  evaluateWindowDailyLimitAccess,
+  evaluateWindowDailyLimitAccessBatch,
+  evaluateWindowDailyLimitAccessSync
 };

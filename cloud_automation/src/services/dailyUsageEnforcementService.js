@@ -95,6 +95,10 @@ async function enforceDailyHourLimits() {
       AND au.azure_user_id IS NOT NULL
       AND COALESCE(au.is_deleted, FALSE) = FALSE
       AND au.azure_account_enabled = TRUE
+      AND (
+        au.window_enforcement_paused_until IS NULL
+        OR au.window_enforcement_paused_until <= NOW()
+      )
   `);
 
   for (const user of users) {

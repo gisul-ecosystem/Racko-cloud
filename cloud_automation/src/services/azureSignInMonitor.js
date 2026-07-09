@@ -4,6 +4,7 @@ const { createAzureCredential } = require('../config/azure');
 const db = require('../db/postgres');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const usageEnforcementService = require('./usageEnforcementService');
+const { isWindowEnforcementPaused } = require('../utils/windowEnforcementPause');
 const { resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
 const {
   getClosedSessionMinutesToday,
@@ -176,6 +177,7 @@ const loadTrackedUsers = async () => {
         au.last_reset_date,
         au.status,
         au.azure_account_enabled,
+        au.window_enforcement_paused_until,
         r.enable_daily_usage,
         r.daily_limit_minutes,
         r.usage_schedule,
@@ -277,7 +279,9 @@ async function heartbeatUsageSession({
 async function openUsageSession(user, signIn, loginTime) {
   let access = { allowed: true, reason: 'ok' };
 
-  if (user.enable_daily_usage) {
+  if (isWindowEnforcementPaused(user)) {
+    access = { allowed: true, reason: 'ok' };
+  } else if (user.enable_daily_usage) {
     const request = {
       enable_daily_usage: user.enable_daily_usage,
       daily_limit_minutes: user.daily_limit_minutes,
@@ -306,7 +310,7 @@ async function openUsageSession(user, signIn, loginTime) {
       `[SIGNIN_MONITOR] User ${user.id} denied Azure session (${access.reason}): ${access.message}`
     );
 
-    if (user.enable_daily_usage && user.enforce_in_azure) {
+    if (!isWindowEnforcementPaused(user) && user.enable_daily_usage && user.enforce_in_azure) {
       if (access.reason === 'limit_exceeded' || access.reason === 'daily_hour_limit_reached') {
         usageEnforcementService
           .enforceUsageLimit({ requestId: user.request_id, userId: user.id })
@@ -322,7 +326,11 @@ async function openUsageSession(user, signIn, loginTime) {
           })
           .catch((error) => console.error('[SIGNIN_MONITOR] Schedule enforcement error:', error.message));
       }
-    } else if (user.has_usage_windows && access.reason === 'limit_exceeded') {
+    } else if (
+      !isWindowEnforcementPaused(user)
+      && user.has_usage_windows
+      && access.reason === 'limit_exceeded'
+    ) {
       usageEnforcementService
         .enforceUsageLimit({ requestId: user.request_id, userId: user.id })
         .catch((error) => console.error('[SIGNIN_MONITOR] Window limit enforcement error:', error.message));
