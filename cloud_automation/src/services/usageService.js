@@ -12,6 +12,7 @@ const {
   loadUsageWindowsByRequest,
   evaluateWindowDailyLimitAccess
 } = require('./usageWindowAccessService');
+const { isUniqueOpenSessionViolation } = require('../utils/openSessionConstraint');
 
 async function getLiveSessionMinutes(client, requestId, userId) {
   const activeSessionResult = await client.query(
@@ -139,6 +140,7 @@ async function startUsageSession({ requestId, userId }) {
         AND logout_at IS NULL
       ORDER BY login_at DESC
       LIMIT 1
+      FOR UPDATE
       `,
       [requestId, userId]
     );
@@ -155,9 +157,11 @@ async function startUsageSession({ requestId, userId }) {
       };
     }
 
-    // Create new session
-    const sessionResult = await client.query(
-      `
+    let sessionResult;
+
+    try {
+      sessionResult = await client.query(
+        `
       INSERT INTO user_usage_sessions (
         request_id,
         user_id,
@@ -167,8 +171,43 @@ async function startUsageSession({ requestId, userId }) {
       VALUES ($1, $2, NOW(), NOW())
       RETURNING id, login_at
       `,
-      [requestId, userId]
-    );
+        [requestId, userId]
+      );
+    } catch (insertError) {
+      if (
+        insertError?.code !== '23505' ||
+        !String(insertError.constraint || insertError.message || '').includes(
+          'idx_one_open_session_per_user'
+        )
+      ) {
+        throw insertError;
+      }
+
+      const racedSession = await client.query(
+        `
+          SELECT id, login_at
+          FROM user_usage_sessions
+          WHERE request_id = $1
+            AND user_id = $2
+            AND logout_at IS NULL
+          ORDER BY login_at DESC
+          LIMIT 1
+        `,
+        [requestId, userId]
+      );
+
+      if (!racedSession.rows.length) {
+        throw insertError;
+      }
+
+      await client.query('COMMIT');
+      return {
+        sessionId: racedSession.rows[0].id,
+        loginAt: racedSession.rows[0].login_at,
+        message: 'Active session already exists.',
+        alreadyActive: true
+      };
+    }
 
     await client.query('COMMIT');
 
@@ -257,10 +296,11 @@ async function endUsageSession({ requestId, userId }) {
       UPDATE user_usage_sessions
       SET 
         logout_at = $1,
-        minutes_used = $2
+        minutes_used = $2,
+        ended_reason = $4
       WHERE id = $3
       `,
-      [logoutAt, minutesUsed, session.id]
+      [logoutAt, minutesUsed, session.id, 'explicit_end']
     );
 
     // Get request to check if daily usage is enabled
@@ -529,27 +569,29 @@ async function getActiveSessions() {
   );
 
   const usageWindowsByRequest = await loadUsageWindowsByRequest([
-    ...new Set(result.rows.map((row) => row.request_id))
+    ...new Set(result.rows.map((row) => Number(row.request_id)))
   ]);
 
   const mapped = [];
 
   for (const row of result.rows) {
     const currentSessionMinutes = Number(row.current_session_minutes || 0);
+    const normalizedRequestId = Number(row.request_id);
+    const normalizedUserId = Number(row.user_id);
 
     if (row.has_usage_windows) {
-      const windows = usageWindowsByRequest.get(row.request_id) || [];
+      const windows = usageWindowsByRequest.get(normalizedRequestId) || [];
       const windowAccess = await evaluateWindowDailyLimitAccess({
-        requestId: row.request_id,
-        userId: row.user_id,
+        requestId: normalizedRequestId,
+        userId: normalizedUserId,
         windows,
         at: new Date()
       });
 
       mapped.push({
         sessionId: row.session_id,
-        requestId: row.request_id,
-        userId: row.user_id,
+        requestId: normalizedRequestId,
+        userId: normalizedUserId,
         loginAt: row.login_at,
         enforceInAzure: true,
         currentSessionMinutes,
@@ -576,8 +618,8 @@ async function getActiveSessions() {
 
     mapped.push({
       sessionId: row.session_id,
-      requestId: row.request_id,
-      userId: row.user_id,
+      requestId: normalizedRequestId,
+      userId: normalizedUserId,
       loginAt: row.login_at,
       enforceInAzure: row.enforce_in_azure === true,
       currentSessionMinutes,

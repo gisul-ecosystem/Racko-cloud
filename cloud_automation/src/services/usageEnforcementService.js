@@ -6,6 +6,8 @@ const { createNotification, NotificationType } = require('./notificationService'
 const { getTodayLimitMinutes, resolveScheduleForRequest } = require('../utils/usageSchedule');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { getLiveSessionMinutes, resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
+const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
+const { DateTime } = require('luxon');
 
 /**
  * Create Microsoft Graph client
@@ -163,8 +165,22 @@ async function enforceUsageLimit({ requestId, userId }) {
     }
 
     const liveSessionMins = await getLiveSessionMinutes(requestId, userId);
-    const usedMinutes = Number(data.used_today_minutes || 0) + liveSessionMins;
+    const windowResult = await db.query(
+      `
+        SELECT timezone
+        FROM request_usage_windows
+        WHERE request_id = $1
+        LIMIT 1
+      `,
+      [requestId]
+    );
     const schedule = resolveScheduleForRequest(data);
+    const tz =
+      windowResult.rows[0]?.timezone || schedule?.timezone || 'Asia/Kolkata';
+    const trackingDate = DateTime.now().setZone(tz).toISODate();
+    const usedMinutes = windowResult.rows.length
+      ? await getConsumedMinutesToday(userId, trackingDate, tz)
+      : Number(data.used_today_minutes || 0) + liveSessionMins;
     const limitMinutes = schedule
       ? getTodayLimitMinutes(schedule)
       : Number(data.daily_limit_minutes || 0);
@@ -219,18 +235,9 @@ async function enforceUsageLimit({ requestId, userId }) {
       [requestId, userId]
     );
 
-    const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
-    const { DateTime } = require('luxon');
-    const windowResult = await db.query(
-      `SELECT timezone FROM request_usage_windows WHERE request_id = $1 LIMIT 1`,
-      [requestId]
-    );
-    const tz =
-      windowResult.rows[0]?.timezone ||
-      resolveScheduleForRequest(data)?.timezone ||
-      'Asia/Kolkata';
-    const trackingDate = DateTime.now().setZone(tz).toISODate();
-    const consumedMinutes = await getConsumedMinutesToday(userId, trackingDate, tz);
+    const consumedMinutes = windowResult.rows.length
+      ? await getConsumedMinutesToday(userId, trackingDate, tz)
+      : usedMinutes;
 
     await db.query(
       `

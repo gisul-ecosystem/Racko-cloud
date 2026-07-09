@@ -10,10 +10,43 @@ const {
   getConsumedMinutesToday
 } = require('./dailyUsageEnforcementService');
 const { resolveScheduleForRequest } = require('../utils/usageSchedule');
+const { resolveStaleSessionClose } = require('../utils/staleSessionClose');
+const { isUniqueOpenSessionViolation } = require('../utils/openSessionConstraint');
+const { isSignInNearOpenSession, getSignInSessionProximityMs } = require('../utils/signInSessionProximity');
 const {
   loadUsageWindowsByRequest,
   evaluateWindowDailyLimitAccess
 } = require('./usageWindowAccessService');
+
+const REQUEST_NOT_EXPIRED_SQL = `
+  (
+    r.expiry_date IS NULL
+    OR COALESCE(
+      r.expires_at,
+      (
+        (r.expiry_date::text || ' ' || COALESCE(
+          (
+            SELECT LEFT(ruw.window_end_time::text, 8)
+            FROM request_usage_windows ruw
+            WHERE ruw.request_id = r.id
+            ORDER BY ruw.day_of_week ASC
+            LIMIT 1
+          ),
+          '18:00:00'
+        ))::timestamp AT TIME ZONE COALESCE(
+          (
+            SELECT ruw.timezone
+            FROM request_usage_windows ruw
+            WHERE ruw.request_id = r.id
+            ORDER BY ruw.day_of_week ASC
+            LIMIT 1
+          ),
+          'Asia/Kolkata'
+        )
+      )
+    ) > NOW()
+  )
+`;
 
 const STALE_SESSION_MINUTES = Number(process.env.SIGNIN_STALE_SESSION_MINUTES || 20);
 const SIGN_IN_LOOKBACK_MINUTES = Number(process.env.SIGNIN_MONITOR_LOOKBACK_MINUTES || 10);
@@ -111,13 +144,13 @@ const isSignInAlreadyProcessed = async (signInId) => {
   }
 };
 
-const markSignInProcessed = async ({ signInId, azureUserId, requestId, userId }) => {
+const markSignInProcessed = async ({ signInId, azureUserId, requestId, userId }, client = db) => {
   if (!signInId) {
     return;
   }
 
   try {
-    await db.query(
+    await client.query(
       `
       INSERT INTO processed_azure_signins (signin_id, azure_user_id, request_id, user_id)
       VALUES ($1, $2, $3, $4)
@@ -148,6 +181,7 @@ const loadTrackedUsers = async () => {
         r.usage_schedule,
         r.enforce_in_azure,
         r.expiry_date,
+        r.expires_at,
         EXISTS (
           SELECT 1
           FROM request_usage_windows ruw
@@ -158,7 +192,7 @@ const loadTrackedUsers = async () => {
       WHERE COALESCE(au.is_deleted, false) = false
         AND r.status = 'Completed'
         AND COALESCE(r.expired, false) = false
-        AND (r.expiry_date IS NULL OR r.expiry_date > NOW())
+        AND ${REQUEST_NOT_EXPIRED_SQL}
     `
   );
 
@@ -177,6 +211,69 @@ const loadTrackedUsers = async () => {
   };
 };
 
+async function findOpenSessionForSignIn(requestId, userId, loginTime, client = db) {
+  const result = await client.query(
+    `
+      SELECT id, login_at
+      FROM user_usage_sessions
+      WHERE request_id = $1
+        AND user_id = $2
+        AND logout_at IS NULL
+      ORDER BY login_at DESC
+      LIMIT 1
+    `,
+    [requestId, userId]
+  );
+
+  if (!result.rows.length) {
+    return null;
+  }
+
+  return result.rows[0];
+}
+
+async function heartbeatUsageSession({
+  sessionId,
+  userId,
+  signInId,
+  azureUserId,
+  requestId
+}) {
+  await db.query(
+    `
+      UPDATE user_usage_sessions
+      SET last_seen_at = NOW()
+      WHERE id = $1
+        AND logout_at IS NULL
+    `,
+    [sessionId]
+  );
+
+  await db.query(
+    `
+      UPDATE azure_users
+      SET last_signin_at = NOW(),
+          status = CASE
+            WHEN status = 'Blocked' THEN status
+            ELSE 'Active'
+          END
+      WHERE id = $1
+    `,
+    [userId]
+  );
+
+  if (signInId && !(await isSignInAlreadyProcessed(signInId))) {
+    await markSignInProcessed({
+      signInId,
+      azureUserId,
+      requestId,
+      userId
+    });
+  }
+
+  return { action: 'heartbeat', sessionId };
+}
+
 async function openUsageSession(user, signIn, loginTime) {
   let access = { allowed: true, reason: 'ok' };
 
@@ -194,7 +291,8 @@ async function openUsageSession(user, signIn, loginTime) {
       at: loginTime
     });
   } else if (user.has_usage_windows) {
-    const windows = (await loadUsageWindowsByRequest([user.request_id])).get(user.request_id) || [];
+    const windows =
+      (await loadUsageWindowsByRequest([Number(user.request_id)])).get(Number(user.request_id)) || [];
     access = await evaluateWindowDailyLimitAccess({
       requestId: user.request_id,
       userId: user.id,
@@ -233,45 +331,115 @@ async function openUsageSession(user, signIn, loginTime) {
     return { action: 'denied', reason: access.reason };
   }
 
-  const sessionResult = await db.query(
-    `
-      INSERT INTO user_usage_sessions (
-        request_id,
-        user_id,
-        login_at,
-        last_seen_at,
-        sign_in_id,
-        ip_address
-      )
-      VALUES ($1, $2, $3, $3, $4, $5)
-      RETURNING id
-    `,
-    [
-      user.request_id,
-      user.id,
-      loginTime,
-      signIn.id || null,
-      signIn.ipAddress || null
-    ]
-  );
+  const client = await db.connect();
 
-  const sessionId = sessionResult.rows[0].id;
+  try {
+    await client.query('BEGIN');
 
-  await db.query(
-    `
-      UPDATE azure_users
-      SET last_signin_at = NOW(),
-          status = 'Active'
-      WHERE id = $1
-    `,
-    [user.id]
-  );
+    const existingSession = await client.query(
+      `
+        SELECT id
+        FROM user_usage_sessions
+        WHERE request_id = $1
+          AND user_id = $2
+          AND logout_at IS NULL
+        FOR UPDATE
+      `,
+      [user.request_id, user.id]
+    );
 
-  console.log(
-    `[SESSION_CREATED] Session ${sessionId} created for user ${user.id} (${user.username}) from Azure sign-in at ${loginTime.toISOString()}`
-  );
+    if (existingSession.rows.length > 0) {
+      await client.query('COMMIT');
+      return heartbeatUsageSession({
+        sessionId: existingSession.rows[0].id,
+        userId: user.id,
+        signInId: signIn.id || null,
+        azureUserId: signIn.userId,
+        requestId: user.request_id
+      });
+    }
 
-  return { action: 'created', sessionId };
+    let sessionResult;
+
+    try {
+      sessionResult = await client.query(
+        `
+          INSERT INTO user_usage_sessions (
+            request_id,
+            user_id,
+            login_at,
+            last_seen_at,
+            sign_in_id,
+            ip_address
+          )
+          VALUES ($1, $2, $3, $3, $4, $5)
+          RETURNING id
+        `,
+        [
+          user.request_id,
+          user.id,
+          loginTime,
+          signIn.id || null,
+          signIn.ipAddress || null
+        ]
+      );
+    } catch (insertError) {
+      if (!isUniqueOpenSessionViolation(insertError)) {
+        throw insertError;
+      }
+
+      const racedSession = await client.query(
+        `
+          SELECT id
+          FROM user_usage_sessions
+          WHERE request_id = $1
+            AND user_id = $2
+            AND logout_at IS NULL
+          ORDER BY login_at DESC
+          LIMIT 1
+        `,
+        [user.request_id, user.id]
+      );
+
+      if (!racedSession.rows.length) {
+        throw insertError;
+      }
+
+      await client.query('COMMIT');
+      return heartbeatUsageSession({
+        sessionId: racedSession.rows[0].id,
+        userId: user.id,
+        signInId: signIn.id || null,
+        azureUserId: signIn.userId,
+        requestId: user.request_id
+      });
+    }
+
+    const sessionId = sessionResult.rows[0].id;
+
+    await client.query(
+      `
+        UPDATE azure_users
+        SET last_signin_at = NOW(),
+            status = 'Active'
+        WHERE id = $1
+      `,
+      [user.id]
+    );
+
+    await client.query('COMMIT');
+
+    console.log(
+      `[SESSION_CREATED] Session ${sessionId} created for user ${user.id} (${user.username}) from Azure sign-in at ${loginTime.toISOString()}`
+    );
+
+    return { action: 'created', sessionId };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function handleActiveSignIn(signIn, user) {
@@ -279,62 +447,49 @@ async function handleActiveSignIn(signIn, user) {
   const azureUserId = signIn.userId;
   const loginTime = new Date(signIn.createdDateTime);
 
-  const existingSession = await db.query(
-    `
-      SELECT id
-      FROM user_usage_sessions
-      WHERE request_id = $1
-        AND user_id = $2
-        AND logout_at IS NULL
-      ORDER BY login_at DESC
-      LIMIT 1
-    `,
-    [user.request_id, user.id]
-  );
+  const existingSession = await findOpenSessionForSignIn(user.request_id, user.id, loginTime);
 
-  if (existingSession.rows.length > 0) {
-    await db.query(
-      `
-        UPDATE user_usage_sessions
-        SET last_seen_at = NOW()
-        WHERE id = $1
-          AND logout_at IS NULL
-      `,
-      [existingSession.rows[0].id]
-    );
-
-    await db.query(
-      `
-        UPDATE azure_users
-        SET last_signin_at = NOW(),
-            status = CASE
-              WHEN status = 'Blocked' THEN status
-              ELSE 'Active'
-            END
-        WHERE id = $1
-      `,
-      [user.id]
-    );
-
-    if (signInId && !(await isSignInAlreadyProcessed(signInId))) {
-      await markSignInProcessed({
-        signInId,
-        azureUserId,
-        requestId: user.request_id,
-        userId: user.id
-      });
-    }
-
-    return { action: 'heartbeat', sessionId: existingSession.rows[0].id };
+  if (existingSession) {
+    return heartbeatUsageSession({
+      sessionId: existingSession.id,
+      userId: user.id,
+      signInId,
+      azureUserId,
+      requestId: user.request_id
+    });
   }
 
   if (signInId && (await isSignInAlreadyProcessed(signInId))) {
+    const nearbyOpenSession = await findOpenSessionForSignIn(user.request_id, user.id, loginTime);
+    if (
+      nearbyOpenSession &&
+      isSignInNearOpenSession(
+        loginTime,
+        nearbyOpenSession.login_at,
+        getSignInSessionProximityMs()
+      )
+    ) {
+      return heartbeatUsageSession({
+        sessionId: nearbyOpenSession.id,
+        userId: user.id,
+        signInId,
+        azureUserId,
+        requestId: user.request_id
+      });
+    }
     return { action: 'skipped' };
   }
 
   const result = await openUsageSession(user, signIn, loginTime);
 
   if (result.action === 'created' && signInId) {
+    await markSignInProcessed({
+      signInId,
+      azureUserId,
+      requestId: user.request_id,
+      userId: user.id
+    });
+  } else if (result.action === 'heartbeat' && signInId) {
     await markSignInProcessed({
       signInId,
       azureUserId,
@@ -386,7 +541,12 @@ async function detectActiveSignIns() {
     fetchedCount = signIns.value.length;
     console.log(`[SIGNIN_MONITOR] Found ${fetchedCount} recent sign-in(s)`);
 
-    for (const signIn of signIns.value) {
+    const orderedSignIns = [...signIns.value].sort(
+      (left, right) =>
+        new Date(left.createdDateTime).getTime() - new Date(right.createdDateTime).getTime()
+    );
+
+    for (const signIn of orderedSignIns) {
       const normalizedUserId = signIn.userId ? String(signIn.userId).toLowerCase() : null;
       if (!normalizedUserId || !trackedUsersMap.has(normalizedUserId)) {
         continue;
@@ -500,19 +660,6 @@ async function detectEndedSessions() {
     for (const session of staleSessions.rows) {
       const lastSeen = new Date(session.effective_last_seen);
       const loginAt = new Date(session.login_at);
-      const durationMins = Math.max(1, Math.floor((lastSeen - loginAt) / 60000));
-
-      await db.query(
-        `
-          UPDATE user_usage_sessions
-          SET
-            logout_at = $1,
-            minutes_used = $2,
-            ended_reason = 'stale_signin'
-          WHERE id = $3
-        `,
-        [lastSeen, durationMins, session.id]
-      );
 
       const requestResult = await db.query(
         `
@@ -526,6 +673,39 @@ async function detectEndedSessions() {
       const request = requestResult.rows[0];
       const timezone = await resolveTrackingTimezone(session.request_id, request);
       const trackingDate = DateTime.now().setZone(timezone).toISODate();
+
+      const limitTrackingResult = await db.query(
+        `
+          SELECT limit_reached, limit_reached_at
+          FROM daily_usage_tracking
+          WHERE azure_user_id = $1
+            AND tracking_date = $2
+          LIMIT 1
+        `,
+        [session.user_id, trackingDate]
+      );
+      const limitTracking = limitTrackingResult.rows[0] || null;
+      const limitReached = limitTracking?.limit_reached === true;
+
+      const { closeAt, durationMins, endedReason } = resolveStaleSessionClose({
+        loginAt,
+        lastSeenAt: lastSeen,
+        now: new Date(),
+        limitReached,
+        limitReachedAt: limitTracking?.limit_reached_at || null
+      });
+
+      await db.query(
+        `
+          UPDATE user_usage_sessions
+          SET
+            logout_at = $1,
+            minutes_used = $2,
+            ended_reason = $3
+          WHERE id = $4
+        `,
+        [closeAt, durationMins, endedReason, session.id]
+      );
 
       const closedMinutesToday = await getClosedSessionMinutesToday(
         session.user_id,
@@ -542,18 +722,47 @@ async function detectEndedSessions() {
         [Math.round(closedMinutesToday), session.user_id, session.request_id]
       );
 
-      await db.query(
-        `
-          INSERT INTO daily_usage_tracking
-            (request_id, azure_user_id, tracking_date, consumed_minutes)
-          VALUES ($1, $2, $3, $4)
-          ON CONFLICT (azure_user_id, tracking_date)
-          DO UPDATE SET
-            consumed_minutes = EXCLUDED.consumed_minutes,
-            updated_at = NOW()
-        `,
-        [session.request_id, session.user_id, trackingDate, closedMinutesToday]
-      );
+      if (limitReached) {
+        await db.query(
+          `
+            INSERT INTO daily_usage_tracking
+              (request_id, azure_user_id, tracking_date, consumed_minutes, limit_reached, limit_reached_at)
+            VALUES ($1, $2, $3, $4, TRUE, COALESCE($5, NOW()))
+            ON CONFLICT (azure_user_id, tracking_date)
+            DO UPDATE SET
+              consumed_minutes = GREATEST(
+                COALESCE(daily_usage_tracking.consumed_minutes, 0),
+                EXCLUDED.consumed_minutes
+              ),
+              limit_reached = TRUE,
+              limit_reached_at = COALESCE(
+                daily_usage_tracking.limit_reached_at,
+                EXCLUDED.limit_reached_at
+              ),
+              updated_at = NOW()
+          `,
+          [
+            session.request_id,
+            session.user_id,
+            trackingDate,
+            closedMinutesToday,
+            limitTracking?.limit_reached_at || null
+          ]
+        );
+      } else {
+        await db.query(
+          `
+            INSERT INTO daily_usage_tracking
+              (request_id, azure_user_id, tracking_date, consumed_minutes)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (azure_user_id, tracking_date)
+            DO UPDATE SET
+              consumed_minutes = EXCLUDED.consumed_minutes,
+              updated_at = NOW()
+          `,
+          [session.request_id, session.user_id, trackingDate, closedMinutesToday]
+        );
+      }
 
       const openSessionCheck = await db.query(
         `
@@ -600,5 +809,11 @@ module.exports = {
   detectActiveSignIns,
   detectEndedSessions,
   monitorAzureSignIns,
-  createGraphClient
+  createGraphClient,
+  findOpenSessionForSignIn,
+  heartbeatUsageSession,
+  handleActiveSignIn,
+  openUsageSession,
+  loadTrackedUsers,
+  isUniqueOpenSessionViolation: require('../utils/openSessionConstraint').isUniqueOpenSessionViolation
 };

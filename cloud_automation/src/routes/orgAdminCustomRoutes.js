@@ -1,5 +1,6 @@
 const express = require('express');
 const {
+  assignCustomRoleToAllUsersInRequest,
   assignCustomRoleToUser,
   createCustomRoleDefinition,
   deleteCustomRoleDefinition,
@@ -81,6 +82,35 @@ router.get(
     try {
       const assignments = await getCustomRoleAssignmentsForRequest(Number(req.params.requestId));
       res.json({ success: true, assignments });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+router.post(
+  '/resource-groups/:requestId/assign-custom-role-to-all',
+  requireSuperAdmin,
+  async (req, res, next) => {
+    try {
+      const { customRoleDefId, permissions, skipExisting } = req.body;
+
+      if (!permissions?.length && !customRoleDefId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Either customRoleDefId or permissions required'
+        });
+      }
+
+      const result = await assignCustomRoleToAllUsersInRequest({
+        requestId: Number(req.params.requestId),
+        customRoleDefId: customRoleDefId || null,
+        permissions: permissions || null,
+        assignedBy: req.headers['x-user-id'],
+        skipExisting: skipExisting !== false
+      });
+
+      res.json({ success: true, ...result });
     } catch (error) {
       next(error);
     }

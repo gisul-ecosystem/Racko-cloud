@@ -9,6 +9,7 @@ const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroups, getResourceGroupNameForUser } = require('./userResourceGroupService');
 const { attachLiveUsageToUsers } = require('./userLiveUsageService');
+const { isRequestExpired } = require('../utils/requestExpiry');
 const {
   getResourceGroupCosts,
   getCachedResourceGroupCosts,
@@ -23,10 +24,12 @@ const {
   evaluateWindowDailyLimitAccess,
   getTodayWindowConfig
 } = require('./usageWindowAccessService');
+const { sumMergedSessionMinutes } = require('../utils/sessionIntervalMerge');
 const {
   resolveScheduleForRequest,
   getTodayLimitMinutes
 } = require('../utils/usageSchedule');
+const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
 
 let armClient = null;
 
@@ -144,7 +147,15 @@ const updateResourceCountHistory = async (userId, currentCount) => {
   );
 };
 
-const deriveUserDisplayStatus = ({ azureAccountEnabled, budgetExceeded, hasOpenSession, expiryDate }) => {
+const deriveUserDisplayStatus = ({
+  azureAccountEnabled,
+  budgetExceeded,
+  hasOpenSession,
+  expiryDate,
+  expiresAt,
+  expiryTimezone,
+  expiryEndTime
+}) => {
   if (azureAccountEnabled === false || budgetExceeded === true) {
     return 'Blocked';
   }
@@ -153,7 +164,14 @@ const deriveUserDisplayStatus = ({ azureAccountEnabled, budgetExceeded, hasOpenS
     return 'Active';
   }
 
-  if (expiryDate && new Date(expiryDate) < new Date()) {
+  if (
+    isRequestExpired({
+      expiry_date: expiryDate,
+      expires_at: expiresAt,
+      timezone: expiryTimezone,
+      expiry_end_time: expiryEndTime
+    })
+  ) {
     return 'Expired';
   }
 
@@ -275,6 +293,7 @@ const getResourceGroupDetail = async (requestId) => {
         r.location,
         r.status,
         r.expiry_date,
+        r.expires_at,
         r.enable_daily_usage,
         r.daily_limit_minutes,
         r.usage_schedule,
@@ -302,7 +321,7 @@ const getResourceGroupDetail = async (requestId) => {
   }
 
   const usageWindowsByRequest = await loadUsageWindowsByRequest([requestId]);
-  const usageWindows = usageWindowsByRequest.get(requestId) || [];
+  const usageWindows = usageWindowsByRequest.get(Number(requestId)) || [];
   const todayWindowConfig = getTodayWindowConfig(usageWindows);
   const hasUsageWindows = usageWindows.length > 0;
   const hasDailyLimitWindows = usageWindows.some(
@@ -398,12 +417,10 @@ const getResourceGroupDetail = async (requestId) => {
     [...liveResourcesByUser.entries()].map(([userId, resources]) => [userId, resources.length])
   );
 
-  await Promise.all(
-    usersResult.rows.map(async (row) => {
-      const liveCount = liveResourceCountByUser.get(Number(row.id)) ?? 0;
-      await updateResourceCountHistory(Number(row.id), liveCount);
-    })
-  );
+  for (const row of usersResult.rows) {
+    const liveCount = liveResourceCountByUser.get(Number(row.id)) ?? 0;
+    await updateResourceCountHistory(Number(row.id), liveCount);
+  }
 
   const mappedUsers = usersResult.rows.map((row) => ({
     ...mapUserUsage(row),
@@ -423,8 +440,9 @@ const getResourceGroupDetail = async (requestId) => {
     { liveResourceCountByUser }
   );
 
-  const users = await Promise.all(
-    enrichedUsers.map(async (user) => {
+  const users = [];
+
+  for (const user of enrichedUsers) {
       const todayMinutes = Math.round(Number(user.todayMinutes || 0));
       const lifetimeMinutes = Math.round(Number(user.totalMinutesSpent || 0));
       const activeSessionMinutes = Math.round(Number(user.activeSessionMinutes || 0));
@@ -432,6 +450,9 @@ const getResourceGroupDetail = async (requestId) => {
       let remainingMinutes = user.remainingMinutes ?? null;
       let dailyLimitMinutes = Number(user.dailyLimitMinutes || 0);
       let limitReached = false;
+      let blockedForToday = false;
+      let blockedReason = null;
+      let blockedReasonLabel = null;
 
       if (hasDailyLimitWindows) {
         const windowAccess = await evaluateWindowDailyLimitAccess({
@@ -445,7 +466,10 @@ const getResourceGroupDetail = async (requestId) => {
             ? Math.round(Number(windowAccess.remainingMinutes))
             : null;
         dailyLimitMinutes = Number(windowAccess.limitMinutes || 0);
-        limitReached = windowAccess.limitReached === true || windowAccess.allowed === false;
+        limitReached = windowAccess.limitReached === true;
+        blockedForToday = windowAccess.blockedForToday === true;
+        blockedReason = windowAccess.blockedReason || null;
+        blockedReasonLabel = windowAccess.blockedReasonLabel || null;
       } else if (request.enable_daily_usage === true) {
         const storedClosedMinutes =
           user.storedMinsToday ??
@@ -464,16 +488,28 @@ const getResourceGroupDetail = async (requestId) => {
           access.remainingMinutes != null ? Math.round(Number(access.remainingMinutes)) : null;
         dailyLimitMinutes = Number(access.limitMinutes || 0);
         limitReached = access.reason === 'limit_exceeded' || access.reason === 'blocked';
+        blockedForToday = !access.allowed;
+        blockedReason = access.reason !== 'ok' ? access.reason : null;
+        blockedReasonLabel = blockedReason
+          ? blockedReason === 'limit_exceeded'
+            ? 'Daily limit reached'
+            : blockedReason === 'outside_window'
+              ? 'Outside usage window'
+              : blockedReason.replace(/_/g, ' ')
+          : null;
       }
 
       const displayStatus = deriveUserDisplayStatus({
         azureAccountEnabled: user.azureAccountEnabled,
         budgetExceeded: user.budgetExceeded,
         hasOpenSession: user.hasActiveSession === true,
-        expiryDate: user.expiryDate
+        expiryDate: user.expiryDate,
+        expiresAt: request.expires_at,
+        expiryTimezone: todayWindowConfig?.timezone || usageWindows[0]?.timezone,
+        expiryEndTime: todayWindowConfig?.windowEndTime || usageWindows[0]?.windowEndTime
       });
 
-      return {
+      users.push({
         ...user,
         status: displayStatus,
         displayStatus,
@@ -482,6 +518,9 @@ const getResourceGroupDetail = async (requestId) => {
         usedTodayMinutes,
         remainingMinutes,
         dailyLimitReached: limitReached,
+        blockedForToday,
+        blockedReason,
+        blockedReasonLabel,
         todayMinutes,
         lifetimeMinutes,
         todayFormatted: formatMinutes(todayMinutes),
@@ -498,9 +537,8 @@ const getResourceGroupDetail = async (requestId) => {
           remainingMinutes != null && user.hasActiveSession
             ? new Date(Date.now() + remainingMinutes * 60 * 1000).toISOString()
             : null
-      };
-    })
-  );
+      });
+  }
 
   const activeSessions = users.filter((user) => user.hasActiveSession).length;
 
@@ -676,6 +714,12 @@ const deleteUser = async ({ adminEmail, requestId, userId }) =>
     userId
   });
 
+const deleteRequest = async ({ adminEmail, requestId }) =>
+  managePortalService.deleteRequestByOrgAdmin({
+    adminEmail,
+    requestId
+  });
+
 const updateUserRoles = async ({ adminEmail, requestId, userId, roles }) =>
   managePortalService.updatePortalUserRolesByOrgAdmin({
     adminEmail,
@@ -701,6 +745,103 @@ const reviewAccessRequest = async ({ id, status, reviewNotes, reviewedBy }) =>
     reviewedBy
   });
 
+const AZURE_COST_FRESHNESS_NOTE =
+  'Azure billing data is typically delayed by several hours and may not include the current session.';
+
+const getSessionMergeGapMs = () =>
+  Number(process.env.SESSION_MERGE_GAP_MINUTES || 2) * 60 * 1000;
+
+const resolveRequestUsageTimezone = async (requestId) => {
+  const windowsByRequest = await loadUsageWindowsByRequest([requestId]);
+  const windows = windowsByRequest.get(requestId) || [];
+  const config = getTodayWindowConfig(windows);
+  return config?.timezone || 'Asia/Kolkata';
+};
+
+const loadMergedMinutesByUserForPeriod = async (
+  requestId,
+  timezone,
+  periodStartDate,
+  periodEndDate
+) => {
+  const tz = timezone || 'Asia/Kolkata';
+  const { rows } = await db.query(
+    `
+      SELECT
+        user_id,
+        login_at,
+        COALESCE(logout_at, NOW()) AS end_at
+      FROM user_usage_sessions
+      WHERE request_id = $1
+        AND DATE(login_at AT TIME ZONE $2) >= $3::date
+        AND DATE(login_at AT TIME ZONE $2) <= $4::date
+      ORDER BY user_id ASC, login_at ASC
+    `,
+    [requestId, tz, periodStartDate, periodEndDate]
+  );
+
+  const gapMs = getSessionMergeGapMs();
+  const intervalsByUser = new Map();
+
+  for (const row of rows) {
+    const userId = Number(row.user_id);
+    if (!intervalsByUser.has(userId)) {
+      intervalsByUser.set(userId, []);
+    }
+    intervalsByUser.get(userId).push({
+      start: new Date(row.login_at),
+      end: new Date(row.end_at)
+    });
+  }
+
+  const mergedMinutesByUser = new Map();
+  for (const [userId, intervals] of intervalsByUser) {
+    mergedMinutesByUser.set(userId, sumMergedSessionMinutes(intervals, gapMs));
+  }
+
+  return mergedMinutesByUser;
+};
+
+const computeSharedAttributionFromMinutes = ({
+  userId,
+  costs,
+  mergedMinutesByUser
+}) => {
+  const userMinutes = mergedMinutesByUser.get(Number(userId)) || 0;
+  const totalMinutes = [...mergedMinutesByUser.values()].reduce(
+    (sum, value) => sum + value,
+    0
+  );
+
+  const resourceGroupTotalCost = {
+    monthToDateCost: costs.monthToDateCost,
+    lifetimeCost: costs.lifetimeCost
+  };
+
+  if (totalMinutes <= 0 || userMinutes <= 0) {
+    return {
+      monthToDateCost: 0,
+      lifetimeCost: 0,
+      attributionMethod: 'proportional',
+      resourceGroupTotalCost,
+      sharePercent: 0,
+      mergedMinutesMtd: userMinutes,
+      totalMergedMinutesMtd: totalMinutes
+    };
+  }
+
+  const ratio = userMinutes / totalMinutes;
+
+  return {
+    monthToDateCost: Number((costs.monthToDateCost * ratio).toFixed(4)),
+    lifetimeCost: Number((costs.lifetimeCost * ratio).toFixed(4)),
+    attributionMethod: 'proportional',
+    resourceGroupTotalCost,
+    sharePercent: Number((ratio * 100).toFixed(2)),
+    mergedMinutesMtd: userMinutes,
+    totalMergedMinutesMtd: totalMinutes
+  };
+};
 const buildAzureCostResponse = ({
   userId,
   user,
@@ -727,8 +868,7 @@ const buildAzureCostResponse = ({
   currency: currency || 'USD',
   resourceGroupTotalCost,
   sharePercent,
-  dataFreshnessNote:
-    'Azure billing data is typically delayed by several hours and may not include the current session.',
+  dataFreshnessNote: AZURE_COST_FRESHNESS_NOTE,
   queriedAt: queriedAt || new Date().toISOString(),
   fromCache,
   rateLimited,
@@ -739,71 +879,36 @@ const applySharedCostAttribution = async ({
   requestId,
   userId,
   costs,
-  perUserCosting
+  perUserCosting,
+  timezone = null
 }) => {
-  let monthToDateCost = costs.monthToDateCost;
-  let lifetimeCost = costs.lifetimeCost;
-  let attributionMethod = 'direct';
-  let resourceGroupTotalCost = null;
-  let sharePercent = null;
-
-  if (!perUserCosting) {
-    const minutesResult = await db.query(
-      `
-        SELECT
-          uus.user_id,
-          COALESCE(
-            SUM(
-              CASE
-                WHEN uus.logout_at IS NULL
-                  THEN EXTRACT(EPOCH FROM (NOW() - uus.login_at)) / 60
-                ELSE COALESCE(
-                  uus.minutes_used,
-                  EXTRACT(EPOCH FROM (uus.logout_at - uus.login_at)) / 60
-                )
-              END
-            ),
-            0
-          ) AS total_minutes
-        FROM user_usage_sessions uus
-        WHERE uus.request_id = $1
-        GROUP BY uus.user_id
-      `,
-      [requestId]
-    );
-
-    const minutesByUser = new Map(
-      minutesResult.rows.map((row) => [Number(row.user_id), Number(row.total_minutes || 0)])
-    );
-    const userMinutes = minutesByUser.get(Number(userId)) || 0;
-    const totalMinutes = [...minutesByUser.values()].reduce((sum, value) => sum + value, 0);
-
-    resourceGroupTotalCost = {
+  if (perUserCosting) {
+    return {
       monthToDateCost: costs.monthToDateCost,
-      lifetimeCost: costs.lifetimeCost
+      lifetimeCost: costs.lifetimeCost,
+      attributionMethod: 'direct',
+      resourceGroupTotalCost: null,
+      sharePercent: null,
+      mergedMinutesMtd: null,
+      totalMergedMinutesMtd: null
     };
-
-    if (totalMinutes > 0 && userMinutes > 0) {
-      const ratio = userMinutes / totalMinutes;
-      monthToDateCost = Number((costs.monthToDateCost * ratio).toFixed(4));
-      lifetimeCost = Number((costs.lifetimeCost * ratio).toFixed(4));
-      sharePercent = Number((ratio * 100).toFixed(2));
-      attributionMethod = 'proportional';
-    } else {
-      monthToDateCost = 0;
-      lifetimeCost = 0;
-      sharePercent = 0;
-      attributionMethod = 'proportional';
-    }
   }
 
-  return {
-    monthToDateCost,
-    lifetimeCost,
-    attributionMethod,
-    resourceGroupTotalCost,
-    sharePercent
-  };
+  const tz = timezone || (await resolveRequestUsageTimezone(requestId));
+  const monthStart = DateTime.now().setZone(tz).startOf('month').toISODate();
+  const today = DateTime.now().setZone(tz).toISODate();
+  const mergedMinutesByUser = await loadMergedMinutesByUserForPeriod(
+    requestId,
+    tz,
+    monthStart,
+    today
+  );
+
+  return computeSharedAttributionFromMinutes({
+    userId,
+    costs,
+    mergedMinutesByUser
+  });
 };
 
 const getUserAzureCost = async (requestId, userId, { refresh = false } = {}) => {
@@ -1030,6 +1135,130 @@ const getUserAzureCost = async (requestId, userId, { refresh = false } = {}) => 
   }
 };
 
+const getSharedAzureCostForRequest = async (requestId, { refresh = false } = {}) => {
+  const requestResult = await db.query(
+    `
+      SELECT
+        id,
+        costing_mode,
+        created_at,
+        azure_resource_group_name
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  const request = requestResult.rows[0];
+
+  if (!request) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  if (isPerUserCosting(request.costing_mode)) {
+    throw new AppError('Shared Azure cost summary is only available for shared costing mode.', 400);
+  }
+
+  const resourceGroup = request.azure_resource_group_name;
+
+  if (!resourceGroup) {
+    throw new AppError('No shared Azure resource group is linked to this request.', 404);
+  }
+
+  const timezone = await resolveRequestUsageTimezone(requestId);
+  const monthStart = DateTime.now().setZone(timezone).startOf('month').toISODate();
+  const today = DateTime.now().setZone(timezone).toISODate();
+
+  const costs = await getResourceGroupCosts({
+    resourceGroupName: resourceGroup,
+    requestCreatedAt: request.created_at,
+    bypassCache: refresh
+  });
+
+  const mergedMinutesByUser = await loadMergedMinutesByUserForPeriod(
+    requestId,
+    timezone,
+    monthStart,
+    today
+  );
+  const totalMergedMinutesMtd = [...mergedMinutesByUser.values()].reduce(
+    (sum, value) => sum + value,
+    0
+  );
+
+  const { rows: users } = await db.query(
+    `
+      SELECT id, username
+      FROM azure_users
+      WHERE request_id = $1
+        AND COALESCE(is_deleted, false) = false
+      ORDER BY username ASC
+    `,
+    [requestId]
+  );
+
+  const userCosts = [];
+
+  for (const user of users) {
+    const attributed = computeSharedAttributionFromMinutes({
+      userId: user.id,
+      costs,
+      mergedMinutesByUser
+    });
+
+    await db.query(
+      `
+        INSERT INTO user_budget_spend
+          (azure_user_id, request_id, current_spend, currency, last_synced_at)
+        VALUES ($1, $2, $3, $4, NOW())
+        ON CONFLICT (azure_user_id)
+        DO UPDATE SET
+          current_spend = EXCLUDED.current_spend,
+          currency = EXCLUDED.currency,
+          last_synced_at = NOW()
+      `,
+      [user.id, requestId, attributed.monthToDateCost, costs.currency || 'USD']
+    );
+
+    userCosts.push(
+      buildAzureCostResponse({
+        userId: user.id,
+        user,
+        request,
+        resourceGroup,
+        monthToDateCost: attributed.monthToDateCost,
+        lifetimeCost: attributed.lifetimeCost,
+        currency: costs.currency || 'USD',
+        attributionMethod: attributed.attributionMethod,
+        resourceGroupTotalCost: attributed.resourceGroupTotalCost,
+        sharePercent: attributed.sharePercent,
+        queriedAt: new Date().toISOString(),
+        fromCache: costs.fromCache === true,
+        cacheAge: costs.cacheAge ?? null
+      })
+    );
+  }
+
+  return {
+    requestId: Number(requestId),
+    resourceGroup,
+    costingMode: request.costing_mode,
+    monthToDateCost: costs.monthToDateCost,
+    lifetimeCost: costs.lifetimeCost,
+    currency: costs.currency || 'USD',
+    totalMergedMinutesMtd: Number(totalMergedMinutesMtd.toFixed(2)),
+    periodStart: monthStart,
+    periodEnd: today,
+    timezone,
+    dataFreshnessNote: AZURE_COST_FRESHNESS_NOTE,
+    queriedAt: new Date().toISOString(),
+    fromCache: costs.fromCache === true,
+    cacheAge: costs.cacheAge ?? null,
+    users: userCosts
+  };
+};
+
 const getDailyUsageForRequest = async (requestId) => {
   const requestResult = await db.query(
     `
@@ -1051,7 +1280,7 @@ const getDailyUsageForRequest = async (requestId) => {
 
   const request = requestResult.rows[0];
   const usageWindowsByRequest = await loadUsageWindowsByRequest([requestId]);
-  const usageWindows = usageWindowsByRequest.get(requestId) || [];
+  const usageWindows = usageWindowsByRequest.get(Number(requestId)) || [];
   const todayWindowConfig = getTodayWindowConfig(usageWindows);
   const hasDailyLimitWindows = usageWindows.some(
     (window) => window.daily_limit_hours != null && Number(window.daily_limit_hours) > 0
@@ -1102,6 +1331,9 @@ const getDailyUsageForRequest = async (requestId) => {
           email: user.username,
           accountEnabled: user.azure_account_enabled !== false,
           limitReached: windowAccess.limitReached === true,
+          blockedForToday: windowAccess.blockedForToday === true,
+          blockedReason: windowAccess.blockedReason || null,
+          blockedReasonLabel: windowAccess.blockedReasonLabel || null,
           dailyLimitHours: dailyLimitHours !== null ? Number(dailyLimitHours) : null,
           consumedMinutes: roundedConsumed,
           remainingMinutes: roundedRemaining,
@@ -1139,8 +1371,6 @@ const getDailyUsageForRequest = async (requestId) => {
     ? getTodayLimitMinutes(schedule)
     : Number(request.daily_limit_minutes || 0);
   const dailyLimitHours = dailyLimitMinutes ? dailyLimitMinutes / 60 : null;
-  const dayStart = DateTime.now().setZone(tz).startOf('day').toUTC().toISO();
-  const dayEnd = DateTime.now().setZone(tz).endOf('day').toUTC().toISO();
 
   const { rows: users } = await db.query(
     `
@@ -1162,21 +1392,7 @@ const getDailyUsageForRequest = async (requestId) => {
 
   const data = await Promise.all(
     users.map(async (user) => {
-      const { rows: sessionRows } = await db.query(
-        `
-          SELECT
-            COALESCE(SUM(
-              EXTRACT(EPOCH FROM (COALESCE(logout_at, NOW()) - login_at)) / 60
-            ), 0) AS total_minutes
-          FROM user_usage_sessions
-          WHERE user_id = $1
-            AND login_at >= $2
-            AND login_at < $3
-        `,
-        [user.id, dayStart, dayEnd]
-      );
-
-      const consumedMinutes = parseFloat(sessionRows[0]?.total_minutes ?? user.used_today_minutes ?? 0);
+      const consumedMinutes = await getConsumedMinutesToday(user.id, todayDate, tz);
       const access = evaluateUsageAccess({
         request,
         user,
@@ -1446,7 +1662,10 @@ const triggerUserCleanup = async (requestId, userId, { action } = {}) => {
 
   const user = rows[0];
   const { runResourceActionForUser } = require('./resourceCleanupService');
+  const { captureUserLabMetrics, recordCleanupSnapshot } = require('./labHistoryService');
   const resolvedAction = action === 'pause' || action === 'delete' ? action : user.resource_cleanup_action || 'delete';
+
+  const metrics = await captureUserLabMetrics(requestId, user.id);
 
   const affected = await runResourceActionForUser({
     costingMode: user.costing_mode,
@@ -1467,6 +1686,17 @@ const triggerUserCleanup = async (requestId, userId, { action } = {}) => {
     `,
     [user.request_id, JSON.stringify(affected), affected.length]
   );
+
+  if (metrics) {
+    await recordCleanupSnapshot({
+      requestId,
+      userId: user.id,
+      triggeredBy: 'admin_manual',
+      cleanupAction: resolvedAction,
+      resourcesDeleted: affected,
+      metrics
+    }).catch(() => {});
+  }
 
   const deletedCount = resolvedAction === 'delete' ? affected.length : 0;
   const pausedCount =
@@ -1539,6 +1769,17 @@ const triggerRequestCleanup = async (requestId, { action, triggeredBy = 'admin_m
     totalDeleted,
     affected
   };
+};
+
+const getLabHistory = async (requestId, { userId = null, limit = 200 } = {}) => {
+  const { getLabHistoryForRequest } = require('./labHistoryService');
+  const history = await getLabHistoryForRequest(requestId, { userId, limit });
+
+  if (!history) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  return history;
 };
 
 const getCleanupLogs = async (requestId, { limit = 20 } = {}) => {
@@ -1780,11 +2021,13 @@ module.exports = {
   getResourceGroupDetail,
   getMonitoringLogs,
   deleteUser,
+  deleteRequest,
   updateUserRoles,
   forceLogoutUser,
   listAccessRequests,
   reviewAccessRequest,
   getUserAzureCost,
+  getSharedAzureCostForRequest,
   getDailyUsageForRequest,
   listAzureRoles,
   renewUserBudget,
@@ -1792,6 +2035,7 @@ module.exports = {
   triggerUserCleanup,
   triggerRequestCleanup,
   getCleanupLogs,
+  getLabHistory,
   getUserSessions,
   unblockUser
 };

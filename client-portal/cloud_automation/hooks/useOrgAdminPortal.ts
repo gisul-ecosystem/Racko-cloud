@@ -4,10 +4,12 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   OrgAdminError,
   deleteOrgAdminUser,
+  deleteOrgAdminRequest,
   forceOrgAdminLogout,
   getOrgMonitoringLogs,
   getOrgResourceGroupDetail,
   getOrgUserAzureCost,
+  getOrgSharedAzureCost,
   listOrgAccessRequests,
   listOrgAzureRoles,
   listOrgRequests,
@@ -28,6 +30,7 @@ import type {
   OrgAdminRequestSummary,
   OrgAdminUser,
   OrgAdminUserAzureCost,
+  OrgAdminSharedAzureCostSummary,
 } from '../types/orgAdmin';
 
 interface UseOrgAdminPortalResult {
@@ -51,6 +54,7 @@ interface UseOrgAdminPortalResult {
   refreshAccessRequests: () => Promise<void>;
   updateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   deleteUser: (userId: number) => Promise<boolean>;
+  deleteRequest: () => Promise<boolean>;
   forceLogout: (userId: number) => Promise<boolean>;
   reviewAccess: (
     id: number,
@@ -59,6 +63,7 @@ interface UseOrgAdminPortalResult {
   ) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<OrgAdminMonitoringResponse | null>;
   fetchUserAzureCost: (userId: number, options?: { refresh?: boolean }) => Promise<OrgAdminUserAzureCost | null>;
+  fetchSharedAzureCost: (options?: { refresh?: boolean }) => Promise<OrgAdminSharedAzureCostSummary | null>;
   renewBudget: (userId: number, topUpAmount: number) => Promise<boolean>;
   updateCleanupSettings: (
     userId: number,
@@ -256,8 +261,9 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       try {
         await deleteOrgAdminUser(selectedRequestId, userId);
         setUsers((current) => current.filter((user) => user.id !== userId));
-        setActionSuccess('User removed successfully.');
+        setActionSuccess('User deleted from Azure and removed from this request.');
         await refreshOverview();
+        await refreshDetail();
         return true;
       } catch (err) {
         handleApiError(err, 'Failed to delete user.');
@@ -266,8 +272,36 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         setSaving(false);
       }
     },
-    [selectedRequestId, refreshOverview, handleApiError]
+    [selectedRequestId, refreshOverview, refreshDetail, handleApiError]
   );
+
+  const deleteRequest = useCallback(async () => {
+    if (selectedRequestId == null) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await deleteOrgAdminRequest(selectedRequestId);
+      const summary = [
+        `${result.usersDeleted}/${result.usersTotal} Azure users deleted`,
+        `${result.resourceGroupsDeleted} resource group(s) removed`,
+      ].join(', ');
+
+      setActionSuccess(`Request #${selectedRequestId} deleted. ${summary}.`);
+      setSelectedRequestId(null);
+      setRequestDetail(null);
+      setUsers([]);
+      await refreshOverview();
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to delete request.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, refreshOverview, handleApiError]);
 
   const forceLogout = useCallback(
     async (userId: number) => {
@@ -344,6 +378,25 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
           setActionError(err.message);
         } else {
           setActionError('Failed to fetch Azure cost for this user.');
+        }
+        return null;
+      }
+    },
+    [selectedRequestId]
+  );
+
+  const fetchSharedAzureCost = useCallback(
+    async (options: { refresh?: boolean } = {}) => {
+      if (selectedRequestId == null) return null;
+
+      try {
+        const response = await getOrgSharedAzureCost(selectedRequestId, options);
+        return response.summary ?? null;
+      } catch (err) {
+        if (err instanceof OrgAdminError) {
+          setActionError(err.message);
+        } else {
+          setActionError('Failed to fetch shared Azure cost for this request.');
         }
         return null;
       }
@@ -532,10 +585,12 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     refreshAccessRequests,
     updateRoles,
     deleteUser,
+    deleteRequest,
     forceLogout,
     reviewAccess,
     fetchUserMonitoring,
     fetchUserAzureCost,
+    fetchSharedAzureCost,
     renewBudget,
     updateCleanupSettings,
     triggerCleanup,

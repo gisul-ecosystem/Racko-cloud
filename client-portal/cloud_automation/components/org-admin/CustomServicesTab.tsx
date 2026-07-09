@@ -25,11 +25,12 @@ const SERVICE_CATEGORIES = [
 
 interface CustomServicesTabProps {
   requestId: number;
+  userCount?: number;
 }
 
 type BannerState = { type: 'success' | 'error'; message: string } | null;
 
-export function CustomServicesTab({ requestId }: CustomServicesTabProps) {
+export function CustomServicesTab({ requestId, userCount = 0 }: CustomServicesTabProps) {
   const [allCustomServices, setAllCustomServices] = useState<OrgAdminCustomService[]>([]);
   const [requestServices, setRequestServices] = useState<OrgAdminCustomService[]>([]);
   const [showCreateForm, setShowCreateForm] = useState(false);
@@ -132,8 +133,13 @@ export function CustomServicesTab({ requestId }: CustomServicesTabProps) {
         <div>
           <h3 className="text-[15px] font-semibold text-gray-900">Custom Services</h3>
           <p className="mt-1 text-sm text-gray-500">
-            Define custom services and add them to this lab request.
+            Add custom services to this request. They apply to all users in the lab automatically.
           </p>
+          {userCount > 0 && (
+            <p className="mt-1 text-xs text-gray-400">
+              Applies to all {userCount} user{userCount !== 1 ? 's' : ''} in this request
+            </p>
+          )}
         </div>
         <button
           type="button"
@@ -239,7 +245,12 @@ export function CustomServicesTab({ requestId }: CustomServicesTabProps) {
       {requestServices.length > 0 && (
         <div>
           <h4 className="mb-3 text-xs font-semibold uppercase tracking-wide text-gray-500">
-            Added to this request ({requestServices.length})
+            Active on this request ({requestServices.length})
+            {userCount > 0 && (
+              <span className="ml-1 font-normal normal-case text-gray-400">
+                · all {userCount} users
+              </span>
+            )}
           </h4>
           <div className="space-y-2">
             {requestServices.map((service) => (

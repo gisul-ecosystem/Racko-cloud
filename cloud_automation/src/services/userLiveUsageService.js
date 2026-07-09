@@ -1,12 +1,24 @@
 const db = require('../db/postgres');
 const { DateTime } = require('luxon');
+const { sumMergedSessionMinutes } = require('../utils/sessionIntervalMerge');
 const { getHourlyRateForProvisionedResources } = require('./estimatePricingService');
 const { getProvisionedResourcesForRequest } = require('./serviceResourceProvisionService');
-const { getClosedSessionMinutesToday } = require('./dailyUsageEnforcementService');
+const { loadUsageWindowsByRequest, getTodayWindowConfig } = require('./usageWindowAccessService');
 
 const ACTIVE_RESOURCE_STATUSES = new Set(['policy_configured', 'provisioned']);
 
 const roundCurrency = (value) => Number(Number(value || 0).toFixed(4));
+
+const getSessionMergeGapMs = () =>
+  Number(process.env.SESSION_MERGE_GAP_MINUTES || 2) * 60 * 1000;
+
+const getRequestUsageTimezone = async (requestId) => {
+  const normalizedRequestId = Number(requestId);
+  const windowsByRequest = await loadUsageWindowsByRequest([normalizedRequestId]);
+  const windows = windowsByRequest.get(normalizedRequestId) || [];
+  const config = getTodayWindowConfig(windows);
+  return config?.timezone || 'Asia/Kolkata';
+};
 
 const getRequestServiceHourlyRate = async (requestId) => {
   const result = await db.query(
@@ -22,15 +34,15 @@ const getRequestServiceHourlyRate = async (requestId) => {
   return parseFloat(result.rows[0]?.hourly_rate || 0);
 };
 
-const getTodayTrackingDate = () =>
-  DateTime.now().setZone('Asia/Kolkata').toISODate();
+const getSessionStatsByUser = async (requestId, timezone) => {
+  const tz = timezone || 'Asia/Kolkata';
+  const trackingDate = DateTime.now().setZone(tz).toISODate();
+  const normalizedRequestId = Number(requestId);
+  const mergeGapMs = getSessionMergeGapMs();
 
-const getSessionStatsByUser = async (requestId) => {
-  const todayStart = DateTime.now().setZone('Asia/Kolkata').startOf('day').toUTC().toISO();
-  const trackingDate = getTodayTrackingDate();
-
-  const result = await db.query(
-    `
+  const [lifetimeResult, todaySessionsResult] = await Promise.all([
+    db.query(
+      `
       SELECT
         uus.user_id,
         COALESCE(
@@ -56,25 +68,56 @@ const getSessionStatsByUser = async (requestId) => {
       WHERE uus.request_id = $1
       GROUP BY uus.user_id
     `,
-    [requestId]
-  );
+      [normalizedRequestId]
+    ),
+    db.query(
+      `
+      SELECT
+        user_id,
+        login_at,
+        logout_at,
+        COALESCE(logout_at, NOW()) AS end_at
+      FROM user_usage_sessions
+      WHERE request_id = $1
+        AND DATE(login_at AT TIME ZONE $2) = $3::date
+      ORDER BY user_id, login_at ASC
+    `,
+      [normalizedRequestId, tz, trackingDate]
+    )
+  ]);
 
-  const closedMinutesByUser = await Promise.all(
-    result.rows.map(async (row) => {
-      const closedMinutes = await getClosedSessionMinutesToday(
-        Number(row.user_id),
-        trackingDate,
-        'Asia/Kolkata'
-      );
-      return [Number(row.user_id), closedMinutes];
-    })
-  );
-  const closedMinutesMap = new Map(closedMinutesByUser);
+  const todayIntervalsByUser = new Map();
+
+  for (const row of todaySessionsResult.rows) {
+    const userId = Number(row.user_id);
+    const intervals = todayIntervalsByUser.get(userId) || [];
+    intervals.push({
+      start: new Date(row.login_at),
+      end: new Date(row.end_at),
+      closed: row.logout_at != null
+    });
+    todayIntervalsByUser.set(userId, intervals);
+  }
+
+  const computeTodayMinutes = (intervals, { closedOnly = false } = {}) => {
+    const selected = closedOnly ? intervals.filter((interval) => interval.closed) : intervals;
+
+    if (!selected.length) {
+      return 0;
+    }
+
+    return sumMergedSessionMinutes(
+      selected.map(({ start, end }) => ({ start, end })),
+      mergeGapMs
+    );
+  };
 
   return new Map(
-    result.rows.map((row) => {
+    lifetimeResult.rows.map((row) => {
       const userId = Number(row.user_id);
-      const closedTodayMinutes = closedMinutesMap.get(userId) ?? 0;
+      const intervals = todayIntervalsByUser.get(userId) || [];
+      const closedTodayMinutes = computeTodayMinutes(intervals, { closedOnly: true });
+      const todayMinutes = computeTodayMinutes(intervals, { closedOnly: false });
       const activeSessionMinutes = Number(row.active_session_minutes || 0);
 
       return [
@@ -82,7 +125,7 @@ const getSessionStatsByUser = async (requestId) => {
         {
           totalMinutesSpent: Number(row.lifetime_minutes || 0),
           closedTodayMinutes,
-          todayMinutes: closedTodayMinutes + activeSessionMinutes,
+          todayMinutes,
           activeSessionMinutes,
           activeSessionCount: Number(row.active_session_count || 0),
           activeLoginAt: row.active_login_at,
@@ -94,9 +137,11 @@ const getSessionStatsByUser = async (requestId) => {
 };
 
 const getLiveUsageForRequest = async (requestId, location) => {
+  const usageTimezone = await getRequestUsageTimezone(requestId);
+
   const [provisionedResources, sessionStatsByUser, serviceHourlyRate] = await Promise.all([
     getProvisionedResourcesForRequest(requestId),
-    getSessionStatsByUser(requestId),
+    getSessionStatsByUser(requestId, usageTimezone),
     getRequestServiceHourlyRate(requestId)
   ]);
 
@@ -119,9 +164,30 @@ const getLiveUsageForRequest = async (requestId, location) => {
 const attachLiveUsageToUsers = async (requestId, users, location, options = {}) => {
   const { liveResourceCountByUser = null } = options;
   const liveUsage = await getLiveUsageForRequest(requestId, location);
+  const userIds = users.map((user) => Number(user.id)).filter((userId) => Number.isFinite(userId));
 
-  const enrichedUsers = await Promise.all(
-    users.map(async (user) => {
+  const budgetResult = userIds.length
+    ? await db.query(
+        `
+          SELECT
+            azure_user_id,
+            current_spend,
+            currency,
+            last_synced_at,
+            sync_error,
+            last_sync_attempted_at
+          FROM user_budget_spend
+          WHERE azure_user_id = ANY($1::int[])
+        `,
+        [userIds]
+      )
+    : { rows: [] };
+
+  const budgetByUserId = new Map(
+    budgetResult.rows.map((row) => [Number(row.azure_user_id), row])
+  );
+
+  const enrichedUsers = users.map((user) => {
       const userId = Number(user.id);
       const sessionStats = liveUsage.sessionStatsByUser.get(userId) || {
         totalMinutesSpent: 0,
@@ -136,7 +202,7 @@ const attachLiveUsageToUsers = async (requestId, users, location, options = {}) 
       const closedTodayMinutes = Number(sessionStats.closedTodayMinutes || 0);
       const liveSessionMins = Math.floor(Number(sessionStats.activeSessionMinutes || 0));
       const hasActiveSession = sessionStats.activeSessionCount > 0;
-      const totalUsedMins = Math.round(closedTodayMinutes + liveSessionMins);
+      const totalUsedMins = Math.round(Number(sessionStats.todayMinutes || 0));
       const lifetimeMinutes = Number(sessionStats.totalMinutesSpent || 0);
 
       const hourlyRate = parseFloat(
@@ -168,16 +234,7 @@ const attachLiveUsageToUsers = async (requestId, users, location, options = {}) 
         user.liveResourceCount ??
         liveUsage.resourceCount;
 
-      const azureCostResult = await db.query(
-        `
-          SELECT current_spend, currency, last_synced_at, sync_error, last_sync_attempted_at
-          FROM user_budget_spend
-          WHERE azure_user_id = $1
-          LIMIT 1
-        `,
-        [userId]
-      );
-      const azureCost = azureCostResult.rows[0] || null;
+      const azureCost = budgetByUserId.get(userId) || null;
 
       return {
         ...user,
@@ -207,8 +264,7 @@ const attachLiveUsageToUsers = async (requestId, users, location, options = {}) 
         syncError: azureCost?.sync_error || user.syncError || null,
         lastSyncAttemptedAt: azureCost?.last_sync_attempted_at || user.lastSyncAttemptedAt || null
       };
-    })
-  );
+    });
 
   const totalLiveCost = roundCurrency(
     enrichedUsers.reduce((sum, user) => sum + Number(user.liveCost || 0), 0)
