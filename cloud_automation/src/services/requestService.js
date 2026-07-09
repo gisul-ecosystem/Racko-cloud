@@ -178,6 +178,8 @@ async function createRequest({
     // Pricing
     // ==========================
 
+    const resolvedCostingMode = normalizeCostingMode(costingMode) || COSTING_MODE_SHARED;
+
     const pricing =
       await pricingService
         .calculatePricing({
@@ -195,7 +197,11 @@ async function createRequest({
 
           selectedInstances: Array.isArray(selectedInstances) ? selectedInstances : [],
 
-          selectedRoles: Array.isArray(selectedRoles) ? selectedRoles : []
+          selectedRoles: Array.isArray(selectedRoles) ? selectedRoles : [],
+
+          costingMode: resolvedCostingMode,
+
+          usageWindows: Array.isArray(usageWindows) ? usageWindows : []
 
         });
 
@@ -224,7 +230,6 @@ async function createRequest({
     // Create Request
     // ==========================
 
-    const resolvedCostingMode = normalizeCostingMode(costingMode) || COSTING_MODE_SHARED;
     const resolvedRackoUserId = String(rackoUserId || '').trim() || null;
     const resolvedCleanupEnabled = cleanupEnabled === true;
     const resolvedCleanupIntervalHours =

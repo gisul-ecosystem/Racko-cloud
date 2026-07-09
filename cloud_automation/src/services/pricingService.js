@@ -10,7 +10,8 @@ const calculatePricing = async (payload = {}) => {
     endDate: payload.endDate,
     selectedInstances: payload.selectedInstances,
     selectedRoles: payload.selectedRoles,
-    costingMode: payload.costingMode
+    costingMode: payload.costingMode,
+    usageWindows: payload.usageWindows
   });
 
   return {
@@ -19,12 +20,17 @@ const calculatePricing = async (payload = {}) => {
     baseHourlyPrice: result.baseHourlyPrice,
     basePrice: result.basePrice,
     durationHours: result.durationHours,
+    calendarHours: result.calendarHours,
+    billableHours: result.billableHours,
+    usesUsageWindows: result.usesUsageWindows,
     duration: result.duration,
     accounts: result.accounts,
     totalPrice: result.totalPrice,
     currency: result.currency,
     roleCount: result.roleCount,
     costingMode: result.costingMode,
+    portalHourlyTotal: result.portalHourlyTotal,
+    infraHourlyTotal: result.infraHourlyTotal,
     estimatedPrice: result.totalPrice
   };
 };

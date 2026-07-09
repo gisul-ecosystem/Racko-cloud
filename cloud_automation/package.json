@@ -6,7 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node app.js",
-    "dev": "node app.js",
+    "dev": "node --watch app.js",
     "test": "node --test test/requestValidation.test.js"
   },
   "dependencies": {
