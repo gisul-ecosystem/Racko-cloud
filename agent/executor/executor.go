@@ -34,32 +34,44 @@ func New(agentID string, cfg *config.Config, r *reporter.Reporter) *Executor {
 
 // Handle is the JobHandler passed to the poller.
 func (e *Executor) Handle(job poller.Job) {
-	log.Printf("[executor] %s — received job id=%s packages=%d",
-		time.Now().Format(time.RFC3339), job.ID, len(job.SoftwareIDs))
+	log.Printf("[executor] ▶ JOB START id=%s packages=%d agentId=%s",
+		job.ID, len(job.SoftwareIDs), e.agentID)
 
 	// Report installing immediately
+	log.Printf("[executor] Reporting status=installing for job=%s", job.ID)
 	if err := e.rep.Report(job.ID, e.agentID, "installing", ""); err != nil {
-		log.Printf("[executor] Failed to report 'installing': %v", err)
+		log.Printf("[executor] ERROR reporting 'installing' for job=%s: %v", job.ID, err)
+	} else {
+		log.Printf("[executor] Reported status=installing for job=%s OK", job.ID)
 	}
 
 	var combinedLogs string
 
-	for _, swID := range job.SoftwareIDs {
-		// Fetch full software record from platform so we know the install method,
-		// package name, fileUrl etc.
+	for i, swID := range job.SoftwareIDs {
+		log.Printf("[executor] Processing software %d/%d id=%s for job=%s", i+1, len(job.SoftwareIDs), swID, job.ID)
+
+		// Fetch full software record from platform
+		log.Printf("[executor] Fetching software details for id=%s", swID)
 		pkg, err := e.fetchSoftware(swID)
 		if err != nil {
+			log.Printf("[executor] ERROR fetching software id=%s: %v", swID, err)
 			combinedLogs += fmt.Sprintf("[error] Could not fetch software %s: %v\n", swID, err)
 			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
-				log.Printf("[executor] Failed to report: %v", err)
+				log.Printf("[executor] ERROR reporting 'failed' for job=%s: %v", job.ID, err)
 			}
 			continue
 		}
+		log.Printf("[executor] Fetched software: name=%s version=%s method=%s chocoName=%s wingetId=%s",
+			pkg.Name, pkg.Version, pkg.InstallMethod, pkg.ChocoName, pkg.WingetID)
 
-		log.Printf("[executor] Installing %s v%s via %s", pkg.Name, pkg.Version, pkg.InstallMethod)
+		log.Printf("[executor] ▶ INSTALL START name=%s version=%s method=%s job=%s",
+			pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
 
 		logs, success := retry.Run(
 			func() (string, error) {
+				log.Printf("[executor] Calling installer.Install for name=%s method=%s", pkg.Name, pkg.InstallMethod)
+				startTime := time.Now()
+
 				// Install with 30-minute timeout
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 				defer cancel()
@@ -70,17 +82,29 @@ func (e *Executor) Handle(job poller.Job) {
 				}, 1)
 
 				go func() {
+					log.Printf("[executor] installer goroutine started for name=%s", pkg.Name)
 					l, e := installer.Install(*pkg)
+					log.Printf("[executor] installer goroutine finished for name=%s err=%v logsLen=%d", pkg.Name, e, len(l))
 					resultChan <- struct {
 						logs string
 						err  error
 					}{l, e}
 				}()
 
+				log.Printf("[executor] Waiting for installer result for name=%s (timeout=30min)", pkg.Name)
 				select {
 				case result := <-resultChan:
+					elapsed := time.Since(startTime)
+					if result.err != nil {
+						log.Printf("[executor] INSTALL ERROR name=%s elapsed=%s err=%v", pkg.Name, elapsed, result.err)
+						log.Printf("[executor] INSTALL OUTPUT name=%s:\n%s", pkg.Name, result.logs)
+					} else {
+						log.Printf("[executor] INSTALL SUCCESS name=%s elapsed=%s", pkg.Name, elapsed)
+						log.Printf("[executor] INSTALL OUTPUT name=%s:\n%s", pkg.Name, result.logs)
+					}
 					return result.logs, result.err
 				case <-ctx.Done():
+					log.Printf("[executor] INSTALL TIMEOUT name=%s after 30 minutes", pkg.Name)
 					return "", fmt.Errorf("install timeout after 30 minutes")
 				}
 			},
@@ -90,8 +114,9 @@ func (e *Executor) Handle(job poller.Job) {
 				if attempt >= 3 {
 					status = "failed"
 				}
+				log.Printf("[executor] Attempt %d failed for name=%s job=%s — reporting status=%s", attempt, pkg.Name, job.ID, status)
 				if err := e.rep.Report(job.ID, e.agentID, status, combinedLogs); err != nil {
-					log.Printf("[executor] Failed to report '%s': %v", status, err)
+					log.Printf("[executor] ERROR reporting '%s' for job=%s: %v", status, job.ID, err)
 				}
 			},
 		)
@@ -99,19 +124,21 @@ func (e *Executor) Handle(job poller.Job) {
 		combinedLogs += logs
 
 		if !success {
-			log.Printf("[executor] Job %s failed for %s — continuing with remaining software", job.ID, pkg.Name)
+			log.Printf("[executor] ✗ INSTALL FAILED name=%s job=%s — continuing with next software", pkg.Name, job.ID)
 			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
-				log.Printf("[executor] Failed to report 'failed': %v", err)
+				log.Printf("[executor] ERROR reporting final 'failed' for job=%s: %v", job.ID, err)
 			}
 			continue
 		}
 
-		log.Printf("[executor] %s installed successfully", pkg.Name)
+		log.Printf("[executor] ✓ INSTALL DONE name=%s job=%s", pkg.Name, job.ID)
 	}
 
-	log.Printf("[executor] Job %s completed", job.ID)
+	log.Printf("[executor] ▶ JOB COMPLETE id=%s — reporting success", job.ID)
 	if err := e.rep.Report(job.ID, e.agentID, "success", combinedLogs); err != nil {
-		log.Printf("[executor] Failed to report 'success': %v", err)
+		log.Printf("[executor] ERROR reporting 'success' for job=%s: %v", job.ID, err)
+	} else {
+		log.Printf("[executor] Reported status=success for job=%s OK", job.ID)
 	}
 }
 
