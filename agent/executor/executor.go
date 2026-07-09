@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/racko-ai/agent/config"
@@ -15,11 +14,6 @@ import (
 	"github.com/racko-ai/agent/reporter"
 	"github.com/racko-ai/agent/retry"
 )
-
-// installMu serializes all package-manager operations across concurrent jobs.
-// Package managers (choco, winget, msi) use OS-level file locks — running them
-// concurrently causes lock contention, hangs, or silent failures.
-var installMu sync.Mutex
 
 // Executor processes jobs received from the poller.
 type Executor struct {
@@ -66,11 +60,6 @@ func (e *Executor) Handle(job poller.Job) {
 
 		logs, success := retry.Run(
 			func() (string, error) {
-				// Serialize all installs — package managers use OS-level file locks.
-				// Concurrent choco/winget/msi calls cause lock contention and hangs.
-				installMu.Lock()
-				defer installMu.Unlock()
-
 				// Install with 30-minute timeout
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 				defer cancel()
