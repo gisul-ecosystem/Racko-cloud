@@ -3,10 +3,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../../../context/AuthContext';
 import { useInstallJobs } from '../../../../hooks/useInstallJobs';
-import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
-import { type IJob, type JobStatus, type ISoftwareCatalog, issueJobStreamTicket } from '../../../../lib/machineManagerApi';
+import { type IJob, type JobStatus, issueJobStreamTicket } from '../../../../lib/machineManagerApi';
 import { getSseGatewayBaseUrl } from '../../../../lib/gatewayUrl';
 import { Briefcase, RefreshCw, X, FileText } from 'lucide-react';
 
@@ -167,18 +166,7 @@ function JobRow({
 export default function JobsPage() {
   const { isAuthenticated } = useAuth();
   const { jobs, loading, error, refetch } = useInstallJobs(isAuthenticated);
-  const { catalog } = useSoftwareCatalog(isAuthenticated);
   const [selectedJob, setSelectedJob] = useState<{ job: IJob; name: string } | null>(null);
-
-  const softwareMap = catalog.reduce<Record<string, ISoftwareCatalog>>((acc, sw) => {
-    acc[sw._id] = sw;
-    return acc;
-  }, {});
-
-  const getSoftwareName = (job: IJob) => {
-    const swId = job.softwareIds[0];
-    return swId ? (softwareMap[swId]?.name ?? swId.slice(-8)) : '—';
-  };
 
   return (
     <div className="max-w-screen-xl">
@@ -232,7 +220,7 @@ export default function JobsPage() {
                     <JobRow
                       key={j._id}
                       job={j}
-                      softwareName={getSoftwareName(j)}
+                      softwareName={j.softwareName || j.softwareIds[0]?.slice(-8) || '—'}
                       isAuthenticated={isAuthenticated}
                       onViewLogs={(job, name) => setSelectedJob({ job, name })}
                       index={i}
