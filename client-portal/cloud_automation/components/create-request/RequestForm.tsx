@@ -15,8 +15,11 @@ import type {
 import {
   catalogInstancesForServices,
   formatInstanceGuide,
+  formatLocationOptionLabel,
+  getInstancePortalTips,
   getSelectedPauseCleanupServices,
   isCustomerDetailsComplete,
+  isVmCatalogService,
   normalizeServiceId,
   DELETE_CLEANUP_ACTION_LABELS,
   PAUSE_CLEANUP_ACTION_LABELS,
@@ -206,6 +209,21 @@ export function RequestForm({
     showInstances && instancesComplete(catalog, selectedServiceIds, selectedInstances);
   const showLocations =
     showPermissions && rolesComplete(catalog, selectedServiceIds, resolvedRoles);
+
+  const selectedLocationEntry = locations.find((entry) => entry.arm_region_name === location);
+  const selectedVmPortalTips = instanceServices
+    .filter((service) => isVmCatalogService(service))
+    .flatMap((service) => {
+      const serviceId = normalizeServiceId(service.id);
+      const selectedOption = selectedInstances.find((entry) => entry.serviceId === serviceId)
+        ?.instanceOption;
+      const instance = catalogInstances.find(
+        (entry) =>
+          normalizeServiceId(entry.serviceId) === serviceId &&
+          entry.option_name === selectedOption
+      );
+      return getInstancePortalTips(instance?.guide);
+    });
 
   const updateUsageWindowDay = (dayIndex: number, patch: Partial<UsageWindow>) => {
     onUsageWindowsChange(
@@ -724,6 +742,7 @@ export function RequestForm({
                             : null;
                         const active = selected === instance.option_name;
                         const guideText = formatInstanceGuide(instance.guide);
+                        const portalTips = getInstancePortalTips(instance.guide);
                         return (
                           <button
                             key={instance.option_name}
@@ -740,6 +759,16 @@ export function RequestForm({
                             </span>
                             {guideText && (
                               <span className="mt-0.5 block text-xs text-gray-500">{guideText}</span>
+                            )}
+                            {active && portalTips.length > 0 && (
+                              <ul className="mt-2 space-y-1 border-t border-red-100 pt-2 text-xs text-amber-800">
+                                {portalTips.map((tip) => (
+                                  <li key={tip} className="flex gap-1.5">
+                                    <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-amber-500" />
+                                    <span>{tip}</span>
+                                  </li>
+                                ))}
+                              </ul>
                             )}
                             {price != null && (
                               <span className="mt-1 block text-xs text-gray-400">
@@ -855,7 +884,8 @@ export function RequestForm({
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-900">Region</h2>
           <p className="mt-0.5 text-xs text-gray-400">
-            Available regions based on your service and instance selections
+            Available regions based on your service and instance selections. Use the exact region
+            shown below when creating resources in Azure Portal.
           </p>
           {locationsError && (
             <p className="mt-2 text-sm text-red-600">{locationsError}</p>
@@ -872,13 +902,30 @@ export function RequestForm({
               </option>
               {locations.map((entry) => (
                 <option key={entry.arm_region_name} value={entry.arm_region_name}>
-                  {entry.display_location}
-                  {entry.basePrice != null ? ` — from $${entry.basePrice.toFixed(3)}/hr` : ''}
+                  {formatLocationOptionLabel(entry)}
                 </option>
               ))}
             </select>
             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           </div>
+          {location && selectedLocationEntry && selectedVmPortalTips.length > 0 && (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                <div>
+                  <p className="text-sm font-medium text-amber-900">
+                    Azure Portal region: {selectedLocationEntry.display_location} (
+                    {selectedLocationEntry.arm_region_name})
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-xs text-amber-900">
+                    {selectedVmPortalTips.map((tip) => (
+                      <li key={tip}>{tip}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       )}
 

@@ -42,7 +42,25 @@ const getProvisionedServiceResources = async (req, res, next) => {
   }
 };
 
+const repairInstancePolicies = async (req, res, next) => {
+  try {
+    validateRequestId(req.params.id);
+
+    const result = await serviceResourceProvisionService.repairInstancePoliciesForRequest(
+      Number(req.params.id)
+    );
+
+    res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   provisionServiceResources,
-  getProvisionedServiceResources
+  getProvisionedServiceResources,
+  repairInstancePolicies
 };

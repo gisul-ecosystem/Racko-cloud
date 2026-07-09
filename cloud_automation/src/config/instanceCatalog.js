@@ -14,7 +14,12 @@ const VM_GUIDES = {
     vcpu: '1',
     ram: '1 GB',
     storage: 'Temp SSD',
-    tier: 'Burstable'
+    tier: 'Burstable',
+    portalTips: [
+      'In Azure Portal → Create a virtual machine, set Region to your lab region (same as selected above — e.g. Denmark East / denmarkeast). The portal often defaults to East US.',
+      'Set Availability options to "No infrastructure redundancy required". Availability zones hide B-series sizes.',
+      'Choose size Standard_B1s, Standard_B1ms, or Standard_B1ls — these are the allowed B1 sizes for your lab policy.'
+    ]
   },
   B2s: {
     summary: 'Balanced burstable VM for everyday apps.',
@@ -625,6 +630,7 @@ const buildGuidePayload = (rawGuide, optionName) => {
     summary: rawGuide.summary || `Azure option: ${optionName}`,
     description: rawGuide.description || '',
     tier: rawGuide.tier || optionName,
+    portalTips: Array.isArray(rawGuide.portalTips) ? rawGuide.portalTips : [],
     specs
   };
 };

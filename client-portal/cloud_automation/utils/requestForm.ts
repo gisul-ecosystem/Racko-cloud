@@ -175,3 +175,27 @@ export function formatInstanceGuide(
   if (typeof guide === 'string') return guide;
   return guide.summary || guide.description;
 }
+
+export function getInstancePortalTips(
+  guide?: string | { portalTips?: string[] } | null
+): string[] {
+  if (!guide || typeof guide === 'string') return [];
+  return Array.isArray(guide.portalTips) ? guide.portalTips : [];
+}
+
+export function isVmCatalogService(
+  service: Pick<CatalogService, 'name' | 'service_name'>
+): boolean {
+  const name = String(service.service_name || service.name || '');
+  return /virtual machine|\bvm\b/i.test(name);
+}
+
+export function formatLocationOptionLabel(entry: {
+  display_location: string;
+  arm_region_name: string;
+  basePrice?: number | null;
+}): string {
+  const priceSuffix =
+    entry.basePrice != null ? ` — from $${Number(entry.basePrice).toFixed(3)}/hr` : '';
+  return `${entry.display_location} (${entry.arm_region_name})${priceSuffix}`;
+}
