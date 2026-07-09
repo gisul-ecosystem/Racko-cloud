@@ -357,6 +357,7 @@ class MachineManagerService {
   }
 
   async updateJobResult(jobId: mongoose.Types.ObjectId, dto: AgentJobResultDto): Promise<void> {
+    logger.info('[MachineManager] updateJobResult start', { jobId: jobId.toString(), status: dto.status, agentId: dto.agentId });
     const job = await JobModel.findById(jobId);
     if (!job) throw new NotFoundError('Job not found.');
 
@@ -375,6 +376,8 @@ class MachineManagerService {
       jobId: jobId.toString(),
       status: dto.status,
       agentId: dto.agentId,
+      attempts: job.attempts,
+      logsLength: dto.logs?.length ?? 0,
     });
 
     // Emit SSE event so browser gets real-time update
