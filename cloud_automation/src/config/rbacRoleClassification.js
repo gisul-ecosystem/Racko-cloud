@@ -17,6 +17,7 @@ const DATA_PLANE_ONLY_ROLES = new Set([
   'Service Bus Data Sender',
   'Service Bus Data Receiver',
   'Cognitive Services User',
+  'Cognitive Services Speech User',
   'Search Index Data Contributor',
   'Search Index Data Reader',
   'EventGrid Data Sender',

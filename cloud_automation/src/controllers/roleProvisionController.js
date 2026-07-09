@@ -17,7 +17,11 @@ const provisionRolesForRequest = async (req, res, next) => {
       success: true,
       usersProcessed: result.usersProcessed,
       rolesAssigned: result.rolesAssigned,
-      rolesProvisioned: result.rolesProvisioned
+      rolesProvisioned: result.rolesProvisioned,
+      permissionsComplete: result.permissionsComplete,
+      provisioningStatus: result.provisioningStatus,
+      resourceScopedAssignments: result.resourceScopedAssignments,
+      permissionFailures: result.permissionFailures
     });
   } catch (error) {
     next(error);
@@ -29,9 +33,21 @@ const reprovisionRolesForRequest = async (req, res, next) => {
     validateRequestId(req.params.id);
 
     const requestId = Number(req.params.id);
+    const db = require('../db/postgres');
+
+    const aiFoundryCheck = await db.query(
+      `
+        SELECT s.name
+        FROM request_services rs
+        JOIN services s ON s.id = rs.service_id
+        WHERE rs.request_id = $1 AND s.name = 'Azure AI Foundry'
+      `,
+      [requestId]
+    );
+
+    const hasAiFoundry = aiFoundryCheck.rows.length > 0;
     const result = await roleProvisionService.reprovisionRolesForRequest(requestId);
 
-    const db = require('../db/postgres');
     const assignments = await db.query(
       `
         SELECT DISTINCT azure_role
@@ -44,12 +60,22 @@ const reprovisionRolesForRequest = async (req, res, next) => {
     );
 
     res.status(200).json({
-      success: true,
-      message: `Roles re-provisioned — ${result.rolesAssigned} assignments made`,
+      success: result.success !== false,
+      message: result.permissionsComplete
+        ? `Roles re-provisioned — ${result.rolesAssigned} assignments made`
+        : `Roles re-provisioned with incomplete resource permissions — ${result.rolesAssigned} assignments made`,
+      hasAiFoundry,
       assignmentsMade: result.rolesAssigned,
       rolesAssigned: assignments.rows.map((row) => row.azure_role),
       usersProcessed: result.usersProcessed,
-      rolesProvisioned: result.rolesProvisioned
+      rolesProvisioned: result.rolesProvisioned,
+      permissionsComplete: result.permissionsComplete,
+      provisioningStatus: result.provisioningStatus,
+      permissionFailures: result.permissionFailures,
+      note: hasAiFoundry
+        ? 'AI Foundry: assigned Azure AI Developer + Storage + Key Vault + Monitoring + Contributor + Network Contributor roles'
+        : undefined,
+      ...result
     });
   } catch (error) {
     next(error);
@@ -71,8 +97,29 @@ const getRoleAssignmentsForRequest = async (req, res, next) => {
   }
 };
 
+const repairResourceScopedPermissions = async (req, res, next) => {
+  try {
+    validateRequestId(req.params.id);
+
+    const result = await roleProvisionService.repairResourceScopedPermissionsForRequest(
+      Number(req.params.id)
+    );
+
+    res.status(200).json({
+      success: result.success,
+      message: result.permissionsComplete
+        ? 'Resource-scoped permissions applied successfully'
+        : 'Provisioning complete but some resource permissions could not be applied',
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 module.exports = {
   getRoleAssignmentsForRequest,
   provisionRolesForRequest,
-  reprovisionRolesForRequest
+  reprovisionRolesForRequest,
+  repairResourceScopedPermissions
 };

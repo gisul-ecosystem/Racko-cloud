@@ -1,6 +1,7 @@
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const { parseFlexibleDateTime } = require('../utils/dateTime');
+const { computeBillableHours } = require('../utils/billableHours');
 const { getAzureServiceName } = require('./servicePricingMap');
 const { isVirtualMachineService, normalizeVmSize } = require('../utils/vmSize');
 const {
@@ -90,8 +91,18 @@ const buildRetailFilter = (service, instanceOption) => {
     );
   }
 
-  if (/app service|functions/i.test(serviceName)) {
+  if (/app service/i.test(serviceName)) {
     const skuToken = mapAppServiceSku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/functions/i.test(serviceName)) {
+    const raw = String(instanceOption || '').trim().toLowerCase();
+    const skuToken = /premium/i.test(raw) ? 'Premium' : /dedicated/i.test(raw) ? 'Dedicated' : 'Consumption';
     return (
       `serviceName eq '${escapeODataString(azureServiceName)}' ` +
       `and contains(skuName,'${escapeODataString(skuToken)}') ` +
@@ -162,6 +173,32 @@ const buildRetailFilter = (service, instanceOption) => {
     );
   }
 
+  if (/event grid/i.test(serviceName)) {
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/application insights/i.test(serviceName)) {
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(productName,'Application Insights') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/^azure monitor$/i.test(serviceName.trim())) {
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/entra id/i.test(serviceName) || /azure devops/i.test(serviceName)) {
+    return null;
+  }
+
   return `serviceName eq '${escapeODataString(azureServiceName)}' and priceType eq 'Consumption'`;
 };
 
@@ -222,6 +259,27 @@ const mergeRegionalPriceMaps = (maps) => {
   return merged;
 };
 
+const intersectRegionalPriceMaps = (maps) => {
+  const nonEmptyMaps = (Array.isArray(maps) ? maps : []).filter((priceMap) => priceMap.size > 0);
+
+  if (nonEmptyMaps.length === 0) {
+    return new Map();
+  }
+
+  let intersection = new Set(nonEmptyMaps[0].keys());
+
+  for (let index = 1; index < nonEmptyMaps.length; index += 1) {
+    intersection = new Set([...intersection].filter((region) => nonEmptyMaps[index].has(region)));
+    if (intersection.size === 0) {
+      break;
+    }
+  }
+
+  const merged = mergeRegionalPriceMaps(nonEmptyMaps);
+
+  return new Map([...intersection].map((region) => [region, merged.get(region) || 0]));
+};
+
 const loadPricingContext = async (serviceIds) => {
   const normalizedServiceIds = Array.from(
     new Set(
@@ -245,7 +303,8 @@ const loadPricingContext = async (serviceIds) => {
         name,
         azure_role,
         category,
-        COALESCE(price_per_user, 0) AS price_per_user
+        COALESCE(price_per_user, 0) AS price_per_user,
+        COALESCE(supports_regions, true) AS supports_regions
       FROM services
       WHERE id = ANY($1::int[])
     `,
@@ -386,7 +445,8 @@ const calculateEstimate = async ({
   endDate,
   selectedInstances = [],
   selectedRoles = [],
-  costingMode = 'shared'
+  costingMode = 'shared',
+  usageWindows = []
 }) => {
   const resolvedAccountCount = Number(accountCount);
   if (!Number.isInteger(resolvedAccountCount) || resolvedAccountCount <= 0) {
@@ -407,7 +467,12 @@ const calculateEstimate = async ({
   }
 
   const durationMs = end.getTime() - start.getTime();
-  const durationHours = Math.max(1, durationMs / 3600000);
+  const { calendarHours, billableHours, usesUsageWindows } = computeBillableHours(
+    start,
+    end,
+    usageWindows
+  );
+  const durationHours = billableHours;
   const durationDays = Number((durationHours / 24).toFixed(2));
   const roleCount = Array.isArray(selectedRoles) ? selectedRoles.length : 0;
   const roleMarkupHourly = roleCount * ROLE_PRICE_MARKUP;
@@ -462,12 +527,17 @@ const calculateEstimate = async ({
     baseHourlyPrice: Number(baseHourlyPrice.toFixed(4)),
     basePrice: Number(baseHourlyPrice.toFixed(4)),
     durationHours: Number(durationHours.toFixed(2)),
+    calendarHours: Number(calendarHours.toFixed(2)),
+    billableHours: Number(billableHours.toFixed(2)),
+    usesUsageWindows,
     duration: durationDays,
     accounts: resolvedAccountCount,
     totalPrice: Number(totalPrice.toFixed(2)),
     currency: 'USD',
     roleCount,
     costingMode: sharedInfra ? 'shared' : 'per_user',
+    portalHourlyTotal: Number(portalHourlyTotal.toFixed(6)),
+    infraHourlyTotal: Number(infraHourlyTotal.toFixed(6)),
     services: lineItems
   };
 };
@@ -542,6 +612,7 @@ module.exports = {
   getServiceRegionalDailyPrices,
   getRegionalHourlyPricesForServices,
   getRegionalDailyPricesForServices,
+  intersectRegionalPriceMaps,
   getPortalHourlyFees,
   getPortalDailyFees,
   calculateEstimate,

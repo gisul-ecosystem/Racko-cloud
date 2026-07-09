@@ -273,6 +273,7 @@ export function RequestWorkspace() {
       selectedInstances,
       selectedRoles,
       costingMode,
+      usageWindows,
     };
   }, [
     catalog,
@@ -284,6 +285,7 @@ export function RequestWorkspace() {
     selectedInstances,
     selectedRoles,
     costingMode,
+    usageWindows,
   ]);
 
   const { pricing, loading: pricingLoading, error: pricingError } = usePricingEstimate(pricingPayload);
@@ -511,7 +513,13 @@ export function RequestWorkspace() {
               totalPrice={totalPrice}
               currency={pricing?.currency}
               durationHours={pricing?.durationHours}
-              accountCount={accountCount}
+              calendarHours={pricing?.calendarHours}
+              billableHours={pricing?.billableHours}
+              usesUsageWindows={pricing?.usesUsageWindows}
+              accountCount={pricing?.accounts ?? accountCount}
+              baseHourlyPrice={pricing?.baseHourlyPrice}
+              portalHourlyTotal={pricing?.portalHourlyTotal}
+              infraHourlyTotal={pricing?.infraHourlyTotal}
               loading={pricingLoading}
               error={pricingError}
             />

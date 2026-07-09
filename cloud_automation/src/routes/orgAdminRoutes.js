@@ -84,6 +84,11 @@ router.post(
   requireSuperAdmin,
   orgAdminController.reprovisionRolesForRequest
 );
+router.post(
+  '/resource-groups/:requestId/repair-resource-permissions',
+  requireSuperAdmin,
+  orgAdminController.repairResourceScopedPermissions
+);
 router.get('/azure/roles', requireSuperAdmin, orgAdminController.listAzureRoles);
 router.get('/access-requests', requireSuperAdmin, orgAdminController.listAccessRequests);
 router.patch(

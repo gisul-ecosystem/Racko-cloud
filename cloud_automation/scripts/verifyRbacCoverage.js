@@ -27,7 +27,17 @@ const SEED_AUTO_ASSIGN_ROLES = [
   ['Application Insights', ['Monitoring Contributor']],
   ['Azure DevOps', ['Project Administrator']],
   ['Azure OpenAI Service', ['Cognitive Services OpenAI Contributor']],
-  ['Azure AI Foundry', ['Azure AI Developer', 'Storage Account Contributor', 'Storage Blob Data Contributor']],
+  ['Azure AI Foundry', [
+    'Azure AI Developer',
+    'Storage Account Contributor',
+    'Storage Blob Data Contributor',
+    'Key Vault Secrets User',
+    'Key Vault Reader',
+    'Monitoring Reader',
+    'Contributor',
+    'Network Contributor',
+    'AcrPull'
+  ]],
   ['Azure AI Search', ['Search Service Contributor']],
   ['Azure Machine Learning', ['Contributor', 'AzureML Data Scientist', 'Network Contributor', 'Storage Account Contributor', 'Storage Blob Data Contributor']],
   ['Azure AI Vision', ['Cognitive Services Contributor']],

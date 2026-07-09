@@ -3,7 +3,7 @@ const AppError = require('../utils/AppError');
 const db = require('../db/postgres');
 const pricingService = require('./pricingService');
 const { assertProvisionableLocation } = require('./azureLocationService');
-const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments } = require('./instanceRoleMappingService');
+const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments, finalizeAiFoundryTierRoles } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 
@@ -178,6 +178,8 @@ async function createRequest({
     // Pricing
     // ==========================
 
+    const resolvedCostingMode = normalizeCostingMode(costingMode) || COSTING_MODE_SHARED;
+
     const pricing =
       await pricingService
         .calculatePricing({
@@ -195,7 +197,11 @@ async function createRequest({
 
           selectedInstances: Array.isArray(selectedInstances) ? selectedInstances : [],
 
-          selectedRoles: Array.isArray(selectedRoles) ? selectedRoles : []
+          selectedRoles: Array.isArray(selectedRoles) ? selectedRoles : [],
+
+          costingMode: resolvedCostingMode,
+
+          usageWindows: Array.isArray(usageWindows) ? usageWindows : []
 
         });
 
@@ -224,7 +230,6 @@ async function createRequest({
     // Create Request
     // ==========================
 
-    const resolvedCostingMode = normalizeCostingMode(costingMode) || COSTING_MODE_SHARED;
     const resolvedRackoUserId = String(rackoUserId || '').trim() || null;
     const resolvedCleanupEnabled = cleanupEnabled === true;
     const resolvedCleanupIntervalHours =
@@ -565,6 +570,9 @@ async function createRequest({
 
     // Auto-assign dependency roles required for portal resource creation
     await applyDependencyRolesToAssignments(client, roleAssignments, validServiceIds);
+
+    // Enforce AI Foundry tier-specific role sets after all auto-assign merges
+    await finalizeAiFoundryTierRoles(client, roleAssignments, validServiceIds, selectedInstances);
 
     // Insert all role assignments into database
     for (const [sid, rolesSet] of roleAssignments.entries()) {

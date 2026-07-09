@@ -181,7 +181,6 @@ JOIN (
     -- AI & Machine Learning
     ('Azure OpenAI Service', 'Cognitive Services OpenAI Contributor', true, 'control_plane'),
     ('Azure OpenAI Service', 'Cognitive Services User', false, 'data_plane'),
-    ('Azure AI Foundry', 'Azure AI Developer', true, 'control_plane'),
     ('Azure AI Search', 'Search Service Contributor', true, 'control_plane'),
     ('Azure AI Search', 'Search Index Data Contributor', false, 'data_plane'),
     ('Azure Machine Learning', 'Contributor', true, 'control_plane'),
@@ -192,6 +191,7 @@ JOIN (
     ('Azure AI Language', 'Cognitive Services Contributor', true, 'control_plane'),
     ('Azure AI Language', 'Cognitive Services User', false, 'data_plane'),
     ('Azure AI Speech', 'Cognitive Services Contributor', true, 'control_plane'),
+    ('Azure AI Speech', 'Cognitive Services Speech User', false, 'data_plane'),
     ('Azure AI Speech', 'Cognitive Services User', false, 'data_plane'),
     ('Azure Bot Service', 'Contributor', true, 'control_plane'),
     ('Azure AI Document Intelligence', 'Cognitive Services Contributor', true, 'control_plane'),
@@ -212,11 +212,37 @@ JOIN (
     ('Azure Machine Learning',              'Network Contributor'),
     ('Azure Machine Learning',              'Storage Account Contributor'),
     ('Azure Machine Learning',              'Storage Blob Data Contributor'),
-    ('Azure AI Foundry',                    'Storage Account Contributor'),
-    ('Azure AI Foundry',                    'Storage Blob Data Contributor'),
     ('Azure ExpressRoute',                  'Network Contributor')
 ) AS r(service_name, azure_role) ON s.name = r.service_name
 ON CONFLICT DO NOTHING;
+
+-- Azure AI Foundry — complete role set (primary + linked resource dependencies)
+DELETE FROM public.service_role_mapping
+WHERE service_id = (SELECT id FROM public.services WHERE name = 'Azure AI Foundry');
+
+INSERT INTO public.service_role_mapping
+  (service_id, azure_role, role_type, scope_type, auto_assign, role_purpose, created_at)
+SELECT s.id, r.azure_role, r.role_type, 'resource_group', r.auto_assign, r.role_purpose, NOW()
+FROM public.services s
+JOIN (
+  VALUES
+    ('Azure AI Foundry', 'Azure AI Developer',              'builtin', true,  'control_plane'),
+    ('Azure AI Foundry', 'Storage Account Contributor',     'builtin', true,  'control_plane'),
+    ('Azure AI Foundry', 'Storage Blob Data Contributor',   'builtin', true,  'data_plane'),
+    ('Azure AI Foundry', 'Storage Blob Data Reader',        'builtin', false, 'data_plane'),
+    ('Azure AI Foundry', 'Key Vault Secrets User',          'builtin', true,  'data_plane'),
+    ('Azure AI Foundry', 'Key Vault Reader',                'builtin', true,  'control_plane'),
+    ('Azure AI Foundry', 'Monitoring Reader',               'builtin', true,  'control_plane'),
+    ('Azure AI Foundry', 'Monitoring Contributor',          'builtin', false, 'control_plane'),
+    ('Azure AI Foundry', 'Contributor',                     'builtin', true,  'control_plane'),
+    ('Azure AI Foundry', 'Network Contributor',             'builtin', true,  'dependency'),
+    ('Azure AI Foundry', 'AcrPull',                        'builtin', true,  'dependency'),
+    ('Azure AI Foundry', 'AzureML Data Scientist',         'builtin', false, 'data_plane'),
+    ('Azure AI Foundry', 'AzureML Compute Operator',       'builtin', false, 'control_plane')
+) AS r(service_name, azure_role, role_type, auto_assign, role_purpose)
+ON s.name = r.service_name
+ON CONFLICT (service_id, azure_role)
+DO UPDATE SET auto_assign = EXCLUDED.auto_assign, role_purpose = EXCLUDED.role_purpose;
 
 -- ============================================================
 -- STEP 5: Instance options
