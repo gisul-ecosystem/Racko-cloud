@@ -11,7 +11,8 @@ const allowedPricingFields = new Set([
   'endDate',
   'selectedInstances',
   'selectedRoles',
-  'costingMode'
+  'costingMode',
+  'usageWindows'
 ]);
 const allowedRetailPricingQueryParams = new Set(['service', 'region', 'sku']);
 const DEFAULT_LOCATION = 'eastus';
@@ -62,6 +63,12 @@ const validatePricingPayload = (body) => {
   if (new Set(serviceIds).size !== serviceIds.length) {
     throw new AppError('serviceIds must not contain duplicates.', 400);
   }
+
+  const { usageWindows } = body;
+
+  if (usageWindows !== undefined && !Array.isArray(usageWindows)) {
+    throw new AppError('usageWindows must be an array when provided.', 400);
+  }
 };
 
 const validateRetailPricingQuery = (query) => {
@@ -104,7 +111,8 @@ const calculatePricing = async (req, res, next) => {
       endDate: String(req.body.endDate || DEFAULT_END_DATE()),
       selectedInstances: Array.isArray(req.body.selectedInstances) ? req.body.selectedInstances : [],
       selectedRoles: Array.isArray(req.body.selectedRoles) ? req.body.selectedRoles : [],
-      costingMode: String(req.body.costingMode || 'shared')
+      costingMode: String(req.body.costingMode || 'shared'),
+      usageWindows: Array.isArray(req.body.usageWindows) ? req.body.usageWindows : []
     };
 
     console.log(

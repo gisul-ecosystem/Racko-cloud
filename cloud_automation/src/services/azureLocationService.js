@@ -17,6 +17,12 @@ const {
 
 const LOG_SERVICE = 'azure-locations';
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_FALLBACK_REGIONS = (
+  process.env.AZURE_DEFAULT_REGIONS || 'eastus,westus,centralindia,southeastasia'
+)
+  .split(',')
+  .map((region) => region.trim().toLowerCase())
+  .filter(Boolean);
 const subscriptionLocationsCache = {
   expiresAt: 0,
   locations: []
@@ -268,50 +274,136 @@ const getCatalogRegionsForService = (serviceName, catalogByServiceName) => {
   return new Map();
 };
 
+const isRegionAgnosticService = (service) => {
+  if (service?.supports_regions === false) {
+    return true;
+  }
+
+  const name = normalizeServiceName(service?.name);
+  return /entra id|azure devops/.test(name);
+};
+
+const getCatalogIntersectionForServiceIds = async (serviceIds) => {
+  const normalizedServiceIds = (Array.isArray(serviceIds) ? serviceIds : [])
+    .map((serviceId) => Number(serviceId))
+    .filter((serviceId) => Number.isInteger(serviceId) && serviceId > 0);
+
+  if (normalizedServiceIds.length === 0) {
+    return [];
+  }
+
+  const result = await db.query(
+    `
+      SELECT
+        sl.arm_region_name,
+        MIN(sl.display_location) AS display_location,
+        MIN(sl.location) AS location
+      FROM service_locations sl
+      INNER JOIN services s
+        ON LOWER(TRIM(sl.service_name)) = LOWER(TRIM(s.name))
+      WHERE s.id = ANY($1::int[])
+        AND COALESCE(s.supports_regions, true) = true
+      GROUP BY sl.arm_region_name
+      HAVING COUNT(DISTINCT s.id) = (
+        SELECT COUNT(*)::int
+        FROM services
+        WHERE id = ANY($1::int[])
+          AND COALESCE(supports_regions, true) = true
+      )
+      ORDER BY sl.arm_region_name
+    `,
+    [normalizedServiceIds]
+  );
+
+  return result.rows.map((row) => ({
+    arm_region_name: String(row.arm_region_name || '').trim().toLowerCase(),
+    display_location: row.display_location || row.location || row.arm_region_name,
+    location: row.location || row.display_location || row.arm_region_name
+  }));
+};
+
+const getRegionsForService = async (
+  service,
+  instancesByServiceId,
+  selectedInstancesByServiceId,
+  catalogByServiceName
+) => {
+  const serviceId = Number(service.id);
+  const instanceOption = resolveInstanceOptionForLocation(
+    serviceId,
+    instancesByServiceId,
+    selectedInstancesByServiceId
+  );
+
+  const retailMap = await getServiceRegionalHourlyPrices(service, instanceOption);
+  if (retailMap.size > 0) {
+    return new Set(retailMap.keys());
+  }
+
+  const catalogRegions = getCatalogRegionsForService(service.name, catalogByServiceName);
+  if (catalogRegions.size > 0) {
+    return new Set(catalogRegions.keys());
+  }
+
+  return null;
+};
+
 const resolveAvailableRegionsForServices = async (
   services,
   instancesByServiceId,
   selectedInstancesByServiceId
 ) => {
   const catalogByServiceName = await loadCatalogRegionsByServiceName();
-  const retailMaps = await Promise.all(
-    services.map(async (service) => {
-      const serviceId = Number(service.id);
-      const instanceOption = resolveInstanceOptionForLocation(
-        serviceId,
-        instancesByServiceId,
-        selectedInstancesByServiceId
-      );
-      return getServiceRegionalHourlyPrices(service, instanceOption);
-    })
+  const regionConstrainedServices = services.filter((service) => !isRegionAgnosticService(service));
+
+  const perServiceRegionSets = await Promise.all(
+    regionConstrainedServices.map((service) =>
+      getRegionsForService(service, instancesByServiceId, selectedInstancesByServiceId, catalogByServiceName)
+    )
   );
 
-  const retailIntersection = intersectRegionalPriceMaps(retailMaps);
-  const catalogRegionSets = services.map((service) => {
-    const catalogRegions = getCatalogRegionsForService(service.name, catalogByServiceName);
-    return new Set(catalogRegions.keys());
-  });
-  const catalogIntersection = intersectRegionNameSets(catalogRegionSets);
+  const retailIntersection = intersectRegionalPriceMaps(
+    await Promise.all(
+      regionConstrainedServices.map(async (service) => {
+        const serviceId = Number(service.id);
+        const instanceOption = resolveInstanceOptionForLocation(
+          serviceId,
+          instancesByServiceId,
+          selectedInstancesByServiceId
+        );
+        return getServiceRegionalHourlyPrices(service, instanceOption);
+      })
+    )
+  );
 
-  let availableRegions = null;
+  let availableRegions = intersectRegionNameSets(
+    perServiceRegionSets.filter((regionSet) => regionSet && regionSet.size > 0)
+  );
 
-  if (retailIntersection.size > 0 && catalogIntersection) {
-    availableRegions = new Set(
-      [...retailIntersection.keys()].filter((region) => catalogIntersection.has(region))
-    );
-    if (availableRegions.size === 0) {
+  if (!availableRegions || availableRegions.size === 0) {
+    if (retailIntersection.size > 0) {
       availableRegions = new Set(retailIntersection.keys());
     }
-  } else if (retailIntersection.size > 0) {
-    availableRegions = new Set(retailIntersection.keys());
-  } else if (catalogIntersection) {
-    availableRegions = catalogIntersection;
+  }
+
+  if (!availableRegions || availableRegions.size === 0) {
+    const catalogRows = await getCatalogIntersectionForServiceIds(
+      regionConstrainedServices.map((service) => Number(service.id))
+    );
+    if (catalogRows.length > 0) {
+      availableRegions = new Set(catalogRows.map((row) => row.arm_region_name));
+    }
+  }
+
+  if (!availableRegions || availableRegions.size === 0) {
+    availableRegions = new Set(DEFAULT_FALLBACK_REGIONS);
   }
 
   return {
     availableRegions,
     retailIntersection,
-    catalogByServiceName
+    catalogByServiceName,
+    regionConstrainedServiceCount: regionConstrainedServices.length
   };
 };
 
@@ -406,6 +498,41 @@ const filterLocationsForSelectedInstances = async (
   return availabilityChecks.filter(Boolean);
 };
 
+const getCatalogHourlyPricesForServices = async (serviceIds) => {
+  const normalizedServiceIds = (Array.isArray(serviceIds) ? serviceIds : [])
+    .map((serviceId) => Number(serviceId))
+    .filter((serviceId) => Number.isInteger(serviceId) && serviceId > 0);
+
+  if (normalizedServiceIds.length === 0) {
+    return new Map();
+  }
+
+  const result = await db.query(
+    `
+      SELECT
+        sl.arm_region_name,
+        SUM(COALESCE(sl.retail_price, s.price_per_user, 0))::float8 AS hourly_price
+      FROM service_locations sl
+      INNER JOIN services s
+        ON LOWER(TRIM(sl.service_name)) = LOWER(TRIM(s.name))
+      WHERE s.id = ANY($1::int[])
+      GROUP BY sl.arm_region_name
+    `,
+    [normalizedServiceIds]
+  );
+
+  const pricesByRegion = new Map();
+  for (const row of result.rows) {
+    const regionName = String(row.arm_region_name || '').trim().toLowerCase();
+    if (!regionName) {
+      continue;
+    }
+    pricesByRegion.set(regionName, Number(row.hourly_price || 0));
+  }
+
+  return pricesByRegion;
+};
+
 const getLocationsForSelectedServices = async (
   services = [],
   instancesByServiceId = new Map(),
@@ -429,14 +556,29 @@ const getLocationsForSelectedServices = async (
   if (!candidateRegionNames || candidateRegionNames.size === 0) {
     logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_no_service_specific_regions', {
       serviceCount: services.length,
-      serviceNames: services.map((service) => service.name)
+      serviceNames: services.map((service) => service.name),
+      regionConstrainedServiceCount: availability.regionConstrainedServiceCount
     });
-    return [];
+    candidateRegionNames = new Set(DEFAULT_FALLBACK_REGIONS);
   }
 
   candidateRegionNames = new Set(
     [...candidateRegionNames].filter((regionName) => subscriptionRegionNames.has(regionName))
   );
+
+  if (candidateRegionNames.size === 0) {
+    logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_subscription_filter_empty', {
+      serviceCount: services.length,
+      fallbackRegionCount: DEFAULT_FALLBACK_REGIONS.length
+    });
+    candidateRegionNames = new Set(
+      DEFAULT_FALLBACK_REGIONS.filter((regionName) => subscriptionRegionNames.has(regionName))
+    );
+  }
+
+  if (candidateRegionNames.size === 0) {
+    return [];
+  }
 
   let candidateLocations = buildLocationEntries(
     candidateRegionNames,
@@ -451,13 +593,14 @@ const getLocationsForSelectedServices = async (
     selectedInstancesByServiceId
   );
 
-  const [regionalHourlyPrices, portalHourlyFee] = await Promise.all([
+  const [regionalHourlyPrices, portalHourlyFee, catalogHourlyPrices] = await Promise.all([
     getRegionalHourlyPricesForServices(
       services,
       instancesByServiceId,
       selectedInstancesByServiceId
     ),
-    Promise.resolve(getPortalHourlyFees(services))
+    Promise.resolve(getPortalHourlyFees(services)),
+    getCatalogHourlyPricesForServices(services.map((service) => Number(service.id)))
   ]);
 
   logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_filtered_for_services', {
@@ -469,14 +612,21 @@ const getLocationsForSelectedServices = async (
 
   return candidateLocations
     .map((location) => {
-      const infraPrice = Number(regionalHourlyPrices.get(location.arm_region_name) || 0);
-      const basePrice = infraPrice + portalHourlyFee;
+      const retailInfraPrice = Number(regionalHourlyPrices.get(location.arm_region_name) || 0);
+      const catalogInfraPrice = Number(catalogHourlyPrices.get(location.arm_region_name) || 0);
+      const basePrice =
+        retailInfraPrice > 0
+          ? retailInfraPrice + portalHourlyFee
+          : catalogInfraPrice > 0
+            ? catalogInfraPrice
+            : portalHourlyFee;
 
       return {
         ...location,
         base_price: basePrice,
         basePrice,
-        currency: 'USD'
+        currency: 'USD',
+        serviceCount: services.length
       };
     })
     .sort((left, right) => {
