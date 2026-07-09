@@ -462,6 +462,9 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
       const userResult = { username: user.username, rgName, deleted: [], failed: [] };
 
       try {
+        const { captureUserLabMetrics, recordCleanupSnapshot } = require('./labHistoryService');
+        const metrics = await captureUserLabMetrics(requestId, user.id);
+
         const affected = await runResourceActionForUser({
           costingMode: request.costing_mode,
           perUserResourceGroupName: user.azure_resource_group_name,
@@ -472,6 +475,21 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
           activeUserCount,
           action: resolvedAction
         });
+
+        if (metrics) {
+          await recordCleanupSnapshot({
+            requestId,
+            userId: user.id,
+            triggeredBy: 'scheduler',
+            cleanupAction: resolvedAction,
+            resourcesDeleted: affected,
+            metrics
+          }).catch((snapshotError) => {
+            console.warn(
+              `[Cleanup] History snapshot failed for user ${user.id}: ${snapshotError.message}`
+            );
+          });
+        }
 
         for (const item of affected) {
           userResult.deleted.push({

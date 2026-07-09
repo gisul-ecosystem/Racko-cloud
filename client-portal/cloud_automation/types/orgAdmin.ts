@@ -50,6 +50,19 @@ export interface OrgAdminRequestSummary {
   resourceGroupCount: number;
 }
 
+export interface OrgAdminDeleteRequestResult {
+  success: boolean;
+  requestId: number;
+  deleted: boolean;
+  usersDeleted: number;
+  usersTotal: number;
+  userErrors: Array<{ username: string; reason: string }>;
+  rolesRemoved: number;
+  customRolesRevoked: number;
+  resourceGroupsDeleted: number;
+  budgetsDeleted: number;
+}
+
 export interface OrgAdminLiveAzureResource {
   name: string;
   type: string;
@@ -80,6 +93,70 @@ export interface OrgAdminCleanupLog {
   status: string;
   error?: string | null;
   details?: unknown;
+}
+
+export interface OrgAdminLabHistoryUserSummary {
+  userId: number;
+  username: string;
+  totalMinutesLifetime: number;
+  totalMinutesToday: number;
+  liveCostUsd: number;
+  azureCostMtdUsd: number;
+  budgetAmountUsd: number | null;
+  currentResourceCount: number;
+  peakResourceCount: number;
+  sessionCount: number;
+  openSessions: number;
+  cleanupRunCount: number;
+}
+
+export interface OrgAdminLabHistoryTimelineEntry {
+  id: string;
+  type: 'session' | 'cleanup_snapshot' | 'cleanup_log' | 'daily_usage';
+  at: string;
+  userId: number | null;
+  username: string | null;
+  title: string;
+  subtitle?: string;
+  minutes?: number;
+  liveCostUsd?: number;
+  azureCostMtdUsd?: number;
+  resourceCount?: number;
+  peakResourceCount?: number;
+  resourcesDeleted?: number;
+  limitReached?: boolean;
+  isActive?: boolean;
+  triggeredBy?: string;
+  status?: string;
+  error?: string | null;
+}
+
+export interface OrgAdminLabHistory {
+  requestId: number;
+  expiryDate: string | null;
+  labCreatedAt: string;
+  hourlyRateUsd: number;
+  userSummaries: OrgAdminLabHistoryUserSummary[];
+  timeline: OrgAdminLabHistoryTimelineEntry[];
+  sessions: Array<{
+    id: number;
+    userId: number;
+    username: string;
+    loginAt: string;
+    logoutAt: string | null;
+    minutesUsed: number;
+    endedReason: string | null;
+    liveCostUsd: number;
+    isActive: boolean;
+  }>;
+  dailyUsage: Array<{
+    userId: number;
+    username: string;
+    trackingDate: string;
+    consumedMinutes: number;
+    limitReached: boolean;
+    limitReachedAt: string | null;
+  }>;
 }
 
 export interface OrgAdminLiveResource {
@@ -142,6 +219,9 @@ export interface OrgAdminUser {
   remainingMinutes: number | null;
   blockedUntil: string | null;
   dailyLimitReached?: boolean;
+  blockedForToday?: boolean;
+  blockedReason?: string | null;
+  blockedReasonLabel?: string | null;
   sessionExpiresAt?: string | null;
   totalSessions?: number;
   totalSessionsToday?: number;
@@ -209,6 +289,29 @@ export interface OrgAdminUserAzureCost {
 export interface OrgAdminUserAzureCostResponse {
   success: boolean;
   cost: OrgAdminUserAzureCost;
+}
+
+export interface OrgAdminSharedAzureCostSummary {
+  requestId: number;
+  resourceGroup: string;
+  costingMode: CostingMode;
+  monthToDateCost: number;
+  lifetimeCost: number;
+  currency: string;
+  totalMergedMinutesMtd: number;
+  periodStart: string;
+  periodEnd: string;
+  timezone: string;
+  dataFreshnessNote: string;
+  queriedAt: string;
+  fromCache?: boolean;
+  cacheAge?: number | null;
+  users: OrgAdminUserAzureCost[];
+}
+
+export interface OrgAdminSharedAzureCostResponse {
+  success: boolean;
+  summary: OrgAdminSharedAzureCostSummary;
 }
 
 export interface OrgAdminResourceGroupDetailResponse {
@@ -281,6 +384,9 @@ export interface OrgAdminDailyUsageEntry {
   email: string;
   accountEnabled: boolean;
   limitReached: boolean;
+  blockedForToday?: boolean;
+  blockedReason?: string | null;
+  blockedReasonLabel?: string | null;
   dailyLimitHours: number | null;
   consumedMinutes: number;
   remainingMinutes: number | null;
@@ -324,6 +430,18 @@ export interface OrgAdminCustomRoleAssignment {
   assigned_at: string;
   revoked_at: string | null;
   status: string;
+}
+
+export interface OrgAdminBulkCustomRoleAssignmentResult {
+  success: boolean;
+  requestId: number;
+  totalUsers: number;
+  assignedCount: number;
+  skippedCount: number;
+  failedCount: number;
+  assigned: Array<{ username: string; assignmentId: number }>;
+  skipped: Array<{ username: string; reason: string }>;
+  failed: Array<{ username: string; reason: string }>;
 }
 
 export interface OrgAdminCustomService {

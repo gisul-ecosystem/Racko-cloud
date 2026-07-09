@@ -1,6 +1,7 @@
 const { DateTime } = require('luxon');
 const db = require('../db/postgres');
 const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
+const { computeWindowAccessState, getBlockedReasonLabel } = require('../utils/windowAccessState');
 
 /**
  * Returns true when the request uses request_usage_windows (new window system).
@@ -67,9 +68,10 @@ async function loadUsageWindowsByRequest(requestIds) {
   const windowsByRequest = new Map();
 
   for (const row of rows) {
-    const list = windowsByRequest.get(row.request_id) || [];
+    const requestId = Number(row.request_id);
+    const list = windowsByRequest.get(requestId) || [];
     list.push(row);
-    windowsByRequest.set(row.request_id, list);
+    windowsByRequest.set(requestId, list);
   }
 
   return windowsByRequest;
@@ -124,72 +126,23 @@ function getTodayWindowConfig(windows, at = new Date()) {
 
 async function evaluateWindowDailyLimitAccess({ requestId, userId, windows, at = new Date() }) {
   const config = getTodayWindowConfig(windows, at);
-
-  if (!config?.todayWindow) {
-    return {
-      allowed: false,
-      reason: 'day_disabled',
-      consumedMinutes: 0,
-      limitMinutes: null,
-      remainingMinutes: 0,
-      limitReached: false,
-      withinWindow: false,
-      todayWindow: null,
-      timezone: config?.timezone || 'Asia/Kolkata',
-      message: 'Access is not allowed on this day.'
-    };
-  }
-
-  const withinWindow = isWithinUsageWindow(windows, at);
+  const withinWindow = config?.todayWindow ? isWithinUsageWindow(windows, at) : false;
   const limitMinutes =
-    config.dailyLimitHours != null ? Math.round(config.dailyLimitHours * 60) : null;
-  const consumedMinutes = await getConsumedMinutesToday(userId, config.todayDate, config.timezone);
-  const limitReached = await isDailyHourLimitReachedToday(userId, config.timezone);
-  const remainingMinutes =
-    limitMinutes != null ? Math.max(0, limitMinutes - consumedMinutes) : null;
+    config?.dailyLimitHours != null ? Math.round(config.dailyLimitHours * 60) : null;
+  const consumedMinutes = config?.todayWindow
+    ? await getConsumedMinutesToday(userId, config.todayDate, config.timezone)
+    : 0;
+  const limitReachedInDb = config?.todayWindow
+    ? await isDailyHourLimitReachedToday(userId, config.timezone)
+    : false;
 
-  if (limitReached || (limitMinutes != null && consumedMinutes >= limitMinutes)) {
-    return {
-      allowed: false,
-      reason: 'limit_exceeded',
-      consumedMinutes,
-      limitMinutes,
-      remainingMinutes: 0,
-      limitReached: true,
-      withinWindow,
-      todayWindow: config.todayWindow,
-      timezone: config.timezone,
-      message: 'Daily usage limit reached for today.'
-    };
-  }
-
-  if (!withinWindow) {
-    return {
-      allowed: false,
-      reason: 'outside_window',
-      consumedMinutes,
-      limitMinutes,
-      remainingMinutes,
-      limitReached: false,
-      withinWindow: false,
-      todayWindow: config.todayWindow,
-      timezone: config.timezone,
-      message: 'Access is only allowed during scheduled hours.'
-    };
-  }
-
-  return {
-    allowed: true,
-    reason: 'ok',
+  return computeWindowAccessState({
+    config,
+    withinWindow,
     consumedMinutes,
     limitMinutes,
-    remainingMinutes,
-    limitReached: false,
-    withinWindow: true,
-    todayWindow: config.todayWindow,
-    timezone: config.timezone,
-    message: 'Access allowed.'
-  };
+    limitReachedInDb
+  });
 }
 
 module.exports = {
@@ -198,5 +151,7 @@ module.exports = {
   loadUsageWindowsByRequest,
   isWithinUsageWindow,
   getTodayWindowConfig,
+  getBlockedReasonLabel,
+  computeWindowAccessState,
   evaluateWindowDailyLimitAccess
 };

@@ -14,6 +14,11 @@ router.get(
   requireSuperAdmin,
   orgAdminController.getResourceGroupDetail
 );
+router.delete(
+  '/resource-groups/:requestId',
+  requireSuperAdmin,
+  orgAdminController.deleteRequest
+);
 router.get(
   '/resource-groups/:requestId/monitoring',
   requireSuperAdmin,
@@ -64,10 +69,20 @@ router.get(
   requireSuperAdmin,
   orgAdminController.getCleanupLogs
 );
+router.get(
+  '/resource-groups/:requestId/history',
+  requireSuperAdmin,
+  orgAdminController.getLabHistory
+);
 router.post(
   '/resource-groups/:requestId/cleanup',
   requireSuperAdmin,
   orgAdminController.triggerRequestCleanup
+);
+router.get(
+  '/resource-groups/:requestId/shared-azure-cost',
+  requireSuperAdmin,
+  orgAdminController.getSharedAzureCost
 );
 router.get(
   '/resource-groups/:requestId/users/:userId/azure-cost',

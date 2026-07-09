@@ -178,6 +178,8 @@ const unblockUser = async ({ username, userId, resetUsage, removeDailyLimit, dry
       SET
         azure_account_enabled = TRUE,
         blocked_until = NULL,
+        blocked_reason = NULL,
+        blocked_at = NULL,
         used_today_minutes = CASE WHEN $2 THEN 0 ELSE used_today_minutes END,
         status = CASE WHEN status = 'Blocked' THEN 'Created' ELSE status END
       WHERE id = $1
@@ -187,6 +189,26 @@ const unblockUser = async ({ username, userId, resetUsage, removeDailyLimit, dry
   console.log('Updated azure_users record.');
 
   if (resetUsage) {
+    const zeroedSessions = await db.query(
+      `
+        UPDATE user_usage_sessions
+        SET
+          logout_at = login_at,
+          minutes_used = 0,
+          ended_reason = COALESCE(ended_reason, 'admin_reset')
+        WHERE user_id = $1
+          AND DATE(login_at AT TIME ZONE $2) = $3::date
+          AND (logout_at IS NULL OR minutes_used > 0)
+        RETURNING id
+      `,
+      [user.id, timezone, todayDate]
+    );
+    if (zeroedSessions.rowCount > 0) {
+      console.log(
+        `Zeroed ${zeroedSessions.rowCount} session(s) for ${todayDate} so enforcement does not re-block.`
+      );
+    }
+
     await db.query(
       `
         INSERT INTO daily_usage_tracking

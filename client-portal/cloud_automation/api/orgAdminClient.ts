@@ -3,8 +3,10 @@ import { ORG_ADMIN_API_PREFIX } from '../constants';
 import type {
   OrgAdminAccessRequest,
   OrgAdminAzureRoleOption,
+  OrgAdminDeleteRequestResult,
   OrgAdminAzureRolesResponse,
   OrgAdminCustomRoleAssignment,
+  OrgAdminBulkCustomRoleAssignmentResult,
   OrgAdminCustomRoleDefinition,
   OrgAdminCustomService,
   OrgAdminDailyUsageResponse,
@@ -15,6 +17,8 @@ import type {
   OrgAdminResourceGroupDetailResponse,
   OrgAdminUser,
   OrgAdminUserAzureCostResponse,
+  OrgAdminSharedAzureCostSummary,
+  OrgAdminSharedAzureCostResponse,
 } from '../types/orgAdmin';
 
 export class OrgAdminError extends Error {
@@ -102,6 +106,15 @@ export async function deleteOrgAdminUser(
   });
 }
 
+export async function deleteOrgAdminRequest(
+  requestId: number
+): Promise<OrgAdminDeleteRequestResult> {
+  return orgAdminRequest<OrgAdminDeleteRequestResult>(
+    `/resource-groups/${encodeURIComponent(requestId)}`,
+    { method: 'DELETE' }
+  );
+}
+
 export async function updateOrgAdminUserRoles(
   requestId: number,
   userId: number,
@@ -136,6 +149,16 @@ export async function getOrgUserAzureCost(
   const params = options.refresh ? '?refresh=true' : '';
   return orgAdminRequest<OrgAdminUserAzureCostResponse>(
     `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/azure-cost${params}`
+  );
+}
+
+export async function getOrgSharedAzureCost(
+  requestId: number,
+  options: { refresh?: boolean } = {}
+): Promise<OrgAdminSharedAzureCostResponse> {
+  const params = options.refresh ? '?refresh=true' : '';
+  return orgAdminRequest<OrgAdminSharedAzureCostResponse>(
+    `/resource-groups/${encodeURIComponent(requestId)}/shared-azure-cost${params}`
   );
 }
 
@@ -261,6 +284,23 @@ export async function getOrgCleanupLogs(
   return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/cleanup-logs`);
 }
 
+export async function getOrgLabHistory(
+  requestId: number,
+  options?: { userId?: number; limit?: number }
+): Promise<{ success: boolean; history: import('../types/orgAdmin').OrgAdminLabHistory }> {
+  const params = new URLSearchParams();
+  if (options?.userId) {
+    params.set('userId', String(options.userId));
+  }
+  if (options?.limit) {
+    params.set('limit', String(options.limit));
+  }
+  const query = params.toString();
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/history${query ? `?${query}` : ''}`
+  );
+}
+
 export function parseRolesInput(input: string): string[] {
   return Array.from(
     new Set(
@@ -349,6 +389,23 @@ export async function assignOrgCustomRole(
     }
   );
   return response.assignment;
+}
+
+export async function assignOrgCustomRoleToAllUsers(
+  requestId: number,
+  body: {
+    customRoleDefId?: number | null;
+    permissions?: string[] | null;
+    skipExisting?: boolean;
+  }
+): Promise<OrgAdminBulkCustomRoleAssignmentResult> {
+  return orgAdminRequest<OrgAdminBulkCustomRoleAssignmentResult>(
+    `/resource-groups/${encodeURIComponent(requestId)}/assign-custom-role-to-all`,
+    {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }
+  );
 }
 
 export async function revokeOrgCustomRoleAssignment(assignmentId: number): Promise<void> {
