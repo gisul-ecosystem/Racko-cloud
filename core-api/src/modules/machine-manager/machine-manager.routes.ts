@@ -30,6 +30,14 @@ machineRouter.get(
 
 // ─── Machine routes (authenticated) ──────────────────────────────────────────
 
+// SSE stream — must come BEFORE requireAuth middleware.
+// EventSource cannot set Authorization headers; auth uses a short-lived
+// single-use ?streamToken= ticket issued by POST /jobs/:id/stream-ticket.
+machineRouter.get(
+  '/jobs/:id/stream',
+  (req, res) => void machineManagerController.streamJobStatus(req, res)
+);
+
 machineRouter.use(requireAuth);
 
 // POST /api/v1/machines/bulk — must come before /:id to avoid collision
@@ -61,6 +69,14 @@ machineRouter.get(
   '/jobs',
   requireRole('admin', 'super_admin'),
   (req, res, next) => machineManagerController.listJobs(req, res, next)
+);
+
+// POST /api/v1/machines/jobs/:id/stream-ticket — issue SSE stream ticket
+machineRouter.post(
+  '/jobs/:id/stream-ticket',
+  requireAuth,
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => machineManagerController.issueJobStreamTicket(req, res, next)
 );
 
 // GET /api/v1/machines/jobs/:id

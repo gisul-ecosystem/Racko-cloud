@@ -5,15 +5,18 @@ const db = require('../db/postgres');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const usageEnforcementService = require('./usageEnforcementService');
 const { resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
-const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
+const {
+  getClosedSessionMinutesToday,
+  getConsumedMinutesToday
+} = require('./dailyUsageEnforcementService');
 const { resolveScheduleForRequest } = require('../utils/usageSchedule');
 const {
   loadUsageWindowsByRequest,
   evaluateWindowDailyLimitAccess
 } = require('./usageWindowAccessService');
 
-const STALE_SESSION_MINUTES = Number(process.env.SIGNIN_STALE_SESSION_MINUTES || 10);
-const SIGN_IN_LOOKBACK_MINUTES = Number(process.env.SIGNIN_MONITOR_LOOKBACK_MINUTES || 5);
+const STALE_SESSION_MINUTES = Number(process.env.SIGNIN_STALE_SESSION_MINUTES || 20);
+const SIGN_IN_LOOKBACK_MINUTES = Number(process.env.SIGNIN_MONITOR_LOOKBACK_MINUTES || 10);
 
 /**
  * Create Microsoft Graph client with app-only authentication.
@@ -521,21 +524,36 @@ async function detectEndedSessions() {
       );
 
       const request = requestResult.rows[0];
+      const timezone = await resolveTrackingTimezone(session.request_id, request);
+      const trackingDate = DateTime.now().setZone(timezone).toISODate();
+
+      const closedMinutesToday = await getClosedSessionMinutesToday(
+        session.user_id,
+        trackingDate,
+        timezone
+      );
 
       await db.query(
         `
           UPDATE azure_users
-          SET used_today_minutes = COALESCE(used_today_minutes, 0) + $1
+          SET used_today_minutes = $1
           WHERE id = $2 AND request_id = $3
         `,
-        [durationMins, session.user_id, session.request_id]
+        [Math.round(closedMinutesToday), session.user_id, session.request_id]
       );
 
-      await syncDailyUsageTracking({
-        requestId: session.request_id,
-        userId: session.user_id,
-        request
-      });
+      await db.query(
+        `
+          INSERT INTO daily_usage_tracking
+            (request_id, azure_user_id, tracking_date, consumed_minutes)
+          VALUES ($1, $2, $3, $4)
+          ON CONFLICT (azure_user_id, tracking_date)
+          DO UPDATE SET
+            consumed_minutes = EXCLUDED.consumed_minutes,
+            updated_at = NOW()
+        `,
+        [session.request_id, session.user_id, trackingDate, closedMinutesToday]
+      );
 
       const openSessionCheck = await db.query(
         `
@@ -564,7 +582,7 @@ async function detectEndedSessions() {
       }
 
       console.log(
-        `[SIGNIN_MONITOR] ✅ Closed stale session for ${session.username} — ${durationMins} mins accumulated`
+        `[SIGNIN_MONITOR] Closed stale session for ${session.username} — ${durationMins}m this session, ${Math.round(closedMinutesToday)}m total today (closed)`
       );
     }
 

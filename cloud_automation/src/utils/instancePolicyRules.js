@@ -202,6 +202,21 @@ const buildSkuListParameter = (allowedSkus) => ({
 
 const INSTANCE_POLICY_RULES = [
   {
+    policyType: 'instance_metadata',
+    pattern: /ai foundry/i,
+    allowedResourceTypes: [
+      'Microsoft.MachineLearningServices/workspaces',
+      'Microsoft.MachineLearningServices/workspaces/computes',
+      'Microsoft.MachineLearningServices/workspaces/datastores',
+      'Microsoft.Storage/storageAccounts',
+      'Microsoft.KeyVault/vaults',
+      'Microsoft.ContainerRegistry/registries',
+      'Microsoft.Insights/components',
+      'Microsoft.Network/virtualNetworks'
+    ],
+    note: 'AI Foundry auto-creates linked resources — do not apply restrictive SKU policies'
+  },
+  {
     policyType: 'allowed_vm_sku',
     pattern: /virtual machine/,
     policyDefinitionId: BUILT_IN_POLICY_DEFINITIONS.allowedVmSkus,

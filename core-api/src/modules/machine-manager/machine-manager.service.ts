@@ -13,7 +13,9 @@ import type {
   AgentJobResultDto,
   AgentHeartbeatDto,
 } from './machine-manager.types';
-import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';import { logger } from '../../utils/logger';
+import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
+import { logger } from '../../utils/logger';
+import { emitJobStatusEvent } from './job.events';
 
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
@@ -81,7 +83,7 @@ class MachineManagerService {
   }
 
   async listMachines(adminId: mongoose.Types.ObjectId): Promise<MachineResponse[]> {
-    const docs = await MachineModel.find({ adminId }).sort({ createdAt: -1 });
+    const docs = await MachineModel.find({ adminId, deleted: { $ne: true } }).sort({ createdAt: -1 });
     return docs.map((d) => this.toMachineResponse(d));
   }
 
@@ -98,17 +100,27 @@ class MachineManagerService {
     adminId: mongoose.Types.ObjectId
   ): Promise<void> {
     const doc = await this.findOwnedMachine(id, adminId);
-    await doc.deleteOne();
+    
+    // Soft delete — set deleted flag instead of removing record
+    doc.deleted = true;
+    doc.status = 'offline';
+    await doc.save();
 
-    logger.info('[MachineManager] Deleted machine', {
+    logger.info('[MachineManager] Soft deleted machine', {
       machineId: id.toString(),
       adminId: adminId.toString(),
     });
+
+    // Notify WebSocket manager to close connection if agent is connected
+    const { wsManager } = await import('./websocket/wsManager');
+    if (doc.agentId) {
+      wsManager.closeConnection(doc.agentId, 4010, 'Machine deleted');
+    }
   }
 
   // ─── Jobs ──────────────────────────────────────────────────────────────────
 
-  /** Create one job per machine for the selected softwares. */
+  /** Create one job per machine per software item. */
   async createJobs(
     dto: CreateJobDto,
     adminId: mongoose.Types.ObjectId
@@ -129,20 +141,74 @@ class MachineManagerService {
     }
 
     const jobs: JobResponse[] = [];
+
     for (const machineId of dto.machineIds) {
-      const doc = await JobModel.create({
-        machineId: new mongoose.Types.ObjectId(machineId),
-        softwareIds: softwareObjectIds,
-        adminId,
-      });
+      const machine = await MachineModel.findById(machineId);
 
-      logger.info('[MachineManager] Created install job', {
-        jobId: doc._id.toString(),
-        machineId,
-        adminId: adminId.toString(),
-      });
+      // One job per software item — enables per-software status tracking
+      for (const softwareId of softwareObjectIds) {
+        // Deduplication: return existing job if one is already pending or installing
+        const existing = await JobModel.findOne({
+          machineId: new mongoose.Types.ObjectId(machineId),
+          softwareIds: [softwareId],
+          status: { $in: ['pending', 'installing'] },
+        });
 
-      jobs.push(this.toJobResponse(doc));
+        if (existing) {
+          logger.info('[MachineManager] Duplicate job prevented — returning existing job', {
+            jobId: existing._id.toString(),
+            machineId,
+            softwareId: softwareId.toString(),
+          });
+          jobs.push(this.toJobResponse(existing));
+          continue;
+        }
+
+        const doc = await JobModel.create({
+          machineId: new mongoose.Types.ObjectId(machineId),
+          softwareIds: [softwareId],
+          adminId,
+        });
+
+        logger.info('[MachineManager] Created install job', {
+          jobId: doc._id.toString(),
+          machineId,
+          softwareId: softwareId.toString(),
+          adminId: adminId.toString(),
+        });
+
+        jobs.push(this.toJobResponse(doc));
+
+        // Push job to agent if connected via WebSocket
+        if (machine?.agentId) {
+          const { wsManager } = await import('./websocket/wsManager');
+          const pushed = wsManager.pushJob(machine.agentId, {
+            _id: doc._id.toString(),
+            machineId: doc.machineId.toString(),
+            softwareIds: doc.softwareIds.map((id) => id.toString()),
+            status: doc.status,
+            logs: doc.logs,
+            attempts: doc.attempts,
+          });
+          if (pushed) {
+            logger.info('[MachineManager] Job pushed via WebSocket', {
+              jobId: doc._id.toString(),
+              agentId: machine.agentId,
+            });
+          } else {
+            logger.warn('[MachineManager] Job NOT pushed - agent not connected via WebSocket', {
+              jobId: doc._id.toString(),
+              agentId: machine.agentId,
+              machineId: machineId.toString(),
+            });
+          }
+        } else {
+          logger.warn('[MachineManager] Job NOT pushed - machine has no agentId', {
+            jobId: doc._id.toString(),
+            machineId: machineId.toString(),
+          });
+        }
+      }
     }
 
     return jobs;
@@ -262,12 +328,23 @@ class MachineManagerService {
   /** Returns the oldest pending job for this agent's machine, or null. */
   async getPendingJobForAgent(agentId: string): Promise<JobResponse | null> {
     const machine = await MachineModel.findOne({ agentId });
-    if (!machine) throw new NotFoundError('Agent not found.');
+    if (!machine) {
+      logger.warn('[Agent] getPendingJobForAgent — agent not found', { agentId });
+      throw new NotFoundError('Agent not found.');
+    }
 
     const job = await JobModel.findOne({
       machineId: machine._id,
       status: 'pending',
     }).sort({ createdAt: 1 });
+
+    logger.debug('[Agent] getPendingJobForAgent result', {
+      agentId,
+      machineId: machine._id.toString(),
+      machineName: machine.name,
+      jobFound: !!job,
+      jobId: job?._id.toString(),
+    });
 
     return job ? this.toJobResponse(job) : null;
   }
@@ -292,11 +369,25 @@ class MachineManagerService {
       status: dto.status,
       agentId: dto.agentId,
     });
+
+    // Emit SSE event so browser gets real-time update
+    emitJobStatusEvent(jobId.toString(), {
+      jobId: jobId.toString(),
+      status: dto.status,
+      logs: dto.logs,
+      attempts: job.attempts,
+      softwareId: job.softwareIds[0]?.toString() ?? '',
+    });
   }
 
   async handleHeartbeat(dto: AgentHeartbeatDto): Promise<void> {
     const machine = await MachineModel.findOne({ agentId: dto.agentId });
     if (!machine) throw new NotFoundError('Agent not found.');
+    
+    // Reject deleted agents
+    if (machine.deleted) {
+      throw new ForbiddenError('Agent has been deleted.');
+    }
 
     machine.status = dto.status === 'online' ? 'online' : 'offline';
     machine.lastSeen = new Date();

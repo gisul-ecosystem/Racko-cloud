@@ -1,5 +1,5 @@
 version: '3.9'
-
+ 
 services:
   core-api:
     image: gisuldocker/racko-core-api:${IMAGE_TAG:-qa}
@@ -18,13 +18,7 @@ services:
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
+ 
   cloud-automation:
     image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-qa}
     env_file:
@@ -36,13 +30,7 @@ services:
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
+ 
   cloud-automation-aws:
     image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-qa}
     env_file:
@@ -54,13 +42,7 @@ services:
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
+ 
   cloud-gateway:
     image: gisuldocker/racko-cloud-gateway:${IMAGE_TAG:-qa}
     env_file:
@@ -69,24 +51,15 @@ services:
       PORT: ${GATEWAY_PORT:-8000}
       JWT_ACCESS_EXPIRES_IN: ${GATEWAY_JWT_ACCESS_EXPIRES_IN:-15m}
     depends_on:
-      core-api:
-        condition: service_healthy
-      cloud-automation:
-        condition: service_healthy
-      cloud-automation-aws:
-        condition: service_healthy
+      - core-api
+      - cloud-automation
+      - cloud-automation-aws
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
+ 
   client-portal:
     image: gisuldocker/racko-client-portal:${IMAGE_TAG:-qa}
     env_file:
@@ -96,24 +69,17 @@ services:
       PORT: ${CLIENT_PORTAL_PORT:-3000}
       GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
     depends_on:
-      cloud-gateway:
-        condition: service_healthy
+      - cloud-gateway
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-
+ 
 volumes:
   tenant-assets:
     name: racko-qa-tenant-assets
-
+ 
 networks:
   racko-network:
     name: racko-qa-network

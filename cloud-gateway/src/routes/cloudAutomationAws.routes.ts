@@ -56,7 +56,7 @@ function rewriteAwsManagePortalPath(path: string): string {
 const awsManagePortalProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
-  timeout: config.REQUEST_TIMEOUT_MS,
+  timeout: config.AWS_REQUEST_TIMEOUT_MS,
   pathRewrite: rewriteAwsManagePortalPath,
   on: {
     error: (_err, _req, res) => {
@@ -72,7 +72,7 @@ const awsManagePortalProxy = createProxyMiddleware({
 const cloudAutomationAwsProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
-  timeout: config.REQUEST_TIMEOUT_MS,
+  timeout: config.AWS_REQUEST_TIMEOUT_MS,
   pathRewrite: rewriteCloudAutomationAwsPath,
   on: {
     error: (_err, _req, res) => {

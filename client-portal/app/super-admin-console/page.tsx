@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, Monitor, MonitorCheck, Palette, Server } from 'lucide-react';
+import { Cloud, Monitor, MonitorCheck, Palette, Server, Users } from 'lucide-react';
 
 const services = [
   {
@@ -38,6 +38,13 @@ const services = [
     href: '/super-admin-console/white-labelling',
     icon: Palette,
     description: 'Manage tenants, branding, service configs and tenant admins',
+  },
+  {
+    id: 'admin-users',
+    name: 'Admin Users',
+    href: '/super-admin-console/admin-users',
+    icon: Users,
+    description: 'View active admins, wallet balances and manage billing',
   },
 ] as const;
 

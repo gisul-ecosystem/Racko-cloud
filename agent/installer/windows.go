@@ -16,6 +16,8 @@ import (
 
 func installOnPlatform(pkg SoftwarePackage) (string, error) {
 	switch pkg.InstallMethod {
+	case "winget":
+		return runWinget(pkg)
 	case "choco":
 		return runChoco(pkg)
 	case "msi":
@@ -58,7 +60,60 @@ func ensureChocolatey() (string, error) {
 	return out, nil
 }
 
-// runChoco installs via Chocolatey. Auto-installs Chocolatey if not present.
+// runWinget installs via winget. Falls back to choco if winget is not available.
+// Treats "already installed" output as success (idempotent).
+func runWinget(pkg SoftwarePackage) (string, error) {
+	wingetID := pkg.WingetID
+	if wingetID == "" {
+		wingetID = pkg.Name
+	}
+
+	// Check if winget is available
+	wingetPath, err := exec.LookPath("winget")
+	if err != nil {
+		// winget not available — fall back to choco if chocoName is provided
+		if pkg.ChocoName != "" || pkg.Name != "" {
+			return runChoco(pkg)
+		}
+		return "", fmt.Errorf("winget not found and no choco fallback available")
+	}
+
+	args := []string{"install", "--id", wingetID, "-e",
+		"--accept-source-agreements", "--accept-package-agreements", "--silent"}
+	if pkg.InstallArgs != "" {
+		args = append(args, strings.Fields(pkg.InstallArgs)...)
+	}
+
+	cmd := exec.Command(wingetPath, args...)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err = cmd.Run()
+
+	combined := fmt.Sprintf("cmd: winget %v\nstdout:\n%s\nstderr:\n%s",
+		args, stdout.String(), stderr.String())
+
+	if err == nil {
+		return combined, nil
+	}
+
+	// Winget exits non-zero for some "already installed" cases.
+	// Detect these and treat as success.
+	outLower := strings.ToLower(stdout.String() + stderr.String())
+	alreadyInstalledSignals := []string{
+		"no applicable upgrade found",
+		"already installed",
+		"no available upgrade found",
+		"no newer package versions are available",
+	}
+	for _, signal := range alreadyInstalledSignals {
+		if strings.Contains(outLower, signal) {
+			return combined, nil // treat as success
+		}
+	}
+
+	return combined, fmt.Errorf("winget exited with error: %w", err)
+}
 func runChoco(pkg SoftwarePackage) (string, error) {
 	// Auto-install Chocolatey if missing
 	installLog, err := ensureChocolatey()
@@ -80,7 +135,23 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 		// Fallback: try choco from PATH
 		out2, err2 := runCmd("choco", args...)
 		if err2 != nil {
-			return installLog + out + out2, fmt.Errorf("choco install failed: %w", err2)
+			combined := installLog + out + out2
+			// Idempotency: choco can exit non-zero when the package is already installed.
+			// Treat these as success rather than a failure.
+			outLower := strings.ToLower(combined)
+			alreadyInstalledSignals := []string{
+				"already installed",
+				"already exists",
+				"package already installed",
+				"nothing to install",
+				"is already installed",
+			}
+			for _, signal := range alreadyInstalledSignals {
+				if strings.Contains(outLower, signal) {
+					return combined, nil
+				}
+			}
+			return combined, fmt.Errorf("choco install failed: %w", err2)
 		}
 		return installLog + out2, nil
 	}

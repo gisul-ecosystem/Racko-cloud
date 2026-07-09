@@ -56,7 +56,13 @@ export function OrgAdminPortal() {
     renewBudget,
     updateCleanupSettings,
     triggerCleanup,
+    triggerRequestCleanup,
+    unblockUser,
+    reprovisionRoles,
     clearActionFeedback,
+    lastUpdatedAt,
+    isRefreshing,
+    hasActiveUsers,
   } = useOrgAdminPortal();
 
   const stats = useMemo(
@@ -349,6 +355,12 @@ export function OrgAdminPortal() {
                     onRenewBudget={renewBudget}
                     onToggleCleanup={handleToggleCleanup}
                     onManualCleanup={triggerCleanup}
+                    onRequestCleanup={triggerRequestCleanup}
+                    onUnblock={unblockUser}
+                    onReprovisionRoles={reprovisionRoles}
+                    lastUpdatedAt={lastUpdatedAt}
+                    isRefreshing={isRefreshing}
+                    hasActiveUsers={hasActiveUsers}
                   />
                 )}
               </div>

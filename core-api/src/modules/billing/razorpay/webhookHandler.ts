@@ -91,10 +91,12 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
     logger.info('Processing payment.captured event', {
       eventId,
       tenantId: notes['tenantId'],
+      userId: notes['userId'],
       purpose: notes['purpose'],
       amount: payment.amount,
     });
-    
+
+    // ── Tenant wallet top-up ──────────────────────────────────────────────
     if (notes['purpose'] === 'wallet_topup' && notes['tenantId'] && payment.amount) {
       try {
         const result = await walletService.creditWallet(
@@ -106,7 +108,7 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
             externalReference: payment.id ?? null,
           }
         );
-        logger.info('Wallet credited successfully', {
+        logger.info('Tenant wallet credited successfully', {
           eventId,
           tenantId: notes['tenantId'],
           amount: payment.amount / 100,
@@ -114,23 +116,47 @@ export async function handleRazorpayWebhook(req: Request, res: Response): Promis
           transactionId: result.transactionId,
         });
       } catch (error) {
-        logger.error('Failed to credit wallet from Razorpay webhook', {
+        logger.error('Failed to credit tenant wallet from Razorpay webhook', {
           eventId,
           tenantId: notes['tenantId'],
           amount: payment.amount,
           error: error instanceof Error ? error.message : String(error),
-          stack: error instanceof Error ? error.stack : undefined,
         });
       }
-    } else {
+    }
+
+    // ── Admin wallet top-up ───────────────────────────────────────────────
+    else if (notes['purpose'] === 'admin_wallet_topup' && notes['userId'] && payment.amount) {
+      try {
+        const { adminBillingService } = await import('../../adminBilling/adminBilling.service');
+        await adminBillingService.creditWallet(
+          notes['userId'],
+          payment.amount / 100,
+          notes['userId'],   // creditedBy = self (razorpay payment)
+          'razorpay_topup'
+        );
+        logger.info('Admin wallet credited successfully via Razorpay', {
+          eventId,
+          userId: notes['userId'],
+          amount: payment.amount / 100,
+        });
+      } catch (error) {
+        logger.error('Failed to credit admin wallet from Razorpay webhook', {
+          eventId,
+          userId: notes['userId'],
+          amount: payment.amount,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    else {
       logger.warn('Payment event conditions not met', {
         eventId,
-        hasPurpose: !!notes['purpose'],
         purpose: notes['purpose'],
         hasTenantId: !!notes['tenantId'],
-        tenantId: notes['tenantId'],
+        hasUserId: !!notes['userId'],
         hasAmount: !!payment.amount,
-        amount: payment.amount,
       });
     }
   } else {

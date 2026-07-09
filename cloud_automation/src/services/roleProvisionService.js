@@ -10,6 +10,11 @@ const {
   roleAssignmentIdFromSeed
 } = require('../provisioners/azure/roleProvisioner');
 const { isPerUserCosting } = require('../utils/costingMode');
+const { getDependencyRolesForServices } = require('./serviceRoleDependencyService');
+const { finalizeAiFoundryTierRoles, applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments } = require('./instanceRoleMappingService');
+const { ResourceManagementClient } = require('@azure/arm-resources');
+const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const { assignResourceScopedPermissions } = require('../provisioners/azure/resourceScopedRoleProvisioner');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -33,6 +38,178 @@ const getAzureUsersForRequest = async (client, requestId) => {
   return result.rows;
 };
 
+const getSelectedServicesForRequest = async (client, requestId) => {
+  const result = await client.query(
+    `SELECT DISTINCT rs.service_id, s.name AS service_name
+     FROM request_services rs
+     INNER JOIN services s ON s.id = rs.service_id
+     WHERE rs.request_id = $1
+     ORDER BY s.name`,
+    [requestId]
+  );
+
+  return result.rows.map((row) => ({
+    serviceId: Number(row.service_id),
+    serviceName: row.service_name
+  }));
+};
+
+const augmentRolesWithDependencies = async (client, roles, requestId) => {
+  const selectedServices = await getSelectedServicesForRequest(client, requestId);
+  if (selectedServices.length === 0) {
+    return roles;
+  }
+
+  const serviceIdByName = new Map(selectedServices.map((s) => [s.serviceName, s.serviceId]));
+  const existingRoleKeys = new Set(roles.map((r) => `${r.serviceId}:${r.azureRole.toLowerCase()}`));
+  const augmented = [...roles];
+
+  const dependencies = await getDependencyRolesForServices(
+    client,
+    selectedServices.map((s) => s.serviceName)
+  );
+
+  for (const dep of dependencies) {
+    const serviceId = serviceIdByName.get(dep.serviceName);
+    if (!serviceId) {
+      continue;
+    }
+
+    const key = `${serviceId}:${dep.role.toLowerCase()}`;
+    if (existingRoleKeys.has(key)) {
+      continue;
+    }
+
+    existingRoleKeys.add(key);
+    augmented.push({
+      serviceId,
+      azureRole: dep.role,
+      entraGroupId: null,
+      assignmentMode: 'rbac'
+    });
+    console.log(
+      `[roleProvision] Adding dependency role "${dep.role}" for ${dep.serviceName} — ${dep.reason}`
+    );
+  }
+
+  return augmented;
+};
+
+const getSelectedInstancesForRequest = async (client, requestId) => {
+  const result = await client.query(
+    `
+      SELECT service_id, instance_option
+      FROM request_service_instances
+      WHERE request_id = $1
+    `,
+    [requestId]
+  );
+
+  return result.rows.map((row) => ({
+    serviceId: Number(row.service_id),
+    instanceOption: row.instance_option
+  }));
+};
+
+const filterRolesByAiFoundryTier = async (client, roles, requestId, selectedServices, selectedInstances) => {
+  const aiFoundry = selectedServices.find((service) => service.serviceName === 'Azure AI Foundry');
+  if (!aiFoundry) {
+    return roles;
+  }
+
+  const instanceOption = selectedInstances.find(
+    (item) => Number(item.serviceId) === aiFoundry.serviceId
+  )?.instanceOption;
+
+  if (!instanceOption) {
+    return roles;
+  }
+
+  const roleAssignments = new Map();
+  roleAssignments.set(aiFoundry.serviceId, new Set());
+
+  for (const role of roles) {
+    if (Number(role.serviceId) !== aiFoundry.serviceId) {
+      continue;
+    }
+
+    roleAssignments.get(aiFoundry.serviceId).add(role.azureRole);
+  }
+
+  await finalizeAiFoundryTierRoles(client, roleAssignments, [aiFoundry.serviceId], [
+    { serviceId: aiFoundry.serviceId, instanceOption }
+  ]);
+
+  const allowedRoles = roleAssignments.get(aiFoundry.serviceId) || new Set();
+
+  return roles.filter(
+    (role) => Number(role.serviceId) !== aiFoundry.serviceId || allowedRoles.has(role.azureRole)
+  );
+};
+
+const reconcileAiFoundryRequestServiceRoles = async (client, requestId) => {
+  const selectedServices = await getSelectedServicesForRequest(client, requestId);
+  const aiFoundry = selectedServices.find((service) => service.serviceName === 'Azure AI Foundry');
+
+  if (!aiFoundry) {
+    return;
+  }
+
+  const selectedInstances = await getSelectedInstancesForRequest(client, requestId);
+  const instanceOption = selectedInstances.find(
+    (item) => Number(item.serviceId) === aiFoundry.serviceId
+  )?.instanceOption;
+
+  if (!instanceOption) {
+    return;
+  }
+
+  const roleAssignments = new Map([[aiFoundry.serviceId, new Set()]]);
+  const selectedInstance = [{ serviceId: aiFoundry.serviceId, instanceOption }];
+
+  await applyTierRolesToAssignments(client, roleAssignments, [aiFoundry.serviceId], selectedInstance);
+  await ensureAutoAssignRolesForServices(client, roleAssignments, [aiFoundry.serviceId]);
+  await applyDependencyRolesToAssignments(client, roleAssignments, [aiFoundry.serviceId]);
+  await finalizeAiFoundryTierRoles(client, roleAssignments, [aiFoundry.serviceId], selectedInstance);
+
+  const targetRoles = roleAssignments.get(aiFoundry.serviceId) || new Set();
+
+  if (targetRoles.size === 0) {
+    return;
+  }
+
+  await client.query(
+    `
+      DELETE FROM request_service_roles
+      WHERE request_id = $1
+        AND service_id = $2
+        AND azure_role <> ALL($3::text[])
+    `,
+    [requestId, aiFoundry.serviceId, [...targetRoles]]
+  );
+
+  for (const azureRole of targetRoles) {
+    await client.query(
+      `
+        INSERT INTO request_service_roles (request_id, service_id, azure_role)
+        VALUES ($1, $2, $3)
+        ON CONFLICT (request_id, service_id, azure_role) DO NOTHING
+      `,
+      [requestId, aiFoundry.serviceId, azureRole]
+    );
+  }
+};
+
+const backfillRequestServiceRoles = async (client, requestId, roles) => {
+  for (const role of roles) {
+    await client.query(
+      `INSERT INTO request_service_roles (request_id, service_id, azure_role)
+       VALUES ($1, $2, $3)
+       ON CONFLICT (request_id, service_id, azure_role) DO NOTHING`,
+      [requestId, role.serviceId, role.azureRole]
+    );
+  }
+};
 const getSelectedRolesForRequest = async (client, requestId) => {
   const result = await client.query(
     `SELECT
@@ -171,15 +348,124 @@ const resolveUserResourceGroupName = (request, user) => {
   return request.azure_resource_group_name;
 };
 
+const findLinkedContainerRegistry = async (resourceGroupName) => {
+  try {
+    const azureConfig = validateAzureEnv();
+    const credential = createAzureCredential(azureConfig);
+    const resourceClient = new ResourceManagementClient(credential, azureConfig.subscriptionId);
+
+    for await (const resource of resourceClient.resources.listByResourceGroup(resourceGroupName, {
+      filter: "resourceType eq 'Microsoft.ContainerRegistry/registries'"
+    })) {
+      return resource.id;
+    }
+
+    return null;
+  } catch (err) {
+    console.warn('[roleProvision] Could not find linked ACR:', err.message);
+    return null;
+  }
+};
+
+const assignAcrPullAtRegistryScope = async ({
+  authorizationClient,
+  users,
+  request,
+  requestId,
+  existingMap,
+  pendingDbInserts
+}) => {
+  const acrTasks = [];
+
+  for (const user of users) {
+    const resourceGroupName = resolveUserResourceGroupName(request, user);
+    if (!resourceGroupName) {
+      continue;
+    }
+
+    const existingRoles = existingMap.get(user.id) || new Set();
+    if (existingRoles.has('AcrPull')) {
+      continue;
+    }
+
+    acrTasks.push(async () => {
+      const acrScope = await findLinkedContainerRegistry(resourceGroupName);
+      if (!acrScope) {
+        console.warn(
+          `[roleProvision] No linked ACR in ${resourceGroupName} — skipping AcrPull for user ${user.username}`
+        );
+        return null;
+      }
+
+      const definition = await findMatchingRoleDefinition(authorizationClient, acrScope, 'AcrPull');
+      if (!definition) {
+        console.warn(`[roleProvision] AcrPull role definition not found at scope ${acrScope}`);
+        return null;
+      }
+
+      const assignmentId = roleAssignmentIdFromSeed(`${requestId}-${user.id}-${definition.id}-acr`);
+
+      try {
+        await createRoleAssignmentWithRetry(
+          authorizationClient,
+          acrScope,
+          assignmentId,
+          {
+            principalId: user.azure_user_id,
+            roleDefinitionId: definition.id,
+            principalType: 'User'
+          },
+          requestId
+        );
+      } catch (error) {
+        if (error?.statusCode !== 409 && error?.code !== 'RoleAssignmentExists') {
+          throw error;
+        }
+      }
+
+      return {
+        assignmentId,
+        requestId,
+        userId: user.id,
+        azureRole: 'AcrPull',
+        scope: acrScope,
+        status: 'assigned',
+        assignedAt: new Date(),
+        assignmentKind: 'rbac',
+        entraGroupId: null
+      };
+    });
+  }
+
+  const acrResults = await runConcurrent(acrTasks, CONCURRENCY_LIMIT);
+  for (const result of acrResults) {
+    if (result.status === 'fulfilled' && result.value) {
+      pendingDbInserts.push(result.value);
+    }
+  }
+};
+
 const provisionRolesForRequest = async (requestId) => {
   try {
     const request = await getRequestContext(db, requestId);
     if (!request) throw new AppError('Request not found', 404);
 
-    const [users, roles] = await Promise.all([
+    const [users, baseRoles, selectedServices, selectedInstances] = await Promise.all([
       getAzureUsersForRequest(db, requestId),
-      getSelectedRolesForRequest(db, requestId)
+      getSelectedRolesForRequest(db, requestId),
+      getSelectedServicesForRequest(db, requestId),
+      getSelectedInstancesForRequest(db, requestId)
     ]);
+
+    let roles = await augmentRolesWithDependencies(db, baseRoles, requestId);
+    roles = await filterRolesByAiFoundryTier(db, roles, requestId, selectedServices, selectedInstances);
+    await backfillRequestServiceRoles(db, requestId, roles);
+
+    const hasAiFoundry = selectedServices.some((service) => service.serviceName === 'Azure AI Foundry');
+    const includesAcrPull = roles.some((role) => role.azureRole === 'AcrPull');
+    const rolesForResourceGroup = hasAiFoundry && includesAcrPull
+      ? roles.filter((role) => role.azureRole !== 'AcrPull')
+      : roles;
 
     if (users.length === 0 || roles.length === 0) {
       return {
@@ -205,7 +491,7 @@ const provisionRolesForRequest = async (requestId) => {
     const existingMap = await getAllExistingAssignments(db, requestId, userIds);
 
     // 2. Pre-fetch all unique role definitions in parallel (cached)
-    const rbacRoles = roles.filter((r) => r.assignmentMode !== 'group' || !r.entraGroupId);
+    const rbacRoles = rolesForResourceGroup.filter((r) => r.assignmentMode !== 'group' || !r.entraGroupId);
     const uniqueRoleNames = [...new Set(rbacRoles.map((r) => r.azureRole))];
 
     const roleDefMap = new Map();
@@ -257,7 +543,7 @@ const provisionRolesForRequest = async (requestId) => {
       const existingRoles = existingMap.get(user.id) || new Set();
       const scope = await resolveScopeForUser(user);
 
-      for (const role of roles) {
+      for (const role of rolesForResourceGroup) {
         if (existingRoles.has(role.azureRole)) continue;
 
         // Group assignment
@@ -335,6 +621,48 @@ const provisionRolesForRequest = async (requestId) => {
       }
     }
 
+    if (hasAiFoundry && includesAcrPull) {
+      try {
+        await assignAcrPullAtRegistryScope({
+          authorizationClient,
+          users,
+          request,
+          requestId,
+          existingMap,
+          pendingDbInserts
+        });
+      } catch (err) {
+        console.warn('[roleProvision] AcrPull assignment failed — continuing:', err.message);
+      }
+    }
+
+    let resourcePermissionResult = {
+      assignments: [],
+      failures: [],
+      permissionsComplete: true,
+      resourcesProcessed: 0
+    };
+
+    try {
+      resourcePermissionResult = await assignResourceScopedPermissions({
+        authorizationClient,
+        users,
+        request,
+        requestId,
+        selectedServices,
+        resolveUserResourceGroupName
+      });
+      pendingDbInserts.push(...resourcePermissionResult.assignments);
+    } catch (err) {
+      console.error('[roleProvision] Resource-scoped permission assignment failed:', err.message);
+      resourcePermissionResult = {
+        assignments: [],
+        failures: [{ message: err.message || 'Resource-scoped permission assignment failed' }],
+        permissionsComplete: false,
+        resourcesProcessed: 0
+      };
+    }
+
     // 5. Batch insert all DB records in one shot
     await batchUpsertAssignments(pendingDbInserts);
 
@@ -345,17 +673,82 @@ const provisionRolesForRequest = async (requestId) => {
       )
     );
 
+    const permissionsComplete = resourcePermissionResult.permissionsComplete;
+
     return {
-      success: true,
+      success: permissionsComplete,
       usersProcessed: users.length,
-      rolesAssigned: pendingDbInserts.length
+      rolesAssigned: pendingDbInserts.length,
+      successful: pendingDbInserts.length,
+      rolesProvisioned: [...new Set(roles.map((r) => r.azureRole))],
+      hasAiFoundry,
+      permissionsComplete,
+      provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioned_permissions_incomplete',
+      resourceScopedAssignments: resourcePermissionResult.assignments.length,
+      permissionFailures: resourcePermissionResult.failures
     };
   } catch (error) {
     throw error;
   }
 };
 
+const reprovisionRolesForRequest = async (requestId) => {
+  console.log(`[reprovisionRoles] Re-provisioning roles for request ${requestId}`);
+  await reconcileAiFoundryRequestServiceRoles(db, requestId);
+  return provisionRolesForRequest(requestId);
+};
+
+const repairResourceScopedPermissionsForRequest = async (requestId) => {
+  const request = await getRequestContext(db, requestId);
+  if (!request) {
+    throw new AppError('Request not found', 404);
+  }
+
+  const [users, selectedServices] = await Promise.all([
+    getAzureUsersForRequest(db, requestId),
+    getSelectedServicesForRequest(db, requestId)
+  ]);
+
+  if (users.length === 0) {
+    return {
+      success: true,
+      usersProcessed: 0,
+      permissionsComplete: true,
+      provisioningStatus: 'provisioned',
+      resourceScopedAssignments: 0,
+      permissionFailures: []
+    };
+  }
+
+  const { authorizationClient } = createAuthorizationClient();
+  const result = await assignResourceScopedPermissions({
+    authorizationClient,
+    users,
+    request,
+    requestId,
+    selectedServices,
+    resolveUserResourceGroupName
+  });
+
+  if (result.assignments.length > 0) {
+    await batchUpsertAssignments(result.assignments);
+  }
+
+  const permissionsComplete = result.permissionsComplete;
+
+  return {
+    success: permissionsComplete,
+    usersProcessed: users.length,
+    permissionsComplete,
+    provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioned_permissions_incomplete',
+    resourceScopedAssignments: result.assignments.length,
+    permissionFailures: result.failures
+  };
+};
+
 module.exports = {
   getUserRoleAssignmentsForRequest,
-  provisionRolesForRequest
+  provisionRolesForRequest,
+  reprovisionRolesForRequest,
+  repairResourceScopedPermissionsForRequest
 };

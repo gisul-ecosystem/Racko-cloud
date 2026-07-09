@@ -1,5 +1,8 @@
 const db = require('../db/postgres');
+const { optionalTableQuery } = require('../utils/transactionQuery');
 const { TIER_ROLE_FALLBACKS, findTierRoleFallbacks } = require('../config/tierRoleMappings');
+const { getDependencyRolesForService } = require('../config/serviceRoleDependencies');
+const { getDependencyRolesForServices } = require('./serviceRoleDependencyService');
 
 const normalizeInstanceOption = (value) => String(value || '').trim();
 
@@ -48,11 +51,11 @@ const enrichMappingsWithFallbacks = async (client, mappings) => {
 };
 
 const loadInstanceRoleMappings = async (client = db) => {
-  let rows = [];
-
-  try {
-    const result = await client.query(
-      `
+  const rows = await optionalTableQuery(
+    client,
+    async () => {
+      const result = await client.query(
+        `
         SELECT
           sirm.service_id,
           s.name AS service_name,
@@ -63,20 +66,18 @@ const loadInstanceRoleMappings = async (client = db) => {
         INNER JOIN services s ON s.id = sirm.service_id
         ORDER BY sirm.service_id, sirm.instance_option
       `
-    );
+      );
 
-    rows = result.rows.map((row) => ({
-      serviceId: Number(row.service_id),
-      serviceName: row.service_name,
-      instanceOption: row.instance_option,
-      azureRole: row.azure_role,
-      tierAutomated: Boolean(row.tier_automated)
-    }));
-  } catch (error) {
-    if (error?.code !== '42P01') {
-      throw error;
-    }
-  }
+      return result.rows.map((row) => ({
+        serviceId: Number(row.service_id),
+        serviceName: row.service_name,
+        instanceOption: row.instance_option,
+        azureRole: row.azure_role,
+        tierAutomated: Boolean(row.tier_automated)
+      }));
+    },
+    []
+  );
 
   return enrichMappingsWithFallbacks(client, rows);
 };
@@ -105,6 +106,19 @@ const resolveRolesForInstance = ({ serviceId, serviceName, instanceOption, mappi
     return [];
   }
 
+  const fallbackEntry = TIER_ROLE_FALLBACKS.find((item) => item.servicePattern.test(String(serviceName || '')));
+  if (fallbackEntry) {
+    const tierMapping = fallbackEntry.mappings.find(
+      (entry) => entry.instanceOption.toLowerCase() === normalizedOption
+    );
+    if (tierMapping?.azureRoles?.length) {
+      return tierMapping.azureRoles;
+    }
+    if (tierMapping?.azureRole) {
+      return [tierMapping.azureRole];
+    }
+  }
+
   const serviceMappings = mappingIndex?.get(Number(serviceId));
   const mapped = serviceMappings?.get(normalizedOption);
 
@@ -121,6 +135,65 @@ const resolveRolesForInstance = ({ serviceId, serviceName, instanceOption, mappi
   }
 
   return [fallback.azureRole];
+};
+
+const finalizeAiFoundryTierRoles = async (client, roleAssignments, validServiceIds, selectedInstances) => {
+  const dbMappings = await loadInstanceRoleMappings(client);
+  const mappingIndex = buildMappingIndex(dbMappings);
+  const serviceNamesById = new Map();
+
+  if (validServiceIds.length > 0) {
+    const servicesResult = await client.query(
+      `
+        SELECT id, name
+        FROM services
+        WHERE id = ANY($1::int[])
+      `,
+      [validServiceIds]
+    );
+
+    for (const row of servicesResult.rows) {
+      serviceNamesById.set(Number(row.id), row.name);
+    }
+  }
+
+  pruneAiFoundryRolesForTier(roleAssignments, selectedInstances, serviceNamesById, mappingIndex);
+};
+
+const pruneAiFoundryRolesForTier = (roleAssignments, selectedInstances, serviceNamesById, mappingIndex) => {
+  for (const item of selectedInstances || []) {
+    const serviceId = Number(item?.serviceId ?? item?.service_id);
+    const instanceOption = normalizeInstanceOption(item?.instanceOption ?? item?.instance_option);
+    const serviceName = serviceNamesById.get(serviceId);
+
+    if (!Number.isInteger(serviceId) || serviceId <= 0 || !instanceOption) {
+      continue;
+    }
+
+    if (!/ai foundry/i.test(String(serviceName || ''))) {
+      continue;
+    }
+
+    const allowedRoles = resolveRolesForInstance({
+      serviceId,
+      serviceName,
+      instanceOption,
+      mappingIndex
+    });
+
+    if (allowedRoles.length === 0) {
+      continue;
+    }
+
+    const allowed = new Set(allowedRoles);
+    const current = roleAssignments.get(serviceId);
+
+    if (!current) {
+      continue;
+    }
+
+    roleAssignments.set(serviceId, new Set([...current].filter((role) => allowed.has(role))));
+  }
 };
 
 const getAutoAssignRolesForServices = async (client, serviceIds) => {
@@ -266,6 +339,81 @@ const ensureAutoAssignRolesForServices = async (client, roleAssignments, service
   return autoAssignByServiceId;
 };
 
+const resolveAllRolesForService = async (client, serviceId, serviceName, instanceOption, mappingIndex) => {
+  const tierRoles = resolveRolesForInstance({
+    serviceId,
+    serviceName,
+    instanceOption,
+    mappingIndex
+  });
+
+  let dbRoles = await optionalTableQuery(
+    client,
+    async () => {
+      const result = await client.query(
+        `
+        SELECT srm.azure_role
+        FROM service_role_mapping srm
+        JOIN services s ON s.id = srm.service_id
+        WHERE s.name = $1 AND COALESCE(srm.auto_assign, false) = true
+      `,
+        [serviceName]
+      );
+
+      return result.rows.map((row) => row.azure_role);
+    },
+    []
+  );
+
+  const dependencies = getDependencyRolesForService(serviceName).map((dep) => dep.role);
+
+  return [...new Set([...tierRoles, ...dbRoles, ...dependencies])];
+};
+
+const applyDependencyRolesToAssignments = async (client, roleAssignments, serviceIds) => {
+  if (!Array.isArray(serviceIds) || serviceIds.length === 0) {
+    return [];
+  }
+
+  const servicesResult = await client.query(
+    `
+      SELECT id, name
+      FROM services
+      WHERE id = ANY($1::int[])
+    `,
+    [serviceIds]
+  );
+
+  const serviceNames = servicesResult.rows.map((row) => row.name);
+  const serviceIdByName = new Map(
+    servicesResult.rows.map((row) => [row.name, Number(row.id)])
+  );
+
+  const dependencies = await getDependencyRolesForServices(client, serviceNames);
+  const applied = [];
+
+  for (const dep of dependencies) {
+    const serviceId = serviceIdByName.get(dep.serviceName);
+    if (!serviceId) {
+      continue;
+    }
+
+    if (!roleAssignments.has(serviceId)) {
+      roleAssignments.set(serviceId, new Set());
+    }
+
+    if (!roleAssignments.get(serviceId).has(dep.role)) {
+      roleAssignments.get(serviceId).add(dep.role);
+      applied.push({ serviceId, serviceName: dep.serviceName, azureRole: dep.role, reason: dep.reason });
+      console.log(
+        `[DEPENDENCY_ROLE_AUTO_ASSIGNED] Service ${serviceId} (${dep.serviceName}): ${dep.role} — ${dep.reason}`
+      );
+    }
+  }
+
+  return applied;
+};
+
 module.exports = {
   TIER_ROLE_FALLBACKS,
   loadInstanceRoleMappings,
@@ -274,7 +422,10 @@ module.exports = {
   resolveRolesForInstance,
   resolveTierRoles,
   applyTierRolesToAssignments,
+  finalizeAiFoundryTierRoles,
   getAutoAssignRolesForServices,
   ensureAutoAssignRolesForServices,
+  resolveAllRolesForService,
+  applyDependencyRolesToAssignments,
   findTierRoleFallbacks
 };

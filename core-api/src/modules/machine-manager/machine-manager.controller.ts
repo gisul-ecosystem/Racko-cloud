@@ -1,8 +1,11 @@
 import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { machineManagerService } from './machine-manager.service';
-import { MachineModel } from './machine-manager.model';
+import { MachineModel, JobModel } from './machine-manager.model';
 import { config } from '../../config';
+import { jobStatusEmitter } from './job.events';
+import { issueJobStreamTicket, consumeJobStreamTicket } from './job.streamTicket';
+import { logger } from '../../utils/logger';
 import type { AuthenticatedRequest } from '../../types';
 import type {
   CreateMachineInput,
@@ -335,8 +338,11 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   async agentGetJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { agentId } = req.params as { agentId: string };
+      logger.debug('[Agent] Polling for pending job', { agentId });
       const job = await machineManagerService.getPendingJobForAgent(agentId);
-      // Return empty object (not 404) when no job is pending — agent should keep polling
+      if (job) {
+        logger.info('[Agent] Pending job found for agent', { agentId, jobId: job._id, softwareIds: job.softwareIds, status: job.status });
+      }
       success(res, job ? 'Job found.' : 'No pending job.', { job: job ?? null });
     } catch (err) {
       next(err);
@@ -347,7 +353,15 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   async agentJobResult(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const jobId = new mongoose.Types.ObjectId(req.params['jobId'] as string);
-      await machineManagerService.updateJobResult(jobId, req.body as AgentJobResultInput);
+      const body = req.body as AgentJobResultInput;
+      logger.info('[Agent] Job result received', {
+        jobId: jobId.toString(),
+        agentId: body.agentId,
+        status: body.status,
+        logsLength: body.logs?.length ?? 0,
+        logsPreview: body.logs?.slice(0, 300) ?? '',
+      });
+      await machineManagerService.updateJobResult(jobId, body);
       success(res, 'Job result recorded.');
     } catch (err) {
       next(err);
@@ -381,6 +395,82 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     } catch (err) {
       next(err);
     }
+  }
+
+  /**
+   * POST /api/v1/machines/jobs/:id/stream-ticket — issue a short-lived SSE stream ticket
+   */
+  async issueJobStreamTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const jobId = req.params['id'] as string;
+      const adminId = (req as AuthenticatedRequest).user.userId;
+
+      const job = await JobModel.findById(jobId);
+      if (!job || job.adminId.toString() !== adminId) {
+        res.status(404).json({ success: false, message: 'Job not found.' });
+        return;
+      }
+
+      const ticket = issueJobStreamTicket(jobId, adminId);
+      success(res, 'Stream ticket issued.', ticket);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/v1/machines/jobs/:id/stream?streamToken=xxx — SSE stream for real-time job status
+   */
+  async streamJobStatus(req: Request, res: Response): Promise<void> {
+    const jobId = req.params['id'] as string;
+    const rawToken = req.query['streamToken'];
+    const streamToken = typeof rawToken === 'string' ? rawToken : '';
+    const ticket = streamToken ? consumeJobStreamTicket(streamToken, jobId) : null;
+
+    if (!ticket) {
+      res.status(401).json({ success: false, message: 'Unauthorized.' });
+      return;
+    }
+
+    const job = await JobModel.findById(jobId);
+    if (!job || job.adminId.toString() !== ticket.userId) {
+      res.status(404).json({ success: false, message: 'Job not found.' });
+      return;
+    }
+
+    // SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+    // Send current state immediately
+    send({ jobId, status: job.status, logs: job.logs, attempts: job.attempts, softwareId: job.softwareIds[0]?.toString() ?? '' });
+
+    // If already terminal, close immediately
+    if (job.status === 'success' || job.status === 'failed') {
+      res.end();
+      return;
+    }
+
+    // Subscribe to live updates
+    const listener = (event: object) => {
+      send(event);
+      const e = event as { status: string };
+      if (e.status === 'success' || e.status === 'failed') {
+        jobStatusEmitter.removeListener(jobId, listener);
+        res.end();
+      }
+    };
+
+    jobStatusEmitter.on(jobId, listener);
+
+    req.on('close', () => {
+      jobStatusEmitter.removeListener(jobId, listener);
+    });
   }
 }
 

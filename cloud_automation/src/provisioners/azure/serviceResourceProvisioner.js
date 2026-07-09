@@ -36,6 +36,21 @@ const provisionServiceResource = async ({
     resourceGroupName
   });
 
+  if (/ai foundry/i.test(String(serviceName || ''))) {
+    console.log('[policyProvisioner] Skipping policy for AI Foundry — uses instance_metadata only');
+    const azureConfig = validateAzureEnv();
+    const scope = `/subscriptions/${azureConfig.subscriptionId}/resourceGroups/${resourceGroupName}`;
+
+    return {
+      resourceType: 'Microsoft.Authorization/policyAssignments',
+      resourceName: `instance-policy-${serviceId}`,
+      policyType: 'instance_metadata',
+      azureResourceId: scope,
+      status: 'policy_configured',
+      errorMessage: null
+    };
+  }
+
   try {
     const result = await configureInstancePolicy({
       requestId,

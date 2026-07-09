@@ -121,6 +121,25 @@ const configureServiceInstancePolicy = async ({
     };
   }
 
+  if (rule.policyType === 'instance_metadata') {
+    logEvent('instance_policy_configure_metadata_only', {
+      requestId,
+      serviceId,
+      serviceName,
+      reason: rule.note || 'instance_metadata_only',
+      allowedResourceTypes: rule.allowedResourceTypes
+    });
+
+    return {
+      resourceType: 'Microsoft.Authorization/policyAssignments',
+      resourceName: `instance-policy-${serviceId}`,
+      policyType: 'instance_metadata',
+      azureResourceId: scope,
+      status: 'policy_configured',
+      errorMessage: null
+    };
+  }
+
   const policyDefinitionId = await resolvePolicyDefinitionId(rule);
   if (!policyDefinitionId) {
     throw new Error(`No policy definition configured for ${rule.policyType}`);

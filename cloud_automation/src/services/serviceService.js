@@ -208,12 +208,18 @@ const normalizeServiceName = (value) =>
     .toLowerCase()
     .replace(/^azure\s+/, '');
 
-const getServiceBundle = async () => {
-  const { loadInstanceRoleMappings } = require('./instanceRoleMappingService');
+let serviceBundleCache = null;
+let serviceBundleInflight = null;
 
-  const [categoriesResult, servicesResult, rolesResult, regionsResult, catalogResult, instancesResult, instanceRoleMappings] =
-    await Promise.all([
-    db.query(
+const fetchServiceBundle = async () => {
+  const { loadInstanceRoleMappings } = require('./instanceRoleMappingService');
+  const { enrichInstances } = require('./instanceEnrichmentService');
+  const { retailPriceToHourly } = require('./azurePricingService');
+
+  const client = await db.connect();
+
+  try {
+    const categoriesResult = await client.query(
       `
         SELECT
           id,
@@ -221,8 +227,8 @@ const getServiceBundle = async () => {
         FROM service_categories
         ORDER BY id
       `
-    ),
-    db.query(
+    );
+    const servicesResult = await client.query(
       `
         SELECT
           id,
@@ -243,8 +249,8 @@ const getServiceBundle = async () => {
         WHERE active = true
         ORDER BY category, name
       `
-    ),
-    db.query(
+    );
+    const rolesResult = await client.query(
       `
         SELECT
           id,
@@ -255,8 +261,8 @@ const getServiceBundle = async () => {
         FROM service_role_mapping
         ORDER BY service_id, azure_role
       `
-    ),
-    db.query(
+    );
+    const regionsResult = await client.query(
       `
         SELECT
           arm_region_name,
@@ -266,23 +272,26 @@ const getServiceBundle = async () => {
         GROUP BY arm_region_name
         ORDER BY arm_region_name
       `
-    ),
-    db.query(
+    );
+    const catalogResult = await client.query(
       `
         SELECT
           service_name AS name,
           COALESCE(service_family, 'General') AS category,
-          MIN(retail_price) AS price,
-          MIN(currency) AS currency,
-          COUNT(DISTINCT arm_region_name) AS location_count,
-          MIN(pricing_source) AS pricing_source
+          retail_price,
+          unit_of_measure,
+          currency,
+          arm_region_name,
+          pricing_source
         FROM service_locations
         WHERE retail_price >= 0
-        GROUP BY service_name, service_family
       `
-    ),
-    db
-      .query(
+    );
+
+    let instancesResult = { rows: [] };
+
+    try {
+      instancesResult = await client.query(
         `
           SELECT
             id,
@@ -292,92 +301,148 @@ const getServiceBundle = async () => {
           FROM service_instance_options
           ORDER BY service_id, sort_order, option_name
         `
-      )
-      .catch(() => ({ rows: [] })),
-    loadInstanceRoleMappings()
-  ]);
+      );
+    } catch {
+      instancesResult = { rows: [] };
+    }
 
-  const catalogByName = new Map();
+    const instanceRoleMappings = await loadInstanceRoleMappings(client);
 
-  catalogResult.rows.forEach((row) => {
-    catalogByName.set(normalizeServiceName(row.name), row);
-  });
+    const catalogByName = new Map();
 
-  const services = servicesResult.rows.map((service) => {
-    const catalog = catalogByName.get(normalizeServiceName(service.name));
+    catalogResult.rows.forEach((row) => {
+      const key = normalizeServiceName(row.name);
+      const hourlyPrice = retailPriceToHourly(Number(row.retail_price), row.unit_of_measure);
+      const existing = catalogByName.get(key);
 
-    return {
-      ...service,
-      id: Number(service.id),
-      price_per_user: Number(service.price_per_user),
-      active: Boolean(service.active),
-      enable_role_selection: Boolean(service.enable_role_selection),
-      role_required: Boolean(service.role_required),
-      supports_instances: Boolean(service.supports_instances),
-      supports_regions: Boolean(service.supports_regions),
-      supports_pricing: Boolean(service.supports_pricing),
-      supports_usage_limit: Boolean(service.supports_usage_limit),
-      service_name: service.name,
-      service_family: service.category,
-      retail_price: catalog ? Number(catalog.price) : Number(service.price_per_user || 0),
-      price: catalog ? Number(catalog.price) : Number(service.price_per_user || 0),
-      currency: catalog?.currency || 'USD',
-      location_count: catalog ? Number(catalog.location_count) : 0,
-      pricing_source: catalog?.pricing_source || 'database'
-    };
-  });
+      if (!existing || hourlyPrice < existing.price) {
+        catalogByName.set(key, {
+          name: row.name,
+          category: row.category,
+          price: hourlyPrice,
+          currency: row.currency,
+          pricing_source: row.pricing_source,
+          location_count: 1
+        });
+        return;
+      }
 
-  const roles = rolesResult.rows.map((row) => ({
-    id: Number(row.id),
-    serviceId: Number(row.service_id),
-    azure_role: row.azure_role,
-    auto_assign: Boolean(row.auto_assign),
-    role_purpose: row.role_purpose || null
-  }));
+      existing.location_count += 1;
+    });
 
-  const regions = regionsResult.rows.map((row) => ({
-    arm_region_name: row.arm_region_name,
-    display_location: row.display_location || row.arm_region_name,
-    location: row.location || row.arm_region_name
-  }));
+    const services = servicesResult.rows.map((service) => {
+      const catalog = catalogByName.get(normalizeServiceName(service.name));
 
-  const { resolveInstanceGuide } = require('../config/instanceCatalog');
+      return {
+        ...service,
+        id: Number(service.id),
+        price_per_user: Number(service.price_per_user),
+        active: Boolean(service.active),
+        enable_role_selection: Boolean(service.enable_role_selection),
+        role_required: Boolean(service.role_required),
+        supports_instances: Boolean(service.supports_instances),
+        supports_regions: Boolean(service.supports_regions),
+        supports_pricing: Boolean(service.supports_pricing),
+        supports_usage_limit: Boolean(service.supports_usage_limit),
+        service_name: service.name,
+        service_family: service.category,
+        retail_price: catalog ? Number(catalog.price) : Number(service.price_per_user || 0),
+        price: catalog ? Number(catalog.price) : Number(service.price_per_user || 0),
+        currency: catalog?.currency || 'USD',
+        location_count: catalog ? Number(catalog.location_count) : 0,
+        pricing_source: catalog?.pricing_source || 'database'
+      };
+    });
 
-  const servicesByIdForGuides = new Map(
-    servicesResult.rows.map((service) => [Number(service.id), service])
-  );
-
-  const instances = instancesResult.rows.map((row) => {
-    const serviceId = Number(row.service_id);
-    const optionName = row.option_name;
-
-    return {
+    const roles = rolesResult.rows.map((row) => ({
       id: Number(row.id),
-      serviceId,
-      option_name: optionName,
-      sort_order: Number(row.sort_order),
-      guide: resolveInstanceGuide(servicesByIdForGuides.get(serviceId)?.name, optionName)
+      serviceId: Number(row.service_id),
+      azure_role: row.azure_role,
+      auto_assign: Boolean(row.auto_assign),
+      role_purpose: row.role_purpose || null
+    }));
+
+    const regions = regionsResult.rows.map((row) => ({
+      arm_region_name: row.arm_region_name,
+      display_location: row.display_location || row.arm_region_name,
+      location: row.location || row.arm_region_name
+    }));
+
+    const { resolveInstanceGuide } = require('../config/instanceCatalog');
+
+    const servicesByIdForGuides = new Map(
+      servicesResult.rows.map((service) => [Number(service.id), service])
+    );
+
+    const instances = instancesResult.rows.map((row) => {
+      const serviceId = Number(row.service_id);
+      const optionName = row.option_name;
+
+      return {
+        id: Number(row.id),
+        serviceId,
+        option_name: optionName,
+        sort_order: Number(row.sort_order),
+        guide: resolveInstanceGuide(servicesByIdForGuides.get(serviceId)?.name, optionName)
+      };
+    });
+
+    const servicesByIdForPricing = new Map(
+      services.map((service) => [
+        Number(service.id),
+        {
+          id: Number(service.id),
+          name: service.name || service.service_name,
+          price_per_user: Number(service.price_per_user || 0)
+        }
+      ])
+    );
+
+    const enrichedInstances = await enrichInstances(instances, servicesByIdForPricing);
+
+    const tierRoleMappings = instanceRoleMappings.map((row) => ({
+      serviceId: Number(row.serviceId),
+      instanceOption: row.instanceOption,
+      azureRole: row.azureRole,
+      tierAutomated: Boolean(row.tierAutomated)
+    }));
+
+    return {
+      categories: categoriesResult.rows.map((row) => ({
+        ...row,
+        id: Number(row.id)
+      })),
+      services,
+      roles,
+      regions,
+      instances: enrichedInstances,
+      instanceRoleMappings: tierRoleMappings
     };
-  });
+  } finally {
+    client.release();
+  }
+};
 
-  const tierRoleMappings = instanceRoleMappings.map((row) => ({
-    serviceId: Number(row.serviceId),
-    instanceOption: row.instanceOption,
-    azureRole: row.azureRole,
-    tierAutomated: Boolean(row.tierAutomated)
-  }));
+const getServiceBundle = async () => {
+  if (serviceBundleCache && serviceBundleCache.expiresAt > Date.now()) {
+    return serviceBundleCache.value;
+  }
 
-  return {
-    categories: categoriesResult.rows.map((row) => ({
-      ...row,
-      id: Number(row.id)
-    })),
-    services,
-    roles,
-    regions,
-    instances,
-    instanceRoleMappings: tierRoleMappings
-  };
+  if (!serviceBundleInflight) {
+    serviceBundleInflight = fetchServiceBundle()
+      .then((value) => {
+        serviceBundleCache = {
+          value,
+          expiresAt: Date.now() + CACHE_TTL_MS
+        };
+        return value;
+      })
+      .finally(() => {
+        serviceBundleInflight = null;
+      });
+  }
+
+  return serviceBundleInflight;
 };
 
 const getServiceCatalog = async () => {
@@ -462,7 +527,7 @@ const getAvailableLocations = async (serviceIds, selectedInstances = {}) => {
   console.log({
     selectedServiceIds: normalizedServiceIds,
     locationCount: locations.length,
-    source: 'azure-subscription-locations-with-retail-pricing'
+    source: 'service-regional-intersection'
   });
 
   return locations;
