@@ -59,14 +59,15 @@ func (e *Executor) Handle(job poller.Job) {
 			continue
 		}
 
-		log.Printf("[executor] Installing %s v%s via %s (job=%s)", pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
+		log.Printf("[executor] Job %s waiting for install slot (package=%s)", job.ID, pkg.Name)
 
 		// Acquire install lock — waits for any other in-progress install to finish.
 		installMu.Lock()
+		log.Printf("[executor] Installing %s v%s via %s (job=%s)", pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
 		logs, err := installer.Install(*pkg)
 		installMu.Unlock()
 
-		combinedLogs += logs
+		combinedLogs += truncateLogs(logs, 50*1024) // cap at 50KB per package
 
 		if err != nil {
 			log.Printf("[executor] Install failed for %s: %v", pkg.Name, err)
@@ -115,4 +116,15 @@ func (e *Executor) fetchSoftware(softwareID string) (*installer.SoftwarePackage,
 	}
 
 	return &result.Data.Software, nil
+}
+
+// truncateLogs keeps at most maxBytes of logs, retaining the tail (most recent output).
+// Install logs can be very large — MySQL, Docker etc produce MB of output.
+// We keep the tail because it contains the final result/error, which is most useful.
+func truncateLogs(logs string, maxBytes int) string {
+	if len(logs) <= maxBytes {
+		return logs
+	}
+	truncated := logs[len(logs)-maxBytes:]
+	return "[...truncated, showing last " + fmt.Sprintf("%d", maxBytes/1024) + "KB...]\n" + truncated
 }
