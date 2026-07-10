@@ -60,12 +60,18 @@ func (e *Executor) Handle(job poller.Job) {
 		}
 
 		log.Printf("[executor] Job %s waiting for install slot (package=%s)", job.ID, pkg.Name)
+		waitStart := time.Now()
 
 		// Acquire install lock — waits for any other in-progress install to finish.
 		installMu.Lock()
+		waitElapsed := time.Since(waitStart).Round(time.Millisecond)
+		log.Printf("[executor] Job %s acquired install slot after %s (package=%s)", job.ID, waitElapsed, pkg.Name)
 		log.Printf("[executor] Installing %s v%s via %s (job=%s)", pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
+		installStart := time.Now()
 		logs, err := installer.Install(*pkg)
+		installElapsed := time.Since(installStart).Round(time.Millisecond)
 		installMu.Unlock()
+		log.Printf("[executor] installer.Install returned for %s — elapsed=%s err=%v", pkg.Name, installElapsed, err)
 
 		combinedLogs += truncateLogs(logs, 50*1024) // cap at 50KB per package
 
