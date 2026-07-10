@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // directInstallTimeout is applied to msi/exe/zip/script installs where we
@@ -106,6 +108,9 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 	log.Printf("[winget] Running: winget %v", args)
 	startTime := time.Now()
 	cmd := exec.Command(wingetPath, args...)
+	cmd.SysProcAttr = &windows.SysProcAttr{
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -297,6 +302,9 @@ func runCmd(name string, args ...string) (string, error) {
 	startTime := time.Now()
 
 	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &windows.SysProcAttr{
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -348,6 +356,9 @@ func runCmdWithTimeout(timeout time.Duration, name string, args ...string) (stri
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &windows.SysProcAttr{
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
