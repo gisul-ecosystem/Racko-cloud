@@ -111,8 +111,11 @@ app.use(
 app.use('/webhooks/razorpay', express.raw({ type: 'application/json' }), razorpayWebhookRoutes);
 
 // 4. Body parsing
-app.use(express.json({ limit: '10kb' }));
-app.use(express.urlencoded({ extended: true, limit: '10kb' }));
+// Default limit is 1MB for most routes. Agent job results can contain
+// verbose install logs (MySQL, Docker etc), so we allow up to 5MB globally.
+// The agent truncates logs to 50KB before sending, so 5MB is a generous safety net.
+app.use(express.json({ limit: '5mb' }));
+app.use(express.urlencoded({ extended: true, limit: '5mb' }));
 
 // 5. Cookie parser
 app.use(cookieParser());

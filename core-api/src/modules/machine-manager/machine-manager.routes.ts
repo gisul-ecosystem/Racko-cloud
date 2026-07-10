@@ -162,7 +162,7 @@ agentRouter.post(
   validateRequest(agentRegisterSchema),
   (req, res, next) => machineManagerController.agentRegister(req, res, next)
 );
-
+ 
 // GET /api/v1/agent/jobs/:agentId
 agentRouter.get(
   '/jobs/:agentId',

@@ -29,6 +29,7 @@ const OS_OPTIONS: { value: MachineOS; label: string }[] = [
 
 const INSTALL_METHODS: { value: InstallMethod; label: string; os: string }[] = [
   { value: 'choco',   label: 'Chocolatey',         os: 'Windows' },
+  { value: 'winget',  label: 'Winget',             os: 'Windows' },
   { value: 'msi',     label: '.msi file',          os: 'Windows' },
   { value: 'exe',     label: '.exe file',          os: 'Windows' },
   { value: 'apt',     label: 'apt / yum / dnf',    os: 'Linux' },
@@ -61,7 +62,7 @@ function MethodBadge({ method }: { method: InstallMethod }) {
 // Whether this install method needs a file URL
 const FILE_METHODS: InstallMethod[] = ['msi', 'exe', 'zip', 'script'];
 // Whether this install method needs a package identifier
-const PKG_METHODS: InstallMethod[] = ['apt', 'brew', 'choco'];
+const PKG_METHODS: InstallMethod[] = ['apt', 'brew', 'choco', 'winget'];
 
 export default function SuperAdminSoftwareCatalogPage() {
   const { isAuthenticated } = useAuth();
@@ -76,6 +77,7 @@ export default function SuperAdminSoftwareCatalogPage() {
   const [version, setVersion] = useState('');
   const [selectedOS, setSelectedOS] = useState<MachineOS[]>([]);
   const [installMethod, setInstallMethod] = useState<InstallMethod>('choco');
+  const [wingetId, setWingetId] = useState('');
   const [aptName, setAptName] = useState('');
   const [brewName, setBrewName] = useState('');
   const [chocoName, setChocoName] = useState('');
@@ -95,7 +97,8 @@ export default function SuperAdminSoftwareCatalogPage() {
     (isFileBased ? fileUrl.trim() : true) &&
     (installMethod === 'apt'    ? aptName.trim() :
      installMethod === 'brew'   ? brewName.trim() :
-     installMethod === 'choco'  ? chocoName.trim() : true)
+     installMethod === 'choco'  ? chocoName.trim() :
+     installMethod === 'winget' ? wingetId.trim() : true)
   ) && !submitting;
 
   const handleSubmit = async () => {
@@ -107,6 +110,7 @@ export default function SuperAdminSoftwareCatalogPage() {
         version: version.trim(),
         supportedOS: selectedOS,
         installMethod,
+        wingetId:    wingetId.trim()    || undefined,
         aptName:     aptName.trim()     || undefined,
         brewName:    brewName.trim()    || undefined,
         chocoName:   chocoName.trim()   || undefined,
@@ -117,7 +121,7 @@ export default function SuperAdminSoftwareCatalogPage() {
       addToast('success', `${name.trim()} added to catalog.`);
       // Reset form
       setName(''); setVersion(''); setSelectedOS([]); setInstallMethod('choco');
-      setAptName(''); setBrewName(''); setChocoName('');
+      setWingetId(''); setAptName(''); setBrewName(''); setChocoName('');
       setFileUrl(''); setFileName(''); setInstallArgs('');
       refetch();
     } catch (err) {
@@ -229,6 +233,12 @@ export default function SuperAdminSoftwareCatalogPage() {
             <div className="sm:col-span-2">
               <label className={labelClass}>Chocolatey package name <span className="text-red-500">*</span></label>
               <input className={inputClass} value={chocoName} onChange={(e) => setChocoName(e.target.value)} placeholder="googlechrome" />
+            </div>
+          )}
+          {installMethod === 'winget' && (
+            <div className="sm:col-span-2">
+              <label className={labelClass}>Winget package ID <span className="text-red-500">*</span></label>
+              <input className={inputClass} value={wingetId} onChange={(e) => setWingetId(e.target.value)} placeholder="Postman.Postman" />
             </div>
           )}
 

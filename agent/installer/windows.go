@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 // directInstallTimeout is applied to msi/exe/zip/script installs where we
@@ -22,33 +24,49 @@ import (
 const directInstallTimeout = 4 * time.Hour
 
 func installOnPlatform(pkg SoftwarePackage) (string, error) {
-	switch pkg.InstallMethod {
-	case "winget":
-		return runWinget(pkg)
-	case "choco":
-		return runChoco(pkg)
-	case "msi":
-		return runMSI(pkg)
-	case "exe":
-		return runEXE(pkg)
-	case "zip":
-		return runZIP(pkg)
-	case "script":
-		return runPowerShell(pkg)
-	default:
-		return "", fmt.Errorf("unsupported install method on Windows: %s", pkg.InstallMethod)
+	log.Printf("[installer] installOnPlatform: name=%s version=%s method=%s chocoName=%s wingetId=%s",
+		pkg.Name, pkg.Version, pkg.InstallMethod, pkg.ChocoName, pkg.WingetID)
+	start := time.Now()
+	out, err := func() (string, error) {
+		switch pkg.InstallMethod {
+		case "winget":
+			return runWinget(pkg)
+		case "choco":
+			return runChoco(pkg)
+		case "msi":
+			return runMSI(pkg)
+		case "exe":
+			return runEXE(pkg)
+		case "zip":
+			return runZIP(pkg)
+		case "script":
+			return runPowerShell(pkg)
+		default:
+			return "", fmt.Errorf("unsupported install method on Windows: %s", pkg.InstallMethod)
+		}
+	}()
+	elapsed := time.Since(start).Round(time.Millisecond)
+	if err != nil {
+		log.Printf("[installer] installOnPlatform FAILED: name=%s elapsed=%s err=%v", pkg.Name, elapsed, err)
+	} else {
+		log.Printf("[installer] installOnPlatform SUCCESS: name=%s elapsed=%s", pkg.Name, elapsed)
 	}
+	return out, err
 }
 
 // ensureChocolatey installs Chocolatey if not already present.
 func ensureChocolatey() (string, error) {
-	if _, err := exec.LookPath("choco"); err == nil {
+	log.Printf("[choco] Checking if chocolatey is installed...")
+	if path, err := exec.LookPath("choco"); err == nil {
+		log.Printf("[choco] Found choco in PATH: %s", path)
 		return "", nil
 	}
 	chocoExe := `C:\ProgramData\chocolatey\bin\choco.exe`
 	if _, err := os.Stat(chocoExe); err == nil {
+		log.Printf("[choco] Found choco at default path: %s", chocoExe)
 		return "", nil
 	}
+	log.Printf("[choco] Chocolatey not found — installing now...")
 	installScript := `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`
 	out, err := runCmd("powershell.exe",
 		"-ExecutionPolicy", "Bypass",
@@ -56,8 +74,10 @@ func ensureChocolatey() (string, error) {
 		"-Command", installScript,
 	)
 	if err != nil {
+		log.Printf("[choco] Chocolatey install FAILED: %v", err)
 		return out, fmt.Errorf("chocolatey install failed: %w", err)
 	}
+	log.Printf("[choco] Chocolatey installed successfully")
 	return out, nil
 }
 
@@ -68,14 +88,16 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 	if wingetID == "" {
 		wingetID = pkg.Name
 	}
-
+	log.Printf("[winget] Looking up winget in PATH...")
 	wingetPath, err := exec.LookPath("winget")
 	if err != nil {
+		log.Printf("[winget] winget not found in PATH — falling back to choco for %s", pkg.Name)
 		if pkg.ChocoName != "" || pkg.Name != "" {
 			return runChoco(pkg)
 		}
 		return "", fmt.Errorf("winget not found and no choco fallback available")
 	}
+	log.Printf("[winget] Found winget at: %s", wingetPath)
 
 	args := []string{"install", "--id", wingetID, "-e",
 		"--accept-source-agreements", "--accept-package-agreements", "--silent"}
@@ -83,22 +105,58 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
 
+	log.Printf("[winget] Running: winget %v", args)
+	startTime := time.Now()
 	cmd := exec.Command(wingetPath, args...)
+	cmd.SysProcAttr = &windows.SysProcAttr{
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err = cmd.Run()
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("[winget] FAILED to start process: %v", err)
+		return "", fmt.Errorf("winget failed to start: %w", err)
+	}
+	log.Printf("[winget] PID=%d started for %s", cmd.Process.Pid, wingetID)
+
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				log.Printf("[winget] STILL RUNNING: %s (PID=%d) elapsed=%s",
+					wingetID, cmd.Process.Pid, time.Since(startTime).Round(time.Second))
+			}
+		}
+	}()
+
+	err = cmd.Wait()
+	close(done)
+	elapsed := time.Since(startTime).Round(time.Millisecond)
 
 	combined := fmt.Sprintf("cmd: winget %v\nstdout:\n%s\nstderr:\n%s",
 		args, stdout.String(), stderr.String())
 
 	if err == nil {
+		log.Printf("[winget] SUCCESS: %s elapsed=%s", wingetID, elapsed)
+		log.Printf("[winget] stdout: %s", stdout.String())
 		return combined, nil
 	}
+
+	log.Printf("[winget] FAILED: %s elapsed=%s err=%v", wingetID, elapsed, err)
+	log.Printf("[winget] stdout: %s", stdout.String())
+	log.Printf("[winget] stderr: %s", stderr.String())
 
 	outLower := strings.ToLower(stdout.String() + stderr.String())
 	for _, signal := range alreadyInstalledSignals {
 		if strings.Contains(outLower, signal) {
+			log.Printf("[winget] Already-installed signal detected ('%s') — treating as success", signal)
 			return combined, nil
 		}
 	}
@@ -108,6 +166,7 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 
 // runChoco installs via choco with no timeout — choco manages itself.
 func runChoco(pkg SoftwarePackage) (string, error) {
+	log.Printf("[choco] Starting install: name=%s chocoName=%s version=%s", pkg.Name, pkg.ChocoName, pkg.Version)
 	installLog, err := ensureChocolatey()
 	if err != nil {
 		return installLog, fmt.Errorf("ensure chocolatey: %w", err)
@@ -119,25 +178,31 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 	}
 	args := []string{"install", name, "-y", "--no-progress"}
 	if pkg.InstallArgs != "" {
+		log.Printf("[choco] Extra installArgs: %s", pkg.InstallArgs)
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
 
+	log.Printf("[choco] Running primary choco path with args: %v", args)
 	out, err := runCmd(`C:\ProgramData\chocolatey\bin\choco.exe`, args...)
 	if err != nil {
+		log.Printf("[choco] Primary choco path failed (%v) — trying choco from PATH", err)
 		out2, err2 := runCmd("choco", args...)
 		if err2 != nil {
 			combined := installLog + out + out2
 			outLower := strings.ToLower(combined)
 			for _, signal := range alreadyInstalledSignals {
 				if strings.Contains(outLower, signal) {
-					log.Printf("[choco] Already installed detected for %s — treating as success", name)
+					log.Printf("[choco] Already installed signal detected for %s — treating as success", name)
 					return combined, nil
 				}
 			}
+			log.Printf("[choco] Both choco paths FAILED for %s", name)
 			return combined, fmt.Errorf("choco install failed: %w", err2)
 		}
+		log.Printf("[choco] PATH fallback succeeded for %s", name)
 		return installLog + out2, nil
 	}
+	log.Printf("[choco] Primary choco path succeeded for %s", name)
 	return installLog + out, nil
 }
 
@@ -233,17 +298,55 @@ var alreadyInstalledSignals = []string{
 
 // runCmd runs a command with no timeout (for package managers that self-manage).
 func runCmd(name string, args ...string) (string, error) {
+	log.Printf("[runCmd] START: %s %v", name, args)
+	startTime := time.Now()
+
 	cmd := exec.Command(name, args...)
+	cmd.SysProcAttr = &windows.SysProcAttr{
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	err := cmd.Run()
+
+	if err := cmd.Start(); err != nil {
+		log.Printf("[runCmd] FAILED to start: %s — %v", name, err)
+		return "", fmt.Errorf("%s failed to start: %w", name, err)
+	}
+	log.Printf("[runCmd] PID=%d started: %s", cmd.Process.Pid, name)
+
+	// Progress ticker — logs every 30s so we can see the process is still alive
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case t := <-ticker.C:
+				log.Printf("[runCmd] STILL RUNNING: %s (PID=%d) elapsed=%s at %s",
+					name, cmd.Process.Pid, time.Since(startTime).Round(time.Second), t.Format("15:04:05"))
+			}
+		}
+	}()
+
+	err := cmd.Wait()
+	close(done)
+
+	elapsed := time.Since(startTime).Round(time.Millisecond)
 	combined := fmt.Sprintf("cmd: %s %v\nstdout:\n%s\nstderr:\n%s",
 		name, args, stdout.String(), stderr.String())
+
 	if err != nil {
-		log.Printf("[installer] %s failed: %v\noutput: %s", name, err, combined)
+		log.Printf("[runCmd] FAILED: %s (PID=%d) elapsed=%s exitErr=%v", name, cmd.Process.Pid, elapsed, err)
+		log.Printf("[runCmd] stdout: %s", stdout.String())
+		log.Printf("[runCmd] stderr: %s", stderr.String())
 		return combined, fmt.Errorf("%s exited with error: %w", name, err)
 	}
+
+	log.Printf("[runCmd] SUCCESS: %s (PID=%d) elapsed=%s", name, cmd.Process.Pid, elapsed)
+	log.Printf("[runCmd] stdout: %s", stdout.String())
 	return combined, nil
 }
 
@@ -253,6 +356,9 @@ func runCmdWithTimeout(timeout time.Duration, name string, args ...string) (stri
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.SysProcAttr = &windows.SysProcAttr{
+		CreationFlags: windows.CREATE_NO_WINDOW,
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
