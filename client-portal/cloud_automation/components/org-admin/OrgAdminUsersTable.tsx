@@ -680,7 +680,12 @@ export function OrgAdminUsersTable({
   async function handleUnblock(event: React.MouseEvent, user: OrgAdminUser) {
     event.stopPropagation();
     if (!onUnblock) return;
-    if (!confirm(`Unblock "${user.username}" and re-enable their Azure account?`)) return;
+    if (
+      !confirm(
+        `Unblock "${user.username}" and re-enable their Azure account?\n\nThis also pauses usage-window enforcement for 24 hours so the account stays enabled outside the scheduled window.`
+      )
+    )
+      return;
 
     setUnblockingUserId(user.id);
     try {
@@ -890,6 +895,9 @@ export function OrgAdminUsersTable({
             const resourcesExpanded = expandedResourcesUserId === user.id;
             const sessionsExpanded = expandedSessionsUserId === user.id;
             const isBlocked = displayStatus === 'Blocked';
+            const canUnblock =
+              onUnblock
+              && (isBlocked || user.azureAccountEnabled === false || user.blockedForToday === true);
             const isOnline = user.isOnline ?? user.hasActiveSession;
             const minutesToday = getMinutesTodayForDisplay(user, nowMs);
             const liveCost = isSharedCosting
@@ -1109,7 +1117,7 @@ export function OrgAdminUsersTable({
                           Force logout
                         </button>
                       )}
-                      {isBlocked && onUnblock && (
+                      {canUnblock && (
                         <button
                           type="button"
                           onClick={(event) => void handleUnblock(event, user)}

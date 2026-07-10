@@ -56,7 +56,10 @@ export interface OrgAdminDeleteRequestResult {
   deleted: boolean;
   usersDeleted: number;
   usersTotal: number;
-  userErrors: Array<{ username: string; reason: string }>;
+  userErrors: Array<{ username?: string; reason: string }>;
+  roleErrors?: Array<{ scope?: string; assignmentId?: string; role?: string | null; reason: string }>;
+  resourceGroupErrors?: Array<{ resourceGroupName?: string; reason: string }>;
+  partialAzureCleanup?: boolean;
   rolesRemoved: number;
   customRolesRevoked: number;
   resourceGroupsDeleted: number;

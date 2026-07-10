@@ -1,7 +1,7 @@
 require('dotenv').config();
 const { DateTime } = require('luxon');
 const db = require('../src/db/postgres');
-const { createGraphClient } = require('../src/provisioners/azure/userProvisioner');
+const { createGraphClient, generateTemporaryPassword } = require('../src/provisioners/azure/userProvisioner');
  
 const parseArgs = () => {
   const args = process.argv.slice(2);
@@ -169,8 +169,35 @@ const unblockUser = async ({ username, userId, resetUsage, removeDailyLimit, dry
   }
 
   const { graphClient } = createGraphClient();
-  await graphClient.api(`/users/${user.azure_user_id}`).patch({ accountEnabled: true });
-  console.log('Re-enabled Azure Entra account.');
+
+  try {
+    await graphClient.api(`/users/${user.azure_user_id}/revokeSignInSessions`).post({});
+    console.log('Revoked existing sign-in sessions.');
+  } catch (revokeError) {
+    console.warn(`Could not revoke sign-in sessions: ${revokeError.message}`);
+  }
+
+  const newPassword = generateTemporaryPassword();
+  let passwordReset = false;
+
+  try {
+    await graphClient.api(`/users/${user.azure_user_id}`).patch({
+      accountEnabled: true,
+      passwordProfile: {
+        forceChangePasswordNextSignIn: true,
+        password: newPassword
+      }
+    });
+    passwordReset = true;
+    console.log('Re-enabled Azure Entra account and reset password.');
+  } catch (passwordError) {
+    if (!/insufficient privileges/i.test(passwordError.message || '')) {
+      throw passwordError;
+    }
+
+    await graphClient.api(`/users/${user.azure_user_id}`).patch({ accountEnabled: true });
+    console.log('Re-enabled Azure Entra account (password reset skipped — missing Graph permission).');
+  }
 
   await db.query(
     `
@@ -180,13 +207,19 @@ const unblockUser = async ({ username, userId, resetUsage, removeDailyLimit, dry
         blocked_until = NULL,
         blocked_reason = NULL,
         blocked_at = NULL,
-        used_today_minutes = CASE WHEN $2 THEN 0 ELSE used_today_minutes END,
+        window_enforcement_paused_until = NOW() + INTERVAL '24 hours',
+        temporary_password = CASE WHEN $2 THEN $3 ELSE temporary_password END,
+        used_today_minutes = CASE WHEN $4 THEN 0 ELSE used_today_minutes END,
         status = CASE WHEN status = 'Blocked' THEN 'Created' ELSE status END
       WHERE id = $1
     `,
-    [user.id, resetUsage]
+    [user.id, passwordReset, newPassword, resetUsage]
   );
-  console.log('Updated azure_users record.');
+  if (passwordReset) {
+    console.log(`Updated azure_users record. New password: ${newPassword}`);
+  } else {
+    console.log('Updated azure_users record. Use existing temporary password from credentials.');
+  }
 
   if (resetUsage) {
     const zeroedSessions = await db.query(

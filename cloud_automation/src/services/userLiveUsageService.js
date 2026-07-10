@@ -40,9 +40,8 @@ const getSessionStatsByUser = async (requestId, timezone) => {
   const normalizedRequestId = Number(requestId);
   const mergeGapMs = getSessionMergeGapMs();
 
-  const [lifetimeResult, todaySessionsResult] = await Promise.all([
-    db.query(
-      `
+  const lifetimeResult = await db.query(
+    `
       SELECT
         uus.user_id,
         COALESCE(
@@ -68,10 +67,11 @@ const getSessionStatsByUser = async (requestId, timezone) => {
       WHERE uus.request_id = $1
       GROUP BY uus.user_id
     `,
-      [normalizedRequestId]
-    ),
-    db.query(
-      `
+    [normalizedRequestId]
+  );
+
+  const todaySessionsResult = await db.query(
+    `
       SELECT
         user_id,
         login_at,
@@ -82,9 +82,8 @@ const getSessionStatsByUser = async (requestId, timezone) => {
         AND DATE(login_at AT TIME ZONE $2) = $3::date
       ORDER BY user_id, login_at ASC
     `,
-      [normalizedRequestId, tz, trackingDate]
-    )
-  ]);
+    [normalizedRequestId, tz, trackingDate]
+  );
 
   const todayIntervalsByUser = new Map();
 
@@ -136,14 +135,14 @@ const getSessionStatsByUser = async (requestId, timezone) => {
   );
 };
 
-const getLiveUsageForRequest = async (requestId, location) => {
-  const usageTimezone = await getRequestUsageTimezone(requestId);
+const getLiveUsageForRequest = async (requestId, location, options = {}) => {
+  const { usageTimezone: preloadedTimezone } = options;
+  const usageTimezone = preloadedTimezone || (await getRequestUsageTimezone(requestId));
 
-  const [provisionedResources, sessionStatsByUser, serviceHourlyRate] = await Promise.all([
-    getProvisionedResourcesForRequest(requestId),
-    getSessionStatsByUser(requestId, usageTimezone),
-    getRequestServiceHourlyRate(requestId)
-  ]);
+  // Run sequentially to avoid exhausting the Supabase session pooler.
+  const sessionStatsByUser = await getSessionStatsByUser(requestId, usageTimezone);
+  const provisionedResources = await getProvisionedResourcesForRequest(requestId);
+  const serviceHourlyRate = await getRequestServiceHourlyRate(requestId);
 
   const pricing = await getHourlyRateForProvisionedResources(provisionedResources, location);
   const resourceCount = provisionedResources.filter((row) =>
@@ -162,8 +161,8 @@ const getLiveUsageForRequest = async (requestId, location) => {
 };
 
 const attachLiveUsageToUsers = async (requestId, users, location, options = {}) => {
-  const { liveResourceCountByUser = null } = options;
-  const liveUsage = await getLiveUsageForRequest(requestId, location);
+  const { liveResourceCountByUser = null, usageTimezone = null } = options;
+  const liveUsage = await getLiveUsageForRequest(requestId, location, { usageTimezone });
   const userIds = users.map((user) => Number(user.id)).filter((userId) => Number.isFinite(userId));
 
   const budgetResult = userIds.length

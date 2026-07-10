@@ -79,6 +79,14 @@ interface UseOrgAdminPortalResult {
   hasActiveUsers: boolean;
 }
 
+function isRequestNotFoundError(err: unknown): boolean {
+  return (
+    err instanceof OrgAdminError &&
+    err.status === 404 &&
+    /not found/i.test(err.message)
+  );
+}
+
 export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const [requests, setRequests] = useState<OrgAdminRequestSummary[]>([]);
   const [selectedRequestId, setSelectedRequestId] = useState<number | null>(null);
@@ -121,11 +129,22 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       const data = await listOrgRequests();
       setRequests(data);
 
-      if (data.length === 0) {
-        setSelectedRequestId(null);
-        setRequestDetail(null);
-        setUsers([]);
-      }
+      setSelectedRequestId((current) => {
+        if (current != null && !data.some((request) => request.id === current)) {
+          setRequestDetail(null);
+          setUsers([]);
+          setDetailError(null);
+          return null;
+        }
+
+        if (data.length === 0) {
+          setRequestDetail(null);
+          setUsers([]);
+          return null;
+        }
+
+        return current;
+      });
     } catch (err) {
       setOverviewError(err instanceof OrgAdminError ? err.message : 'Failed to load requests.');
     } finally {
@@ -148,13 +167,22 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       setUsers(detail.users);
       setLastUpdatedAt(new Date());
     } catch (err) {
+      if (isRequestNotFoundError(err)) {
+        setSelectedRequestId(null);
+        setRequestDetail(null);
+        setUsers([]);
+        setDetailError(null);
+        await refreshOverview();
+        return;
+      }
+
       setDetailError(err instanceof OrgAdminError ? err.message : 'Failed to load request detail.');
     } finally {
       refreshInFlightRef.current = false;
       setIsRefreshing(false);
       setDetailLoading(false);
     }
-  }, [selectedRequestId]);
+  }, [selectedRequestId, refreshOverview]);
 
   const refreshDetailSilent = useCallback(async () => {
     if (selectedRequestId == null) return;
@@ -168,13 +196,19 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       setRequestDetail(detail.request);
       setUsers(detail.users);
       setLastUpdatedAt(new Date());
-    } catch {
-      // Keep stale data during background refresh.
+    } catch (err) {
+      if (isRequestNotFoundError(err)) {
+        setSelectedRequestId(null);
+        setRequestDetail(null);
+        setUsers([]);
+        setDetailError(null);
+        await refreshOverview();
+      }
     } finally {
       refreshInFlightRef.current = false;
       setIsRefreshing(false);
     }
-  }, [selectedRequestId]);
+  }, [selectedRequestId, refreshOverview]);
 
   const refreshAccessRequests = useCallback(async () => {
     setAccessLoading(true);
@@ -286,16 +320,33 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       const result = await deleteOrgAdminRequest(selectedRequestId);
       const summary = [
         `${result.usersDeleted}/${result.usersTotal} Azure users deleted`,
-        `${result.resourceGroupsDeleted} resource group(s) removed`,
+        `${result.resourceGroupsDeleted} resource group deletion(s) started in Azure`,
       ].join(', ');
 
-      setActionSuccess(`Request #${selectedRequestId} deleted. ${summary}.`);
+      if (result.userErrors?.length || result.roleErrors?.length || result.partialAzureCleanup) {
+        setActionSuccess(
+          `Request #${selectedRequestId} removed from Racko. ${summary}. Some Azure cleanup steps failed — check server logs.`
+        );
+      } else {
+        setActionSuccess(
+          `Request #${selectedRequestId} deleted. ${summary}. Azure may take a few minutes to finish removing resource groups.`
+        );
+      }
       setSelectedRequestId(null);
       setRequestDetail(null);
       setUsers([]);
       await refreshOverview();
       return true;
     } catch (err) {
+      if (isRequestNotFoundError(err)) {
+        setActionSuccess(`Request #${selectedRequestId} was already removed.`);
+        setSelectedRequestId(null);
+        setRequestDetail(null);
+        setUsers([]);
+        await refreshOverview();
+        return true;
+      }
+
       handleApiError(err, 'Failed to delete request.');
       return false;
     } finally {
@@ -393,15 +444,24 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         const response = await getOrgSharedAzureCost(selectedRequestId, options);
         return response.summary ?? null;
       } catch (err) {
-        if (err instanceof OrgAdminError) {
-          setActionError(err.message);
-        } else {
-          setActionError('Failed to fetch shared Azure cost for this request.');
+        if (isRequestNotFoundError(err)) {
+          setSelectedRequestId(null);
+          setRequestDetail(null);
+          setUsers([]);
+          setDetailError(null);
+          await refreshOverview();
+          return null;
         }
+
+        setActionError(
+          err instanceof OrgAdminError
+            ? err.message
+            : 'Failed to fetch shared Azure cost for this request.'
+        );
         return null;
       }
     },
-    [selectedRequestId]
+    [selectedRequestId, refreshOverview]
   );
 
   const clearActionFeedback = useCallback(() => {
@@ -520,7 +580,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   }, [selectedRequestId, refreshDetailSilent, handleApiError]);
 
   const unblockUser = useCallback(
-    async (userId: number, options: { resetUsage?: boolean } = {}) => {
+    async (userId: number, options: { resetUsage?: boolean; pauseWindowEnforcement?: boolean } = {}) => {
       if (selectedRequestId == null) return false;
 
       setSaving(true);
@@ -528,8 +588,17 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       setActionSuccess(null);
 
       try {
-        const result = await unblockOrgAdminUser(selectedRequestId, userId, options);
-        setActionSuccess(`User "${result.username}" unblocked.`);
+        const result = await unblockOrgAdminUser(selectedRequestId, userId, {
+          resetUsage: options.resetUsage !== false,
+          pauseWindowEnforcement: options.pauseWindowEnforcement !== false,
+        });
+        const pauseNote = result.windowEnforcementPausedUntil
+          ? ' Usage window enforcement paused for 24 hours.'
+          : '';
+        const passwordNote = result.temporaryPassword
+          ? ` New password: ${result.temporaryPassword}`
+          : '';
+        setActionSuccess(`User "${result.username}" unblocked.${pauseNote}${passwordNote}`);
         await refreshDetailSilent();
         return true;
       } catch (err) {

@@ -258,8 +258,15 @@ export async function triggerOrgRequestCleanup(
 export async function unblockOrgAdminUser(
   requestId: number,
   userId: number,
-  options: { resetUsage?: boolean } = {}
-): Promise<{ success: boolean; userId: number; username: string }> {
+  options: { resetUsage?: boolean; pauseWindowEnforcement?: boolean; pauseWindowHours?: number } = {}
+): Promise<{
+  success: boolean;
+  userId: number;
+  username: string;
+  windowEnforcementPausedUntil?: string | null;
+  temporaryPassword?: string;
+  userPrincipalName?: string | null;
+}> {
   return orgAdminRequest(
     `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/unblock`,
     {
