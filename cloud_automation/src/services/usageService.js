@@ -10,8 +10,11 @@ const {
 } = require('../utils/usageSchedule');
 const {
   loadUsageWindowsByRequest,
-  evaluateWindowDailyLimitAccess
+  evaluateWindowDailyLimitAccess,
+  requestHasUsageWindows
 } = require('./usageWindowAccessService');
+const { isWindowEnforcementPaused } = require('../utils/windowEnforcementPause');
+const { isUniqueOpenSessionViolation } = require('../utils/openSessionConstraint');
 
 async function getLiveSessionMinutes(client, requestId, userId) {
   const activeSessionResult = await client.query(
@@ -102,7 +105,8 @@ async function startUsageSession({ requestId, userId }) {
         request_id,
         used_today_minutes,
         last_reset_date,
-        blocked_until
+        blocked_until,
+        window_enforcement_paused_until
       FROM azure_users
       WHERE id = $1 AND request_id = $2
       `,
@@ -114,8 +118,9 @@ async function startUsageSession({ requestId, userId }) {
     }
 
     const user = userResult.rows[0];
+    const enforcementPaused = isWindowEnforcementPaused(user);
 
-    if (request.enable_daily_usage) {
+    if (!enforcementPaused && request.enable_daily_usage) {
       const refreshedUser = await ensureDailyReset(client, request, user, userId, requestId);
       const access = evaluateUsageAccess({
         request,
@@ -126,6 +131,24 @@ async function startUsageSession({ requestId, userId }) {
       if (!access.allowed) {
         console.log(`[SESSION_STARTED] User ${userId} denied: ${access.reason}`);
         throw new AppError(access.message, 403);
+      }
+    } else if (!enforcementPaused) {
+      const hasUsageWindows = await requestHasUsageWindows(requestId);
+
+      if (hasUsageWindows) {
+        const windowsByRequest = await loadUsageWindowsByRequest([requestId]);
+        const windows = windowsByRequest.get(Number(requestId)) || [];
+        const windowAccess = await evaluateWindowDailyLimitAccess({
+          requestId,
+          userId,
+          windows,
+          at: new Date()
+        });
+
+        if (!windowAccess.allowed) {
+          console.log(`[SESSION_STARTED] User ${userId} denied: ${windowAccess.reason}`);
+          throw new AppError(windowAccess.message, 403);
+        }
       }
     }
 
@@ -139,6 +162,7 @@ async function startUsageSession({ requestId, userId }) {
         AND logout_at IS NULL
       ORDER BY login_at DESC
       LIMIT 1
+      FOR UPDATE
       `,
       [requestId, userId]
     );
@@ -155,9 +179,11 @@ async function startUsageSession({ requestId, userId }) {
       };
     }
 
-    // Create new session
-    const sessionResult = await client.query(
-      `
+    let sessionResult;
+
+    try {
+      sessionResult = await client.query(
+        `
       INSERT INTO user_usage_sessions (
         request_id,
         user_id,
@@ -167,7 +193,55 @@ async function startUsageSession({ requestId, userId }) {
       VALUES ($1, $2, NOW(), NOW())
       RETURNING id, login_at
       `,
-      [requestId, userId]
+        [requestId, userId]
+      );
+    } catch (insertError) {
+      if (
+        insertError?.code !== '23505' ||
+        !String(insertError.constraint || insertError.message || '').includes(
+          'idx_one_open_session_per_user'
+        )
+      ) {
+        throw insertError;
+      }
+
+      const racedSession = await client.query(
+        `
+          SELECT id, login_at
+          FROM user_usage_sessions
+          WHERE request_id = $1
+            AND user_id = $2
+            AND logout_at IS NULL
+          ORDER BY login_at DESC
+          LIMIT 1
+        `,
+        [requestId, userId]
+      );
+
+      if (!racedSession.rows.length) {
+        throw insertError;
+      }
+
+      await client.query('COMMIT');
+      return {
+        sessionId: racedSession.rows[0].id,
+        loginAt: racedSession.rows[0].login_at,
+        message: 'Active session already exists.',
+        alreadyActive: true
+      };
+    }
+
+    await client.query(
+      `
+        UPDATE azure_users
+        SET
+          status = 'Active',
+          azure_account_enabled = TRUE,
+          last_signin_at = NOW()
+        WHERE id = $1
+          AND request_id = $2
+      `,
+      [userId, requestId]
     );
 
     await client.query('COMMIT');
@@ -257,10 +331,11 @@ async function endUsageSession({ requestId, userId }) {
       UPDATE user_usage_sessions
       SET 
         logout_at = $1,
-        minutes_used = $2
+        minutes_used = $2,
+        ended_reason = $4
       WHERE id = $3
       `,
-      [logoutAt, minutesUsed, session.id]
+      [logoutAt, minutesUsed, session.id, 'explicit_end']
     );
 
     // Get request to check if daily usage is enabled
@@ -502,6 +577,7 @@ async function getActiveSessions() {
       au.last_reset_date,
       au.blocked_until,
       au.azure_user_id,
+      au.window_enforcement_paused_until,
       EXISTS (
         SELECT 1
         FROM request_usage_windows ruw
@@ -529,39 +605,53 @@ async function getActiveSessions() {
   );
 
   const usageWindowsByRequest = await loadUsageWindowsByRequest([
-    ...new Set(result.rows.map((row) => row.request_id))
+    ...new Set(result.rows.map((row) => Number(row.request_id)))
   ]);
 
   const mapped = [];
 
   for (const row of result.rows) {
     const currentSessionMinutes = Number(row.current_session_minutes || 0);
+    const normalizedRequestId = Number(row.request_id);
+    const normalizedUserId = Number(row.user_id);
 
     if (row.has_usage_windows) {
-      const windows = usageWindowsByRequest.get(row.request_id) || [];
+      const windows = usageWindowsByRequest.get(normalizedRequestId) || [];
       const windowAccess = await evaluateWindowDailyLimitAccess({
-        requestId: row.request_id,
-        userId: row.user_id,
+        requestId: normalizedRequestId,
+        userId: normalizedUserId,
         windows,
         at: new Date()
       });
 
+      const enforcementPaused = isWindowEnforcementPaused(row);
+      const effectiveAccess = enforcementPaused
+        ? {
+            ...windowAccess,
+            allowed: true,
+            reason: 'ok',
+            blockedForToday: false,
+            blockedReason: null,
+            message: 'Admin override — window enforcement paused.'
+          }
+        : windowAccess;
+
       mapped.push({
         sessionId: row.session_id,
-        requestId: row.request_id,
-        userId: row.user_id,
+        requestId: normalizedRequestId,
+        userId: normalizedUserId,
         loginAt: row.login_at,
-        enforceInAzure: true,
+        enforceInAzure: !enforcementPaused,
         currentSessionMinutes,
         usedTodayMinutes: Number(windowAccess.consumedMinutes || 0),
         dailyLimitMinutes: Number(windowAccess.limitMinutes || 0),
         totalUsedMinutes: Number(windowAccess.consumedMinutes || 0),
         withinWindow: windowAccess.withinWindow,
         access: {
-          allowed: windowAccess.allowed,
-          reason: windowAccess.reason,
-          message: windowAccess.message,
-          remainingMinutes: windowAccess.remainingMinutes
+          allowed: effectiveAccess.allowed,
+          reason: effectiveAccess.reason,
+          message: effectiveAccess.message,
+          remainingMinutes: effectiveAccess.remainingMinutes
         },
         request: row
       });
@@ -576,8 +666,8 @@ async function getActiveSessions() {
 
     mapped.push({
       sessionId: row.session_id,
-      requestId: row.request_id,
-      userId: row.user_id,
+      requestId: normalizedRequestId,
+      userId: normalizedUserId,
       loginAt: row.login_at,
       enforceInAzure: row.enforce_in_azure === true,
       currentSessionMinutes,

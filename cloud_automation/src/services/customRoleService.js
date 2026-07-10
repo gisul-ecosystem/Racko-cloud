@@ -3,6 +3,7 @@ const { AuthorizationManagementClient } = require('@azure/arm-authorization');
 const db = require('../db/postgres');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
 const AppError = require('../utils/AppError');
+const { getUsersForRequest } = require('./userProvisionService');
 
 let authClient = null;
 let subscriptionId = null;
@@ -256,7 +257,122 @@ const getCustomRoleDefinitionById = async (id) => {
   return result.rows[0] || null;
 };
 
+const resolveResourceGroupName = (user, requestId) =>
+  user.resourceGroup ||
+  user.azure_resource_group_name ||
+  `RG-CUST-${requestId}-U${user.userNumber || user.user_number || 1}`;
+
+const userHasActiveCustomRoleDef = async (requestId, azureUserId, customRoleDefId) => {
+  if (!customRoleDefId) {
+    return false;
+  }
+
+  const result = await db.query(
+    `
+    SELECT id
+    FROM custom_role_assignments
+    WHERE request_id = $1
+      AND azure_user_id = $2
+      AND custom_role_def_id = $3
+      AND status = 'active'
+    LIMIT 1
+  `,
+    [requestId, azureUserId, customRoleDefId]
+  );
+
+  return result.rows.length > 0;
+};
+
+const assignCustomRoleToAllUsersInRequest = async ({
+  requestId,
+  customRoleDefId,
+  permissions,
+  assignedBy,
+  skipExisting = true
+}) => {
+  if (!permissions?.length && !customRoleDefId) {
+    throw new AppError('Either customRoleDefId or permissions required', 400);
+  }
+
+  let resolvedPermissions = permissions;
+
+  if (customRoleDefId && !permissions?.length) {
+    const roleDefinition = await getCustomRoleDefinitionById(Number(customRoleDefId));
+
+    if (!roleDefinition) {
+      throw new AppError('Custom role definition not found', 404);
+    }
+
+    resolvedPermissions = parsePermissions(roleDefinition.permissions);
+  } else {
+    resolvedPermissions = parsePermissions(resolvedPermissions);
+  }
+
+  if (resolvedPermissions.length === 0) {
+    throw new AppError('At least one valid permission is required', 400);
+  }
+
+  const users = await getUsersForRequest(requestId);
+
+  if (users.length === 0) {
+    throw new AppError('No users found for this request', 404);
+  }
+
+  const assigned = [];
+  const skipped = [];
+  const failed = [];
+
+  for (const user of users) {
+    if (!user.azureUserId) {
+      failed.push({ username: user.username, reason: 'Missing Azure user ID' });
+      continue;
+    }
+
+    if (
+      skipExisting &&
+      (await userHasActiveCustomRoleDef(requestId, user.azureUserId, customRoleDefId || null))
+    ) {
+      skipped.push({ username: user.username, reason: 'Already has this role' });
+      continue;
+    }
+
+    try {
+      const assignment = await assignCustomRoleToUser({
+        requestId,
+        azureUserId: user.azureUserId,
+        username: user.username,
+        customRoleDefId: customRoleDefId || null,
+        permissions: resolvedPermissions,
+        resourceGroupName: resolveResourceGroupName(user, requestId),
+        assignedBy
+      });
+
+      assigned.push({
+        username: user.username,
+        assignmentId: assignment.id
+      });
+    } catch (error) {
+      failed.push({
+        username: user.username,
+        reason: error.message || 'Assignment failed'
+      });
+    }
+  }
+
+  return {
+    requestId,
+    totalUsers: users.length,
+    assignedCount: assigned.length,
+    skippedCount: skipped.length,
+    failedCount: failed.length,
+    assigned,
+    skipped,
+    failed
+  };
+};
+
 module.exports = {
+  assignCustomRoleToAllUsersInRequest,
   assignCustomRoleToUser,
   createCustomRoleDefinition,
   deleteCustomRoleDefinition,

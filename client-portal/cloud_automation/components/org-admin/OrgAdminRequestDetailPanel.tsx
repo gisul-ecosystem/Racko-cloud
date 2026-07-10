@@ -1,13 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ChevronRight, Loader2, RefreshCw } from 'lucide-react';
+import { ChevronRight, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { OrgAdminBudgetTab } from './OrgAdminBudgetTab';
 import { OrgAdminCleanupTab } from './OrgAdminCleanupTab';
 import { OrgAdminUsersTable } from './OrgAdminUsersTable';
-import { CustomRolesTab } from './CustomRolesTab';
-import { CustomServicesTab } from './CustomServicesTab';
+import { OrgAdminHistoryTab } from './OrgAdminHistoryTab';
+import { RequestCustomConfigTab } from './RequestCustomConfigTab';
 import type {
   OrgAdminAzureRoleOption,
   OrgAdminMonitoringResponse,
@@ -15,9 +15,10 @@ import type {
   OrgAdminRequestSummary,
   OrgAdminUser,
   OrgAdminUserAzureCost,
+  OrgAdminSharedAzureCostSummary,
 } from '../../types/orgAdmin';
 
-type DetailTab = 'users' | 'cleanup' | 'budget' | 'custom-roles' | 'custom-services';
+type DetailTab = 'users' | 'cleanup' | 'budget' | 'history' | 'custom-config';
 
 interface OrgAdminRequestDetailPanelProps {
   request: OrgAdminRequestSummary;
@@ -32,11 +33,14 @@ interface OrgAdminRequestDetailPanelProps {
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<OrgAdminMonitoringResponse | null>;
   onFetchAzureCost: (userId: number, options?: { refresh?: boolean }) => Promise<OrgAdminUserAzureCost | null>;
+  onFetchSharedAzureCost?: (options?: { refresh?: boolean }) => Promise<OrgAdminSharedAzureCostSummary | null>;
   onRenewBudget: (userId: number, topUpAmount: number) => Promise<boolean>;
   onToggleCleanup: (userId: number, disabled: boolean) => Promise<boolean>;
   onManualCleanup: (userId: number) => Promise<boolean>;
   onRequestCleanup?: () => Promise<boolean>;
   onUnblock?: (userId: number) => Promise<boolean>;
+  onDeleteUser?: (userId: number) => Promise<boolean>;
+  onDeleteRequest?: () => Promise<boolean>;
   onReprovisionRoles: () => Promise<boolean>;
   lastUpdatedAt?: Date | null;
   isRefreshing?: boolean;
@@ -56,11 +60,14 @@ export function OrgAdminRequestDetailPanel({
   onUpdateRoles,
   fetchUserMonitoring,
   onFetchAzureCost,
+  onFetchSharedAzureCost,
   onRenewBudget,
   onToggleCleanup,
   onManualCleanup,
   onRequestCleanup,
   onUnblock,
+  onDeleteUser,
+  onDeleteRequest,
   onReprovisionRoles,
   lastUpdatedAt = null,
   isRefreshing = false,
@@ -88,6 +95,18 @@ export function OrgAdminRequestDetailPanel({
     }
 
     await onReprovisionRoles();
+  };
+
+  const handleDeleteRequest = async () => {
+    if (!onDeleteRequest) return;
+
+    const confirmed = window.confirm(
+      `Delete request #${request.id} permanently?\n\nThis will:\n• Delete all ${request.userCount} Azure user account(s)\n• Remove all RBAC role assignments\n• Delete all resource groups\n• Remove the request from the database\n\nThis action cannot be undone.`
+    );
+
+    if (!confirmed) return;
+
+    await onDeleteRequest();
   };
 
   const infoItems = [
@@ -158,16 +177,27 @@ export function OrgAdminRequestDetailPanel({
               {Math.max(0, Math.round((Date.now() - lastUpdatedAt.getTime()) / 1000))}s ago
             </span>
           )}
+          {onDeleteRequest && (
+            <button
+              type="button"
+              onClick={() => void handleDeleteRequest()}
+              disabled={saving}
+              className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete Request
+            </button>
+          )}
         </div>
 
         <div className="mt-3 flex flex-wrap gap-1">
           {(
             [
               { id: 'users' as const, label: 'Users' },
+              { id: 'history' as const, label: 'History' },
               { id: 'cleanup' as const, label: 'Cleanup' },
               { id: 'budget' as const, label: 'Budget' },
-              { id: 'custom-roles' as const, label: 'Custom Roles' },
-              { id: 'custom-services' as const, label: 'Custom Services' },
+              { id: 'custom-config' as const, label: 'Custom Roles & Services' },
             ] as const
           ).map((tab) => (
             <button
@@ -213,10 +243,12 @@ export function OrgAdminRequestDetailPanel({
                 onSelect={setSelectedUserId}
                 onForceLogout={onForceLogout}
                 onUnblock={onUnblock}
+                onDeleteUser={onDeleteUser}
                 onTriggerCleanup={onManualCleanup}
                 onUpdateRoles={onUpdateRoles}
                 fetchUserMonitoring={fetchUserMonitoring}
                 onFetchAzureCost={onFetchAzureCost}
+                onFetchSharedAzureCost={onFetchSharedAzureCost}
                 embedded
               />
             </div>
@@ -243,12 +275,12 @@ export function OrgAdminRequestDetailPanel({
             />
           )}
 
-          {activeTab === 'custom-roles' && (
-            <CustomRolesTab requestId={request.id} users={users} />
+          {activeTab === 'history' && (
+            <OrgAdminHistoryTab requestId={request.id} users={users} />
           )}
 
-          {activeTab === 'custom-services' && (
-            <CustomServicesTab requestId={request.id} />
+          {activeTab === 'custom-config' && (
+            <RequestCustomConfigTab requestId={request.id} users={users} />
           )}
         </>
       )}

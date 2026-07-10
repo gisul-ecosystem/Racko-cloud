@@ -1,5 +1,6 @@
 const { DateTime } = require('luxon');
 const db = require('../db/postgres');
+const { sumMergedSessionMinutes } = require('../utils/sessionIntervalMerge');
 const { createGraphClient } = require('../provisioners/azure/userProvisioner');
 const {
   runResourceActionForUser
@@ -29,6 +30,37 @@ const logEvent = (level, event, details = {}) => {
 
 const resolveContactEmail = (username) =>
   String(username || '').includes('@') ? String(username).trim() : null;
+
+const getSessionMergeGapMs = () =>
+  Number(process.env.SESSION_MERGE_GAP_MINUTES || 2) * 60 * 1000;
+
+async function loadTodaySessionIntervals(userId, todayDate, timezone, { closedOnly = false } = {}) {
+  const tz = timezone || 'Asia/Kolkata';
+
+  const { rows } = await db.query(
+    `
+      SELECT
+        login_at,
+        COALESCE(logout_at, NOW()) AS end_at
+      FROM user_usage_sessions
+      WHERE user_id = $1
+        AND DATE(login_at AT TIME ZONE $2) = $3::date
+        ${closedOnly ? 'AND logout_at IS NOT NULL' : ''}
+      ORDER BY login_at ASC
+    `,
+    [userId, tz, todayDate]
+  );
+
+  return rows.map((row) => ({
+    start: new Date(row.login_at),
+    end: new Date(row.end_at)
+  }));
+}
+
+async function getMergedSessionMinutesToday(userId, todayDate, timezone, { closedOnly = false } = {}) {
+  const intervals = await loadTodaySessionIntervals(userId, todayDate, timezone, { closedOnly });
+  return sumMergedSessionMinutes(intervals, getSessionMergeGapMs());
+}
 
 /**
  * Called by the window enforcement scheduler every minute.
@@ -63,6 +95,10 @@ async function enforceDailyHourLimits() {
       AND au.azure_user_id IS NOT NULL
       AND COALESCE(au.is_deleted, FALSE) = FALSE
       AND au.azure_account_enabled = TRUE
+      AND (
+        au.window_enforcement_paused_until IS NULL
+        OR au.window_enforcement_paused_until <= NOW()
+      )
   `);
 
   for (const user of users) {
@@ -208,55 +244,15 @@ async function enforceForRequest(requestId, timezone) {
  * Sums closed session time for a user on a given date (in the correct timezone).
  */
 async function getClosedSessionMinutesToday(userId, todayDate, timezone) {
-  const tz = timezone || 'Asia/Kolkata';
-
-  const { rows } = await db.query(
-    `
-      SELECT COALESCE(
-        SUM(
-          COALESCE(
-            minutes_used,
-            EXTRACT(EPOCH FROM (logout_at - login_at)) / 60
-          )
-        ),
-        0
-      ) AS consumed_minutes
-      FROM user_usage_sessions
-      WHERE user_id = $1
-        AND logout_at IS NOT NULL
-        AND DATE(login_at AT TIME ZONE $2) = $3::date
-    `,
-    [userId, tz, todayDate]
-  );
-
-  return parseFloat(rows[0]?.consumed_minutes ?? 0);
+  return getMergedSessionMinutesToday(userId, todayDate, timezone, { closedOnly: true });
 }
 
 /**
  * Sums all session time for a user on a given date (in the correct timezone).
- * Uses logout_at if closed, NOW() if session is still open.
+ * Merges overlapping intervals before summing so duplicate sessions are not double-counted.
  */
 async function getConsumedMinutesToday(userId, todayDate, timezone) {
-  const tz = timezone || 'Asia/Kolkata';
-
-  const { rows } = await db.query(
-    `
-      SELECT COALESCE(
-        SUM(
-          EXTRACT(EPOCH FROM (
-            COALESCE(logout_at, NOW()) - login_at
-          )) / 60
-        ),
-        0
-      ) AS consumed_minutes
-      FROM user_usage_sessions
-      WHERE user_id = $1
-        AND DATE(login_at AT TIME ZONE $2) = $3::date
-    `,
-    [userId, tz, todayDate]
-  );
-
-  return parseFloat(rows[0]?.consumed_minutes ?? 0);
+  return getMergedSessionMinutesToday(userId, todayDate, timezone, { closedOnly: false });
 }
 
 async function handleLimitReached({
@@ -441,5 +437,7 @@ module.exports = {
   enforceDailyHourLimits,
   enforceForRequest,
   getConsumedMinutesToday,
-  getClosedSessionMinutesToday
+  getClosedSessionMinutesToday,
+  getMergedSessionMinutesToday,
+  loadTodaySessionIntervals
 };

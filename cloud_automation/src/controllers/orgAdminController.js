@@ -103,6 +103,28 @@ const deleteUser = async (req, res, next) => {
   }
 };
 
+const deleteRequest = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.deleteRequest({
+      adminEmail: getSuperAdminActor(req),
+      requestId
+    });
+
+    res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const updateUserRoles = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
@@ -220,6 +242,27 @@ const getUserAzureCost = async (req, res, next) => {
     res.status(200).json({
       success: true,
       cost
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getSharedAzureCost = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const summary = await orgAdminService.getSharedAzureCostForRequest(requestId, {
+      refresh: req.query.refresh === 'true' || req.query.refresh === '1'
+    });
+
+    res.status(200).json({
+      success: true,
+      summary
     });
   } catch (error) {
     next(error);
@@ -395,7 +438,7 @@ const unblockUser = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
     const userId = Number(req.params.userId);
-    const { resetUsage } = req.body || {};
+    const { resetUsage, pauseWindowEnforcement, pauseWindowHours } = req.body || {};
 
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new AppError('Request id must be a positive integer.', 400);
@@ -409,7 +452,9 @@ const unblockUser = async (req, res, next) => {
       requestId,
       userId,
       adminEmail: getSuperAdminActor(req),
-      resetUsage: resetUsage === true
+      resetUsage: resetUsage !== false,
+      pauseWindowEnforcement: pauseWindowEnforcement !== false,
+      pauseWindowHours: Number(pauseWindowHours) || 24
     });
 
     res.status(200).json({ success: true, ...result });
@@ -450,6 +495,24 @@ const getCleanupLogs = async (req, res, next) => {
     const logs = await orgAdminService.getCleanupLogs(requestId);
 
     res.status(200).json({ success: true, logs });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const getLabHistory = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = req.query.userId ? Number(req.query.userId) : null;
+    const limit = req.query.limit ? Number(req.query.limit) : 200;
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const history = await orgAdminService.getLabHistory(requestId, { userId, limit });
+
+    res.status(200).json({ success: true, history });
   } catch (error) {
     next(error);
   }
@@ -507,11 +570,13 @@ module.exports = {
   getResourceGroupDetail,
   getMonitoringLogs,
   deleteUser,
+  deleteRequest,
   updateUserRoles,
   forceLogoutUser,
   listAccessRequests,
   reviewAccessRequest,
   getUserAzureCost,
+  getSharedAzureCost,
   getDailyUsage,
   listAzureRoles,
   renewUserBudget,
@@ -521,6 +586,7 @@ module.exports = {
   repairResourceScopedPermissions,
   getUserSessions,
   getCleanupLogs,
+  getLabHistory,
   triggerRequestCleanup,
   unblockUser
 };

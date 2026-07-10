@@ -12,6 +12,7 @@ import type {
   OrgAdminRequestDetail,
   OrgAdminUser,
   OrgAdminUserAzureCost,
+  OrgAdminSharedAzureCostSummary,
 } from '../../types/orgAdmin';
 
 interface OrgAdminRequestDetailDrawerProps {
@@ -34,6 +35,7 @@ interface OrgAdminRequestDetailDrawerProps {
   onDeleteUser: (userId: number) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<OrgAdminMonitoringResponse | null>;
   onFetchAzureCost: (userId: number, options?: { refresh?: boolean }) => Promise<OrgAdminUserAzureCost | null>;
+  onFetchSharedAzureCost?: (options?: { refresh?: boolean }) => Promise<OrgAdminSharedAzureCostSummary | null>;
   lastUpdatedAt?: Date | null;
   isRefreshing?: boolean;
   hasActiveUsers?: boolean;
@@ -59,6 +61,7 @@ export function OrgAdminRequestDetailDrawer({
   onDeleteUser,
   fetchUserMonitoring,
   onFetchAzureCost,
+  onFetchSharedAzureCost,
   lastUpdatedAt = null,
   isRefreshing = false,
   hasActiveUsers = false,
@@ -150,6 +153,7 @@ export function OrgAdminRequestDetailDrawer({
                   onUpdateRoles={onUpdateRoles}
                   fetchUserMonitoring={fetchUserMonitoring}
                   onFetchAzureCost={onFetchAzureCost}
+                  onFetchSharedAzureCost={onFetchSharedAzureCost}
                 />
                 <OrgAdminUserPanel
                   user={selectedUser}

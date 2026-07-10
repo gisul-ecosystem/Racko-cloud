@@ -12,8 +12,8 @@ const connectionString = process.env.DATABASE_URL.replace(
 
 const configuredPoolMax = Number(process.env.SUPABASE_DB_POOL_MAX);
 const poolMax = Number.isFinite(configuredPoolMax) && configuredPoolMax > 0
-  ? Math.min(configuredPoolMax, 12)
-  : 8;
+  ? Math.min(configuredPoolMax, 10)
+  : 4;
 
 const pool = new Pool({
   connectionString,

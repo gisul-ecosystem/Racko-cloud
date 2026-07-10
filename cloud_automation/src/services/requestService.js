@@ -6,6 +6,7 @@ const { assertProvisionableLocation, assertLocationAvailableForServices } = requ
 const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments, finalizeAiFoundryTierRoles } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
+const { buildExpiresAtFromParts } = require('../utils/requestExpiry');
 
 async function createRequest({
   customerEmail,
@@ -458,6 +459,26 @@ async function createRequest({
           ]
         );
       }
+    }
+
+    const firstUsageWindow = Array.isArray(usageWindows) && usageWindows.length > 0
+      ? usageWindows[0]
+      : null;
+    const expiresAt = buildExpiresAtFromParts({
+      expiryDate: endDate,
+      timezone: firstUsageWindow?.timezone,
+      endTimeLocal: firstUsageWindow?.window_end_time
+    });
+
+    if (expiresAt) {
+      await client.query(
+        `
+          UPDATE requests
+          SET expires_at = $2
+          WHERE id = $1
+        `,
+        [requestId, expiresAt]
+      );
     }
 
 

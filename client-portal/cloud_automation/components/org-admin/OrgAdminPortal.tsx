@@ -49,10 +49,13 @@ export function OrgAdminPortal() {
     refreshDetail,
     refreshAccessRequests,
     updateRoles,
+    deleteUser,
+    deleteRequest,
     forceLogout,
     reviewAccess,
     fetchUserMonitoring,
     fetchUserAzureCost,
+    fetchSharedAzureCost,
     renewBudget,
     updateCleanupSettings,
     triggerCleanup,
@@ -352,11 +355,14 @@ export function OrgAdminPortal() {
                     onUpdateRoles={updateRoles}
                     fetchUserMonitoring={fetchUserMonitoring}
                     onFetchAzureCost={fetchUserAzureCost}
+                    onFetchSharedAzureCost={fetchSharedAzureCost}
                     onRenewBudget={renewBudget}
                     onToggleCleanup={handleToggleCleanup}
                     onManualCleanup={triggerCleanup}
                     onRequestCleanup={triggerRequestCleanup}
                     onUnblock={unblockUser}
+                    onDeleteUser={deleteUser}
+                    onDeleteRequest={deleteRequest}
                     onReprovisionRoles={reprovisionRoles}
                     lastUpdatedAt={lastUpdatedAt}
                     isRefreshing={isRefreshing}

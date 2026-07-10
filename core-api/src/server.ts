@@ -45,7 +45,8 @@ async function bootstrap(): Promise<void> {
 
   process.on('unhandledRejection', (reason) => {
     logger.error('Unhandled rejection', { reason });
-    process.exit(1);
+    // Do not exit — transient DB/network rejections should not crash the process.
+    // Mongoose will auto-reconnect; the app stays alive to serve requests.
   });
 
   process.on('uncaughtException', (error) => {
