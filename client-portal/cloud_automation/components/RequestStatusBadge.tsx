@@ -52,10 +52,21 @@ const statusConfig: Record<
     dot: 'bg-red-500',
     badge: 'bg-red-100 text-red-700 border-red-200',
   },
+  resource_cleanup_in_progress: {
+    label: 'Cleanup in progress',
+    dot: 'bg-amber-500',
+    badge: 'bg-amber-50 text-amber-800 border-amber-200',
+  },
 };
 
 function resolveConfig(status: string) {
-  const key = status.trim().toLowerCase();
+  const key = status.trim().toLowerCase().replace(/\s+/g, '_');
+  const normalizedLabel = status.trim().toLowerCase();
+
+  if (normalizedLabel.includes('resource cleanup') && normalizedLabel.includes('progress')) {
+    return statusConfig.resource_cleanup_in_progress;
+  }
+
   return (
     statusConfig[key] ?? {
       label: status || 'Unknown',
@@ -71,10 +82,11 @@ export function RequestStatusBadge({ status }: { status: string }) {
 
   return (
     <span
-      className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cfg.badge}`}
+      className={`inline-flex max-w-[11rem] items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${cfg.badge}`}
+      title={status}
     >
-      <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot} ${isActive ? 'animate-pulse' : ''}`} />
-      {cfg.label}
+      <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${cfg.dot} ${isActive ? 'animate-pulse' : ''}`} />
+      <span className="truncate">{cfg.label}</span>
     </span>
   );
 }

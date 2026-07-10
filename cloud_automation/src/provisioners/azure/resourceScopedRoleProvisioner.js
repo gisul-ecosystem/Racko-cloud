@@ -14,7 +14,10 @@ const CONCURRENCY_LIMIT = 10;
 const API_VERSIONS = {
   'microsoft.cognitiveservices/accounts': '2023-05-01',
   'microsoft.search/searchservices': '2023-11-01',
-  'microsoft.keyvault/vaults': '2023-02-01'
+  'microsoft.keyvault/vaults': '2023-02-01',
+  'microsoft.apimanagement/service': '2022-08-01',
+  'microsoft.operationalinsights/workspaces': '2022-10-01',
+  'microsoft.containerregistry/registries': '2023-07-01'
 };
 
 const SPEECH_KIND_PATTERN = /speech/i;
@@ -33,6 +36,18 @@ const SERVICE_RESOURCE_RULES = {
     resourceType: 'microsoft.keyvault/vaults',
     rbacRole: 'Key Vault Secrets User',
     secretPermissions: ['get', 'list']
+  },
+  'Azure API Management': {
+    resourceType: 'microsoft.apimanagement/service',
+    roles: ['API Management Service Operator Role', 'API Management Service Reader']
+  },
+  'Log Analytics Workspace': {
+    resourceType: 'microsoft.operationalinsights/workspaces',
+    roles: ['Log Analytics Contributor', 'Log Analytics Reader']
+  },
+  'Azure Container Registry': {
+    resourceType: 'microsoft.containerregistry/registries',
+    roles: ['AcrPush', 'AcrPull']
   }
 };
 
@@ -308,6 +323,18 @@ const buildActiveRules = (selectedServices) => {
 
   if ([...KEY_VAULT_TRIGGER_SERVICES].some((name) => serviceNames.has(name))) {
     rules.push(SERVICE_RESOURCE_RULES['Azure Key Vault']);
+  }
+
+  if (serviceNames.has('Azure API Management')) {
+    rules.push(SERVICE_RESOURCE_RULES['Azure API Management']);
+  }
+
+  if (serviceNames.has('Log Analytics Workspace')) {
+    rules.push(SERVICE_RESOURCE_RULES['Log Analytics Workspace']);
+  }
+
+  if (serviceNames.has('Azure Container Registry')) {
+    rules.push(SERVICE_RESOURCE_RULES['Azure Container Registry']);
   }
 
   return rules;

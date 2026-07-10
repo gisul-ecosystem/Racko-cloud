@@ -50,7 +50,12 @@ const SERVICE_RESOURCE_TYPES = {
   'document intelligence': [{ provider: 'Microsoft.CognitiveServices', resourceType: 'accounts' }],
   'bot service': [{ provider: 'Microsoft.BotService', resourceType: 'botServices' }],
   'ai foundry': [{ provider: 'Microsoft.CognitiveServices', resourceType: 'accounts' }],
-  'defender for cloud': [{ provider: 'Microsoft.Security', resourceType: 'automations' }]
+  'defender for cloud': [{ provider: 'Microsoft.Security', resourceType: 'automations' }],
+  'api management': [{ provider: 'Microsoft.ApiManagement', resourceType: 'service' }],
+  apim: [{ provider: 'Microsoft.ApiManagement', resourceType: 'service' }],
+  'log analytics': [{ provider: 'Microsoft.OperationalInsights', resourceType: 'workspaces' }],
+  'container registry': [{ provider: 'Microsoft.ContainerRegistry', resourceType: 'registries' }],
+  acr: [{ provider: 'Microsoft.ContainerRegistry', resourceType: 'registries' }]
 };
 
 const getServiceResourceTypes = (serviceName) => {

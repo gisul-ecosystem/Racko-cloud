@@ -32,8 +32,30 @@ const getCredentialDelivery = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      deliveryStatus: delivery ? delivery.deliveryStatus : null
+      deliveryStatus: delivery ? delivery.deliveryStatus : null,
+      spreadsheetAvailable: delivery
+        ? ['sent', 'queued'].includes(String(delivery.deliveryStatus || '').toLowerCase())
+        : false
     });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const downloadCredentialSpreadsheet = async (req, res, next) => {
+  try {
+    validateRequestId(req.params.id);
+
+    const { buffer, filename } = await credentialService.buildCredentialSpreadsheetForRequest(
+      Number(req.params.id)
+    );
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.status(200).send(buffer);
   } catch (error) {
     next(error);
   }
@@ -42,5 +64,6 @@ const getCredentialDelivery = async (req, res, next) => {
 module.exports = {
   getCredentialDelivery,
   sendCredentials,
-  sendCredentialsForRequest: sendCredentials
+  sendCredentialsForRequest: sendCredentials,
+  downloadCredentialSpreadsheet
 };
