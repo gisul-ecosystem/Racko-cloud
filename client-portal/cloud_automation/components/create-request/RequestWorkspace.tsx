@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ApiError } from '../../../lib/apiClient';
@@ -31,6 +31,8 @@ import {
 } from '../../utils/requestForm';
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
+import { CreateRequestSubmitBar } from './CreateRequestSubmitBar';
+import { isCustomerDetailsComplete } from '../../utils/requestForm';
 
 function resolveTierAutomatedServices(
   catalog: ServiceCatalogResponse,
@@ -429,8 +431,34 @@ export function RequestWorkspace() {
 
   const totalPrice = pricing?.totalPrice ?? pricing?.estimatedPrice ?? null;
 
+  const formProgress = useMemo(() => {
+    const detailsDone = isCustomerDetailsComplete({
+      customerEmail,
+      accountCount,
+      startDate,
+      endDate,
+    });
+    const servicesDone = selectedServiceIds.length > 0;
+    const regionDone = Boolean(location.trim());
+
+    return [
+      { label: 'Details', done: detailsDone },
+      { label: 'Policies', done: detailsDone },
+      { label: 'Services', done: servicesDone },
+      { label: 'Region', done: regionDone },
+    ];
+  }, [customerEmail, accountCount, startDate, endDate, selectedServiceIds, location]);
+
+  const submitBarProps = {
+    submitting,
+    submitError,
+    totalPrice,
+    currency: pricing?.currency,
+    onSubmit: handleSubmit,
+  };
+
   return (
-    <div className="mx-auto max-w-screen-xl space-y-6">
+    <div className="mx-auto max-w-screen-xl space-y-6 pb-8">
       <div>
         <Link
           href={AZURE_ROUTES.dashboard}
@@ -456,8 +484,35 @@ export function RequestWorkspace() {
       )}
 
       {catalog && !catalogError && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="space-y-6 lg:col-span-2">
+        <>
+          <div className="rounded-xl border border-gray-200 bg-white px-4 py-4 shadow-sm sm:px-6">
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Request progress</p>
+            <ol className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+              {formProgress.map((step, index) => (
+                <li key={step.label} className="flex items-center gap-2">
+                  <span
+                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                      step.done
+                        ? 'bg-[#B91C1C] text-white'
+                        : 'border border-gray-200 bg-gray-50 text-gray-500'
+                    }`}
+                  >
+                    {index + 1}
+                  </span>
+                  <span
+                    className={`text-sm ${
+                      step.done ? 'font-medium text-gray-900' : 'text-gray-500'
+                    }`}
+                  >
+                    {step.label}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          </div>
+
+        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <div className="min-w-0 space-y-6">
             <RequestForm
               catalog={catalog}
               selectedServiceIds={selectedServiceIds}
@@ -506,49 +561,49 @@ export function RequestWorkspace() {
               adminAccessMessage={adminAccessMessage}
               validationErrors={validationErrors}
             />
-          </div>
 
-          <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-            <PricingSummary
-              totalPrice={totalPrice}
-              currency={pricing?.currency}
-              durationHours={pricing?.durationHours}
-              calendarHours={pricing?.calendarHours}
-              billableHours={pricing?.billableHours}
-              usesUsageWindows={pricing?.usesUsageWindows}
-              accountCount={pricing?.accounts ?? accountCount}
-              baseHourlyPrice={pricing?.baseHourlyPrice}
-              portalHourlyTotal={pricing?.portalHourlyTotal}
-              infraHourlyTotal={pricing?.infraHourlyTotal}
-              loading={pricingLoading}
-              error={pricingError}
-            />
+            <div className="space-y-4 xl:hidden">
+              <PricingSummary
+                totalPrice={totalPrice}
+                currency={pricing?.currency}
+                durationHours={pricing?.durationHours}
+                calendarHours={pricing?.calendarHours}
+                billableHours={pricing?.billableHours}
+                usesUsageWindows={pricing?.usesUsageWindows}
+                accountCount={pricing?.accounts ?? accountCount}
+                baseHourlyPrice={pricing?.baseHourlyPrice}
+                portalHourlyTotal={pricing?.portalHourlyTotal}
+                infraHourlyTotal={pricing?.infraHourlyTotal}
+                loading={pricingLoading}
+                error={pricingError}
+              />
 
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-              {submitError && (
-                <p className="mb-4 text-sm text-red-600">{submitError}</p>
-              )}
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={submitting}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717] disabled:opacity-50"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Creating request…
-                  </>
-                ) : (
-                  'Create request'
-                )}
-              </button>
-              <p className="mt-3 text-center text-xs text-gray-400">
-                Submits to POST /api/requests via the cloud automation gateway
-              </p>
+              <CreateRequestSubmitBar {...submitBarProps} />
             </div>
           </div>
+
+          <aside className="hidden xl:block">
+            <div className="sticky top-4 space-y-4">
+              <PricingSummary
+                totalPrice={totalPrice}
+                currency={pricing?.currency}
+                durationHours={pricing?.durationHours}
+                calendarHours={pricing?.calendarHours}
+                billableHours={pricing?.billableHours}
+                usesUsageWindows={pricing?.usesUsageWindows}
+                accountCount={pricing?.accounts ?? accountCount}
+                baseHourlyPrice={pricing?.baseHourlyPrice}
+                portalHourlyTotal={pricing?.portalHourlyTotal}
+                infraHourlyTotal={pricing?.infraHourlyTotal}
+                loading={pricingLoading}
+                error={pricingError}
+              />
+
+              <CreateRequestSubmitBar {...submitBarProps} compact />
+            </div>
+          </aside>
         </div>
+        </>
       )}
     </div>
   );

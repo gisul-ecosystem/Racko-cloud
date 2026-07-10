@@ -18,7 +18,10 @@ const CUSTOM_POLICY_KEYS = {
   searchSku: 'ca-allowed-search-sku',
   cognitiveServicesSku: 'ca-allowed-cognitive-services-sku',
   botServiceSku: 'ca-allowed-bot-service-sku',
-  logicAppMode: 'ca-allowed-logic-app-mode'
+  logicAppMode: 'ca-allowed-logic-app-mode',
+  apiManagementSku: 'ca-allowed-api-management-sku',
+  logAnalyticsSku: 'ca-allowed-log-analytics-sku',
+  containerRegistrySku: 'ca-allowed-container-registry-sku'
 };
 
 const normalizeServiceName = (value) =>
@@ -169,6 +172,40 @@ const mapBotServiceSku = (instanceOption) => {
 const mapLogicAppMode = (instanceOption) => {
   const raw = String(instanceOption || '').trim().toLowerCase();
   return /standard/i.test(raw) ? 'Standard' : 'Consumption';
+};
+
+const mapApiManagementSku = (instanceOption) => {
+  const raw = String(instanceOption || '').trim().toLowerCase();
+
+  if (/premium/i.test(raw)) {
+    return 'Premium';
+  }
+  if (/standard/i.test(raw)) {
+    return 'Standard';
+  }
+  if (/basic/i.test(raw)) {
+    return 'Basic';
+  }
+
+  return 'Developer';
+};
+
+const mapLogAnalyticsSku = (instanceOption) => {
+  const raw = String(instanceOption || '').trim().toLowerCase();
+  return /capacity|reservation|commitment/i.test(raw) ? 'CapacityReservation' : 'PerGB2018';
+};
+
+const mapContainerRegistrySku = (instanceOption) => {
+  const raw = String(instanceOption || '').trim().toLowerCase();
+
+  if (/premium/i.test(raw)) {
+    return 'Premium';
+  }
+  if (/standard/i.test(raw)) {
+    return 'Standard';
+  }
+
+  return 'Basic';
 };
 
 const mapLogicAppPlanSku = (instanceOption) => {
@@ -383,6 +420,36 @@ const INSTANCE_POLICY_RULES = [
         }
       }
     })
+  },
+  {
+    policyType: 'allowed_api_management_sku',
+    pattern: /api management/,
+    customPolicyKey: CUSTOM_POLICY_KEYS.apiManagementSku,
+    resolveAllowedSkus: (instanceOption) => [mapApiManagementSku(instanceOption)],
+    buildParameters: (instanceOption, allowedSkus) => ({
+      displayNameSuffix: `Allowed API Management SKUs ${allowedSkus.join(', ')}`,
+      parameters: buildSkuListParameter(allowedSkus)
+    })
+  },
+  {
+    policyType: 'allowed_log_analytics_sku',
+    pattern: /log analytics/,
+    customPolicyKey: CUSTOM_POLICY_KEYS.logAnalyticsSku,
+    resolveAllowedSkus: (instanceOption) => [mapLogAnalyticsSku(instanceOption)],
+    buildParameters: (instanceOption, allowedSkus) => ({
+      displayNameSuffix: `Allowed Log Analytics SKUs ${allowedSkus.join(', ')}`,
+      parameters: buildSkuListParameter(allowedSkus)
+    })
+  },
+  {
+    policyType: 'allowed_container_registry_sku',
+    pattern: /container registry/,
+    customPolicyKey: CUSTOM_POLICY_KEYS.containerRegistrySku,
+    resolveAllowedSkus: (instanceOption) => [mapContainerRegistrySku(instanceOption)],
+    buildParameters: (instanceOption, allowedSkus) => ({
+      displayNameSuffix: `Allowed container registry SKUs ${allowedSkus.join(', ')}`,
+      parameters: buildSkuListParameter(allowedSkus)
+    })
   }
 ];
 
@@ -410,6 +477,9 @@ module.exports = {
   mapCognitiveServicesSku,
   mapBotServiceSku,
   mapLogicAppMode,
+  mapApiManagementSku,
+  mapLogAnalyticsSku,
+  mapContainerRegistrySku,
   mapLogicAppPlanSku,
   mapAksNodeVmSize
 };

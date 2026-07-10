@@ -1,9 +1,10 @@
 const cron = require('node-cron');
 const { runBudgetPoll } = require('../services/budgetPollingService');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 
 let scheduledTask = null;
 
-const DEFAULT_BUDGET_POLL_CRON = '*/15 * * * *';
+const DEFAULT_BUDGET_POLL_CRON = '7,22,37,52 * * * *';
 
 const getBudgetPollCron = () => {
   const value = String(process.env.BUDGET_POLL_CRON || DEFAULT_BUDGET_POLL_CRON).trim();
@@ -53,7 +54,7 @@ const startBudgetScheduler = () => {
   });
 
   scheduledTask = cron.schedule(schedule, () => {
-    runBudgetPollJob().catch((error) => {
+    runScheduledJob('budget-poll', runBudgetPollJob).catch((error) => {
       logSchedulerEvent('error', 'budget_poll_unhandled_error', {
         message: error?.message
       });

@@ -1,12 +1,15 @@
 'use client';
 
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   Activity,
   CheckCircle2,
+  ChevronRight,
   Clock,
   Cloud,
   FileText,
+  MapPin,
   Plus,
   RefreshCw,
   Timer,
@@ -18,13 +21,16 @@ import { AZURE_ROUTES, AZURE_SERVICE } from '../constants';
 import { useProvisioningRequests } from '../hooks/useProvisioningRequests';
 import { RequestStatusBadge } from './RequestStatusBadge';
 import {
+  formatAzureRegion,
   formatCurrency,
   formatDateTime,
+  formatRelativeTime,
   getAccountCount,
   getCreatedAt,
   getCustomerEmail,
   getEstimatedPrice,
   getRequestStatus,
+  truncateEmail,
 } from '../utils/formatters';
 
 function StatCard({
@@ -46,29 +52,34 @@ function StatCard({
   }[tone];
 
   return (
-    <div className="flex items-center gap-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-      <div className={`flex h-12 w-12 items-center justify-center rounded-xl ${toneClass}`}>
-        {icon}
-      </div>
-      <div>
-        <p className="text-2xl font-bold text-gray-900">{value}</p>
-        <p className="text-sm text-gray-500">{label}</p>
+    <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center gap-4">
+        <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-xl ${toneClass}`}>
+          {icon}
+        </div>
+        <div className="min-w-0">
+          <p className="text-2xl font-bold text-gray-900">{value}</p>
+          <p className="text-sm text-gray-500">{label}</p>
+        </div>
       </div>
     </div>
   );
 }
 
 export function AzureDashboardHome() {
+  const router = useRouter();
   const { isAuthenticated } = useAuth();
   const { requests, stats, loading, error, refetch } = useProvisioningRequests(isAuthenticated);
 
   const recentRequests = requests.slice(0, 10);
+  const completionRate =
+    stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-6">
-      {/* Hero */}
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="flex flex-col gap-6 p-6 lg:flex-row lg:items-center lg:justify-between lg:p-8">
+      {/* Page header */}
+      <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="flex flex-col gap-5 p-6 lg:flex-row lg:items-center lg:justify-between lg:p-8">
           <div className="flex items-start gap-4">
             <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
               <Cloud className="h-7 w-7" />
@@ -76,8 +87,16 @@ export function AzureDashboardHome() {
             <div>
               <h1 className="text-2xl font-bold text-gray-900">{AZURE_SERVICE.name}</h1>
               <p className="mt-1 max-w-xl text-sm text-gray-500">{AZURE_SERVICE.description}</p>
+              {!loading && !error && stats.total > 0 ? (
+                <p className="mt-2 text-xs text-gray-400">
+                  {stats.total} total request{stats.total !== 1 ? 's' : ''}
+                  {stats.completed > 0 ? ` · ${completionRate}% completed` : ''}
+                  {stats.provisioning > 0 ? ` · ${stats.provisioning} provisioning` : ''}
+                </p>
+              ) : null}
             </div>
           </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
@@ -99,16 +118,16 @@ export function AzureDashboardHome() {
         </div>
       </div>
 
-      {error && !loading && <ErrorState message={error} onRetry={refetch} />}
+      {error && !loading ? <ErrorState message={error} onRetry={refetch} /> : null}
 
-      {!error && (
+      {!error ? (
         <>
           {/* Metrics */}
           {loading ? (
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
-              {Array.from({ length: 4 }).map((_, i) => (
+              {Array.from({ length: 4 }).map((_, index) => (
                 <div
-                  key={i}
+                  key={index}
                   className="animate-pulse rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
                 >
                   <div className="flex items-center gap-4">
@@ -159,9 +178,17 @@ export function AzureDashboardHome() {
                   <p className="mt-0.5 text-xs text-gray-400">
                     {loading
                       ? 'Loading…'
-                      : `${requests.length} total provisioning request${requests.length !== 1 ? 's' : ''}`}
+                      : `${requests.length} total · click a row to view details`}
                   </p>
                 </div>
+                {!loading && requests.length > 0 ? (
+                  <Link
+                    href={AZURE_ROUTES.createRequest}
+                    className="text-sm font-medium text-[#B91C1C] transition hover:text-[#a01717]"
+                  >
+                    New request
+                  </Link>
+                ) : null}
               </div>
 
               {loading ? (
@@ -195,7 +222,7 @@ export function AzureDashboardHome() {
                           Customer
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                          Location
+                          Region
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           Accounts
@@ -212,66 +239,114 @@ export function AzureDashboardHome() {
                       </tr>
                     </thead>
                     <tbody>
-                      {recentRequests.map((request, index) => (
-                        <tr
-                          key={request.id}
-                          className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${
-                            index % 2 !== 0 ? 'bg-gray-50/40' : ''
-                          }`}
-                        >
-                          <td className="px-6 py-3.5 font-mono text-xs text-gray-600">
-                            #{request.id}
-                          </td>
-                          <td className="px-4 py-3.5 text-gray-900">{getCustomerEmail(request)}</td>
-                          <td className="px-4 py-3.5 text-gray-600">{request.location ?? '—'}</td>
-                          <td className="px-4 py-3.5 text-gray-600">{getAccountCount(request)}</td>
-                          <td className="px-4 py-3.5">
-                            <RequestStatusBadge status={getRequestStatus(request)} />
-                          </td>
-                          <td className="px-4 py-3.5 text-gray-600">
-                            {formatCurrency(getEstimatedPrice(request))}
-                          </td>
-                          <td className="px-6 py-3.5 text-gray-500">
-                            {formatDateTime(getCreatedAt(request))}
-                          </td>
-                        </tr>
-                      ))}
+                      {recentRequests.map((request, index) => {
+                        const createdAt = getCreatedAt(request);
+
+                        return (
+                          <tr
+                            key={request.id}
+                            onClick={() => router.push(AZURE_ROUTES.requestStatus(request.id))}
+                            className={`group cursor-pointer border-b border-gray-50 transition-colors hover:bg-gray-50 ${
+                              index % 2 !== 0 ? 'bg-gray-50/40' : ''
+                            }`}
+                          >
+                            <td className="px-6 py-3.5 font-mono text-xs text-gray-600">
+                              #{request.id}
+                            </td>
+                            <td className="px-4 py-3.5 text-gray-900">
+                              <span title={getCustomerEmail(request)}>
+                                {truncateEmail(getCustomerEmail(request))}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-gray-600">
+                              <span
+                                className="inline-flex items-center gap-1.5"
+                                title={request.location ?? undefined}
+                              >
+                                <MapPin className="h-3.5 w-3.5 shrink-0 text-gray-400" />
+                                {formatAzureRegion(request.location)}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3.5 text-gray-600">{getAccountCount(request)}</td>
+                            <td className="px-4 py-3.5">
+                              <RequestStatusBadge status={getRequestStatus(request)} />
+                            </td>
+                            <td className="px-4 py-3.5 text-gray-600">
+                              {formatCurrency(getEstimatedPrice(request))}
+                            </td>
+                            <td className="px-6 py-3.5 text-gray-500">
+                              <span
+                                className="inline-flex items-center gap-1"
+                                title={formatDateTime(createdAt)}
+                              >
+                                {formatRelativeTime(createdAt)}
+                                <ChevronRight className="h-3.5 w-3.5 text-gray-300 opacity-0 transition group-hover:opacity-100" />
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
               )}
             </div>
 
-            {/* Operational notes */}
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-              <div className="mb-4 flex items-center gap-2">
-                <Clock className="h-4 w-4 text-[#B91C1C]" />
-                <h2 className="text-sm font-semibold text-gray-900">Operational notes</h2>
+            {/* Sidebar */}
+            <div className="space-y-6">
+              <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+                <h2 className="text-sm font-semibold text-gray-900">Quick actions</h2>
+                <div className="mt-3 space-y-2">
+                  <Link
+                    href={AZURE_ROUTES.createRequest}
+                    className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-[#B91C1C]/30 hover:bg-red-50 hover:text-[#B91C1C]"
+                  >
+                    <span className="inline-flex items-center gap-2">
+                      <Plus className="h-4 w-4" />
+                      New provisioning request
+                    </span>
+                    <ChevronRight className="h-4 w-4 text-gray-400" />
+                  </Link>
+                  <button
+                    type="button"
+                    onClick={refetch}
+                    disabled={loading}
+                    className="flex w-full items-center gap-2 rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-40"
+                  >
+                    <RefreshCw className={`h-4 w-4 text-gray-400 ${loading ? 'animate-spin' : ''}`} />
+                    Refresh dashboard
+                  </button>
+                </div>
               </div>
-              <ul className="space-y-3 text-sm text-gray-600">
-                <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
-                  Requests flow through the cloud automation API and are provisioned into Azure
-                  resource groups.
-                </li>
-                <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
-                  Pending requests are actively provisioning; completed requests have credentials
-                  ready for delivery.
-                </li>
-                <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
-                  Expired requests are cleaned up automatically by the expiry scheduler.
-                </li>
-                <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
-                  Use Org Admin for resource group management and elevated access workflows.
-                </li>
-              </ul>
+
+              <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+                <div className="mb-4 flex items-center gap-2">
+                  <Clock className="h-4 w-4 text-[#B91C1C]" />
+                  <h2 className="text-sm font-semibold text-gray-900">Operational notes</h2>
+                </div>
+                <ul className="space-y-3 text-sm text-gray-600">
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    Requests are provisioned into Azure resource groups via the cloud automation API.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    Pending requests are actively provisioning; completed requests have credentials ready.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    Expired requests are cleaned up automatically by the expiry scheduler.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    Use Org Admin for resource group management and elevated access workflows.
+                  </li>
+                </ul>
+              </div>
             </div>
           </div>
         </>
-      )}
+      ) : null}
     </div>
   );
 }

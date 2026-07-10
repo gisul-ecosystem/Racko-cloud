@@ -35,6 +35,28 @@ const timeInputClass =
 
 const labelClass = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500';
 
+function SectionHeader({
+  step,
+  title,
+  description,
+}: {
+  step: number;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#B91C1C]/10 text-sm font-semibold text-[#B91C1C]">
+        {step}
+      </span>
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+        {description ? <p className="mt-0.5 text-sm text-gray-500">{description}</p> : null}
+      </div>
+    </div>
+  );
+}
+
 const USAGE_WINDOW_DAYS = [
   'Sunday',
   'Monday',
@@ -268,8 +290,12 @@ export function RequestForm({
 
       {/* Step 1: Customer details */}
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-900">Customer details</h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <SectionHeader
+          step={1}
+          title="Customer details"
+          description="Who is this lab for and how long should it run?"
+        />
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className={labelClass} htmlFor="customerEmail">
               Customer email
@@ -362,12 +388,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Daily usage windows</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Set which days and hours lab users can access Azure
-          </p>
+          <SectionHeader
+            step={2}
+            title="Daily usage windows"
+            description="Optional — restrict which days and hours users can access the lab."
+          />
 
-          <div className="mt-4 space-y-3">
+          <div className="mt-5 space-y-3">
             {USAGE_WINDOW_DAYS.map((day, index) => {
               const existing = usageWindows.find((window) => window.day_of_week === index);
 
@@ -490,7 +517,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <label className="flex cursor-pointer items-center gap-3">
+          <SectionHeader
+            step={3}
+            title="Resource cleanup"
+            description="Automatically clean up lab resources on a schedule."
+          />
+
+          <label className="mt-5 flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
               checked={resourceCleanupEnabled}
@@ -618,12 +651,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Per-user budget</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Optional spending cap per user (requires per-user resource groups)
-          </p>
+          <SectionHeader
+            step={4}
+            title="Per-user budget"
+            description="Optional spending cap when using per-user resource groups."
+          />
 
-          <div className="mt-4">
+          <div className="mt-5">
             <label className={labelClass} htmlFor="perUserBudgetUsd">
               Budget per user (USD) — optional
             </label>
@@ -651,9 +685,12 @@ export function RequestForm({
       {/* Step 3: Service selection */}
       {showServices && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Services</h2>
-          <p className="mt-0.5 text-xs text-gray-400">Select one or more Azure services to provision</p>
-          <div className="mt-4 space-y-5">
+          <SectionHeader
+            step={5}
+            title="Azure services"
+            description="Choose one or more services to include in this lab."
+          />
+          <div className="mt-5 space-y-5">
             {Array.from(servicesByCategory.entries()).map(([category, services]) => (
               <div key={category}>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
@@ -709,11 +746,12 @@ export function RequestForm({
       {/* Step 4: Instance sizes (from catalog) */}
       {showInstances && instanceServices.length > 0 && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Instance sizes</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Choose instance tiers for services that support sizing
-          </p>
-          <div className="mt-4 space-y-5">
+          <SectionHeader
+            step={6}
+            title="Instance sizes"
+            description="Pick a tier for each service that supports sizing."
+          />
+          <div className="mt-5 space-y-5">
             {instanceServices.map((service) => {
               const serviceId = normalizeServiceId(service.id);
               const options = catalogInstances.filter(
@@ -790,13 +828,14 @@ export function RequestForm({
       {/* Step 5: Permissions (auto + manual) */}
       {showPermissions && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Permissions</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Roles are auto-assigned from catalog rules and instance tier mappings
-          </p>
+          <SectionHeader
+            step={7}
+            title="Permissions"
+            description="Roles are assigned automatically from catalog rules and instance tiers."
+          />
 
           {resolvedRoles.length > 0 && (
-            <div className="mt-4 space-y-3">
+            <div className="mt-5 space-y-3">
               {resolvedRoles.map((entry) => {
                 const service = catalog.services.find((svc) => svc.id === entry.serviceId);
                 const isAutomated = tierAutomatedServices.has(entry.serviceId);
@@ -882,15 +921,15 @@ export function RequestForm({
       {/* Step 6: Region (derived from services + instances) */}
       {showLocations && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Region</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Available regions based on your service and instance selections. Use the exact region
-            shown below when creating resources in Azure Portal.
-          </p>
+          <SectionHeader
+            step={8}
+            title="Deployment region"
+            description="Use this exact region when creating resources in Azure Portal."
+          />
           {locationsError && (
-            <p className="mt-2 text-sm text-red-600">{locationsError}</p>
+            <p className="mt-3 text-sm text-red-600">{locationsError}</p>
           )}
-          <div className="relative mt-4">
+          <div className="relative mt-5">
             <select
               className={`${inputClass} appearance-none pr-10`}
               value={location}

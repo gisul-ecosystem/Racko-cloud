@@ -21,7 +21,10 @@ const DATA_PLANE_ONLY_ROLES = new Set([
   'Search Index Data Contributor',
   'Search Index Data Reader',
   'EventGrid Data Sender',
-  'AzureML Compute Operator'
+  'AzureML Compute Operator',
+  'AcrPull',
+  'AcrPush',
+  'Log Analytics Reader'
 ]);
 
 const CONTROL_PLANE_ROLES = new Set([
@@ -55,7 +58,12 @@ const CONTROL_PLANE_ROLES = new Set([
   'EventGrid Contributor',
   'Cosmos DB Operator',
   'Cosmos DB Account Reader Role',
-  'Storage Account Contributor'
+  'Storage Account Contributor',
+  'API Management Service Contributor',
+  'API Management Service Reader',
+  'API Management Service Operator Role',
+  'Log Analytics Contributor',
+  'Log Analytics Reader'
 ]);
 
 const isControlPlaneRole = (roleName) => CONTROL_PLANE_ROLES.has(roleName);

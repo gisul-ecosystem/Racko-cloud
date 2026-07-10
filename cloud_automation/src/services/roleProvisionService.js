@@ -462,10 +462,21 @@ const provisionRolesForRequest = async (requestId) => {
     await backfillRequestServiceRoles(db, requestId, roles);
 
     const hasAiFoundry = selectedServices.some((service) => service.serviceName === 'Azure AI Foundry');
+    const hasStandaloneAcr = selectedServices.some(
+      (service) => service.serviceName === 'Azure Container Registry'
+    );
     const includesAcrPull = roles.some((role) => role.azureRole === 'AcrPull');
-    const rolesForResourceGroup = hasAiFoundry && includesAcrPull
-      ? roles.filter((role) => role.azureRole !== 'AcrPull')
-      : roles;
+    const rolesForResourceGroup = roles.filter((role) => {
+      if (hasAiFoundry && role.azureRole === 'AcrPull') {
+        return false;
+      }
+
+      if (hasStandaloneAcr && (role.azureRole === 'AcrPull' || role.azureRole === 'AcrPush')) {
+        return false;
+      }
+
+      return true;
+    });
 
     if (users.length === 0 || roles.length === 0) {
       return {

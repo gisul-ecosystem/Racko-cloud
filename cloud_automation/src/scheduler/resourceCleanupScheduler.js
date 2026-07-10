@@ -1,5 +1,6 @@
 const cron = require('node-cron');
 const db = require('../db/postgres');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 const { executeCleanupForRequest } = require('../services/resourceCleanupService');
 const { sendResourceCleanupEmail } = require('../services/email/resourceCleanupEmailService');
 const { createNotification, NotificationType } = require('../services/notificationService');
@@ -129,11 +130,11 @@ function startResourceCleanupScheduler() {
     return;
   }
 
-  scheduledTask = cron.schedule('*/5 * * * *', async () => {
-    const now = new Date();
-    logEvent('info', 'resource_cleanup_poll_started', { time: now.toISOString() });
+  scheduledTask = cron.schedule('3-59/5 * * * *', async () => {
+    await runScheduledJob('resource-cleanup', async () => {
+      const now = new Date();
+      logEvent('info', 'resource_cleanup_poll_started', { time: now.toISOString() });
 
-    try {
       const { rows: dueRequests } = await db.query(
         `
           SELECT
@@ -162,9 +163,9 @@ function startResourceCleanupScheduler() {
       }
 
       logEvent('info', 'resource_cleanup_poll_completed', { processed: dueRequests.length });
-    } catch (err) {
+    }).catch((err) => {
       logEvent('error', 'resource_cleanup_poll_error', { error: err.message });
-    }
+    });
   });
 
   logEvent('info', 'resource_cleanup_scheduler_started');

@@ -1,4 +1,5 @@
-import { apiRequest } from '../../lib/apiClient';
+import { apiRequest, getAccessToken } from '../../lib/apiClient';
+import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
 import { CLOUD_AUTOMATION_API_PREFIX } from '../constants';
 import type {
   AdminAccessRequestPayload,
@@ -159,6 +160,8 @@ export interface ProvisionStepStatus {
   deliveryStatus?: string | null;
   portalLink?: string | null;
   usersSent?: number;
+  spreadsheetFilename?: string | null;
+  spreadsheetAvailable?: boolean;
 }
 
 /** GET /api/provision/request/:id — resource group provisioning status. */
@@ -247,6 +250,47 @@ export async function sendProvisionCredentials(requestId: number): Promise<Provi
   );
 }
 
+/** GET /api/provision/request/:id/credentials/spreadsheet */
+export async function downloadCredentialSpreadsheet(requestId: number): Promise<void> {
+  const token = getAccessToken();
+  const response = await fetch(
+    `${getGatewayBaseUrl()}${cloudAutomationPath(`/provision/request/${requestId}/credentials/spreadsheet`)}`,
+    {
+      method: 'GET',
+      credentials: 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: 'no-store',
+    }
+  );
+
+  if (!response.ok) {
+    let message = 'Failed to download credential spreadsheet.';
+    try {
+      const payload = (await response.json()) as { message?: string };
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = disposition.match(/filename="([^"]+)"/i);
+  const filename = filenameMatch?.[1] || `azure-lab-credentials-request-${requestId}.xlsx`;
+
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
 type SnapshotPart<T> = PromiseSettledResult<T>;
 
 function readSnapshotPart<T>(result: SnapshotPart<T>, fallback: T): T {
@@ -302,6 +346,7 @@ export async function fetchProvisionSnapshot(requestId: number): Promise<Provisi
       deliveryStatus: credentialsRaw.deliveryStatus ?? null,
       recipientEmail: null,
       sentAt: null,
+      spreadsheetAvailable: Boolean(credentialsRaw.spreadsheetAvailable),
     },
     fetchedAt: new Date().toISOString(),
   };

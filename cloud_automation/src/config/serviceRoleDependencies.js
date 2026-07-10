@@ -48,6 +48,10 @@ Azure AI Language                Cognitive Services Contributor               (n
 Azure AI Speech                  Cognitive Services Contributor               (none)
 Azure Bot Service                Contributor                                  (none)
 Azure AI Document Intelligence   Cognitive Services Contributor               (none)
+Azure API Management             API Management Service Contributor           + Network Contributor
+Log Analytics Workspace          Log Analytics Contributor                    (none)
+Azure Container Registry         Contributor                                  (none)
+                                                                               + AcrPush
 */
 
 /** Maps service name → additional roles to auto-assign (in addition to the service's own roles). */
@@ -138,6 +142,13 @@ const SERVICE_ROLE_DEPENDENCIES = {
     {
       role: 'Network Contributor',
       reason: 'Required for ExpressRoute circuit VNet peering configuration'
+    }
+  ],
+
+  'Azure API Management': [
+    {
+      role: 'Network Contributor',
+      reason: 'Required for API Management VNet integration and private endpoint configuration'
     }
   ]
 };

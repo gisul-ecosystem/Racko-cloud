@@ -463,6 +463,105 @@ const CUSTOM_POLICY_DEFINITIONS = {
         effect: 'deny'
       }
     }
+  },
+  [CUSTOM_POLICY_KEYS.apiManagementSku]: {
+    displayName: 'Cloud Automation - Allowed API Management SKUs',
+    description: 'Restrict API Management service SKUs that can be deployed in customer resource groups.',
+    mode: 'All',
+    parameters: {
+      listOfAllowedSKUs: {
+        type: 'Array',
+        metadata: {
+          displayName: 'Allowed SKUs',
+          description: 'Allowed API Management SKU names (Developer, Basic, Standard, Premium).'
+        }
+      }
+    },
+    policyRule: {
+      if: {
+        allOf: [
+          {
+            field: 'type',
+            equals: 'Microsoft.ApiManagement/service'
+          },
+          {
+            not: {
+              field: 'Microsoft.ApiManagement/service/sku.name',
+              in: "[parameters('listOfAllowedSKUs')]"
+            }
+          }
+        ]
+      },
+      then: {
+        effect: 'deny'
+      }
+    }
+  },
+  [CUSTOM_POLICY_KEYS.logAnalyticsSku]: {
+    displayName: 'Cloud Automation - Allowed Log Analytics workspace SKUs',
+    description: 'Restrict Log Analytics workspace SKUs that can be deployed in customer resource groups.',
+    mode: 'All',
+    parameters: {
+      listOfAllowedSKUs: {
+        type: 'Array',
+        metadata: {
+          displayName: 'Allowed SKUs',
+          description: 'Allowed Log Analytics workspace SKU names (PerGB2018, CapacityReservation).'
+        }
+      }
+    },
+    policyRule: {
+      if: {
+        allOf: [
+          {
+            field: 'type',
+            equals: 'Microsoft.OperationalInsights/workspaces'
+          },
+          {
+            not: {
+              field: 'Microsoft.OperationalInsights/workspaces/sku.name',
+              in: "[parameters('listOfAllowedSKUs')]"
+            }
+          }
+        ]
+      },
+      then: {
+        effect: 'deny'
+      }
+    }
+  },
+  [CUSTOM_POLICY_KEYS.containerRegistrySku]: {
+    displayName: 'Cloud Automation - Allowed Container Registry SKUs',
+    description: 'Restrict Azure Container Registry SKUs that can be deployed in customer resource groups.',
+    mode: 'All',
+    parameters: {
+      listOfAllowedSKUs: {
+        type: 'Array',
+        metadata: {
+          displayName: 'Allowed SKUs',
+          description: 'Allowed container registry SKU names (Basic, Standard, Premium).'
+        }
+      }
+    },
+    policyRule: {
+      if: {
+        allOf: [
+          {
+            field: 'type',
+            equals: 'Microsoft.ContainerRegistry/registries'
+          },
+          {
+            not: {
+              field: 'Microsoft.ContainerRegistry/registries/sku.name',
+              in: "[parameters('listOfAllowedSKUs')]"
+            }
+          }
+        ]
+      },
+      then: {
+        effect: 'deny'
+      }
+    }
   }
 };
 

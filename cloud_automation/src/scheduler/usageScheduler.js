@@ -15,6 +15,7 @@ const { resetDailyCounters } = require('../services/dailyUsageResetService');
 const { evaluateUsageAccess } = require('../services/usageAccessEvaluator');
 const { resetDailyCountersIfNeeded } = require('../services/usageMiddlewareHelper');
 const { isWindowEnforcementPaused } = require('../utils/windowEnforcementPause');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 
 /**
  * Monitor active sessions every minute
@@ -175,7 +176,7 @@ const startUsageScheduler = () => {
 
   // Every minute — detect sign-ins, end stale sessions, enforce limits
   cron.schedule('* * * * *', async () => {
-    try {
+    await runScheduledJob('usage-monitor', async () => {
       console.log('[usageScheduler] Running sign-in check...');
       await detectActiveSignIns();
       await detectEndedSessions();
@@ -183,9 +184,9 @@ const startUsageScheduler = () => {
       await enforceBlockedAzureUsers();
       await restoreScheduledAccess();
       await monitorActiveSessions();
-    } catch (error) {
+    }).catch((error) => {
       console.error('[usageScheduler] Error:', error.message);
-    }
+    });
   });
   console.log('Usage monitor scheduled (every minute)');
 

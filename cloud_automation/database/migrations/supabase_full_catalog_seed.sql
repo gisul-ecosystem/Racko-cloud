@@ -45,7 +45,7 @@ INSERT INTO public.service_categories (name) VALUES
   ('AI & Machine Learning');
 
 -- ============================================================
--- STEP 3: Services (31)
+-- STEP 3: Services (34)
 -- ============================================================
 INSERT INTO public.services (
   name, category, azure_role, description, price_per_user, active,
@@ -80,10 +80,13 @@ INSERT INTO public.services (
 ('Azure Service Bus', 'Integration & Messaging', 'Contributor', 'Enterprise messaging', 0.05, true, true, 'Contributor', false, true, true, true, true),
 ('Azure Event Grid', 'Integration & Messaging', 'EventGrid Contributor', 'Event routing', 0.00, true, true, 'EventGrid Contributor', false, true, true, true, true),
 ('Azure Logic Apps', 'Integration & Messaging', 'Logic App Contributor', 'Workflow automation', 0.08, true, true, 'Logic App Contributor', false, true, true, true, true),
+('Azure API Management', 'Integration & Messaging', 'API Management Service Contributor', 'Publish, secure, and manage APIs', 0.12, true, true, 'API Management Service Contributor', false, true, true, true, true),
 
 -- Monitoring & DevOps
 ('Azure Monitor', 'Monitoring & DevOps', 'Monitoring Contributor', 'Metrics and monitoring', 0.00, true, true, 'Monitoring Contributor', false, true, true, true, false),
 ('Application Insights', 'Monitoring & DevOps', 'Monitoring Contributor', 'Application performance monitoring', 0.00, true, true, 'Monitoring Contributor', false, true, true, true, true),
+('Log Analytics Workspace', 'Monitoring & DevOps', 'Log Analytics Contributor', 'Collect and analyze log data', 0.04, true, true, 'Log Analytics Contributor', false, true, true, true, true),
+('Azure Container Registry', 'Monitoring & DevOps', 'Contributor', 'Private Docker container registry', 0.05, true, true, 'Contributor', false, true, true, true, true),
 ('Azure DevOps', 'Monitoring & DevOps', 'Project Administrator', 'CI/CD and repositories', 0.00, true, true, 'Project Administrator', false, false, false, true, true),
 
 -- AI & Machine Learning
@@ -170,11 +173,22 @@ JOIN (
     ('Azure Event Grid', 'EventGrid Contributor', true, 'control_plane'),
     ('Azure Logic Apps', 'Logic App Contributor', true, 'control_plane'),
 
+    ('Azure API Management', 'API Management Service Contributor', true, 'control_plane'),
+    ('Azure API Management', 'API Management Service Reader', false, 'control_plane'),
+    ('Azure API Management', 'API Management Service Operator Role', false, 'control_plane'),
+
     -- Monitoring & DevOps
     ('Azure Monitor', 'Monitoring Contributor', true, 'control_plane'),
     ('Azure Monitor', 'Monitoring Reader', false, 'control_plane'),
     ('Application Insights', 'Monitoring Contributor', true, 'control_plane'),
     ('Application Insights', 'Monitoring Reader', false, 'control_plane'),
+    ('Log Analytics Workspace', 'Log Analytics Contributor', true, 'control_plane'),
+    ('Log Analytics Workspace', 'Log Analytics Reader', false, 'control_plane'),
+    ('Log Analytics Workspace', 'Monitoring Contributor', false, 'control_plane'),
+    ('Log Analytics Workspace', 'Monitoring Reader', false, 'control_plane'),
+    ('Azure Container Registry', 'Contributor', true, 'control_plane'),
+    ('Azure Container Registry', 'AcrPush', true, 'data_plane'),
+    ('Azure Container Registry', 'AcrPull', false, 'data_plane'),
     ('Azure DevOps', 'Project Administrator', true, 'control_plane'),
     ('Azure DevOps', 'Contributor', false, 'control_plane'),
 
@@ -212,7 +226,8 @@ JOIN (
     ('Azure Machine Learning',              'Network Contributor'),
     ('Azure Machine Learning',              'Storage Account Contributor'),
     ('Azure Machine Learning',              'Storage Blob Data Contributor'),
-    ('Azure ExpressRoute',                  'Network Contributor')
+    ('Azure ExpressRoute',                  'Network Contributor'),
+    ('Azure API Management',              'Network Contributor')
 ) AS r(service_name, azure_role) ON s.name = r.service_name
 ON CONFLICT DO NOTHING;
 
@@ -333,11 +348,23 @@ JOIN (
     ('Azure Logic Apps', 'Consumption', 1),
     ('Azure Logic Apps', 'Standard', 2),
 
+    ('Azure API Management', 'Developer', 1),
+    ('Azure API Management', 'Basic', 2),
+    ('Azure API Management', 'Standard', 3),
+    ('Azure API Management', 'Premium', 4),
+
     ('Azure Monitor', 'Basic Monitoring', 1),
     ('Azure Monitor', 'Advanced Monitoring', 2),
 
     ('Application Insights', 'Basic', 1),
     ('Application Insights', 'Enterprise', 2),
+
+    ('Log Analytics Workspace', 'Pay-as-you-go', 1),
+    ('Log Analytics Workspace', 'Capacity Reservation', 2),
+
+    ('Azure Container Registry', 'Basic', 1),
+    ('Azure Container Registry', 'Standard', 2),
+    ('Azure Container Registry', 'Premium', 3),
 
     ('Azure DevOps', 'Basic', 1),
     ('Azure DevOps', 'Basic + Test Plans', 2),

@@ -22,6 +22,55 @@ const isSkuRestrictedInLocation = (sku, location) =>
     );
   });
 
+const getRegionsSupportingVmSize = async (instanceOption) => {
+  const candidates = getVmSizeFallbackChain(instanceOption);
+  const primarySize = candidates[0] || normalizeVmSize(instanceOption);
+  const cacheKey = `vm-regions:${primarySize.toLowerCase()}`;
+
+  const cached = sizeCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.sizes;
+  }
+
+  const azureConfig = validateAzureEnv();
+  const client = new ComputeManagementClient(
+    createAzureCredential(azureConfig),
+    azureConfig.subscriptionId
+  );
+
+  const regions = new Set();
+
+  for (const candidate of candidates) {
+    for await (const sku of client.resourceSkus.list({
+      filter: `name eq '${candidate}'`
+    })) {
+      if (sku.resourceType !== 'virtualMachines') {
+        continue;
+      }
+
+      for (const listedLocation of sku.locations || []) {
+        const normalizedLocation = String(listedLocation || '').trim().toLowerCase();
+        if (!normalizedLocation || isSkuRestrictedInLocation(sku, normalizedLocation)) {
+          continue;
+        }
+
+        regions.add(normalizedLocation);
+      }
+    }
+
+    if (regions.size > 0) {
+      break;
+    }
+  }
+
+  sizeCache.set(cacheKey, {
+    sizes: regions,
+    expiresAt: Date.now() + CACHE_TTL_MS
+  });
+
+  return regions;
+};
+
 const getDeployableVmSizesForLocation = async (location) => {
   const normalizedLocation = String(location || '').trim().toLowerCase();
 
@@ -128,6 +177,7 @@ const filterVmInstancesForLocation = async (location, instances, servicesById) =
 
 module.exports = {
   getDeployableVmSizesForLocation,
+  getRegionsSupportingVmSize,
   resolveVmSizeForLocation,
   assertVmSizeAvailableInLocation,
   filterVmInstancesForLocation

@@ -2,7 +2,7 @@ require('dotenv').config();
 const db = require('../src/db/postgres');
 const { isControlPlaneRole } = require('../src/config/rbacRoleClassification');
 
-/** Expected auto_assign roles from supabase_full_catalog_seed.sql (31 services) */
+/** Expected auto_assign roles from supabase_full_catalog_seed.sql (34 services) */
 const SEED_AUTO_ASSIGN_ROLES = [
   ['Azure Virtual Machines (VMs)', ['Virtual Machine Contributor', 'Network Contributor']],
   ['Azure Kubernetes Service (AKS)', ['Azure Kubernetes Service Cluster Admin Role', 'Network Contributor', 'Virtual Machine Contributor']],
@@ -44,7 +44,10 @@ const SEED_AUTO_ASSIGN_ROLES = [
   ['Azure AI Language', ['Cognitive Services Contributor']],
   ['Azure AI Speech', ['Cognitive Services Contributor']],
   ['Azure Bot Service', ['Contributor']],
-  ['Azure AI Document Intelligence', ['Cognitive Services Contributor']]
+  ['Azure AI Document Intelligence', ['Cognitive Services Contributor']],
+  ['Azure API Management', ['API Management Service Contributor', 'Network Contributor']],
+  ['Log Analytics Workspace', ['Log Analytics Contributor']],
+  ['Azure Container Registry', ['Contributor', 'AcrPush']]
 ];
 
 function auditSeedCatalog() {
