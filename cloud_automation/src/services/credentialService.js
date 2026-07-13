@@ -14,6 +14,40 @@ const {
 const DELIVERY_STATUS_QUEUED = 'queued';
 const DELIVERY_STATUS_SENT = 'sent';
 
+let credentialDeliverySchemaPromise = null;
+
+const loadCredentialDeliverySchema = async () => {
+  if (credentialDeliverySchemaPromise) {
+    return credentialDeliverySchemaPromise;
+  }
+
+  credentialDeliverySchemaPromise = (async () => {
+    const result = await db.query(
+      `
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = 'credential_delivery'
+      `
+    );
+
+    const columns = new Set(result.rows.map((row) => row.column_name));
+
+    return {
+      hasCreatedAt: columns.has('created_at'),
+      hasPortalLink: columns.has('portal_link'),
+      hasAdminUsername: columns.has('admin_username'),
+      hasAdminTemporaryPassword: columns.has('admin_temporary_password'),
+      hasPortalExpiresAt: columns.has('portal_expires_at'),
+    };
+  })().catch((error) => {
+    credentialDeliverySchemaPromise = null;
+    throw error;
+  });
+
+  return credentialDeliverySchemaPromise;
+};
+
 const logCredentialEvent = (level, event, details = {}) => {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -92,6 +126,7 @@ const upsertDeliveryRecord = async (
   deliveryStatus,
   deliveryMeta = {}
 ) => {
+  const schema = await loadCredentialDeliverySchema();
   const createdAt = new Date();
   const sentAt = deliveryStatus === DELIVERY_STATUS_SENT ? createdAt : null;
   const portalLink = deliveryMeta.portalLink ?? null;
@@ -99,64 +134,106 @@ const upsertDeliveryRecord = async (
   const adminTemporaryPassword = deliveryMeta.adminTemporaryPassword ?? null;
   const portalExpiresAt = deliveryMeta.portalExpiresAt ?? null;
 
+  const updateAssignments = [
+    'recipient_email = $2',
+    'delivery_status = $3',
+    'sent_at = $4',
+  ];
+  const updateParams = [requestId, recipientEmail, deliveryStatus, sentAt];
+  let paramIndex = 5;
+
+  if (schema.hasCreatedAt) {
+    updateAssignments.push(`created_at = $${paramIndex}`);
+    updateParams.push(createdAt);
+    paramIndex += 1;
+  }
+
+  if (schema.hasPortalLink) {
+    updateAssignments.push(`portal_link = COALESCE($${paramIndex}, portal_link)`);
+    updateParams.push(portalLink);
+    paramIndex += 1;
+  }
+
+  if (schema.hasAdminUsername) {
+    updateAssignments.push(`admin_username = COALESCE($${paramIndex}, admin_username)`);
+    updateParams.push(adminUsername);
+    paramIndex += 1;
+  }
+
+  if (schema.hasAdminTemporaryPassword) {
+    updateAssignments.push(
+      `admin_temporary_password = COALESCE($${paramIndex}, admin_temporary_password)`
+    );
+    updateParams.push(adminTemporaryPassword);
+    paramIndex += 1;
+  }
+
+  if (schema.hasPortalExpiresAt) {
+    updateAssignments.push(`portal_expires_at = COALESCE($${paramIndex}, portal_expires_at)`);
+    updateParams.push(portalExpiresAt);
+    paramIndex += 1;
+  }
+
   const updateQuery = `
     UPDATE credential_delivery
-    SET
-      recipient_email = $2,
-      delivery_status = $3,
-      sent_at = $4,
-      created_at = $5,
-      portal_link = COALESCE($6, portal_link),
-      admin_username = COALESCE($7, admin_username),
-      admin_temporary_password = COALESCE($8, admin_temporary_password),
-      portal_expires_at = COALESCE($9, portal_expires_at)
+    SET ${updateAssignments.join(',\n      ')}
     WHERE request_id = $1
     RETURNING request_id, recipient_email, delivery_status, sent_at
   `;
 
-  const updateResult = await client.query(updateQuery, [
-    requestId,
-    recipientEmail,
-    deliveryStatus,
-    sentAt,
-    createdAt,
-    portalLink,
-    adminUsername,
-    adminTemporaryPassword,
-    portalExpiresAt
-  ]);
+  const updateResult = await client.query(updateQuery, updateParams);
 
   if (updateResult.rows.length > 0) {
     return updateResult.rows[0];
   }
 
+  const insertColumns = ['request_id', 'recipient_email', 'delivery_status', 'sent_at'];
+  const insertValues = ['$1', '$2', '$3', '$4'];
+  const insertParams = [requestId, recipientEmail, deliveryStatus, sentAt];
+  paramIndex = 5;
+
+  if (schema.hasCreatedAt) {
+    insertColumns.push('created_at');
+    insertValues.push(`$${paramIndex}`);
+    insertParams.push(createdAt);
+    paramIndex += 1;
+  }
+
+  if (schema.hasPortalLink) {
+    insertColumns.push('portal_link');
+    insertValues.push(`$${paramIndex}`);
+    insertParams.push(portalLink);
+    paramIndex += 1;
+  }
+
+  if (schema.hasAdminUsername) {
+    insertColumns.push('admin_username');
+    insertValues.push(`$${paramIndex}`);
+    insertParams.push(adminUsername);
+    paramIndex += 1;
+  }
+
+  if (schema.hasAdminTemporaryPassword) {
+    insertColumns.push('admin_temporary_password');
+    insertValues.push(`$${paramIndex}`);
+    insertParams.push(adminTemporaryPassword);
+    paramIndex += 1;
+  }
+
+  if (schema.hasPortalExpiresAt) {
+    insertColumns.push('portal_expires_at');
+    insertValues.push(`$${paramIndex}`);
+    insertParams.push(portalExpiresAt);
+    paramIndex += 1;
+  }
+
   const insertQuery = `
-    INSERT INTO credential_delivery (
-      request_id,
-      recipient_email,
-      delivery_status,
-      sent_at,
-      created_at,
-      portal_link,
-      admin_username,
-      admin_temporary_password,
-      portal_expires_at
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    INSERT INTO credential_delivery (${insertColumns.join(', ')})
+    VALUES (${insertValues.join(', ')})
     RETURNING request_id, recipient_email, delivery_status, sent_at
   `;
 
-  const insertResult = await client.query(insertQuery, [
-    requestId,
-    recipientEmail,
-    deliveryStatus,
-    sentAt,
-    createdAt,
-    portalLink,
-    adminUsername,
-    adminTemporaryPassword,
-    portalExpiresAt
-  ]);
+  const insertResult = await client.query(insertQuery, insertParams);
 
   return insertResult.rows[0];
 };
@@ -164,16 +241,21 @@ const upsertDeliveryRecord = async (
 const getCredentialDelivery = async (requestId) => {
   validateRequestId(requestId);
 
+  const schema = await loadCredentialDeliverySchema();
+  const optionalColumns = [
+    schema.hasPortalLink ? 'portal_link' : null,
+    schema.hasAdminUsername ? 'admin_username' : null,
+    schema.hasAdminTemporaryPassword ? 'admin_temporary_password' : null,
+    schema.hasPortalExpiresAt ? 'portal_expires_at' : null,
+  ].filter(Boolean);
+
   const query = `
     SELECT
       request_id,
       recipient_email,
       delivery_status,
-      sent_at,
-      portal_link,
-      admin_username,
-      admin_temporary_password,
-      portal_expires_at
+      sent_at
+      ${optionalColumns.length ? `, ${optionalColumns.join(', ')}` : ''}
     FROM credential_delivery
     WHERE request_id = $1
   `;
@@ -184,15 +266,17 @@ const getCredentialDelivery = async (requestId) => {
     return null;
   }
 
+  const row = result.rows[0];
+
   return {
-    requestId: result.rows[0].request_id,
-    recipientEmail: result.rows[0].recipient_email,
-    deliveryStatus: result.rows[0].delivery_status,
-    sentAt: result.rows[0].sent_at,
-    portalLink: result.rows[0].portal_link,
-    adminUsername: result.rows[0].admin_username,
-    adminTemporaryPassword: result.rows[0].admin_temporary_password,
-    portalExpiresAt: result.rows[0].portal_expires_at
+    requestId: row.request_id,
+    recipientEmail: row.recipient_email,
+    deliveryStatus: row.delivery_status,
+    sentAt: row.sent_at,
+    portalLink: row.portal_link ?? null,
+    adminUsername: row.admin_username ?? null,
+    adminTemporaryPassword: row.admin_temporary_password ?? null,
+    portalExpiresAt: row.portal_expires_at ?? null,
   };
 };
 
@@ -250,6 +334,27 @@ const buildCredentialSpreadsheetAttachment = async (requestId) => {
 
 const sendCredentials = async (requestId) => {
   validateRequestId(requestId);
+
+  const existingDelivery = await getCredentialDelivery(requestId);
+  if (
+    existingDelivery &&
+    ['queued', 'sent'].includes(String(existingDelivery.deliveryStatus || '').toLowerCase())
+  ) {
+    logCredentialEvent('info', 'credential_delivery_already_queued', {
+      requestId,
+      deliveryStatus: existingDelivery.deliveryStatus,
+    });
+
+    return {
+      success: true,
+      requestId,
+      portalLink: existingDelivery.portalLink,
+      adminUsername: existingDelivery.adminUsername,
+      usersSent: (await loadCredentials(requestId)).users.length,
+      deliveryStatus: existingDelivery.deliveryStatus,
+      spreadsheetFilename: buildCredentialSpreadsheetFilename(requestId),
+    };
+  }
 
   const portalPromise = accessPortalService.issueAccessPortalTokenForRequest(requestId);
   const credentialPromise = loadCredentials(requestId);

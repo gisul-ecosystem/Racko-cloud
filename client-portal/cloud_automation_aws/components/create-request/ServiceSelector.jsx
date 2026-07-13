@@ -1,50 +1,56 @@
 'use client';
 
+import { Layers } from 'lucide-react';
+import { optionCardClass, checkboxClass } from './formStyles';
+
 export function ServiceSelector({ servicesByCategory, selectedServiceIds, onToggleService }) {
   if (servicesByCategory.size === 0) {
     return (
-      <p className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-4 py-6 text-center text-sm text-gray-500">
-        No AWS services are available in the catalog yet. Restart the cloud-automation-aws service
-        or run <code className="text-xs">npm run seed</code> in the cloud_automation_aws folder.
-      </p>
+      <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/80 px-6 py-10 text-center">
+        <Layers className="mx-auto h-8 w-8 text-gray-300" />
+        <p className="mt-3 text-sm font-medium text-gray-600">No AWS services in the catalog yet</p>
+        <p className="mt-1 text-xs text-gray-400">
+          Restart cloud-automation-aws or run{' '}
+          <code className="rounded bg-gray-100 px-1 py-0.5 text-[11px]">npm run seed</code> in the
+          cloud_automation_aws folder.
+        </p>
+      </div>
     );
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       {Array.from(servicesByCategory.entries()).map(([categoryName, services]) => (
         <div key={categoryName}>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
+          <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-gray-400">
             {categoryName}
           </p>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <div className="grid gap-3 sm:grid-cols-2">
             {services.map((service) => {
               const checked = selectedServiceIds.includes(service._id);
               return (
                 <label
                   key={service._id}
-                  className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition ${
-                    checked
-                      ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
-                      : 'border-gray-200 hover:border-gray-300'
-                  }`}
+                  className={`flex cursor-pointer items-start gap-3 ${optionCardClass(checked)}`}
                 >
                   <input
                     type="checkbox"
                     checked={checked}
                     onChange={() => onToggleService(service._id)}
-                    className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
+                    className={`mt-0.5 ${checkboxClass}`}
                   />
                   <span className="min-w-0 flex-1">
-                    <span className="block text-sm font-medium text-gray-900">{service.name}</span>
-                    {service.description && (
-                      <span className="mt-0.5 block text-xs text-gray-400">{service.description}</span>
-                    )}
-                    {service.pricingType === 'instance' && (
-                      <span className="mt-0.5 block text-xs text-gray-400">
-                        Instance selection required
+                    <span className="block text-sm font-semibold text-gray-900">{service.name}</span>
+                    {service.description ? (
+                      <span className="mt-1 block text-xs leading-relaxed text-gray-500">
+                        {service.description}
                       </span>
-                    )}
+                    ) : null}
+                    {service.pricingType === 'instance' ? (
+                      <span className="mt-2 inline-flex rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#B91C1C]">
+                        Instance required
+                      </span>
+                    ) : null}
                   </span>
                 </label>
               );

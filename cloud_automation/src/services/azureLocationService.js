@@ -130,7 +130,7 @@ const getSubscriptionLocations = async () => {
       {
         params: { 'api-version': '2022-12-01' },
         headers: { Authorization: `Bearer ${accessToken}` },
-        timeout: 15000
+        timeout: 0
       }
     );
 
@@ -294,7 +294,7 @@ const getProviderMetadata = async (providerNamespace) => {
         {
           params: { 'api-version': '2021-04-01' },
           headers: { Authorization: `Bearer ${accessToken}` },
-          timeout: 20000
+          timeout: 0
         }
       );
 
@@ -590,10 +590,7 @@ const filterLocationsForSelectedInstances = async (
   selectedInstancesByServiceId
 ) => {
   const { serviceSupportsInstances } = require('./instanceAvailabilityService');
-  const { isVirtualMachineService } = require('../utils/vmSize');
-  const { getRegionsSupportingVmSize } = require('./vmInstanceAvailabilityService');
-  const { getServiceRegionalHourlyPrices } = require('./estimatePricingService');
-  const { findInstancePolicyRule } = require('../utils/instancePolicyRules');
+  const { getRegionsSupportingInstance } = require('./instanceRegionAvailabilityService');
 
   const servicesById = new Map(
     services.map((service) => [
@@ -634,48 +631,40 @@ const filterLocationsForSelectedInstances = async (
 
   const regionSets = [];
 
-  for (const instance of instancesToValidate) {
-    const service = servicesById.get(Number(instance.serviceId ?? instance.service_id));
-    const optionName = String(instance.option_name || '').trim();
+  const instanceRegionSets = await Promise.all(
+    instancesToValidate.map(async (instance) => {
+      const service = servicesById.get(Number(instance.serviceId ?? instance.service_id));
+      const optionName = String(instance.option_name || '').trim();
 
-    if (!service || !optionName) {
-      continue;
-    }
-
-    if (isVirtualMachineService(service.name)) {
-      const priceByRegion = await getServiceRegionalHourlyPrices(service, optionName);
-      if (priceByRegion.size > 0) {
-        regionSets.push(new Set([...priceByRegion.keys()].map((region) => region.toLowerCase())));
-        continue;
+      if (!service || !optionName) {
+        return null;
       }
 
-      const vmRegions = await getRegionsSupportingVmSize(optionName);
-      if (vmRegions.size > 0) {
-        regionSets.push(vmRegions);
-      }
-      continue;
-    }
+      return getRegionsSupportingInstance(service, optionName);
+    })
+  );
 
-    const rule = findInstancePolicyRule(service.name);
-    if (
-      rule &&
-      rule.policyType !== 'allowed_vm_sku' &&
-      rule.policyType !== 'allowed_aks_node_vm_sku' &&
-      rule.policyType !== 'instance_metadata'
-    ) {
-      const priceByRegion = await getServiceRegionalHourlyPrices(service, optionName);
-      if (priceByRegion.size > 0) {
-        regionSets.push(new Set([...priceByRegion.keys()].map((region) => region.toLowerCase())));
-      }
+  for (const regionSet of instanceRegionSets) {
+    if (regionSet && regionSet.size > 0) {
+      regionSets.push(regionSet);
     }
   }
 
   const validRegions = intersectRegionNameSets(regionSets);
-  if (!validRegions || validRegions.size === 0) {
-    return locations;
+
+  if (regionSets.length > 0) {
+    if (!validRegions || validRegions.size === 0) {
+      logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_no_matching_instance_regions', {
+        serviceCount: services.length,
+        instanceCount: instancesToValidate.length
+      });
+      return [];
+    }
+
+    return locations.filter((location) => validRegions.has(location.arm_region_name));
   }
 
-  return locations.filter((location) => validRegions.has(location.arm_region_name));
+  return locations;
 };
 
 const getCatalogHourlyPricesForServices = async (serviceIds) => {

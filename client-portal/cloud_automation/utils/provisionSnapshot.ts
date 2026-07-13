@@ -82,10 +82,11 @@ export function getCompletedStepCount(steps: ProvisionStepState[]): number {
 
 export function getNextProvisionStepKey(
   snapshot: ProvisionSnapshot,
-  overrides: StepCompletionOverrides = {}
+  overrides: StepCompletionOverrides = {},
+  stepErrors: Partial<Record<ProvisionStepKey, string>> = {}
 ): ProvisionStepKey | null {
-  const steps = deriveStepStates(snapshot, overrides);
-  const next = steps.find((step) => step.status === 'active' || step.status === 'failed');
+  const steps = deriveStepStates(snapshot, overrides, stepErrors);
+  const next = steps.find((step) => step.status === 'active');
   return next?.key ?? null;
 }
 
