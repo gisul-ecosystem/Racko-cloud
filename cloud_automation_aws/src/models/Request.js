@@ -101,6 +101,11 @@ const labRoleSchema = new mongoose.Schema(
     lastSessionAt: { type: Date },
     lastCleanupAt: { type: Date },
     cleanupLogs: [cleanupLogSchema],
+    cleanupDisabled: { type: Boolean, default: false },
+    cleanupIntervalOverride: { type: Number, default: null },
+    windowEnforcementPausedUntil: Date,
+    budgetTopUpUsd: { type: Number, default: 0 },
+    deletedAt: Date,
     linkUsed: { type: Boolean, default: false },
     linkUsedAt: { type: Date },
     policies: [String],
@@ -127,6 +132,11 @@ const identityUserSchema = new mongoose.Schema(
     lastSessionAt: { type: Date },
     lastCleanupAt: { type: Date },
     cleanupLogs: [cleanupLogSchema],
+    cleanupDisabled: { type: Boolean, default: false },
+    cleanupIntervalOverride: { type: Number, default: null },
+    windowEnforcementPausedUntil: Date,
+    budgetTopUpUsd: { type: Number, default: 0 },
+    deletedAt: Date,
     needsActivation: { type: Boolean, default: false },
     policies: [String],
   },
@@ -191,6 +201,7 @@ const requestSchema = new mongoose.Schema(
 
     enableResourceCleanup: { type: Boolean, default: false },
     resourceCleanupIntervalHours: { type: Number, min: 1, max: 24 },
+    resourceCleanupAction: { type: String, enum: ['delete', 'pause'], default: 'delete' },
     resourceCleanupNextRunAt: Date,
     resourceCleanupLastRanAt: Date,
 
@@ -210,6 +221,7 @@ const requestSchema = new mongoose.Schema(
     expiredAt: Date,
 
     selectedServices: [selectedServiceSchema],
+    customServiceIds: [{ type: mongoose.Schema.Types.ObjectId, ref: 'CustomService' }],
     permissions: [permissionSchema],
     selectedPermissions: {
       type: Map,

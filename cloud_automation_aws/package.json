@@ -9,7 +9,9 @@
     "dev": "nodemon app.js",
     "seed": "node src/db/seed.js",
     "migrate": "node src/db/migrate-provisioning.js",
-    "test": "node --test test/**/*.test.js"
+    "migrate:org-admin": "node src/db/migrate-org-admin-parity.js",
+    "test": "node --test test/**/*.test.js",
+    "usage:inspect": "node scripts/inspect-usage-session.js"
   },
   "dependencies": {
     "@aws-sdk/client-budgets": "^3.840.0",

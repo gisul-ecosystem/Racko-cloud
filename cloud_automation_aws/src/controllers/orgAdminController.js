@@ -1,4 +1,9 @@
 import * as orgAdminService from '../services/orgAdminService.js';
+import * as customConfigService from '../services/customConfigService.js';
+
+function actor(req) {
+  return String(req.headers['x-user-id'] || req.headers['x-user-email'] || 'org_admin');
+}
  
 export async function listRequests(req, res, next) {
   try {
@@ -120,7 +125,8 @@ export async function triggerUserCleanup(req, res, next) {
   try {
     const results = await orgAdminService.triggerUserCleanup(
       req.params.requestId,
-      Number(req.params.userIndex)
+      Number(req.params.userIndex),
+      { action: req.body?.action, actor: actor(req) }
     );
     res.json({ success: true, ...results });
   } catch (err) {
@@ -130,7 +136,10 @@ export async function triggerUserCleanup(req, res, next) {
 
 export async function triggerAllCleanup(req, res, next) {
   try {
-    const results = await orgAdminService.triggerAllCleanup(req.params.requestId);
+    const results = await orgAdminService.triggerAllCleanup(req.params.requestId, {
+      action: req.body?.action,
+      actor: actor(req),
+    });
     res.json({ success: true, ...results });
   } catch (err) {
     next(err);
@@ -139,11 +148,10 @@ export async function triggerAllCleanup(req, res, next) {
 
 export async function updateCleanupSettings(req, res, next) {
   try {
-    const { cleanupEnabled, cleanupIntervalHours } = req.body;
     await orgAdminService.updateCleanupSettings(
       req.params.requestId,
       Number(req.params.userIndex),
-      { cleanupEnabled, cleanupIntervalHours }
+      req.body || {}
     );
     res.json({ success: true });
   } catch (err) {
@@ -201,4 +209,231 @@ export async function forceLogout(req, res, next) {
   } catch (err) {
     next(err);
   }
+}
+
+export async function deleteRequest(req, res, next) {
+  try {
+    const result = await orgAdminService.deleteRequest(req.params.requestId, { actor: actor(req) });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function reprovisionPermissions(req, res, next) {
+  try {
+    const result = await orgAdminService.reprovisionPermissions(req.params.requestId, { actor: actor(req) });
+    res.json({ success: result.success, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function repairPermissions(req, res, next) {
+  try {
+    const result = await orgAdminService.repairPermissions(req.params.requestId, { actor: actor(req) });
+    res.json({ success: result.success, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function unblockUser(req, res, next) {
+  try {
+    const result = await orgAdminService.unblockUser(
+      req.params.requestId,
+      Number(req.params.userIndex),
+      { ...(req.body || {}), actor: actor(req) }
+    );
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getUserSessions(req, res, next) {
+  try {
+    const sessions = await orgAdminService.getUserSessions(
+      req.params.requestId,
+      Number(req.params.userIndex),
+      { limit: req.query.limit }
+    );
+    res.json({ success: true, sessions });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getCleanupLogs(req, res, next) {
+  try {
+    const logs = await orgAdminService.getCleanupLogs(req.params.requestId, { limit: req.query.limit });
+    res.json({ success: true, logs });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getHistory(req, res, next) {
+  try {
+    const history = await orgAdminService.getLabHistory(req.params.requestId, {
+      userIndex: req.query.userIndex ?? req.query.userId,
+      limit: req.query.limit,
+    });
+    res.json({ success: true, history });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function getSharedCost(req, res, next) {
+  try {
+    const summary = await orgAdminService.getSharedCost(req.params.requestId);
+    res.json({ success: true, summary });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function updateRequestCleanupSettings(req, res, next) {
+  try {
+    const request = await orgAdminService.updateRequestCleanupSettings(req.params.requestId, req.body || {});
+    res.json({ success: true, request });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listAccessRequests(req, res, next) {
+  try {
+    const requests = await orgAdminService.listAccessRequests(req.query);
+    res.json({ success: true, requests, count: requests.length });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function createAccessRequest(req, res, next) {
+  try {
+    const request = await orgAdminService.createAccessRequest(req.body || {});
+    res.status(201).json({ success: true, request });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function reviewAccessRequest(req, res, next) {
+  try {
+    const request = await orgAdminService.reviewAccessRequest(req.params.id, {
+      ...(req.body || {}),
+      reviewedBy: actor(req),
+    });
+    res.json({ success: true, request });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listCustomPolicies(req, res, next) {
+  try {
+    res.json({ success: true, policies: await customConfigService.listCustomPolicies() });
+  } catch (err) { next(err); }
+}
+
+export async function createCustomPolicy(req, res, next) {
+  try {
+    res.status(201).json({ success: true, policy: await customConfigService.createCustomPolicy(req.body || {}, actor(req)) });
+  } catch (err) { next(err); }
+}
+
+export async function updateCustomPolicy(req, res, next) {
+  try {
+    res.json({ success: true, policy: await customConfigService.updateCustomPolicy(req.params.id, req.body || {}) });
+  } catch (err) { next(err); }
+}
+
+export async function deleteCustomPolicy(req, res, next) {
+  try {
+    await customConfigService.deleteCustomPolicy(req.params.id);
+    res.json({ success: true });
+  } catch (err) { next(err); }
+}
+
+export async function listCustomAssignments(req, res, next) {
+  try {
+    res.json({ success: true, assignments: await customConfigService.listAssignments(req.params.requestId) });
+  } catch (err) { next(err); }
+}
+
+export async function assignCustomPolicy(req, res, next) {
+  try {
+    const assignment = await customConfigService.assignPolicy({
+      requestId: req.params.requestId,
+      userIndex: Number(req.params.userIndex),
+      ...(req.body || {}),
+      actor: actor(req),
+    });
+    res.status(201).json({ success: true, assignment });
+  } catch (err) { next(err); }
+}
+
+export async function assignCustomPolicyToAll(req, res, next) {
+  try {
+    const result = await customConfigService.assignPolicyToAll({
+      requestId: req.params.requestId,
+      ...(req.body || {}),
+      actor: actor(req),
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (err) { next(err); }
+}
+
+export async function revokeCustomAssignment(req, res, next) {
+  try {
+    await customConfigService.revokeAssignment(req.params.assignmentId);
+    res.json({ success: true });
+  } catch (err) { next(err); }
+}
+
+export async function listCustomServices(req, res, next) {
+  try { res.json({ success: true, services: await customConfigService.listCustomServices() }); }
+  catch (err) { next(err); }
+}
+
+export async function createCustomService(req, res, next) {
+  try {
+    res.status(201).json({ success: true, service: await customConfigService.createCustomService(req.body || {}, actor(req)) });
+  } catch (err) { next(err); }
+}
+
+export async function updateCustomService(req, res, next) {
+  try {
+    res.json({ success: true, service: await customConfigService.updateCustomService(req.params.id, req.body || {}) });
+  } catch (err) { next(err); }
+}
+
+export async function deleteCustomService(req, res, next) {
+  try {
+    await customConfigService.deleteCustomService(req.params.id);
+    res.json({ success: true });
+  } catch (err) { next(err); }
+}
+
+export async function assignCustomService(req, res, next) {
+  try {
+    await customConfigService.assignCustomService(req.params.requestId, req.params.serviceId);
+    res.json({ success: true });
+  } catch (err) { next(err); }
+}
+
+export async function removeCustomService(req, res, next) {
+  try {
+    await customConfigService.removeCustomService(req.params.requestId, req.params.serviceId);
+    res.json({ success: true });
+  } catch (err) { next(err); }
+}
+
+export async function getRequestCustomServices(req, res, next) {
+  try {
+    res.json({ success: true, services: await customConfigService.getRequestCustomServices(req.params.requestId) });
+  } catch (err) { next(err); }
 }

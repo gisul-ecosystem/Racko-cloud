@@ -1,5 +1,6 @@
 import {
   DescribeInstancesCommand,
+  StopInstancesCommand,
   TerminateInstancesCommand,
   DeleteNatGatewayCommand,
   DescribeNatGatewaysCommand,
@@ -14,6 +15,7 @@ import {
 import {
   DescribeDBInstancesCommand,
   DeleteDBInstanceCommand,
+  StopDBInstanceCommand,
 } from '@aws-sdk/client-rds';
 import {
   ListBucketsCommand,
@@ -87,21 +89,7 @@ import {
 } from '@aws-sdk/client-sqs';
 
 import {
-  ec2Client,
-  rdsClient,
-  s3Client,
-  eksClient,
-  lambdaClient,
-  elastiCacheClient,
-  redshiftClient,
-  openSearchClient,
-  sageMakerClient,
-  kinesisClient,
-  snsClient,
-  dynamoDBClient,
-  lightsailClient,
-  cloudFrontClient,
-  sqsClient,
+  createRegionalAwsClientsForAccount,
   MASTER_ACCOUNT_ID,
 } from '../config/aws.js';
 import Request from '../models/Request.js';
@@ -129,7 +117,7 @@ function logResult(service, action, count, errors = []) {
   }
 }
 
-async function cleanupEC2(requestId, userIndex) {
+async function cleanupEC2(requestId, userIndex, ec2Client) {
   const result = { terminated: 0, errors: [] };
   try {
     const response = await ec2Client.send(
@@ -161,7 +149,33 @@ async function cleanupEC2(requestId, userIndex) {
   return result;
 }
 
-async function cleanupRDS(requestId, userIndex) {
+async function pauseEC2(requestId, userIndex, ec2Client) {
+  const result = { stopped: 0, errors: [] };
+  try {
+    const response = await ec2Client.send(
+      new DescribeInstancesCommand({
+        Filters: [
+          { Name: 'tag:racko:request', Values: [String(requestId)] },
+          { Name: 'tag:racko:user-index', Values: [String(userIndex + 1)] },
+          { Name: 'instance-state-name', Values: ['running', 'pending'] },
+        ],
+      })
+    );
+    const instanceIds = response.Reservations?.flatMap((reservation) => reservation.Instances || [])
+      .map((instance) => instance.InstanceId)
+      .filter(Boolean) || [];
+    if (instanceIds.length > 0) {
+      await ec2Client.send(new StopInstancesCommand({ InstanceIds: instanceIds }));
+      result.stopped = instanceIds.length;
+    }
+  } catch (err) {
+    result.errors.push(err.message);
+  }
+  logResult('EC2', 'stopped', result.stopped, result.errors);
+  return result;
+}
+
+async function cleanupRDS(requestId, userIndex, rdsClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const response = await rdsClient.send(new DescribeDBInstancesCommand({}));
@@ -190,7 +204,33 @@ async function cleanupRDS(requestId, userIndex) {
   return result;
 }
 
-async function cleanupS3(requestId, userIndex) {
+async function pauseRDS(requestId, userIndex, rdsClient) {
+  const result = { stopped: 0, errors: [] };
+  try {
+    const response = await rdsClient.send(new DescribeDBInstancesCommand({}));
+    const labDbs = (response.DBInstances || []).filter(
+      (db) =>
+        db.DBInstanceStatus === 'available' &&
+        hasMatchingTags(db.TagList || [], requestId, userIndex)
+    );
+    for (const db of labDbs) {
+      try {
+        await rdsClient.send(
+          new StopDBInstanceCommand({ DBInstanceIdentifier: db.DBInstanceIdentifier })
+        );
+        result.stopped++;
+      } catch (err) {
+        result.errors.push(`${db.DBInstanceIdentifier}: ${err.message}`);
+      }
+    }
+  } catch (err) {
+    result.errors.push(err.message);
+  }
+  logResult('RDS', 'stopped', result.stopped, result.errors);
+  return result;
+}
+
+async function cleanupS3(requestId, userIndex, s3Client) {
   const result = { bucketsEmptied: 0, bucketsDeleted: 0, errors: [] };
   try {
     const { Buckets = [] } = await s3Client.send(new ListBucketsCommand({}));
@@ -242,7 +282,7 @@ async function cleanupS3(requestId, userIndex) {
   return result;
 }
 
-async function cleanupEKS(requestId, userIndex) {
+async function cleanupEKS(requestId, userIndex, eksClient, requestRegion, accountId) {
   const result = { deleted: 0, errors: [] };
   try {
     const { clusters = [] } = await eksClient.send(new ListEKSClustersCommand({}));
@@ -251,7 +291,7 @@ async function cleanupEKS(requestId, userIndex) {
       try {
         const { tags = {} } = await eksClient.send(
           new EKSListTagsCommand({
-            resourceArn: `arn:aws:eks:${process.env.AWS_REGION}:${MASTER_ACCOUNT_ID}:cluster/${clusterName}`,
+            resourceArn: `arn:aws:eks:${requestRegion}:${accountId}:cluster/${clusterName}`,
           })
         );
 
@@ -271,7 +311,7 @@ async function cleanupEKS(requestId, userIndex) {
   return result;
 }
 
-async function cleanupLambda(requestId, userIndex) {
+async function cleanupLambda(requestId, userIndex, lambdaClient) {
   const result = { deleted: 0, errors: [] };
   try {
     let marker;
@@ -306,7 +346,7 @@ async function cleanupLambda(requestId, userIndex) {
   return result;
 }
 
-async function cleanupElastiCache(requestId, userIndex) {
+async function cleanupElastiCache(requestId, userIndex, elastiCacheClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const response = await elastiCacheClient.send(
@@ -335,7 +375,7 @@ async function cleanupElastiCache(requestId, userIndex) {
   return result;
 }
 
-async function cleanupRedshift(requestId, userIndex) {
+async function cleanupRedshift(requestId, userIndex, redshiftClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const response = await redshiftClient.send(new RedshiftDescribeClustersCommand({}));
@@ -363,7 +403,7 @@ async function cleanupRedshift(requestId, userIndex) {
   return result;
 }
 
-async function cleanupOpenSearch(requestId, userIndex) {
+async function cleanupOpenSearch(requestId, userIndex, openSearchClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const { DomainNames = [] } = await openSearchClient.send(new ListDomainNamesCommand({}));
@@ -395,7 +435,7 @@ async function cleanupOpenSearch(requestId, userIndex) {
   return result;
 }
 
-async function cleanupSageMaker(requestId, userIndex) {
+async function cleanupSageMaker(requestId, userIndex, sageMakerClient) {
   const result = { notebooksDeleted: 0, trainingJobsStopped: 0, errors: [] };
   const namePattern = String(requestId).slice(-6);
 
@@ -446,7 +486,7 @@ async function cleanupSageMaker(requestId, userIndex) {
   return result;
 }
 
-async function cleanupKinesis(requestId, userIndex) {
+async function cleanupKinesis(requestId, userIndex, kinesisClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const { StreamNames = [] } = await kinesisClient.send(new ListStreamsCommand({}));
@@ -471,7 +511,7 @@ async function cleanupKinesis(requestId, userIndex) {
   return result;
 }
 
-async function cleanupSNS(requestId, userIndex) {
+async function cleanupSNS(requestId, userIndex, snsClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const { Topics = [] } = await snsClient.send(new ListTopicsCommand({}));
@@ -496,7 +536,7 @@ async function cleanupSNS(requestId, userIndex) {
   return result;
 }
 
-async function cleanupSQS(requestId, userIndex) {
+async function cleanupSQS(requestId, userIndex, sqsClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const { QueueUrls = [] } = await sqsClient.send(new ListQueuesCommand({}));
@@ -522,7 +562,7 @@ async function cleanupSQS(requestId, userIndex) {
   return result;
 }
 
-async function cleanupDynamoDB(requestId, userIndex) {
+async function cleanupDynamoDB(requestId, userIndex, dynamoDBClient) {
   const result = { deleted: 0, errors: [] };
   try {
     const { TableNames = [] } = await dynamoDBClient.send(new ListTablesCommand({}));
@@ -550,7 +590,7 @@ async function cleanupDynamoDB(requestId, userIndex) {
   return result;
 }
 
-async function cleanupLightsail(requestId, userIndex) {
+async function cleanupLightsail(requestId, userIndex, lightsailClient) {
   const result = { instancesDeleted: 0, dbsDeleted: 0, errors: [] };
   try {
     const { instances = [] } = await lightsailClient.send(new GetInstancesCommand({}));
@@ -599,7 +639,7 @@ async function cleanupLightsail(requestId, userIndex) {
   return result;
 }
 
-async function cleanupCloudFront(requestId, userIndex) {
+async function cleanupCloudFront(requestId, userIndex, cloudFrontClient) {
   const result = { deleted: 0, errors: [] };
   const namePattern = String(requestId).slice(-6);
 
@@ -647,7 +687,7 @@ async function cleanupCloudFront(requestId, userIndex) {
   return result;
 }
 
-async function cleanupVPC(requestId, userIndex) {
+async function cleanupVPC(requestId, userIndex, ec2Client) {
   const result = { deleted: 0, errors: [] };
   try {
     const { Vpcs = [] } = await ec2Client.send(
@@ -713,19 +753,11 @@ async function cleanupVPC(requestId, userIndex) {
   return result;
 }
 
-async function cleanupEMR(requestId, userIndex) {
+async function cleanupEMR(requestId, userIndex, emrClient) {
   const result = { terminated: 0, errors: [] };
   try {
-    const { EMRClient, ListClustersCommand, DescribeClusterCommand, TerminateJobFlowsCommand } =
+    const { ListClustersCommand, DescribeClusterCommand, TerminateJobFlowsCommand } =
       await import('@aws-sdk/client-emr');
-
-    const emrClient = new EMRClient({
-      region: process.env.AWS_REGION,
-      credentials: {
-        accessKeyId: process.env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
-      },
-    });
 
     const { Clusters = [] } = await emrClient.send(
       new ListClustersCommand({
@@ -781,6 +813,11 @@ const SERVICE_CLEANERS = {
   EMR: cleanupEMR,
 };
 
+const SERVICE_PAUSERS = {
+  EC2: pauseEC2,
+  RDS: pauseRDS,
+};
+
 export async function cleanupUserResources(requestId, userIndex) {
   const request = await Request.findById(requestId);
   if (!request) throw new Error('Request not found');
@@ -790,6 +827,11 @@ export async function cleanupUserResources(requestId, userIndex) {
   if (!user) throw new Error(`User not found for userIndex ${userIndex}`);
 
   const allowedServices = (request.selectedServices || []).map((s) => s.serviceName);
+  const requestRegion = String(request.region || process.env.AWS_REGION || 'ap-south-1');
+  const cleanupAccountId =
+    user.accountId || user.awsAccountId || request.awsAccountId ||
+    request.provisionedResources?.targetAccountId || MASTER_ACCOUNT_ID;
+  const cleanupClients = await createRegionalAwsClientsForAccount(requestRegion, cleanupAccountId);
 
   console.log(`[cleanup] Starting cleanup for request ${requestId} user ${userIndex + 1}`);
   console.log(`[cleanup] Services to clean: ${allowedServices.join(', ')}`);
@@ -803,7 +845,13 @@ export async function cleanupUserResources(requestId, userIndex) {
       continue;
     }
     try {
-      results[service] = await cleaner(requestId, userIndex);
+      results[service] = await cleaner(
+        requestId,
+        userIndex,
+        cleanupClients[service],
+        requestRegion,
+        cleanupAccountId
+      );
     } catch (err) {
       console.error(`[cleanup] ${service} cleanup failed:`, err.message);
       results[service] = { error: err.message };
@@ -827,7 +875,39 @@ export async function cleanupUserResources(requestId, userIndex) {
   return results;
 }
 
-export async function cleanupAllUsers(requestId) {
+export async function pauseUserResources(requestId, userIndex) {
+  const request = await Request.findById(requestId);
+  if (!request) throw new Error('Request not found');
+  const field = request.accessType === 'identity_center' ? 'identityUsers' : 'labRoles';
+  const user = request[field]?.find((entry) => entry.userIndex === userIndex);
+  if (!user) throw new Error(`User not found for userIndex ${userIndex}`);
+
+  const requestRegion = String(request.region || process.env.AWS_REGION || 'ap-south-1');
+  const cleanupAccountId =
+    user.accountId || user.awsAccountId || request.awsAccountId ||
+    request.provisionedResources?.targetAccountId || MASTER_ACCOUNT_ID;
+  const clients = await createRegionalAwsClientsForAccount(requestRegion, cleanupAccountId);
+  const results = {};
+  for (const service of (request.selectedServices || []).map((entry) => entry.serviceName)) {
+    const pauser = SERVICE_PAUSERS[service];
+    if (!pauser) {
+      results[service] = { skipped: true, reason: 'pause_not_supported' };
+      continue;
+    }
+    results[service] = await pauser(requestId, userIndex, clients[service], requestRegion);
+  }
+
+  await Request.findOneAndUpdate(
+    { _id: requestId, [`${field}.userIndex`]: userIndex },
+    {
+      $set: { [`${field}.$.lastCleanupAt`]: new Date() },
+      $push: { [`${field}.$.cleanupLogs`]: { cleanedAt: new Date(), results } },
+    }
+  );
+  return results;
+}
+
+export async function cleanupAllUsers(requestId, { respectUserSettings = false } = {}) {
   const request = await Request.findById(requestId);
   if (!request) throw new Error('Request not found');
 
@@ -838,8 +918,40 @@ export async function cleanupAllUsers(requestId) {
 
   const allResults = [];
   for (const role of users) {
+    if (respectUserSettings) {
+      if (role.cleanupDisabled) {
+        allResults.push({ userIndex: role.userIndex, skipped: true, reason: 'cleanup_disabled' });
+        continue;
+      }
+      const intervalHours = Number(role.cleanupIntervalOverride || 0);
+      const lastCleanupAt = role.lastCleanupAt ? new Date(role.lastCleanupAt).getTime() : 0;
+      if (intervalHours > 0 && lastCleanupAt + intervalHours * 3600000 > Date.now()) {
+        allResults.push({ userIndex: role.userIndex, skipped: true, reason: 'interval_not_due' });
+        continue;
+      }
+    }
     const result = await cleanupUserResources(requestId, role.userIndex);
     allResults.push({ userIndex: role.userIndex, ...result });
+  }
+  return allResults;
+}
+
+export async function pauseAllUsers(requestId, { respectUserSettings = false } = {}) {
+  const request = await Request.findById(requestId);
+  if (!request) throw new Error('Request not found');
+  const users = request.accessType === 'identity_center'
+    ? request.identityUsers || []
+    : request.labRoles || [];
+  const allResults = [];
+  for (const user of users) {
+    if (respectUserSettings && user.cleanupDisabled) {
+      allResults.push({ userIndex: user.userIndex, skipped: true, reason: 'cleanup_disabled' });
+      continue;
+    }
+    allResults.push({
+      userIndex: user.userIndex,
+      ...(await pauseUserResources(requestId, user.userIndex)),
+    });
   }
   return allResults;
 }

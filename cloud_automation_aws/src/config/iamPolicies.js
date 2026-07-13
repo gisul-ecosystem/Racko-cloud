@@ -359,8 +359,131 @@ export function getManagedPoliciesForRequest(request) {
   return [...new Set(arns)];
 }
 
+/** S3 read/delete actions allowed outside the lab region only for racko-tagged resources. */
+export const S3_TAG_AWARE_REGION_ACTIONS = [
+  's3:DeleteBucket',
+  's3:DeleteObject',
+  's3:DeleteObjectVersion',
+  's3:ListBucket',
+  's3:ListBucketVersions',
+  's3:ListObject*',
+  's3:GetObject',
+  's3:GetObjectVersion',
+  's3:PutBucketVersioning',
+];
+
+/** Global or console-navigation actions exempt from the lab region deny. */
+export const REGION_EXEMPT_NOT_ACTIONS = [
+  'iam:*',
+  'organizations:*',
+  'account:*',
+  'route53:*',
+  'cloudfront:*',
+  'support:*',
+  'ce:*',
+  'billing:*',
+  'budgets:*',
+  'health:*',
+  'pricing:*',
+  'tag:*',
+  'resource-groups:*',
+  'sts:*',
+  'aws-portal:*',
+  's3:ListAllMyBuckets',
+  's3:ListBuckets',
+  's3:GetBucketLocation',
+  's3:HeadBucket',
+  's3:GetBucketTagging',
+  ...S3_TAG_AWARE_REGION_ACTIONS,
+  'cloudwatch:Get*',
+  'cloudwatch:List*',
+  'cloudwatch:Describe*',
+  'logs:Describe*',
+  'logs:Get*',
+  'logs:Filter*',
+  'servicequotas:Get*',
+  'servicequotas:List*',
+];
+
+function buildS3RegionDenyStatement(labRegion) {
+  if (labRegion === 'us-east-1') {
+    return {
+      Sid: 'DenyS3CreateOutsideLabRegion',
+      Effect: 'Deny',
+      Action: 's3:CreateBucket',
+      Resource: 'arn:aws:s3:::*',
+      Condition: {
+        Null: {
+          's3:LocationConstraint': 'false',
+        },
+      },
+    };
+  }
+
+  return {
+    Sid: 'DenyS3CreateOutsideLabRegion',
+    Effect: 'Deny',
+    Action: 's3:CreateBucket',
+    Resource: 'arn:aws:s3:::*',
+    Condition: {
+      StringNotLike: {
+        's3:LocationConstraint': labRegion,
+      },
+    },
+  };
+}
+
+function buildRegionalDenyStatement(labRegion) {
+  return {
+    Sid: 'DenyOutsideLabRegion',
+    Effect: 'Deny',
+    NotAction: REGION_EXEMPT_NOT_ACTIONS,
+    Resource: '*',
+    Condition: {
+      StringNotEquals: {
+        'aws:RequestedRegion': labRegion,
+      },
+    },
+  };
+}
+
+function buildS3TaggedCleanupRegionDenyStatement(requestId, labRegion) {
+  return {
+    Sid: 'DenyS3TaggedCleanupOutsideLabRegion',
+    Effect: 'Deny',
+    Action: S3_TAG_AWARE_REGION_ACTIONS,
+    Resource: ['arn:aws:s3:::*', 'arn:aws:s3:::*/*'],
+    Condition: {
+      StringNotEquals: {
+        'aws:RequestedRegion': labRegion,
+      },
+      StringNotEqualsIfExists: {
+        'aws:ResourceTag/racko:request': String(requestId),
+      },
+    },
+  };
+}
+
+export function buildRegionRestrictionStatements(labRegion, requestId = '') {
+  const region = String(labRegion || '').trim();
+  if (!region) return [];
+
+  const statements = [buildRegionalDenyStatement(region), buildS3RegionDenyStatement(region)];
+
+  if (requestId) {
+    statements.push(buildS3TaggedCleanupRegionDenyStatement(requestId, region));
+  }
+
+  return statements;
+}
+
 export function buildPermissionPolicy(request, username) {
   const statements = [];
+  const labRegion = String(request.region || '').trim();
+
+  for (const regionStatement of buildRegionRestrictionStatements(labRegion, request._id).reverse()) {
+    statements.unshift(regionStatement);
+  }
 
   statements.unshift({
     Sid: 'EnforceRackoTagOnCreate',

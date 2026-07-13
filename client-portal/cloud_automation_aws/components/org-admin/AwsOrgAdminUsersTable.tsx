@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Activity, DollarSign, ExternalLink, Loader2, LogOut, Trash2 } from 'lucide-react';
 import {
   formatCurrency,
@@ -25,11 +25,13 @@ interface AwsOrgAdminUsersTableProps {
   saving: boolean;
   onSuspend: (userIndex: number) => Promise<boolean>;
   onReinstate: (userIndex: number) => Promise<boolean>;
+  onUnblock: (userIndex: number) => Promise<boolean>;
   onDelete: (userIndex: number) => Promise<boolean>;
   onConsoleUrl: (userIndex: number) => Promise<boolean>;
   onUpdatePermissions: (userIndex: number, policies: string[]) => Promise<boolean>;
   onFetchCost: (userIndex: number) => Promise<AwsOrgAdminUserCost | null>;
   onForceLogout: (userIndex: number) => Promise<boolean>;
+  onCleanup: (userIndex: number) => Promise<boolean>;
   fetchUserMonitoring: (userIndex: number) => Promise<AwsOrgAdminMonitoringResponse | null>;
 }
 
@@ -109,11 +111,13 @@ export function AwsOrgAdminUsersTable({
   saving,
   onSuspend,
   onReinstate,
+  onUnblock,
   onDelete,
   onConsoleUrl,
   onUpdatePermissions,
   onFetchCost,
   onForceLogout,
+  onCleanup,
   fetchUserMonitoring,
 }: AwsOrgAdminUsersTableProps) {
   const [editingUserIndex, setEditingUserIndex] = useState<number | null>(null);
@@ -125,8 +129,33 @@ export function AwsOrgAdminUsersTable({
   const [usageUser, setUsageUser] = useState<AwsOrgAdminUser | null>(null);
   const [loggingOutUserIndex, setLoggingOutUserIndex] = useState<number | null>(null);
   const [dailyUsage, setDailyUsage] = useState<Record<number, AwsOrgAdminDailyUsageEntry>>({});
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [page, setPage] = useState(1);
+  const [expandedUserIndex, setExpandedUserIndex] = useState<number | null>(null);
+  const pageSize = 10;
 
   const showUsageTracking = Boolean(detail.enableDailyUsage || detail.usageWindows?.length);
+  const filteredUsers = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return detail.users.filter((user) => {
+      const status = user.suspended ? 'suspended' : user.status.toLowerCase();
+      return (
+        (statusFilter === 'all' || status.includes(statusFilter)) &&
+        (!query ||
+          user.username.toLowerCase().includes(query) ||
+          (user.email || '').toLowerCase().includes(query) ||
+          (user.roleName || '').toLowerCase().includes(query) ||
+          (user.accountId || '').includes(query))
+      );
+    });
+  }, [detail.users, search, statusFilter]);
+  const pageCount = Math.max(1, Math.ceil(filteredUsers.length / pageSize));
+  const pageUsers = filteredUsers.slice((page - 1) * pageSize, page * pageSize);
+
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter]);
 
   useEffect(() => {
     if (!detail.requestId || !showUsageTracking) return undefined;
@@ -213,6 +242,27 @@ export function AwsOrgAdminUsersTable({
           : ' Spend data refreshes every minute when this panel is open.'}
       </p>
 
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder="Search users, roles, accounts…"
+          className="min-w-[240px] flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm"
+        />
+        <select
+          value={statusFilter}
+          onChange={(event) => setStatusFilter(event.target.value)}
+          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+        >
+          <option value="all">All statuses</option>
+          <option value="active">Active</option>
+          <option value="completed">Completed</option>
+          <option value="suspended">Suspended</option>
+          <option value="expired">Expired</option>
+        </select>
+        <span className="text-xs text-gray-500">{filteredUsers.length} user(s)</span>
+      </div>
+
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1200px] text-left text-sm">
           <thead>
@@ -235,7 +285,7 @@ export function AwsOrgAdminUsersTable({
             </tr>
           </thead>
           <tbody>
-            {detail.users.map((user) => {
+            {pageUsers.map((user) => {
               const busy = saving && busyUserIndex === user.userIndex;
               const loggingOut = loggingOutUserIndex === user.userIndex;
               const budget = detail.perUserBudgetUsd || 0;
@@ -245,6 +295,26 @@ export function AwsOrgAdminUsersTable({
                 <tr key={user.userIndex} className="border-b border-gray-50">
                   <td className="px-4 py-3">
                     <p className="font-medium text-gray-900">{user.username}</p>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setExpandedUserIndex((current) =>
+                          current === user.userIndex ? null : user.userIndex
+                        )
+                      }
+                      className="mt-1 text-[11px] font-medium text-blue-700 hover:underline"
+                    >
+                      {expandedUserIndex === user.userIndex ? 'Hide details' : 'Show details'}
+                    </button>
+                    {expandedUserIndex === user.userIndex && (
+                      <div className="mt-2 space-y-0.5 rounded-lg bg-gray-50 p-2 text-[11px] text-gray-600">
+                        <p>Email: {user.email || '—'}</p>
+                        <p>Account: {user.accountId || detail.awsAccountId || '—'}</p>
+                        <p>Role ARN: {user.roleArn || '—'}</p>
+                        <p>Policies: {user.policies?.join(', ') || 'None'}</p>
+                        <p>Last cleanup: {user.lastCleanupAt ? new Date(user.lastCleanupAt).toLocaleString() : 'Never'}</p>
+                      </div>
+                    )}
                     {user.budgetExceeded && (
                       <span className="mt-1 inline-block rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-600">
                         Budget exceeded
@@ -454,6 +524,27 @@ export function AwsOrgAdminUsersTable({
                           )}
                         </>
                       )}
+                      {user.dailyLimitReached && (
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => void onUnblock(user.userIndex)}
+                          className="rounded-lg border border-green-200 bg-green-50 px-2 py-1 text-xs font-medium text-green-800 disabled:opacity-50"
+                        >
+                          Unblock
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={busy}
+                        onClick={() =>
+                          window.confirm(`Clean AWS resources for ${user.username}?`) &&
+                          void onCleanup(user.userIndex)
+                        }
+                        className="rounded-lg border border-red-200 bg-white px-2 py-1 text-xs font-medium text-red-700 disabled:opacity-50"
+                      >
+                        Clean now
+                      </button>
                       {user.suspended ? (
                         <button
                           type="button"
@@ -503,6 +594,14 @@ export function AwsOrgAdminUsersTable({
           </tbody>
         </table>
       </div>
+
+      {pageCount > 1 && (
+        <div className="mt-4 flex items-center justify-end gap-2 text-sm">
+          <button type="button" disabled={page === 1} onClick={() => setPage((value) => value - 1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Previous</button>
+          <span className="text-gray-500">Page {page} of {pageCount}</span>
+          <button type="button" disabled={page === pageCount} onClick={() => setPage((value) => value + 1)} className="rounded-lg border px-3 py-1.5 disabled:opacity-40">Next</button>
+        </div>
+      )}
 
       {costData && costUserIndex != null && (
         <AwsOrgAdminCostModal
