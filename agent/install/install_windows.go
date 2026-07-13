@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 
 	"github.com/racko-ai/agent/config"
 )
@@ -44,8 +45,7 @@ func RunInstallerGUI(cfg *config.Config) {
 	}
 
 	// The installer is expected to be in the same directory as the agent binary.
-	dir := exe[:len(exe)-len("racko-agent.exe")]
-	setupExe := dir + "racko-agent-setup.exe"
+	setupExe := filepath.Join(filepath.Dir(exe), "racko-agent-setup.exe")
 
 	if _, err := os.Stat(setupExe); os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "[install] setup installer not found at %s\n", setupExe)
