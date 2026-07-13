@@ -12,6 +12,19 @@ import (
 	"github.com/racko-ai/agent/config"
 )
 
+// Job represents a pending install job received from the platform.
+type Job struct {
+	ID          string   `json:"_id"`
+	MachineID   string   `json:"machineId"`
+	SoftwareIDs []string `json:"softwareIds"`
+	Status      string   `json:"status"`
+	Logs        string   `json:"logs"`
+	Attempts    int      `json:"attempts"`
+}
+
+// JobHandler is called when a job is received from the platform.
+type JobHandler func(job Job)
+
 // WSPoller connects to the platform via WebSocket and receives jobs in real-time.
 // It implements infinite reconnection with exponential backoff.
 type WSPoller struct {
