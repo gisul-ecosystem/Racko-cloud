@@ -2,20 +2,12 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { TenantOnboardPage } from '@/components/tenant/TenantOnboardPage';
-import { useTenantAuth } from '@/context/TenantAuthContext';
+import { tenantVps } from '@/lib/tenantAdminRoutes';
 
-export default function TenantOnboardRoutePage() {
+export default function RedirectPage() {
   const router = useRouter();
-  const { tenantUser } = useTenantAuth();
-
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/vms');
-    }
-  }, [router, tenantUser?.role]);
-
-  if (tenantUser?.role !== 'tenant_admin') return null;
-
-  return <TenantOnboardPage />;
+    router.replace(tenantVps.assignVms);
+  }, [router]);
+  return null;
 }

@@ -35,7 +35,8 @@ router.patch('/notifications/read-all', async (req, res, next) => {
 
 router.patch('/notifications/:id/read', async (req, res, next) => {
   try {
-    await markAsRead(req.params.id);
+    const userId = req.headers['x-user-id'] || 'admin';
+    await markAsRead(req.params.id, userId);
     res.json({ success: true });
   } catch (err) {
     next(err);

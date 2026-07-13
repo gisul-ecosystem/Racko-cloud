@@ -57,7 +57,13 @@ export function useProvisioningRequests(isAuthenticated: boolean): UseProvisioni
   }, []);
 
   useEffect(() => {
-    if (isAuthenticated) void load();
+    if (!isAuthenticated) {
+      setLoading(false);
+      setRequests([]);
+      setError(null);
+      return;
+    }
+    void load();
   }, [load, isAuthenticated]);
 
   const stats = useMemo(() => computeStats(requests), [requests]);

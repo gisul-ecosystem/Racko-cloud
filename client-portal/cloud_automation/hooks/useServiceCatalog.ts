@@ -37,7 +37,13 @@ export function useServiceCatalog(enabled = true): UseServiceCatalogResult {
   }, []);
 
   useEffect(() => {
-    if (enabled) void load();
+    if (!enabled) {
+      setLoading(false);
+      setError(null);
+      setCatalog(null);
+      return;
+    }
+    void load();
   }, [enabled, load]);
 
   return { catalog, loading, error, refetch: load };

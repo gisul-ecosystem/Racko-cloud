@@ -110,6 +110,7 @@ function createMountedCoreApiProxy(mountPath: string) {
 }
 
 const tenantWalletProxy = createMountedCoreApiProxy('/api/v1/tenant-wallet');
+const tenantServicesProxy = createMountedCoreApiProxy('/api/v1/tenant-services');
 const tenantOrdersProxy = createMountedCoreApiProxy('/api/v1/tenant-orders');
 const tenantPlansProxy = createMountedCoreApiProxy('/api/v1/tenant-plans');
 const tenantNotificationsProxy = createMountedCoreApiProxy('/api/v1/tenant-notifications');
@@ -301,6 +302,7 @@ router.post('/webhooks/razorpay/test-credit', coreApiProxy);
 
 // ─── TENANT AUTHENTICATED ROUTES (tenant JWT; not platform verify) ───────────
 router.use('/api/v1/tenant-wallet', requireTenantBearer, tenantWalletProxy);
+router.use('/api/v1/tenant-services', requireTenantBearer, tenantServicesProxy);
 router.use('/api/v1/tenant-orders', requireTenantBearer, tenantOrdersProxy);
 router.use('/api/v1/tenant-plans', requireTenantBearer, tenantPlansProxy);
 router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificationsProxy);

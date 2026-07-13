@@ -11,7 +11,7 @@ import {
   createAdminAccessRequest,
   createRequestWithPricing,
 } from '../../api/client';
-import { AZURE_ROUTES } from '../../constants';
+import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
 import { useAvailableLocations } from '../../hooks/useAvailableLocations';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
 import { useServiceCatalog } from '../../hooks/useServiceCatalog';
@@ -200,6 +200,7 @@ function validateForm(input: {
 
 export function RequestWorkspace() {
   const router = useRouter();
+  const AZURE_ROUTES = useAzureRoutes();
   const { catalog, loading: catalogLoading, error: catalogError, refetch } = useServiceCatalog();
 
   const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([]);
@@ -493,7 +494,7 @@ export function RequestWorkspace() {
                   <span
                     className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
                       step.done
-                        ? 'bg-[#B91C1C] text-white'
+                        ? 'bg-[var(--cloud-accent,#B91C1C)] text-white'
                         : 'border border-gray-200 bg-gray-50 text-gray-500'
                     }`}
                   >

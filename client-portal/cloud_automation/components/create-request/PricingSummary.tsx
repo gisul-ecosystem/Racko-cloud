@@ -52,7 +52,7 @@ export function PricingSummary({
       <div className="mt-4">
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Loader2 className="h-4 w-4 animate-spin text-[#B91C1C]" />
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--cloud-accent,#B91C1C)]" />
             Calculating…
           </div>
         ) : error ? (

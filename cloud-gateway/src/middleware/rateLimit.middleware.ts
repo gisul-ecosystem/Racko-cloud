@@ -81,10 +81,16 @@ export const userRateLimiter = rateLimit({
         const token = authHeader.slice(7);
         const payload = token.split('.')[1];
         if (payload) {
-          const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as { userId?: string };
-          if (decoded.userId) {
-            logger.debug('Rate limit key: user', { userId: decoded.userId, path: req.path });
-            return `user:${decoded.userId}`;
+          const decoded = JSON.parse(Buffer.from(payload, 'base64url').toString('utf-8')) as {
+            userId?: string;
+            sub?: string;
+            type?: string;
+          };
+          const rateLimitUserId =
+            decoded.userId || (decoded.type === 'tenant' && decoded.sub ? decoded.sub : undefined);
+          if (rateLimitUserId) {
+            logger.debug('Rate limit key: user', { userId: rateLimitUserId, path: req.path });
+            return `user:${rateLimitUserId}`;
           }
           logger.warn('Rate limit: JWT decoded but no userId found', { path: req.path, keys: Object.keys(decoded) });
         }

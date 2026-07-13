@@ -19,7 +19,7 @@ import {
   reinstateRequestUser,
   syncRequestSpend,
 } from '../../../../../cloud_automation_aws/api/client';
-import { AWS_ROUTES } from '../../../../../cloud_automation_aws/constants';
+import { useAwsRoutes } from '../../../../../lib/cloudPortalRoutes';
 import { useProvisionStatus } from '../../../../../cloud_automation_aws/hooks/useProvisionStatus';
 
 function StepIcon({ state }) {
@@ -56,6 +56,7 @@ function StepIcon({ state }) {
 
 export default function AwsRequestStatusPage() {
   const params = useParams();
+  const AWS_ROUTES = useAwsRoutes();
   const requestId = String(params.id ?? '');
   const [request, setRequest] = useState(null);
   const [requestLoading, setRequestLoading] = useState(true);

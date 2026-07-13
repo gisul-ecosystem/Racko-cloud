@@ -1,10 +1,13 @@
 const express = require('express');
 const provisionController = require('../controllers/provisionController');
+const { attachRackoUser } = require('../middleware/rackoUserMiddleware');
+const { requireOwnedRequest } = require('../middleware/requireOwnedRequest');
 
 const router = express.Router();
 
-// Admin routes - don't enforce user-specific daily usage limits
-router.post('/request/:id', provisionController.provisionRequestResourceGroup);
-router.get('/request/:id', provisionController.getProvisionedRequest);
+router.use(attachRackoUser);
+
+router.post('/request/:id', requireOwnedRequest, provisionController.provisionRequestResourceGroup);
+router.get('/request/:id', requireOwnedRequest, provisionController.getProvisionedRequest);
 
 module.exports = router;
