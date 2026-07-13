@@ -15,6 +15,7 @@ import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { ApiError } from '@/lib/apiClient';
 import { getTenantDevDomain } from '@/lib/gatewayUrl';
+import { getTenantDefaultDashboardPath } from '@/lib/tenantPortalRoutes';
 
 const loginSchema = z.object({
   email: z.string().email('Invalid email address'),
@@ -23,7 +24,7 @@ const loginSchema = z.object({
 
 export default function TenantLoginPage() {
   const router = useRouter();
-  const { login, isAuthenticated, isLoading: authLoading } = useTenantAuth();
+  const { login, isAuthenticated, isLoading: authLoading, tenantUser } = useTenantAuth();
   const { accentColor, tenantNotFound, loading: brandingLoading } = useTenantBranding();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -34,9 +35,9 @@ export default function TenantLoginPage() {
 
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
-      router.replace('/tenant/dashboard/wallet');
+      router.replace(getTenantDefaultDashboardPath(tenantUser?.role));
     }
-  }, [authLoading, isAuthenticated, router]);
+  }, [authLoading, isAuthenticated, router, tenantUser?.role]);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();

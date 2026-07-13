@@ -2,17 +2,12 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { useTenantAuth } from '@/context/TenantAuthContext';
-import { getTenantDefaultDashboardPath } from '@/lib/tenantPortalRoutes';
+import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 
-export default function TenantDashboardIndexPage() {
+export default function TenantDashboardIndexRedirect() {
   const router = useRouter();
-  const { isLoading, tenantUser } = useTenantAuth();
-
   useEffect(() => {
-    if (isLoading) return;
-    router.replace(getTenantDefaultDashboardPath(tenantUser?.role));
-  }, [isLoading, router, tenantUser?.role]);
-
+    router.replace(TENANT_CONSOLE);
+  }, [router]);
   return null;
 }

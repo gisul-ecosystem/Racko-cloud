@@ -25,6 +25,7 @@ import softwareCatalogRoutes from './modules/software-catalog/software-catalog.r
 import internalTenantRoutes from './modules/tenant/internalTenant.routes';
 import tenantRoutes from './modules/tenant/tenant.routes';
 import tenantBrandingRoutes from './modules/tenant/tenantBranding.routes';
+import tenantPortalServicesRoutes from './modules/tenant/tenantPortalServices.routes';
 import tenantAuthRoutes from './modules/tenantAuth/tenantAuth.routes';
 import superAdminRoutes from './modules/superAdmin/superAdmin.routes';
 import walletRoutes from './modules/wallet/wallet.routes';
@@ -146,6 +147,7 @@ app.get('/health', (_req, res) => {
 app.use('/internal/tenants', internalTenantRoutes);
 app.use('/api/v1/tenants', tenantRoutes);
 app.use('/api/v1/tenant-branding', tenantBrandingRoutes);
+app.use('/api/v1/tenant-services', tenantPortalServicesRoutes);
 app.use('/api/v1/tenant-auth', tenantAuthRoutes);
 app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);

@@ -39,6 +39,21 @@ export interface TenantWallet {
   currency: string;
 }
 
+export type TenantServiceKey =
+  | 'vm-management'
+  | 'elastic-servers'
+  | 'azure'
+  | 'aws'
+  | 'gcp'
+  | 'docs'
+  | 'machine-manager';
+export type TenantServiceStatus = 'active' | 'suspended';
+
+export interface TenantAssignedService {
+  serviceKey: TenantServiceKey;
+  status: TenantServiceStatus;
+}
+
 export interface TenantWalletTransaction {
   id: string;
   type: string;

@@ -14,10 +14,12 @@ import {
   RefreshCw,
   Timer,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { useOptionalAuth } from '../../context/AuthContext';
 import { ErrorState } from '../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../components/dashboard/LoadingSkeleton';
-import { AZURE_ROUTES, AZURE_SERVICE } from '../constants';
+import { AZURE_SERVICE } from '../constants';
+import { useAzureRoutes } from '../../lib/cloudPortalRoutes';
+import { useIsTenantPortal } from '../../lib/portalMode';
 import { useProvisioningRequests } from '../hooks/useProvisioningRequests';
 import { RequestStatusBadge } from './RequestStatusBadge';
 import {
@@ -45,7 +47,7 @@ function StatCard({
   tone: 'red' | 'blue' | 'green' | 'gray';
 }) {
   const toneClass = {
-    red: 'bg-red-50 text-[#B91C1C]',
+    red: 'bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]',
     blue: 'bg-blue-50 text-blue-600',
     green: 'bg-green-50 text-green-600',
     gray: 'bg-gray-100 text-gray-500',
@@ -68,7 +70,10 @@ function StatCard({
 
 export function AzureDashboardHome() {
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const auth = useOptionalAuth();
+  const isTenantPortal = useIsTenantPortal();
+  const isAuthenticated = isTenantPortal || (auth?.isAuthenticated ?? false);
+  const AZURE_ROUTES = useAzureRoutes();
   const { requests, stats, loading, error, refetch } = useProvisioningRequests(isAuthenticated);
 
   const recentRequests = requests.slice(0, 10);
@@ -81,7 +86,7 @@ export function AzureDashboardHome() {
       <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex flex-col gap-5 p-6 lg:flex-row lg:items-center lg:justify-between lg:p-8">
           <div className="flex items-start gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]">
               <Cloud className="h-7 w-7" />
             </div>
             <div>
@@ -109,7 +114,7 @@ export function AzureDashboardHome() {
             </button>
             <Link
               href={AZURE_ROUTES.createRequest}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717]"
+              className="inline-flex items-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95"
             >
               <Plus className="h-4 w-4" />
               Create Request
@@ -184,7 +189,7 @@ export function AzureDashboardHome() {
                 {!loading && requests.length > 0 ? (
                   <Link
                     href={AZURE_ROUTES.createRequest}
-                    className="text-sm font-medium text-[#B91C1C] transition hover:text-[#a01717]"
+                    className="text-sm font-medium text-[var(--cloud-accent,#B91C1C)] transition hover:opacity-80"
                   >
                     New request
                   </Link>
@@ -204,7 +209,7 @@ export function AzureDashboardHome() {
                   </p>
                   <Link
                     href={AZURE_ROUTES.createRequest}
-                    className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#a01717]"
+                    className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95"
                   >
                     <Plus className="h-4 w-4" />
                     Create Request
@@ -299,7 +304,7 @@ export function AzureDashboardHome() {
                 <div className="mt-3 space-y-2">
                   <Link
                     href={AZURE_ROUTES.createRequest}
-                    className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-[#B91C1C]/30 hover:bg-red-50 hover:text-[#B91C1C]"
+                    className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-[var(--cloud-accent,#B91C1C)] hover:bg-[var(--cloud-accent-soft,#fef2f2)] hover:text-[var(--cloud-accent,#B91C1C)]"
                   >
                     <span className="inline-flex items-center gap-2">
                       <Plus className="h-4 w-4" />
@@ -321,24 +326,24 @@ export function AzureDashboardHome() {
 
               <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
                 <div className="mb-4 flex items-center gap-2">
-                  <Clock className="h-4 w-4 text-[#B91C1C]" />
+                  <Clock className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
                   <h2 className="text-sm font-semibold text-gray-900">Operational notes</h2>
                 </div>
                 <ul className="space-y-3 text-sm text-gray-600">
                   <li className="flex gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                     Requests are provisioned into Azure resource groups via the cloud automation API.
                   </li>
                   <li className="flex gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                     Pending requests are actively provisioning; completed requests have credentials ready.
                   </li>
                   <li className="flex gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                     Expired requests are cleaned up automatically by the expiry scheduler.
                   </li>
                   <li className="flex gap-2">
-                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                    <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                     Use Org Admin for resource group management and elevated access workflows.
                   </li>
                 </ul>

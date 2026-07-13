@@ -257,3 +257,8 @@ export function useAuth(): AuthContextValue {
   if (!ctx) throw new Error('useAuth must be used within AuthProvider');
   return ctx;
 }
+
+/** Safe for routes outside AuthProvider (e.g. /tenant). Returns null when absent. */
+export function useOptionalAuth(): AuthContextValue | null {
+  return useContext(AuthContext);
+}

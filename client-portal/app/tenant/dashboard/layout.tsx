@@ -1,15 +1,18 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { usePathname, useRouter } from 'next/navigation';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { TenantServicesProvider } from '@/context/TenantServicesContext';
 import { TenantShell } from '@/components/tenant/TenantShell';
 
 export default function TenantDashboardLayout({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, isLoading } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const router = useRouter();
+  const pathname = usePathname() ?? '';
+  const isAdminMirror = pathname.startsWith('/tenant/dashboard/admin');
 
   useEffect(() => {
     if (!isLoading && !isAuthenticated) {
@@ -28,5 +31,9 @@ export default function TenantDashboardLayout({ children }: { children: React.Re
     );
   }
 
-  return <TenantShell>{children}</TenantShell>;
+  return (
+    <TenantServicesProvider>
+      {isAdminMirror ? children : <TenantShell>{children}</TenantShell>}
+    </TenantServicesProvider>
+  );
 }

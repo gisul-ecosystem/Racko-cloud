@@ -23,7 +23,7 @@ export function CreateRequestSubmitBar({
   return (
     <section
       className={`rounded-xl border border-gray-200 bg-white shadow-sm ${
-        compact ? 'p-5' : 'border-[#B91C1C]/15 p-6 ring-1 ring-[#B91C1C]/10'
+        compact ? 'p-5' : 'border-[var(--cloud-accent,#B91C1C)]/15 p-6 ring-1 ring-[var(--cloud-accent,#B91C1C)]/10'
       }`}
     >
       {!compact && (
@@ -60,7 +60,7 @@ export function CreateRequestSubmitBar({
             type="button"
             onClick={onSubmit}
             disabled={submitting}
-            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#a01717] disabled:opacity-50"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:brightness-95 disabled:opacity-50"
           >
             {submitting ? (
               <>

@@ -1,5 +1,4 @@
-import { apiRequest } from '../../lib/apiClient';
-import { AWS_API_BASE } from '../constants';
+import { cloudAutomationRequest } from '../../lib/cloudAutomationRequest';
 
 type ApiResponse<T> = {
   success: boolean;
@@ -8,7 +7,11 @@ type ApiResponse<T> = {
 
 function awsPath(path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
-  return `${AWS_API_BASE}${normalized}`;
+  return normalized;
+}
+
+async function awsRequest<T>(path: string, options?: RequestInit & { skipAuth?: boolean }): Promise<T> {
+  return cloudAutomationRequest<T>('aws', path, options);
 }
 
 export interface AwsServiceCategory {
@@ -64,7 +67,7 @@ export interface AwsPricingEstimateResponse {
 }
 
 export async function getCategories(): Promise<AwsServiceCategory[]> {
-  const response = await apiRequest<ApiResponse<{ categories: AwsServiceCategory[] }>>(
+  const response = await awsRequest<ApiResponse<{ categories: AwsServiceCategory[] }>>(
     awsPath('/categories')
   );
   return response.categories ?? [];
@@ -79,7 +82,7 @@ export async function getServices(params?: {
   if (params?.region) search.set('region', params.region);
 
   const query = search.toString();
-  const response = await apiRequest<ApiResponse<{ services: AwsCatalogService[] }>>(
+  const response = await awsRequest<ApiResponse<{ services: AwsCatalogService[] }>>(
     `${awsPath('/services')}${query ? `?${query}` : ''}`
   );
   return response.services ?? [];
@@ -90,14 +93,14 @@ export async function getPricing(
   region: string
 ): Promise<AwsPricingOption[]> {
   const params = new URLSearchParams({ serviceId, region });
-  const response = await apiRequest<ApiResponse<{ pricing: AwsPricingOption[] }>>(
+  const response = await awsRequest<ApiResponse<{ pricing: AwsPricingOption[] }>>(
     `${awsPath('/pricing')}?${params.toString()}`
   );
   return response.pricing ?? [];
 }
 
 export async function getRegions(): Promise<Array<{ code: string; name: string }>> {
-  const response = await apiRequest<ApiResponse<{ regions: Array<{ code: string; name: string }> }>>(
+  const response = await awsRequest<ApiResponse<{ regions: Array<{ code: string; name: string }> }>>(
     awsPath('/regions')
   );
   return response.regions ?? [];
@@ -123,7 +126,7 @@ export async function getAvailableRegions(
     params.set('instanceSelections', instanceSelections);
   }
 
-  const response = await apiRequest<ApiResponse<{ regions: AwsAvailableRegion[] }>>(
+  const response = await awsRequest<ApiResponse<{ regions: AwsAvailableRegion[] }>>(
     `${awsPath('/available-regions')}?${params.toString()}`
   );
 
@@ -133,7 +136,7 @@ export async function getAvailableRegions(
 export async function calculatePricingEstimate(
   payload: AwsPricingEstimatePayload
 ): Promise<AwsPricingEstimateResponse> {
-  return apiRequest<AwsPricingEstimateResponse>(awsPath('/pricing/estimate'), {
+  return awsRequest<AwsPricingEstimateResponse>(awsPath('/pricing/estimate'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -251,7 +254,7 @@ export interface AwsRequestRecord {
 export async function createRequest(
   payload: AwsCreateRequestPayload
 ): Promise<AwsCreateRequestResponse> {
-  return apiRequest<AwsCreateRequestResponse>(awsPath('/requests'), {
+  return awsRequest<AwsCreateRequestResponse>(awsPath('/requests'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -280,7 +283,7 @@ export interface AwsRequest {
 
 /** List all provisioning requests for the authenticated user (mirrors Azure listRequests). */
 export async function listRequests(): Promise<AwsRequest[]> {
-  const response = await apiRequest<{ success: boolean; data: AwsRequest[]; count: number }>(
+  const response = await awsRequest<{ success: boolean; data: AwsRequest[]; count: number }>(
     awsPath('/requests')
   );
   return response.data ?? [];
@@ -308,7 +311,7 @@ export async function getRequests(): Promise<AwsRequestRecord[]> {
 }
 
 export async function getRequestById(id: string): Promise<AwsRequestRecord> {
-  const response = await apiRequest<ApiResponse<{ request: AwsRequestRecord }>>(
+  const response = await awsRequest<ApiResponse<{ request: AwsRequestRecord }>>(
     awsPath(`/requests/${id}`)
   );
   if (!response.request) {
@@ -324,7 +327,7 @@ export async function syncServicesCatalog(): Promise<{
   errors: number;
   duration: number;
 }> {
-  return apiRequest(awsPath('/admin/sync-services'), { method: 'POST' });
+  return awsRequest(awsPath('/admin/sync-services'), { method: 'POST' });
 }
 
 export interface AwsProvisionStatusResponse {
@@ -356,15 +359,15 @@ export interface AwsProvisionStatusResponse {
 }
 
 export async function startProvision(requestId: string): Promise<{ success: boolean; status: string }> {
-  return apiRequest(awsPath(`/provision/request/${requestId}/start`), { method: 'POST' });
+  return awsRequest(awsPath(`/provision/request/${requestId}/start`), { method: 'POST' });
 }
 
 export async function getProvisionStatus(requestId: string): Promise<AwsProvisionStatusResponse> {
-  return apiRequest<AwsProvisionStatusResponse>(awsPath(`/provision/request/${requestId}/status`));
+  return awsRequest<AwsProvisionStatusResponse>(awsPath(`/provision/request/${requestId}/status`));
 }
 
 export async function retryProvision(requestId: string): Promise<{ success: boolean; status: string }> {
-  return apiRequest(awsPath(`/provision/request/${requestId}/retry`), { method: 'POST' });
+  return awsRequest(awsPath(`/provision/request/${requestId}/retry`), { method: 'POST' });
 }
 
 export interface AwsUserSpendRecord {
@@ -378,7 +381,7 @@ export interface AwsUserSpendRecord {
 }
 
 export async function getRequestSpend(requestId: string): Promise<AwsUserSpendRecord[]> {
-  const response = await apiRequest<ApiResponse<{ spend: AwsUserSpendRecord[] }>>(
+  const response = await awsRequest<ApiResponse<{ spend: AwsUserSpendRecord[] }>>(
     awsPath(`/requests/${requestId}/spend`)
   );
   return response.spend ?? [];
@@ -387,7 +390,7 @@ export async function getRequestSpend(requestId: string): Promise<AwsUserSpendRe
 export async function syncRequestSpend(
   requestId: string
 ): Promise<Array<{ username: string; spendUsd: number; services: AwsUserSpendRecord['services'] }>> {
-  const response = await apiRequest<
+  const response = await awsRequest<
     ApiResponse<{
       results: Array<{ username: string; spendUsd: number; services: AwsUserSpendRecord['services'] }>;
     }>
@@ -399,7 +402,7 @@ export async function reinstateRequestUser(
   requestId: string,
   userIndex: number
 ): Promise<{ success: boolean; message: string }> {
-  return apiRequest(awsPath(`/requests/${requestId}/users/${userIndex}/reinstate`), {
+  return awsRequest(awsPath(`/requests/${requestId}/users/${userIndex}/reinstate`), {
     method: 'POST',
   });
 }

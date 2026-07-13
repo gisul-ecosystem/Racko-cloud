@@ -3,12 +3,13 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { ChevronLeft, FileText, LayoutGrid } from 'lucide-react';
-import { AWS_ROUTES } from '../constants';
 import { useAwsShell } from '../hooks/useAwsShell';
+import { useAwsRoutes } from '../../lib/cloudPortalRoutes';
 
 export function AwsSidebar() {
   const { sidebarOpen, setSidebarOpen } = useAwsShell();
   const pathname = usePathname();
+  const AWS_ROUTES = useAwsRoutes();
 
   const navItems = [
     { href: AWS_ROUTES.dashboard, label: 'Overview', icon: LayoutGrid, exact: true },
