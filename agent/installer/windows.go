@@ -27,12 +27,12 @@ const directInstallTimeout = 4 * time.Hour
 // ─── Win32 API declarations ───────────────────────────────────────────────────
 
 var (
-	modWtsapi32                  = windows.NewLazySystemDLL("wtsapi32.dll")
-	modUserenv                   = windows.NewLazySystemDLL("userenv.dll")
+	modWtsapi32                      = windows.NewLazySystemDLL("wtsapi32.dll")
+	modUserenv                       = windows.NewLazySystemDLL("userenv.dll")
 	procWTSGetActiveConsoleSessionId = windows.NewLazySystemDLL("kernel32.dll").NewProc("WTSGetActiveConsoleSessionId")
-	procWTSQueryUserToken        = modWtsapi32.NewProc("WTSQueryUserToken")
-	procCreateEnvironmentBlock   = modUserenv.NewProc("CreateEnvironmentBlock")
-	procDestroyEnvironmentBlock  = modUserenv.NewProc("DestroyEnvironmentBlock")
+	procWTSQueryUserToken            = modWtsapi32.NewProc("WTSQueryUserToken")
+	procCreateEnvironmentBlock       = modUserenv.NewProc("CreateEnvironmentBlock")
+	procDestroyEnvironmentBlock      = modUserenv.NewProc("DestroyEnvironmentBlock")
 )
 
 func wtsGetActiveConsoleSessionId() uint32 {
@@ -64,14 +64,59 @@ func destroyEnvironmentBlock(env uintptr) {
 
 // ─── Active-user process launcher ─────────────────────────────────────────────
 
+// getElevatedToken returns the elevated (admin) token linked to t.
+// Under UAC, WTSQueryUserToken returns a filtered token even for Administrators.
+// TokenLinkedToken retrieves the full elevated counterpart.
+// If the token is already elevated or has no linked token, t itself is returned.
+func getElevatedToken(t windows.Token) (windows.Token, error) {
+	// TOKEN_ELEVATION_TYPE: 1=Default, 2=Full(elevated), 3=Limited(filtered)
+	var elevType uint32
+	var retLen uint32
+	err := windows.GetTokenInformation(t, windows.TokenElevationType,
+		(*byte)(unsafe.Pointer(&elevType)), uint32(unsafe.Sizeof(elevType)), &retLen)
+	if err != nil {
+		return 0, fmt.Errorf("GetTokenInformation(TokenElevationType): %w", err)
+	}
+
+	const tokenElevationTypeLimited = 3
+	if elevType != tokenElevationTypeLimited {
+		// Already elevated or default — duplicate it directly
+		var dup windows.Token
+		err = windows.DuplicateTokenEx(t, windows.TOKEN_ALL_ACCESS, nil,
+			windows.SecurityDelegation, windows.TokenPrimary, &dup)
+		if err != nil {
+			return 0, fmt.Errorf("DuplicateTokenEx(already elevated): %w", err)
+		}
+		return dup, nil
+	}
+
+	// Token is limited — get the linked elevated token
+	var linkedToken windows.Token
+	err = windows.GetTokenInformation(t, windows.TokenLinkedToken,
+		(*byte)(unsafe.Pointer(&linkedToken)), uint32(unsafe.Sizeof(linkedToken)), &retLen)
+	if err != nil {
+		return 0, fmt.Errorf("GetTokenInformation(TokenLinkedToken): %w", err)
+	}
+
+	// LinkedToken is an impersonation token; duplicate to primary
+	var primary windows.Token
+	err = windows.DuplicateTokenEx(linkedToken, windows.TOKEN_ALL_ACCESS, nil,
+		windows.SecurityDelegation, windows.TokenPrimary, &primary)
+	linkedToken.Close()
+	if err != nil {
+		return 0, fmt.Errorf("DuplicateTokenEx(linked): %w", err)
+	}
+	return primary, nil
+}
+
 // runAsActiveUser launches name+args in the active console user's session using
 // CreateProcessAsUser. This is the industry-standard RMM pattern for running
 // installers from a LocalSystem service — the process gets the user's desktop,
 // profile, PATH, and Start Menu, exactly as if the user ran it themselves.
 //
-// stdout+stderr are captured via a temp file and returned as a string.
-// Falls back to runCmd (Session 0 / LocalSystem) if no active user session exists
-// (e.g. headless server with no one logged in).
+// stdout+stderr are captured via anonymous pipes passed through STARTF_USESTDHANDLES —
+// the proper Win32 method that works across session boundaries without file permission issues.
+// Falls back to runCmd (Session 0 / LocalSystem) if no active user session exists.
 func runAsActiveUser(name string, args ...string) (string, error) {
 	sessionID := wtsGetActiveConsoleSessionId()
 	const noSession = ^uint32(0) // 0xFFFFFFFF means no active session
@@ -89,23 +134,27 @@ func runAsActiveUser(name string, args ...string) (string, error) {
 	}
 	defer userToken.Close()
 
-	// Duplicate to a primary token (required for CreateProcessAsUser)
-	var primaryToken windows.Token
-	err = windows.DuplicateTokenEx(
-		userToken,
-		windows.TOKEN_ALL_ACCESS,
-		nil,
-		windows.SecurityImpersonation,
-		windows.TokenPrimary,
-		&primaryToken,
-	)
+	elevatedToken, err := getElevatedToken(userToken)
 	if err != nil {
-		log.Printf("[runAsUser] DuplicateTokenEx failed (%v) — falling back to LocalSystem", err)
-		return runCmd(name, args...)
+		log.Printf("[runAsUser] getElevatedToken failed (%v) — using standard user token", err)
+		// Fall back: duplicate the original token directly
+		var fallback windows.Token
+		dupErr := windows.DuplicateTokenEx(userToken, windows.TOKEN_ALL_ACCESS, nil,
+			windows.SecurityDelegation, windows.TokenPrimary, &fallback)
+		if dupErr != nil {
+			log.Printf("[runAsUser] DuplicateTokenEx fallback failed (%v) — falling back to LocalSystem", dupErr)
+			return runCmd(name, args...)
+		}
+		elevatedToken = fallback
+	} else {
+		log.Printf("[runAsUser] Using elevated (admin) token for session %d", sessionID)
 	}
-	defer primaryToken.Close()
+	defer elevatedToken.Close()
 
-	// Build environment block from the user token so PATH, APPDATA etc. are correct
+	// elevatedToken is already a primary token (getElevatedToken returns a primary)
+	primaryToken := elevatedToken
+
+	// Build environment block from the user token so PATH, APPDATA, etc. are correct
 	envBlock, err := createEnvironmentBlock(primaryToken)
 	if err != nil {
 		log.Printf("[runAsUser] CreateEnvironmentBlock failed (%v) — proceeding without user env", err)
@@ -114,36 +163,44 @@ func runAsActiveUser(name string, args ...string) (string, error) {
 		defer destroyEnvironmentBlock(envBlock)
 	}
 
-	// Capture output via a temp file — pipes require additional handles inheritance
-	// setup that is fragile across sessions; a temp file is simpler and reliable.
-	outFile, err := os.CreateTemp("", "racko_install_out_*.txt")
-	if err != nil {
-		log.Printf("[runAsUser] Cannot create temp output file (%v) — falling back to LocalSystem", err)
+	// Create anonymous pipes for stdout+stderr capture.
+	// Using STARTF_USESTDHANDLES is the industry-standard Win32 approach —
+	// it works across session boundaries with no file permission issues,
+	// unlike shell redirection (cmd.exe /C ... > file) which requires the
+	// user token to have write access to a SYSTEM-owned temp file.
+	var readPipe, writePipe windows.Handle
+	sa := windows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(windows.SecurityAttributes{})),
+		InheritHandle:      1, // pipe handles must be inheritable
+	}
+	if err := windows.CreatePipe(&readPipe, &writePipe, &sa, 0); err != nil {
+		log.Printf("[runAsUser] CreatePipe failed (%v) — falling back to LocalSystem", err)
 		return runCmd(name, args...)
 	}
-	outPath := outFile.Name()
-	outFile.Close()
-	defer os.Remove(outPath)
+	// The write end goes to the child; close it in the parent after process starts
+	// so ReadFile on the read end returns EOF when the child exits.
+	defer windows.CloseHandle(readPipe)
 
-	// Build command line string (CreateProcess takes a single string)
 	cmdLine := buildCmdLine(name, args...)
 	log.Printf("[runAsUser] Launching in user session %d: %s", sessionID, cmdLine)
 
-	// Wrap in cmd.exe so we can redirect stdout/stderr to the temp file
-	wrappedCmd := fmt.Sprintf(`cmd.exe /C %s > "%s" 2>&1`, cmdLine, outPath)
-	wrappedCmdLine, err := windows.UTF16PtrFromString(wrappedCmd)
+	cmdLinePtr, err := windows.UTF16PtrFromString(cmdLine)
 	if err != nil {
+		windows.CloseHandle(writePipe)
 		return runCmd(name, args...)
 	}
 
-	// Desktop name — must be the interactive desktop
+	// Desktop must be the interactive desktop for the process to function correctly
 	desktop, _ := windows.UTF16PtrFromString("winsta0\\default")
 
 	si := windows.StartupInfo{
-		Cb:          uint32(unsafe.Sizeof(windows.StartupInfo{})),
-		Desktop:     desktop,
-		Flags:       windows.STARTF_USESHOWWINDOW,
-		ShowWindow:  0, // SW_HIDE
+		Cb:         uint32(unsafe.Sizeof(windows.StartupInfo{})),
+		Desktop:    desktop,
+		Flags:      windows.STARTF_USESTDHANDLES | windows.STARTF_USESHOWWINDOW,
+		ShowWindow: 0, // SW_HIDE
+		StdInput:   windows.InvalidHandle,
+		StdOutput:  writePipe,
+		StdErr:     writePipe,
 	}
 	pi := windows.ProcessInformation{}
 
@@ -161,17 +218,21 @@ func runAsActiveUser(name string, args ...string) (string, error) {
 
 	err = windows.CreateProcessAsUser(
 		primaryToken,
-		nil,           // lpApplicationName (nil = use command line)
-		wrappedCmdLine,
-		nil,           // process security attrs
-		nil,           // thread security attrs
-		false,         // inherit handles
+		nil,         // lpApplicationName (nil = use command line)
+		cmdLinePtr,
+		nil,         // process security attrs
+		nil,         // thread security attrs
+		true,        // inherit handles — required for pipe handles to be passed to child
 		creationFlags,
 		envPtr,
-		nil,           // current directory (inherit)
+		nil,         // current directory (inherit)
 		&si,
 		&pi,
 	)
+	// Close write end in parent immediately after CreateProcessAsUser —
+	// this ensures ReadFile below returns EOF when the child process exits.
+	windows.CloseHandle(writePipe)
+
 	if err != nil {
 		log.Printf("[runAsUser] CreateProcessAsUser failed (%v) — falling back to LocalSystem", err)
 		return runCmd(name, args...)
@@ -180,6 +241,25 @@ func runAsActiveUser(name string, args ...string) (string, error) {
 	defer windows.CloseHandle(pi.Process)
 
 	log.Printf("[runAsUser] PID=%d started in session %d: %s", pi.ProcessId, sessionID, name)
+
+	// Read all output from the pipe in a goroutine so the buffer never fills
+	// and blocks the child process (deadlock prevention).
+	outputCh := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		tmp := make([]byte, 4096)
+		for {
+			var n uint32
+			err := windows.ReadFile(readPipe, tmp, &n, nil)
+			if n > 0 {
+				buf.Write(tmp[:n])
+			}
+			if err != nil {
+				break // EOF or error — child exited and write end is closed
+			}
+		}
+		outputCh <- buf.String()
+	}()
 
 	// Progress ticker
 	doneCh := make(chan struct{})
@@ -198,28 +278,22 @@ func runAsActiveUser(name string, args ...string) (string, error) {
 	}()
 
 	// Wait for process to finish (no timeout — package managers self-manage)
-	_, err = windows.WaitForSingleObject(pi.Process, windows.INFINITE)
+	windows.WaitForSingleObject(pi.Process, windows.INFINITE)
 	close(doneCh)
 
 	elapsed := time.Since(startTime).Round(time.Millisecond)
 
-	// Get exit code
 	var exitCode uint32
 	windows.GetExitCodeProcess(pi.Process, &exitCode)
 
-	// Read captured output
-	outBytes, readErr := os.ReadFile(outPath)
-	output := ""
-	if readErr == nil {
-		output = string(outBytes)
-	}
+	// Wait for the output reader goroutine to finish
+	output := <-outputCh
 	combined := fmt.Sprintf("cmd: %s\nstdout+stderr:\n%s", cmdLine, output)
 
 	if exitCode != 0 {
 		log.Printf("[runAsUser] FAILED: %s (PID=%d) exitCode=%d elapsed=%s", name, pi.ProcessId, exitCode, elapsed)
 		log.Printf("[runAsUser] output: %s", output)
 
-		// Check already-installed signals before treating as failure
 		outLower := strings.ToLower(output)
 		for _, signal := range alreadyInstalledSignals {
 			if strings.Contains(outLower, signal) {
@@ -327,8 +401,6 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 	wingetPath, err := exec.LookPath("winget")
 	if err != nil {
 		// Also check the known install location
-		candidate := `C:\Users\` // winget is per-user; check common system location
-		_ = candidate
 		wingetPath = `C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\winget.exe`
 		if _, statErr := os.Stat(wingetPath); statErr != nil {
 			log.Printf("[winget] winget not found — falling back to choco for %s", pkg.Name)
