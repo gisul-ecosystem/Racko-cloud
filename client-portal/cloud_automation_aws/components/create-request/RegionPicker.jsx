@@ -40,7 +40,7 @@ export function RegionPicker({
             onClick={() => onRegionChange(entry.code)}
             className={`rounded-lg border p-4 text-left transition ${
               active
-                ? 'border-[#B91C1C] bg-red-50/50'
+                ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
                 : 'border-gray-200 hover:border-gray-300'
             }`}
           >

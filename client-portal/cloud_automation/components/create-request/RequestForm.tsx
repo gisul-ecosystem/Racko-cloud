@@ -28,10 +28,10 @@ import {
 import { formatCatalogServicePrice } from '../../utils/formatters';
 
 const inputClass =
-  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
+  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]';
 
 const timeInputClass =
-  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
+  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]';
 
 const labelClass = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500';
 
@@ -46,7 +46,7 @@ function SectionHeader({
 }) {
   return (
     <div className="flex items-start gap-3">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#B91C1C]/10 text-sm font-semibold text-[#B91C1C]">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--cloud-accent,#B91C1C)]/10 text-sm font-semibold text-[var(--cloud-accent,#B91C1C)]">
         {step}
       </span>
       <div>
@@ -325,14 +325,14 @@ export function RequestForm({
           <div className="sm:col-span-2">
             <span className={labelClass}>Resource group costing</span>
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/40">
+              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[var(--cloud-accent,#B91C1C)] has-[:checked]:bg-[var(--cloud-accent-soft,#fef2f2)]/40">
                 <input
                   type="radio"
                   name="costingMode"
                   value="shared"
                   checked={costingMode === 'shared'}
                   onChange={() => onCostingModeChange('shared')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                  className="mt-1 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                 />
                 <span>
                   <span className="block text-sm font-medium text-gray-900">Shared resource group</span>
@@ -341,14 +341,14 @@ export function RequestForm({
                   </span>
                 </span>
               </label>
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/40">
+              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[var(--cloud-accent,#B91C1C)] has-[:checked]:bg-[var(--cloud-accent-soft,#fef2f2)]/40">
                 <input
                   type="radio"
                   name="costingMode"
                   value="per_user"
                   checked={costingMode === 'per_user'}
                   onChange={() => onCostingModeChange('per_user')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                  className="mt-1 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                 />
                 <span>
                   <span className="block text-sm font-medium text-gray-900">Per-user resource groups</span>
@@ -409,7 +409,7 @@ export function RequestForm({
                         type="checkbox"
                         checked={Boolean(existing)}
                         onChange={(event) => toggleUsageWindowDay(index, event.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                        className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                       />
                       <span className="text-sm font-medium text-gray-900">{day}</span>
                     </label>
@@ -457,7 +457,7 @@ export function RequestForm({
                                   : undefined,
                               })
                             }
-                            className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                            className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]"
                           />
                           {existing.daily_limit_hours ? (
                             <span className="text-xs text-gray-400">
@@ -533,7 +533,7 @@ export function RequestForm({
                   onResourceCleanupIntervalHoursChange(undefined);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
             />
             <span className="text-sm font-medium text-gray-900">Enable periodic resource cleanup</span>
           </label>
@@ -557,7 +557,7 @@ export function RequestForm({
                         value="delete"
                         checked={resourceCleanupAction === 'delete'}
                         onChange={() => onResourceCleanupActionChange('delete')}
-                        className="mt-0.5 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                        className="mt-0.5 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                       />
                       <span>
                         <span className="block text-sm font-medium text-gray-900">Delete resources</span>
@@ -580,7 +580,7 @@ export function RequestForm({
                         value="pause"
                         checked={resourceCleanupAction === 'pause'}
                         onChange={() => onResourceCleanupActionChange('pause')}
-                        className="mt-0.5 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                        className="mt-0.5 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                       />
                       <span>
                         <span className="block text-sm font-medium text-gray-900">Pause resources</span>
@@ -706,7 +706,7 @@ export function RequestForm({
                         key={serviceId}
                         className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition ${
                           checked
-                            ? 'border-[#B91C1C] bg-red-50/50'
+                            ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
                             : 'border-gray-200 hover:border-gray-300'
                         }`}
                       >
@@ -714,7 +714,7 @@ export function RequestForm({
                           type="checkbox"
                           checked={checked}
                           onChange={() => onToggleService(serviceId)}
-                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                         />
                         <span className="min-w-0 flex-1">
                           <span className="flex items-start justify-between gap-2">
@@ -788,7 +788,7 @@ export function RequestForm({
                             onClick={() => onSelectInstance(serviceId, instance.option_name)}
                             className={`rounded-lg border p-3 text-left transition ${
                               active
-                                ? 'border-[#B91C1C] bg-red-50/50'
+                                ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
                                 : 'border-gray-200 hover:border-gray-300'
                             }`}
                           >
@@ -851,7 +851,7 @@ export function RequestForm({
                       {entry.roles.map((role) => (
                         <span
                           key={role}
-                          className="rounded-full border border-[#B91C1C] bg-red-50 px-3 py-1 text-xs font-medium text-[#B91C1C]"
+                          className="rounded-full border border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] px-3 py-1 text-xs font-medium text-[var(--cloud-accent,#B91C1C)]"
                         >
                           {role}
                           {isAutomated ? ' (auto)' : ''}
@@ -901,7 +901,7 @@ export function RequestForm({
                               }}
                               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                                 active
-                                  ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                                  ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]'
                                   : 'border-gray-200 text-gray-600 hover:border-gray-300'
                               }`}
                             >
@@ -977,7 +977,7 @@ export function RequestForm({
             className="flex w-full items-center justify-between gap-2 text-left"
           >
             <div className="flex items-center gap-2">
-              <Shield className="h-4 w-4 text-[#B91C1C]" />
+              <Shield className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
               <span className="text-sm font-semibold text-gray-900">Request elevated access</span>
             </div>
             <ChevronDown

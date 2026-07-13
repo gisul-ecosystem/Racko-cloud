@@ -52,8 +52,18 @@ const vmManagementLimitsSchema = z.object({
   allowedTemplateIds: z.array(z.number().int().positive()).optional().default([]),
 });
 
-const azureLimitsSchema = z.object({}).passthrough();
-const azurePricingSchema = z.object({}).passthrough();
+const genericLimitsSchema = z.object({}).passthrough();
+const genericPricingSchema = z.object({}).passthrough();
+
+function genericServiceCreateSchema<K extends Exclude<(typeof SERVICE_CATALOG)[number], 'vm-management'>>(
+  serviceKey: K
+) {
+  return z.object({
+    serviceKey: z.literal(serviceKey),
+    limits: genericLimitsSchema,
+    pricing: genericPricingSchema,
+  });
+}
 
 export const serviceConfigCreateSchema = z.discriminatedUnion('serviceKey', [
   z.object({
@@ -61,11 +71,12 @@ export const serviceConfigCreateSchema = z.discriminatedUnion('serviceKey', [
     limits: vmManagementLimitsSchema,
     pricing: vmManagementPricingSchema,
   }),
-  z.object({
-    serviceKey: z.literal('azure'),
-    limits: azureLimitsSchema,
-    pricing: azurePricingSchema,
-  }),
+  genericServiceCreateSchema('elastic-servers'),
+  genericServiceCreateSchema('azure'),
+  genericServiceCreateSchema('aws'),
+  genericServiceCreateSchema('gcp'),
+  genericServiceCreateSchema('docs'),
+  genericServiceCreateSchema('machine-manager'),
 ]);
 
 export const serviceConfigUpdateSchema = z

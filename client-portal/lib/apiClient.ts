@@ -207,9 +207,16 @@ export async function apiRequest<T>(
     }
 
     // Refresh failed — clear token, fire global event, throw
+    const hadToken = !!accessToken;
     clearAccessToken();
     emitSessionExpired();
-    throw new ApiError('Session expired. Please log in again.', 401, 'SESSION_EXPIRED');
+    throw new ApiError(
+      hadToken
+        ? 'Session expired. Please log in again.'
+        : 'Authentication required. Please log in again.',
+      401,
+      'SESSION_EXPIRED'
+    );
   }
 
   if (!res.ok) {

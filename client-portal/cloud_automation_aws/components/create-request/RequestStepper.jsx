@@ -37,9 +37,9 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 <span
                   className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors ${
                     completed
-                      ? 'bg-[#B91C1C] text-white'
+                      ? 'bg-[var(--cloud-accent,#B91C1C)] text-white'
                       : active
-                        ? 'border-2 border-[#B91C1C] text-[#B91C1C]'
+                        ? 'border-2 border-[var(--cloud-accent,#B91C1C)] text-[var(--cloud-accent,#B91C1C)]'
                         : 'border-2 border-gray-200 text-gray-400'
                   }`}
                 >
@@ -48,7 +48,7 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 <span
                   className={`mt-1.5 max-w-full truncate text-center text-[10px] font-medium leading-tight sm:text-xs ${
                     active
-                      ? 'text-[#B91C1C]'
+                      ? 'text-[var(--cloud-accent,#B91C1C)]'
                       : completed
                         ? 'text-gray-600'
                         : reachable
@@ -64,7 +64,7 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 <div
                   aria-hidden="true"
                   className={`mx-1 mt-4 h-0.5 min-w-[6px] flex-1 shrink ${
-                    completed ? 'bg-[#B91C1C]' : 'bg-gray-200'
+                    completed ? 'bg-[var(--cloud-accent,#B91C1C)]' : 'bg-gray-200'
                   }`}
                 />
               )}

@@ -72,8 +72,23 @@ export async function getUnreadCount(userId) {
   });
 }
 
-export async function markAsRead(notificationId) {
-  await Notification.findByIdAndUpdate(notificationId, { read: true });
+export async function markAsRead(notificationId, userId) {
+  const result = await Notification.findOneAndUpdate(
+    {
+      _id: notificationId,
+      $or: [{ userId }, { userId: null }],
+    },
+    { read: true },
+    { new: true }
+  );
+
+  if (!result) {
+    const error = new Error('Notification not found');
+    error.statusCode = 404;
+    throw error;
+  }
+
+  return result;
 }
 
 export async function markAllAsRead(userId) {

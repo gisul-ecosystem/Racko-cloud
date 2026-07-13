@@ -188,7 +188,7 @@ export function RequestForm({
                   onClick={() => onAccessTypeChange('magic_link')}
                   className={`rounded-lg border-2 p-4 text-left transition ${
                     accessType === 'magic_link'
-                      ? 'border-[#B91C1C] bg-red-50/40'
+                      ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/40'
                       : 'border-gray-200 bg-white hover:border-gray-300'
                   }`}
                 >
@@ -197,7 +197,7 @@ export function RequestForm({
                     Best for short labs (≤7 days). Admin generates one-click console links from the
                     manage portal. No password needed.
                   </p>
-                  <p className="mt-2 text-[11px] font-semibold text-[#B91C1C]">
+                  <p className="mt-2 text-[11px] font-semibold text-[var(--cloud-accent,#B91C1C)]">
                     Max session: 12 hours per link
                   </p>
                 </button>
@@ -207,7 +207,7 @@ export function RequestForm({
                   onClick={() => onAccessTypeChange('identity_center')}
                   className={`rounded-lg border-2 p-4 text-left transition ${
                     accessType === 'identity_center'
-                      ? 'border-[#B91C1C] bg-red-50/40'
+                      ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/40'
                       : 'border-gray-200 bg-white hover:border-gray-300'
                   }`}
                 >
@@ -282,7 +282,7 @@ export function RequestForm({
                   onUsageWindowsChange([]);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
             />
             <span className="text-sm font-medium text-gray-900">Enable daily usage windows</span>
           </label>
@@ -306,7 +306,7 @@ export function RequestForm({
                             type="checkbox"
                             checked={Boolean(existing)}
                             onChange={(event) => toggleUsageWindowDay(index, event.target.checked)}
-                            className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                            className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                           />
                           <span className="text-sm font-medium text-gray-900">{day}</span>
                         </label>
@@ -355,7 +355,7 @@ export function RequestForm({
                                       : undefined,
                                   })
                                 }
-                                className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                                className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]"
                               />
                               {existing.dailyLimitHours ? (
                                 <span className="text-xs text-gray-400">
@@ -436,7 +436,7 @@ export function RequestForm({
                   onResourceCleanupIntervalHoursChange(4);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
             />
             <span className="text-sm font-medium text-gray-900">Enable periodic resource cleanup</span>
           </label>
@@ -487,7 +487,7 @@ export function RequestForm({
                   onPerUserBudgetUsdChange(undefined);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
             />
             <span className="text-sm font-medium text-gray-900">Set per-user budget cap</span>
           </label>
@@ -601,7 +601,7 @@ export function RequestForm({
           <button
             type="button"
             onClick={onNext}
-            className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717]"
+            className="rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95"
           >
             Next
           </button>

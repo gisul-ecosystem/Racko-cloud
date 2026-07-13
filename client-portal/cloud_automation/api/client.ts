@@ -1,6 +1,7 @@
-import { apiRequest, getAccessToken } from '../../lib/apiClient';
+import { cloudAutomationRequest, getAzureCloudApiPrefix } from '../../lib/cloudAutomationRequest';
+import { getAccessToken } from '../../lib/apiClient';
+import { getTenantAccessToken } from '../../lib/tenantPortalApiClient';
 import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
-import { CLOUD_AUTOMATION_API_PREFIX } from '../constants';
 import type {
   AdminAccessRequestPayload,
   AvailableInstance,
@@ -23,23 +24,27 @@ type ApiResponse<T> = {
 
 function cloudAutomationPath(path: string): string {
   const normalized = path.startsWith('/') ? path : `/${path}`;
-  return `${CLOUD_AUTOMATION_API_PREFIX}${normalized}`;
+  return normalized;
+}
+
+async function azureRequest<T>(path: string, options?: RequestInit & { skipAuth?: boolean }): Promise<T> {
+  return cloudAutomationRequest<T>('azure', path, options);
 }
 
 /** Health check for cloud_automation via the gateway. */
 export async function fetchCloudAutomationHealth(): Promise<{ success: boolean; message: string }> {
-  return apiRequest(cloudAutomationPath('/health'));
+  return azureRequest(cloudAutomationPath('/health'));
 }
 
 /** List all provisioning requests. */
 export async function listRequests(): Promise<ProvisioningRequest[]> {
-  const response = await apiRequest<ListRequestsResponse>(cloudAutomationPath('/requests'));
+  const response = await azureRequest<ListRequestsResponse>(cloudAutomationPath('/requests'));
   return response.data ?? [];
 }
 
 /** Get a single provisioning request by ID. */
 export async function getRequestById(id: number): Promise<ProvisioningRequest | null> {
-  const response = await apiRequest<ApiResponse<ProvisioningRequest>>(
+  const response = await azureRequest<ApiResponse<ProvisioningRequest>>(
     cloudAutomationPath(`/requests/${id}`)
   );
   return response.data ?? null;
@@ -73,7 +78,7 @@ function normalizeCatalogResponse(response: ServiceCatalogResponse): ServiceCata
 
 /** Load full service catalog with pricing, categories, roles, instances, regions. */
 export async function getServices(): Promise<ServiceCatalogResponse> {
-  const response = await apiRequest<ServiceCatalogResponse>(cloudAutomationPath('/services'));
+  const response = await azureRequest<ServiceCatalogResponse>(cloudAutomationPath('/services'));
   return normalizeCatalogResponse(response);
 }
 
@@ -89,7 +94,7 @@ export async function getAvailableLocations(
     params.set('instanceSelections', instanceSelections);
   }
 
-  const response = await apiRequest<{ success: boolean; locations: AvailableLocation[] }>(
+  const response = await azureRequest<{ success: boolean; locations: AvailableLocation[] }>(
     `${cloudAutomationPath('/services/available-locations')}?${params.toString()}`
   );
   return response.locations ?? [];
@@ -105,7 +110,7 @@ export async function getAvailableInstances(
     serviceIds: serviceIds.join(','),
   });
 
-  const response = await apiRequest<{ success: boolean; instances: AvailableInstance[] }>(
+  const response = await azureRequest<{ success: boolean; instances: AvailableInstance[] }>(
     `${cloudAutomationPath('/services/available-instances')}?${params.toString()}`
   );
   return response.instances ?? [];
@@ -115,7 +120,7 @@ export async function getAvailableInstances(
 export async function calculatePricingEstimate(
   payload: PricingEstimatePayload
 ): Promise<PricingEstimateResponse> {
-  return apiRequest<PricingEstimateResponse>(cloudAutomationPath('/pricing/calculate'), {
+  return azureRequest<PricingEstimateResponse>(cloudAutomationPath('/pricing/calculate'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -125,7 +130,7 @@ export async function calculatePricingEstimate(
 export async function createRequestWithPricing(
   payload: CreateRequestPayload
 ): Promise<CreateRequestResponse> {
-  return apiRequest<CreateRequestResponse>(cloudAutomationPath('/requests'), {
+  return azureRequest<CreateRequestResponse>(cloudAutomationPath('/requests'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -135,7 +140,7 @@ export async function createRequestWithPricing(
 export async function createAdminAccessRequest(
   payload: AdminAccessRequestPayload
 ): Promise<{ success: boolean; request: unknown }> {
-  return apiRequest(cloudAutomationPath('/admin-access-requests'), {
+  return azureRequest(cloudAutomationPath('/admin-access-requests'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });
@@ -143,7 +148,7 @@ export async function createAdminAccessRequest(
 
 /** Get available RBAC roles for a service. */
 export async function getServiceRoles(serviceId: number): Promise<ServiceRole[]> {
-  const response = await apiRequest<{ success: boolean; roles: ServiceRole[] }>(
+  const response = await azureRequest<{ success: boolean; roles: ServiceRole[] }>(
     cloudAutomationPath(`/services/${serviceId}/roles`)
   );
   return response.roles ?? [];
@@ -166,47 +171,47 @@ export interface ProvisionStepStatus {
 
 /** GET /api/provision/request/:id — resource group provisioning status. */
 export async function getProvisionStatus(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(cloudAutomationPath(`/provision/request/${requestId}`));
+  return azureRequest<ProvisionStepStatus>(cloudAutomationPath(`/provision/request/${requestId}`));
 }
 
 /** GET /api/provision/request/:id/users */
 export async function getProvisionUsers(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/users`)
   );
 }
 
 /** GET /api/provision/request/:id/roles */
 export async function getProvisionRoles(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/roles`)
   );
 }
 
 /** GET /api/provision/request/:id/services */
 export async function getProvisionServices(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/services`)
   );
 }
 
 /** GET /api/provision/request/:id/credentials */
 export async function getProvisionCredentials(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/credentials`)
   );
 }
 
 /** POST /api/provision/request/:id — create resource group. */
 export async function provisionResourceGroup(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(cloudAutomationPath(`/provision/request/${requestId}`), {
+  return azureRequest<ProvisionStepStatus>(cloudAutomationPath(`/provision/request/${requestId}`), {
     method: 'POST',
   });
 }
 
 /** POST /api/provision/request/:id/services — configure instance policies. */
 export async function provisionServices(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/services`),
     { method: 'POST' }
   );
@@ -214,7 +219,7 @@ export async function provisionServices(requestId: number): Promise<ProvisionSte
 
 /** POST /api/provision/request/:id/users */
 export async function provisionUsers(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/users`),
     { method: 'POST' }
   );
@@ -222,7 +227,7 @@ export async function provisionUsers(requestId: number): Promise<ProvisionStepSt
 
 /** POST /api/provision/request/:id/reprovision-roles — assign missing dependency roles. */
 export async function reprovisionRequestRoles(requestId: number) {
-  return apiRequest<{
+  return azureRequest<{
     success: boolean;
     message: string;
     usersProcessed: number;
@@ -236,7 +241,7 @@ export async function reprovisionRequestRoles(requestId: number) {
 
 /** POST /api/provision/request/:id/roles */
 export async function provisionRoles(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/roles`),
     { method: 'POST' }
   );
@@ -244,7 +249,7 @@ export async function provisionRoles(requestId: number): Promise<ProvisionStepSt
 
 /** POST /api/provision/request/:id/send-credentials */
 export async function sendProvisionCredentials(requestId: number): Promise<ProvisionStepStatus> {
-  return apiRequest<ProvisionStepStatus>(
+  return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/send-credentials`),
     { method: 'POST' }
   );
@@ -252,12 +257,12 @@ export async function sendProvisionCredentials(requestId: number): Promise<Provi
 
 /** GET /api/provision/request/:id/credentials/spreadsheet */
 export async function downloadCredentialSpreadsheet(requestId: number): Promise<void> {
-  const token = getAccessToken();
+  const token = getTenantAccessToken() || getAccessToken();
   const response = await fetch(
-    `${getGatewayBaseUrl()}${cloudAutomationPath(`/provision/request/${requestId}/credentials/spreadsheet`)}`,
+    `${getGatewayBaseUrl()}${getAzureCloudApiPrefix()}/provision/request/${requestId}/credentials/spreadsheet`,
     {
       method: 'GET',
-      credentials: 'include',
+      credentials: getTenantAccessToken() ? 'omit' : 'include',
       headers: token ? { Authorization: `Bearer ${token}` } : {},
       cache: 'no-store',
     }

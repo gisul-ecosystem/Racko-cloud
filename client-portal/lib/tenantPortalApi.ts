@@ -5,6 +5,7 @@ import type {
   PlaceOrderInput,
   TenantBranding,
   TenantBrandingAssetType,
+  TenantAssignedService,
   TenantOrder,
   TenantOrderCatalog,
   TenantOrderQuote,
@@ -93,6 +94,15 @@ export async function fetchTenantBrandingAssetObjectUrl(
   const blob = await fetchTenantBrandingAsset(assetType, cacheBust);
   if (!blob) return null;
   return URL.createObjectURL(blob);
+}
+
+export async function getTenantServices(): Promise<TenantAssignedService[]> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ services: TenantAssignedService[] }>>(
+      '/api/v1/tenant-services'
+    )
+  );
+  return data.services;
 }
 
 export async function getTenantWallet(): Promise<TenantWallet> {
