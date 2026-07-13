@@ -2,7 +2,7 @@ version: '3.9'
  
 services:
   core-api:
-    image: gisuldocker/racko-core-api:${IMAGE_TAG:-qa}
+    image: gisuldocker/racko-core-api:qa
     env_file:
       - core-api/.env
     environment:
@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
  
   cloud-automation:
-    image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-qa}
+    image: gisuldocker/racko-cloud-automation:qa
     env_file:
       - cloud-automation/.env
     environment:
@@ -32,7 +32,7 @@ services:
     restart: unless-stopped
  
   cloud-automation-aws:
-    image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-qa}
+    image: gisuldocker/racko-cloud-automation-aws:qa
     env_file:
       - cloud-automation-aws/.env
     environment:
@@ -44,7 +44,7 @@ services:
     restart: unless-stopped
  
   cloud-gateway:
-    image: gisuldocker/racko-cloud-gateway:${IMAGE_TAG:-qa}
+    image: gisuldocker/racko-cloud-gateway:qa
     env_file:
       - cloud-gateway/.env
     environment:
@@ -61,7 +61,7 @@ services:
     restart: unless-stopped
  
   client-portal:
-    image: gisuldocker/racko-client-portal:${IMAGE_TAG:-qa}
+    image: gisuldocker/racko-client-portal:qa
     env_file:
       - client-portal/.env
     environment:

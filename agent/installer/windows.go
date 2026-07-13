@@ -26,18 +26,74 @@ const directInstallTimeout = 4 * time.Hour
 
 // ─── Win32 API declarations ───────────────────────────────────────────────────
 
-var (
-	modWtsapi32                      = windows.NewLazySystemDLL("wtsapi32.dll")
-	modUserenv                       = windows.NewLazySystemDLL("userenv.dll")
-	procWTSGetActiveConsoleSessionId = windows.NewLazySystemDLL("kernel32.dll").NewProc("WTSGetActiveConsoleSessionId")
-	procWTSQueryUserToken            = modWtsapi32.NewProc("WTSQueryUserToken")
-	procCreateEnvironmentBlock       = modUserenv.NewProc("CreateEnvironmentBlock")
-	procDestroyEnvironmentBlock      = modUserenv.NewProc("DestroyEnvironmentBlock")
+// WTS_SESSION_INFO mirrors the Win32 WTS_SESSION_INFOW struct.
+type wtsSessionInfo struct {
+	SessionID         uint32
+	pWinStationName   *uint16
+	State             uint32
+}
+
+const (
+	wtsActive       = 0 // WTSActive — session has an interactive logged-on user
+	wtsDisconnected = 4 // WTSDisconnected — user closed RDP but session still alive
 )
 
-func wtsGetActiveConsoleSessionId() uint32 {
-	ret, _, _ := procWTSGetActiveConsoleSessionId.Call()
-	return uint32(ret)
+var (
+	modWtsapi32                = windows.NewLazySystemDLL("wtsapi32.dll")
+	modUserenv                 = windows.NewLazySystemDLL("userenv.dll")
+	procWTSEnumerateSessions   = modWtsapi32.NewProc("WTSEnumerateSessionsW")
+	procWTSFreeMemory          = modWtsapi32.NewProc("WTSFreeMemory")
+	procWTSQueryUserToken      = modWtsapi32.NewProc("WTSQueryUserToken")
+	procCreateEnvironmentBlock = modUserenv.NewProc("CreateEnvironmentBlock")
+	procDestroyEnvironmentBlock = modUserenv.NewProc("DestroyEnvironmentBlock")
+)
+
+// findActiveSessionID enumerates all WTS sessions and returns the best one
+// to run installers in. Priority:
+//  1. WTSActive — user is actively connected (console or RDP)
+//  2. WTSDisconnected — user closed RDP window but session is still alive
+//
+// This covers the common cloud VM scenario where a user connects via RDP,
+// sets up their machine, closes the RDP window, and then an admin pushes
+// software from the portal. Without WTSDisconnected support, those installs
+// would fall back to LocalSystem (Session 0) and hang.
+func findActiveSessionID() (uint32, error) {
+	var pSessions uintptr
+	var count uint32
+
+	ret, _, err := procWTSEnumerateSessions.Call(
+		0, // WTS_CURRENT_SERVER_HANDLE
+		0, // Reserved
+		1, // Version
+		uintptr(unsafe.Pointer(&pSessions)),
+		uintptr(unsafe.Pointer(&count)),
+	)
+	if ret == 0 {
+		return 0, fmt.Errorf("WTSEnumerateSessionsW: %w", err)
+	}
+	defer procWTSFreeMemory.Call(pSessions)
+
+	size := unsafe.Sizeof(wtsSessionInfo{})
+
+	// First pass: prefer an actively connected session
+	for i := uint32(0); i < count; i++ {
+		info := (*wtsSessionInfo)(unsafe.Pointer(pSessions + uintptr(i)*size))
+		if info.State == wtsActive && info.SessionID != 0 {
+			log.Printf("[runAsUser] Found active session ID=%d (WTSActive)", info.SessionID)
+			return info.SessionID, nil
+		}
+	}
+
+	// Second pass: fall back to disconnected session (user closed RDP window)
+	for i := uint32(0); i < count; i++ {
+		info := (*wtsSessionInfo)(unsafe.Pointer(pSessions + uintptr(i)*size))
+		if info.State == wtsDisconnected && info.SessionID != 0 {
+			log.Printf("[runAsUser] Found disconnected session ID=%d (WTSDisconnected) — user closed RDP", info.SessionID)
+			return info.SessionID, nil
+		}
+	}
+
+	return 0, fmt.Errorf("no active or disconnected user session found (sessions checked: %d)", count)
 }
 
 func wtsQueryUserToken(sessionID uint32) (windows.Token, error) {
@@ -48,7 +104,6 @@ func wtsQueryUserToken(sessionID uint32) (windows.Token, error) {
 	}
 	return token, nil
 }
-
 func createEnvironmentBlock(token windows.Token) (uintptr, error) {
 	var env uintptr
 	ret, _, err := procCreateEnvironmentBlock.Call(uintptr(unsafe.Pointer(&env)), uintptr(token), 0)
@@ -62,7 +117,12 @@ func destroyEnvironmentBlock(env uintptr) {
 	procDestroyEnvironmentBlock.Call(env)
 }
 
-// ─── Active-user process launcher ─────────────────────────────────────────────
+// rebootRequiredExitCodes are Windows installer exit codes that mean
+// "installed successfully, reboot required". Treat as success.
+var rebootRequiredExitCodes = map[uint32]bool{
+	3010: true, // ERROR_SUCCESS_REBOOT_REQUIRED (most common — MSI, choco packages)
+	1641: true, // ERROR_SUCCESS_REBOOT_INITIATED (installer triggered a reboot)
+}
 
 // getElevatedToken returns the elevated (admin) token linked to t.
 // Under UAC, WTSQueryUserToken returns a filtered token even for Administrators.
@@ -118,13 +178,11 @@ func getElevatedToken(t windows.Token) (windows.Token, error) {
 // the proper Win32 method that works across session boundaries without file permission issues.
 // Falls back to runCmd (Session 0 / LocalSystem) if no active user session exists.
 func runAsActiveUser(name string, args ...string) (string, error) {
-	sessionID := wtsGetActiveConsoleSessionId()
-	const noSession = ^uint32(0) // 0xFFFFFFFF means no active session
-	if sessionID == noSession {
-		log.Printf("[runAsUser] No active console session — falling back to LocalSystem for: %s", name)
+	sessionID, err := findActiveSessionID()
+	if err != nil {
+		log.Printf("[runAsUser] %v — falling back to LocalSystem for: %s", err, name)
 		return runCmd(name, args...)
 	}
-	log.Printf("[runAsUser] Active console session ID: %d", sessionID)
 
 	// Get the user token for that session
 	userToken, err := wtsQueryUserToken(sessionID)
@@ -293,6 +351,11 @@ func runAsActiveUser(name string, args ...string) (string, error) {
 	if exitCode != 0 {
 		log.Printf("[runAsUser] FAILED: %s (PID=%d) exitCode=%d elapsed=%s", name, pi.ProcessId, exitCode, elapsed)
 		log.Printf("[runAsUser] output: %s", output)
+
+		if rebootRequiredExitCodes[exitCode] {
+			log.Printf("[runAsUser] Exit code %d means reboot required — treating as success", exitCode)
+			return combined, nil
+		}
 
 		outLower := strings.ToLower(output)
 		for _, signal := range alreadyInstalledSignals {
@@ -613,6 +676,15 @@ func runCmd(name string, args ...string) (string, error) {
 		log.Printf("[runCmd] FAILED: %s (PID=%d) elapsed=%s exitErr=%v", name, cmd.Process.Pid, elapsed, err)
 		log.Printf("[runCmd] stdout: %s", stdout.String())
 		log.Printf("[runCmd] stderr: %s", stderr.String())
+
+		// Check for reboot-required exit codes before treating as failure
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code := uint32(exitErr.ExitCode())
+			if rebootRequiredExitCodes[code] {
+				log.Printf("[runCmd] Exit code %d means reboot required — treating as success", code)
+				return combined, nil
+			}
+		}
 		return combined, fmt.Errorf("%s exited with error: %w", name, err)
 	}
 
