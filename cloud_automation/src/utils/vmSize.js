@@ -8,10 +8,72 @@ const normalizeVmSize = (instanceOption) => {
 
   const compact = raw.replace(/\s+/g, '_');
   if (compact.startsWith('Standard_')) {
+    if (/^Standard_B1$/i.test(compact)) {
+      return 'Standard_B1s';
+    }
     return compact;
   }
 
+  if (/^b1$/i.test(raw)) {
+    return 'Standard_B1s';
+  }
+
   return `Standard_${compact}`;
+};
+
+const getVmSizeFamilyPattern = (primarySku) => {
+  const primary = String(primarySku || '').trim();
+  if (/^Standard_B1/i.test(primary)) {
+    return /^Standard_B1/i;
+  }
+  if (/^Standard_B2/i.test(primary)) {
+    return /^Standard_B2/i;
+  }
+  if (/^Standard_D/i.test(primary)) {
+    return /^Standard_D/i;
+  }
+  if (/^Standard_E/i.test(primary)) {
+    return /^Standard_E/i;
+  }
+
+  return null;
+};
+
+const getVmPolicyAllowedSkus = async (instanceOption, location) => {
+  const primary = normalizeVmSize(instanceOption);
+  const chain = getVmSizeFallbackChain(instanceOption);
+  const familyPattern = getVmSizeFamilyPattern(primary);
+
+  let candidates = familyPattern
+    ? chain.filter((sku) => familyPattern.test(sku))
+    : chain.slice(0, 4);
+
+  const normalizedLocation = String(location || '').trim().toLowerCase();
+  if (!normalizedLocation) {
+    return Array.from(new Set(candidates));
+  }
+
+  const { getDeployableVmSizesForLocation } = require('../services/vmInstanceAvailabilityService');
+  const deployable = await getDeployableVmSizesForLocation(normalizedLocation);
+
+  let allowed = candidates.filter((sku) => deployable.has(sku));
+
+  if (allowed.length === 0 && familyPattern) {
+    allowed = [...deployable].filter((sku) => familyPattern.test(sku));
+  } else if (familyPattern && /^Standard_B1/i.test(primary)) {
+    allowed = Array.from(
+      new Set([
+        ...allowed,
+        ...[...deployable].filter((sku) => /^Standard_B1/i.test(sku))
+      ])
+    );
+  }
+
+  if (allowed.length === 0) {
+    allowed = [primary];
+  }
+
+  return Array.from(new Set(allowed));
 };
 
 const VM_SIZE_FALLBACKS = {
@@ -48,5 +110,6 @@ module.exports = {
   isVirtualMachineService,
   normalizeVmSize,
   getVmSizeFallbackChain,
+  getVmPolicyAllowedSkus,
   isVmCapacityError
 };

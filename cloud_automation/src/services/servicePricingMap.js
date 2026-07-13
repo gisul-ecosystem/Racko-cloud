@@ -30,6 +30,8 @@ const SERVICE_PRICING_MAP = {
   'azure ai vision': 'Foundry Tools',
   'azure ai language': 'Foundry Tools',
   'azure ai speech': 'Foundry Tools',
+  'azure service bus': 'Service Bus',
+  'service bus': 'Service Bus',
   'azure event grid': 'Event Grid',
   'event grid': 'Event Grid',
   'azure logic apps': 'Logic Apps',
@@ -38,7 +40,15 @@ const SERVICE_PRICING_MAP = {
   'azure monitor': 'Azure Monitor',
   'azure devops': 'Azure DevOps',
   'microsoft entra id (azure ad)': 'Microsoft Entra ID',
-  'entra id': 'Microsoft Entra ID'
+  'entra id': 'Microsoft Entra ID',
+  'azure api management': 'API Management',
+  'api management': 'API Management',
+  apim: 'API Management',
+  'log analytics workspace': 'Log Analytics',
+  'log analytics': 'Log Analytics',
+  'azure container registry': 'Container Registry',
+  'container registry': 'Container Registry',
+  acr: 'Container Registry'
 };
 
 const normalizeServiceKey = (value) => {

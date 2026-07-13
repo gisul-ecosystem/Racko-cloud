@@ -7,7 +7,7 @@
   "scripts": {
     "start": "node app.js",
     "dev": "node --watch app.js",
-    "test": "node --test test/requestValidation.test.js"
+    "test": "node --test test/requestValidation.test.js test/windowDailyLimitAccess.test.js test/sessionDuplicateAndMerge.test.js test/usageWindowMapKey.test.js"
   },
   "dependencies": {
     "@azure/arm-appservice": "^14.1.0",
@@ -30,6 +30,7 @@
     "luxon": "^3.7.2",
     "node-cron": "^4.2.1",
     "nodemailer": "^8.0.10",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "xlsx": "^0.18.5"
   }
 }

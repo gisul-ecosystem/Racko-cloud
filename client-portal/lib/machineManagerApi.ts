@@ -26,6 +26,7 @@ export interface IJob {
   _id: string;
   machineId: string;
   softwareIds: string[];
+  softwareName: string;
   status: JobStatus;
   logs: string;
   attempts: number;

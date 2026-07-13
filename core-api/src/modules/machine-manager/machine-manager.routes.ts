@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import express from 'express';
 import { machineManagerController } from './machine-manager.controller';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
@@ -161,7 +162,7 @@ agentRouter.post(
   validateRequest(agentRegisterSchema),
   (req, res, next) => machineManagerController.agentRegister(req, res, next)
 );
-
+ 
 // GET /api/v1/agent/jobs/:agentId
 agentRouter.get(
   '/jobs/:agentId',
@@ -170,8 +171,11 @@ agentRouter.get(
 );
 
 // POST /api/v1/agent/jobs/:jobId/result
+// Larger body limit — install logs can be verbose (MySQL, Docker etc).
+// Agent truncates to 50KB before sending; this 5MB limit is a safety net.
 agentRouter.post(
   '/jobs/:jobId/result',
+  express.json({ limit: '5mb' }),
   validateRequest(agentJobResultSchema),
   (req, res, next) => machineManagerController.agentJobResult(req, res, next)
 );

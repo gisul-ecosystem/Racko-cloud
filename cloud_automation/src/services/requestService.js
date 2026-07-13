@@ -2,10 +2,11 @@
 const AppError = require('../utils/AppError');
 const db = require('../db/postgres');
 const pricingService = require('./pricingService');
-const { assertProvisionableLocation } = require('./azureLocationService');
+const { assertProvisionableLocation, assertLocationAvailableForServices } = require('./azureLocationService');
 const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments, finalizeAiFoundryTierRoles } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
+const { buildExpiresAtFromParts } = require('../utils/requestExpiry');
 
 async function createRequest({
   customerEmail,
@@ -172,7 +173,57 @@ async function createRequest({
       throw new AppError('No services resolved', 400);
     }
 
+    const servicesForLocation = await client.query(
+      `
+        SELECT
+          id,
+          name,
+          COALESCE(supports_regions, true) AS supports_regions
+        FROM services
+        WHERE id = ANY($1::int[])
+      `,
+      [validServiceIds]
+    );
 
+    await assertLocationAvailableForServices(location, servicesForLocation.rows);
+
+    const normalizedLocation = String(location || '').trim().toLowerCase();
+    const instancesToValidate = [];
+
+    for (const service of servicesForLocation.rows) {
+      const selected = (Array.isArray(selectedInstances) ? selectedInstances : []).find(
+        (entry) => Number(entry?.serviceId ?? entry?.service_id) === Number(service.id)
+      );
+      const instanceOption = String(
+        selected?.instanceOption ?? selected?.instance_option ?? ''
+      ).trim();
+
+      if (instanceOption) {
+        instancesToValidate.push({
+          serviceId: Number(service.id),
+          option_name: instanceOption
+        });
+      }
+    }
+
+    if (instancesToValidate.length > 0) {
+      const { filterInstancesForLocation } = require('./instanceAvailabilityService');
+      const servicesById = new Map(
+        servicesForLocation.rows.map((service) => [Number(service.id), service])
+      );
+      const filtered = await filterInstancesForLocation(
+        normalizedLocation,
+        instancesToValidate,
+        servicesById
+      );
+
+      if (filtered.length !== instancesToValidate.length) {
+        throw new AppError(
+          'One or more selected instance sizes are not available in the chosen region. Pick another region or instance size.',
+          400
+        );
+      }
+    }
 
     // ==========================
     // Pricing
@@ -408,6 +459,26 @@ async function createRequest({
           ]
         );
       }
+    }
+
+    const firstUsageWindow = Array.isArray(usageWindows) && usageWindows.length > 0
+      ? usageWindows[0]
+      : null;
+    const expiresAt = buildExpiresAtFromParts({
+      expiryDate: endDate,
+      timezone: firstUsageWindow?.timezone,
+      endTimeLocal: firstUsageWindow?.window_end_time
+    });
+
+    if (expiresAt) {
+      await client.query(
+        `
+          UPDATE requests
+          SET expires_at = $2
+          WHERE id = $1
+        `,
+        [requestId, expiresAt]
+      );
     }
 
 

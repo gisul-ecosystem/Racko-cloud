@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 const { DateTime } = require('luxon');
 const db = require('../db/postgres');
 const { createGraphClient } = require('../provisioners/azure/userProvisioner');
@@ -72,7 +73,7 @@ async function enforceWindowForRequest(requestId) {
 
   const { rows: users } = await db.query(
     `
-      SELECT id, azure_user_id, azure_account_enabled
+      SELECT id, azure_user_id, azure_account_enabled, window_enforcement_paused_until
       FROM azure_users
       WHERE request_id = $1
         AND azure_user_id IS NOT NULL
@@ -81,14 +82,51 @@ async function enforceWindowForRequest(requestId) {
     [requestId]
   );
 
-  if (!users.length) {
+  const enforcementPausedUsers = users.filter(
+    (user) =>
+      user.window_enforcement_paused_until
+      && new Date(user.window_enforcement_paused_until).getTime() > Date.now()
+  );
+
+  if (enforcementPausedUsers.length === users.length) {
     return;
   }
 
-  const usersToBlock = users.filter(
+  const eligibleUsers = users.filter(
+    (user) =>
+      !user.window_enforcement_paused_until
+      || new Date(user.window_enforcement_paused_until).getTime() <= Date.now()
+  );
+
+  if (!eligibleUsers.length) {
+    const pausedButDisabled = enforcementPausedUsers.filter(
+      (user) => user.azure_account_enabled === false
+    );
+
+    if (pausedButDisabled.length) {
+      const { graphClient } = createGraphClient();
+      await setEntraUsersEnabled(graphClient, pausedButDisabled, true);
+      await db.query(
+        `
+          UPDATE azure_users
+          SET azure_account_enabled = TRUE
+          WHERE id = ANY($1)
+        `,
+        [pausedButDisabled.map((user) => user.id)]
+      );
+      logEvent('info', 'users_reenabled_admin_pause', {
+        requestId,
+        count: pausedButDisabled.length
+      });
+    }
+
+    return;
+  }
+
+  const usersToBlock = eligibleUsers.filter(
     (user) => user.azure_account_enabled !== false && !shouldBeUnblocked
   );
-  const usersToUnblock = users.filter(
+  const usersToUnblock = eligibleUsers.filter(
     (user) => user.azure_account_enabled === false && shouldBeUnblocked
   );
 
@@ -200,12 +238,12 @@ function startWindowEnforcementScheduler() {
   }
 
   scheduledTask = cron.schedule('* * * * *', async () => {
-    try {
+    await runScheduledJob('window-enforcement', async () => {
       await enforceUsageWindows();
       await enforceDailyHourLimits();
-    } catch (err) {
+    }).catch((err) => {
       logEvent('error', 'enforcement_poll_error', { error: err.message });
-    }
+    });
   });
 
   logEvent('info', 'window_enforcement_scheduler_started');

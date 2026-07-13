@@ -36,11 +36,12 @@ class MachineManagerService {
     };
   }
 
-  private toJobResponse(doc: IJob): JobResponse {
+  private toJobResponse(doc: IJob, softwareName = ''): JobResponse {
     return {
       _id: doc._id.toString(),
       machineId: doc.machineId.toString(),
       softwareIds: doc.softwareIds.map((id) => id.toString()),
+      softwareName,
       status: doc.status,
       logs: doc.logs,
       attempts: doc.attempts,
@@ -215,20 +216,26 @@ class MachineManagerService {
   }
 
   async listJobs(adminId: mongoose.Types.ObjectId): Promise<JobResponse[]> {
-    const docs = await JobModel.find({ adminId }).sort({ createdAt: -1 });
-    return docs.map((d) => this.toJobResponse(d));
+    const docs = await JobModel.find({ adminId }).sort({ createdAt: -1 })
+      .populate<{ softwareIds: Array<{ _id: mongoose.Types.ObjectId; name: string }> }>('softwareIds', 'name');
+    return docs.map((d) => {
+      const swName = (d.softwareIds[0] as unknown as { name?: string } | undefined)?.name ?? '';
+      return this.toJobResponse(d as unknown as IJob, swName);
+    });
   }
 
   async getJob(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
   ): Promise<JobResponse> {
-    const doc = await JobModel.findById(id);
+    const doc = await JobModel.findById(id)
+      .populate<{ softwareIds: Array<{ _id: mongoose.Types.ObjectId; name: string }> }>('softwareIds', 'name');
     if (!doc) throw new NotFoundError('Job not found.');
     if (doc.adminId.toString() !== adminId.toString()) {
       throw new ForbiddenError('You do not have permission to access this job.');
     }
-    return this.toJobResponse(doc);
+    const swName = (doc.softwareIds[0] as unknown as { name?: string } | undefined)?.name ?? '';
+    return this.toJobResponse(doc as unknown as IJob, swName);
   }
 
   // ─── Agent endpoints (no auth — token-based) ──────────────────────────────
@@ -350,6 +357,7 @@ class MachineManagerService {
   }
 
   async updateJobResult(jobId: mongoose.Types.ObjectId, dto: AgentJobResultDto): Promise<void> {
+    logger.info('[MachineManager] updateJobResult start', { jobId: jobId.toString(), status: dto.status, agentId: dto.agentId });
     const job = await JobModel.findById(jobId);
     if (!job) throw new NotFoundError('Job not found.');
 
@@ -368,6 +376,8 @@ class MachineManagerService {
       jobId: jobId.toString(),
       status: dto.status,
       agentId: dto.agentId,
+      attempts: job.attempts,
+      logsLength: dto.logs?.length ?? 0,
     });
 
     // Emit SSE event so browser gets real-time update

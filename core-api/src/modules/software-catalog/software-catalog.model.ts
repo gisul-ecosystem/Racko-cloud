@@ -2,7 +2,7 @@ import mongoose, { Document, Schema } from 'mongoose';
 import type { MachineOS } from '../machine-manager/machine-manager.model';
 
 // Install method determines how the agent installs this software.
-export type InstallMethod = 'apt' | 'brew' | 'choco' | 'msi' | 'exe' | 'zip' | 'script';
+export type InstallMethod = 'apt' | 'brew' | 'choco' | 'winget' | 'msi' | 'exe' | 'zip' | 'script';
 
 export interface ISoftwareCatalog extends Document {
   _id: mongoose.Types.ObjectId;
@@ -39,7 +39,7 @@ const softwareCatalogSchema = new Schema<ISoftwareCatalog>(
     },
     installMethod: {
       type: String,
-      enum: ['apt', 'brew', 'choco', 'msi', 'exe', 'zip', 'script'],
+      enum: ['apt', 'brew', 'choco', 'winget', 'msi', 'exe', 'zip', 'script'],
       required: true,
     },
     wingetId:    { type: String, trim: true }, // kept for legacy data only

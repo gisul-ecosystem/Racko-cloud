@@ -14,7 +14,12 @@ const VM_GUIDES = {
     vcpu: '1',
     ram: '1 GB',
     storage: 'Temp SSD',
-    tier: 'Burstable'
+    tier: 'Burstable',
+    portalTips: [
+      'In Azure Portal → Create a virtual machine, set Region to your lab region (same as selected above — e.g. Denmark East / denmarkeast). The portal often defaults to East US.',
+      'Set Availability options to "No infrastructure redundancy required". Availability zones hide B-series sizes.',
+      'Choose size Standard_B1s, Standard_B1ms, or Standard_B1ls — these are the allowed B1 sizes for your lab policy.'
+    ]
   },
   B2s: {
     summary: 'Balanced burstable VM for everyday apps.',
@@ -575,6 +580,57 @@ const SERVICE_GUIDES = {
       description: 'Production OCR, forms, invoices, and custom model training.',
       tier: 'Standard'
     }
+  },
+  'api management': {
+    Developer: {
+      summary: 'Developer tier for non-production APIs.',
+      description: 'Low-cost APIM for development and testing without SLA.',
+      tier: 'Developer'
+    },
+    Basic: {
+      summary: 'Basic production API gateway.',
+      description: 'Entry production tier with SLA for small API workloads.',
+      tier: 'Basic'
+    },
+    Standard: {
+      summary: 'Standard API gateway.',
+      description: 'Production APIs with autoscale and multi-region support.',
+      tier: 'Standard'
+    },
+    Premium: {
+      summary: 'Premium API gateway.',
+      description: 'VNet integration, multi-region deployment, and highest scale.',
+      tier: 'Premium'
+    }
+  },
+  'log analytics': {
+    'Pay-as-you-go': {
+      summary: 'Pay per GB ingested.',
+      description: 'PerGB2018 billing for flexible log ingestion and retention.',
+      tier: 'PerGB2018'
+    },
+    'Capacity Reservation': {
+      summary: 'Committed daily ingestion capacity.',
+      description: 'Reserved capacity tier for predictable high-volume log workloads.',
+      tier: 'CapacityReservation'
+    }
+  },
+  'container registry': {
+    Basic: {
+      summary: 'Basic container registry.',
+      description: 'Cost-effective registry for dev/test image storage.',
+      tier: 'Basic'
+    },
+    Standard: {
+      summary: 'Standard container registry.',
+      description: 'Higher throughput and webhooks for production CI/CD pipelines.',
+      tier: 'Standard'
+    },
+    Premium: {
+      summary: 'Premium container registry.',
+      description: 'Geo-replication, content trust, and private link support.',
+      tier: 'Premium'
+    }
   }
 };
 
@@ -625,6 +681,7 @@ const buildGuidePayload = (rawGuide, optionName) => {
     summary: rawGuide.summary || `Azure option: ${optionName}`,
     description: rawGuide.description || '',
     tier: rawGuide.tier || optionName,
+    portalTips: Array.isArray(rawGuide.portalTips) ? rawGuide.portalTips : [],
     specs
   };
 };

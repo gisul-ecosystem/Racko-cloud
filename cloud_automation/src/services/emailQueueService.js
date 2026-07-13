@@ -163,11 +163,28 @@ const processEmailJob = async (jobId, callbacks = {}) => {
     await client.query('COMMIT');
 
     try {
-      await sendCredentialEmailWithRetry({
+      const mailOptions = {
         to: job.recipient_email,
         subject: job.subject,
         html: job.html
-      });
+      };
+
+      if (job.related_type === 'credential_delivery' && job.related_id) {
+        try {
+          const { buildCredentialSpreadsheetAttachment } = require('./credentialService');
+          const attachment = await buildCredentialSpreadsheetAttachment(Number(job.related_id));
+          mailOptions.attachments = [attachment];
+        } catch (attachmentError) {
+          logEmailQueueEvent('error', 'credential_spreadsheet_attachment_failed', {
+            jobId,
+            requestId: job.related_id,
+            message: attachmentError?.message
+          });
+          throw attachmentError;
+        }
+      }
+
+      await sendCredentialEmailWithRetry(mailOptions);
 
       await db.query(
         `

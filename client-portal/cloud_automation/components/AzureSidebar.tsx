@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { ChevronLeft, LayoutGrid } from 'lucide-react';
+import { ChevronLeft, Cloud, LayoutGrid, Plus } from 'lucide-react';
 import { AZURE_ROUTES } from '../constants';
 import { useAzureShell } from '../hooks/useAzureShell';
 
@@ -37,6 +37,13 @@ export function AzureSidebar() {
             >
               <LayoutGrid className="h-4 w-4 shrink-0 text-[#B91C1C]" />
               Overview
+            </Link>
+            <Link
+              href={AZURE_ROUTES.createRequest}
+              className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+            >
+              <Plus className="h-4 w-4 shrink-0 text-gray-400" />
+              Create request
             </Link>
           </nav>
 

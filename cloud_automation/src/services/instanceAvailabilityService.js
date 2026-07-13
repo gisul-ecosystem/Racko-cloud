@@ -4,34 +4,55 @@ const { enrichInstances } = require('./instanceEnrichmentService');
 const { findInstancePolicyRule, normalizeServiceName } = require('../utils/instancePolicyRules');
 
 const filterInstancesForLocation = async (location, instances, servicesById) => {
+  const normalizedLocation = String(location || '').trim().toLowerCase();
   const vmFiltered = await filterVmInstancesForLocation(location, instances, servicesById);
+  const { getServiceRegionalHourlyPrices } = require('./estimatePricingService');
 
-  return vmFiltered.filter((instance) => {
-    const serviceId = Number(instance.serviceId ?? instance.service_id);
-    const service = servicesById.get(serviceId);
-    const rule = findInstancePolicyRule(service?.name);
+  const availabilityChecks = await Promise.all(
+    vmFiltered.map(async (instance) => {
+      const serviceId = Number(instance.serviceId ?? instance.service_id);
+      const service = servicesById.get(serviceId);
+      const rule = findInstancePolicyRule(service?.name);
+      const optionName = String(instance.option_name || '').trim();
 
-    if (
-      !rule ||
-      rule.policyType === 'allowed_vm_sku' ||
-      rule.policyType === 'allowed_aks_node_vm_sku' ||
-      rule.policyType === 'instance_metadata'
-    ) {
-      return true;
-    }
+      if (
+        !rule ||
+        rule.policyType === 'allowed_vm_sku' ||
+        rule.policyType === 'allowed_aks_node_vm_sku' ||
+        rule.policyType === 'instance_metadata'
+      ) {
+        return instance;
+      }
 
-    const optionName = String(instance.option_name || '').trim();
-    if (!optionName) {
-      return false;
-    }
+      if (!optionName) {
+        return null;
+      }
 
-    if (typeof rule.resolveAllowedSkus !== 'function') {
-      return true;
-    }
+      if (typeof rule.resolveAllowedSkus !== 'function') {
+        return instance;
+      }
 
-    const allowedSkus = rule.resolveAllowedSkus(optionName);
-    return allowedSkus.length > 0;
-  });
+      const allowedSkus = rule.resolveAllowedSkus(optionName);
+      if (allowedSkus.length === 0) {
+        return null;
+      }
+
+      if (!normalizedLocation) {
+        return instance;
+      }
+
+      if (/app service|functions|sql database|blob storage|data lake storage|service bus|key vault|logic apps|event grid/i.test(String(service?.name || ''))) {
+        const priceByRegion = await getServiceRegionalHourlyPrices(service, optionName);
+        if (priceByRegion.size > 0 && !priceByRegion.has(normalizedLocation)) {
+          return null;
+        }
+      }
+
+      return instance;
+    })
+  );
+
+  return availabilityChecks.filter(Boolean);
 };
 
 const getAvailableInstancesForLocation = async (location, serviceIds) => {

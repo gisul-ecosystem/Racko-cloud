@@ -15,8 +15,11 @@ import type {
 import {
   catalogInstancesForServices,
   formatInstanceGuide,
+  formatLocationOptionLabel,
+  getInstancePortalTips,
   getSelectedPauseCleanupServices,
   isCustomerDetailsComplete,
+  isVmCatalogService,
   normalizeServiceId,
   DELETE_CLEANUP_ACTION_LABELS,
   PAUSE_CLEANUP_ACTION_LABELS,
@@ -31,6 +34,28 @@ const timeInputClass =
   'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
 
 const labelClass = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500';
+
+function SectionHeader({
+  step,
+  title,
+  description,
+}: {
+  step: number;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#B91C1C]/10 text-sm font-semibold text-[#B91C1C]">
+        {step}
+      </span>
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+        {description ? <p className="mt-0.5 text-sm text-gray-500">{description}</p> : null}
+      </div>
+    </div>
+  );
+}
 
 const USAGE_WINDOW_DAYS = [
   'Sunday',
@@ -207,6 +232,21 @@ export function RequestForm({
   const showLocations =
     showPermissions && rolesComplete(catalog, selectedServiceIds, resolvedRoles);
 
+  const selectedLocationEntry = locations.find((entry) => entry.arm_region_name === location);
+  const selectedVmPortalTips = instanceServices
+    .filter((service) => isVmCatalogService(service))
+    .flatMap((service) => {
+      const serviceId = normalizeServiceId(service.id);
+      const selectedOption = selectedInstances.find((entry) => entry.serviceId === serviceId)
+        ?.instanceOption;
+      const instance = catalogInstances.find(
+        (entry) =>
+          normalizeServiceId(entry.serviceId) === serviceId &&
+          entry.option_name === selectedOption
+      );
+      return getInstancePortalTips(instance?.guide);
+    });
+
   const updateUsageWindowDay = (dayIndex: number, patch: Partial<UsageWindow>) => {
     onUsageWindowsChange(
       usageWindows.map((window) =>
@@ -250,8 +290,12 @@ export function RequestForm({
 
       {/* Step 1: Customer details */}
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-900">Customer details</h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <SectionHeader
+          step={1}
+          title="Customer details"
+          description="Who is this lab for and how long should it run?"
+        />
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className={labelClass} htmlFor="customerEmail">
               Customer email
@@ -344,12 +388,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Daily usage windows</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Set which days and hours lab users can access Azure
-          </p>
+          <SectionHeader
+            step={2}
+            title="Daily usage windows"
+            description="Optional — restrict which days and hours users can access the lab."
+          />
 
-          <div className="mt-4 space-y-3">
+          <div className="mt-5 space-y-3">
             {USAGE_WINDOW_DAYS.map((day, index) => {
               const existing = usageWindows.find((window) => window.day_of_week === index);
 
@@ -472,7 +517,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <label className="flex cursor-pointer items-center gap-3">
+          <SectionHeader
+            step={3}
+            title="Resource cleanup"
+            description="Automatically clean up lab resources on a schedule."
+          />
+
+          <label className="mt-5 flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
               checked={resourceCleanupEnabled}
@@ -600,12 +651,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Per-user budget</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Optional spending cap per user (requires per-user resource groups)
-          </p>
+          <SectionHeader
+            step={4}
+            title="Per-user budget"
+            description="Optional spending cap when using per-user resource groups."
+          />
 
-          <div className="mt-4">
+          <div className="mt-5">
             <label className={labelClass} htmlFor="perUserBudgetUsd">
               Budget per user (USD) — optional
             </label>
@@ -633,9 +685,12 @@ export function RequestForm({
       {/* Step 3: Service selection */}
       {showServices && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Services</h2>
-          <p className="mt-0.5 text-xs text-gray-400">Select one or more Azure services to provision</p>
-          <div className="mt-4 space-y-5">
+          <SectionHeader
+            step={5}
+            title="Azure services"
+            description="Choose one or more services to include in this lab."
+          />
+          <div className="mt-5 space-y-5">
             {Array.from(servicesByCategory.entries()).map(([category, services]) => (
               <div key={category}>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
@@ -691,11 +746,12 @@ export function RequestForm({
       {/* Step 4: Instance sizes (from catalog) */}
       {showInstances && instanceServices.length > 0 && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Instance sizes</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Choose instance tiers for services that support sizing
-          </p>
-          <div className="mt-4 space-y-5">
+          <SectionHeader
+            step={6}
+            title="Instance sizes"
+            description="Pick a tier for each service that supports sizing."
+          />
+          <div className="mt-5 space-y-5">
             {instanceServices.map((service) => {
               const serviceId = normalizeServiceId(service.id);
               const options = catalogInstances.filter(
@@ -724,6 +780,7 @@ export function RequestForm({
                             : null;
                         const active = selected === instance.option_name;
                         const guideText = formatInstanceGuide(instance.guide);
+                        const portalTips = getInstancePortalTips(instance.guide);
                         return (
                           <button
                             key={instance.option_name}
@@ -740,6 +797,16 @@ export function RequestForm({
                             </span>
                             {guideText && (
                               <span className="mt-0.5 block text-xs text-gray-500">{guideText}</span>
+                            )}
+                            {active && portalTips.length > 0 && (
+                              <ul className="mt-2 space-y-1 border-t border-red-100 pt-2 text-xs text-amber-800">
+                                {portalTips.map((tip) => (
+                                  <li key={tip} className="flex gap-1.5">
+                                    <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-amber-500" />
+                                    <span>{tip}</span>
+                                  </li>
+                                ))}
+                              </ul>
                             )}
                             {price != null && (
                               <span className="mt-1 block text-xs text-gray-400">
@@ -761,13 +828,14 @@ export function RequestForm({
       {/* Step 5: Permissions (auto + manual) */}
       {showPermissions && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Permissions</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Roles are auto-assigned from catalog rules and instance tier mappings
-          </p>
+          <SectionHeader
+            step={7}
+            title="Permissions"
+            description="Roles are assigned automatically from catalog rules and instance tiers."
+          />
 
           {resolvedRoles.length > 0 && (
-            <div className="mt-4 space-y-3">
+            <div className="mt-5 space-y-3">
               {resolvedRoles.map((entry) => {
                 const service = catalog.services.find((svc) => svc.id === entry.serviceId);
                 const isAutomated = tierAutomatedServices.has(entry.serviceId);
@@ -853,14 +921,15 @@ export function RequestForm({
       {/* Step 6: Region (derived from services + instances) */}
       {showLocations && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Region</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Available regions based on your service and instance selections
-          </p>
+          <SectionHeader
+            step={8}
+            title="Deployment region"
+            description="Use this exact region when creating resources in Azure Portal."
+          />
           {locationsError && (
-            <p className="mt-2 text-sm text-red-600">{locationsError}</p>
+            <p className="mt-3 text-sm text-red-600">{locationsError}</p>
           )}
-          <div className="relative mt-4">
+          <div className="relative mt-5">
             <select
               className={`${inputClass} appearance-none pr-10`}
               value={location}
@@ -872,13 +941,30 @@ export function RequestForm({
               </option>
               {locations.map((entry) => (
                 <option key={entry.arm_region_name} value={entry.arm_region_name}>
-                  {entry.display_location}
-                  {entry.basePrice != null ? ` — from $${entry.basePrice.toFixed(3)}/hr` : ''}
+                  {formatLocationOptionLabel(entry)}
                 </option>
               ))}
             </select>
             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           </div>
+          {location && selectedLocationEntry && selectedVmPortalTips.length > 0 && (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
+              <div className="flex items-start gap-2">
+                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-amber-700" />
+                <div>
+                  <p className="text-sm font-medium text-amber-900">
+                    Azure Portal region: {selectedLocationEntry.display_location} (
+                    {selectedLocationEntry.arm_region_name})
+                  </p>
+                  <ul className="mt-2 space-y-1.5 text-xs text-amber-900">
+                    {selectedVmPortalTips.map((tip) => (
+                      <li key={tip}>{tip}</li>
+                    ))}
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
         </section>
       )}
 

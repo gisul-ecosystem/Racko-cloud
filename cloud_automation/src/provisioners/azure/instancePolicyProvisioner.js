@@ -20,6 +20,53 @@ const sanitizeAssignmentName = (seed) => {
   return `pol${hash}`;
 };
 
+const AZURE_POLICY_DISPLAY_NAME_MAX = 128;
+
+const POLICY_DISPLAY_TYPE_LABELS = {
+  allowed_vm_sku: 'VM',
+  allowed_aks_node_vm_sku: 'AKS VM',
+  allowed_app_service_plan_sku: 'App Service',
+  allowed_storage_account_sku: 'Storage',
+  allowed_sql_database_sku: 'SQL',
+  allowed_service_bus_sku: 'Service Bus',
+  allowed_key_vault_sku: 'Key Vault',
+  allowed_cosmos_db_mode: 'Cosmos DB',
+  allowed_cdn_sku: 'CDN',
+  allowed_load_balancer_sku: 'Load Balancer',
+  allowed_app_gateway_sku: 'App Gateway',
+  allowed_search_sku: 'Search',
+  allowed_cognitive_services_sku: 'Cognitive',
+  allowed_bot_service_sku: 'Bot Service',
+  allowed_logic_app_mode: 'Logic Apps',
+  allowed_api_management_sku: 'API Management',
+  allowed_log_analytics_sku: 'Log Analytics',
+  allowed_container_registry_sku: 'Container Registry'
+};
+
+const buildPolicyAssignmentDisplayName = ({
+  policyType,
+  requestId,
+  instanceOption,
+  allowedSkus = []
+}) => {
+  const skus = (Array.isArray(allowedSkus) ? allowedSkus : [])
+    .map((sku) => String(sku || '').trim())
+    .filter(Boolean);
+  const label = POLICY_DISPLAY_TYPE_LABELS[policyType] || 'Instance';
+  const primary = skus[0] || String(instanceOption || '').trim() || 'default';
+
+  let displayName =
+    skus.length <= 1
+      ? `Racko ${label} ${primary} (req ${requestId})`
+      : `Racko ${label} ${primary} +${skus.length - 1} more (req ${requestId})`;
+
+  if (displayName.length > AZURE_POLICY_DISPLAY_NAME_MAX) {
+    displayName = `Racko ${label} req ${requestId} (${skus.length} SKUs)`;
+  }
+
+  return displayName.slice(0, AZURE_POLICY_DISPLAY_NAME_MAX);
+};
+
 const createPolicyClient = () => {
   const azureConfig = validateAzureEnv();
   const credential = createAzureCredential(azureConfig);
@@ -99,7 +146,8 @@ const configureServiceInstancePolicy = async ({
   requestId,
   serviceId,
   serviceName,
-  instanceOption
+  instanceOption,
+  location
 }) => {
   const rule = findInstancePolicyRule(serviceName);
 
@@ -145,7 +193,13 @@ const configureServiceInstancePolicy = async ({
     throw new Error(`No policy definition configured for ${rule.policyType}`);
   }
 
-  const requestedSkus = rule.resolveAllowedSkus(instanceOption);
+  let requestedSkus = rule.resolveAllowedSkus(instanceOption);
+
+  if (rule.policyType === 'allowed_vm_sku') {
+    const { getVmPolicyAllowedSkus } = require('../../utils/vmSize');
+    requestedSkus = await getVmPolicyAllowedSkus(instanceOption, location);
+  }
+
   const assignmentSeed = rule.mergeAssignments
     ? `${requestId}-${rule.policyType}`
     : `${requestId}-${serviceId}-${rule.policyType}`;
@@ -173,10 +227,25 @@ const configureServiceInstancePolicy = async ({
     requestId,
     allowUpdate: Boolean(rule.mergeAssignments),
     parameters: {
-      displayName: `${built.displayNameSuffix} (request ${requestId})`,
+      displayName: buildPolicyAssignmentDisplayName({
+        policyType: rule.policyType,
+        requestId,
+        instanceOption,
+        allowedSkus
+      }),
       policyDefinitionId,
       parameters: built.parameters
     }
+  });
+
+  logEvent('instance_policy_assignment_applied', {
+    requestId,
+    serviceId,
+    serviceName,
+    scope,
+    assignmentName,
+    allowedSkus,
+    location: location || null
   });
 
   return {
@@ -194,7 +263,8 @@ const configureInstancePolicy = async ({
   serviceId,
   serviceName,
   resourceGroupName,
-  instanceOption
+  instanceOption,
+  location
 }) => {
   const { policyClient, subscriptionId } = createPolicyClient();
   const scope = buildResourceGroupScope(subscriptionId, resourceGroupName);
@@ -214,7 +284,8 @@ const configureInstancePolicy = async ({
     requestId,
     serviceId,
     serviceName,
-    instanceOption
+    instanceOption,
+    location
   });
 
   logEvent('instance_policy_configure_success', {

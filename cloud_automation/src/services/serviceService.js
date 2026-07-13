@@ -4,8 +4,11 @@ const azureCatalogSyncService = require('./azureCatalogSyncService');
 const { getLocationsForSelectedServices } = require('./azureLocationService');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
+const AVAILABLE_LOCATIONS_CACHE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_LOCATION = process.env.AZURE_PRICING_DEFAULT_REGION || 'eastus';
 const pricingCache = new Map();
+const availableLocationsCache = new Map();
+const availableLocationsInflight = new Map();
 
 const logServicePricingEvent = (event, details = {}) => {
   console.log(
@@ -514,23 +517,43 @@ const getAvailableLocations = async (serviceIds, selectedInstances = {}) => {
     return [];
   }
 
-  const { loadPricingContext } = require('./estimatePricingService');
-  const { services, instancesByServiceId } = await loadPricingContext(normalizedServiceIds);
   const selectedInstancesByServiceId = parseInstanceSelections(selectedInstances);
+  const cacheKey = `${normalizedServiceIds.join(',')}|${JSON.stringify(selectedInstancesByServiceId)}`;
+  const cached = availableLocationsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.locations;
+  }
 
-  const locations = await getLocationsForSelectedServices(
-    services,
-    instancesByServiceId,
-    selectedInstancesByServiceId
-  );
+  const inflight = availableLocationsInflight.get(cacheKey);
+  if (inflight) {
+    return inflight;
+  }
 
-  console.log({
-    selectedServiceIds: normalizedServiceIds,
-    locationCount: locations.length,
-    source: 'service-regional-intersection'
-  });
+  const fetchPromise = (async () => {
+    const { loadPricingContext } = require('./estimatePricingService');
+    const { services, instancesByServiceId } = await loadPricingContext(normalizedServiceIds);
 
-  return locations;
+    const locations = await getLocationsForSelectedServices(
+      services,
+      instancesByServiceId,
+      selectedInstancesByServiceId
+    );
+
+    availableLocationsCache.set(cacheKey, {
+      locations,
+      expiresAt: Date.now() + AVAILABLE_LOCATIONS_CACHE_TTL_MS
+    });
+
+    return locations;
+  })();
+
+  availableLocationsInflight.set(cacheKey, fetchPromise);
+
+  try {
+    return await fetchPromise;
+  } finally {
+    availableLocationsInflight.delete(cacheKey);
+  }
 };
 
 const getAvailableInstances = async (location, serviceIds) => {

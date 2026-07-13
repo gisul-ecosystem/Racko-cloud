@@ -79,7 +79,8 @@ function rewriteCloudAutomationPath(path: string): string {
 const cloudAutomationProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_URL,
   changeOrigin: true,
-  timeout: config.REQUEST_TIMEOUT_MS,
+  timeout: Math.max(config.REQUEST_TIMEOUT_MS, 120_000),
+  proxyTimeout: Math.max(config.REQUEST_TIMEOUT_MS, 120_000),
   pathRewrite: rewriteCloudAutomationPath,
   on: {
     error: (_err, _req, res) => {

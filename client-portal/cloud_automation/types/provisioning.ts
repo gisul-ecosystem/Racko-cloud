@@ -54,6 +54,7 @@ export interface CredentialDelivery {
   deliveryStatus?: string | null;
   recipientEmail?: string | null;
   sentAt?: string | null;
+  spreadsheetAvailable?: boolean;
 }
 
 export interface ProvisionSnapshot {

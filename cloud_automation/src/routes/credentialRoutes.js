@@ -7,5 +7,6 @@ const router = express.Router();
 router.get('/request/:id/send-credentials', credentialController.sendCredentials);
 router.post('/request/:id/send-credentials', credentialController.sendCredentials);
 router.get('/request/:id/credentials', credentialController.getCredentialDelivery);
+router.get('/request/:id/credentials/spreadsheet', credentialController.downloadCredentialSpreadsheet);
 
 module.exports = router;

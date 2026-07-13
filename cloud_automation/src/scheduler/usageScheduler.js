@@ -14,6 +14,8 @@ const {
 const { resetDailyCounters } = require('../services/dailyUsageResetService');
 const { evaluateUsageAccess } = require('../services/usageAccessEvaluator');
 const { resetDailyCountersIfNeeded } = require('../services/usageMiddlewareHelper');
+const { isWindowEnforcementPaused } = require('../utils/windowEnforcementPause');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 
 /**
  * Monitor active sessions every minute
@@ -37,6 +39,20 @@ const monitorActiveSessions = async () => {
       const access = session.access;
 
       if (!access?.allowed) {
+        const pauseResult = await db.query(
+          `
+            SELECT window_enforcement_paused_until
+            FROM azure_users
+            WHERE id = $1
+            LIMIT 1
+          `,
+          [session.userId]
+        );
+
+        if (isWindowEnforcementPaused(pauseResult.rows[0])) {
+          continue;
+        }
+
         console.log(
           `[SESSION_VIOLATION] Session ${session.sessionId} for user ${session.userId}: ${access.reason}`
         );
@@ -160,7 +176,7 @@ const startUsageScheduler = () => {
 
   // Every minute — detect sign-ins, end stale sessions, enforce limits
   cron.schedule('* * * * *', async () => {
-    try {
+    await runScheduledJob('usage-monitor', async () => {
       console.log('[usageScheduler] Running sign-in check...');
       await detectActiveSignIns();
       await detectEndedSessions();
@@ -168,9 +184,9 @@ const startUsageScheduler = () => {
       await enforceBlockedAzureUsers();
       await restoreScheduledAccess();
       await monitorActiveSessions();
-    } catch (error) {
+    }).catch((error) => {
       console.error('[usageScheduler] Error:', error.message);
-    }
+    });
   });
   console.log('Usage monitor scheduled (every minute)');
 

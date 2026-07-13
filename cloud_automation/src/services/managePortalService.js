@@ -13,8 +13,23 @@ const {
   logAzureRoleEvent,
   roleAssignmentIdFromSeed
 } = require('../provisioners/azure/roleProvisioner');
-const { getResourceGroupNameForUser } = require('./userResourceGroupService');
+const {
+  getResourceGroupNameForUser,
+  getResourceGroupNamesForCleanup
+} = require('./userResourceGroupService');
+const { getUsersForRequest } = require('./userProvisionService');
+const { getUserRoleAssignmentsForRequest } = require('./roleProvisionService');
+const {
+  createCleanupClients,
+  startResourceGroupDeletion
+} = require('../provisioners/azure/cleanupProvisioner');
+const { deleteUserBudget } = require('../provisioners/azure/azureBudgetProvisioner');
+const {
+  getCustomRoleAssignmentsForRequest,
+  revokeCustomRoleAssignment
+} = require('./customRoleService');
 const usageService = require('./usageService');
+const { requestHasUsageWindows } = require('./usageWindowAccessService');
 
 const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
@@ -985,6 +1000,71 @@ const revokeAssignmentsForUser = async (authorizationClient, assignments, reques
   }
 };
 
+const purgeRequestDatabaseRecords = async (requestId) => {
+  const client = await db.connect();
+
+  try {
+    await client.query('BEGIN');
+
+    const requestScopedTables = [
+      'processed_azure_signins',
+      'request_service_roles',
+      'request_services',
+      'request_service_instances',
+      'provisioned_service_resources',
+      'request_custom_services',
+      'custom_role_assignments',
+      'request_usage_windows',
+      'usage_enforcement_logs',
+      'window_enforcement_logs',
+      'user_usage_sessions',
+      'user_role_assignments',
+      'daily_usage_tracking',
+      'resource_cleanup_logs',
+      'cleanup_logs',
+      'budget_exceeded_events',
+      'lab_history_snapshots',
+      'access_portal_sessions',
+      'access_portal_tokens',
+      'access_portal_audit_logs',
+      'notifications',
+      'request_user_resource_groups',
+      'credential_delivery',
+      'user_budget_spend',
+      'azure_users'
+    ];
+
+    for (const table of requestScopedTables) {
+      try {
+        await client.query(`DELETE FROM ${table} WHERE request_id = $1`, [requestId]);
+      } catch (error) {
+        if (error?.message?.includes('does not exist')) {
+          continue;
+        }
+        throw error;
+      }
+    }
+
+    await client.query(
+      'UPDATE admin_access_requests SET request_id = NULL WHERE request_id = $1',
+      [requestId]
+    );
+
+    const result = await client.query('DELETE FROM requests WHERE id = $1 RETURNING id', [requestId]);
+
+    if (!result.rows.length) {
+      throw new AppError('Request not found.', 404);
+    }
+
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
 const deletePortalUserCore = async ({ requestId, userId, auditActor = 'customer', auditEmail = null }) => {
   const targetUserId = String(userId || '').trim();
   if (!targetUserId) {
@@ -1112,6 +1192,269 @@ const deletePortalUserCore = async ({ requestId, userId, auditActor = 'customer'
     azureUserId: deletedUser.azureUserId,
     deleted: true
   };
+};
+
+const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
+  const normalizedRequestId = Number(requestId);
+
+  if (!Number.isInteger(normalizedRequestId) || normalizedRequestId <= 0) {
+    throw new AppError('Request id must be a positive integer.', 400);
+  }
+
+  const request = await getRequestContext(normalizedRequestId);
+
+  if (!request) {
+    throw new AppError('Request not found.', 404);
+  }
+
+  const requestDetails = await db.query(
+    `
+      SELECT costing_mode, azure_resource_group_name
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [normalizedRequestId]
+  );
+
+  const costingMode = requestDetails.rows[0]?.costing_mode || null;
+  const sharedResourceGroupName = requestDetails.rows[0]?.azure_resource_group_name || null;
+
+  const customAssignments = await getCustomRoleAssignmentsForRequest(normalizedRequestId);
+  let customRolesRevoked = 0;
+
+  for (const assignment of customAssignments) {
+    try {
+      await revokeCustomRoleAssignment(assignment.id);
+      customRolesRevoked += 1;
+    } catch (error) {
+      logManagePortalEvent('error', 'custom_role_revoke_failed', {
+        requestId: normalizedRequestId,
+        assignmentId: assignment.id,
+        message: error?.message
+      });
+    }
+  }
+
+  const roleAssignments = await getUserRoleAssignmentsForRequest(normalizedRequestId);
+  let rolesRemoved = 0;
+  const roleErrors = [];
+
+  try {
+    const { authorizationClient, resourceClient, graphClient } = createCleanupClients();
+
+    for (const assignment of roleAssignments) {
+      const assignmentId = assignment.assignment_id || assignment.assignmentId;
+      if (!assignmentId || !assignment.scope) {
+        continue;
+      }
+
+      try {
+        const removed = await deleteRoleAssignmentWithRetry(
+          authorizationClient,
+          assignment.scope,
+          assignmentId,
+          normalizedRequestId
+        );
+
+        if (removed) {
+          rolesRemoved += 1;
+        }
+      } catch (error) {
+        roleErrors.push({
+          scope: assignment.scope,
+          assignmentId,
+          role: assignment.azure_role || null,
+          reason: error?.message || 'Role assignment deletion failed'
+        });
+        logManagePortalEvent('error', 'role_assignment_delete_failed', {
+          requestId: normalizedRequestId,
+          scope: assignment.scope,
+          assignmentId,
+          message: error?.message
+        });
+      }
+    }
+
+    const budgetUsers = await db.query(
+      `
+      SELECT id, azure_resource_group_name, budget_id
+      FROM azure_users
+      WHERE request_id = $1
+    `,
+      [normalizedRequestId]
+    );
+
+    let budgetsDeleted = 0;
+
+    for (const user of budgetUsers.rows) {
+      if (!user.budget_id || !user.azure_resource_group_name) {
+        continue;
+      }
+
+      try {
+        await deleteUserBudget({
+          resourceGroupName: user.azure_resource_group_name,
+          userId: user.id
+        });
+        budgetsDeleted += 1;
+      } catch (error) {
+        logManagePortalEvent('error', 'budget_delete_failed', {
+          requestId: normalizedRequestId,
+          userId: user.id,
+          message: error?.message
+        });
+      }
+    }
+
+    const azureUsers = await getUsersForRequest(normalizedRequestId);
+    let usersDeleted = 0;
+    const userErrors = [];
+
+    for (const user of azureUsers) {
+      if (!user.azureUserId) {
+        userErrors.push({
+          username: user.username,
+          reason: 'Missing Azure user ID'
+        });
+        continue;
+      }
+
+      try {
+        await deleteAzureUserWithRetry(graphClient, user.azureUserId, normalizedRequestId);
+        usersDeleted += 1;
+      } catch (error) {
+        userErrors.push({
+          username: user.username,
+          reason: error?.message || 'Azure user deletion failed'
+        });
+      }
+    }
+
+    const resourceGroupsToDelete = await getResourceGroupNamesForCleanup(
+      normalizedRequestId,
+      costingMode,
+      sharedResourceGroupName
+    );
+
+    let resourceGroupsDeleted = 0;
+    const resourceGroupErrors = [];
+
+    for (const resourceGroupName of resourceGroupsToDelete) {
+      const started = await startResourceGroupDeletion(
+        resourceClient,
+        resourceGroupName,
+        normalizedRequestId
+      );
+
+      if (started) {
+        resourceGroupsDeleted += 1;
+      } else {
+        resourceGroupErrors.push({
+          resourceGroupName,
+          reason: 'Could not start resource group deletion in Azure'
+        });
+      }
+    }
+
+    try {
+      const auditClient = await db.connect();
+
+      try {
+        await recordAuditLog(auditClient, {
+          requestId: null,
+          customerEmail: request.customer_email || adminEmail,
+          actor: 'super_admin',
+          action: 'org_admin_request_deleted',
+          targetUserId: null,
+          details: {
+            deletedRequestId: normalizedRequestId,
+            usersDeleted,
+            usersTotal: azureUsers.length,
+            userErrors,
+            rolesRemoved,
+            roleErrors,
+            customRolesRevoked,
+            resourceGroupsDeleted,
+            resourceGroupErrors,
+            budgetsDeleted,
+            adminEmail,
+            resourceGroupDeletionMode: 'async'
+          }
+        });
+      } finally {
+        auditClient.release();
+      }
+    } catch (auditError) {
+      logManagePortalEvent('error', 'audit_log_skipped', {
+        requestId: normalizedRequestId,
+        action: 'org_admin_request_deleted',
+        reason: auditError?.message
+      });
+    }
+
+    await purgeRequestDatabaseRecords(normalizedRequestId);
+
+    logManagePortalEvent('info', 'request_delete_completed', {
+      requestId: normalizedRequestId,
+      usersDeleted,
+      usersTotal: azureUsers.length,
+      rolesRemoved,
+      customRolesRevoked,
+      resourceGroupsDeleted,
+      budgetsDeleted,
+      actor: 'super_admin'
+    });
+
+    return {
+      requestId: normalizedRequestId,
+      deleted: true,
+      usersDeleted,
+      usersTotal: azureUsers.length,
+      userErrors,
+      roleErrors,
+      resourceGroupErrors,
+      rolesRemoved,
+      customRolesRevoked,
+      resourceGroupsDeleted,
+      budgetsDeleted,
+      resourceGroupDeletionMode: 'async'
+    };
+  } catch (error) {
+    logManagePortalEvent('error', 'request_delete_failed', {
+      requestId: normalizedRequestId,
+      message: error?.message
+    });
+
+    try {
+      await purgeRequestDatabaseRecords(normalizedRequestId);
+      logManagePortalEvent('info', 'request_delete_db_purged_after_azure_failure', {
+        requestId: normalizedRequestId
+      });
+
+      return {
+        requestId: normalizedRequestId,
+        deleted: true,
+        usersDeleted: 0,
+        usersTotal: 0,
+        userErrors: [{ reason: error?.message || 'Azure cleanup failed before user deletion' }],
+        roleErrors,
+        resourceGroupErrors: [],
+        rolesRemoved,
+        customRolesRevoked,
+        resourceGroupsDeleted: 0,
+        budgetsDeleted: 0,
+        resourceGroupDeletionMode: 'async',
+        partialAzureCleanup: true
+      };
+    } catch (purgeError) {
+      throw new AppError(
+        `Request delete failed: ${error?.message || 'Azure cleanup error'}. ` +
+          `Database purge also failed: ${purgeError?.message || 'unknown error'}.`,
+        500
+      );
+    }
+  }
 };
 
 const updatePortalUserRolesCore = async ({
@@ -1427,7 +1770,9 @@ const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
     [requestId]
   );
 
-  if (requestResult.rows[0]?.enable_daily_usage) {
+  const hasUsageWindows = await requestHasUsageWindows(requestId);
+
+  if (requestResult.rows[0]?.enable_daily_usage || hasUsageWindows) {
     try {
       await usageService.startUsageSession({ requestId, userId: user.id });
       console.log(`[CONSOLE_LAUNCH] Usage session started for user ${user.id}, request ${requestId}`);
@@ -1825,6 +2170,7 @@ const triggerUserCleanup = async (sessionToken, userId, { action } = {}) => {
 module.exports = {
   deletePortalUser,
   deletePortalUserByOrgAdmin,
+  deleteRequestByOrgAdmin,
   exchangeAccessToken,
   endPortalUserUsageSession,
   getAzureConsoleLaunch,

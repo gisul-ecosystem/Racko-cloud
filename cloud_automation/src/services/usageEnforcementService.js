@@ -6,6 +6,9 @@ const { createNotification, NotificationType } = require('./notificationService'
 const { getTodayLimitMinutes, resolveScheduleForRequest } = require('../utils/usageSchedule');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { getLiveSessionMinutes, resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
+const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
+const { isWindowEnforcementPaused } = require('../utils/windowEnforcementPause');
+const { DateTime } = require('luxon');
 
 /**
  * Create Microsoft Graph client
@@ -152,6 +155,25 @@ async function enforceUsageLimit({ requestId, userId }) {
 
     const data = result.rows[0];
 
+    const pauseResult = await db.query(
+      `
+        SELECT window_enforcement_paused_until
+        FROM azure_users
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (isWindowEnforcementPaused(pauseResult.rows[0])) {
+      console.log(`[ENFORCEMENT] Skipping limit enforcement — admin pause active for user ${userId}`);
+      return {
+        success: true,
+        message: 'Window enforcement paused by admin.',
+        enforced: false
+      };
+    }
+
     // Check if enforcement in Azure is enabled
     if (!data.enforce_in_azure) {
       console.log(`[ENFORCEMENT] Azure enforcement disabled for request ${requestId}. Skipping.`);
@@ -163,8 +185,22 @@ async function enforceUsageLimit({ requestId, userId }) {
     }
 
     const liveSessionMins = await getLiveSessionMinutes(requestId, userId);
-    const usedMinutes = Number(data.used_today_minutes || 0) + liveSessionMins;
+    const windowResult = await db.query(
+      `
+        SELECT timezone
+        FROM request_usage_windows
+        WHERE request_id = $1
+        LIMIT 1
+      `,
+      [requestId]
+    );
     const schedule = resolveScheduleForRequest(data);
+    const tz =
+      windowResult.rows[0]?.timezone || schedule?.timezone || 'Asia/Kolkata';
+    const trackingDate = DateTime.now().setZone(tz).toISODate();
+    const usedMinutes = windowResult.rows.length
+      ? await getConsumedMinutesToday(userId, trackingDate, tz)
+      : Number(data.used_today_minutes || 0) + liveSessionMins;
     const limitMinutes = schedule
       ? getTodayLimitMinutes(schedule)
       : Number(data.daily_limit_minutes || 0);
@@ -219,18 +255,9 @@ async function enforceUsageLimit({ requestId, userId }) {
       [requestId, userId]
     );
 
-    const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
-    const { DateTime } = require('luxon');
-    const windowResult = await db.query(
-      `SELECT timezone FROM request_usage_windows WHERE request_id = $1 LIMIT 1`,
-      [requestId]
-    );
-    const tz =
-      windowResult.rows[0]?.timezone ||
-      resolveScheduleForRequest(data)?.timezone ||
-      'Asia/Kolkata';
-    const trackingDate = DateTime.now().setZone(tz).toISODate();
-    const consumedMinutes = await getConsumedMinutesToday(userId, trackingDate, tz);
+    const consumedMinutes = windowResult.rows.length
+      ? await getConsumedMinutesToday(userId, trackingDate, tz)
+      : usedMinutes;
 
     await db.query(
       `
@@ -361,6 +388,29 @@ async function enforceScheduleViolation({
     }
 
     const data = result.rows[0];
+
+    const pauseResult = await db.query(
+      `
+        SELECT window_enforcement_paused_until
+        FROM azure_users
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (isWindowEnforcementPaused(pauseResult.rows[0])) {
+      console.log(
+        `[ENFORCEMENT] Skipping schedule enforcement (${reason}) — admin pause active for user ${userId}`
+      );
+      return {
+        success: true,
+        enforced: false,
+        skipped: 'enforcement_paused',
+        reason
+      };
+    }
+
     const nextBlockedUntil = blockedUntil || new Date(Date.now() + 60 * 60 * 1000);
     let azureActions = [];
 
@@ -465,6 +515,10 @@ async function enforceBlockedAzureUsers() {
         AND au.status = 'Blocked'
         AND au.blocked_until IS NOT NULL
         AND au.blocked_until > NOW()
+        AND (
+          au.window_enforcement_paused_until IS NULL
+          OR au.window_enforcement_paused_until <= NOW()
+        )
       `
     );
 

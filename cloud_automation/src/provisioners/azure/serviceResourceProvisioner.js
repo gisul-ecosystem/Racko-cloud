@@ -26,14 +26,16 @@ const provisionServiceResource = async ({
   serviceId,
   serviceName,
   resourceGroupName,
-  instanceOption
+  instanceOption,
+  location
 }) => {
   logEvent('service_instance_policy_started', {
     requestId,
     serviceId,
     serviceName,
     instanceOption,
-    resourceGroupName
+    resourceGroupName,
+    location
   });
 
   if (/ai foundry/i.test(String(serviceName || ''))) {
@@ -57,7 +59,8 @@ const provisionServiceResource = async ({
       serviceId,
       serviceName,
       resourceGroupName,
-      instanceOption
+      instanceOption,
+      location
     });
 
     logEvent('service_instance_policy_success', {

@@ -8,7 +8,7 @@ const mongoObjectId = z
 const machineOSEnum = z.enum(['windows', 'linux', 'macos']);
 
 const installMethodEnum = z.enum(
-  ['apt', 'brew', 'choco', 'msi', 'exe', 'zip', 'script'],
+  ['apt', 'brew', 'choco', 'winget', 'msi', 'exe', 'zip', 'script'],
   { required_error: 'installMethod is required' }
 );
 

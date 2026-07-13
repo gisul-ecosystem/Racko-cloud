@@ -10,7 +10,10 @@ const {
   mapStorageSku,
   mapServiceBusSku,
   mapKeyVaultSku,
-  mapAksNodeVmSize
+  mapAksNodeVmSize,
+  mapApiManagementSku,
+  mapLogAnalyticsSku,
+  mapContainerRegistrySku
 } = require('../utils/instancePolicyRules');
 const {
   fetchRetailPriceItems,
@@ -166,6 +169,33 @@ const buildRetailFilter = (service, instanceOption) => {
 
   if (/logic app/i.test(serviceName)) {
     const skuToken = /standard/i.test(String(instanceOption || '')) ? 'Standard' : 'Consumption';
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/api management/i.test(serviceName)) {
+    const skuToken = mapApiManagementSku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/log analytics/i.test(serviceName)) {
+    const skuToken = mapLogAnalyticsSku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/container registry/i.test(serviceName)) {
+    const skuToken = mapContainerRegistrySku(instanceOption);
     return (
       `serviceName eq '${escapeODataString(azureServiceName)}' ` +
       `and contains(skuName,'${escapeODataString(skuToken)}') ` +

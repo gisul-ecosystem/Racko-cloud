@@ -354,16 +354,26 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     try {
       const jobId = new mongoose.Types.ObjectId(req.params['jobId'] as string);
       const body = req.body as AgentJobResultInput;
+      const bodySize = JSON.stringify(body).length;
       logger.info('[Agent] Job result received', {
         jobId: jobId.toString(),
         agentId: body.agentId,
         status: body.status,
         logsLength: body.logs?.length ?? 0,
+        bodySizeBytes: bodySize,
         logsPreview: body.logs?.slice(0, 300) ?? '',
       });
       await machineManagerService.updateJobResult(jobId, body);
+      logger.info('[Agent] Job result saved successfully', {
+        jobId: jobId.toString(),
+        status: body.status,
+      });
       success(res, 'Job result recorded.');
     } catch (err) {
+      logger.error('[Agent] Job result failed', {
+        jobId: req.params['jobId'],
+        error: err instanceof Error ? err.message : String(err),
+      });
       next(err);
     }
   }

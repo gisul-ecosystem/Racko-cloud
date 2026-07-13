@@ -45,7 +45,9 @@ const API_VERSIONS = {
   'microsoft.cognitiveservices/accounts': '2023-05-01',
   'microsoft.containerregistry/registries': '2023-06-01-preview',
   'microsoft.documentdb/databaseaccounts': '2023-04-15',
-  'microsoft.app/containerapps': '2023-05-01'
+  'microsoft.app/containerapps': '2023-05-01',
+  'microsoft.apimanagement/service': '2022-08-01',
+  'microsoft.operationalinsights/workspaces': '2022-10-01'
 };
 
 const DELETE_ORDER = [
@@ -72,6 +74,8 @@ const DELETE_ORDER = [
   'microsoft.containerregistry/registries',
   'microsoft.compute/sshpublickeys',
   'microsoft.web/serverfarms',
+  'microsoft.apimanagement/service',
+  'microsoft.operationalinsights/workspaces',
   'microsoft.cognitiveservices/accounts',
   'microsoft.documentdb/databaseaccounts'
 ];
@@ -462,6 +466,9 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
       const userResult = { username: user.username, rgName, deleted: [], failed: [] };
 
       try {
+        const { captureUserLabMetrics, recordCleanupSnapshot } = require('./labHistoryService');
+        const metrics = await captureUserLabMetrics(requestId, user.id);
+
         const affected = await runResourceActionForUser({
           costingMode: request.costing_mode,
           perUserResourceGroupName: user.azure_resource_group_name,
@@ -472,6 +479,21 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
           activeUserCount,
           action: resolvedAction
         });
+
+        if (metrics) {
+          await recordCleanupSnapshot({
+            requestId,
+            userId: user.id,
+            triggeredBy: 'scheduler',
+            cleanupAction: resolvedAction,
+            resourcesDeleted: affected,
+            metrics
+          }).catch((snapshotError) => {
+            console.warn(
+              `[Cleanup] History snapshot failed for user ${user.id}: ${snapshotError.message}`
+            );
+          });
+        }
 
         for (const item of affected) {
           userResult.deleted.push({
