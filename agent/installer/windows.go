@@ -26,18 +26,55 @@ const directInstallTimeout = 4 * time.Hour
 
 // ─── Win32 API declarations ───────────────────────────────────────────────────
 
+// WTS_SESSION_INFO mirrors the Win32 WTS_SESSION_INFOW struct.
+type wtsSessionInfo struct {
+	SessionID         uint32
+	pWinStationName   *uint16
+	State             uint32
+}
+
+const wtsActive = 0 // WTSActive — session has an interactive logged-on user
+
 var (
-	modWtsapi32                      = windows.NewLazySystemDLL("wtsapi32.dll")
-	modUserenv                       = windows.NewLazySystemDLL("userenv.dll")
-	procWTSGetActiveConsoleSessionId = windows.NewLazySystemDLL("kernel32.dll").NewProc("WTSGetActiveConsoleSessionId")
-	procWTSQueryUserToken            = modWtsapi32.NewProc("WTSQueryUserToken")
-	procCreateEnvironmentBlock       = modUserenv.NewProc("CreateEnvironmentBlock")
-	procDestroyEnvironmentBlock      = modUserenv.NewProc("DestroyEnvironmentBlock")
+	modWtsapi32                = windows.NewLazySystemDLL("wtsapi32.dll")
+	modUserenv                 = windows.NewLazySystemDLL("userenv.dll")
+	procWTSEnumerateSessions   = modWtsapi32.NewProc("WTSEnumerateSessionsW")
+	procWTSFreeMemory          = modWtsapi32.NewProc("WTSFreeMemory")
+	procWTSQueryUserToken      = modWtsapi32.NewProc("WTSQueryUserToken")
+	procCreateEnvironmentBlock = modUserenv.NewProc("CreateEnvironmentBlock")
+	procDestroyEnvironmentBlock = modUserenv.NewProc("DestroyEnvironmentBlock")
 )
 
-func wtsGetActiveConsoleSessionId() uint32 {
-	ret, _, _ := procWTSGetActiveConsoleSessionId.Call()
-	return uint32(ret)
+// findActiveSessionID enumerates all WTS sessions and returns the first one
+// in WTSActive state. This covers both physical console and RDP sessions,
+// whereas WTSGetActiveConsoleSessionId only returns the console session and
+// fails on headless VMs where users connect exclusively via RDP.
+func findActiveSessionID() (uint32, error) {
+	var pSessions uintptr
+	var count uint32
+
+	ret, _, err := procWTSEnumerateSessions.Call(
+		0,              // WTS_CURRENT_SERVER_HANDLE
+		0,              // Reserved
+		1,              // Version
+		uintptr(unsafe.Pointer(&pSessions)),
+		uintptr(unsafe.Pointer(&count)),
+	)
+	if ret == 0 {
+		return 0, fmt.Errorf("WTSEnumerateSessionsW: %w", err)
+	}
+	defer procWTSFreeMemory.Call(pSessions)
+
+	// Walk the array of WTS_SESSION_INFO structs
+	size := unsafe.Sizeof(wtsSessionInfo{})
+	for i := uint32(0); i < count; i++ {
+		info := (*wtsSessionInfo)(unsafe.Pointer(pSessions + uintptr(i)*size))
+		if info.State == wtsActive && info.SessionID != 0 {
+			log.Printf("[runAsUser] Found active session ID=%d (WTSActive)", info.SessionID)
+			return info.SessionID, nil
+		}
+	}
+	return 0, fmt.Errorf("no active user session found (all sessions checked: %d)", count)
 }
 
 func wtsQueryUserToken(sessionID uint32) (windows.Token, error) {
@@ -48,7 +85,6 @@ func wtsQueryUserToken(sessionID uint32) (windows.Token, error) {
 	}
 	return token, nil
 }
-
 func createEnvironmentBlock(token windows.Token) (uintptr, error) {
 	var env uintptr
 	ret, _, err := procCreateEnvironmentBlock.Call(uintptr(unsafe.Pointer(&env)), uintptr(token), 0)
@@ -118,13 +154,11 @@ func getElevatedToken(t windows.Token) (windows.Token, error) {
 // the proper Win32 method that works across session boundaries without file permission issues.
 // Falls back to runCmd (Session 0 / LocalSystem) if no active user session exists.
 func runAsActiveUser(name string, args ...string) (string, error) {
-	sessionID := wtsGetActiveConsoleSessionId()
-	const noSession = ^uint32(0) // 0xFFFFFFFF means no active session
-	if sessionID == noSession {
-		log.Printf("[runAsUser] No active console session — falling back to LocalSystem for: %s", name)
+	sessionID, err := findActiveSessionID()
+	if err != nil {
+		log.Printf("[runAsUser] %v — falling back to LocalSystem for: %s", err, name)
 		return runCmd(name, args...)
 	}
-	log.Printf("[runAsUser] Active console session ID: %d", sessionID)
 
 	// Get the user token for that session
 	userToken, err := wtsQueryUserToken(sessionID)
