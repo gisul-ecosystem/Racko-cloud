@@ -61,7 +61,7 @@ export default function TenantPlanDetailPage() {
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/vms');
+      router.replace('/tenant/console');
     }
   }, [tenantUser, router]);
 
@@ -193,7 +193,7 @@ export default function TenantPlanDetailPage() {
         <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
           {actionError}
           {actionError.includes('balance') ? (
-            <Link href="/tenant/dashboard/wallet" className="ml-1 font-semibold underline">
+            <Link href="/tenant/dashboard/admin/billing" className="ml-1 font-semibold underline">
               Go to Wallet
             </Link>
           ) : null}
@@ -336,7 +336,7 @@ export default function TenantPlanDetailPage() {
                 {insufficientForQuote && (
                   <p className="rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-orange-800">
                     Insufficient balance.{' '}
-                    <Link href="/tenant/dashboard/wallet" className="font-semibold underline">
+                    <Link href="/tenant/dashboard/admin/billing" className="font-semibold underline">
                       Add funds
                     </Link>
                   </p>

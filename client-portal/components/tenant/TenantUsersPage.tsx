@@ -103,7 +103,7 @@ export function TenantUsersPage() {
           </p>
         </div>
         <Link
-          href="/tenant/dashboard/vms/onboard"
+          href="/tenant/dashboard/admin/assign-vms"
           className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white"
           style={tenantAccentButton(accentColor)}
         >
@@ -128,7 +128,7 @@ export function TenantUsersPage() {
                 Onboard VMs to create tenant users with 1:1 VM assignments.
               </p>
               <Link
-                href="/tenant/dashboard/vms/onboard"
+                href="/tenant/dashboard/admin/assign-vms"
                 className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[#B91C1C] hover:underline"
               >
                 <UserPlus className="h-4 w-4" />
@@ -167,7 +167,7 @@ export function TenantUsersPage() {
                         <td className="px-4 py-3 text-gray-600">
                           {vmCount > 0 ? (
                             <Link
-                              href={`/tenant/dashboard/vms?userId=${user.id}`}
+                              href={`/tenant/dashboard/admin/vms?userId=${user.id}`}
                               className="text-[#B91C1C] hover:underline"
                             >
                               {vmCount} VM{vmCount === 1 ? '' : 's'}

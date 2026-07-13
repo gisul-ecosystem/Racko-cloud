@@ -7,7 +7,8 @@ import { ArrowLeft, Loader2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { createRequest } from '../../api/client';
-import { AWS_DEFAULT_REGION, AWS_ROUTES } from '../../constants';
+import { AWS_DEFAULT_REGION } from '../../constants';
+import { useAwsRoutes } from '../../../lib/cloudPortalRoutes';
 import { DEFAULT_IAM_POLICIES } from '../../config/iamPolicies';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
 import { useAvailableRegions } from '../../hooks/useAvailableRegions';
@@ -108,6 +109,7 @@ function validateForm(input) {
 
 export function RequestWorkspace() {
   const router = useRouter();
+  const AWS_ROUTES = useAwsRoutes();
   const { services, servicesByCategory, loading, error, refetch } = useServiceCatalog();
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -481,7 +483,7 @@ export function RequestWorkspace() {
                 type="button"
                 onClick={handleSubmit}
                 disabled={submitting || currentStep < 8}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717] disabled:opacity-50"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:opacity-50"
               >
                 {submitting ? (
                   <>

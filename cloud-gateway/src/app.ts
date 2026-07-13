@@ -14,6 +14,7 @@ import cloudAutomationAwsRoutes from './routes/cloudAutomationAws.routes';
 import cloudAutomationGcpRoutes from './routes/cloudAutomationGcp.routes';
 import managePortalRoutes from './routes/managePortal.routes';
 import orgAdminPortalRoutes from './routes/orgAdminPortal.routes';
+import tenantCloudRoutes from './routes/tenantCloud.routes';
 import proxyRoutes from './routes/proxy.routes';
 
 const app = express();
@@ -63,6 +64,8 @@ app.get('/health', (_req, res) => {
 app.use(managePortalRoutes);
 // Organization admin APIs (JWT super_admin; enforced by cloud_automation)
 app.use(orgAdminPortalRoutes);
+// Tenant cloud automation (tenant JWT + assigned service → azure/aws services)
+app.use(tenantCloudRoutes);
 // Cloud automation AWS/GCP — register before Azure routes because
 // /api/v1/cloud-automation-aws and /api/v1/cloud-automation-gcp are prefixes of /api/v1/cloud-automation.
 app.use(cloudAutomationAwsRoutes);

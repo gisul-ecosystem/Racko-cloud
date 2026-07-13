@@ -4,13 +4,17 @@ import { config } from '../config';
 import { UnauthorizedError, ForbiddenError } from '../utils/errors';
 import type { GatewayRequest } from '../types';
 
-interface TenantTokenPayload {
+export interface TenantTokenPayload {
   sub: string;
   tenantId: string;
   role: 'tenant_admin' | 'tenant_user';
   type: 'tenant';
   iat?: number;
   exp?: number;
+}
+
+export interface TenantAuthenticatedRequest extends GatewayRequest {
+  tenantAuth: TenantTokenPayload;
 }
 
 /**
@@ -56,6 +60,7 @@ export function requireTenantBearer(req: Request, _res: Response, next: NextFunc
     }
 
     req.headers['x-tenant-id'] = gatewayReq.tenantContext.id;
+    (req as TenantAuthenticatedRequest).tenantAuth = payload;
     next();
   } catch {
     next(new UnauthorizedError('Invalid or expired access token.'));

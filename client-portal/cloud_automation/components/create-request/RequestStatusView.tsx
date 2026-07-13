@@ -22,7 +22,7 @@ import {
   Users,
 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
-import { AZURE_ROUTES } from '../../constants';
+import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
 import { downloadCredentialSpreadsheet } from '../../api/client';
 import { useProvisionStatus } from '../../hooks/useProvisionStatus';
 import type { OrchestrationEvent, ProvisionSnapshot, ProvisionStepState } from '../../types/provisioning';
@@ -52,7 +52,7 @@ function StepIcon({ status }: { status: ProvisionStepState['status'] }) {
     return <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" />;
   }
   if (status === 'active') {
-    return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[#B91C1C]" />;
+    return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[var(--cloud-accent,#B91C1C)]" />;
   }
   if (status === 'failed') {
     return <AlertCircle className="h-5 w-5 shrink-0 text-red-600" />;
@@ -178,9 +178,11 @@ export function RequestStatusView({
   requestId,
   initialSnapshot = null,
   initialError = null,
-  backHref = AZURE_ROUTES.dashboard,
+  backHref,
   backLabel = 'Back to overview',
 }: RequestStatusViewProps) {
+  const AZURE_ROUTES = useAzureRoutes();
+  const resolvedBackHref = backHref ?? AZURE_ROUTES.dashboard;
   const [tipsOpen, setTipsOpen] = useState(false);
   const [downloadingSpreadsheet, setDownloadingSpreadsheet] = useState(false);
   const [spreadsheetError, setSpreadsheetError] = useState<string | null>(null);
@@ -227,7 +229,7 @@ export function RequestStatusView({
   return (
     <div className="mx-auto max-w-screen-xl space-y-6">
       <Link
-        href={backHref}
+        href={resolvedBackHref}
         className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900"
       >
         <ArrowLeft className="h-4 w-4" />
@@ -246,7 +248,7 @@ export function RequestStatusView({
           <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="flex flex-col gap-5 p-6 lg:flex-row lg:items-start lg:justify-between lg:p-8">
               <div className="flex items-start gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]">
                   <Cloud className="h-7 w-7" />
                 </div>
                 <div className="min-w-0">
@@ -357,7 +359,7 @@ export function RequestStatusView({
                   <div className="mb-6 h-2 overflow-hidden rounded-full bg-gray-100">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        isComplete ? 'bg-green-600' : failedStep ? 'bg-red-500' : 'bg-[#B91C1C]'
+                        isComplete ? 'bg-green-600' : failedStep ? 'bg-red-500' : 'bg-[var(--cloud-accent,#B91C1C)]'
                       }`}
                       style={{ width: `${progressPct}%` }}
                     />
@@ -387,7 +389,7 @@ export function RequestStatusView({
                               step.status === 'complete'
                                 ? 'text-gray-900'
                                 : step.status === 'active'
-                                  ? 'text-[#B91C1C]'
+                                  ? 'text-[var(--cloud-accent,#B91C1C)]'
                                   : step.status === 'failed'
                                     ? 'text-red-700'
                                     : 'text-gray-500'
@@ -488,7 +490,7 @@ export function RequestStatusView({
                     className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
                   >
                     <span className="inline-flex items-center gap-2 text-sm font-semibold text-gray-900">
-                      <Info className="h-4 w-4 text-[#B91C1C]" />
+                      <Info className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
                       Azure Portal tips
                     </span>
                     <ChevronRight
@@ -528,7 +530,7 @@ export function RequestStatusView({
                       type="button"
                       onClick={() => void handleDownloadSpreadsheet()}
                       disabled={downloadingSpreadsheet}
-                      className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-[#B91C1C]/30 hover:bg-red-50 hover:text-[#B91C1C] disabled:opacity-50"
+                      className="flex w-full items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-[var(--cloud-accent,#B91C1C)] hover:bg-[var(--cloud-accent-soft,#fef2f2)] hover:text-[var(--cloud-accent,#B91C1C)] disabled:opacity-50"
                     >
                       <span className="inline-flex items-center gap-2">
                         {downloadingSpreadsheet ? (
@@ -543,13 +545,13 @@ export function RequestStatusView({
                   ) : null}
                   <Link
                     href={AZURE_ROUTES.createRequest}
-                    className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-[#B91C1C]/30 hover:bg-red-50 hover:text-[#B91C1C]"
+                    className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:border-[var(--cloud-accent,#B91C1C)] hover:bg-[var(--cloud-accent-soft,#fef2f2)] hover:text-[var(--cloud-accent,#B91C1C)]"
                   >
                     New request
                     <ChevronRight className="h-4 w-4 text-gray-400" />
                   </Link>
                   <Link
-                    href={backHref}
+                    href={resolvedBackHref}
                     className="flex items-center justify-between rounded-lg border border-gray-200 px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
                   >
                     Back to dashboard

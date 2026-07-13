@@ -395,7 +395,7 @@ export const getAllRequests = async ({ rackoUserId, isSuperAdmin } = {}) => {
     .lean();
 };
 
-export const getRequestById = async (id) => {
+export const getRequestById = async (id, { rackoUserId, isSuperAdmin } = {}) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw validationError('Invalid request id');
   }
@@ -405,6 +405,14 @@ export const getRequestById = async (id) => {
     const error = new Error('Request not found');
     error.statusCode = 404;
     throw error;
+  }
+
+  if (!isSuperAdmin) {
+    if (!rackoUserId || String(request.createdBy || '') !== String(rackoUserId)) {
+      const error = new Error('Request not found');
+      error.statusCode = 404;
+      throw error;
+    }
   }
 
   return request;

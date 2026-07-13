@@ -25,7 +25,7 @@ export function PermissionsPicker({ selectedServices, permissionOverrides, onPer
               {effective.map((policy) => (
                 <span
                   key={policy}
-                  className="rounded-full border border-[#B91C1C] bg-red-50 px-3 py-1 text-xs font-medium text-[#B91C1C]"
+                  className="rounded-full border border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] px-3 py-1 text-xs font-medium text-[var(--cloud-accent,#B91C1C)]"
                 >
                   {policy}
                 </span>
@@ -58,7 +58,7 @@ export function PermissionsPicker({ selectedServices, permissionOverrides, onPer
                         }}
                         className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                           active
-                            ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                            ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]'
                             : 'border-gray-200 text-gray-600 hover:border-gray-300'
                         }`}
                       >

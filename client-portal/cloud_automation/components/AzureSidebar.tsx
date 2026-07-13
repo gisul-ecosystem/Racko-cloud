@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { ChevronLeft, Cloud, LayoutGrid, Plus } from 'lucide-react';
-import { AZURE_ROUTES } from '../constants';
 import { useAzureShell } from '../hooks/useAzureShell';
+import { useAzureRoutes } from '../../lib/cloudPortalRoutes';
 
 export function AzureSidebar() {
   const { sidebarOpen, setSidebarOpen } = useAzureShell();
+  const AZURE_ROUTES = useAzureRoutes();
 
   return (
     <>

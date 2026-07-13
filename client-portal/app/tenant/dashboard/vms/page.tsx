@@ -1,7 +1,13 @@
 'use client';
 
-import { TenantVmListView } from '@/components/tenant/TenantVmViews';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { tenantVps } from '@/lib/tenantAdminRoutes';
 
-export default function TenantVmListPage() {
-  return <TenantVmListView />;
+export default function RedirectPage() {
+  const router = useRouter();
+  useEffect(() => {
+    router.replace(tenantVps.vms);
+  }, [router]);
+  return null;
 }

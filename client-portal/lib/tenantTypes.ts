@@ -1,6 +1,55 @@
 export type TenantStatus = 'pending' | 'active' | 'suspended' | 'cancelled';
-export type ServiceKey = 'vm-management' | 'azure';
+export type ServiceKey =
+  | 'vm-management'
+  | 'elastic-servers'
+  | 'azure'
+  | 'aws'
+  | 'gcp'
+  | 'docs'
+  | 'machine-manager';
 export type ServiceConfigStatus = 'active' | 'suspended';
+
+export const PLATFORM_SERVICE_CATALOG: Array<{
+  key: ServiceKey;
+  name: string;
+  description: string;
+}> = [
+  {
+    key: 'vm-management',
+    name: 'VPS Hosting',
+    description: 'Provision and manage Racko cloud virtual machines',
+  },
+  {
+    key: 'elastic-servers',
+    name: 'Elastic Server Import',
+    description: 'Connect to external servers from any provider via secure browser console',
+  },
+  {
+    key: 'azure',
+    name: 'Azure Services',
+    description: 'Azure access management, provisioning, and lab environments.',
+  },
+  {
+    key: 'aws',
+    name: 'AWS Services',
+    description: 'AWS access management, provisioning, and lab environments.',
+  },
+  {
+    key: 'gcp',
+    name: 'GCP Services',
+    description: 'Google Cloud access management, provisioning, and lab environments.',
+  },
+  {
+    key: 'docs',
+    name: 'Documentation',
+    description: 'Guides and reference for VPS, Elastic Server, AWS, and Azure services',
+  },
+  {
+    key: 'machine-manager',
+    name: 'Machine Manager',
+    description: 'Install and manage software on any machine',
+  },
+];
 
 export interface TenantBranding {
   logoUrl?: string;
