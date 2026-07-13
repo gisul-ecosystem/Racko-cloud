@@ -117,7 +117,12 @@ func destroyEnvironmentBlock(env uintptr) {
 	procDestroyEnvironmentBlock.Call(env)
 }
 
-// ─── Active-user process launcher ─────────────────────────────────────────────
+// rebootRequiredExitCodes are Windows installer exit codes that mean
+// "installed successfully, reboot required". Treat as success.
+var rebootRequiredExitCodes = map[uint32]bool{
+	3010: true, // ERROR_SUCCESS_REBOOT_REQUIRED (most common — MSI, choco packages)
+	1641: true, // ERROR_SUCCESS_REBOOT_INITIATED (installer triggered a reboot)
+}
 
 // getElevatedToken returns the elevated (admin) token linked to t.
 // Under UAC, WTSQueryUserToken returns a filtered token even for Administrators.
@@ -346,6 +351,11 @@ func runAsActiveUser(name string, args ...string) (string, error) {
 	if exitCode != 0 {
 		log.Printf("[runAsUser] FAILED: %s (PID=%d) exitCode=%d elapsed=%s", name, pi.ProcessId, exitCode, elapsed)
 		log.Printf("[runAsUser] output: %s", output)
+
+		if rebootRequiredExitCodes[exitCode] {
+			log.Printf("[runAsUser] Exit code %d means reboot required — treating as success", exitCode)
+			return combined, nil
+		}
 
 		outLower := strings.ToLower(output)
 		for _, signal := range alreadyInstalledSignals {
@@ -666,6 +676,15 @@ func runCmd(name string, args ...string) (string, error) {
 		log.Printf("[runCmd] FAILED: %s (PID=%d) elapsed=%s exitErr=%v", name, cmd.Process.Pid, elapsed, err)
 		log.Printf("[runCmd] stdout: %s", stdout.String())
 		log.Printf("[runCmd] stderr: %s", stderr.String())
+
+		// Check for reboot-required exit codes before treating as failure
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code := uint32(exitErr.ExitCode())
+			if rebootRequiredExitCodes[code] {
+				log.Printf("[runCmd] Exit code %d means reboot required — treating as success", code)
+				return combined, nil
+			}
+		}
 		return combined, fmt.Errorf("%s exited with error: %w", name, err)
 	}
 
