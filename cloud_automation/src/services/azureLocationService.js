@@ -589,7 +589,11 @@ const filterLocationsForSelectedInstances = async (
   instancesByServiceId,
   selectedInstancesByServiceId
 ) => {
-  const { filterInstancesForLocation, serviceSupportsInstances } = require('./instanceAvailabilityService');
+  const { serviceSupportsInstances } = require('./instanceAvailabilityService');
+  const { isVirtualMachineService } = require('../utils/vmSize');
+  const { getRegionsSupportingVmSize } = require('./vmInstanceAvailabilityService');
+  const { getServiceRegionalHourlyPrices } = require('./estimatePricingService');
+  const { findInstancePolicyRule } = require('../utils/instancePolicyRules');
 
   const servicesById = new Map(
     services.map((service) => [
@@ -628,19 +632,50 @@ const filterLocationsForSelectedInstances = async (
     return locations;
   }
 
-  const availabilityChecks = await Promise.all(
-    locations.map(async (location) => {
-      const filtered = await filterInstancesForLocation(
-        location.arm_region_name,
-        instancesToValidate,
-        servicesById
-      );
+  const regionSets = [];
 
-      return filtered.length === instancesToValidate.length ? location : null;
-    })
-  );
+  for (const instance of instancesToValidate) {
+    const service = servicesById.get(Number(instance.serviceId ?? instance.service_id));
+    const optionName = String(instance.option_name || '').trim();
 
-  return availabilityChecks.filter(Boolean);
+    if (!service || !optionName) {
+      continue;
+    }
+
+    if (isVirtualMachineService(service.name)) {
+      const priceByRegion = await getServiceRegionalHourlyPrices(service, optionName);
+      if (priceByRegion.size > 0) {
+        regionSets.push(new Set([...priceByRegion.keys()].map((region) => region.toLowerCase())));
+        continue;
+      }
+
+      const vmRegions = await getRegionsSupportingVmSize(optionName);
+      if (vmRegions.size > 0) {
+        regionSets.push(vmRegions);
+      }
+      continue;
+    }
+
+    const rule = findInstancePolicyRule(service.name);
+    if (
+      rule &&
+      rule.policyType !== 'allowed_vm_sku' &&
+      rule.policyType !== 'allowed_aks_node_vm_sku' &&
+      rule.policyType !== 'instance_metadata'
+    ) {
+      const priceByRegion = await getServiceRegionalHourlyPrices(service, optionName);
+      if (priceByRegion.size > 0) {
+        regionSets.push(new Set([...priceByRegion.keys()].map((region) => region.toLowerCase())));
+      }
+    }
+  }
+
+  const validRegions = intersectRegionNameSets(regionSets);
+  if (!validRegions || validRegions.size === 0) {
+    return locations;
+  }
+
+  return locations.filter((location) => validRegions.has(location.arm_region_name));
 };
 
 const getCatalogHourlyPricesForServices = async (serviceIds) => {

@@ -47,43 +47,50 @@ func (e *Executor) Handle(job poller.Job) {
 	}
 
 	var combinedLogs string
+	jobFailed := false
 
 	for _, swID := range job.SoftwareIDs {
 		pkg, err := e.fetchSoftware(swID)
 		if err != nil {
 			log.Printf("[executor] Failed to fetch software id=%s: %v", swID, err)
 			combinedLogs += fmt.Sprintf("[error] Could not fetch software %s: %v\n", swID, err)
-			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
-				log.Printf("[executor] Failed to report 'failed' for job=%s: %v", job.ID, err)
-			}
+			jobFailed = true
 			continue
 		}
 
 		log.Printf("[executor] Job %s waiting for install slot (package=%s)", job.ID, pkg.Name)
+		waitStart := time.Now()
 
 		// Acquire install lock — waits for any other in-progress install to finish.
 		installMu.Lock()
+		waitElapsed := time.Since(waitStart).Round(time.Millisecond)
+		log.Printf("[executor] Job %s acquired install slot after %s (package=%s)", job.ID, waitElapsed, pkg.Name)
 		log.Printf("[executor] Installing %s v%s via %s (job=%s)", pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
+		installStart := time.Now()
 		logs, err := installer.Install(*pkg)
+		installElapsed := time.Since(installStart).Round(time.Millisecond)
 		installMu.Unlock()
+		log.Printf("[executor] installer.Install returned for %s — elapsed=%s err=%v", pkg.Name, installElapsed, err)
 
 		combinedLogs += truncateLogs(logs, 50*1024) // cap at 50KB per package
 
 		if err != nil {
 			log.Printf("[executor] Install failed for %s: %v", pkg.Name, err)
 			log.Printf("[executor] Output:\n%s", logs)
-			if err := e.rep.Report(job.ID, e.agentID, "failed", combinedLogs); err != nil {
-				log.Printf("[executor] Failed to report 'failed' for job=%s: %v", job.ID, err)
-			}
+			jobFailed = true
 			continue
 		}
 
 		log.Printf("[executor] %s installed successfully", pkg.Name)
 	}
 
-	log.Printf("[executor] Job %s complete — reporting success", job.ID)
-	if err := e.rep.Report(job.ID, e.agentID, "success", combinedLogs); err != nil {
-		log.Printf("[executor] Failed to report 'success' for job=%s: %v", job.ID, err)
+	finalStatus := "success"
+	if jobFailed {
+		finalStatus = "failed"
+	}
+	log.Printf("[executor] Job %s complete — reporting %s", job.ID, finalStatus)
+	if err := e.rep.Report(job.ID, e.agentID, finalStatus, combinedLogs); err != nil {
+		log.Printf("[executor] Failed to report '%s' for job=%s: %v", finalStatus, job.ID, err)
 	}
 }
 

@@ -33,7 +33,7 @@ export default function TenantNotificationsPage() {
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/vms');
+      router.replace('/tenant/dashboard/admin/vms');
     }
   }, [tenantUser, router]);
 

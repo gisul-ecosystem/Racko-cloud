@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 const { DateTime } = require('luxon');
 const db = require('../db/postgres');
 const { createGraphClient } = require('../provisioners/azure/userProvisioner');
@@ -237,12 +238,12 @@ function startWindowEnforcementScheduler() {
   }
 
   scheduledTask = cron.schedule('* * * * *', async () => {
-    try {
+    await runScheduledJob('window-enforcement', async () => {
       await enforceUsageWindows();
       await enforceDailyHourLimits();
-    } catch (err) {
+    }).catch((err) => {
       logEvent('error', 'enforcement_poll_error', { error: err.message });
-    }
+    });
   });
 
   logEvent('info', 'window_enforcement_scheduler_started');

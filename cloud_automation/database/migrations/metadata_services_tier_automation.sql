@@ -267,6 +267,42 @@ WHERE s.name ILIKE '%Bot Service%'
 ON CONFLICT (service_id, instance_option)
 DO UPDATE SET azure_role = EXCLUDED.azure_role, tier_automated = EXCLUDED.tier_automated;
 
+INSERT INTO public.service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
+SELECT s.id, m.instance_option, m.azure_role, true
+FROM public.services s
+CROSS JOIN (VALUES
+  ('Developer', 'API Management Service Contributor'),
+  ('Basic', 'API Management Service Contributor'),
+  ('Standard', 'API Management Service Contributor'),
+  ('Premium', 'API Management Service Contributor')
+) AS m(instance_option, azure_role)
+WHERE s.name ILIKE '%API Management%'
+ON CONFLICT (service_id, instance_option)
+DO UPDATE SET azure_role = EXCLUDED.azure_role, tier_automated = EXCLUDED.tier_automated;
+
+INSERT INTO public.service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
+SELECT s.id, m.instance_option, m.azure_role, true
+FROM public.services s
+CROSS JOIN (VALUES
+  ('Pay-as-you-go', 'Log Analytics Contributor'),
+  ('Capacity Reservation', 'Log Analytics Contributor')
+) AS m(instance_option, azure_role)
+WHERE s.name ILIKE '%Log Analytics%'
+ON CONFLICT (service_id, instance_option)
+DO UPDATE SET azure_role = EXCLUDED.azure_role, tier_automated = EXCLUDED.tier_automated;
+
+INSERT INTO public.service_instance_role_mapping (service_id, instance_option, azure_role, tier_automated)
+SELECT s.id, m.instance_option, m.azure_role, true
+FROM public.services s
+CROSS JOIN (VALUES
+  ('Basic', 'Contributor'),
+  ('Standard', 'Contributor'),
+  ('Premium', 'Contributor')
+) AS m(instance_option, azure_role)
+WHERE s.name ILIKE '%Container Registry%'
+ON CONFLICT (service_id, instance_option)
+DO UPDATE SET azure_role = EXCLUDED.azure_role, tier_automated = EXCLUDED.tier_automated;
+
 -- Enable instance picker for tier-automated metadata services
 UPDATE public.services
 SET supports_instances = true
@@ -291,5 +327,8 @@ WHERE name ILIKE ANY (ARRAY[
   '%AI Language%',
   '%AI Speech%',
   '%Document Intelligence%',
-  '%Bot Service%'
+  '%Bot Service%',
+  '%API Management%',
+  '%Log Analytics%',
+  '%Container Registry%'
 ]);

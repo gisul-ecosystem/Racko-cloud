@@ -6,6 +6,10 @@ const { createNotification, NotificationType } = require('./notificationService'
 const {
   buildCredentialEmailHtml,
 } = require('./email/credentialEmailService');
+const {
+  buildCredentialSpreadsheetBuffer,
+  buildCredentialSpreadsheetFilename
+} = require('./email/credentialExcelService');
 
 const DELIVERY_STATUS_QUEUED = 'queued';
 const DELIVERY_STATUS_SENT = 'sent';
@@ -81,9 +85,19 @@ const loadCredentials = async (requestId) => {
   };
 };
 
-const upsertDeliveryRecord = async (client, requestId, recipientEmail, deliveryStatus) => {
+const upsertDeliveryRecord = async (
+  client,
+  requestId,
+  recipientEmail,
+  deliveryStatus,
+  deliveryMeta = {}
+) => {
   const createdAt = new Date();
   const sentAt = deliveryStatus === DELIVERY_STATUS_SENT ? createdAt : null;
+  const portalLink = deliveryMeta.portalLink ?? null;
+  const adminUsername = deliveryMeta.adminUsername ?? null;
+  const adminTemporaryPassword = deliveryMeta.adminTemporaryPassword ?? null;
+  const portalExpiresAt = deliveryMeta.portalExpiresAt ?? null;
 
   const updateQuery = `
     UPDATE credential_delivery
@@ -91,7 +105,11 @@ const upsertDeliveryRecord = async (client, requestId, recipientEmail, deliveryS
       recipient_email = $2,
       delivery_status = $3,
       sent_at = $4,
-      created_at = $5
+      created_at = $5,
+      portal_link = COALESCE($6, portal_link),
+      admin_username = COALESCE($7, admin_username),
+      admin_temporary_password = COALESCE($8, admin_temporary_password),
+      portal_expires_at = COALESCE($9, portal_expires_at)
     WHERE request_id = $1
     RETURNING request_id, recipient_email, delivery_status, sent_at
   `;
@@ -101,7 +119,11 @@ const upsertDeliveryRecord = async (client, requestId, recipientEmail, deliveryS
     recipientEmail,
     deliveryStatus,
     sentAt,
-    createdAt
+    createdAt,
+    portalLink,
+    adminUsername,
+    adminTemporaryPassword,
+    portalExpiresAt
   ]);
 
   if (updateResult.rows.length > 0) {
@@ -114,9 +136,13 @@ const upsertDeliveryRecord = async (client, requestId, recipientEmail, deliveryS
       recipient_email,
       delivery_status,
       sent_at,
-      created_at
+      created_at,
+      portal_link,
+      admin_username,
+      admin_temporary_password,
+      portal_expires_at
     )
-    VALUES ($1, $2, $3, $4, $5)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
     RETURNING request_id, recipient_email, delivery_status, sent_at
   `;
 
@@ -125,7 +151,11 @@ const upsertDeliveryRecord = async (client, requestId, recipientEmail, deliveryS
     recipientEmail,
     deliveryStatus,
     sentAt,
-    createdAt
+    createdAt,
+    portalLink,
+    adminUsername,
+    adminTemporaryPassword,
+    portalExpiresAt
   ]);
 
   return insertResult.rows[0];
@@ -139,7 +169,11 @@ const getCredentialDelivery = async (requestId) => {
       request_id,
       recipient_email,
       delivery_status,
-      sent_at
+      sent_at,
+      portal_link,
+      admin_username,
+      admin_temporary_password,
+      portal_expires_at
     FROM credential_delivery
     WHERE request_id = $1
   `;
@@ -154,7 +188,63 @@ const getCredentialDelivery = async (requestId) => {
     requestId: result.rows[0].request_id,
     recipientEmail: result.rows[0].recipient_email,
     deliveryStatus: result.rows[0].delivery_status,
-    sentAt: result.rows[0].sent_at
+    sentAt: result.rows[0].sent_at,
+    portalLink: result.rows[0].portal_link,
+    adminUsername: result.rows[0].admin_username,
+    adminTemporaryPassword: result.rows[0].admin_temporary_password,
+    portalExpiresAt: result.rows[0].portal_expires_at
+  };
+};
+
+const buildCredentialSpreadsheetForRequest = async (requestId) => {
+  validateRequestId(requestId);
+
+  const [delivery, credentials] = await Promise.all([
+    getCredentialDelivery(requestId),
+    loadCredentials(requestId)
+  ]);
+
+  if (!delivery || !['sent', 'queued'].includes(String(delivery.deliveryStatus || '').toLowerCase())) {
+    throw new AppError(
+      'Credential spreadsheet is available after credentials have been sent for this request.',
+      404
+    );
+  }
+
+  if (!credentials.request) {
+    throw new AppError('Request not found.', 404);
+  }
+
+  if (!credentials.users.length) {
+    throw new AppError('No provisioned users found for this request.', 404);
+  }
+
+  const buffer = buildCredentialSpreadsheetBuffer({
+    requestId,
+    customerEmail: credentials.request.customer_email,
+    location: credentials.request.location,
+    portalLink: delivery.portalLink || '',
+    portalExpiresAt: delivery.portalExpiresAt,
+    adminCredentials: {
+      username: delivery.adminUsername || '',
+      temporaryPassword: delivery.adminTemporaryPassword || ''
+    },
+    users: credentials.users
+  });
+
+  return {
+    buffer,
+    filename: buildCredentialSpreadsheetFilename(requestId)
+  };
+};
+
+const buildCredentialSpreadsheetAttachment = async (requestId) => {
+  const { buffer, filename } = await buildCredentialSpreadsheetForRequest(requestId);
+
+  return {
+    filename,
+    content: buffer,
+    contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   };
 };
 
@@ -190,6 +280,13 @@ const sendCredentials = async (requestId) => {
     expiresAt: portal.expiresAt.toISOString()
   });
 
+  const deliveryMeta = {
+    portalLink,
+    adminUsername: adminCredentials?.username || null,
+    adminTemporaryPassword: adminCredentials?.temporaryPassword || null,
+    portalExpiresAt: portal.expiresAt
+  };
+
   logCredentialEvent('info', 'credential_delivery_email_started', {
     requestId,
     recipientEmail: request.customer_email,
@@ -201,7 +298,8 @@ const sendCredentials = async (requestId) => {
       db,
       requestId,
       request.customer_email,
-      DELIVERY_STATUS_QUEUED
+      DELIVERY_STATUS_QUEUED,
+      deliveryMeta
     );
 
     await enqueueEmail({
@@ -215,7 +313,8 @@ const sendCredentials = async (requestId) => {
           db,
           requestId,
           request.customer_email,
-          DELIVERY_STATUS_SENT
+          DELIVERY_STATUS_SENT,
+          deliveryMeta
         );
 
         logCredentialEvent('info', 'credential_delivery_email_success', {
@@ -257,7 +356,8 @@ const sendCredentials = async (requestId) => {
       portalLink,
       adminUsername: adminCredentials?.username || null,
       usersSent: users.length,
-      deliveryStatus: DELIVERY_STATUS_QUEUED
+      deliveryStatus: DELIVERY_STATUS_QUEUED,
+      spreadsheetFilename: buildCredentialSpreadsheetFilename(requestId)
     };
   } catch (error) {
     logCredentialEvent('error', 'credential_delivery_failed', {
@@ -275,5 +375,7 @@ const sendCredentials = async (requestId) => {
 module.exports = {
   getCredentialDelivery,
   sendCredentials,
-  sendCredentialsForRequest: sendCredentials
+  sendCredentialsForRequest: sendCredentials,
+  buildCredentialSpreadsheetForRequest,
+  buildCredentialSpreadsheetAttachment
 };

@@ -45,7 +45,9 @@ const API_VERSIONS = {
   'microsoft.cognitiveservices/accounts': '2023-05-01',
   'microsoft.containerregistry/registries': '2023-06-01-preview',
   'microsoft.documentdb/databaseaccounts': '2023-04-15',
-  'microsoft.app/containerapps': '2023-05-01'
+  'microsoft.app/containerapps': '2023-05-01',
+  'microsoft.apimanagement/service': '2022-08-01',
+  'microsoft.operationalinsights/workspaces': '2022-10-01'
 };
 
 const DELETE_ORDER = [
@@ -72,6 +74,8 @@ const DELETE_ORDER = [
   'microsoft.containerregistry/registries',
   'microsoft.compute/sshpublickeys',
   'microsoft.web/serverfarms',
+  'microsoft.apimanagement/service',
+  'microsoft.operationalinsights/workspaces',
   'microsoft.cognitiveservices/accounts',
   'microsoft.documentdb/databaseaccounts'
 ];

@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 const db = require('../db/postgres');
 const cleanupService = require('../services/cleanupService');
 const { sendCleanupNotificationEmailWithRetry } = require('../services/email/cleanupNotificationEmailService');
@@ -116,11 +117,11 @@ const startCleanupScheduler = () => {
   }
 
   logSchedulerEvent('info', 'scheduled_cleanup_scheduler_started', {
-    schedule: '*/5 * * * *'
+    schedule: '1-59/5 * * * *'
   });
 
-  scheduledTask = cron.schedule('*/5 * * * *', () => {
-    runScheduledCleanupJob().catch((error) => {
+  scheduledTask = cron.schedule('1-59/5 * * * *', () => {
+    runScheduledJob('scheduled-cleanup', runScheduledCleanupJob).catch((error) => {
       logSchedulerEvent('error', 'scheduled_cleanup_unhandled_error', {
         message: error?.message
       });

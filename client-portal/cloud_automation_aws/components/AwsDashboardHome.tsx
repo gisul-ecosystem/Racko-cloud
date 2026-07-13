@@ -13,10 +13,12 @@ import {
   Server,
   Timer,
 } from 'lucide-react';
-import { useAuth } from '../../context/AuthContext';
+import { useOptionalAuth } from '../../context/AuthContext';
 import { ErrorState } from '../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../components/dashboard/LoadingSkeleton';
-import { AWS_ROUTES, AWS_SERVICE } from '../constants';
+import { AWS_SERVICE } from '../constants';
+import { useAwsRoutes } from '../../lib/cloudPortalRoutes';
+import { useIsTenantPortal } from '../../lib/portalMode';
 import { useAwsRequests } from '../hooks/useAwsRequests';
 import { AwsRequestStatusBadge } from './AwsRequestStatusBadge';
 import type { AwsRequest } from '../api/client';
@@ -33,7 +35,7 @@ function StatCard({
   tone: 'red' | 'blue' | 'green' | 'gray';
 }) {
   const toneClass = {
-    red: 'bg-red-50 text-[#B91C1C]',
+    red: 'bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]',
     blue: 'bg-blue-50 text-blue-600',
     green: 'bg-green-50 text-green-600',
     gray: 'bg-gray-100 text-gray-500',
@@ -93,7 +95,10 @@ function formatCreatedAt(request: AwsRequest): string {
 
 export function AwsDashboardHome() {
   const router = useRouter();
-  const { isAuthenticated } = useAuth();
+  const auth = useOptionalAuth();
+  const isTenantPortal = useIsTenantPortal();
+  const isAuthenticated = isTenantPortal || (auth?.isAuthenticated ?? false);
+  const AWS_ROUTES = useAwsRoutes();
   const { requests, stats, loading, error, refetch } = useAwsRequests(isAuthenticated);
 
   const recentRequests = requests.slice(0, 10);
@@ -103,7 +108,7 @@ export function AwsDashboardHome() {
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="flex flex-col gap-6 p-6 lg:flex-row lg:items-center lg:justify-between lg:p-8">
           <div className="flex items-start gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
+            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]">
               <Server className="h-7 w-7" />
             </div>
             <div>
@@ -123,7 +128,7 @@ export function AwsDashboardHome() {
             </button>
             <Link
               href={AWS_ROUTES.createRequest}
-              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717]"
+              className="inline-flex items-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95"
             >
               <Plus className="h-4 w-4" />
               Create Request
@@ -208,7 +213,7 @@ export function AwsDashboardHome() {
                   </p>
                   <Link
                     href={AWS_ROUTES.createRequest}
-                    className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#a01717]"
+                    className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2 text-sm font-medium text-white transition hover:brightness-95"
                   >
                     <Plus className="h-4 w-4" />
                     Create Request
@@ -276,25 +281,25 @@ export function AwsDashboardHome() {
 
             <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
               <div className="mb-4 flex items-center gap-2">
-                <Clock className="h-4 w-4 text-[#B91C1C]" />
+                <Clock className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
                 <h2 className="text-sm font-semibold text-gray-900">Operational notes</h2>
               </div>
               <ul className="space-y-3 text-sm text-gray-600">
                 <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                   Requests flow through the AWS automation API and are provisioned into AWS accounts.
                 </li>
                 <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                   Pending requests are actively provisioning; completed requests have credentials
                   ready for delivery.
                 </li>
                 <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                   Expired requests are cleaned up automatically by the expiry scheduler.
                 </li>
                 <li className="flex gap-2">
-                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#B91C1C]" />
+                  <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--cloud-accent,#B91C1C)]" />
                   Use Org Admin for account management and elevated access workflows.
                 </li>
               </ul>

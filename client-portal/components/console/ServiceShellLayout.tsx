@@ -1,6 +1,6 @@
 'use client';
 
-import type { ReactNode } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import { ErrorBoundary } from '../ui/ErrorBoundary';
 
 interface ServiceShellLayoutProps {
@@ -9,6 +9,8 @@ interface ServiceShellLayoutProps {
   topBar: ReactNode;
   children: ReactNode;
   mainClassName?: string;
+  /** Optional root styles (e.g. tenant --cloud-accent CSS variables). */
+  style?: CSSProperties;
 }
 
 export function ServiceShellLayout({
@@ -17,9 +19,10 @@ export function ServiceShellLayout({
   topBar,
   children,
   mainClassName = 'p-6 lg:p-8',
+  style,
 }: ServiceShellLayoutProps) {
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50" style={style}>
       {sidebar}
 
       <div

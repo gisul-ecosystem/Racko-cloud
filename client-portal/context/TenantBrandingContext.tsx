@@ -63,7 +63,7 @@ interface TenantBrandingState {
   loading: boolean;
 }
 
-const TenantBrandingContext = createContext<TenantBrandingState | null>(null);
+export const TenantBrandingContext = createContext<TenantBrandingState | null>(null);
 
 function resolveLogoSrc(
   metadata: TenantBranding,

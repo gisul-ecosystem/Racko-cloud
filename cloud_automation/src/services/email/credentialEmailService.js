@@ -91,6 +91,9 @@ const buildCredentialEmailHtml = ({ requestId, users, adminCredentials, portalLi
             </p>
           </div>
           <p style="margin: 18px 0 0; font-size: 13px; color: #6b7280;">
+            An Excel spreadsheet with the portal link and all learner usernames and passwords is attached for distribution.
+          </p>
+          <p style="margin: 8px 0 0; font-size: 13px; color: #6b7280;">
             This secure link expires in 7 days.
           </p>
           <p style="margin: 8px 0 0; font-size: 13px; color: #6b7280;">
@@ -131,7 +134,7 @@ const isRetryableEmailError = (error) => {
   );
 };
 
-const sendCredentialEmailWithRetry = async ({ to, subject, html }) => {
+const sendCredentialEmailWithRetry = async ({ to, subject, html, attachments = [] }) => {
   const { transporter, from } = createSmtpTransport();
   let lastError;
 
@@ -141,7 +144,8 @@ const sendCredentialEmailWithRetry = async ({ to, subject, html }) => {
         from,
         to,
         subject,
-        html
+        html,
+        attachments
       });
     } catch (error) {
       lastError = error;

@@ -37,7 +37,10 @@ const POLICY_DISPLAY_TYPE_LABELS = {
   allowed_search_sku: 'Search',
   allowed_cognitive_services_sku: 'Cognitive',
   allowed_bot_service_sku: 'Bot Service',
-  allowed_logic_app_mode: 'Logic Apps'
+  allowed_logic_app_mode: 'Logic Apps',
+  allowed_api_management_sku: 'API Management',
+  allowed_log_analytics_sku: 'Log Analytics',
+  allowed_container_registry_sku: 'Container Registry'
 };
 
 const buildPolicyAssignmentDisplayName = ({

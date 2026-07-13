@@ -172,6 +172,8 @@ const normalizeServiceIds = (value) => {
 };
 
 const getAvailableLocations = async (req, res, next) => {
+  const startedAt = Date.now();
+
   try {
     const queryKeys = Object.keys(req.query);
     const invalidQueryParams = queryKeys.filter((key) => !allowedAvailableLocationsQueryParams.has(key));
@@ -185,6 +187,15 @@ const getAvailableLocations = async (req, res, next) => {
     const instanceSelections =
       req.body?.selectedInstances ?? req.body?.instanceSelections ?? req.query.instanceSelections;
     const locations = await serviceService.getAvailableLocations(serviceIds, instanceSelections);
+
+    console.log(
+      JSON.stringify({
+        event: 'available_locations_fetch_completed',
+        serviceIds,
+        locationCount: locations.length,
+        durationMs: Date.now() - startedAt
+      })
+    );
 
     res.status(200).json({
       success: true,

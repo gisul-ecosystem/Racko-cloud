@@ -37,7 +37,6 @@ function rowHighlightClass(plan: TenantPlan): string {
 
 export default function TenantPlansPage() {
   const { tenantUser } = useTenantAuth();
-  const { accentColor } = useTenantBranding();
   const router = useRouter();
   const [plans, setPlans] = useState<TenantPlan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +44,7 @@ export default function TenantPlansPage() {
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/vms');
+      router.replace('/tenant/console');
     }
   }, [tenantUser, router]);
 
@@ -74,6 +73,12 @@ export default function TenantPlansPage() {
     return <ErrorState title="VM plans unavailable" message={error} onRetry={() => void load()} />;
   }
 
+  return <TenantPlansPageContent plans={plans} />;
+}
+
+function TenantPlansPageContent({ plans }: { plans: TenantPlan[] }) {
+  const { accentColor } = useTenantBranding();
+
   return (
     <div className="space-y-4">
       <div>
@@ -88,7 +93,7 @@ export default function TenantPlansPage() {
           <Server className="mx-auto h-10 w-10 text-gray-300" />
           <p className="mt-3 text-sm text-gray-500">No VM plans yet.</p>
           <Link
-            href="/tenant/dashboard/orders/new"
+            href="/tenant/dashboard/admin/vms/create"
             className="mt-4 inline-block rounded-lg px-4 py-2 text-sm font-semibold text-white hover:opacity-90"
             style={tenantAccentButton(accentColor)}
           >

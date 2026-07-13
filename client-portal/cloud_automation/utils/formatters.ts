@@ -83,6 +83,109 @@ export function getCreatedAt(request: ProvisioningRequest): string | null {
   return request.created_at ?? request.createdAt ?? null;
 }
 
+const REGION_DIRECTION_SUFFIXES = ['north', 'south', 'east', 'west', 'central'] as const;
+
+const KNOWN_AZURE_REGIONS: Record<string, string> = {
+  australiaeast: 'Australia East',
+  australiasoutheast: 'Australia Southeast',
+  brazilsouth: 'Brazil South',
+  canadacentral: 'Canada Central',
+  canadaeast: 'Canada East',
+  centralindia: 'Central India',
+  centralus: 'Central US',
+  denmarkeast: 'Denmark East',
+  eastasia: 'East Asia',
+  eastus: 'East US',
+  eastus2: 'East US 2',
+  francecentral: 'France Central',
+  germanywestcentral: 'Germany West Central',
+  japaneast: 'Japan East',
+  japanwest: 'Japan West',
+  koreacentral: 'Korea Central',
+  northcentralus: 'North Central US',
+  northeurope: 'North Europe',
+  norwayeast: 'Norway East',
+  southafricanorth: 'South Africa North',
+  southcentralus: 'South Central US',
+  southeastasia: 'Southeast Asia',
+  southindia: 'South India',
+  swedencentral: 'Sweden Central',
+  switzerlandnorth: 'Switzerland North',
+  uaenorth: 'UAE North',
+  uksouth: 'UK South',
+  ukwest: 'UK West',
+  westcentralus: 'West Central US',
+  westeurope: 'West Europe',
+  westindia: 'West India',
+  westus: 'West US',
+  westus2: 'West US 2',
+  westus3: 'West US 3',
+};
+
+function titleCaseWord(value: string): string {
+  if (!value) return '';
+  return value.charAt(0).toUpperCase() + value.slice(1).toLowerCase();
+}
+
+/** Turn an Azure ARM region slug into a readable label (e.g. southafricanorth → South Africa North). */
+export function formatAzureRegion(region: string | null | undefined): string {
+  if (!region) return '—';
+
+  const normalized = String(region).trim().toLowerCase();
+  if (!normalized) return '—';
+
+  if (KNOWN_AZURE_REGIONS[normalized]) {
+    return KNOWN_AZURE_REGIONS[normalized];
+  }
+
+  for (const direction of REGION_DIRECTION_SUFFIXES) {
+    if (!normalized.endsWith(direction) || normalized.length <= direction.length) {
+      continue;
+    }
+
+    const base = normalized.slice(0, -direction.length);
+    if (!base) {
+      return titleCaseWord(direction);
+    }
+
+    return `${titleCaseWord(base)} ${titleCaseWord(direction)}`;
+  }
+
+  return normalized
+    .replace(/(\d+)/g, ' $1 ')
+    .split(/\s+/)
+    .filter(Boolean)
+    .map(titleCaseWord)
+    .join(' ');
+}
+
+export function formatRelativeTime(value: string | null | undefined): string {
+  if (!value) return '—';
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '—';
+
+  const diffMs = Date.now() - date.getTime();
+  const diffMinutes = Math.round(diffMs / 60_000);
+
+  if (diffMinutes < 1) return 'Just now';
+  if (diffMinutes < 60) return `${diffMinutes}m ago`;
+
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+
+  const diffDays = Math.round(diffHours / 24);
+  if (diffDays < 7) return `${diffDays}d ago`;
+
+  return formatDateTime(value);
+}
+
+export function truncateEmail(email: string, maxLength = 28): string {
+  if (!email || email === '—') return email;
+  if (email.length <= maxLength) return email;
+  return `${email.slice(0, maxLength)}…`;
+}
+
 export function formatMinutes(value: number | null | undefined): string {
   if (value == null || Number.isNaN(value)) return '—';
   const minutes = Math.max(0, Math.round(value));

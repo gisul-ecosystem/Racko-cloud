@@ -2,6 +2,7 @@ const cron = require('node-cron');
 const cleanupService = require('../services/cleanupService');
 const db = require('../db/postgres');
 const { createNotification, NotificationType } = require('../services/notificationService');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 
 let scheduledTask = null;
 
@@ -99,7 +100,7 @@ const startExpiryScheduler = () => {
   scheduledTask = cron.schedule(
     '0 2 * * *',
     () => {
-      runExpiryCleanupJob().catch((error) => {
+      runScheduledJob('expiry-cleanup', runExpiryCleanupJob).catch((error) => {
         logSchedulerEvent('error', 'cleanup_scheduler_unhandled_error', {
           errorName: error?.name,
           errorCode: error?.code,

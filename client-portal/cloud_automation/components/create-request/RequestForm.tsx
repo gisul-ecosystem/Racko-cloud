@@ -28,12 +28,34 @@ import {
 import { formatCatalogServicePrice } from '../../utils/formatters';
 
 const inputClass =
-  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
+  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]';
 
 const timeInputClass =
-  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
+  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]';
 
 const labelClass = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500';
+
+function SectionHeader({
+  step,
+  title,
+  description,
+}: {
+  step: number;
+  title: string;
+  description?: string;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--cloud-accent,#B91C1C)]/10 text-sm font-semibold text-[var(--cloud-accent,#B91C1C)]">
+        {step}
+      </span>
+      <div>
+        <h2 className="text-base font-semibold text-gray-900">{title}</h2>
+        {description ? <p className="mt-0.5 text-sm text-gray-500">{description}</p> : null}
+      </div>
+    </div>
+  );
+}
 
 const USAGE_WINDOW_DAYS = [
   'Sunday',
@@ -268,8 +290,12 @@ export function RequestForm({
 
       {/* Step 1: Customer details */}
       <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-        <h2 className="text-sm font-semibold text-gray-900">Customer details</h2>
-        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+        <SectionHeader
+          step={1}
+          title="Customer details"
+          description="Who is this lab for and how long should it run?"
+        />
+        <div className="mt-5 grid gap-4 sm:grid-cols-2">
           <div className="sm:col-span-2">
             <label className={labelClass} htmlFor="customerEmail">
               Customer email
@@ -299,14 +325,14 @@ export function RequestForm({
           <div className="sm:col-span-2">
             <span className={labelClass}>Resource group costing</span>
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/40">
+              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[var(--cloud-accent,#B91C1C)] has-[:checked]:bg-[var(--cloud-accent-soft,#fef2f2)]/40">
                 <input
                   type="radio"
                   name="costingMode"
                   value="shared"
                   checked={costingMode === 'shared'}
                   onChange={() => onCostingModeChange('shared')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                  className="mt-1 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                 />
                 <span>
                   <span className="block text-sm font-medium text-gray-900">Shared resource group</span>
@@ -315,14 +341,14 @@ export function RequestForm({
                   </span>
                 </span>
               </label>
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/40">
+              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[var(--cloud-accent,#B91C1C)] has-[:checked]:bg-[var(--cloud-accent-soft,#fef2f2)]/40">
                 <input
                   type="radio"
                   name="costingMode"
                   value="per_user"
                   checked={costingMode === 'per_user'}
                   onChange={() => onCostingModeChange('per_user')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                  className="mt-1 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                 />
                 <span>
                   <span className="block text-sm font-medium text-gray-900">Per-user resource groups</span>
@@ -362,12 +388,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Daily usage windows</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Set which days and hours lab users can access Azure
-          </p>
+          <SectionHeader
+            step={2}
+            title="Daily usage windows"
+            description="Optional — restrict which days and hours users can access the lab."
+          />
 
-          <div className="mt-4 space-y-3">
+          <div className="mt-5 space-y-3">
             {USAGE_WINDOW_DAYS.map((day, index) => {
               const existing = usageWindows.find((window) => window.day_of_week === index);
 
@@ -382,7 +409,7 @@ export function RequestForm({
                         type="checkbox"
                         checked={Boolean(existing)}
                         onChange={(event) => toggleUsageWindowDay(index, event.target.checked)}
-                        className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                        className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                       />
                       <span className="text-sm font-medium text-gray-900">{day}</span>
                     </label>
@@ -430,7 +457,7 @@ export function RequestForm({
                                   : undefined,
                               })
                             }
-                            className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                            className="w-24 rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]"
                           />
                           {existing.daily_limit_hours ? (
                             <span className="text-xs text-gray-400">
@@ -490,7 +517,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <label className="flex cursor-pointer items-center gap-3">
+          <SectionHeader
+            step={3}
+            title="Resource cleanup"
+            description="Automatically clean up lab resources on a schedule."
+          />
+
+          <label className="mt-5 flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
               checked={resourceCleanupEnabled}
@@ -500,7 +533,7 @@ export function RequestForm({
                   onResourceCleanupIntervalHoursChange(undefined);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
             />
             <span className="text-sm font-medium text-gray-900">Enable periodic resource cleanup</span>
           </label>
@@ -524,7 +557,7 @@ export function RequestForm({
                         value="delete"
                         checked={resourceCleanupAction === 'delete'}
                         onChange={() => onResourceCleanupActionChange('delete')}
-                        className="mt-0.5 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                        className="mt-0.5 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                       />
                       <span>
                         <span className="block text-sm font-medium text-gray-900">Delete resources</span>
@@ -547,7 +580,7 @@ export function RequestForm({
                         value="pause"
                         checked={resourceCleanupAction === 'pause'}
                         onChange={() => onResourceCleanupActionChange('pause')}
-                        className="mt-0.5 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                        className="mt-0.5 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                       />
                       <span>
                         <span className="block text-sm font-medium text-gray-900">Pause resources</span>
@@ -618,12 +651,13 @@ export function RequestForm({
 
       {detailsComplete && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Per-user budget</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Optional spending cap per user (requires per-user resource groups)
-          </p>
+          <SectionHeader
+            step={4}
+            title="Per-user budget"
+            description="Optional spending cap when using per-user resource groups."
+          />
 
-          <div className="mt-4">
+          <div className="mt-5">
             <label className={labelClass} htmlFor="perUserBudgetUsd">
               Budget per user (USD) — optional
             </label>
@@ -651,9 +685,12 @@ export function RequestForm({
       {/* Step 3: Service selection */}
       {showServices && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Services</h2>
-          <p className="mt-0.5 text-xs text-gray-400">Select one or more Azure services to provision</p>
-          <div className="mt-4 space-y-5">
+          <SectionHeader
+            step={5}
+            title="Azure services"
+            description="Choose one or more services to include in this lab."
+          />
+          <div className="mt-5 space-y-5">
             {Array.from(servicesByCategory.entries()).map(([category, services]) => (
               <div key={category}>
                 <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
@@ -669,7 +706,7 @@ export function RequestForm({
                         key={serviceId}
                         className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition ${
                           checked
-                            ? 'border-[#B91C1C] bg-red-50/50'
+                            ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
                             : 'border-gray-200 hover:border-gray-300'
                         }`}
                       >
@@ -677,7 +714,7 @@ export function RequestForm({
                           type="checkbox"
                           checked={checked}
                           onChange={() => onToggleService(serviceId)}
-                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
                         />
                         <span className="min-w-0 flex-1">
                           <span className="flex items-start justify-between gap-2">
@@ -709,11 +746,12 @@ export function RequestForm({
       {/* Step 4: Instance sizes (from catalog) */}
       {showInstances && instanceServices.length > 0 && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Instance sizes</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Choose instance tiers for services that support sizing
-          </p>
-          <div className="mt-4 space-y-5">
+          <SectionHeader
+            step={6}
+            title="Instance sizes"
+            description="Pick a tier for each service that supports sizing."
+          />
+          <div className="mt-5 space-y-5">
             {instanceServices.map((service) => {
               const serviceId = normalizeServiceId(service.id);
               const options = catalogInstances.filter(
@@ -750,7 +788,7 @@ export function RequestForm({
                             onClick={() => onSelectInstance(serviceId, instance.option_name)}
                             className={`rounded-lg border p-3 text-left transition ${
                               active
-                                ? 'border-[#B91C1C] bg-red-50/50'
+                                ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
                                 : 'border-gray-200 hover:border-gray-300'
                             }`}
                           >
@@ -790,13 +828,14 @@ export function RequestForm({
       {/* Step 5: Permissions (auto + manual) */}
       {showPermissions && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Permissions</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Roles are auto-assigned from catalog rules and instance tier mappings
-          </p>
+          <SectionHeader
+            step={7}
+            title="Permissions"
+            description="Roles are assigned automatically from catalog rules and instance tiers."
+          />
 
           {resolvedRoles.length > 0 && (
-            <div className="mt-4 space-y-3">
+            <div className="mt-5 space-y-3">
               {resolvedRoles.map((entry) => {
                 const service = catalog.services.find((svc) => svc.id === entry.serviceId);
                 const isAutomated = tierAutomatedServices.has(entry.serviceId);
@@ -812,7 +851,7 @@ export function RequestForm({
                       {entry.roles.map((role) => (
                         <span
                           key={role}
-                          className="rounded-full border border-[#B91C1C] bg-red-50 px-3 py-1 text-xs font-medium text-[#B91C1C]"
+                          className="rounded-full border border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] px-3 py-1 text-xs font-medium text-[var(--cloud-accent,#B91C1C)]"
                         >
                           {role}
                           {isAutomated ? ' (auto)' : ''}
@@ -862,7 +901,7 @@ export function RequestForm({
                               }}
                               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                                 active
-                                  ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                                  ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]'
                                   : 'border-gray-200 text-gray-600 hover:border-gray-300'
                               }`}
                             >
@@ -882,15 +921,15 @@ export function RequestForm({
       {/* Step 6: Region (derived from services + instances) */}
       {showLocations && (
         <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <h2 className="text-sm font-semibold text-gray-900">Region</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Available regions based on your service and instance selections. Use the exact region
-            shown below when creating resources in Azure Portal.
-          </p>
+          <SectionHeader
+            step={8}
+            title="Deployment region"
+            description="Use this exact region when creating resources in Azure Portal."
+          />
           {locationsError && (
-            <p className="mt-2 text-sm text-red-600">{locationsError}</p>
+            <p className="mt-3 text-sm text-red-600">{locationsError}</p>
           )}
-          <div className="relative mt-4">
+          <div className="relative mt-5">
             <select
               className={`${inputClass} appearance-none pr-10`}
               value={location}
@@ -938,7 +977,7 @@ export function RequestForm({
             className="flex w-full items-center justify-between gap-2 text-left"
           >
             <div className="flex items-center gap-2">
-              <Shield className="h-4 w-4 text-[#B91C1C]" />
+              <Shield className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
               <span className="text-sm font-semibold text-gray-900">Request elevated access</span>
             </div>
             <ChevronDown

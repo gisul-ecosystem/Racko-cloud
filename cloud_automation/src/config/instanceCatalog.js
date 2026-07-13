@@ -580,6 +580,57 @@ const SERVICE_GUIDES = {
       description: 'Production OCR, forms, invoices, and custom model training.',
       tier: 'Standard'
     }
+  },
+  'api management': {
+    Developer: {
+      summary: 'Developer tier for non-production APIs.',
+      description: 'Low-cost APIM for development and testing without SLA.',
+      tier: 'Developer'
+    },
+    Basic: {
+      summary: 'Basic production API gateway.',
+      description: 'Entry production tier with SLA for small API workloads.',
+      tier: 'Basic'
+    },
+    Standard: {
+      summary: 'Standard API gateway.',
+      description: 'Production APIs with autoscale and multi-region support.',
+      tier: 'Standard'
+    },
+    Premium: {
+      summary: 'Premium API gateway.',
+      description: 'VNet integration, multi-region deployment, and highest scale.',
+      tier: 'Premium'
+    }
+  },
+  'log analytics': {
+    'Pay-as-you-go': {
+      summary: 'Pay per GB ingested.',
+      description: 'PerGB2018 billing for flexible log ingestion and retention.',
+      tier: 'PerGB2018'
+    },
+    'Capacity Reservation': {
+      summary: 'Committed daily ingestion capacity.',
+      description: 'Reserved capacity tier for predictable high-volume log workloads.',
+      tier: 'CapacityReservation'
+    }
+  },
+  'container registry': {
+    Basic: {
+      summary: 'Basic container registry.',
+      description: 'Cost-effective registry for dev/test image storage.',
+      tier: 'Basic'
+    },
+    Standard: {
+      summary: 'Standard container registry.',
+      description: 'Higher throughput and webhooks for production CI/CD pipelines.',
+      tier: 'Standard'
+    },
+    Premium: {
+      summary: 'Premium container registry.',
+      description: 'Geo-replication, content trust, and private link support.',
+      tier: 'Premium'
+    }
   }
 };
 

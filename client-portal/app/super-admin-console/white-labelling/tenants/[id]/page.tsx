@@ -6,9 +6,13 @@ import { useParams } from 'next/navigation';
 import {
   AlertCircle,
   ArrowLeft,
+  Ban,
+  BookOpen,
   CheckCircle2,
   Cloud,
+  Globe,
   Loader2,
+  Monitor,
   MonitorCheck,
   Palette,
   Pause,
@@ -49,6 +53,7 @@ import type {
   SuperAdminOrder,
   SuperAdminTenantVm,
 } from '../../../../../lib/tenantTypes';
+import { PLATFORM_SERVICE_CATALOG } from '../../../../../lib/tenantTypes';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
 import type { VMStatus } from '@/lib/vmApi';
@@ -121,6 +126,8 @@ export default function TenantDetailPage() {
   const [assignKey, setAssignKey] = useState<ServiceKey>('vm-management');
   const [assignLimits, setAssignLimits] = useState(DEFAULT_VM_LIMITS);
   const [assignPricing, setAssignPricing] = useState(DEFAULT_VM_PRICING);
+  const [assigningKey, setAssigningKey] = useState<ServiceKey | null>(null);
+  const [disallowingKey, setDisallowingKey] = useState<ServiceKey | null>(null);
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminForm, setAdminForm] = useState({ email: '', password: '' });
@@ -207,28 +214,37 @@ export default function TenantDetailPage() {
     e.preventDefault();
     setSaving(true);
     try {
-      const limits: Record<string, unknown> =
-        assignKey === 'vm-management'
-          ? { ...assignLimits }
-          : {};
-      const pricing: Record<string, unknown> =
-        assignKey === 'vm-management'
-          ? { ...assignPricing }
-          : {};
-
-      const config = await assignTenantService(tenantId, {
-        serviceKey: assignKey,
-        limits,
-        pricing,
+      await assignServiceByKey(assignKey, {
+        limits: assignKey === 'vm-management' ? { ...assignLimits } : {},
+        pricing: assignKey === 'vm-management' ? { ...assignPricing } : {},
       });
-      setServices((prev) => [...prev, config]);
       setAssignOpen(false);
-      flash(`Service "${assignKey}" assigned.`);
     } catch (err) {
       flashErr(err instanceof ApiError ? err.message : 'Failed to assign service');
     } finally {
       setSaving(false);
     }
+  };
+
+  const assignServiceByKey = async (
+    serviceKey: ServiceKey,
+    options?: { limits?: Record<string, unknown>; pricing?: Record<string, unknown> }
+  ) => {
+    const limits =
+      options?.limits ??
+      (serviceKey === 'vm-management' ? { ...DEFAULT_VM_LIMITS } : {});
+    const pricing =
+      options?.pricing ??
+      (serviceKey === 'vm-management' ? { ...DEFAULT_VM_PRICING } : {});
+
+    const config = await assignTenantService(tenantId, {
+      serviceKey,
+      limits,
+      pricing,
+    });
+    setServices((prev) => [...prev, config]);
+    flash(`Service "${serviceKey}" assigned.`);
+    return config;
   };
 
   const handleToggleServiceStatus = async (config: TenantServiceConfig) => {
@@ -296,9 +312,62 @@ export default function TenantDetailPage() {
   };
 
   const assignedKeys = new Set(services.map((s) => s.serviceKey));
-  const availableServices: ServiceKey[] = (['vm-management'] as const).filter(
+  const availableServices: ServiceKey[] = PLATFORM_SERVICE_CATALOG.map((s) => s.key).filter(
     (k) => !assignedKeys.has(k)
   );
+
+  const openAssignModal = (serviceKey?: ServiceKey) => {
+    const nextKey =
+      serviceKey && availableServices.includes(serviceKey)
+        ? serviceKey
+        : availableServices[0];
+    if (!nextKey) return;
+    setAssignKey(nextKey);
+    setAssignLimits(DEFAULT_VM_LIMITS);
+    setAssignPricing(DEFAULT_VM_PRICING);
+    setAssignOpen(true);
+  };
+
+  /** Allow a catalog service. Generic services assign immediately; VM opens config modal. */
+  const allowService = async (serviceKey: ServiceKey) => {
+    if (!availableServices.includes(serviceKey)) return;
+
+    if (serviceKey === 'vm-management') {
+      openAssignModal('vm-management');
+      return;
+    }
+
+    setAssigningKey(serviceKey);
+    try {
+      await assignServiceByKey(serviceKey);
+    } catch (err) {
+      flashErr(err instanceof ApiError ? err.message : 'Failed to assign service');
+    } finally {
+      setAssigningKey(null);
+    }
+  };
+
+  /** Permanently remove a service so it is no longer available to the tenant. */
+  const disallowService = async (config: TenantServiceConfig) => {
+    if (
+      !confirm(
+        `Disallow "${config.serviceKey}" for this tenant? It will no longer appear in the tenant portal.`
+      )
+    ) {
+      return;
+    }
+
+    setDisallowingKey(config.serviceKey);
+    try {
+      await removeTenantService(tenantId, config.serviceKey, true);
+      setServices((prev) => prev.filter((s) => s.id !== config.id));
+      flash(`Service "${config.serviceKey}" disallowed.`);
+    } catch (err) {
+      flashErr(err instanceof ApiError ? err.message : 'Failed to disallow service');
+    } finally {
+      setDisallowingKey(null);
+    }
+  };
 
   const loadTenantOrders = useCallback(async () => {
     setOrdersLoading(true);
@@ -351,8 +420,24 @@ export default function TenantDetailPage() {
     }
   };
 
-  const serviceIcon = (key: ServiceKey) =>
-    key === 'vm-management' ? MonitorCheck : Cloud;
+  const serviceIcon = (key: ServiceKey) => {
+    switch (key) {
+      case 'vm-management':
+        return MonitorCheck;
+      case 'elastic-servers':
+        return Globe;
+      case 'azure':
+      case 'aws':
+      case 'gcp':
+        return Cloud;
+      case 'docs':
+        return BookOpen;
+      case 'machine-manager':
+        return Monitor;
+      default:
+        return Shield;
+    }
+  };
 
   if (loading && !tenant) {
     return (
@@ -561,13 +646,16 @@ export default function TenantDetailPage() {
       {tab === 'services' && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-gray-500">
-              Assign services with limits and pricing per tenant.
-            </p>
+            <div>
+              <p className="text-sm font-medium text-gray-900">Service catalog</p>
+              <p className="text-sm text-gray-500">
+                Allow services for this tenant. Only enabled services appear in the tenant portal.
+              </p>
+            </div>
             {availableServices.length > 0 && (
               <button
                 type="button"
-                onClick={() => setAssignOpen(true)}
+                onClick={() => openAssignModal()}
                 className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-2 text-sm font-medium text-white hover:bg-[#991B1B]"
               >
                 <Plus className="h-4 w-4" />
@@ -576,24 +664,95 @@ export default function TenantDetailPage() {
             )}
           </div>
 
+          <div className="grid gap-3 sm:grid-cols-2">
+            {PLATFORM_SERVICE_CATALOG.map((service) => {
+              const assigned = services.find((s) => s.serviceKey === service.key);
+              const ServiceIcon = serviceIcon(service.key);
+              return (
+                <div
+                  key={service.key}
+                  className="flex items-start justify-between gap-3 rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-red-50">
+                      <ServiceIcon className="h-5 w-5 text-[#B91C1C]" />
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">{service.name}</p>
+                      <p className="mt-0.5 font-mono text-xs text-gray-400">{service.key}</p>
+                      <p className="mt-1 text-xs text-gray-500">{service.description}</p>
+                      {assigned ? (
+                        <span
+                          className={`mt-2 inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            assigned.status === 'active'
+                              ? 'bg-green-50 text-green-700'
+                              : 'bg-orange-50 text-orange-700'
+                          }`}
+                        >
+                          {assigned.status === 'active' ? 'Allowed' : 'Suspended'}
+                        </span>
+                      ) : (
+                        <span className="mt-2 inline-flex rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                          Not assigned
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {!assigned ? (
+                    <button
+                      type="button"
+                      disabled={assigningKey === service.key || saving}
+                      onClick={() => void allowService(service.key)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#B91C1C] px-3 py-1.5 text-xs font-medium text-[#B91C1C] hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {assigningKey === service.key ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Plus className="h-3 w-3" />
+                      )}
+                      Allow
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      disabled={disallowingKey === service.key || saving}
+                      onClick={() => void disallowService(assigned)}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 disabled:opacity-50"
+                    >
+                      {disallowingKey === service.key ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        <Ban className="h-3 w-3" />
+                      )}
+                      Disallow
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
           {services.length === 0 ? (
             <WhiteLabellingEmptyState
               icon={Shield}
               title="No services assigned yet"
-              description="Assign vm-management to enable tenant VM ordering."
+              description="Use Allow on a service above to enable it for this tenant."
               action={
-                <button
-                  type="button"
-                  onClick={() => setAssignOpen(true)}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#991B1B]"
-                >
-                  <Plus className="h-4 w-4" />
-                  Assign first service
-                </button>
+                availableServices.length > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => openAssignModal()}
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#991B1B]"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Assign first service
+                  </button>
+                ) : undefined
               }
             />
           ) : (
             <div className="space-y-4">
+              <p className="text-sm font-medium text-gray-900">Assigned service configs</p>
               {services.map((config) => {
                 const ServiceIcon = serviceIcon(config.serviceKey);
                 return (
@@ -1035,15 +1194,18 @@ export default function TenantDetailPage() {
                   onChange={(e) => setAssignKey(e.target.value as ServiceKey)}
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                 >
-                  {availableServices.map((k) => (
-                    <option key={k} value={k}>
-                      {k}
-                    </option>
-                  ))}
+                  {availableServices.map((k) => {
+                    const meta = PLATFORM_SERVICE_CATALOG.find((s) => s.key === k);
+                    return (
+                      <option key={k} value={k}>
+                        {meta ? `${meta.name} (${k})` : k}
+                      </option>
+                    );
+                  })}
                 </select>
               </div>
 
-              {assignKey === 'vm-management' && (
+              {assignKey === 'vm-management' ? (
                 <>
                   <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
                     Limits
@@ -1105,6 +1267,11 @@ export default function TenantDetailPage() {
                     ))}
                   </div>
                 </>
+              ) : (
+                <p className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-600">
+                  This service will be enabled for the tenant portal with no extra limits or pricing
+                  setup.
+                </p>
               )}
 
               <div className="flex justify-end gap-2 pt-2">

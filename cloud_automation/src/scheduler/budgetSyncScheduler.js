@@ -1,4 +1,5 @@
 const cron = require('node-cron');
+const { runScheduledJob } = require('../utils/schedulerCoordinator');
 const axios = require('axios');
 const db = require('../db/postgres');
 const { ensureAzureManagementAccess } = require('../config/azure');
@@ -259,15 +260,17 @@ const startBudgetSpendSyncScheduler = () => {
     return scheduledTask;
   }
 
-  scheduledTask = cron.schedule('*/15 * * * *', () => {
-    syncAllUserBudgetSpend().catch((err) => {
+  scheduledTask = cron.schedule('10,25,40,55 * * * *', () => {
+    runScheduledJob('budget-spend-sync', syncAllUserBudgetSpend).catch((err) => {
       logEvent('error', 'sync_error', { error: err.message });
     });
   });
 
-  syncAllUserBudgetSpend().catch((err) => {
-    logEvent('error', 'initial_sync_error', { error: err.message });
-  });
+  setTimeout(() => {
+    runScheduledJob('budget-spend-sync-initial', syncAllUserBudgetSpend).catch((err) => {
+      logEvent('error', 'initial_sync_error', { error: err.message });
+    });
+  }, 60_000);
 
   logEvent('info', 'started', { intervalMinutes: 15 });
   return scheduledTask;

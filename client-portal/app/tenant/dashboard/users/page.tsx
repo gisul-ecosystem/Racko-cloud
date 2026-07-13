@@ -2,20 +2,11 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { TenantUsersPage } from '@/components/tenant/TenantUsersPage';
-import { useTenantAuth } from '@/context/TenantAuthContext';
 
-export default function TenantUsersRoutePage() {
+export default function RedirectPage() {
   const router = useRouter();
-  const { tenantUser } = useTenantAuth();
-
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_user') {
-      router.replace('/tenant/dashboard/vms');
-    }
-  }, [router, tenantUser?.role]);
-
-  if (tenantUser?.role !== 'tenant_admin') return null;
-
-  return <TenantUsersPage />;
+    router.replace('/tenant/dashboard/admin/users');
+  }, [router]);
+  return null;
 }

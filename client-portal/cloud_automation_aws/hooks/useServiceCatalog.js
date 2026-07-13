@@ -24,7 +24,14 @@ export function useServiceCatalog(enabled = true) {
   }, []);
 
   useEffect(() => {
-    if (enabled) void load();
+    if (!enabled) {
+      setLoading(false);
+      setError(null);
+      setCategories([]);
+      setServices([]);
+      return;
+    }
+    void load();
   }, [enabled, load]);
 
   const servicesByCategory = useMemo(() => {
