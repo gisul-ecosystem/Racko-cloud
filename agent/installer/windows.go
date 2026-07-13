@@ -33,7 +33,10 @@ type wtsSessionInfo struct {
 	State             uint32
 }
 
-const wtsActive = 0 // WTSActive — session has an interactive logged-on user
+const (
+	wtsActive       = 0 // WTSActive — session has an interactive logged-on user
+	wtsDisconnected = 4 // WTSDisconnected — user closed RDP but session still alive
+)
 
 var (
 	modWtsapi32                = windows.NewLazySystemDLL("wtsapi32.dll")
@@ -45,18 +48,23 @@ var (
 	procDestroyEnvironmentBlock = modUserenv.NewProc("DestroyEnvironmentBlock")
 )
 
-// findActiveSessionID enumerates all WTS sessions and returns the first one
-// in WTSActive state. This covers both physical console and RDP sessions,
-// whereas WTSGetActiveConsoleSessionId only returns the console session and
-// fails on headless VMs where users connect exclusively via RDP.
+// findActiveSessionID enumerates all WTS sessions and returns the best one
+// to run installers in. Priority:
+//  1. WTSActive — user is actively connected (console or RDP)
+//  2. WTSDisconnected — user closed RDP window but session is still alive
+//
+// This covers the common cloud VM scenario where a user connects via RDP,
+// sets up their machine, closes the RDP window, and then an admin pushes
+// software from the portal. Without WTSDisconnected support, those installs
+// would fall back to LocalSystem (Session 0) and hang.
 func findActiveSessionID() (uint32, error) {
 	var pSessions uintptr
 	var count uint32
 
 	ret, _, err := procWTSEnumerateSessions.Call(
-		0,              // WTS_CURRENT_SERVER_HANDLE
-		0,              // Reserved
-		1,              // Version
+		0, // WTS_CURRENT_SERVER_HANDLE
+		0, // Reserved
+		1, // Version
 		uintptr(unsafe.Pointer(&pSessions)),
 		uintptr(unsafe.Pointer(&count)),
 	)
@@ -65,8 +73,9 @@ func findActiveSessionID() (uint32, error) {
 	}
 	defer procWTSFreeMemory.Call(pSessions)
 
-	// Walk the array of WTS_SESSION_INFO structs
 	size := unsafe.Sizeof(wtsSessionInfo{})
+
+	// First pass: prefer an actively connected session
 	for i := uint32(0); i < count; i++ {
 		info := (*wtsSessionInfo)(unsafe.Pointer(pSessions + uintptr(i)*size))
 		if info.State == wtsActive && info.SessionID != 0 {
@@ -74,7 +83,17 @@ func findActiveSessionID() (uint32, error) {
 			return info.SessionID, nil
 		}
 	}
-	return 0, fmt.Errorf("no active user session found (all sessions checked: %d)", count)
+
+	// Second pass: fall back to disconnected session (user closed RDP window)
+	for i := uint32(0); i < count; i++ {
+		info := (*wtsSessionInfo)(unsafe.Pointer(pSessions + uintptr(i)*size))
+		if info.State == wtsDisconnected && info.SessionID != 0 {
+			log.Printf("[runAsUser] Found disconnected session ID=%d (WTSDisconnected) — user closed RDP", info.SessionID)
+			return info.SessionID, nil
+		}
+	}
+
+	return 0, fmt.Errorf("no active or disconnected user session found (sessions checked: %d)", count)
 }
 
 func wtsQueryUserToken(sessionID uint32) (windows.Token, error) {
