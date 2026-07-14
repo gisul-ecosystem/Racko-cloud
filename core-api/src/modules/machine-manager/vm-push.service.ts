@@ -365,7 +365,10 @@ class VMPushService {
       'Write-Host "[racko] Downloading agent binary..."',
       'Invoke-WebRequest -Uri $binaryUrl -OutFile "$installDir\\racko-agent.exe" -UseBasicParsing',
       'Write-Host "[racko] Writing config..."',
-      'Set-Content -Path "$installDir\\config.json" -Value $configContent -Encoding UTF8',
+      // [System.IO.File]::WriteAllText writes UTF-8 WITHOUT BOM — critical because
+      // PowerShell Set-Content -Encoding UTF8 adds a BOM (EF BB BF) which breaks
+      // Go's json.NewDecoder and causes all config fields to parse as empty strings.
+      '[System.IO.File]::WriteAllText("$installDir\\config.json", $configContent, [System.Text.UTF8Encoding]::new($false))',
       // Stop and remove any existing service before creating
       'sc.exe stop RackoAgent 2>$null; sc.exe delete RackoAgent 2>$null; Start-Sleep -Seconds 2',
       'Write-Host "[racko] Registering Windows service..."',
