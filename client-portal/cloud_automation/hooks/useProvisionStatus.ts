@@ -23,6 +23,7 @@ import {
   createOrchestrationEvent,
   deriveStepStates,
   getNextProvisionStepKey,
+  isCredentialDeliveryComplete,
   isSnapshotProvisioningComplete,
 } from '../utils/provisionSnapshot';
 
@@ -48,6 +49,7 @@ interface UseProvisionStatusResult {
   error: string | null;
   isComplete: boolean;
   refresh: (isManual?: boolean) => Promise<void>;
+  retryFailedStep: () => Promise<void>;
 }
 
 const STEP_ACTIONS: Record<ProvisionStepKey, (requestId: number) => Promise<unknown>> = {
@@ -73,9 +75,17 @@ export function useProvisionStatus({
   initialSnapshot = null,
   initialError = null,
 }: UseProvisionStatusOptions): UseProvisionStatusResult {
+  const orchestratingRef = useRef(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const overridesRef = useRef<StepCompletionOverrides>({});
+  const stepErrorsRef = useRef<Partial<Record<ProvisionStepKey, string>>>({});
+  const isCompleteRef = useRef(false);
+  const deliveryPendingRef = useRef(false);
+
   const [snapshot, setSnapshot] = useState<ProvisionSnapshot | null>(initialSnapshot);
   const [overrides, setOverrides] = useState<StepCompletionOverrides>({});
   const [stepErrors, setStepErrors] = useState<Partial<Record<ProvisionStepKey, string>>>({});
+  stepErrorsRef.current = stepErrors;
   const [events, setEvents] = useState<OrchestrationEvent[]>(() => {
     if (initialSnapshot) {
       return [
@@ -89,11 +99,6 @@ export function useProvisionStatus({
   });
   const [loading, setLoading] = useState(!initialSnapshot);
   const [error, setError] = useState<string | null>(initialError);
-  const orchestratingRef = useRef(false);
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const overridesRef = useRef<StepCompletionOverrides>({});
-  const isCompleteRef = useRef(false);
-  const deliveryPendingRef = useRef(false);
 
   const appendEvent = useCallback((event: OrchestrationEvent) => {
     setEvents((current) => [event, ...current].slice(0, 40));
@@ -102,6 +107,19 @@ export function useProvisionStatus({
   const loadSnapshot = useCallback(async () => {
     const nextSnapshot = await fetchProvisionSnapshot(requestId);
     deliveryPendingRef.current = isAccessLinkDeliveryPending(nextSnapshot);
+
+    if (isCredentialDeliveryComplete(nextSnapshot.credentials)) {
+      const nextOverrides = { ...overridesRef.current, credentials: true };
+      overridesRef.current = nextOverrides;
+      setOverrides(nextOverrides);
+      setStepErrors((current) => {
+        if (!current.credentials) return current;
+        const next = { ...current };
+        delete next.credentials;
+        return next;
+      });
+    }
+
     setSnapshot(nextSnapshot);
     setError(null);
     return nextSnapshot;
@@ -117,8 +135,22 @@ export function useProvisionStatus({
         return;
       }
 
-      const nextStep = getNextProvisionStepKey(currentSnapshot, currentOverrides);
+      const nextStep = getNextProvisionStepKey(
+        currentSnapshot,
+        currentOverrides,
+        stepErrorsRef.current
+      );
       if (!nextStep) return;
+
+      if (
+        nextStep === 'credentials' &&
+        isCredentialDeliveryComplete(currentSnapshot.credentials)
+      ) {
+        const nextOverrides = { ...overridesRef.current, credentials: true };
+        overridesRef.current = nextOverrides;
+        setOverrides(nextOverrides);
+        return;
+      }
 
       const stepLabel =
         deriveStepStates(currentSnapshot, currentOverrides).find((step) => step.key === nextStep)
@@ -204,6 +236,34 @@ export function useProvisionStatus({
     }
   }, [appendEvent, loadSnapshot, requestId, runNextStep, snapshot]);
 
+  const retryFailedStep = useCallback(async () => {
+    const failed = deriveStepStates(
+      snapshot ?? EMPTY_SNAPSHOT,
+      overridesRef.current,
+      stepErrorsRef.current
+    ).find((step) => step.status === 'failed');
+
+    if (failed) {
+      const cleared = { ...stepErrorsRef.current };
+      delete cleared[failed.key];
+      stepErrorsRef.current = cleared;
+      setStepErrors(cleared);
+    }
+
+    try {
+      const currentSnapshot = snapshot ?? (await loadSnapshot());
+      await runNextStep(currentSnapshot);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to retry provisioning step.'
+      );
+    }
+  }, [loadSnapshot, runNextStep, snapshot]);
+
   useEffect(() => {
     void refresh();
 
@@ -242,5 +302,6 @@ export function useProvisionStatus({
     error,
     isComplete,
     refresh,
+    retryFailedStep,
   };
 }

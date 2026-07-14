@@ -270,7 +270,7 @@ const fetchRetailPriceItems = async (filter) => {
       () =>
         axios.get(nextUrl, {
           params: nextParams,
-          timeout: 20000
+          timeout: 0
         }),
       { attempts: MAX_RETRY_ATTEMPTS, baseDelayMs: RETRY_BASE_DELAY_MS }
     );

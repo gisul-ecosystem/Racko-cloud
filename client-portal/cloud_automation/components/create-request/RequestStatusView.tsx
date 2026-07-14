@@ -38,6 +38,7 @@ import {
   getEstimatedPrice,
 } from '../../utils/formatters';
 import { RequestStatusBadge } from '../RequestStatusBadge';
+import { RACKO_BTN_PRIMARY, RACKO_BTN_SECONDARY } from '../cloudButtonStyles';
 
 interface RequestStatusViewProps {
   requestId: number;
@@ -52,7 +53,7 @@ function StepIcon({ status }: { status: ProvisionStepState['status'] }) {
     return <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" />;
   }
   if (status === 'active') {
-    return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[var(--cloud-accent,#B91C1C)]" />;
+    return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[#B91C1C]" />;
   }
   if (status === 'failed') {
     return <AlertCircle className="h-5 w-5 shrink-0 text-red-600" />;
@@ -70,19 +71,25 @@ function MetaChip({
   icon,
   label,
   value,
+  hint,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
+  hint?: string;
 }) {
   return (
-    <div className="flex min-w-0 items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
-      <span className="text-gray-400">{icon}</span>
+    <div
+      className="flex min-w-0 items-center gap-3 rounded-xl border border-gray-100 bg-gray-50/80 px-3.5 py-3"
+      title={hint ?? value}
+    >
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-[#B91C1C] shadow-sm">
+        {icon}
+      </div>
       <div className="min-w-0">
-        <p className="text-[11px] font-medium uppercase tracking-wide text-gray-400">{label}</p>
-        <p className="truncate text-sm font-medium text-gray-900" title={value}>
-          {value}
-        </p>
+        <p className="text-[10px] font-semibold uppercase tracking-wider text-gray-400">{label}</p>
+        <p className="truncate text-sm font-semibold text-gray-900">{value}</p>
+        {hint ? <p className="truncate text-[11px] text-gray-500">{hint}</p> : null}
       </div>
     </div>
   );
@@ -186,7 +193,7 @@ export function RequestStatusView({
   const [tipsOpen, setTipsOpen] = useState(false);
   const [downloadingSpreadsheet, setDownloadingSpreadsheet] = useState(false);
   const [spreadsheetError, setSpreadsheetError] = useState<string | null>(null);
-  const { snapshot, steps, summary, events, loading, error, isComplete, refresh } =
+  const { snapshot, steps, summary, events, loading, error, isComplete, refresh, retryFailedStep } =
     useProvisionStatus({
       requestId,
       initialSnapshot,
@@ -199,6 +206,7 @@ export function RequestStatusView({
   const failedStep = steps.find((step) => step.status === 'failed');
   const regionLabel = formatAzureRegion(request?.location);
   const customerEmail = request ? getCustomerEmail(request) : '—';
+  const createdAt = request ? getCreatedAt(request) : null;
   const spreadsheetAvailable = Boolean(snapshot?.credentials?.spreadsheetAvailable);
 
   const handleDownloadSpreadsheet = async () => {
@@ -227,10 +235,10 @@ export function RequestStatusView({
   }
 
   return (
-    <div className="mx-auto max-w-screen-xl space-y-6">
+    <div className="mx-auto max-w-screen-xl space-y-6 pb-8">
       <Link
         href={resolvedBackHref}
-        className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900"
+        className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
       >
         <ArrowLeft className="h-4 w-4" />
         {backLabel}
@@ -245,15 +253,21 @@ export function RequestStatusView({
       {snapshot ? (
         <>
           {/* Header */}
-          <div className="rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+            <div className="h-1 bg-gradient-to-r from-[#B91C1C] via-[#DC2626] to-[#B91C1C]" />
             <div className="flex flex-col gap-5 p-6 lg:flex-row lg:items-start lg:justify-between lg:p-8">
               <div className="flex items-start gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]">
+                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
                   <Cloud className="h-7 w-7" />
                 </div>
                 <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h1 className="text-2xl font-bold text-gray-900">Request #{requestId}</h1>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                    Provisioning status
+                  </p>
+                  <div className="mt-1 flex flex-wrap items-center gap-2">
+                    <h1 className="text-2xl font-bold tracking-tight text-gray-900">
+                      Request #{requestId}
+                    </h1>
                     {request ? <RequestStatusBadge status={request.status ?? 'Provisioning'} /> : null}
                   </div>
                   <p className="mt-1 text-sm text-gray-500">{customerEmail}</p>
@@ -271,7 +285,7 @@ export function RequestStatusView({
                 type="button"
                 onClick={() => void refresh(true)}
                 disabled={loading}
-                className="inline-flex shrink-0 items-center gap-1.5 self-start rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
+                className={`shrink-0 self-start ${RACKO_BTN_SECONDARY}`}
               >
                 <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
                 Refresh
@@ -298,7 +312,8 @@ export function RequestStatusView({
                 <MetaChip
                   icon={<Calendar className="h-4 w-4" />}
                   label="Created"
-                  value={formatRelativeTime(getCreatedAt(request))}
+                  value={formatRelativeTime(createdAt)}
+                  hint={createdAt ? formatDateTime(createdAt) : undefined}
                 />
               </div>
             ) : null}
@@ -325,21 +340,33 @@ export function RequestStatusView({
           ) : null}
 
           {failedStep ? (
-            <div className="rounded-xl border border-red-200 bg-red-50 p-5 shadow-sm">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
-                <div className="min-w-0 flex-1">
-                  <h2 className="text-sm font-semibold text-red-900">{failedStep.label} failed</h2>
-                  <p className="mt-1 text-sm text-red-700">{failedStep.error}</p>
-                  <button
-                    type="button"
-                    onClick={() => void refresh(true)}
-                    className="mt-3 inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
-                  >
-                    <RefreshCw className="h-3.5 w-3.5" />
-                    Retry provisioning
-                  </button>
+            <div className="overflow-hidden rounded-xl border border-red-200 bg-red-50 shadow-sm">
+              <div className="h-0.5 bg-[#B91C1C]" />
+              <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex items-start gap-3">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100">
+                    <AlertCircle className="h-5 w-5 text-red-600" />
+                  </div>
+                  <div className="min-w-0">
+                    <h2 className="text-sm font-semibold text-red-900">{failedStep.label} failed</h2>
+                    <p className="mt-1 text-sm leading-relaxed text-red-700">{failedStep.error}</p>
+                    {failedStep.key === 'credentials' ? (
+                      <p className="mt-2 text-xs text-red-600/90">
+                        Ensure cloud automation has FRONTEND_URL set and email delivery is configured,
+                        then retry sending the access link.
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void retryFailedStep()}
+                  disabled={loading}
+                  className={`shrink-0 ${RACKO_BTN_PRIMARY}`}
+                >
+                  <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  Retry step
+                </button>
               </div>
             </div>
           ) : null}
@@ -359,7 +386,7 @@ export function RequestStatusView({
                   <div className="mb-6 h-2 overflow-hidden rounded-full bg-gray-100">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        isComplete ? 'bg-green-600' : failedStep ? 'bg-red-500' : 'bg-[var(--cloud-accent,#B91C1C)]'
+                        isComplete ? 'bg-green-600' : failedStep ? 'bg-red-500' : 'bg-[#B91C1C]'
                       }`}
                       style={{ width: `${progressPct}%` }}
                     />
@@ -389,7 +416,7 @@ export function RequestStatusView({
                               step.status === 'complete'
                                 ? 'text-gray-900'
                                 : step.status === 'active'
-                                  ? 'text-[var(--cloud-accent,#B91C1C)]'
+                                  ? 'text-[#B91C1C]'
                                   : step.status === 'failed'
                                     ? 'text-red-700'
                                     : 'text-gray-500'

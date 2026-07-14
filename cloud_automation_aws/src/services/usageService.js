@@ -10,6 +10,7 @@ import {
   getRequestTimezone,
   sumConsumedMinutesToday,
 } from '../utils/usageWindowAccess.js';
+import { revokeLabUserConsoleSessionsSafe } from './awsSessionRevocationService.js';
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -201,6 +202,7 @@ export async function handleDailyLimitReached(request, user, consumedMinutes, da
   if (userIndex != null) {
     const { expireMagicLinkSessionsForUser } = await import('./sessionTrackingService.js');
     await expireMagicLinkSessionsForUser(String(request._id), userIndex);
+    await revokeLabUserConsoleSessionsSafe(String(request._id), userIndex);
   }
 
   const accessType = request.accessType || 'magic_link';
@@ -302,6 +304,7 @@ export async function forceLogoutUser({ requestId, userIndex }) {
 
   const { expireMagicLinkSessionsForUser } = await import('./sessionTrackingService.js');
   await expireMagicLinkSessionsForUser(requestId, userIndex);
+  const awsRevocation = await revokeLabUserConsoleSessionsSafe(requestId, userIndex);
 
   const endedUsage = await endUsageSessionIfActive({ requestId, userId }).catch(() => null);
   if (endedUsage) {
@@ -309,6 +312,7 @@ export async function forceLogoutUser({ requestId, userIndex }) {
       success: true,
       sessionsClosedCount: 1,
       message: 'User session ended.',
+      awsRevocation,
     };
   }
 
@@ -318,7 +322,12 @@ export async function forceLogoutUser({ requestId, userIndex }) {
   );
 
   if (!openSessions.length) {
-    return { success: true, sessionsClosedCount: 0, message: 'No active sessions to logout.' };
+    return {
+      success: true,
+      sessionsClosedCount: 0,
+      message: 'No active sessions to logout.',
+      awsRevocation,
+    };
   }
 
   const now = new Date();
@@ -341,6 +350,7 @@ export async function forceLogoutUser({ requestId, userIndex }) {
     success: true,
     sessionsClosedCount: openSessions.length,
     message: 'User session ended.',
+    awsRevocation,
   };
 }
 

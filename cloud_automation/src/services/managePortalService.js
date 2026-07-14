@@ -470,7 +470,9 @@ const validateSessionForRequest = (session, requestId) => {
 };
 
 const resolveFrontendBaseUrl = () => {
-  const baseUrl = String(process.env.FRONTEND_URL || process.env.CLIENT_PORTAL_URL || '')
+  const baseUrl = String(
+    process.env.FRONTEND_URL || process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'
+  )
     .trim()
     .replace(/\/+$/, '');
 

@@ -40,7 +40,9 @@ const isAzureNetworkError = (error) => {
     message.includes('enotfound') ||
     message.includes('etimedout') ||
     message.includes('esockettimedout') ||
-    errorCode === 'authenticationrequirederror' && message.includes('network')
+    message.includes('timeout') ||
+    errorCode === 'econnaborted' ||
+    (errorCode === 'authenticationrequirederror' && message.includes('network'))
   );
 };
 

@@ -1,8 +1,12 @@
 const COUNTABLE_KEYS = [
   'terminated',
+  'stopped',
   'deleted',
   'bucketsDeleted',
-  'bucketsEmptied',
+  'notebooksDeleted',
+  'trainingJobsStopped',
+  'instancesDeleted',
+  'dbsDeleted',
 ];
 
 export function countCleanupDeleted(results) {

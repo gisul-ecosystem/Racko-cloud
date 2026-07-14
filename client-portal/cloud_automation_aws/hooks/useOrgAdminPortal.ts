@@ -1,30 +1,39 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AwsOrgAdminError,
+  deleteAwsOrgRequest,
   deleteAwsOrgUser,
+  fixAwsOrgRequestPermissions,
   forceAwsOrgLogout,
   generateAwsOrgConsoleUrl,
   getAwsOrgMonitoringLogs,
   getAwsOrgRequestDetail,
   getAwsOrgUserCost,
   listAwsIamPolicies,
+  listAwsOrgAccessRequests,
   listAwsOrgRequests,
   reinstateAwsOrgUser,
+  reviewAwsOrgAccessRequest,
   renewAwsOrgUserBudget,
   suspendAwsOrgUser,
   syncAwsOrgRequestSpend,
   triggerAwsOrgUserCleanup,
+  triggerAwsOrgAllCleanup,
+  unblockAwsOrgUser,
   updateAwsOrgCleanupSettings,
+  updateAwsOrgRequestCleanupSettings,
   updateAwsOrgUserPermissions,
 } from '../api/orgAdminClient';
 import type {
   AwsIamPolicyGroup,
+  AwsOrgAdminAccessRequest,
   AwsOrgAdminMonitoringResponse,
   AwsOrgAdminRequestDetail,
   AwsOrgAdminRequestSummary,
   AwsOrgAdminUserCost,
+  AwsOrgAdminSharedCost,
 } from '../types/orgAdmin';
 
 const STATUS_FILTERS = ['All', 'Completed', 'Expired', 'Provisioning', 'Failed', 'Pending'] as const;
@@ -34,8 +43,10 @@ export function useOrgAdminPortal() {
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [requestDetail, setRequestDetail] = useState<AwsOrgAdminRequestDetail | null>(null);
   const [iamPolicies, setIamPolicies] = useState<AwsIamPolicyGroup[]>([]);
+  const [accessRequests, setAccessRequests] = useState<AwsOrgAdminAccessRequest[]>([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [accessLoading, setAccessLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -44,7 +55,18 @@ export function useOrgAdminPortal() {
   const [statusFilter, setStatusFilter] = useState<string>('All');
   const [regionFilter, setRegionFilter] = useState('All');
   const [search, setSearch] = useState('');
-  const [activeTab, setActiveTab] = useState<'users' | 'cleanup' | 'budget'>('users');
+  const [activeTab, setActiveTab] = useState<
+    'users' | 'history' | 'cleanup' | 'budget' | 'custom-config'
+  >('users');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const refreshInFlightRef = useRef(false);
+
+  const hasActiveUsers = Boolean(
+    requestDetail?.users?.some(
+      (user) => user.hasActiveSession || user.activeSession || user.status === 'Active'
+    )
+  );
 
   const handleApiError = useCallback((err: unknown, fallback: string) => {
     if (err instanceof AwsOrgAdminError) {
@@ -59,10 +81,7 @@ export function useOrgAdminPortal() {
     setOverviewError(null);
 
     try {
-      const data = await listAwsOrgRequests({
-        status: statusFilter,
-        region: regionFilter,
-      });
+      const data = await listAwsOrgRequests();
       setRequests(data);
 
       if (data.length === 0) {
@@ -74,30 +93,48 @@ export function useOrgAdminPortal() {
     } finally {
       setOverviewLoading(false);
     }
-  }, [statusFilter, regionFilter]);
+  }, []);
 
   const refreshDetail = useCallback(async () => {
     if (!selectedRequestId) return;
+    if (refreshInFlightRef.current) return;
 
+    refreshInFlightRef.current = true;
     setDetailLoading(true);
+    setIsRefreshing(true);
     setDetailError(null);
 
     try {
       const detail = await getAwsOrgRequestDetail(selectedRequestId);
       setRequestDetail(detail);
+      setLastUpdatedAt(new Date());
     } catch (err) {
       setDetailError(err instanceof AwsOrgAdminError ? err.message : 'Failed to load request detail.');
     } finally {
+      refreshInFlightRef.current = false;
+      setIsRefreshing(false);
       setDetailLoading(false);
     }
   }, [selectedRequestId]);
 
+  const refreshAccessRequests = useCallback(async () => {
+    setAccessLoading(true);
+    try {
+      setAccessRequests(await listAwsOrgAccessRequests({ status: 'pending' }));
+    } catch {
+      setAccessRequests([]);
+    } finally {
+      setAccessLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshOverview();
+    void refreshAccessRequests();
     void listAwsIamPolicies()
       .then(setIamPolicies)
       .catch(() => setIamPolicies([]));
-  }, [refreshOverview]);
+  }, [refreshOverview, refreshAccessRequests]);
 
   useEffect(() => {
     if (selectedRequestId) {
@@ -113,10 +150,10 @@ export function useOrgAdminPortal() {
 
     const intervalId = window.setInterval(() => {
       void refreshDetail();
-    }, 30_000);
+    }, hasActiveUsers ? 10_000 : 60_000);
 
     return () => window.clearInterval(intervalId);
-  }, [selectedRequestId, refreshDetail]);
+  }, [selectedRequestId, refreshDetail, hasActiveUsers]);
 
   const stats = useMemo(
     () => ({
@@ -262,8 +299,9 @@ export function useOrgAdminPortal() {
       setActionSuccess(null);
 
       try {
-        const result = await triggerAwsOrgUserCleanup(selectedRequestId, userIndex);
-        setActionSuccess(`Cleanup completed. ${result.deletedCount} resource(s) removed.`);
+        const action = requestDetail?.resourceCleanupAction || 'delete';
+        const result = await triggerAwsOrgUserCleanup(selectedRequestId, userIndex, action);
+        setActionSuccess(`${action === 'pause' ? 'Pause' : 'Cleanup'} completed. ${result.deletedCount} resource action(s) applied.`);
         await refreshDetail();
         return true;
       } catch (err) {
@@ -273,7 +311,7 @@ export function useOrgAdminPortal() {
         setSaving(false);
       }
     },
-    [selectedRequestId, refreshDetail, handleApiError]
+    [selectedRequestId, requestDetail?.resourceCleanupAction, refreshDetail, handleApiError]
   );
 
   const handleSyncSpend = useCallback(async () => {
@@ -296,8 +334,90 @@ export function useOrgAdminPortal() {
     }
   }, [selectedRequestId, refreshDetail, handleApiError]);
 
+  const handleReviewAccess = useCallback(
+    async (id: string, status: 'approved' | 'rejected', reviewNotes?: string) => {
+      setSaving(true);
+      clearActionFeedback();
+      try {
+        await reviewAwsOrgAccessRequest(id, { status, reviewNotes });
+        setActionSuccess(`Access request ${status}.`);
+        await refreshAccessRequests();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to review access request.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [clearActionFeedback, handleApiError, refreshAccessRequests]
+  );
+
+  const handleDeleteRequest = useCallback(async () => {
+    if (!selectedRequestId) return false;
+    setSaving(true);
+    clearActionFeedback();
+    try {
+      await deleteAwsOrgRequest(selectedRequestId);
+      setSelectedRequestId(null);
+      setRequestDetail(null);
+      setActionSuccess('AWS request deleted.');
+      await refreshOverview();
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to delete request.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, clearActionFeedback, refreshOverview, handleApiError]);
+
+  const handleFixPermissions = useCallback(
+    () =>
+      runAction(
+        () => fixAwsOrgRequestPermissions(selectedRequestId!),
+        'IAM permissions repaired.',
+        'Failed to repair permissions.'
+      ),
+    [runAction, selectedRequestId]
+  );
+
+  const handleRequestCleanup = useCallback(async () => {
+    if (!selectedRequestId) return false;
+    setSaving(true);
+    clearActionFeedback();
+    try {
+      const action = requestDetail?.resourceCleanupAction || 'delete';
+      const result = await triggerAwsOrgAllCleanup(selectedRequestId, action);
+      setActionSuccess(
+        `Request ${action} completed. ${result.deletedCount ?? 0} resource action(s) applied.`
+      );
+      await refreshDetail();
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to clean up request.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, requestDetail?.resourceCleanupAction, clearActionFeedback, refreshDetail, handleApiError]);
+
+  const fetchSharedCost = useCallback(
+    async (options: { refresh?: boolean } = {}): Promise<AwsOrgAdminSharedCost | null> => {
+      if (!selectedRequestId) return null;
+      try {
+        const { getAwsOrgSharedCost } = await import('../api/orgAdminClient');
+        return await getAwsOrgSharedCost(selectedRequestId, options);
+      } catch (err) {
+        handleApiError(err, 'Failed to load shared AWS cost.');
+        return null;
+      }
+    },
+    [selectedRequestId, handleApiError]
+  );
+
   const handleToggleCleanup = useCallback(
-    async (cleanupEnabled: boolean) => {
+    async (userIndex: number, cleanupEnabled: boolean) => {
       if (!selectedRequestId) return false;
 
       setSaving(true);
@@ -305,7 +425,7 @@ export function useOrgAdminPortal() {
       setActionSuccess(null);
 
       try {
-        await updateAwsOrgCleanupSettings(selectedRequestId, 0, { cleanupEnabled });
+        await updateAwsOrgCleanupSettings(selectedRequestId, userIndex, { cleanupEnabled });
         setActionSuccess('Cleanup settings updated.');
         await refreshDetail();
         return true;
@@ -317,6 +437,40 @@ export function useOrgAdminPortal() {
       }
     },
     [selectedRequestId, refreshDetail, handleApiError]
+  );
+
+  const handleRequestCleanupSettings = useCallback(
+    async (settings: {
+      cleanupEnabled?: boolean;
+      cleanupIntervalHours?: number;
+      action?: 'delete' | 'pause';
+    }) => {
+      if (!selectedRequestId) return false;
+      setSaving(true);
+      clearActionFeedback();
+      try {
+        await updateAwsOrgRequestCleanupSettings(selectedRequestId, settings);
+        setActionSuccess('Request cleanup schedule updated.');
+        await refreshDetail();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to update request cleanup settings.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, clearActionFeedback, refreshDetail, handleApiError]
+  );
+
+  const handleUnblock = useCallback(
+    (userIndex: number) =>
+      runAction(
+        () => unblockAwsOrgUser(selectedRequestId!, userIndex),
+        `User ${userIndex + 1} unblocked.`,
+        'Failed to unblock user.'
+      ),
+    [runAction, selectedRequestId]
   );
 
   const fetchUserCost = useCallback(
@@ -366,18 +520,21 @@ export function useOrgAdminPortal() {
   const handleRefresh = useCallback(() => {
     clearActionFeedback();
     void refreshOverview();
+    void refreshAccessRequests();
     if (selectedRequestId) {
       void refreshDetail();
     }
-  }, [clearActionFeedback, refreshOverview, refreshDetail, selectedRequestId]);
+  }, [clearActionFeedback, refreshOverview, refreshAccessRequests, refreshDetail, selectedRequestId]);
 
   return {
     requests,
     selectedRequestId,
     requestDetail,
     iamPolicies,
+    accessRequests,
     overviewLoading,
     detailLoading,
+    accessLoading,
     saving,
     overviewError,
     detailError,
@@ -406,10 +563,21 @@ export function useOrgAdminPortal() {
     handleRenewBudget,
     handleCleanup,
     handleSyncSpend,
+    handleReviewAccess,
+    handleDeleteRequest,
+    handleFixPermissions,
+    handleRequestCleanup,
     handleToggleCleanup,
+    handleRequestCleanupSettings,
+    handleUnblock,
     fetchUserCost,
+    fetchSharedCost,
     handleForceLogout,
     fetchUserMonitoring,
     clearActionFeedback,
+    refreshAccessRequests,
+    lastUpdatedAt,
+    isRefreshing,
+    hasActiveUsers,
   };
 }

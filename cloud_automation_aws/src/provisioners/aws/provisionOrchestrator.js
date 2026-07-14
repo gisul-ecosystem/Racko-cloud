@@ -213,7 +213,7 @@ export async function run(requestId) {
     await runStep(requestId, 'AUTOTAG', 'Deploy auto-tagger Lambda', 3, async () => {
       const deployments = [];
       for (const account of labAccounts) {
-        const deployment = await deployAutoTagger(account.accountId, requestId);
+        const deployment = await deployAutoTagger(account.accountId, requestId, request.region);
         deployments.push(deployment);
       }
       console.log('[Orchestrator] Auto-tagger deployed to all lab accounts');

@@ -2,6 +2,7 @@ import {
   DeleteRoleCommand,
   DeleteRolePolicyCommand,
   PutRolePolicyCommand,
+  PutUserPolicyCommand,
 } from '@aws-sdk/client-iam';
 import { iamClient } from '../config/aws.js';
 import {
@@ -12,13 +13,23 @@ import {
 import Request from '../models/Request.js';
 import UserSpend from '../models/UserSpend.js';
 import BudgetEvent from '../models/BudgetEvent.js';
+import AccessRequest from '../models/AccessRequest.js';
+import CleanupLog from '../models/CleanupLog.js';
+import HistorySnapshot from '../models/HistorySnapshot.js';
+import CustomIamPolicyAssignment from '../models/CustomIamPolicyAssignment.js';
+import SessionLog from '../models/SessionLog.js';
 import { generateAndLogConsoleUrl } from './consoleAccessService.js';
-import { cleanupUserResources, cleanupAllUsers } from './resourceCleanupService.js';
+import {
+  cleanupUserResources,
+  cleanupAllUsers,
+  pauseUserResources,
+  pauseAllUsers,
+} from './resourceCleanupService.js';
 import { countCleanupDeleted } from '../utils/cleanupMetrics.js';
 import { createNotification } from './notificationService.js';
 import { syncRequestUserSpend, fetchUserSpend } from './costTrackingService.js';
 import { attachLiveUsageToUsers } from './userLiveUsageService.js';
-import { syncRecentActivityForRequest } from './awsConsoleLoginMonitor.js';
+import { syncRecentActivityForRequest, reconcileIdleSessionsForRequest } from './awsConsoleLoginMonitor.js';
 import {
   getUserSessionStats,
   syncActiveMagicLinkUsageSessions,
@@ -42,11 +53,32 @@ import {
   sumConsumedMinutesToday,
 } from '../utils/usageWindowAccess.js';
 import { DateTime } from 'luxon';
+import { rollbackLabRoles } from '../provisioners/aws/iamRoleProvisioner.js';
+import {
+  deprovisionIdentityUsers,
+  getIamClientForAccount,
+} from '../provisioners/aws/identityProvisioner.js';
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
   error.statusCode = statusCode;
   return error;
+}
+
+async function recordHistory(requestId, event, {
+  userIndex = null,
+  actor = 'org_admin',
+  summary = null,
+  snapshot = null,
+} = {}) {
+  return HistorySnapshot.create({ requestId, userIndex, event, actor, summary, snapshot });
+}
+
+function getRequestUser(request, userIndex) {
+  const field = (request.accessType || 'magic_link') === 'identity_center'
+    ? 'identityUsers'
+    : 'labRoles';
+  return { field, user: request[field]?.find((entry) => entry.userIndex === Number(userIndex)) };
 }
 
 function buildPolicyDocumentFromNames(policies = [], request = null) {
@@ -105,6 +137,12 @@ function mapUsersFromRequest(request, spendRecords = []) {
       spendByService: spend?.services || [],
       lastCleanupAt: role.lastCleanupAt,
       cleanupLogs: role.cleanupLogs || [],
+      cleanupDisabled: role.cleanupDisabled || false,
+      cleanupIntervalOverride: role.cleanupIntervalOverride ?? null,
+      cleanupEnabled: !role.cleanupDisabled,
+      cleanupIntervalHours: role.cleanupIntervalOverride ?? request.cleanupIntervalHours ?? null,
+      windowEnforcementPausedUntil: role.windowEnforcementPausedUntil || null,
+      budgetTopUpUsd: role.budgetTopUpUsd || 0,
       permissionSetArn: role.permissionSetArn,
       needsActivation: role.needsActivation,
       policies,
@@ -135,6 +173,7 @@ export async function listAllRequests({ status, region, search } = {}) {
 
   return requests.map((request) => ({
     requestId: String(request._id),
+    requestName: request.requestName || null,
     customerEmail: request.customerEmail,
     region: request.region,
     status: request.status,
@@ -161,11 +200,12 @@ export async function getRequestDetail(requestId) {
   const spendRecords = await UserSpend.find({ requestId, date: today });
   await syncActiveMagicLinkUsageSessions(requestId);
 
-  // CloudTrail lookups span multiple regions and can exceed gateway timeouts.
-  // Schedulers also run monitorAwsUserActivity; the portal polls every 30s.
-  void syncRecentActivityForRequest(requestId).catch((err) => {
-    console.warn(`[orgAdmin] Activity sync failed for ${requestId}:`, err.message);
-  });
+  try {
+    await syncRecentActivityForRequest(String(request._id));
+    await reconcileIdleSessionsForRequest(String(request._id));
+  } catch (err) {
+    console.warn(`[orgAdmin] Usage session reconcile failed for ${requestId}:`, err.message);
+  }
 
   const requestForUsage = await Request.findById(requestId);
   const baseUsers = mapUsersFromRequest(requestForUsage || request, spendRecords);
@@ -193,6 +233,7 @@ export async function getRequestDetail(requestId) {
 
   return {
     requestId: String(request._id),
+    requestName: request.requestName || null,
     customerEmail: request.customerEmail,
     region: request.region,
     status: request.status,
@@ -206,6 +247,11 @@ export async function getRequestDetail(requestId) {
     perUserBudgetUsd: request.perUserBudgetUsd,
     cleanupEnabled: request.cleanupEnabled,
     cleanupIntervalHours: request.cleanupIntervalHours,
+    enableResourceCleanup: request.enableResourceCleanup,
+    resourceCleanupIntervalHours: request.resourceCleanupIntervalHours,
+    resourceCleanupAction: request.resourceCleanupAction || 'delete',
+    resourceCleanupNextRunAt: request.resourceCleanupNextRunAt || null,
+    resourceCleanupLastRanAt: request.resourceCleanupLastRanAt || null,
     selectedServices: (request.selectedServices || []).map((service) => service.serviceName),
     permissions: request.permissions || [],
     progress: request.progress,
@@ -286,6 +332,9 @@ export async function suspendLabUser(requestId, userIndex) {
   const request = await Request.findById(requestId);
   if (!request) throw createError('Request not found', 404);
 
+  const { revokeLabUserConsoleSessionsSafe } = await import('./awsSessionRevocationService.js');
+  await revokeLabUserConsoleSessionsSafe(requestId, userIndex);
+
   const accessType = request.accessType || 'magic_link';
 
   if (accessType === 'identity_center') {
@@ -359,23 +408,34 @@ export async function deleteLabUser(requestId, userIndex) {
   const request = await Request.findById(requestId);
   if (!request) throw createError('Request not found', 404);
 
-  const role = request.labRoles?.find((entry) => entry.userIndex === userIndex);
-  if (!role) throw createError('Role not found', 404);
+  const { field, user } = getRequestUser(request, userIndex);
+  if (!user) throw createError('User not found', 404);
 
-  try {
-    await iamClient.send(
-      new DeleteRolePolicyCommand({
-        RoleName: role.roleName,
+  if (field === 'identityUsers') {
+    await deprovisionIdentityUsers({
+      identityUsers: [user],
+      awsAccountId: request.awsAccountId,
+    });
+  } else {
+    try {
+      await iamClient.send(new DeleteRolePolicyCommand({
+        RoleName: user.roleName,
         PolicyName: 'RackoLabPermissions',
-      })
-    );
-    await iamClient.send(new DeleteRoleCommand({ RoleName: role.roleName }));
-  } catch (err) {
-    console.warn(`[orgAdmin] IAM role delete warning: ${err.message}`);
+      }));
+      await iamClient.send(new DeleteRoleCommand({ RoleName: user.roleName }));
+    } catch (err) {
+      console.warn(`[orgAdmin] IAM role delete warning: ${err.message}`);
+    }
   }
 
   await Request.findByIdAndUpdate(requestId, {
-    $pull: { labRoles: { userIndex } },
+    $pull: { [field]: { userIndex } },
+    $set: { updatedAt: new Date() },
+  });
+  await recordHistory(requestId, 'user_deleted', {
+    userIndex,
+    summary: `${user.username || user.roleName || `user ${userIndex}`} deleted`,
+    snapshot: user.toObject?.() || user,
   });
 }
 
@@ -383,23 +443,36 @@ export async function updateUserPermissions(requestId, userIndex, policies = [])
   const request = await Request.findById(requestId);
   if (!request) throw createError('Request not found', 404);
 
-  const role = request.labRoles?.find((entry) => entry.userIndex === userIndex);
-  if (!role) throw createError('Role not found', 404);
+  if (!Array.isArray(policies)) throw createError('policies must be an array', 400);
+  const { field, user } = getRequestUser(request, userIndex);
+  if (!user) throw createError('User not found', 404);
 
   const policyDocument = buildPolicyDocumentFromNames(policies);
-
-  await iamClient.send(
-    new PutRolePolicyCommand({
-      RoleName: role.roleName,
+  if (field === 'identityUsers') {
+    const client = await getIamClientForAccount(
+      user.accountId || user.awsAccountId || request.awsAccountId
+    );
+    await client.send(new PutUserPolicyCommand({
+      UserName: user.username,
       PolicyName: 'RackoLabPermissions',
       PolicyDocument: JSON.stringify(policyDocument),
-    })
-  );
+    }));
+  } else {
+    await iamClient.send(new PutRolePolicyCommand({
+      RoleName: user.roleName,
+      PolicyName: 'RackoLabPermissions',
+      PolicyDocument: JSON.stringify(policyDocument),
+    }));
+  }
 
   await Request.findOneAndUpdate(
-    { _id: requestId, 'labRoles.userIndex': userIndex },
-    { $set: { 'labRoles.$.policies': policies } }
+    { _id: requestId, [`${field}.userIndex`]: userIndex },
+    { $set: { [`${field}.$.policies`]: policies, updatedAt: new Date() } }
   );
+  await recordHistory(requestId, 'permissions_updated', {
+    userIndex,
+    snapshot: { policies },
+  });
 }
 
 export async function getUserCost(requestId, userIndex) {
@@ -467,29 +540,34 @@ export async function renewUserBudget(requestId, userIndex, topUpAmount) {
   const request = await Request.findById(requestId);
   if (!request) throw createError('Request not found', 404);
 
-  const role = request.labRoles?.find((entry) => entry.userIndex === userIndex);
-  if (!role) throw createError('User not found', 404);
+  const { field, user } = getRequestUser(request, userIndex);
+  if (!user) throw createError('User not found', 404);
 
-  const newBudget = (request.perUserBudgetUsd || 0) + amount;
+  const previousTopUp = Number(user.budgetTopUpUsd || 0);
+  const newTopUp = previousTopUp + amount;
+  const newBudget = Number(request.perUserBudgetUsd || 0) + newTopUp;
 
-  await Request.findByIdAndUpdate(requestId, {
-    perUserBudgetUsd: newBudget,
-  });
+  if (field === 'identityUsers' && user.suspended) {
+    const { reinstateIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
+    await reinstateIdentityUser(request, userIndex);
+  }
 
   await Request.findOneAndUpdate(
-    { _id: requestId, 'labRoles.userIndex': userIndex },
+    { _id: requestId, [`${field}.userIndex`]: userIndex },
     {
       $set: {
-        'labRoles.$.budgetExceeded': false,
-        'labRoles.$.suspended': false,
-        'labRoles.$.currentSpend': 0,
+        [`${field}.$.budgetExceeded`]: false,
+        [`${field}.$.suspended`]: false,
+        [`${field}.$.currentSpend`]: 0,
+        [`${field}.$.budgetTopUpUsd`]: newTopUp,
+        updatedAt: new Date(),
       },
     }
   );
 
   await BudgetEvent.create({
     requestId,
-    username: `labuser${userIndex + 1}`,
+    username: user.username || `labuser${userIndex + 1}`,
     userId: String(userIndex),
     spendUsd: 0,
     budgetUsd: newBudget,
@@ -504,51 +582,149 @@ export async function renewUserBudget(requestId, userIndex, topUpAmount) {
     requestId,
   });
 
-  return { newTotalBudget: newBudget, topUpAmount: amount };
-}
-
-export async function triggerUserCleanup(requestId, userIndex) {
-  const results = await cleanupUserResources(requestId, userIndex);
-  const deletedCount = countCleanupDeleted(results);
-
-  await createNotification({
-    type: 'cleanup_ran',
-    title: 'AWS resource cleanup completed',
-    message: `Lab cleanup ran for labuser${userIndex + 1} — ${deletedCount} resource(s) removed`,
-    requestId,
-    metadata: results,
+  await recordHistory(requestId, 'budget_renewed', {
+    userIndex,
+    snapshot: { topUpAmount: amount, previousTopUp, newTotalBudget: newBudget },
   });
-
-  return {
-    results,
-    deletedCount,
-  };
+  return { newTotalBudget: newBudget, topUpAmount: amount, previousTopUp };
 }
 
-export async function triggerAllCleanup(requestId) {
-  const results = await cleanupAllUsers(requestId);
-  const deletedCount = results.reduce(
-    (sum, entry) => sum + countCleanupDeleted(entry),
-    0
-  );
-  return { results, deletedCount };
+export async function triggerUserCleanup(requestId, userIndex, { action = 'delete', actor = 'org_admin' } = {}) {
+  if (!['delete', 'pause'].includes(action)) {
+    throw createError("action must be 'delete' or 'pause'.", 400);
+  }
+  const log = await CleanupLog.create({ requestId, userIndex, action, triggeredBy: actor });
+  let results;
+  try {
+    results = action === 'pause'
+      ? await pauseUserResources(requestId, userIndex)
+      : await cleanupUserResources(requestId, userIndex);
+    const deletedCount = countCleanupDeleted(results);
+    await CleanupLog.updateOne({ _id: log._id }, {
+      status: 'success',
+      totalDeleted: deletedCount,
+      results,
+      completedAt: new Date(),
+    });
+
+    await createNotification({
+      type: 'cleanup_ran',
+      title: action === 'pause' ? 'AWS resource pause completed' : 'AWS resource cleanup completed',
+      message: `Lab ${action} ran for labuser${userIndex + 1} — ${deletedCount} resource action(s) applied`,
+      requestId,
+      metadata: results,
+    });
+    await recordHistory(requestId, 'user_cleanup', {
+      userIndex,
+      actor,
+      snapshot: { action, deletedCount, results },
+    });
+
+    return { action, results, deletedCount };
+  } catch (err) {
+    await CleanupLog.updateOne({ _id: log._id }, {
+      status: 'failed',
+      error: err.message,
+      completedAt: new Date(),
+    });
+    throw err;
+  }
 }
 
-export async function updateCleanupSettings(requestId, _userIndex, settings) {
-  const { cleanupEnabled, cleanupIntervalHours } = settings;
+export async function triggerAllCleanup(requestId, { action = 'delete', actor = 'org_admin' } = {}) {
+  if (!['delete', 'pause'].includes(action)) {
+    throw createError("action must be 'delete' or 'pause'.", 400);
+  }
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  const log = await CleanupLog.create({ requestId, action, triggeredBy: actor });
+  try {
+    const results = action === 'pause'
+      ? await pauseAllUsers(requestId)
+      : await cleanupAllUsers(requestId);
+    const deletedCount = results.reduce((sum, entry) => sum + countCleanupDeleted(entry), 0);
+    await CleanupLog.updateOne({ _id: log._id }, {
+      status: 'success',
+      totalDeleted: deletedCount,
+      results,
+      completedAt: new Date(),
+    });
+    await Request.findByIdAndUpdate(requestId, {
+      resourceCleanupLastRanAt: new Date(),
+      updatedAt: new Date(),
+    });
+    await recordHistory(requestId, 'request_cleanup', {
+      actor,
+      snapshot: { action, deletedCount, results },
+    });
+    return { action, results, deletedCount, totalDeleted: deletedCount };
+  } catch (err) {
+    await CleanupLog.updateOne({ _id: log._id }, {
+      status: 'failed',
+      error: err.message,
+      completedAt: new Date(),
+    });
+    throw err;
+  }
+}
 
+export async function updateCleanupSettings(requestId, userIndex, settings) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  const { field, user } = getRequestUser(request, userIndex);
+  if (!user) throw createError('User not found', 404);
+  const cleanupDisabled = settings.cleanupDisabled ??
+    (settings.cleanupEnabled !== undefined ? !Boolean(settings.cleanupEnabled) : undefined);
+  const cleanupIntervalOverride = settings.cleanupIntervalOverride ?? settings.cleanupIntervalHours;
   const updates = {};
-  if (cleanupEnabled !== undefined) updates.cleanupEnabled = Boolean(cleanupEnabled);
-  if (cleanupIntervalHours !== undefined) {
-    updates.cleanupIntervalHours = cleanupIntervalHours;
+  if (cleanupDisabled !== undefined) updates[`${field}.$.cleanupDisabled`] = Boolean(cleanupDisabled);
+  if (cleanupIntervalOverride !== undefined) {
+    const interval = cleanupIntervalOverride === null ? null : Number(cleanupIntervalOverride);
+    if (interval !== null && (!Number.isFinite(interval) || interval < 1 || interval > 24)) {
+      throw createError('cleanupIntervalOverride must be between 1 and 24 hours', 400);
+    }
+    updates[`${field}.$.cleanupIntervalOverride`] = interval;
   }
+  if (!Object.keys(updates).length) throw createError('No fields to update', 400);
+  updates.updatedAt = new Date();
+  await Request.findOneAndUpdate(
+    { _id: requestId, [`${field}.userIndex`]: Number(userIndex) },
+    { $set: updates }
+  );
+  await recordHistory(requestId, 'cleanup_settings_updated', {
+    userIndex: Number(userIndex),
+    snapshot: { cleanupDisabled, cleanupIntervalOverride },
+  });
+}
 
-  if (Object.keys(updates).length === 0) {
-    throw createError('No fields to update', 400);
+export async function updateRequestCleanupSettings(requestId, settings) {
+  const updates = {};
+  if (settings.cleanupEnabled !== undefined) updates.cleanupEnabled = Boolean(settings.cleanupEnabled);
+  if (settings.enableResourceCleanup !== undefined) {
+    updates.enableResourceCleanup = Boolean(settings.enableResourceCleanup);
   }
-
-  const result = await Request.findByIdAndUpdate(requestId, updates, { new: true });
-  if (!result) throw createError('Request not found', 404);
+  const interval = settings.resourceCleanupIntervalHours ?? settings.cleanupIntervalHours;
+  if (interval !== undefined) {
+    const number = Number(interval);
+    if (!Number.isFinite(number) || number < 1 || number > 24) {
+      throw createError('cleanup interval must be between 1 and 24 hours', 400);
+    }
+    updates.cleanupIntervalHours = number;
+    updates.resourceCleanupIntervalHours = number;
+    updates.resourceCleanupNextRunAt = new Date(Date.now() + number * 3600000);
+  }
+  if (settings.action !== undefined) {
+    if (!['delete', 'pause'].includes(settings.action)) {
+      throw createError("action must be 'delete' or 'pause'.", 400);
+    }
+    updates.resourceCleanupAction = settings.action;
+  }
+  if (!Object.keys(updates).length) throw createError('No fields to update', 400);
+  updates.updatedAt = new Date();
+  const request = await Request.findByIdAndUpdate(requestId, updates, { new: true });
+  if (!request) throw createError('Request not found', 404);
+  await recordHistory(requestId, 'request_cleanup_settings_updated', { snapshot: updates });
+  return request;
 }
 
 export async function syncRequestSpend(requestId) {
@@ -667,4 +843,344 @@ export async function getMonitoringLogs(requestId, { userIndex = null, limit = 5
 
 export async function forceLogoutUser(requestId, userIndex) {
   return forceLogoutUsageSession({ requestId, userIndex: Number(userIndex) });
+}
+
+export async function deleteRequest(requestId, { actor = 'org_admin' } = {}) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  const auditSnapshot = {
+    customerEmail: request.customerEmail,
+    requestName: request.requestName,
+    region: request.region,
+    accessType: request.accessType,
+    userCount: (request.accessType === 'identity_center'
+      ? request.identityUsers
+      : request.labRoles
+    )?.length || 0,
+    selectedServices: (request.selectedServices || []).map((service) => service.serviceName),
+  };
+
+  try {
+    await cleanupAllUsers(requestId);
+  } catch (err) {
+    console.warn(`[orgAdmin] Resource cleanup before request deletion failed: ${err.message}`);
+  }
+  if ((request.accessType || 'magic_link') === 'identity_center') {
+    await deprovisionIdentityUsers(request);
+  } else {
+    await rollbackLabRoles(request.labRoles || []);
+  }
+
+  await Promise.all([
+    SessionLog.deleteMany({ requestId }),
+    UserSpend.deleteMany({ requestId }),
+    BudgetEvent.deleteMany({ requestId }),
+    AccessRequest.updateMany({ requestId }, { $set: { requestId: null } }),
+    CustomIamPolicyAssignment.updateMany(
+      { requestId, active: true },
+      { $set: { active: false } }
+    ),
+  ]);
+  await Request.deleteOne({ _id: requestId });
+  await recordHistory(requestId, 'request_deleted', {
+    actor,
+    summary: `Request ${requestId} deleted`,
+    snapshot: auditSnapshot,
+  });
+  return { requestId, deleted: true };
+}
+
+export async function reprovisionPermissions(requestId, { actor = 'org_admin' } = {}) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  const users = (request.accessType || 'magic_link') === 'identity_center'
+    ? request.identityUsers || []
+    : request.labRoles || [];
+  const failures = [];
+  let usersProcessed = 0;
+  for (const user of users) {
+    try {
+      await updateUserPermissions(requestId, user.userIndex, resolveUserPolicies(user, request));
+      usersProcessed += 1;
+    } catch (err) {
+      failures.push({ userIndex: user.userIndex, error: err.message });
+    }
+  }
+  const result = {
+    success: failures.length === 0,
+    usersProcessed,
+    rolesProvisioned: usersProcessed,
+    assignmentsMade: usersProcessed,
+    permissionsComplete: failures.length === 0,
+    permissionFailures: failures,
+  };
+  await recordHistory(requestId, 'permissions_reprovisioned', { actor, snapshot: result });
+  return result;
+}
+
+export async function repairPermissions(requestId, options = {}) {
+  return reprovisionPermissions(requestId, options);
+}
+
+export async function unblockUser(requestId, userIndex, {
+  actor = 'org_admin',
+  resetUsage = true,
+  pauseWindowEnforcement = true,
+  pauseWindowHours = 24,
+} = {}) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  const { field, user } = getRequestUser(request, userIndex);
+  if (!user) throw createError('User not found', 404);
+  if (user.suspended && field === 'identityUsers') {
+    const { reinstateIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
+    await reinstateIdentityUser(request, Number(userIndex));
+  }
+
+  const pauseUntil = pauseWindowEnforcement
+    ? new Date(Date.now() + Math.max(Number(pauseWindowHours) || 24, 1) * 3600000)
+    : null;
+  const set = {
+    [`${field}.$.suspended`]: false,
+    [`${field}.$.budgetExceeded`]: false,
+    [`${field}.$.windowEnforcementPausedUntil`]: pauseUntil,
+    updatedAt: new Date(),
+  };
+  if (resetUsage) {
+    set['usageUserStates.$[state].dailyLimitReached'] = false;
+  }
+  await Request.findOneAndUpdate(
+    { _id: requestId, [`${field}.userIndex`]: Number(userIndex) },
+    { $set: set },
+    {
+      arrayFilters: resetUsage
+        ? [{ 'state.userId': resolveUsageUserId(request, Number(userIndex)) }]
+        : undefined,
+    }
+  );
+  if (resetUsage) {
+    const userId = resolveUsageUserId(request, Number(userIndex));
+    await Request.updateOne(
+      { _id: requestId },
+      {
+        $set: {
+          'usageSessions.$[session].logoutAt': new Date(),
+          'usageSessions.$[session].minutesUsed': 0,
+        },
+      },
+      { arrayFilters: [{ 'session.userId': userId, 'session.logoutAt': null }] }
+    );
+  }
+  const result = {
+    userIndex: Number(userIndex),
+    username: user.username || `labuser${Number(userIndex) + 1}`,
+    resetUsage,
+    pauseWindowEnforcement,
+    windowEnforcementPausedUntil: pauseUntil,
+  };
+  await recordHistory(requestId, 'user_unblocked', {
+    userIndex: Number(userIndex),
+    actor,
+    snapshot: result,
+  });
+  return result;
+}
+
+export async function getUserSessions(requestId, userIndex, { limit = 50 } = {}) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  const { user } = getRequestUser(request, userIndex);
+  if (!user) throw createError('User not found', 404);
+  const resolvedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
+  const sessions = await SessionLog.find({ requestId, userIndex: Number(userIndex) })
+    .sort({ startedAt: -1 })
+    .limit(resolvedLimit)
+    .lean();
+  return sessions.map((session) => ({
+    id: String(session._id),
+    loginAt: session.startedAt,
+    logoutAt: session.endedAt || null,
+    minutesUsed: session.status === 'active'
+      ? Math.max(0, Math.floor((Date.now() - new Date(session.startedAt).getTime()) / 60000))
+      : session.durationMins,
+    endedReason: session.status,
+    ipAddress: session.ipAddress || null,
+    status: session.status === 'active' ? 'Active' : session.status,
+    isActive: session.status === 'active',
+  }));
+}
+
+export async function getCleanupLogs(requestId, { limit = 20 } = {}) {
+  if (!(await Request.exists({ _id: requestId }))) throw createError('Request not found', 404);
+  return CleanupLog.find({ requestId })
+    .sort({ ranAt: -1 })
+    .limit(Math.min(Math.max(Number(limit) || 20, 1), 100))
+    .lean();
+}
+
+export async function getLabHistory(requestId, { userIndex = null, limit = 200 } = {}) {
+  if (!(await Request.exists({ _id: requestId }))) throw createError('Request not found', 404);
+  const query = { requestId };
+  if (userIndex !== null && userIndex !== '') query.userIndex = Number(userIndex);
+  const rows = await HistorySnapshot.find(query)
+    .sort({ createdAt: -1 })
+    .limit(Math.min(Math.max(Number(limit) || 200, 1), 500))
+    .lean();
+  return {
+    requestId: String(requestId),
+    entries: rows.map((row) => ({
+      id: String(row._id),
+      type: row.event,
+      at: row.createdAt,
+      userIndex: row.userIndex,
+      title: row.summary || row.event.replace(/_/g, ' '),
+      subtitle: row.actor,
+      status: row.snapshot?.status,
+      costUsd: row.snapshot?.costUsd,
+      resourcesDeleted: row.snapshot?.deletedCount,
+      details: row.snapshot,
+    })),
+  };
+}
+
+export async function listAccessRequests({ status, requestId } = {}) {
+  const query = {};
+  if (status) query.status = String(status).toLowerCase();
+  if (requestId) query.requestId = requestId;
+  const rows = await AccessRequest.find(query).sort({ createdAt: -1 });
+  return rows.map((row) => row.toJSON());
+}
+
+export async function createAccessRequest(fields = {}) {
+  if (!fields.customerEmail || !fields.serviceName || !fields.requestedAccess) {
+    throw createError('customerEmail, serviceName, and requestedAccess are required', 400);
+  }
+  if (fields.requestId && !(await Request.exists({ _id: fields.requestId }))) {
+    throw createError('Linked request not found', 404);
+  }
+  const request = await AccessRequest.create({
+    requestId: fields.requestId || undefined,
+    customerEmail: fields.customerEmail,
+    serviceId: fields.serviceId || undefined,
+    serviceName: fields.serviceName,
+    defaultPolicy: fields.defaultPolicy,
+    requestedAccess: fields.requestedAccess,
+    requestedPolicies: fields.requestedPolicies || [],
+    accountCount: fields.accountCount,
+  });
+  return request.toJSON();
+}
+
+export async function reviewAccessRequest(id, {
+  status,
+  reviewNotes,
+  reviewedBy = 'org_admin',
+} = {}) {
+  const normalized = String(status || '').toLowerCase();
+  if (!['approved', 'rejected'].includes(normalized)) {
+    throw createError('status must be approved or rejected', 400);
+  }
+  const accessRequest = await AccessRequest.findOneAndUpdate(
+    { _id: id, status: 'pending' },
+    {
+      status: normalized,
+      reviewNotes,
+      reviewedBy,
+      reviewedAt: new Date(),
+    },
+    { new: true }
+  );
+  if (!accessRequest) throw createError('Access request not found or already reviewed', 404);
+
+  if (normalized === 'approved' && accessRequest.requestId) {
+    try {
+      const request = await Request.findById(accessRequest.requestId);
+      if (!request) throw createError('Linked request not found', 404);
+      const users = (request.accessType || 'magic_link') === 'identity_center'
+        ? request.identityUsers || []
+        : request.labRoles || [];
+      const requestedPolicies = accessRequest.requestedPolicies?.length
+        ? accessRequest.requestedPolicies
+        : String(accessRequest.requestedAccess || '')
+            .split(/[,;\n]+/)
+            .map((value) => value.trim())
+            .filter(Boolean);
+      for (const user of users) {
+        const merged = [...new Set([...resolveUserPolicies(user, request), ...requestedPolicies])];
+        await updateUserPermissions(request._id, user.userIndex, merged);
+      }
+      accessRequest.accessApplied = true;
+      accessRequest.fulfillmentError = undefined;
+      await accessRequest.save();
+    } catch (err) {
+      accessRequest.fulfillmentError = err.message;
+      await accessRequest.save();
+    }
+  }
+  if (accessRequest.requestId) {
+    await recordHistory(accessRequest.requestId, 'access_request_reviewed', {
+      actor: reviewedBy,
+      snapshot: {
+        accessRequestId: accessRequest._id,
+        status: normalized,
+        accessApplied: accessRequest.accessApplied,
+        fulfillmentError: accessRequest.fulfillmentError,
+      },
+    });
+  }
+  return accessRequest;
+}
+
+export function computeSharedCostAttribution(totalSpend, users = [], sessions = []) {
+  const minutesByUser = new Map(users.map((user) => [Number(user.userIndex), 0]));
+  for (const session of sessions) {
+    const matchedUser = users.find(
+      (user) => user.userId === session.userId || user.username === session.userId
+    );
+    const userIndex = matchedUser?.userIndex ?? userIndexFromUserId(session.userId);
+    if (!minutesByUser.has(userIndex)) continue;
+    const minutes = session.minutesUsed ?? (
+      session.logoutAt
+        ? Math.max(0, (new Date(session.logoutAt) - new Date(session.loginAt)) / 60000)
+        : Math.max(0, (Date.now() - new Date(session.loginAt).getTime()) / 60000)
+    );
+    minutesByUser.set(userIndex, minutesByUser.get(userIndex) + Number(minutes || 0));
+  }
+  const totalMinutes = [...minutesByUser.values()].reduce((sum, value) => sum + value, 0);
+  return users.map((user) => {
+    const minutes = minutesByUser.get(Number(user.userIndex)) || 0;
+    const ratio = totalMinutes > 0 ? minutes / totalMinutes : (users.length ? 1 / users.length : 0);
+    return {
+      userIndex: user.userIndex,
+      username: user.username || `labuser${Number(user.userIndex) + 1}`,
+      mergedMinutesMtd: Number(minutes.toFixed(2)),
+      sharePercent: Number((ratio * 100).toFixed(2)),
+      monthToDateCost: Number((Number(totalSpend || 0) * ratio).toFixed(4)),
+      attributionMethod: totalMinutes > 0 ? 'proportional' : 'equal_split',
+    };
+  });
+}
+
+export async function getSharedCost(requestId) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  if (request.costingMode === 'per_user') {
+    throw createError('Shared AWS cost is only available for shared costing mode', 400);
+  }
+  const users = (request.accessType || 'magic_link') === 'identity_center'
+    ? request.identityUsers || []
+    : request.labRoles || [];
+  const cost = await getRequestTotalCost(requestId);
+  const attributed = computeSharedCostAttribution(cost.totalSpend, users, request.usageSessions || []);
+  return {
+    requestId: String(request._id),
+    costingMode: request.costingMode,
+    monthToDateCost: cost.totalSpend,
+    lifetimeCost: cost.totalSpend,
+    currency: 'USD',
+    totalMergedMinutesMtd: attributed.reduce((sum, entry) => sum + entry.mergedMinutesMtd, 0),
+    queriedAt: new Date().toISOString(),
+    users: attributed,
+    dataFreshnessNote: 'AWS Cost Explorer data may be delayed by several hours.',
+  };
 }

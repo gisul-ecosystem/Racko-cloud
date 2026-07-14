@@ -16,6 +16,7 @@ import { AwsCostingModeBadge } from './AwsCostingModeBadge';
 import { AwsLabStatusBadge } from './AwsLabStatusBadge';
 import { AwsOrgAdminRequestDetailPanel } from './AwsOrgAdminRequestDetailPanel';
 import { AwsOrgAdminStatCard } from './AwsOrgAdminStatCard';
+import { AwsOrgAdminAccessRequests } from './AwsOrgAdminAccessRequests';
 import { formatCurrency } from '../../api/orgAdminClient';
 
 export function OrgAdminPortal() {
@@ -24,8 +25,10 @@ export function OrgAdminPortal() {
     selectedRequestId,
     requestDetail,
     iamPolicies,
+    accessRequests,
     overviewLoading,
     detailLoading,
+    accessLoading,
     saving,
     overviewError,
     detailError,
@@ -53,24 +56,37 @@ export function OrgAdminPortal() {
     handleRenewBudget,
     handleCleanup,
     handleSyncSpend,
+    handleReviewAccess,
+    handleDeleteRequest,
+    handleFixPermissions,
+    handleRequestCleanup,
     handleToggleCleanup,
+    handleRequestCleanupSettings,
+    handleUnblock,
     fetchUserCost,
+    fetchSharedCost,
     handleForceLogout,
     fetchUserMonitoring,
     clearActionFeedback,
+    lastUpdatedAt,
+    isRefreshing,
+    hasActiveUsers,
   } = useOrgAdminPortal();
 
   const filtered = useMemo(() => {
     const query = search.trim().toLowerCase();
-    if (!query) return requests;
-
-    return requests.filter(
-      (request) =>
+    return requests.filter((request) => {
+      const matchesStatus = statusFilter === 'All' || request.status === statusFilter;
+      const matchesRegion = regionFilter === 'All' || request.region === regionFilter;
+      const matchesSearch =
+        !query ||
         request.customerEmail.toLowerCase().includes(query) ||
         String(request.requestId).includes(query) ||
-        (request.region || '').toLowerCase().includes(query)
-    );
-  }, [requests, search]);
+        (request.region || '').toLowerCase().includes(query) ||
+        (request.requestName || '').toLowerCase().includes(query);
+      return matchesStatus && matchesRegion && matchesSearch;
+    });
+  }, [requests, search, statusFilter, regionFilter]);
 
   return (
     <div className="mx-auto max-w-screen-2xl space-y-6">
@@ -122,6 +138,13 @@ export function OrgAdminPortal() {
         />
         <AwsOrgAdminStatCard label="Total Users" value={stats.totalUsers} color="purple" icon="👥" />
       </div>
+
+      <AwsOrgAdminAccessRequests
+        requests={accessRequests}
+        loading={accessLoading}
+        saving={saving}
+        onReview={handleReviewAccess}
+      />
 
       {(actionError || actionSuccess) && (
         <div
@@ -245,6 +268,9 @@ export function OrgAdminPortal() {
                     <div className="text-sm font-bold text-gray-900">
                       #{String(request.requestId).slice(-6)}
                     </div>
+                    {request.requestName && (
+                      <div className="text-sm font-medium text-gray-700">{request.requestName}</div>
+                    )}
                     <div className="text-sm text-gray-500">{request.customerEmail}</div>
                   </div>
 
@@ -299,17 +325,26 @@ export function OrgAdminPortal() {
                     onTabChange={setActiveTab}
                     onRetry={() => void refreshDetail()}
                     onSyncSpend={handleSyncSpend}
+                    onFixPermissions={handleFixPermissions}
+                    onDeleteRequest={handleDeleteRequest}
+                    onRequestCleanup={handleRequestCleanup}
+                    onFetchSharedCost={fetchSharedCost}
                     onSuspend={handleSuspend}
                     onReinstate={handleReinstate}
+                    onUnblock={handleUnblock}
                     onDelete={handleDeleteUser}
                     onConsoleUrl={handleConsoleUrl}
                     onUpdatePermissions={handleUpdatePermissions}
                     onRenewBudget={handleRenewBudget}
                     onCleanup={handleCleanup}
                     onToggleCleanup={handleToggleCleanup}
+                    onRequestCleanupSettings={handleRequestCleanupSettings}
                     onFetchCost={fetchUserCost}
                     onForceLogout={handleForceLogout}
                     fetchUserMonitoring={fetchUserMonitoring}
+                    lastUpdatedAt={lastUpdatedAt}
+                    isRefreshing={isRefreshing}
+                    hasActiveUsers={hasActiveUsers}
                   />
                 )}
               </div>

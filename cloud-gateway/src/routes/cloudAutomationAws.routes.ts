@@ -20,6 +20,15 @@ function requireRole(...roles: string[]) {
   };
 }
 
+function forwardVerifiedIdentity(req: Request, _res: Response, next: NextFunction): void {
+  const authReq = req as AuthenticatedRequest;
+  if (authReq.user) {
+    req.headers['x-user-id'] = authReq.user.userId;
+    req.headers['x-user-role'] = authReq.user.role;
+  }
+  next();
+}
+
 function rewriteCloudAutomationAwsPath(path: string): string {
   if (path === '/health' || path === `${GATEWAY_PREFIX}/health`) {
     return '/health';
@@ -53,6 +62,14 @@ function rewriteAwsManagePortalPath(path: string): string {
   return `/api/manage${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
 }
 
+function rewriteAwsOrgAdminPath(path: string): string {
+  const orgAdminPrefix = `${GATEWAY_PREFIX}/org-admin`;
+  const suffix = path.startsWith(orgAdminPrefix)
+    ? path.slice(orgAdminPrefix.length) || '/'
+    : path;
+  return `/api/org-admin${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
 const awsManagePortalProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
@@ -63,6 +80,22 @@ const awsManagePortalProxy = createProxyMiddleware({
       (res as Response).status(502).json({
         success: false,
         message: 'AWS manage portal service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
+  },
+});
+
+const awsOrgAdminProxy = createProxyMiddleware({
+  target: config.CLOUD_AUTOMATION_AWS_URL,
+  changeOrigin: true,
+  timeout: config.AWS_REQUEST_TIMEOUT_MS,
+  pathRewrite: rewriteAwsOrgAdminPath,
+  on: {
+    error: (_err, _req, res) => {
+      (res as Response).status(502).json({
+        success: false,
+        message: 'AWS organization admin service temporarily unavailable.',
         code: 'BAD_GATEWAY',
       });
     },
@@ -88,11 +121,22 @@ const cloudAutomationAwsProxy = createProxyMiddleware({
 /** Public AWS manage-users portal (token/JWT auth enforced by cloud_automation_aws). */
 router.use(`${GATEWAY_PREFIX}/manage`, awsManagePortalProxy);
 
+/** AWS organization-admin APIs are restricted to verified super admins. */
+router.use(
+  `${GATEWAY_PREFIX}/org-admin`,
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin'),
+  forwardVerifiedIdentity,
+  awsOrgAdminProxy
+);
+
 router.use(
   GATEWAY_PREFIX,
   authMiddleware,
   verifyMiddleware,
   requireRole('admin', 'super_admin'),
+  forwardVerifiedIdentity,
   cloudAutomationAwsProxy
 );
 

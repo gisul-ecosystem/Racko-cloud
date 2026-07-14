@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Check, Cloud, FilePlus2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ApiError } from '../../../lib/apiClient';
@@ -317,6 +317,7 @@ export function RequestWorkspace() {
       const without = current.filter((entry) => entry.serviceId !== serviceId);
       return [...without, { serviceId, instanceOption }];
     });
+    setLocation('');
   }, []);
 
   const handleRoleChange = useCallback((serviceId: number, roles: string[]) => {
@@ -459,19 +460,41 @@ export function RequestWorkspace() {
   };
 
   return (
-    <div className="mx-auto max-w-screen-xl space-y-6 pb-8">
-      <div>
-        <Link
-          href={AZURE_ROUTES.dashboard}
-          className="mb-4 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to overview
-        </Link>
-        <h1 className="text-2xl font-bold text-gray-900">Create request</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Provision Azure lab access for a customer using the service catalog.
-        </p>
+    <div className="mx-auto max-w-screen-xl space-y-6 pb-10">
+      {/* Page header */}
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="h-1 bg-gradient-to-r from-[#B91C1C] via-[#DC2626] to-[#B91C1C]" />
+        <div className="p-6 lg:p-8">
+          <Link
+            href={AZURE_ROUTES.dashboard}
+            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to overview
+          </Link>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
+                <FilePlus2 className="h-7 w-7" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                  Azure automation
+                </p>
+                <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
+                  Create request
+                </h1>
+                <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
+                  Provision Azure lab access for a customer using the service catalog.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+              <Cloud className="h-4 w-4 shrink-0 text-[#B91C1C]" />
+              <span>Fields unlock step by step as you complete each section</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {catalogError && !catalogLoading && (
@@ -479,26 +502,42 @@ export function RequestWorkspace() {
       )}
 
       {catalogLoading && (
-        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <TableSkeleton rows={6} cols={1} embedded />
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="p-6">
+            <TableSkeleton rows={6} cols={1} embedded />
+          </div>
         </div>
       )}
 
       {catalog && !catalogError && (
         <>
-          <div className="rounded-xl border border-gray-200 bg-white px-4 py-4 shadow-sm sm:px-6">
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Request progress</p>
-            <ol className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+            <div className="border-b border-gray-100 px-6 py-4">
+              <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                Request progress
+              </p>
+              <p className="mt-0.5 text-sm text-gray-500">
+                {formProgress.filter((step) => step.done).length} of {formProgress.length} steps
+                complete
+              </p>
+            </div>
+            <ol className="grid grid-cols-2 gap-4 px-6 py-5 sm:grid-cols-4">
               {formProgress.map((step, index) => (
-                <li key={step.label} className="flex items-center gap-2">
+                <li key={step.label} className="relative flex items-center gap-3">
+                  {index < formProgress.length - 1 ? (
+                    <span
+                      className="absolute left-4 top-8 hidden h-px w-[calc(100%-1rem)] bg-gray-200 sm:block"
+                      aria-hidden
+                    />
+                  ) : null}
                   <span
-                    className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
+                    className={`relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition ${
                       step.done
-                        ? 'bg-[var(--cloud-accent,#B91C1C)] text-white'
-                        : 'border border-gray-200 bg-gray-50 text-gray-500'
+                        ? 'bg-[#B91C1C] text-white shadow-sm'
+                        : 'border border-gray-200 bg-white text-gray-400'
                     }`}
                   >
-                    {index + 1}
+                    {step.done ? <Check className="h-4 w-4" /> : index + 1}
                   </span>
                   <span
                     className={`text-sm ${
@@ -512,8 +551,8 @@ export function RequestWorkspace() {
             </ol>
           </div>
 
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="min-w-0 space-y-6">
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="min-w-0 space-y-6">
             <RequestForm
               catalog={catalog}
               selectedServiceIds={selectedServiceIds}
@@ -584,7 +623,7 @@ export function RequestWorkspace() {
           </div>
 
           <aside className="hidden xl:block">
-            <div className="sticky top-4 space-y-4">
+            <div className="sticky top-20 space-y-4">
               <PricingSummary
                 totalPrice={totalPrice}
                 currency={pricing?.currency}

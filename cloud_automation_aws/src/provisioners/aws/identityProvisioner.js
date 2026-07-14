@@ -39,7 +39,7 @@ function getAllManagedPoliciesForUser(request) {
   return [...new Set([...BASELINE_MANAGED_POLICIES, ...getManagedPoliciesForRequest(request)])];
 }
 
-async function getIamClientForAccount(accountId) {
+export async function getIamClientForAccount(accountId) {
   const normalizedAccountId = String(accountId).trim();
 
   if (normalizedAccountId === String(MASTER_ACCOUNT_ID || '').trim()) {

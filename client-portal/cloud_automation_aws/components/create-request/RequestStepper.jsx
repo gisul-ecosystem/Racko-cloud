@@ -14,9 +14,26 @@ export const FORM_STEPS = [
 ];
 
 export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
+  const completedCount = FORM_STEPS.filter((step) => step.id < currentStep).length;
+
   return (
     <nav aria-label="Request form progress" className="w-full">
-      <ol className="flex w-full items-start">
+      <div className="mb-4 flex items-center justify-between gap-3 border-b border-gray-100 pb-4">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+            Request progress
+          </p>
+          <p className="mt-0.5 text-sm text-gray-500">
+            Step {currentStep} of {FORM_STEPS.length}
+            {completedCount > 0 ? ` · ${completedCount} completed` : ''}
+          </p>
+        </div>
+        <span className="hidden rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-[#B91C1C] ring-1 ring-[#B91C1C]/10 sm:inline">
+          {FORM_STEPS[currentStep - 1]?.label}
+        </span>
+      </div>
+
+      <ol className="flex w-full items-start overflow-x-auto pb-1">
         {FORM_STEPS.map((step, index) => {
           const completed = step.id < currentStep;
           const active = step.id === currentStep;
@@ -24,7 +41,7 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
           const showConnector = index < FORM_STEPS.length - 1;
 
           return (
-            <li key={step.id} className="flex min-w-0 flex-1 items-start">
+            <li key={step.id} className="flex min-w-[4.5rem] flex-1 items-start sm:min-w-0">
               <button
                 type="button"
                 disabled={!reachable}
@@ -35,22 +52,24 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 }`}
               >
                 <span
-                  className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-colors ${
+                  className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-all ${
                     completed
-                      ? 'bg-[var(--cloud-accent,#B91C1C)] text-white'
+                      ? 'bg-[#B91C1C] text-white shadow-sm'
                       : active
-                        ? 'border-2 border-[var(--cloud-accent,#B91C1C)] text-[var(--cloud-accent,#B91C1C)]'
-                        : 'border-2 border-gray-200 text-gray-400'
+                        ? 'border-2 border-[#B91C1C] bg-red-50 text-[#B91C1C] shadow-sm'
+                        : reachable
+                          ? 'border-2 border-gray-200 bg-white text-gray-500'
+                          : 'border-2 border-gray-100 bg-gray-50 text-gray-300'
                   }`}
                 >
                   {completed ? <Check className="h-4 w-4" /> : step.id}
                 </span>
                 <span
-                  className={`mt-1.5 max-w-full truncate text-center text-[10px] font-medium leading-tight sm:text-xs ${
+                  className={`mt-2 max-w-full truncate text-center text-[10px] font-medium leading-tight sm:text-xs ${
                     active
-                      ? 'text-[var(--cloud-accent,#B91C1C)]'
+                      ? 'font-semibold text-[#B91C1C]'
                       : completed
-                        ? 'text-gray-600'
+                        ? 'text-gray-700'
                         : reachable
                           ? 'text-gray-500'
                           : 'text-gray-300'
@@ -60,14 +79,14 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 </span>
               </button>
 
-              {showConnector && (
+              {showConnector ? (
                 <div
                   aria-hidden="true"
-                  className={`mx-1 mt-4 h-0.5 min-w-[6px] flex-1 shrink ${
-                    completed ? 'bg-[var(--cloud-accent,#B91C1C)]' : 'bg-gray-200'
+                  className={`mx-0.5 mt-[1.125rem] h-0.5 min-w-[8px] flex-1 shrink rounded-full ${
+                    completed ? 'bg-[#B91C1C]' : 'bg-gray-200'
                   }`}
                 />
-              )}
+              ) : null}
             </li>
           );
         })}
