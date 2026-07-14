@@ -6,6 +6,7 @@ import type {
   AdminVmQuote,
   AdminQuoteInput,
   AdminTemplateRates,
+  AdminCloudChargeResult,
 } from '../types/adminBilling';
 
 interface ApiEnvelope<T> {
@@ -106,5 +107,52 @@ export async function createAdminWalletTopup(amount: number): Promise<AdminTopup
       method: 'POST',
       body: JSON.stringify({ amount }),
     })
+  );
+}
+
+export async function chargeAdminWalletForCloudRequest(
+  amountUsd: number,
+  relatedRequestId?: string | null,
+  provider: 'azure' | 'aws' = 'azure'
+): Promise<AdminCloudChargeResult> {
+  return unwrap(
+    apiRequest<ApiEnvelope<AdminCloudChargeResult>>(
+      '/api/v1/admin-billing/wallet/me/charge-cloud-request',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          amountUsd,
+          provider,
+          ...(relatedRequestId ? { relatedRequestId } : {}),
+        }),
+      }
+    )
+  );
+}
+
+export async function refundAdminWalletCloudCharge(
+  amountInr: number,
+  relatedRequestId?: string | null
+): Promise<AdminWallet> {
+  return unwrap(
+    apiRequest<ApiEnvelope<AdminWallet>>('/api/v1/admin-billing/wallet/me/refund-cloud-request', {
+      method: 'POST',
+      body: JSON.stringify({
+        amountInr,
+        ...(relatedRequestId ? { relatedRequestId } : {}),
+      }),
+    })
+  );
+}
+
+export async function linkAdminWalletCloudCharge(relatedRequestId: string): Promise<void> {
+  await unwrap(
+    apiRequest<ApiEnvelope<{ relatedRequestId: string }>>(
+      '/api/v1/admin-billing/wallet/me/link-cloud-request',
+      {
+        method: 'POST',
+        body: JSON.stringify({ relatedRequestId }),
+      }
+    )
   );
 }

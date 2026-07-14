@@ -10,6 +10,9 @@ import {
   savePricingSchema,
   topupSchema,
   userIdParamSchema,
+  chargeCloudRequestSchema,
+  refundCloudRequestSchema,
+  linkCloudRequestSchema,
 } from './adminBilling.validation';
 
 const router = Router();
@@ -61,6 +64,33 @@ router.post(
   validateRequest(topupSchema),
   (req, res, next) => {
     adminBillingController.topupMyWallet(req, res, next);
+  }
+);
+
+// POST /api/v1/admin-billing/wallet/me/charge-cloud-request — USD→INR debit for Azure labs
+router.post(
+  '/wallet/me/charge-cloud-request',
+  validateRequest(chargeCloudRequestSchema),
+  (req, res, next) => {
+    adminBillingController.chargeCloudRequest(req, res, next);
+  }
+);
+
+// POST /api/v1/admin-billing/wallet/me/refund-cloud-request — refund if lab create fails
+router.post(
+  '/wallet/me/refund-cloud-request',
+  validateRequest(refundCloudRequestSchema),
+  (req, res, next) => {
+    adminBillingController.refundCloudRequestCharge(req, res, next);
+  }
+);
+
+// POST /api/v1/admin-billing/wallet/me/link-cloud-request — attach request id to latest debit
+router.post(
+  '/wallet/me/link-cloud-request',
+  validateRequest(linkCloudRequestSchema),
+  (req, res, next) => {
+    adminBillingController.linkCloudRequestCharge(req, res, next);
   }
 );
 

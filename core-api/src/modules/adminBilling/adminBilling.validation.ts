@@ -50,6 +50,27 @@ export const topupSchema = z.object({
   }),
 });
 
+export const chargeCloudRequestSchema = z.object({
+  body: z.object({
+    amountUsd: z.number().positive(),
+    relatedRequestId: z.string().min(1).nullable().optional(),
+    provider: z.enum(['azure', 'aws']).optional().default('azure'),
+  }),
+});
+
+export const refundCloudRequestSchema = z.object({
+  body: z.object({
+    amountInr: z.number().positive(),
+    relatedRequestId: z.string().min(1).nullable().optional(),
+  }),
+});
+
+export const linkCloudRequestSchema = z.object({
+  body: z.object({
+    relatedRequestId: z.string().min(1),
+  }),
+});
+
 export const userIdParamSchema = z.object({
   params: z.object({ userId: z.string().min(1) }),
 });

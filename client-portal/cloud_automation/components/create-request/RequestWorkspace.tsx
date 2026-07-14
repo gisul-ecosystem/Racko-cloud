@@ -8,6 +8,12 @@ import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ApiError } from '../../../lib/apiClient';
 import {
+  chargeAdminWalletForCloudRequest,
+  getMyAdminWallet,
+  linkAdminWalletCloudCharge,
+  refundAdminWalletCloudCharge,
+} from '../../../lib/adminBillingApi';
+import {
   createAdminAccessRequest,
   createRequestWithPricing,
 } from '../../api/client';
@@ -29,6 +35,11 @@ import {
   normalizeServiceId,
   supportsPauseCleanup,
 } from '../../utils/requestForm';
+import {
+  convertUsdToInr,
+  DEFAULT_USD_TO_INR_RATE,
+  formatInr,
+} from '../../utils/walletBilling';
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
 import { CreateRequestSubmitBar } from './CreateRequestSubmitBar';
@@ -223,6 +234,10 @@ export function RequestWorkspace() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
+  const [walletCurrency, setWalletCurrency] = useState('INR');
+  const [usdToInrRate, setUsdToInrRate] = useState(DEFAULT_USD_TO_INR_RATE);
+  const [walletLoading, setWalletLoading] = useState(true);
 
   const [adminAccessOpen, setAdminAccessOpen] = useState(false);
   const [adminAccessServiceId, setAdminAccessServiceId] = useState<number | null>(null);
@@ -234,6 +249,26 @@ export function RequestWorkspace() {
     selectedServiceIds,
     selectedInstances
   );
+
+  const refreshWallet = useCallback(async () => {
+    setWalletLoading(true);
+    try {
+      const wallet = await getMyAdminWallet();
+      setWalletBalance(wallet.balance);
+      setWalletCurrency(wallet.currency || 'INR');
+      if (wallet.usdToInrRate && wallet.usdToInrRate > 0) {
+        setUsdToInrRate(wallet.usdToInrRate);
+      }
+    } catch {
+      setWalletBalance(null);
+    } finally {
+      setWalletLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshWallet();
+  }, [refreshWallet]);
 
   const tierAutomatedServices = useMemo(
     () => (catalog ? resolveTierAutomatedServices(catalog, selectedInstances) : new Set<number>()),
@@ -348,43 +383,95 @@ export function RequestWorkspace() {
 
     if (errors.length > 0) return;
 
-    setSubmitting(true);
-    try {
-      const response = await createRequestWithPricing({
-        customerEmail: customerEmail.trim(),
-        accountCount,
-        location,
-        startDate,
-        endDate,
-        serviceIds: selectedServiceIds,
-        selectedRoles,
-        selectedInstances,
-        costingMode,
-        resourceCleanupEnabled,
-        ...(resourceCleanupEnabled && resourceCleanupIntervalHours
-          ? {
-              resourceCleanupIntervalHours,
-              ...(pauseCleanupAvailable && resourceCleanupAction === 'pause'
-                ? { resourceCleanupAction: 'pause' as const }
-                : {}),
-            }
-          : {}),
-        ...(perUserBudgetUsd !== undefined ? { perUserBudgetUsd } : {}),
-        ...(usageWindows.length > 0
-          ? {
-              usageWindows: usageWindows.map((window) => ({
-                ...window,
-                timezone: usageWindowTimezone,
-              })),
-            }
-          : {}),
-      });
+    if (totalPrice == null) {
+      setSubmitError('Complete the form to calculate an estimate before creating the request.');
+      return;
+    }
 
-      router.push(AZURE_ROUTES.requestStatus(response.requestId));
+    const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate) ?? 0;
+
+    if (totalPrice > 0) {
+      if (walletBalance == null) {
+        setSubmitError('Unable to load your wallet balance. Refresh and try again.');
+        return;
+      }
+
+      if (walletBalance < estimatedInr) {
+        setSubmitError(
+          `Insufficient wallet balance. This request needs ${formatInr(estimatedInr)} but your wallet has ${formatInr(walletBalance)}.`
+        );
+        return;
+      }
+    }
+
+    setSubmitting(true);
+    let chargedInr: number | null = null;
+
+    try {
+      if (totalPrice > 0) {
+        const charge = await chargeAdminWalletForCloudRequest(totalPrice, null, 'azure');
+        chargedInr = charge.chargedInr;
+        setWalletBalance(charge.balance);
+        setUsdToInrRate(charge.usdToInrRate);
+      }
+
+      try {
+        const response = await createRequestWithPricing({
+          customerEmail: customerEmail.trim(),
+          accountCount,
+          location,
+          startDate,
+          endDate,
+          serviceIds: selectedServiceIds,
+          selectedRoles,
+          selectedInstances,
+          costingMode,
+          resourceCleanupEnabled,
+          ...(resourceCleanupEnabled && resourceCleanupIntervalHours
+            ? {
+                resourceCleanupIntervalHours,
+                ...(pauseCleanupAvailable && resourceCleanupAction === 'pause'
+                  ? { resourceCleanupAction: 'pause' as const }
+                  : {}),
+              }
+            : {}),
+          ...(perUserBudgetUsd !== undefined ? { perUserBudgetUsd } : {}),
+          ...(usageWindows.length > 0
+            ? {
+                usageWindows: usageWindows.map((window) => ({
+                  ...window,
+                  timezone: usageWindowTimezone,
+                })),
+              }
+            : {}),
+        });
+
+        if (chargedInr != null && chargedInr > 0) {
+          void linkAdminWalletCloudCharge(String(response.requestId)).catch(() => undefined);
+        }
+        router.push(AZURE_ROUTES.requestStatus(response.requestId));
+      } catch (createErr) {
+        if (chargedInr != null && chargedInr > 0) {
+          try {
+            const refunded = await refundAdminWalletCloudCharge(chargedInr);
+            setWalletBalance(refunded.balance);
+          } catch {
+            // Best-effort refund; surface original create failure below.
+          }
+        }
+        throw createErr;
+      }
     } catch (err) {
-      setSubmitError(
-        err instanceof ApiError ? err.message : 'Failed to create provisioning request.'
-      );
+      if (err instanceof ApiError && err.status === 402) {
+        setSubmitError(
+          'Insufficient wallet balance. Top up your wallet, then try creating the request again.'
+        );
+        void refreshWallet();
+      } else {
+        setSubmitError(
+          err instanceof ApiError ? err.message : 'Failed to create provisioning request.'
+        );
+      }
     } finally {
       setSubmitting(false);
     }
@@ -432,6 +519,12 @@ export function RequestWorkspace() {
   };
 
   const totalPrice = pricing?.totalPrice ?? pricing?.estimatedPrice ?? null;
+  const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate);
+  const insufficientBalance =
+    Boolean(totalPrice && totalPrice > 0) &&
+    estimatedInr != null &&
+    walletBalance != null &&
+    walletBalance < estimatedInr;
 
   const formProgress = useMemo(() => {
     const detailsDone = isCustomerDetailsComplete({
@@ -457,6 +550,12 @@ export function RequestWorkspace() {
     totalPrice,
     currency: pricing?.currency,
     onSubmit: handleSubmit,
+    walletBalance,
+    walletCurrency,
+    estimatedInr,
+    usdToInrRate,
+    walletLoading,
+    insufficientBalance,
   };
 
   return (
