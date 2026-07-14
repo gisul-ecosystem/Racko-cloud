@@ -111,7 +111,17 @@ router.post('/admin/sync-services', async (req, res, next) => {
 
 router.post('/pricing/estimate', async (req, res, next) => {
   try {
-    const { serviceIds = [], region, accountCount, durationDays, instanceSelections = [] } = req.body;
+    const {
+      serviceIds = [],
+      region,
+      accountCount,
+      durationDays,
+      instanceSelections = [],
+      startDate,
+      endDate,
+      usageWindows = [],
+      costingMode = 'shared',
+    } = req.body;
 
     if (!region || !Array.isArray(serviceIds) || serviceIds.length === 0) {
       return res.status(400).json({
@@ -126,6 +136,10 @@ router.post('/pricing/estimate', async (req, res, next) => {
       accountCount: Number(accountCount) || 0,
       durationDays: Number(durationDays) || 0,
       instanceSelections,
+      startDate,
+      endDate,
+      usageWindows,
+      costingMode,
     });
 
     res.json({ success: true, ...estimate });

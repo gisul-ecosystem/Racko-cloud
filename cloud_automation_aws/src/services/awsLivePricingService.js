@@ -1,18 +1,12 @@
 import { GetProductsCommand } from '@aws-sdk/client-pricing';
 import { pricingClient } from '../config/aws.js';
+import {
+  formatFlatRateLabOption,
+  getFlatRateLabTier,
+  getFlatRateLabTiers,
+} from '../config/flatRateLabPricing.js';
 import Service from '../models/Service.js';
 import { INSTANCE_FILTERS } from './catalogSyncService.js';
-
-const FLAT_RATE_INSTANCE_TYPES = {
-  Lambda: 'per-GB-second',
-  S3: 'per-GB',
-  CloudFront: 'per-GB-transferred',
-  SQS: 'per-million-requests',
-  SNS: 'per-million-notifications',
-  Kinesis: 'per-shard-hour',
-  DynamoDB: 'per-RCU-WCU',
-  VPC: 'per-NAT-gateway-hour',
-};
 
 const LIGHTSAIL_BUNDLE_MAP = {
   nano: 'nano_3_0',
@@ -26,7 +20,7 @@ const LIGHTSAIL_BUNDLE_MAP = {
 const LIGHTSAIL_FALLBACK = {
   nano_3_0: { pricePerHour: 0.00521, pricePerDay: 0.125 },
   micro_3_0: { pricePerHour: 0.01042, pricePerDay: 0.25 },
-  small_3_0: { pricePerHour: 0.02083, pricePerDay: 0.50 },
+  small_3_0: { pricePerHour: 0.02083, pricePerDay: 0.5 },
   medium_3_0: { pricePerHour: 0.04167, pricePerDay: 1.0 },
   large_3_0: { pricePerHour: 0.08333, pricePerDay: 2.0 },
   xlarge_3_0: { pricePerHour: 0.16667, pricePerDay: 4.0 },
@@ -173,17 +167,13 @@ function formatInstancePricing(service, instanceType, price, locationName) {
   };
 }
 
-function formatFlatRatePricing(service, price, locationName) {
-  return {
-    instanceType: FLAT_RATE_INSTANCE_TYPES[service.name] || 'flat-rate',
-    pricePerHour: 0,
-    pricePerDay: 0,
-    priceUnit: price.priceUnit,
-    unitPrice: price.unitPrice,
-    flatRate: true,
-    locationName,
-    serviceName: service.name,
-  };
+function formatFlatRateLabPricing(service, instanceType, locationName) {
+  const tier = getFlatRateLabTier(service.name, instanceType);
+  if (!tier) return null;
+
+  return formatFlatRateLabOption(service.name, tier, {
+    locationName: locationName || null,
+  });
 }
 
 function applyFallbackPricing(service, instanceType, regionCode) {
@@ -229,13 +219,7 @@ export async function getLivePricingForService(service, instanceType, regionCode
   let result = null;
 
   if (service.pricingType === 'flat_rate') {
-    const price = await fetchLivePricing(service.awsServiceCode, [
-      { Type: 'TERM_MATCH', Field: 'regionCode', Value: regionCode },
-    ]);
-
-    if (price) {
-      result = formatFlatRatePricing(service, price, price.locationName);
-    }
+    result = formatFlatRateLabPricing(service, instanceType, regionCode);
   } else if (instanceType) {
     const filters = buildLivePricingFilters(service.name, instanceType, regionCode);
     const price = await fetchLivePricing(resolveServiceCode(service), filters);
@@ -259,8 +243,9 @@ export async function getLivePricingOptions(serviceId, regionCode) {
   if (!service) return [];
 
   if (service.pricingType === 'flat_rate') {
-    const pricing = await getLivePricingForService(service, null, regionCode);
-    return pricing ? [pricing] : [];
+    return getFlatRateLabTiers(service.name).map((tier) =>
+      formatFlatRateLabOption(service.name, tier, { locationName: regionCode })
+    );
   }
 
   const instanceTypes = INSTANCE_FILTERS[service.name];
@@ -298,10 +283,14 @@ export function parseInstanceSelections(value) {
 
 export function resolveInstanceTypeForService(service, selectedInstancesByServiceId) {
   const serviceId = String(service._id);
-  const selected = selectedInstancesByServiceId[serviceId];
+  const selected = selectedInstancesByServiceId?.[serviceId];
 
   if (selected) {
     return selected;
+  }
+
+  if (service.pricingType === 'flat_rate') {
+    return getFlatRateLabTier(service.name)?.instanceType || null;
   }
 
   const options = INSTANCE_FILTERS[service.name] || [];

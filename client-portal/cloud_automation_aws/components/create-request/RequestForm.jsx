@@ -106,8 +106,14 @@ export function RequestForm({
     [services, selectedServiceIds]
   );
 
-  const instanceServices = selectedServices.filter((service) => service.pricingType === 'instance');
-  const flatRateServices = selectedServices.filter((service) => service.pricingType === 'flat_rate');
+  const instanceServices = useMemo(
+    () => selectedServices.filter((service) => service.pricingType === 'instance'),
+    [selectedServices]
+  );
+  const flatRateServices = useMemo(
+    () => selectedServices.filter((service) => service.pricingType === 'flat_rate'),
+    [selectedServices]
+  );
 
   const toggleUsageWindowDay = (dayIndex, enabled) => {
     if (!enabled) {
@@ -586,8 +592,8 @@ export function RequestForm({
           <div className="p-6">
             <SectionHeader
               step={6}
-              title="Instance sizes"
-              description={`Choose instance tiers for sized services. Preview uses ${pricingRegion} until you pick a region in step 8.`}
+              title="Instances & usage estimates"
+              description={`Choose instance sizes for compute services and lab usage tiers for GB/request-based services. Preview uses ${pricingRegion} until you pick a region in step 8.`}
             />
             <div className="mt-6">
             <InstancePicker

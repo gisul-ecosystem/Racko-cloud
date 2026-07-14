@@ -4,11 +4,13 @@ import { parseServiceDateTime } from '../utils/serviceDateTime.js';
 import Request from '../models/Request.js';
 import Service from '../models/Service.js';
 import { DEFAULT_IAM_POLICIES } from '../config/iamPolicies.js';
+import { computeBillableHours } from '../utils/billableHours.js';
 import { isEnabledRegion } from './awsRegionService.js';
 import {
   getLivePricingForService,
   resolveInstanceTypeForService,
 } from './awsLivePricingService.js';
+import { computeServiceCost } from './pricingService.js';
 
 const DAY_NAME_TO_INDEX = {
   Sunday: 0,
@@ -26,11 +28,26 @@ function validationError(message, statusCode = 400) {
   return error;
 }
 
-function durationDaysBetween(startDate, endDate) {
-  const start = new Date(startDate);
-  const end = new Date(endDate);
-  const diffMs = end.getTime() - start.getTime();
-  return Math.max(1, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+function computeEstimatedPrice(resolvedServices, accountCount, durationHours, costingMode = 'shared') {
+  let total = 0;
+
+  for (const service of resolvedServices) {
+    const pricePerHour =
+      Number(service.pricePerHour) > 0
+        ? Number(service.pricePerHour)
+        : Number(service.pricePerDay || 0) / 24;
+
+    const { cost } = computeServiceCost({
+      pricingType: service.pricingType,
+      pricePerHour,
+      durationHours,
+      accountCount,
+      costingMode,
+    });
+    total += cost;
+  }
+
+  return parseFloat(total.toFixed(2));
 }
 
 function isValidEmail(value) {
@@ -118,49 +135,30 @@ async function resolveSelectedServices(selectedServices, region) {
     let instanceType = entry.instanceType || null;
     let pricePerDay = entry.pricePerDay ?? 0;
 
-    if (service.pricingType === 'instance') {
-      const pricing = await getLivePricingForService(
-        service,
-        instanceType || resolveInstanceTypeForService(service, {}),
-        region
-      );
+    const pricing = await getLivePricingForService(
+      service,
+      instanceType || resolveInstanceTypeForService(service, {}),
+      region
+    );
 
-      if (!pricing) {
-        throw validationError(`No pricing found for ${service.name} in ${region}`);
-      }
-
-      instanceType = pricing.instanceType;
-      pricePerDay = pricing.pricePerDay;
-    } else {
-      const pricing = await getLivePricingForService(service, null, region);
-      instanceType = null;
-      pricePerDay = pricing?.pricePerDay ?? pricing?.unitPrice ?? entry.pricePerDay ?? 0;
+    if (!pricing) {
+      throw validationError(`No pricing found for ${service.name} in ${region}`);
     }
+
+    instanceType = pricing.instanceType;
+    pricePerDay = pricing.pricePerDay;
 
     resolved.push({
       serviceId: service._id,
       serviceName: service.name,
       instanceType,
       pricePerDay,
+      pricePerHour: pricing.pricePerHour ?? (Number(pricePerDay) || 0) / 24,
       pricingType: service.pricingType,
     });
   }
 
   return resolved;
-}
-
-function computeEstimatedPrice(resolvedServices, accountCount, durationDays) {
-  let total = 0;
-
-  for (const service of resolvedServices) {
-    if (service.pricingType === 'instance') {
-      total += service.pricePerDay * accountCount * durationDays;
-    } else {
-      total += service.pricePerDay * durationDays;
-    }
-  }
-
-  return parseFloat(total.toFixed(2));
 }
 
 function buildPermissions(resolvedServices, permissionsInput) {
@@ -330,11 +328,16 @@ export const createRequest = async (payload, userId) => {
   );
   const resolvedPermissions = buildPermissions(resolvedServices, input.permissions);
   const selectedPermissionsMap = buildSelectedPermissionsMap(resolvedPermissions);
-  const durationDays = durationDaysBetween(input.startDate, input.endDate);
+  const { billableHours } = computeBillableHours(
+    start,
+    end,
+    input.enableDailyUsage ? input.usageWindows : []
+  );
   const estimatedPrice = computeEstimatedPrice(
     resolvedServices,
     input.accountCount,
-    durationDays
+    billableHours,
+    input.costingMode
   );
 
   let resourceCleanupNextRunAt;
