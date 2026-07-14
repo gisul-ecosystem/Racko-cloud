@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, Loader2 } from 'lucide-react';
+import { ArrowLeft, FilePlus2, Server } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { createRequest } from '../../api/client';
@@ -16,6 +16,7 @@ import { useServiceCatalog } from '../../hooks/useServiceCatalog';
 import { getEffectivePolicies } from './PermissionsPicker';
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
+import { CreateRequestSubmitBar } from './CreateRequestSubmitBar';
 import { defaultEndDate, defaultStartDate } from '../../utils/requestForm';
 
 function durationDaysBetween(startDate, endDate) {
@@ -226,7 +227,7 @@ export function RequestWorkspace() {
     error: regionsError,
   } = useAvailableRegions(selectedServiceIds, selectedInstances);
 
-  const showPricingPanel = currentStep >= 6;
+  const showFinalStepPanel = currentStep === 8;
 
   const handleToggleService = useCallback((serviceId) => {
     setSelectedServiceIds((current) => {
@@ -378,19 +379,40 @@ export function RequestWorkspace() {
   const totalPrice = estimate?.total ?? null;
 
   return (
-    <div className="mx-auto max-w-screen-xl space-y-6">
-      <div>
-        <Link
-          href={AWS_ROUTES.dashboard}
-          className="mb-4 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-gray-900"
-        >
-          <ArrowLeft className="h-4 w-4" />
-          Back to overview
-        </Link>
-        <h1 className="text-2xl font-bold text-gray-900">Create request</h1>
-        <p className="mt-1 text-sm text-gray-500">
-          Provision AWS lab access for a customer using the service catalog.
-        </p>
+    <div className="mx-auto max-w-screen-xl space-y-6 pb-10">
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="h-1 bg-gradient-to-r from-[#B91C1C] via-[#DC2626] to-[#B91C1C]" />
+        <div className="p-6 lg:p-8">
+          <Link
+            href={AWS_ROUTES.dashboard}
+            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+          >
+            <ArrowLeft className="h-4 w-4" />
+            Back to overview
+          </Link>
+          <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="flex items-start gap-4">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
+                <FilePlus2 className="h-7 w-7" />
+              </div>
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                  AWS automation
+                </p>
+                <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
+                  Create request
+                </h1>
+                <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
+                  Provision AWS lab access for a customer using the service catalog.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
+              <Server className="h-4 w-4 shrink-0 text-[#B91C1C]" />
+              <span>Complete each step — Next unlocks the following section</span>
+            </div>
+          </div>
+        </div>
       </div>
 
       {error && !loading && <ErrorState message={error} onRetry={refetch} />}
@@ -402,8 +424,12 @@ export function RequestWorkspace() {
       )}
 
       {!loading && !error && (
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-          <div className="space-y-6 lg:col-span-2">
+        <div
+          className={`grid grid-cols-1 gap-6 ${
+            showFinalStepPanel ? 'xl:grid-cols-[minmax(0,1fr)_340px]' : ''
+          }`}
+        >
+          <div className="min-w-0 space-y-6">
             <RequestForm
               currentStep={currentStep}
               maxReachableStep={maxReachableStep}
@@ -454,8 +480,8 @@ export function RequestWorkspace() {
             />
           </div>
 
-          <div className="space-y-4 lg:sticky lg:top-6 lg:self-start">
-            {showPricingPanel ? (
+          {showFinalStepPanel ? (
+            <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
               <PricingSummary
                 totalPrice={totalPrice}
                 breakdown={estimate?.breakdown ?? []}
@@ -464,41 +490,15 @@ export function RequestWorkspace() {
                 loading={estimateLoading}
                 error={estimateError}
               />
-            ) : (
-              <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-                <h2 className="text-sm font-semibold text-gray-900">Pricing estimate</h2>
-                <p className="mt-2 text-sm text-gray-400">
-                  Select services and instances in steps 5–6 to see a live estimate.
-                </p>
-              </div>
-            )}
 
-            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-              {submitError && (
-                <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                  {submitError}
-                </div>
-              )}
-              <button
-                type="button"
-                onClick={handleSubmit}
-                disabled={submitting || currentStep < 8}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:brightness-95 disabled:opacity-50"
-              >
-                {submitting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Creating request…
-                  </>
-                ) : (
-                  'Create request'
-                )}
-              </button>
-              <p className="mt-3 text-center text-xs text-gray-400">
-                Submits to POST /api/v1/cloud-automation-aws/requests
-              </p>
+              <CreateRequestSubmitBar
+                submitting={submitting}
+                submitError={submitError}
+                totalPrice={totalPrice}
+                onSubmit={handleSubmit}
+              />
             </div>
-          </div>
+          ) : null}
         </div>
       )}
     </div>

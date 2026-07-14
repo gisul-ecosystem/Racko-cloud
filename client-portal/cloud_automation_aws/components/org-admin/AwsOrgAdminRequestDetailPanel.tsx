@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { ChevronRight, Loader2 } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { ChevronRight, Loader2, RefreshCw, Trash2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { formatCurrency } from '../../api/orgAdminClient';
 import type {
@@ -9,12 +9,15 @@ import type {
   AwsOrgAdminRequestDetail,
   AwsOrgAdminRequestSummary,
   AwsOrgAdminUserCost,
+  AwsOrgAdminSharedCost,
 } from '../../types/orgAdmin';
 import { AwsOrgAdminBudgetTab } from './AwsOrgAdminBudgetTab';
 import { AwsOrgAdminCleanupTab } from './AwsOrgAdminCleanupTab';
 import { AwsOrgAdminUsersTable } from './AwsOrgAdminUsersTable';
+import { AwsOrgAdminHistoryTab } from './AwsOrgAdminHistoryTab';
+import { AwsCustomConfigTab } from './AwsCustomConfigTab';
 
-type DetailTab = 'users' | 'cleanup' | 'budget';
+type DetailTab = 'users' | 'history' | 'cleanup' | 'budget' | 'custom-config';
 
 interface AwsOrgAdminRequestDetailPanelProps {
   request: AwsOrgAdminRequestSummary;
@@ -27,19 +30,34 @@ interface AwsOrgAdminRequestDetailPanelProps {
   onTabChange: (tab: DetailTab) => void;
   onRetry: () => void;
   onSyncSpend: () => Promise<boolean>;
+  onFixPermissions: () => Promise<boolean>;
+  onDeleteRequest: () => Promise<boolean>;
+  onRequestCleanup: () => Promise<boolean>;
+  onFetchSharedCost: (options?: { refresh?: boolean }) => Promise<AwsOrgAdminSharedCost | null>;
   onSuspend: (userIndex: number) => Promise<boolean>;
   onReinstate: (userIndex: number) => Promise<boolean>;
+  onUnblock: (userIndex: number) => Promise<boolean>;
   onDelete: (userIndex: number) => Promise<boolean>;
   onConsoleUrl: (userIndex: number) => Promise<boolean>;
   onUpdatePermissions: (userIndex: number, policies: string[]) => Promise<boolean>;
   onRenewBudget: (userIndex: number, topUpAmount: number) => Promise<boolean>;
   onCleanup: (userIndex: number) => Promise<boolean>;
-  onToggleCleanup: (enabled: boolean) => Promise<boolean>;
+  onToggleCleanup: (userIndex: number, enabled: boolean) => Promise<boolean>;
+  onRequestCleanupSettings: (
+    settings: {
+      cleanupEnabled?: boolean;
+      cleanupIntervalHours?: number;
+      action?: 'delete' | 'pause';
+    }
+  ) => Promise<boolean>;
   onFetchCost: (userIndex: number) => Promise<AwsOrgAdminUserCost | null>;
   onForceLogout: (userIndex: number) => Promise<boolean>;
   fetchUserMonitoring: (
     userIndex: number
   ) => Promise<import('../../types/orgAdmin').AwsOrgAdminMonitoringResponse | null>;
+  lastUpdatedAt: Date | null;
+  isRefreshing: boolean;
+  hasActiveUsers: boolean;
 }
 
 export function AwsOrgAdminRequestDetailPanel({
@@ -53,19 +71,35 @@ export function AwsOrgAdminRequestDetailPanel({
   onTabChange,
   onRetry,
   onSyncSpend,
+  onFixPermissions,
+  onDeleteRequest,
+  onRequestCleanup,
+  onFetchSharedCost,
   onSuspend,
   onReinstate,
+  onUnblock,
   onDelete,
   onConsoleUrl,
   onUpdatePermissions,
   onRenewBudget,
   onCleanup,
   onToggleCleanup,
+  onRequestCleanupSettings,
   onFetchCost,
   onForceLogout,
   fetchUserMonitoring,
+  lastUpdatedAt,
+  isRefreshing,
+  hasActiveUsers,
 }: AwsOrgAdminRequestDetailPanelProps) {
   const [syncing, setSyncing] = useState(false);
+  const [sharedCost, setSharedCost] = useState<AwsOrgAdminSharedCost | null>(null);
+
+  useEffect(() => {
+    if (request.costingMode === 'shared') {
+      void onFetchSharedCost().then(setSharedCost);
+    }
+  }, [onFetchSharedCost, request.costingMode, request.requestId]);
 
   const infoItems = [
     { label: 'Request', value: `#${String(request.requestId).slice(-6)}` },
@@ -118,13 +152,33 @@ export function AwsOrgAdminRequestDetailPanel({
           ))}
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => void onFixPermissions()} disabled={saving} className="inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-50">
+            <RefreshCw className={`h-3.5 w-3.5 ${saving ? 'animate-spin' : ''}`} /> Fix Permissions
+          </button>
+          {hasActiveUsers && <span className="rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">● Live</span>}
+          {isRefreshing && <span className="text-xs text-amber-700">Refreshing…</span>}
+          {lastUpdatedAt && !isRefreshing && <span className="text-xs text-gray-400">Updated {Math.max(0, Math.round((Date.now() - lastUpdatedAt.getTime()) / 1000))}s ago</span>}
+          <button type="button" disabled={saving} onClick={() => window.confirm(`Delete AWS request #${request.requestId}? This cannot be undone.`) && void onDeleteRequest()} className="ml-auto inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /> Delete Request</button>
+        </div>
+
+        {request.costingMode === 'shared' && (
+          <div className="mt-3 flex flex-wrap items-center gap-4 rounded-lg border border-violet-100 bg-violet-50 px-4 py-3 text-sm">
+            <div><p className="text-xs text-violet-700">Shared AWS cost MTD</p><p className="font-semibold text-violet-950">{formatCurrency(sharedCost?.monthToDateCost ?? 0)}</p></div>
+            <div className="text-xs text-gray-500">{sharedCost?.users?.length ?? 0} user attribution(s)</div>
+            <button type="button" onClick={() => void onFetchSharedCost({ refresh: true }).then(setSharedCost)} className="ml-auto rounded-lg border bg-white px-3 py-1.5 text-xs">Refresh cost</button>
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex flex-wrap gap-1">
             {(
               [
                 { id: 'users' as const, label: 'Users' },
+                { id: 'history' as const, label: 'History' },
                 { id: 'cleanup' as const, label: 'Cleanup' },
                 { id: 'budget' as const, label: 'Budget' },
+                { id: 'custom-config' as const, label: 'Custom IAM Policies & Services' },
               ] as const
             ).map((tab) => (
               <button
@@ -175,11 +229,13 @@ export function AwsOrgAdminRequestDetailPanel({
                 saving={saving}
                 onSuspend={onSuspend}
                 onReinstate={onReinstate}
+                onUnblock={onUnblock}
                 onDelete={onDelete}
                 onConsoleUrl={onConsoleUrl}
                 onUpdatePermissions={onUpdatePermissions}
                 onFetchCost={onFetchCost}
                 onForceLogout={onForceLogout}
+                onCleanup={onCleanup}
                 fetchUserMonitoring={fetchUserMonitoring}
               />
             </div>
@@ -191,7 +247,17 @@ export function AwsOrgAdminRequestDetailPanel({
               saving={saving}
               onCleanup={onCleanup}
               onToggleCleanup={onToggleCleanup}
+              onRequestCleanup={onRequestCleanup}
+              onRequestCleanupSettings={onRequestCleanupSettings}
             />
+          )}
+
+          {activeTab === 'history' && (
+            <AwsOrgAdminHistoryTab requestId={request.requestId} users={requestDetail.users} />
+          )}
+
+          {activeTab === 'custom-config' && (
+            <AwsCustomConfigTab requestId={request.requestId} users={requestDetail.users} />
           )}
 
           {activeTab === 'budget' && (

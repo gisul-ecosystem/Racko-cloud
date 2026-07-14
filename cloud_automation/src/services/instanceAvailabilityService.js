@@ -2,11 +2,11 @@ const db = require('../db/postgres');
 const { filterVmInstancesForLocation } = require('./vmInstanceAvailabilityService');
 const { enrichInstances } = require('./instanceEnrichmentService');
 const { findInstancePolicyRule, normalizeServiceName } = require('../utils/instancePolicyRules');
+const { isInstanceAvailableInLocation } = require('./instanceRegionAvailabilityService');
 
 const filterInstancesForLocation = async (location, instances, servicesById) => {
   const normalizedLocation = String(location || '').trim().toLowerCase();
   const vmFiltered = await filterVmInstancesForLocation(location, instances, servicesById);
-  const { getServiceRegionalHourlyPrices } = require('./estimatePricingService');
 
   const availabilityChecks = await Promise.all(
     vmFiltered.map(async (instance) => {
@@ -15,12 +15,11 @@ const filterInstancesForLocation = async (location, instances, servicesById) => 
       const rule = findInstancePolicyRule(service?.name);
       const optionName = String(instance.option_name || '').trim();
 
-      if (
-        !rule ||
-        rule.policyType === 'allowed_vm_sku' ||
-        rule.policyType === 'allowed_aks_node_vm_sku' ||
-        rule.policyType === 'instance_metadata'
-      ) {
+      if (!rule) {
+        return instance;
+      }
+
+      if (rule.policyType === 'allowed_vm_sku') {
         return instance;
       }
 
@@ -28,27 +27,12 @@ const filterInstancesForLocation = async (location, instances, servicesById) => 
         return null;
       }
 
-      if (typeof rule.resolveAllowedSkus !== 'function') {
-        return instance;
-      }
-
-      const allowedSkus = rule.resolveAllowedSkus(optionName);
-      if (allowedSkus.length === 0) {
-        return null;
-      }
-
       if (!normalizedLocation) {
         return instance;
       }
 
-      if (/app service|functions|sql database|blob storage|data lake storage|service bus|key vault|logic apps|event grid/i.test(String(service?.name || ''))) {
-        const priceByRegion = await getServiceRegionalHourlyPrices(service, optionName);
-        if (priceByRegion.size > 0 && !priceByRegion.has(normalizedLocation)) {
-          return null;
-        }
-      }
-
-      return instance;
+      const available = await isInstanceAvailableInLocation(service, optionName, normalizedLocation);
+      return available ? instance : null;
     })
   );
 

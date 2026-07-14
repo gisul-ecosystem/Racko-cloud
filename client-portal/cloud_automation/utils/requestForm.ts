@@ -176,6 +176,72 @@ export function formatInstanceGuide(
   return guide.summary || guide.description;
 }
 
+export interface ParsedInstanceGuide {
+  summary: string;
+  description: string;
+  tier?: string;
+  specs: { label: string; value: string }[];
+  portalTips: string[];
+}
+
+type GuideObject = {
+  summary?: string;
+  description?: string;
+  tier?: string;
+  portalTips?: string[];
+  specs?: { label: string; value: string }[];
+  vcpu?: string;
+  ram?: string;
+  storage?: string;
+  performance?: string;
+};
+
+function buildSpecsFromGuide(guide: GuideObject): { label: string; value: string }[] {
+  if (Array.isArray(guide.specs) && guide.specs.length > 0) {
+    return guide.specs;
+  }
+
+  const specs: { label: string; value: string }[] = [];
+  if (guide.vcpu) specs.push({ label: 'vCPU', value: guide.vcpu });
+  if (guide.ram) specs.push({ label: 'RAM', value: guide.ram });
+  if (guide.storage) specs.push({ label: 'Storage', value: guide.storage });
+  if (guide.performance) specs.push({ label: 'Performance', value: guide.performance });
+  return specs;
+}
+
+export function parseInstanceGuide(
+  guide?: string | GuideObject | null,
+  optionName?: string
+): ParsedInstanceGuide {
+  const fallbackSummary = optionName ? `Azure option: ${optionName}` : 'Azure option';
+
+  if (!guide) {
+    return {
+      summary: fallbackSummary,
+      description: 'Select this tier or size for the chosen service.',
+      specs: [],
+      portalTips: [],
+    };
+  }
+
+  if (typeof guide === 'string') {
+    return {
+      summary: guide,
+      description: '',
+      specs: [],
+      portalTips: [],
+    };
+  }
+
+  return {
+    summary: guide.summary || fallbackSummary,
+    description: guide.description || '',
+    tier: guide.tier,
+    specs: buildSpecsFromGuide(guide),
+    portalTips: Array.isArray(guide.portalTips) ? guide.portalTips : [],
+  };
+}
+
 export function getInstancePortalTips(
   guide?: string | { portalTips?: string[] } | null
 ): string[] {

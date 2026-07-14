@@ -236,6 +236,8 @@ function normalizePayload(payload) {
     timezone,
     enableResourceCleanup,
     resourceCleanupIntervalHours,
+    resourceCleanupAction:
+      payload.resourceCleanupAction ?? payload.resource_cleanup_action ?? 'delete',
     perUserBudgetUsd: payload.perUserBudgetUsd ?? payload.per_user_budget_usd,
     selectedServices: payload.selectedServices ?? payload.selected_services ?? [],
     permissions: payload.permissions ?? [],
@@ -307,6 +309,9 @@ export const createRequest = async (payload, userId) => {
         'resource_cleanup_interval_hours must be an integer between 1 and 24 when cleanup is enabled'
       );
     }
+    if (input.resourceCleanupAction !== 'delete') {
+      throw validationError("AWS resource_cleanup_action currently supports 'delete' only");
+    }
   }
 
   if (
@@ -357,6 +362,7 @@ export const createRequest = async (payload, userId) => {
     resourceCleanupIntervalHours: input.enableResourceCleanup
       ? input.resourceCleanupIntervalHours
       : undefined,
+    resourceCleanupAction: input.resourceCleanupAction,
     resourceCleanupNextRunAt,
     cleanupEnabled: input.enableResourceCleanup,
     cleanupIntervalHours: input.enableResourceCleanup

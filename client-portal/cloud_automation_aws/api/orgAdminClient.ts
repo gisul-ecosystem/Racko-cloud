@@ -1,12 +1,19 @@
 import { ApiError, apiRequest } from '../../lib/apiClient';
 import { AWS_ORG_ADMIN_API_PREFIX } from '../constants';
 import type {
+  AwsCustomIamPolicy,
+  AwsCustomIamPolicyAssignment,
+  AwsCustomService,
   AwsIamPolicyGroup,
+  AwsOrgAdminAccessRequest,
   AwsOrgAdminDailyUsageResponse,
   AwsOrgAdminErrorKind,
   AwsOrgAdminMonitoringResponse,
+  AwsOrgAdminCleanupLog,
   AwsOrgAdminRequestDetail,
   AwsOrgAdminRequestSummary,
+  AwsOrgAdminLabHistory,
+  AwsOrgAdminSharedCost,
   AwsOrgAdminUser,
   AwsOrgAdminUserCost,
 } from '../types/orgAdmin';
@@ -86,6 +93,12 @@ export async function reinstateAwsOrgUser(requestId: string, userIndex: number):
   });
 }
 
+export async function unblockAwsOrgUser(requestId: string, userIndex: number): Promise<void> {
+  await orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/users/${userIndex}/unblock`, {
+    method: 'POST',
+  });
+}
+
 export async function deleteAwsOrgUser(requestId: string, userIndex: number): Promise<void> {
   await orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/users/${userIndex}`, {
     method: 'DELETE',
@@ -142,11 +155,12 @@ export async function renewAwsOrgUserBudget(
 
 export async function triggerAwsOrgUserCleanup(
   requestId: string,
-  userIndex: number
+  userIndex: number,
+  action: 'delete' | 'pause' = 'delete'
 ): Promise<{ deletedCount: number }> {
   return orgAdminRequest(
     `/requests/${encodeURIComponent(requestId)}/users/${userIndex}/cleanup`,
-    { method: 'POST' }
+    { method: 'POST', body: JSON.stringify({ action }) }
   );
 }
 
@@ -164,6 +178,26 @@ export async function updateAwsOrgCleanupSettings(
   );
 }
 
+export async function updateAwsOrgRequestCleanupSettings(
+  requestId: string,
+  settings: { cleanupEnabled?: boolean; cleanupIntervalHours?: number; action?: 'delete' | 'pause' }
+): Promise<void> {
+  await orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/cleanup-settings`, {
+    method: 'PATCH',
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function getAwsOrgCleanupLogs(
+  requestId: string,
+  limit = 50
+): Promise<AwsOrgAdminCleanupLog[]> {
+  const response = await orgAdminRequest<{ success: boolean; logs: AwsOrgAdminCleanupLog[] }>(
+    `/requests/${encodeURIComponent(requestId)}/cleanup-logs?limit=${limit}`
+  );
+  return response.logs ?? [];
+}
+
 export async function syncAwsOrgRequestSpend(requestId: string): Promise<unknown> {
   const response = await orgAdminRequest<{ success: boolean; results: unknown }>(
     `/requests/${encodeURIComponent(requestId)}/sync-spend`,
@@ -172,9 +206,13 @@ export async function syncAwsOrgRequestSpend(requestId: string): Promise<unknown
   return response.results;
 }
 
-export async function triggerAwsOrgAllCleanup(requestId: string): Promise<{ deletedCount: number }> {
+export async function triggerAwsOrgAllCleanup(
+  requestId: string,
+  action: 'delete' | 'pause' = 'delete'
+): Promise<{ deletedCount: number }> {
   return orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/cleanup-all`, {
     method: 'POST',
+    body: JSON.stringify({ action }),
   });
 }
 
@@ -204,6 +242,201 @@ export async function forceAwsOrgLogout(requestId: string, userIndex: number): P
   await orgAdminRequest(
     `/requests/${encodeURIComponent(requestId)}/users/${userIndex}/force-logout`,
     { method: 'POST' }
+  );
+}
+
+export async function listAwsOrgAccessRequests(
+  params: { status?: string; requestId?: string } = {}
+): Promise<AwsOrgAdminAccessRequest[]> {
+  const search = new URLSearchParams();
+  if (params.status) search.set('status', params.status);
+  if (params.requestId) search.set('requestId', params.requestId);
+  const query = search.toString();
+  const response = await orgAdminRequest<{
+    success: boolean;
+    requests: AwsOrgAdminAccessRequest[];
+  }>(`/access-requests${query ? `?${query}` : ''}`);
+  return response.requests ?? [];
+}
+
+export async function reviewAwsOrgAccessRequest(
+  id: string,
+  payload: { status: 'approved' | 'rejected'; reviewNotes?: string }
+): Promise<void> {
+  await orgAdminRequest(`/access-requests/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteAwsOrgRequest(requestId: string): Promise<void> {
+  await orgAdminRequest(`/requests/${encodeURIComponent(requestId)}`, { method: 'DELETE' });
+}
+
+export async function fixAwsOrgRequestPermissions(requestId: string): Promise<void> {
+  await orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/fix-permissions`, {
+    method: 'POST',
+  });
+}
+
+export async function getAwsOrgSharedCost(
+  requestId: string,
+  options: { refresh?: boolean } = {}
+): Promise<AwsOrgAdminSharedCost> {
+  const query = options.refresh ? '?refresh=true' : '';
+  const response = await orgAdminRequest<{
+    success: boolean;
+    cost?: AwsOrgAdminSharedCost;
+    summary?: AwsOrgAdminSharedCost;
+  }>(`/requests/${encodeURIComponent(requestId)}/shared-cost${query}`);
+  return response.cost ?? response.summary ?? {
+    requestId,
+    monthToDateCost: 0,
+  };
+}
+
+export async function getAwsOrgLabHistory(
+  requestId: string,
+  params: { userIndex?: number; limit?: number } = {}
+): Promise<AwsOrgAdminLabHistory> {
+  const search = new URLSearchParams();
+  if (params.userIndex != null) search.set('userIndex', String(params.userIndex));
+  if (params.limit != null) search.set('limit', String(params.limit));
+  const query = search.toString();
+  const response = await orgAdminRequest<{
+    success: boolean;
+    history?: AwsOrgAdminLabHistory;
+    entries?: AwsOrgAdminLabHistory['entries'];
+  }>(`/requests/${encodeURIComponent(requestId)}/history${query ? `?${query}` : ''}`);
+  return response.history ?? { requestId, entries: response.entries ?? [] };
+}
+
+export async function listAwsCustomIamPolicies(): Promise<AwsCustomIamPolicy[]> {
+  const response = await orgAdminRequest<{ success: boolean; policies: AwsCustomIamPolicy[] }>(
+    '/custom-iam-policies'
+  );
+  return response.policies ?? [];
+}
+
+export async function createAwsCustomIamPolicy(
+  body: Omit<AwsCustomIamPolicy, 'id'>
+): Promise<AwsCustomIamPolicy> {
+  const response = await orgAdminRequest<{ success: boolean; policy: AwsCustomIamPolicy }>(
+    '/custom-iam-policies',
+    { method: 'POST', body: JSON.stringify(body) }
+  );
+  return response.policy;
+}
+
+export async function updateAwsCustomIamPolicy(
+  id: string,
+  body: Partial<Omit<AwsCustomIamPolicy, 'id'>>
+): Promise<AwsCustomIamPolicy> {
+  const response = await orgAdminRequest<{ success: boolean; policy: AwsCustomIamPolicy }>(
+    `/custom-iam-policies/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(body) }
+  );
+  return response.policy;
+}
+
+export async function deleteAwsCustomIamPolicy(id: string): Promise<void> {
+  await orgAdminRequest(`/custom-iam-policies/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function listAwsCustomServices(): Promise<AwsCustomService[]> {
+  const response = await orgAdminRequest<{ success: boolean; services: AwsCustomService[] }>(
+    '/custom-services'
+  );
+  return response.services ?? [];
+}
+
+export async function createAwsCustomService(
+  body: Omit<AwsCustomService, 'id'>
+): Promise<AwsCustomService> {
+  const response = await orgAdminRequest<{ success: boolean; service: AwsCustomService }>(
+    '/custom-services',
+    { method: 'POST', body: JSON.stringify(body) }
+  );
+  return response.service;
+}
+
+export async function updateAwsCustomService(
+  id: string,
+  body: Partial<Omit<AwsCustomService, 'id'>>
+): Promise<AwsCustomService> {
+  const response = await orgAdminRequest<{ success: boolean; service: AwsCustomService }>(
+    `/custom-services/${encodeURIComponent(id)}`,
+    { method: 'PUT', body: JSON.stringify(body) }
+  );
+  return response.service;
+}
+
+export async function deleteAwsCustomService(id: string): Promise<void> {
+  await orgAdminRequest(`/custom-services/${encodeURIComponent(id)}`, { method: 'DELETE' });
+}
+
+export async function listAwsRequestCustomServices(requestId: string): Promise<AwsCustomService[]> {
+  const response = await orgAdminRequest<{ success: boolean; services: AwsCustomService[] }>(
+    `/requests/${encodeURIComponent(requestId)}/custom-services`
+  );
+  return response.services ?? [];
+}
+
+export async function addAwsCustomServiceToRequest(
+  requestId: string,
+  serviceId: string
+): Promise<void> {
+  await orgAdminRequest(
+    `/requests/${encodeURIComponent(requestId)}/custom-services/${encodeURIComponent(serviceId)}`,
+    { method: 'POST' }
+  );
+}
+
+export async function removeAwsCustomServiceFromRequest(
+  requestId: string,
+  serviceId: string
+): Promise<void> {
+  await orgAdminRequest(
+    `/requests/${encodeURIComponent(requestId)}/custom-services/${encodeURIComponent(serviceId)}`,
+    { method: 'DELETE' }
+  );
+}
+
+export async function listAwsCustomIamAssignments(
+  requestId: string
+): Promise<AwsCustomIamPolicyAssignment[]> {
+  const response = await orgAdminRequest<{
+    success: boolean;
+    assignments: AwsCustomIamPolicyAssignment[];
+  }>(`/requests/${encodeURIComponent(requestId)}/custom-iam-policy-assignments`);
+  return response.assignments ?? [];
+}
+
+export async function assignAwsCustomIamPolicy(
+  requestId: string,
+  userIndex: number,
+  policyId: string
+): Promise<void> {
+  await orgAdminRequest(
+    `/requests/${encodeURIComponent(requestId)}/users/${userIndex}/custom-iam-policies`,
+    { method: 'POST', body: JSON.stringify({ policyId }) }
+  );
+}
+
+export async function assignAwsCustomIamPolicyToAll(
+  requestId: string,
+  policyId: string
+): Promise<void> {
+  await orgAdminRequest(
+    `/requests/${encodeURIComponent(requestId)}/custom-iam-policies/assign-all`,
+    { method: 'POST', body: JSON.stringify({ policyId }) }
+  );
+}
+
+export async function revokeAwsCustomIamAssignment(assignmentId: string): Promise<void> {
+  await orgAdminRequest(
+    `/custom-iam-policy-assignments/${encodeURIComponent(assignmentId)}`,
+    { method: 'DELETE' }
   );
 }
 

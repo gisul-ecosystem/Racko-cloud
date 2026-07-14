@@ -41,15 +41,24 @@ const LAMBDA_EXECUTION_POLICIES = [
   'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess',
 ];
 
-async function getClientsForAccount(accountId) {
+async function getClientsForAccount(accountId, deploymentRegion = REGION) {
   const normalizedAccountId = String(accountId).trim();
+  const region = String(deploymentRegion || REGION).trim() || REGION;
+  const accountRegionalConfig = {
+    region,
+    credentials: {
+      accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+      secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+    },
+  };
 
   if (normalizedAccountId === String(MASTER_ACCOUNT_ID || '').trim()) {
     return {
-      lambda: lambdaClient,
-      events: new CloudWatchEventsClient(regionalConfig),
+      lambda: new LambdaClient(accountRegionalConfig),
+      events: new CloudWatchEventsClient(accountRegionalConfig),
       iam: iamClient,
       accountId: normalizedAccountId,
+      region,
     };
   }
 
@@ -71,13 +80,14 @@ async function getClientsForAccount(accountId) {
     secretAccessKey: Credentials.SecretAccessKey,
     sessionToken: Credentials.SessionToken,
   };
-  const clientConfig = { region: REGION, credentials };
+  const clientConfig = { region, credentials };
 
   return {
     lambda: new LambdaClient(clientConfig),
     events: new CloudWatchEventsClient(clientConfig),
     iam: new IAMClient(clientConfig),
     accountId: normalizedAccountId,
+    region,
   };
 }
 
@@ -124,8 +134,9 @@ function buildResourceSuffix(requestId) {
   return String(requestId).replace(/[^a-zA-Z0-9-]/g, '').slice(-12);
 }
 
-export async function deployAutoTagger(accountId, requestId) {
-  const { lambda, events, iam } = await getClientsForAccount(accountId);
+export async function deployAutoTagger(accountId, requestId, requestRegion) {
+  const deploymentRegion = String(requestRegion || REGION).trim() || REGION;
+  const { lambda, events, iam } = await getClientsForAccount(accountId, deploymentRegion);
   const roleArn = await createLambdaRole(iam);
   const suffix = buildResourceSuffix(requestId);
 
@@ -164,7 +175,7 @@ export async function deployAutoTagger(accountId, requestId) {
         },
       })
     );
-    console.log(`[AutoTagger] Deployed Lambda ${functionName} in account ${accountId}`);
+    console.log(`[AutoTagger] Deployed Lambda ${functionName} in account ${accountId} (${deploymentRegion})`);
   } else {
     await lambda.send(
       new UpdateFunctionConfigurationCommand({
@@ -238,6 +249,6 @@ export async function deployAutoTagger(accountId, requestId) {
     })
   );
 
-  console.log(`[AutoTagger] EventBridge rule active for account ${accountId}`);
+  console.log(`[AutoTagger] EventBridge rule active for account ${accountId} (${deploymentRegion})`);
   return { functionName, lambdaArn, ruleName, ruleArn: RuleArn };
 }

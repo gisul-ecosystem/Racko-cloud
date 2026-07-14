@@ -34,10 +34,35 @@ export default function BudgetCleanupCell({
 
     try {
       const data = await cleanupAwsLabUser(requestId, userIndex, jwtToken);
-      const count = data.results?.ec2Terminated || 0;
-      const rdsCount = data.results?.rdsDeleted || 0;
+      const results = data.results || {};
+      const errors = Object.entries(results).flatMap(([service, result]) => {
+        if (result?.error) return [`${service}: ${result.error}`];
+        return (result?.errors || []).map((error) => `${service}: ${error}`);
+      });
+
+      if (errors.length > 0) {
+        throw new Error(errors.join('; '));
+      }
+
+      const metricLabels = {
+        terminated: 'terminated',
+        deleted: 'deleted',
+        bucketsDeleted: 'bucket(s) deleted',
+        notebooksDeleted: 'notebook(s) deleted',
+        trainingJobsStopped: 'training job(s) stopped',
+        instancesDeleted: 'instance(s) deleted',
+        dbsDeleted: 'database(s) deleted',
+      };
+      const removed = Object.entries(results).flatMap(([service, result]) =>
+        Object.entries(metricLabels)
+          .filter(([metric]) => Number(result?.[metric] || 0) > 0)
+          .map(([metric, label]) => `${result[metric]} ${service} ${label}`)
+      );
+
       onFeedback?.(
-        `Cleanup complete — ${count} EC2 terminated${rdsCount ? `, ${rdsCount} RDS deleted` : ''}.`
+        removed.length > 0
+          ? `Cleanup complete — ${removed.join(', ')}.`
+          : 'Cleanup complete — no matching resources were removed.'
       );
       onRefresh();
     } catch (err) {

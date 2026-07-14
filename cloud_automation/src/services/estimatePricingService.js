@@ -13,7 +13,14 @@ const {
   mapAksNodeVmSize,
   mapApiManagementSku,
   mapLogAnalyticsSku,
-  mapContainerRegistrySku
+  mapContainerRegistrySku,
+  mapCosmosMode,
+  mapCdnSku,
+  mapLoadBalancerSku,
+  mapAppGatewaySku,
+  mapSearchSku,
+  mapBotServiceSku,
+  mapLogicAppMode
 } = require('../utils/instancePolicyRules');
 const {
   fetchRetailPriceItems,
@@ -159,7 +166,7 @@ const buildRetailFilter = (service, instanceOption) => {
   }
 
   if (/cosmos db/i.test(serviceName)) {
-    const skuToken = String(instanceOption || 'Serverless').trim();
+    const skuToken = mapCosmosMode(instanceOption);
     return (
       `serviceName eq '${escapeODataString(azureServiceName)}' ` +
       `and contains(skuName,'${escapeODataString(skuToken)}') ` +
@@ -168,7 +175,7 @@ const buildRetailFilter = (service, instanceOption) => {
   }
 
   if (/logic app/i.test(serviceName)) {
-    const skuToken = /standard/i.test(String(instanceOption || '')) ? 'Standard' : 'Consumption';
+    const skuToken = mapLogicAppMode(instanceOption);
     return (
       `serviceName eq '${escapeODataString(azureServiceName)}' ` +
       `and contains(skuName,'${escapeODataString(skuToken)}') ` +
@@ -196,6 +203,51 @@ const buildRetailFilter = (service, instanceOption) => {
 
   if (/container registry/i.test(serviceName)) {
     const skuToken = mapContainerRegistrySku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/\bcdn\b/i.test(serviceName)) {
+    const skuToken = mapCdnSku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/load balancer/i.test(serviceName)) {
+    const skuToken = mapLoadBalancerSku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/application gateway/i.test(serviceName)) {
+    const skuToken = mapAppGatewaySku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/ai search/i.test(serviceName)) {
+    const skuToken = mapSearchSku(instanceOption);
+    return (
+      `serviceName eq '${escapeODataString(azureServiceName)}' ` +
+      `and contains(skuName,'${escapeODataString(skuToken)}') ` +
+      `and priceType eq 'Consumption'`
+    );
+  }
+
+  if (/bot service/i.test(serviceName)) {
+    const skuToken = mapBotServiceSku(instanceOption);
     return (
       `serviceName eq '${escapeODataString(azureServiceName)}' ` +
       `and contains(skuName,'${escapeODataString(skuToken)}') ` +
