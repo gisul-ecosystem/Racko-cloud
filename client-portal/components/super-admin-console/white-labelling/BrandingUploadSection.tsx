@@ -1,9 +1,9 @@
 'use client';
 
 import { useRef, useState } from 'react';
-import { ImagePlus, Loader2 } from 'lucide-react';
+import { ImagePlus, Loader2, Trash2 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
-import { uploadTenantBrandingAsset } from '@/lib/tenantApi';
+import { deleteTenantBrandingAsset, uploadTenantBrandingAsset } from '@/lib/tenantApi';
 import { resolveTenantBrandingUrl } from '@/lib/tenantBrandingUrl';
 import type { BrandingAssetType, Tenant } from '@/lib/tenantTypes';
 
@@ -46,6 +46,7 @@ export function BrandingUploadSection({
     'login-page-image': null,
   });
   const [uploading, setUploading] = useState<BrandingAssetType | null>(null);
+  const [removing, setRemoving] = useState<BrandingAssetType | null>(null);
   const [previewVersion, setPreviewVersion] = useState(0);
 
   async function handleUpload(assetType: BrandingAssetType, file: File) {
@@ -62,6 +63,20 @@ export function BrandingUploadSection({
     }
   }
 
+  async function handleRemove(assetType: BrandingAssetType) {
+    setRemoving(assetType);
+    try {
+      const updated = await deleteTenantBrandingAsset(tenantId, assetType);
+      onUpdated(updated);
+      setPreviewVersion((v) => v + 1);
+      onFlash?.(`${ASSET_OPTIONS.find((o) => o.type === assetType)?.label} removed.`);
+    } catch (err) {
+      onFlashErr?.(err instanceof ApiError ? err.message : 'Remove failed.');
+    } finally {
+      setRemoving(null);
+    }
+  }
+
   return (
     <div className="space-y-4 rounded-lg border border-dashed border-gray-200 bg-gray-50/50 p-4">
       <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
@@ -70,7 +85,7 @@ export function BrandingUploadSection({
       <div className="grid gap-4 sm:grid-cols-3">
         {ASSET_OPTIONS.map(({ type, label }) => {
           const preview = brandingPreviewUrl(tenant, type, previewVersion || tenant.updatedAt);
-          const busy = uploading === type;
+          const busy = uploading === type || removing === type;
           return (
             <div key={type} className="rounded-lg border border-gray-200 bg-white p-3">
               <p className="text-xs font-medium text-gray-700">{label}</p>
@@ -95,21 +110,38 @@ export function BrandingUploadSection({
                   e.target.value = '';
                 }}
               />
-              <button
-                type="button"
-                disabled={busy}
-                onClick={() => fileRefs.current[type]?.click()}
-                className="mt-2 w-full rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
-              >
-                {busy ? (
-                  <span className="inline-flex items-center gap-1">
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                    Uploading…
-                  </span>
-                ) : (
-                  'Upload file'
-                )}
-              </button>
+              <div className="mt-2 flex gap-2">
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => fileRefs.current[type]?.click()}
+                  className="flex-1 rounded-md border border-gray-200 px-2 py-1.5 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {uploading === type ? (
+                    <span className="inline-flex items-center gap-1">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Uploading…
+                    </span>
+                  ) : (
+                    'Upload file'
+                  )}
+                </button>
+                {preview ? (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={() => void handleRemove(type)}
+                    aria-label={`Remove ${label}`}
+                    className="inline-flex items-center justify-center rounded-md border border-red-200 px-2 py-1.5 text-xs text-red-600 hover:bg-red-50 disabled:opacity-50"
+                  >
+                    {removing === type ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <Trash2 className="h-3.5 w-3.5" />
+                    )}
+                  </button>
+                ) : null}
+              </div>
             </div>
           );
         })}
