@@ -6,6 +6,7 @@ import { verifyManagePortalLogin, getManagePortalData } from '../services/manage
 
 import { generateAndLogConsoleUrl } from '../services/consoleAccessService.js';
 import { createNotification } from '../services/notificationService.js';
+import { revokeLabUserConsoleSessionsSafe } from '../services/awsSessionRevocationService.js';
 
 import {
   getUserSessionStats,
@@ -259,6 +260,8 @@ router.post('/manage/aws/request/:id/users/:userIndex/suspend', authMiddleware, 
 
     const userIndex = Number(req.params.userIndex);
     const accessType = request.accessType || 'magic_link';
+
+    await revokeLabUserConsoleSessionsSafe(req.params.id, userIndex);
 
     if (accessType === 'identity_center') {
       await suspendIdentityUser(request, userIndex);

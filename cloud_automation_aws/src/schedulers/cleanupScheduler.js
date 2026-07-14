@@ -1,6 +1,7 @@
 import Request from '../models/Request.js';
 import cron from 'node-cron';
-import { cleanupUserResources } from '../services/resourceCleanupService.js';
+import { cleanupUserResources, pauseUserResources } from '../services/resourceCleanupService.js';
+import CleanupLog from '../models/CleanupLog.js';
 import { sendResourceCleanupEmail } from '../services/cleanupEmailService.js';
 import { buildRequestLabel, countCleanupDeleted } from '../utils/cleanupMetrics.js';
 import { createNotification } from '../services/notificationService.js';
@@ -35,13 +36,14 @@ export async function runCleanupCheck() {
       let requestHadCleanup = false;
 
       for (const role of users) {
-        if (role.suspended) continue;
+        if (role.suspended || role.cleanupDisabled) continue;
 
         const lastCleanup = role.lastCleanupAt
           ? new Date(role.lastCleanupAt)
           : new Date(request.startDate);
 
-        const intervalMs = (request.cleanupIntervalHours || 2) * 60 * 60 * 1000;
+        const intervalMs =
+          (role.cleanupIntervalOverride || request.cleanupIntervalHours || 2) * 60 * 60 * 1000;
         const nextCleanup = new Date(lastCleanup.getTime() + intervalMs);
 
         if (now >= nextCleanup) {
@@ -49,7 +51,9 @@ export async function runCleanupCheck() {
             `[cleanupScheduler] Cleaning request ${request._id} user ${role.userIndex + 1}`
           );
           try {
-            const results = await cleanupUserResources(String(request._id), role.userIndex);
+            const results = request.resourceCleanupAction === 'pause'
+              ? await pauseUserResources(String(request._id), role.userIndex)
+              : await cleanupUserResources(String(request._id), role.userIndex);
             requestDeletedCount += countCleanupDeleted(results);
             requestHadCleanup = true;
             cleaned++;
@@ -68,6 +72,8 @@ export async function runCleanupCheck() {
 
         await Request.findByIdAndUpdate(request._id, {
           cleanupNextRunAt: nextCleanupAt,
+          resourceCleanupLastRanAt: now,
+          resourceCleanupNextRunAt: nextCleanupAt,
           updatedAt: now,
           $push: {
             cleanupLogs: {
@@ -75,6 +81,15 @@ export async function runCleanupCheck() {
               message: `Scheduled cleanup removed ${requestDeletedCount} resource(s) across lab users`,
             },
           },
+        });
+        await CleanupLog.create({
+          requestId: request._id,
+          action: request.resourceCleanupAction || 'delete',
+          triggeredBy: 'scheduler',
+          status: 'success',
+          totalDeleted: requestDeletedCount,
+          ranAt: now,
+          completedAt: now,
         });
 
         if (request.customerEmail) {

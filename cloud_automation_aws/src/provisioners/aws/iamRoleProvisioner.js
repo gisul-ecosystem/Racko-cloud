@@ -68,6 +68,13 @@ export async function createLabRole(request, userIndex) {
   } catch (err) {
     if (err.name === 'EntityAlreadyExistsException') {
       const roleArn = `arn:aws:iam::${MASTER_ACCOUNT_ID}:role/${roleName}`;
+      await iamClient.send(
+        new PutRolePolicyCommand({
+          RoleName: roleName,
+          PolicyName: 'RackoLabPermissions',
+          PolicyDocument: JSON.stringify(permissionPolicy),
+        })
+      );
       return { roleName, roleArn, userIndex };
     }
     throw err;
@@ -76,11 +83,18 @@ export async function createLabRole(request, userIndex) {
 
 export async function createLabRoles(request) {
   const accountCount = Number(request.accountCount) || 1;
-  const roles = [];
+  const roles = request.labRoles?.length
+    ? request.labRoles
+    : [];
 
   for (let i = 0; i < accountCount; i += 1) {
     const role = await createLabRole(request, i);
-    roles.push(role);
+    const existingIndex = roles.findIndex((entry) => entry.userIndex === i);
+    if (existingIndex >= 0) {
+      roles[existingIndex] = role;
+    } else {
+      roles.push(role);
+    }
   }
 
   return roles;

@@ -7,5 +7,5 @@ export const SERVICE_CATALOG = [
   'docs',
   'machine-manager',
 ] as const;
-
+ 
 export type ServiceKey = (typeof SERVICE_CATALOG)[number];

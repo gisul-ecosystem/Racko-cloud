@@ -7,6 +7,7 @@ import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { EC2Client } from '@aws-sdk/client-ec2';
 import { EKSClient } from '@aws-sdk/client-eks';
 import { ElastiCacheClient } from '@aws-sdk/client-elasticache';
+import { EMRClient } from '@aws-sdk/client-emr';
 import { IAMClient } from '@aws-sdk/client-iam';
 import { KinesisClient } from '@aws-sdk/client-kinesis';
 import { LambdaClient } from '@aws-sdk/client-lambda';
@@ -20,7 +21,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import { SageMakerClient } from '@aws-sdk/client-sagemaker';
 import { SNSClient } from '@aws-sdk/client-sns';
 import { SQSClient } from '@aws-sdk/client-sqs';
-import { STSClient } from '@aws-sdk/client-sts';
+import { AssumeRoleCommand, STSClient } from '@aws-sdk/client-sts';
 
 export {
   formatIdentityCenterError,
@@ -54,7 +55,10 @@ export const budgetsClient = new BudgetsClient(globalConfig);
 export const costExplorerClient = new CostExplorerClient(globalConfig);
 export const orgsClient = new OrganizationsClient(globalConfig);
 export const cloudWatchClient = new CloudWatchClient(regionalConfig);
-export const s3Client = new S3Client(regionalConfig);
+export const s3Client = new S3Client({
+  ...regionalConfig,
+  followRegionRedirects: true,
+});
 export const eksClient = new EKSClient(regionalConfig);
 export const rdsClient = new RDSClient(regionalConfig);
 export const lambdaClient = new LambdaClient(regionalConfig);
@@ -72,3 +76,53 @@ export const pricingClient = new PricingClient({
   region: 'us-east-1',
   credentials,
 });
+
+export function createRegionalAwsClients(requestRegion, clientCredentials = credentials) {
+  const requestedRegion = String(requestRegion || region).trim() || region;
+  const config = { region: requestedRegion, credentials: clientCredentials };
+  const regionalEc2Client = new EC2Client(config);
+
+  return {
+    EC2: regionalEc2Client,
+    VPC: regionalEc2Client,
+    RDS: new RDSClient(config),
+    S3: new S3Client({ ...config, followRegionRedirects: true }),
+    EKS: new EKSClient(config),
+    Lambda: new LambdaClient(config),
+    ElastiCache: new ElastiCacheClient(config),
+    Redshift: new RedshiftClient(config),
+    OpenSearch: new OpenSearchClient(config),
+    SageMaker: new SageMakerClient(config),
+    Kinesis: new KinesisClient(config),
+    SNS: new SNSClient(config),
+    SQS: new SQSClient(config),
+    DynamoDB: new DynamoDBClient(config),
+    Lightsail: new LightsailClient(config),
+    CloudFront: cloudFrontClient,
+    EMR: new EMRClient(config),
+  };
+}
+
+export async function createRegionalAwsClientsForAccount(requestRegion, accountId) {
+  const targetAccountId = String(accountId || MASTER_ACCOUNT_ID || '').trim();
+  if (!targetAccountId || targetAccountId === String(MASTER_ACCOUNT_ID || '').trim()) {
+    return createRegionalAwsClients(requestRegion);
+  }
+
+  const roleName = process.env.RACKO_LAB_ADMIN_ROLE_NAME || 'RackoLabAdmin';
+  const { Credentials } = await stsClient.send(
+    new AssumeRoleCommand({
+      RoleArn: `arn:aws:iam::${targetAccountId}:role/${roleName}`,
+      RoleSessionName: 'RackoResourceCleanup',
+      DurationSeconds: 3600,
+    })
+  );
+  if (!Credentials) {
+    throw new Error(`Unable to assume cleanup role in AWS account ${targetAccountId}`);
+  }
+  return createRegionalAwsClients(requestRegion, {
+    accessKeyId: Credentials.AccessKeyId,
+    secretAccessKey: Credentials.SecretAccessKey,
+    sessionToken: Credentials.SessionToken,
+  });
+}

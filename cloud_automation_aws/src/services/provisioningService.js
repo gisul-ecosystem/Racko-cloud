@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import Request from '../models/Request.js';
 import { run } from '../provisioners/aws/provisionOrchestrator.js';
+import { createLabRoles } from '../provisioners/aws/iamRoleProvisioner.js';
 
 const activeRuns = new Set();
 
@@ -74,4 +75,31 @@ export async function retry(requestId) {
   });
 
   return start(requestId);
+}
+
+export async function syncRolePolicies(requestId) {
+  if (!mongoose.Types.ObjectId.isValid(requestId)) {
+    throw validationError('Invalid request id');
+  }
+
+  const request = await Request.findById(requestId);
+  if (!request) {
+    throw validationError('Request not found', 404);
+  }
+
+  if (request.accessType === 'identity_center') {
+    throw validationError('Role policy sync is only available for magic link requests.');
+  }
+
+  if (!request.labRoles?.length) {
+    throw validationError('No lab roles found on this request.');
+  }
+
+  const labRoles = await createLabRoles(request);
+  await Request.findByIdAndUpdate(requestId, {
+    labRoles,
+    updatedAt: new Date(),
+  });
+
+  return { labRoles };
 }

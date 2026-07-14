@@ -7,6 +7,7 @@ import {
 } from '../provisioners/aws/identityProvisioner.js';
 import { sendReinstateCredentialsEmail } from '../provisioners/aws/emailProvisioner.js';
 import { createNotification } from './notificationService.js';
+import { revokeLabUserConsoleSessionsSafe } from './awsSessionRevocationService.js';
 
 function resolveUsername(user, userIndex) {
   return user.username || `labuser${userIndex + 1}`;
@@ -14,6 +15,8 @@ function resolveUsername(user, userIndex) {
 
 export async function suspendUser(request, user, accessType) {
   try {
+    await revokeLabUserConsoleSessionsSafe(String(request._id), user.userIndex);
+
     if (accessType === 'identity_center') {
       await suspendIdentityUser(request, user.userIndex);
       await Request.findOneAndUpdate(

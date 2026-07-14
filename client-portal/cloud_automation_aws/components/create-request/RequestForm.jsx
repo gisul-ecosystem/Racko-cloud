@@ -1,13 +1,25 @@
 'use client';
 
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, ChevronRight } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
+import {
+  RACKO_BTN_PRIMARY,
+  RACKO_BTN_SECONDARY,
+} from '../../../components/console/cloudButtonStyles';
 import { COMMON_TIMEZONES } from '../../constants';
-import { inputClass, labelClass, sectionClass, timeInputClass } from './formStyles';
+import {
+  checkboxClass,
+  inputClass,
+  labelClass,
+  optionCardClass,
+  sectionClass,
+  timeInputClass,
+} from './formStyles';
 import { InstancePicker } from './InstancePicker';
 import { PermissionsPicker } from './PermissionsPicker';
 import { RegionPicker } from './RegionPicker';
 import { RequestStepper } from './RequestStepper';
+import { SectionHeader } from './SectionHeader';
 import { ServiceSelector } from './ServiceSelector';
 
 const USAGE_WINDOW_DAYS = [
@@ -125,31 +137,42 @@ export function RequestForm({
 
   return (
     <div className="space-y-6">
-      <div className="rounded-xl border border-gray-200 bg-white px-3 py-4 shadow-sm sm:px-5">
-        <RequestStepper
-          currentStep={currentStep}
-          maxReachableStep={maxReachableStep}
-          onStepClick={onStepClick}
-        />
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+        <div className="h-0.5 bg-gradient-to-r from-[#B91C1C] to-[#DC2626]" />
+        <div className="px-4 py-5 sm:px-6">
+          <RequestStepper
+            currentStep={currentStep}
+            maxReachableStep={maxReachableStep}
+            onStepClick={onStepClick}
+          />
+        </div>
       </div>
 
       {(validationErrors.length > 0 || stepErrors.length > 0) && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-            <ul className="space-y-1 text-sm text-red-700">
-              {[...stepErrors, ...validationErrors].map((error) => (
-                <li key={error}>{error}</li>
-              ))}
-            </ul>
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+            <div>
+              <p className="text-sm font-semibold text-red-800">Please fix the following</p>
+              <ul className="mt-2 space-y-1 text-sm text-red-700">
+                {[...stepErrors, ...validationErrors].map((error) => (
+                  <li key={error}>{error}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       )}
 
       {currentStep === 1 && (
         <section className={sectionClass}>
-          <h2 className="text-sm font-semibold text-gray-900">Customer details</h2>
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="p-6">
+            <SectionHeader
+              step={1}
+              title="Customer details"
+              description="Who is this lab for, how many accounts, and when does access run?"
+            />
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <label className={labelClass} htmlFor="customerEmail">
                 Customer email
@@ -186,18 +209,14 @@ export function RequestForm({
                 <button
                   type="button"
                   onClick={() => onAccessTypeChange('magic_link')}
-                  className={`rounded-lg border-2 p-4 text-left transition ${
-                    accessType === 'magic_link'
-                      ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/40'
-                      : 'border-gray-200 bg-white hover:border-gray-300'
-                  }`}
+                  className={optionCardClass(accessType === 'magic_link')}
                 >
-                  <div className="text-sm font-semibold text-gray-900">🔗 Magic Link Access</div>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <div className="text-sm font-semibold text-gray-900">Magic link access</div>
+                  <p className="mt-1 text-xs leading-relaxed text-gray-500">
                     Best for short labs (≤7 days). Admin generates one-click console links from the
                     manage portal. No password needed.
                   </p>
-                  <p className="mt-2 text-[11px] font-semibold text-[var(--cloud-accent,#B91C1C)]">
+                  <p className="mt-2 text-[11px] font-semibold text-[#B91C1C]">
                     Max session: 12 hours per link
                   </p>
                 </button>
@@ -205,18 +224,14 @@ export function RequestForm({
                 <button
                   type="button"
                   onClick={() => onAccessTypeChange('identity_center')}
-                  className={`rounded-lg border-2 p-4 text-left transition ${
-                    accessType === 'identity_center'
-                      ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/40'
-                      : 'border-gray-200 bg-white hover:border-gray-300'
-                  }`}
+                  className={optionCardClass(accessType === 'identity_center')}
                 >
-                  <div className="text-sm font-semibold text-gray-900">🔐 Direct IAM Login</div>
-                  <p className="mt-1 text-xs text-gray-500">
+                  <div className="text-sm font-semibold text-gray-900">Direct IAM login</div>
+                  <p className="mt-1 text-xs leading-relaxed text-gray-500">
                     Best for long labs (&gt;7 days). Users receive username and password and can sign
                     in directly to the AWS console for the full lab duration.
                   </p>
-                  <p className="mt-2 text-[11px] font-semibold text-blue-800">
+                  <p className="mt-2 text-[11px] font-semibold text-blue-700">
                     Persistent access for full lab duration
                   </p>
                 </button>
@@ -267,11 +282,19 @@ export function RequestForm({
               )}
             </div>
           </div>
+          </div>
         </section>
       )}
 
       {currentStep === 2 && (
         <section className={sectionClass}>
+          <div className="p-6">
+            <SectionHeader
+              step={2}
+              title="Daily usage windows"
+              description="Optionally restrict which days and hours lab users can access AWS."
+            />
+            <div className="mt-6">
           <label className="flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
@@ -282,7 +305,7 @@ export function RequestForm({
                   onUsageWindowsChange([]);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
+              className={checkboxClass}
             />
             <span className="text-sm font-medium text-gray-900">Enable daily usage windows</span>
           </label>
@@ -306,7 +329,7 @@ export function RequestForm({
                             type="checkbox"
                             checked={Boolean(existing)}
                             onChange={(event) => toggleUsageWindowDay(index, event.target.checked)}
-                            className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
+                            className={checkboxClass}
                           />
                           <span className="text-sm font-medium text-gray-900">{day}</span>
                         </label>
@@ -419,11 +442,20 @@ export function RequestForm({
               )}
             </>
           )}
+            </div>
+          </div>
         </section>
       )}
 
       {currentStep === 3 && (
         <section className={sectionClass}>
+          <div className="p-6">
+            <SectionHeader
+              step={3}
+              title="Resource cleanup"
+              description="Automatically delete lab resources on a schedule to control spend."
+            />
+            <div className="mt-6">
           <label className="flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
@@ -436,7 +468,7 @@ export function RequestForm({
                   onResourceCleanupIntervalHoursChange(4);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
+              className={checkboxClass}
             />
             <span className="text-sm font-medium text-gray-900">Enable periodic resource cleanup</span>
           </label>
@@ -472,11 +504,20 @@ export function RequestForm({
               </div>
             </div>
           )}
+            </div>
+          </div>
         </section>
       )}
 
       {currentStep === 4 && (
         <section className={sectionClass}>
+          <div className="p-6">
+            <SectionHeader
+              step={4}
+              title="Budget cap"
+              description="Optionally disable lab users when their AWS spend exceeds a limit."
+            />
+            <div className="mt-6">
           <label className="flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
@@ -487,7 +528,7 @@ export function RequestForm({
                   onPerUserBudgetUsdChange(undefined);
                 }
               }}
-              className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
+              className={checkboxClass}
             />
             <span className="text-sm font-medium text-gray-900">Set per-user budget cap</span>
           </label>
@@ -516,33 +557,39 @@ export function RequestForm({
               </p>
             </div>
           )}
+            </div>
+          </div>
         </section>
       )}
 
       {currentStep === 5 && (
         <section className={sectionClass}>
-          <h2 className="text-sm font-semibold text-gray-900">Services</h2>
-          <p className="mt-0.5 text-xs text-gray-400">Select one or more AWS services to provision</p>
-          <div className="mt-4">
+          <div className="p-6">
+            <SectionHeader
+              step={5}
+              title="Services"
+              description="Select one or more AWS services to provision in the lab."
+            />
+            <div className="mt-6">
             <ServiceSelector
               servicesByCategory={servicesByCategory}
               selectedServiceIds={selectedServiceIds}
               onToggleService={onToggleService}
             />
+            </div>
           </div>
         </section>
       )}
 
       {currentStep === 6 && (
         <section className={sectionClass}>
-          <h2 className="text-sm font-semibold text-gray-900">Instance sizes</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Choose instance tiers for services that support sizing (live AWS pricing)
-          </p>
-          <p className="mt-1 text-xs text-gray-400">
-            Preview uses {pricingRegion} until you select a region in step 8.
-          </p>
-          <div className="mt-4">
+          <div className="p-6">
+            <SectionHeader
+              step={6}
+              title="Instance sizes"
+              description={`Choose instance tiers for sized services. Preview uses ${pricingRegion} until you pick a region in step 8.`}
+            />
+            <div className="mt-6">
             <InstancePicker
               instanceServices={instanceServices}
               flatRateServices={flatRateServices}
@@ -550,33 +597,39 @@ export function RequestForm({
               selectedInstances={selectedInstances}
               onSelectInstance={onSelectInstance}
             />
+            </div>
           </div>
         </section>
       )}
 
       {currentStep === 7 && (
         <section className={sectionClass}>
-          <h2 className="text-sm font-semibold text-gray-900">Permissions</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Roles are auto-assigned from IAM policy mappings
-          </p>
-          <div className="mt-4">
+          <div className="p-6">
+            <SectionHeader
+              step={7}
+              title="Permissions"
+              description="IAM policies are auto-assigned from service mappings. Adjust overrides if needed."
+            />
+            <div className="mt-6">
             <PermissionsPicker
               selectedServices={selectedServices}
               permissionOverrides={permissionOverrides}
               onPermissionChange={onPermissionChange}
             />
+            </div>
           </div>
         </section>
       )}
 
       {currentStep === 8 && (
         <section className={sectionClass}>
-          <h2 className="text-sm font-semibold text-gray-900">Select AWS region</h2>
-          <p className="mt-0.5 text-xs text-gray-400">
-            Available regions based on your service and instance selections (live AWS pricing)
-          </p>
-          <div className="mt-4">
+          <div className="p-6">
+            <SectionHeader
+              step={8}
+              title="AWS region"
+              description="Regions with live pricing for your selected services and instances."
+            />
+            <div className="mt-6">
             <RegionPicker
               region={region}
               onRegionChange={onRegionChange}
@@ -584,28 +637,28 @@ export function RequestForm({
               loading={regionsLoading}
               error={regionsError}
             />
+            </div>
           </div>
         </section>
       )}
 
-      <div className="flex items-center justify-between gap-3">
-        <button
-          type="button"
-          onClick={onBack}
-          disabled={currentStep === 1}
-          className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
-        >
-          Back
-        </button>
-        {currentStep < 8 ? (
+      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white p-4 shadow-sm sm:p-5">
+        <div className="flex items-center justify-between gap-3">
           <button
             type="button"
-            onClick={onNext}
-            className="rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:brightness-95"
+            onClick={onBack}
+            disabled={currentStep === 1}
+            className={RACKO_BTN_SECONDARY}
           >
-            Next
+            Back
           </button>
-        ) : null}
+          {currentStep < 8 ? (
+            <button type="button" onClick={onNext} className={RACKO_BTN_PRIMARY}>
+              Next
+              <ChevronRight className="h-4 w-4" />
+            </button>
+          ) : null}
+        </div>
       </div>
     </div>
   );

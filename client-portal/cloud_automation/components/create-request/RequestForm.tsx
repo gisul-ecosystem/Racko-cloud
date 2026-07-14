@@ -2,6 +2,7 @@
 
 import { AlertCircle, ChevronDown, Shield } from 'lucide-react';
 import { COMMON_TIMEZONES } from '../../constants';
+import { RACKO_BTN_SECONDARY } from '../cloudButtonStyles';
 import type {
   AvailableLocation,
   CatalogInstance,
@@ -14,7 +15,6 @@ import type {
 } from '../../types/catalog';
 import {
   catalogInstancesForServices,
-  formatInstanceGuide,
   formatLocationOptionLabel,
   getInstancePortalTips,
   getSelectedPauseCleanupServices,
@@ -25,15 +25,18 @@ import {
   PAUSE_CLEANUP_ACTION_LABELS,
   supportsPauseCleanup,
 } from '../../utils/requestForm';
-import { formatCatalogServicePrice } from '../../utils/formatters';
+import { InstanceOptionCard } from './InstanceOptionCard';
+import { ServiceOptionCard } from './ServiceOptionCard';
 
 const inputClass =
-  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]';
+  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
 
 const timeInputClass =
-  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]';
+  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
 
-const labelClass = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500';
+const labelClass = 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500';
+
+const sectionClass = 'overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm';
 
 function SectionHeader({
   step,
@@ -45,13 +48,15 @@ function SectionHeader({
   description?: string;
 }) {
   return (
-    <div className="flex items-start gap-3">
-      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[var(--cloud-accent,#B91C1C)]/10 text-sm font-semibold text-[var(--cloud-accent,#B91C1C)]">
+    <div className="flex items-start gap-4 border-b border-gray-100 pb-5">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-sm font-bold text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
         {step}
       </span>
-      <div>
+      <div className="min-w-0">
         <h2 className="text-base font-semibold text-gray-900">{title}</h2>
-        {description ? <p className="mt-0.5 text-sm text-gray-500">{description}</p> : null}
+        {description ? (
+          <p className="mt-0.5 text-sm leading-relaxed text-gray-500">{description}</p>
+        ) : null}
       </div>
     </div>
   );
@@ -276,20 +281,26 @@ export function RequestForm({
   return (
     <div className="space-y-6">
       {validationErrors.length > 0 && (
-        <div className="rounded-xl border border-red-200 bg-red-50 p-4">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />
-            <ul className="space-y-1 text-sm text-red-700">
-              {validationErrors.map((error) => (
-                <li key={error}>{error}</li>
-              ))}
-            </ul>
+        <div className="rounded-xl border border-red-200 bg-red-50 p-4 shadow-sm">
+          <div className="flex items-start gap-3">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-100">
+              <AlertCircle className="h-4 w-4 text-red-600" />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-red-800">Please fix the following</p>
+              <ul className="mt-2 space-y-1 text-sm text-red-700">
+                {validationErrors.map((error) => (
+                  <li key={error}>• {error}</li>
+                ))}
+              </ul>
+            </div>
           </div>
         </div>
       )}
 
       {/* Step 1: Customer details */}
-      <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+      <section className={sectionClass}>
+        <div className="p-6">
         <SectionHeader
           step={1}
           title="Customer details"
@@ -325,14 +336,14 @@ export function RequestForm({
           <div className="sm:col-span-2">
             <span className={labelClass}>Resource group costing</span>
             <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[var(--cloud-accent,#B91C1C)] has-[:checked]:bg-[var(--cloud-accent-soft,#fef2f2)]/40">
+              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/60">
                 <input
                   type="radio"
                   name="costingMode"
                   value="shared"
                   checked={costingMode === 'shared'}
                   onChange={() => onCostingModeChange('shared')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
+                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
                 />
                 <span>
                   <span className="block text-sm font-medium text-gray-900">Shared resource group</span>
@@ -341,14 +352,14 @@ export function RequestForm({
                   </span>
                 </span>
               </label>
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[var(--cloud-accent,#B91C1C)] has-[:checked]:bg-[var(--cloud-accent-soft,#fef2f2)]/40">
+              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/60">
                 <input
                   type="radio"
                   name="costingMode"
                   value="per_user"
                   checked={costingMode === 'per_user'}
                   onChange={() => onCostingModeChange('per_user')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
+                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
                 />
                 <span>
                   <span className="block text-sm font-medium text-gray-900">Per-user resource groups</span>
@@ -384,10 +395,12 @@ export function RequestForm({
             />
           </div>
         </div>
+        </div>
       </section>
 
       {detailsComplete && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <SectionHeader
             step={2}
             title="Daily usage windows"
@@ -512,11 +525,13 @@ export function RequestForm({
               ))}
             </select>
           </div>
+          </div>
         </section>
       )}
 
       {detailsComplete && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <SectionHeader
             step={3}
             title="Resource cleanup"
@@ -646,11 +661,13 @@ export function RequestForm({
               </div>
             </div>
           )}
+          </div>
         </section>
       )}
 
       {detailsComplete && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <SectionHeader
             step={4}
             title="Per-user budget"
@@ -679,73 +696,54 @@ export function RequestForm({
               exceeds this amount, the user receives an email and their account is automatically suspended.
             </p>
           </div>
+          </div>
         </section>
       )}
 
       {/* Step 3: Service selection */}
       {showServices && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <SectionHeader
             step={5}
             title="Azure services"
             description="Choose one or more services to include in this lab."
           />
-          <div className="mt-5 space-y-5">
+          <div className="mt-5 space-y-6">
             {Array.from(servicesByCategory.entries()).map(([category, services]) => (
               <div key={category}>
-                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-400">
-                  {category}
-                </p>
-                <div className="grid gap-2 sm:grid-cols-2">
+                <div className="mb-3 flex items-center gap-2">
+                  <span className="h-px flex-1 bg-gray-100" />
+                  <p className="shrink-0 text-xs font-semibold uppercase tracking-wider text-gray-400">
+                    {category}
+                  </p>
+                  <span className="h-px flex-1 bg-gray-100" />
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
                   {services.map((service) => {
                     const serviceId = normalizeServiceId(service.id);
                     const checked = selectedServiceIds.includes(serviceId);
-                    const servicePrice = formatCatalogServicePrice(service);
                     return (
-                      <label
+                      <ServiceOptionCard
                         key={serviceId}
-                        className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition ${
-                          checked
-                            ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
-                            : 'border-gray-200 hover:border-gray-300'
-                        }`}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => onToggleService(serviceId)}
-                          className="mt-0.5 h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
-                        />
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-start justify-between gap-2">
-                            <span className="text-sm font-medium text-gray-900">
-                              {service.service_name || service.name}
-                            </span>
-                            {servicePrice && (
-                              <span className="shrink-0 text-xs font-medium text-gray-600">
-                                {servicePrice}
-                              </span>
-                            )}
-                          </span>
-                          {service.supports_instances && (
-                            <span className="mt-0.5 block text-xs text-gray-400">
-                              Instance selection required
-                            </span>
-                          )}
-                        </span>
-                      </label>
+                        service={service}
+                        checked={checked}
+                        onToggle={() => onToggleService(serviceId)}
+                      />
                     );
                   })}
                 </div>
               </div>
             ))}
           </div>
+          </div>
         </section>
       )}
 
       {/* Step 4: Instance sizes (from catalog) */}
       {showInstances && instanceServices.length > 0 && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <SectionHeader
             step={6}
             title="Instance sizes"
@@ -763,71 +761,45 @@ export function RequestForm({
               )?.instanceOption;
 
               return (
-                <div key={serviceId}>
-                  <p className="mb-2 text-sm font-medium text-gray-900">
-                    {service.service_name || service.name}
-                  </p>
+                <div key={serviceId} className="rounded-xl border border-gray-100 bg-gray-50/40 p-4">
+                  <div className="mb-3 flex items-center justify-between gap-2">
+                    <p className="text-sm font-semibold text-gray-900">
+                      {service.service_name || service.name}
+                    </p>
+                    {selected ? (
+                      <span className="rounded-full bg-[#B91C1C] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                        {selected}
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-400">Select one tier</span>
+                    )}
+                  </div>
                   {options.length === 0 ? (
                     <p className="text-sm text-gray-400">No instance options in the catalog.</p>
                   ) : (
-                    <div className="grid gap-2 sm:grid-cols-2">
-                      {options.map((instance) => {
-                        const price =
-                          instance.hourlyPrice ??
-                          instance.hourly_price ??
-                          (instance.dailyPrice ?? instance.daily_price) != null
-                            ? Number(instance.dailyPrice ?? instance.daily_price) / 24
-                            : null;
-                        const active = selected === instance.option_name;
-                        const guideText = formatInstanceGuide(instance.guide);
-                        const portalTips = getInstancePortalTips(instance.guide);
-                        return (
-                          <button
-                            key={instance.option_name}
-                            type="button"
-                            onClick={() => onSelectInstance(serviceId, instance.option_name)}
-                            className={`rounded-lg border p-3 text-left transition ${
-                              active
-                                ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]/50'
-                                : 'border-gray-200 hover:border-gray-300'
-                            }`}
-                          >
-                            <span className="block text-sm font-medium text-gray-900">
-                              {instance.option_name}
-                            </span>
-                            {guideText && (
-                              <span className="mt-0.5 block text-xs text-gray-500">{guideText}</span>
-                            )}
-                            {active && portalTips.length > 0 && (
-                              <ul className="mt-2 space-y-1 border-t border-red-100 pt-2 text-xs text-amber-800">
-                                {portalTips.map((tip) => (
-                                  <li key={tip} className="flex gap-1.5">
-                                    <span className="mt-1 h-1 w-1 shrink-0 rounded-full bg-amber-500" />
-                                    <span>{tip}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            )}
-                            {price != null && (
-                              <span className="mt-1 block text-xs text-gray-400">
-                                ${Number(price).toFixed(3)}/hr
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
+                    <div className="grid gap-3 lg:grid-cols-2">
+                      {options.map((instance) => (
+                        <InstanceOptionCard
+                          key={instance.option_name}
+                          instance={instance}
+                          selected={selected === instance.option_name}
+                          onSelect={() => onSelectInstance(serviceId, instance.option_name)}
+                        />
+                      ))}
                     </div>
                   )}
                 </div>
               );
             })}
           </div>
+          </div>
         </section>
       )}
 
       {/* Step 5: Permissions (auto + manual) */}
       {showPermissions && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <SectionHeader
             step={7}
             title="Permissions"
@@ -851,7 +823,7 @@ export function RequestForm({
                       {entry.roles.map((role) => (
                         <span
                           key={role}
-                          className="rounded-full border border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] px-3 py-1 text-xs font-medium text-[var(--cloud-accent,#B91C1C)]"
+                          className="rounded-full border border-[#B91C1C]/30 bg-red-50 px-3 py-1 text-xs font-medium text-[#B91C1C]"
                         >
                           {role}
                           {isAutomated ? ' (auto)' : ''}
@@ -901,8 +873,8 @@ export function RequestForm({
                               }}
                               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                                 active
-                                  ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]'
-                                  : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                                  ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                                  : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
                               }`}
                             >
                               {role}
@@ -915,29 +887,41 @@ export function RequestForm({
                 })}
             </div>
           )}
+          </div>
         </section>
       )}
 
       {/* Step 6: Region (derived from services + instances) */}
       {showLocations && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <SectionHeader
             step={8}
             title="Deployment region"
-            description="Use this exact region when creating resources in Azure Portal."
+            description="Only regions where every selected service instance can actually be deployed are listed."
           />
           {locationsError && (
             <p className="mt-3 text-sm text-red-600">{locationsError}</p>
           )}
+          {!locationsLoading && !locationsError && locations.length === 0 ? (
+            <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+              No Azure regions support the selected instance option(s). Choose a different tier
+              or service configuration.
+            </div>
+          ) : (
           <div className="relative mt-5">
             <select
               className={`${inputClass} appearance-none pr-10`}
               value={location}
               onChange={(event) => onLocationChange(event.target.value)}
-              disabled={locationsLoading}
+              disabled={locationsLoading || locations.length === 0}
             >
               <option value="">
-                {locationsLoading ? 'Loading regions…' : 'Select a region'}
+                {locationsLoading
+                  ? 'Loading regions…'
+                  : locations.length === 0
+                    ? 'No regions available'
+                    : 'Select a region'}
               </option>
               {locations.map((entry) => (
                 <option key={entry.arm_region_name} value={entry.arm_region_name}>
@@ -947,6 +931,7 @@ export function RequestForm({
             </select>
             <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           </div>
+          )}
           {location && selectedLocationEntry && selectedVmPortalTips.length > 0 && (
             <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-4">
               <div className="flex items-start gap-2">
@@ -965,20 +950,29 @@ export function RequestForm({
               </div>
             </div>
           )}
+          </div>
         </section>
       )}
 
       {/* Admin access request */}
       {detailsComplete && (
-        <section className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+        <section className={sectionClass}>
+          <div className="p-6">
           <button
             type="button"
             onClick={() => onAdminAccessOpenChange(!adminAccessOpen)}
             className="flex w-full items-center justify-between gap-2 text-left"
           >
-            <div className="flex items-center gap-2">
-              <Shield className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
-              <span className="text-sm font-semibold text-gray-900">Request elevated access</span>
+            <div className="flex items-center gap-3">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
+                <Shield className="h-4 w-4" />
+              </div>
+              <div>
+                <span className="block text-sm font-semibold text-gray-900">
+                  Request elevated access
+                </span>
+                <span className="text-xs text-gray-500">Optional admin role request</span>
+              </div>
             </div>
             <ChevronDown
               className={`h-4 w-4 text-gray-400 transition ${adminAccessOpen ? 'rotate-180' : ''}`}
@@ -1026,7 +1020,7 @@ export function RequestForm({
                 type="button"
                 onClick={onSubmitAdminAccess}
                 disabled={adminAccessSubmitting}
-                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
+                className={RACKO_BTN_SECONDARY}
               >
                 {adminAccessSubmitting ? 'Submitting…' : 'Submit access request'}
               </button>
@@ -1035,6 +1029,7 @@ export function RequestForm({
               )}
             </div>
           )}
+          </div>
         </section>
       )}
     </div>

@@ -1,12 +1,14 @@
 import { fetchFinalSpend } from './costTrackingService.js';
 import Request from '../models/Request.js';
-import { cleanupAllUsers } from './resourceCleanupService.js';
+import { cleanupAllUsers, pauseAllUsers } from './resourceCleanupService.js';
 import { rollbackLabRoles } from '../provisioners/aws/iamRoleProvisioner.js';
 import { deprovisionIdentityUsers } from '../provisioners/aws/identityProvisioner.js';
 import { rollbackPermissionSets } from '../provisioners/aws/permissionSetProvisioner.js';
 import { rollbackAssignments } from '../provisioners/aws/accountAssignmentProvisioner.js';
 import { rollbackScpResources } from '../provisioners/aws/scpProvisioner.js';
 import { countCleanupDeleted } from '../utils/cleanupMetrics.js';
+import CleanupLog from '../models/CleanupLog.js';
+import HistorySnapshot from '../models/HistorySnapshot.js';
 
 export async function runExpiryCleanupForRequest(request) {
   const requestId = String(request._id);
@@ -78,6 +80,23 @@ export async function runExpiryCleanupForRequest(request) {
       },
     },
   });
+  await CleanupLog.create({
+    requestId,
+    action: 'delete',
+    triggeredBy: 'expiry',
+    status: 'success',
+    totalDeleted: deletedCount,
+    results: resourceResults,
+    ranAt: now,
+    completedAt: now,
+  });
+  await HistorySnapshot.create({
+    requestId,
+    event: 'request_expired',
+    actor: 'expiry_scheduler',
+    summary: `Lab expired and ${deletedCount} resource(s) were removed`,
+    snapshot: { deletedCount, rolesRemoved, usersRemoved },
+  });
 
   console.log(
     `[labExpiryCleanup] Completed for request ${requestId}: ${deletedCount} resources, ${rolesRemoved} roles, ${usersRemoved} users`
@@ -97,7 +116,10 @@ export async function runExpiryCleanupForRequest(request) {
 
 export async function runScheduledResourceCleanupForRequest(request) {
   const requestId = String(request._id);
-  const results = await cleanupAllUsers(requestId);
+  const action = request.resourceCleanupAction || 'delete';
+  const results = action === 'pause'
+    ? await pauseAllUsers(requestId, { respectUserSettings: true })
+    : await cleanupAllUsers(requestId, { respectUserSettings: true });
   const deletedCount = countCleanupDeleted(results);
 
   const intervalHours =
@@ -112,9 +134,26 @@ export async function runScheduledResourceCleanupForRequest(request) {
     $push: {
       cleanupLogs: {
         ranAt: now,
-        message: `Scheduled resource cleanup removed ${deletedCount} resource(s)`,
+        message: `Scheduled resource ${action} applied ${deletedCount} action(s)`,
       },
     },
+  });
+  await CleanupLog.create({
+    requestId,
+    action,
+    triggeredBy: 'scheduler',
+    status: 'success',
+    totalDeleted: deletedCount,
+    results,
+    ranAt: now,
+    completedAt: now,
+  });
+  await HistorySnapshot.create({
+    requestId,
+    event: 'scheduled_cleanup',
+    actor: 'resource_cleanup_scheduler',
+    summary: `Scheduled ${action} applied ${deletedCount} resource action(s)`,
+    snapshot: { action, deletedCount, results },
   });
 
   return {
@@ -122,6 +161,7 @@ export async function runScheduledResourceCleanupForRequest(request) {
     customerEmail: request.customerEmail,
     requestLabel: request.requestName?.trim() || `Request #${requestId.slice(-8)}`,
     deletedCount,
+    action,
     cleanedAt: now,
     nextCleanupAt: nextRun,
     intervalHours,

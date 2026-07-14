@@ -15,6 +15,9 @@ import {
   INLINE_IAM_POLICIES,
   INLINE_IAM_POLICY_ALIASES,
   SERVICE_IAM_POLICIES,
+  buildPermissionPolicy,
+  buildRegionRestrictionStatements,
+  REGION_EXEMPT_NOT_ACTIONS,
 } from '../src/config/iamPolicies.js';
 
 describe('scpPolicies', () => {
@@ -130,6 +133,69 @@ describe('iamPolicies', () => {
       INLINE_IAM_POLICIES[INLINE_IAM_POLICY_ALIASES.AmazonEKSClusterPolicy],
       INLINE_IAM_POLICIES.EKSFullAccess
     );
+  });
+
+  it('denies regional resource creates outside the request region', () => {
+    const doc = buildPermissionPolicy({
+      _id: '6a546e0278b85a6c3b7c9433',
+      region: 'eu-west-3',
+      permissions: [{ serviceName: 'S3', policies: ['S3FullAccess'] }],
+    });
+
+    const regionDeny = doc.Statement.find((entry) => entry.Sid === 'DenyOutsideLabRegion');
+    assert.ok(regionDeny);
+    assert.equal(regionDeny.Effect, 'Deny');
+    assert.deepEqual(regionDeny.NotAction, REGION_EXEMPT_NOT_ACTIONS);
+    assert.equal(regionDeny.Condition.StringNotEquals['aws:RequestedRegion'], 'eu-west-3');
+
+    const s3RegionDeny = doc.Statement.find((entry) => entry.Sid === 'DenyS3CreateOutsideLabRegion');
+    assert.ok(s3RegionDeny);
+    assert.equal(s3RegionDeny.Action, 's3:CreateBucket');
+    assert.equal(s3RegionDeny.Condition.StringNotLike['s3:LocationConstraint'], 'eu-west-3');
+  });
+
+  it('builds broad regional restrictions for every catalog service permission', () => {
+    for (const serviceName of Object.keys(SERVICE_IAM_POLICIES)) {
+      const doc = buildPermissionPolicy({
+        _id: 'abc123def456',
+        region: 'ap-south-1',
+        permissions: [{ serviceName, policies: [DEFAULT_IAM_POLICIES[serviceName]] }],
+      });
+
+      assert.equal(
+        doc.Statement.some((entry) => entry.Sid === 'DenyOutsideLabRegion'),
+        true,
+        `${serviceName} should include broad regional deny`
+      );
+      assert.equal(
+        doc.Statement.some((entry) => entry.Sid === 'DenyS3CreateOutsideLabRegion'),
+        true,
+        `${serviceName} should include S3 create regional deny`
+      );
+    }
+  });
+
+  it('allows deleting racko-tagged S3 buckets outside the lab region', () => {
+    const doc = buildPermissionPolicy({
+      _id: '6a54796b78b85a6c3b7c9b4c',
+      region: 'eu-west-3',
+      permissions: [{ serviceName: 'S3', policies: ['S3FullAccess'] }],
+    });
+
+    const cleanupDeny = doc.Statement.find(
+      (entry) => entry.Sid === 'DenyS3TaggedCleanupOutsideLabRegion'
+    );
+    assert.ok(cleanupDeny);
+    assert.ok(cleanupDeny.Action.includes('s3:DeleteBucket'));
+    assert.equal(
+      cleanupDeny.Condition.StringNotEqualsIfExists['aws:ResourceTag/racko:request'],
+      '6a54796b78b85a6c3b7c9b4c'
+    );
+  });
+
+  it('returns no regional restrictions when request region is missing', () => {
+    assert.deepEqual(buildRegionRestrictionStatements(''), []);
+    assert.deepEqual(buildRegionRestrictionStatements(null), []);
   });
 });
 

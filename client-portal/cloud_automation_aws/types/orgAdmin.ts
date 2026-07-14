@@ -23,6 +23,7 @@ export interface AwsOrgAdminRequestSummary {
   userCount: number;
   createdAt: string;
   selectedServices: string[];
+  requestName?: string | null;
 }
 
 export interface AwsOrgAdminUser {
@@ -36,6 +37,10 @@ export interface AwsOrgAdminUser {
   currentSpend: number;
   spendByService: { serviceName: string; spendUsd: number }[];
   lastCleanupAt?: string | null;
+  cleanupDisabled?: boolean;
+  cleanupIntervalOverride?: number | null;
+  cleanupEnabled?: boolean;
+  cleanupIntervalHours?: number | null;
   cleanupLogs?: {
     cleanedAt?: string;
     ranAt?: string;
@@ -79,6 +84,7 @@ export interface AwsOrgAdminLiveSummary {
 
 export interface AwsOrgAdminRequestDetail {
   requestId: string;
+  requestName?: string | null;
   customerEmail: string;
   region: string;
   status: AwsRequestStatus | string;
@@ -111,6 +117,10 @@ export interface AwsOrgAdminRequestDetail {
   usageWindowSummary?: string;
   todayWindow?: { start: string; end: string } | null;
   liveSummary?: AwsOrgAdminLiveSummary | null;
+  sharedCost?: AwsOrgAdminSharedCost | null;
+  resourceCleanupAction?: 'delete' | 'pause';
+  resourceCleanupNextRunAt?: string | null;
+  resourceCleanupLastRanAt?: string | null;
 }
 
 export interface AwsIamPolicyGroup {
@@ -168,4 +178,98 @@ export interface AwsOrgAdminMonitoringResponse {
   usageSessions: AwsOrgAdminUsageSession[];
   enforcementLogs: unknown[];
   auditLogs: unknown[];
+}
+
+export interface AwsOrgAdminAccessRequest {
+  id: string;
+  requestId: string | null;
+  customerEmail: string;
+  serviceName: string;
+  requestedAccess: string;
+  accountCount?: number | null;
+  status: string;
+  reviewNotes?: string | null;
+  createdAt: string;
+  region?: string | null;
+}
+
+export interface AwsOrgAdminSharedCost {
+  requestId: string;
+  costingMode?: AwsCostingMode;
+  monthToDateCost: number;
+  lifetimeCost?: number;
+  currency?: string;
+  queriedAt?: string | null;
+  totalMergedMinutesMtd?: number;
+  users?: {
+    userIndex: number;
+    username: string;
+    mergedMinutesMtd: number;
+    sharePercent: number;
+    monthToDateCost: number;
+    attributionMethod: string;
+  }[];
+  dataFreshnessNote?: string;
+}
+
+export interface AwsOrgAdminHistoryEntry {
+  id: string | number;
+  type: string;
+  at: string;
+  userIndex?: number | null;
+  username?: string | null;
+  title: string;
+  subtitle?: string | null;
+  costUsd?: number;
+  resourcesDeleted?: number;
+  status?: string;
+}
+
+export interface AwsOrgAdminLabHistory {
+  requestId: string;
+  entries: AwsOrgAdminHistoryEntry[];
+}
+
+export interface AwsCustomIamPolicy {
+  id: string;
+  name: string;
+  description?: string | null;
+  document: Record<string, unknown>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AwsCustomService {
+  id: string;
+  name: string;
+  description?: string | null;
+  category: string;
+  pricePerUser: number;
+  active?: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface AwsCustomIamPolicyAssignment {
+  _id?: string;
+  id?: string;
+  requestId: string;
+  userIndex: number;
+  policyId?: string | null;
+  name: string;
+  active: boolean;
+  createdAt?: string;
+}
+
+export interface AwsOrgAdminCleanupLog {
+  _id?: string;
+  id?: string;
+  requestId: string;
+  userIndex?: number | null;
+  ranAt: string;
+  triggeredBy?: string;
+  totalDeleted?: number;
+  status: string;
+  error?: string | null;
+  action?: string;
 }

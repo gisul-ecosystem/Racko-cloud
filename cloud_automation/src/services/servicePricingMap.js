@@ -48,7 +48,15 @@ const SERVICE_PRICING_MAP = {
   'log analytics': 'Log Analytics',
   'azure container registry': 'Container Registry',
   'container registry': 'Container Registry',
-  acr: 'Container Registry'
+  acr: 'Container Registry',
+  'azure cdn': 'Content Delivery Network',
+  cdn: 'Content Delivery Network',
+  'azure load balancer': 'Load Balancer',
+  'load balancer': 'Load Balancer',
+  'azure application gateway': 'Application Gateway',
+  'application gateway': 'Application Gateway',
+  'azure bot service': 'Bot Service',
+  'bot service': 'Bot Service'
 };
 
 const normalizeServiceKey = (value) => {

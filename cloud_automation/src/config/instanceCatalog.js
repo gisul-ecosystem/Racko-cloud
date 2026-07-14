@@ -7,6 +7,19 @@ const normalizeKey = (value) =>
     .replace(/\s+/g, ' ')
     .trim();
 
+const vmPortalTips = (sizeName, alternateSizes = []) => {
+  const sizes = [sizeName, ...alternateSizes]
+    .filter(Boolean)
+    .map((size) => `Standard_${size}`)
+    .join(', ');
+
+  return [
+    'In Azure Portal → Create a virtual machine, set Region to your lab region (same as selected in step 8). The portal often defaults to East US.',
+    'Set Availability options to "No infrastructure redundancy required". Availability zones may hide some VM sizes.',
+    `Choose size ${sizes} — allowed for your lab provisioning policy.`,
+  ];
+};
+
 const VM_GUIDES = {
   B1s: {
     summary: 'Entry-level burstable VM for light workloads.',
@@ -15,11 +28,7 @@ const VM_GUIDES = {
     ram: '1 GB',
     storage: 'Temp SSD',
     tier: 'Burstable',
-    portalTips: [
-      'In Azure Portal → Create a virtual machine, set Region to your lab region (same as selected above — e.g. Denmark East / denmarkeast). The portal often defaults to East US.',
-      'Set Availability options to "No infrastructure redundancy required". Availability zones hide B-series sizes.',
-      'Choose size Standard_B1s, Standard_B1ms, or Standard_B1ls — these are the allowed B1 sizes for your lab policy.'
-    ]
+    portalTips: vmPortalTips('B1s', ['B1ms', 'B1ls'])
   },
   B2s: {
     summary: 'Balanced burstable VM for everyday apps.',
@@ -27,7 +36,8 @@ const VM_GUIDES = {
     vcpu: '2',
     ram: '4 GB',
     storage: 'Temp SSD',
-    tier: 'Burstable'
+    tier: 'Burstable',
+    portalTips: vmPortalTips('B2s')
   },
   D2s_v5: {
     summary: 'General-purpose compute with balanced CPU and memory.',
@@ -35,7 +45,8 @@ const VM_GUIDES = {
     vcpu: '2',
     ram: '8 GB',
     storage: 'Temp SSD',
-    tier: 'General purpose'
+    tier: 'General purpose',
+    portalTips: vmPortalTips('D2s_v5')
   },
   D4s_v5: {
     summary: 'Higher-capacity general-purpose VM.',
@@ -43,7 +54,8 @@ const VM_GUIDES = {
     vcpu: '4',
     ram: '16 GB',
     storage: 'Temp SSD',
-    tier: 'General purpose'
+    tier: 'General purpose',
+    portalTips: vmPortalTips('D4s_v5')
   },
   D8s_v5: {
     summary: 'High-performance general-purpose VM.',
@@ -51,7 +63,8 @@ const VM_GUIDES = {
     vcpu: '8',
     ram: '32 GB',
     storage: 'Temp SSD',
-    tier: 'General purpose'
+    tier: 'General purpose',
+    portalTips: vmPortalTips('D8s_v5')
   },
   E2s_v5: {
     summary: 'Memory-optimized VM for in-memory workloads.',
@@ -59,7 +72,8 @@ const VM_GUIDES = {
     vcpu: '2',
     ram: '16 GB',
     storage: 'Temp SSD',
-    tier: 'Memory optimized'
+    tier: 'Memory optimized',
+    portalTips: vmPortalTips('E2s_v5')
   },
   E4s_v5: {
     summary: 'Mid-tier memory-optimized VM.',
@@ -67,7 +81,8 @@ const VM_GUIDES = {
     vcpu: '4',
     ram: '32 GB',
     storage: 'Temp SSD',
-    tier: 'Memory optimized'
+    tier: 'Memory optimized',
+    portalTips: vmPortalTips('E4s_v5')
   },
   E8s_v5: {
     summary: 'Large memory-optimized VM.',
@@ -75,7 +90,8 @@ const VM_GUIDES = {
     vcpu: '8',
     ram: '64 GB',
     storage: 'Temp SSD',
-    tier: 'Memory optimized'
+    tier: 'Memory optimized',
+    portalTips: vmPortalTips('E8s_v5')
   }
 };
 
@@ -650,14 +666,67 @@ const resolveServiceGuideKey = (serviceName) => {
   return null;
 };
 
-const buildGuidePayload = (rawGuide, optionName) => {
+const buildDefaultPortalTips = (serviceKey, optionName) => {
+  if (!serviceKey || !optionName) return [];
+
+  const regionTip =
+    'Use the same Azure region as selected in step 8 (Deployment region).';
+
+  if (serviceKey === 'virtual machines') {
+    return vmPortalTips(optionName);
+  }
+
+  const serviceTips = {
+    'kubernetes service': [
+      `In Azure Portal → Create Kubernetes cluster, configure node pools for "${optionName}".`,
+      regionTip,
+      'Match node VM size to the tier selected in this request.',
+    ],
+    'app service': [
+      `In Azure Portal → Create App Service, select plan "${optionName}".`,
+      regionTip,
+      'Create the app in the resource group provisioned for this lab.',
+    ],
+    functions: [
+      `In Azure Portal → Create Function App, choose hosting plan "${optionName}".`,
+      regionTip,
+    ],
+    'sql database': [
+      `In Azure Portal → Create SQL database, select tier "${optionName}".`,
+      regionTip,
+      'Use the SQL server created in your lab resource group.',
+    ],
+    'cosmos db': [
+      `In Azure Portal → Create Azure Cosmos DB, select capacity mode "${optionName}".`,
+      regionTip,
+    ],
+    'blob storage': [
+      `In Azure Portal → Create storage account, choose access tier "${optionName}".`,
+      regionTip,
+    ],
+  };
+
+  if (serviceTips[serviceKey]) {
+    return serviceTips[serviceKey];
+  }
+
+  const label = serviceKey.replace(/\b\w/g, (char) => char.toUpperCase());
+  return [
+    `In Azure Portal, provision ${label} using tier "${optionName}".`,
+    regionTip,
+    'Follow your lab policy for roles and resource group assignments.',
+  ];
+};
+
+const buildGuidePayload = (rawGuide, optionName, serviceKey = null) => {
   if (!rawGuide) {
     return {
       optionName,
       summary: `Azure option: ${optionName}`,
       description: 'Select this tier or size for the chosen service.',
       specs: [],
-      tier: optionName
+      tier: optionName,
+      portalTips: buildDefaultPortalTips(serviceKey, optionName),
     };
   }
 
@@ -676,13 +745,17 @@ const buildGuidePayload = (rawGuide, optionName) => {
     specs.push({ label: 'Performance', value: rawGuide.performance });
   }
 
+  const portalTips = Array.isArray(rawGuide.portalTips) && rawGuide.portalTips.length > 0
+    ? rawGuide.portalTips
+    : buildDefaultPortalTips(serviceKey, optionName);
+
   return {
     optionName,
     summary: rawGuide.summary || `Azure option: ${optionName}`,
     description: rawGuide.description || '',
     tier: rawGuide.tier || optionName,
-    portalTips: Array.isArray(rawGuide.portalTips) ? rawGuide.portalTips : [],
-    specs
+    portalTips,
+    specs,
   };
 };
 
@@ -695,15 +768,15 @@ const resolveInstanceGuide = (serviceName, optionName) => {
   const serviceKey = resolveServiceGuideKey(serviceName);
 
   if (serviceKey === 'virtual machines' && VM_GUIDES[option]) {
-    return buildGuidePayload(VM_GUIDES[option], option);
+    return buildGuidePayload(VM_GUIDES[option], option, serviceKey);
   }
 
   const serviceGuides = serviceKey ? SERVICE_GUIDES[serviceKey] : null;
   if (serviceGuides?.[option]) {
-    return buildGuidePayload(serviceGuides[option], option);
+    return buildGuidePayload(serviceGuides[option], option, serviceKey);
   }
 
-  return buildGuidePayload(null, option);
+  return buildGuidePayload(null, option, serviceKey);
 };
 
 module.exports = {

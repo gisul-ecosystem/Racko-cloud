@@ -30,7 +30,7 @@ async function processResourceCleanup(request) {
 
   const result = await runScheduledResourceCleanupForRequest(request);
 
-  if (result.customerEmail) {
+  if (result.customerEmail && result.action !== 'pause') {
     try {
       await sendResourceCleanupEmail({
         to: result.customerEmail,
@@ -56,8 +56,8 @@ async function processResourceCleanup(request) {
 
   await createNotification({
     type: 'cleanup_ran',
-    title: 'AWS resource cleanup completed',
-    message: `Lab cleanup ran for ${buildRequestLabel(request)} — ${result.deletedCount} resource(s) removed`,
+    title: result.action === 'pause' ? 'AWS resource pause completed' : 'AWS resource cleanup completed',
+    message: `Lab ${result.action || 'cleanup'} ran for ${buildRequestLabel(request)} — ${result.deletedCount} resource action(s) applied`,
     requestId,
     metadata: { deletedCount: result.deletedCount },
   });

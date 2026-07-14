@@ -15,12 +15,34 @@ import {
 import {
   expireMagicLinkSessionsForUser,
   startDirectIamSession,
+  expireTimedOutSessionLogsForRequest,
+  closeOrphanOpenUsageSessions,
+  endIdleSessionLogsForRequest,
 } from './sessionTrackingService.js';
 
 const cloudTrailCredentials = {
   accessKeyId: process.env.AWS_ACCESS_KEY_ID,
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
 };
+
+export function getIdleMinutes() {
+  return Number(process.env.AWS_SESSION_IDLE_MINUTES || 5);
+}
+
+export function getSessionStartLookbackMinutes() {
+  const idleMinutes = getIdleMinutes();
+  const configured = Number(process.env.AWS_SESSION_START_LOOKBACK_MINUTES);
+  if (Number.isFinite(configured) && configured > 0) {
+    return Math.min(configured, idleMinutes);
+  }
+  return Math.min(idleMinutes, 3);
+}
+
+export function isRecentActivityEvent(eventTime, now = new Date()) {
+  const eventAt = eventTime instanceof Date ? eventTime : new Date(eventTime);
+  const cutoffMs = getSessionStartLookbackMinutes() * 60 * 1000;
+  return eventAt.getTime() >= now.getTime() - cutoffMs;
+}
 
 function cloudTrailClientForRegion(region) {
   return new CloudTrailClient({
@@ -341,6 +363,10 @@ async function startSessionsFromEvents(events, userLookup, { dedupeEvents = fals
     if (!request) continue;
 
     const activityTime = new Date(event.eventTime || Date.now());
+    if (!isRecentActivityEvent(activityTime)) {
+      continue;
+    }
+
     const started = await ensureUserSessionStarted(request, userInfo, activityTime, {
       source: event.eventName === 'ConsoleLogin' ? 'console_login' : 'api_activity',
     });
@@ -357,6 +383,54 @@ async function startSessionsFromEvents(events, userLookup, { dedupeEvents = fals
   return sessionsCreated;
 }
 
+function buildActiveUserKeysFromEvents(events, userLookup) {
+  const activeUsers = new Set();
+
+  for (const event of events) {
+    const userInfo = resolveUserFromEvent(event, userLookup);
+    if (userInfo) {
+      activeUsers.add(`${userInfo.requestId}:${userInfo.userIndex}`);
+    }
+  }
+
+  return activeUsers;
+}
+
+export async function reconcileIdleSessionsForRequest(requestId) {
+  const idleMinutes = getIdleMinutes();
+  const now = new Date();
+
+  const request = await Request.findById(requestId).lean();
+  if (!request || request.status !== 'Completed') {
+    return { ended: 0, closedOrphans: 0, expired: 0 };
+  }
+
+  const expired = await expireTimedOutSessionLogsForRequest(requestId, now);
+
+  if (idleMinutes <= 0) {
+    return { ended: 0, closedOrphans: 0, expired };
+  }
+
+  const userLookup = buildConsoleUserLookupMap([request]);
+  const regions = resolveCloudTrailRegions([request]);
+  const since = new Date(now.getTime() - idleMinutes * 60 * 1000);
+  const recentEvents = await lookupRecentUserEvents(regions, since);
+  const activeUserKeys = buildActiveUserKeysFromEvents(recentEvents, userLookup);
+
+  const ended = await endIdleSessionLogsForRequest(requestId, {
+    activeUserKeys,
+    idleMinutes,
+    now,
+  });
+  const closedOrphans = await closeOrphanOpenUsageSessions(requestId, {
+    activeUserKeys,
+    idleMinutes,
+    now,
+  });
+
+  return { ended, closedOrphans, expired };
+}
+
 export async function syncRecentActivityForRequest(requestId) {
   const request = await Request.findById(requestId).lean();
   if (!request || request.status !== 'Completed') {
@@ -368,8 +442,9 @@ export async function syncRecentActivityForRequest(requestId) {
     return { synced: 0 };
   }
 
-  const lookbackMinutes = Number(process.env.AWS_ACTIVITY_SYNC_LOOKBACK_MINUTES || 20);
-  const since = new Date(Date.now() - lookbackMinutes * 60 * 1000);
+  const lookbackMinutes = getSessionStartLookbackMinutes();
+  const now = new Date();
+  const since = new Date(now.getTime() - lookbackMinutes * 60 * 1000);
   const regions = resolveCloudTrailRegions([request]);
   let synced = 0;
 
@@ -386,6 +461,7 @@ export async function syncRecentActivityForRequest(requestId) {
       for (const event of events) {
         if (!isTrackableActivityEvent(event)) continue;
         const eventTime = new Date(event.eventTime || Date.now());
+        if (!isRecentActivityEvent(eventTime, now)) continue;
         if (!latestEvent || eventTime > new Date(latestEvent.eventTime || 0)) {
           latestEvent = event;
         }
@@ -423,8 +499,9 @@ export async function monitorAwsUserActivity() {
     return { checked: 0, sessionsCreated: 0 };
   }
 
-  const lookbackMinutes = Number(process.env.AWS_ACTIVITY_MONITOR_LOOKBACK_MINUTES || 10);
-  const since = new Date(Date.now() - lookbackMinutes * 60 * 1000);
+  const lookbackMinutes = getSessionStartLookbackMinutes();
+  const now = new Date();
+  const since = new Date(now.getTime() - lookbackMinutes * 60 * 1000);
   const regions = resolveCloudTrailRegions(requests);
   const recentEvents = await lookupRecentUserEvents(regions, since);
   const sessionsFromEvents = await startSessionsFromEvents(recentEvents, userLookup);
@@ -443,6 +520,7 @@ export async function monitorAwsUserActivity() {
       for (const event of events) {
         if (!isTrackableActivityEvent(event)) continue;
         const eventTime = new Date(event.eventTime || Date.now());
+        if (!isRecentActivityEvent(eventTime, now)) continue;
         if (!latestEvent || eventTime > new Date(latestEvent.eventTime || 0)) {
           latestEvent = event;
         }
@@ -510,17 +588,32 @@ export async function monitorAwsConsoleLogins() {
 }
 
 export async function monitorIdleUsageSessions() {
-  const idleMinutes = Number(process.env.AWS_SESSION_IDLE_MINUTES || 5);
+  const idleMinutes = getIdleMinutes();
   if (idleMinutes <= 0) {
     return { ended: 0 };
   }
 
-  const activeSessionLogs = await SessionLog.find({ status: 'active' });
-  if (!activeSessionLogs.length) {
+  const [activeSessionLogs, requestsWithOpenUsage] = await Promise.all([
+    SessionLog.find({ status: 'active' }),
+    Request.find({
+      status: 'Completed',
+      usageSessions: { $elemMatch: { logoutAt: null } },
+    })
+      .select('_id')
+      .lean(),
+  ]);
+
+  const requestIds = [
+    ...new Set([
+      ...activeSessionLogs.map((session) => String(session.requestId)),
+      ...requestsWithOpenUsage.map((request) => String(request._id)),
+    ]),
+  ];
+
+  if (!requestIds.length) {
     return { ended: 0 };
   }
 
-  const requestIds = [...new Set(activeSessionLogs.map((session) => String(session.requestId)))];
   const requests = await Request.find({
     _id: { $in: requestIds },
     status: 'Completed',
@@ -532,39 +625,30 @@ export async function monitorIdleUsageSessions() {
 
   const userLookup = buildConsoleUserLookupMap(requests);
   const regions = resolveCloudTrailRegions(requests);
-  const since = new Date(Date.now() - idleMinutes * 60 * 1000);
+  const now = new Date();
+  const since = new Date(now.getTime() - idleMinutes * 60 * 1000);
   const recentEvents = await lookupRecentUserEvents(regions, since);
-  const activeUsers = new Set();
-
-  for (const event of recentEvents) {
-    const userInfo = resolveUserFromEvent(event, userLookup);
-    if (userInfo) {
-      activeUsers.add(`${userInfo.requestId}:${userInfo.userIndex}`);
-    }
-  }
+  const activeUserKeys = buildActiveUserKeysFromEvents(recentEvents, userLookup);
 
   let ended = 0;
-  const now = new Date();
+  let closedOrphans = 0;
 
-  for (const sessionLog of activeSessionLogs) {
-    const request = requests.find((entry) => String(entry._id) === String(sessionLog.requestId));
-    if (!request) continue;
-
-    const sessionAgeMinutes =
-      (now.getTime() - new Date(sessionLog.startedAt).getTime()) / 60000;
-    if (sessionAgeMinutes < idleMinutes) continue;
-
-    const activityKey = `${String(sessionLog.requestId)}:${sessionLog.userIndex}`;
-    if (activeUsers.has(activityKey)) continue;
-
-    await expireMagicLinkSessionsForUser(sessionLog.requestId, sessionLog.userIndex, now);
-    ended += 1;
-    console.log(
-      `[ConsoleLoginMonitor] Ended idle session for ${sessionLog.username} after ${Math.round(sessionAgeMinutes)} min`
-    );
+  for (const request of requests) {
+    const requestId = String(request._id);
+    await expireTimedOutSessionLogsForRequest(requestId, now);
+    ended += await endIdleSessionLogsForRequest(requestId, {
+      activeUserKeys,
+      idleMinutes,
+      now,
+    });
+    closedOrphans += await closeOrphanOpenUsageSessions(requestId, {
+      activeUserKeys,
+      idleMinutes,
+      now,
+    });
   }
 
-  return { ended };
+  return { ended, closedOrphans };
 }
 
 export async function monitorStaleSessions() {
