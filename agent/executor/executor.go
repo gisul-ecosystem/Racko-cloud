@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -67,11 +68,10 @@ func (e *Executor) Handle(job poller.Job) {
 		log.Printf("[executor] Job %s acquired install slot after %s (package=%s)", job.ID, waitElapsed, pkg.Name)
 		log.Printf("[executor] Installing %s v%s via %s (job=%s)", pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
 		installStart := time.Now()
-		logs, err := installer.Install(*pkg)
+		logs, err := installWithRetry(*pkg)
 		installElapsed := time.Since(installStart).Round(time.Millisecond)
 		installMu.Unlock()
 		log.Printf("[executor] installer.Install returned for %s — elapsed=%s err=%v", pkg.Name, installElapsed, err)
-
 		combinedLogs += truncateLogs(logs, 50*1024) // cap at 50KB per package
 
 		if err != nil {
@@ -134,4 +134,71 @@ func truncateLogs(logs string, maxBytes int) string {
 	}
 	truncated := logs[len(logs)-maxBytes:]
 	return "[...truncated, showing last " + fmt.Sprintf("%d", maxBytes/1024) + "KB...]\n" + truncated
+}
+
+// installWithRetry runs installer.Install with exponential backoff retry for transient errors.
+// Retries up to 3 times with delays of 10s, 30s, 60s.
+// Permanent failures (checksum mismatch, package not found, etc.) are not retried.
+func installWithRetry(pkg installer.SoftwarePackage) (string, error) {
+	const maxAttempts = 3
+	delays := []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}
+
+	var lastLogs string
+	var lastErr error
+
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		logs, err := installer.Install(pkg)
+		lastLogs = logs
+		lastErr = err
+
+		if err == nil {
+			return logs, nil
+		}
+
+		// Check if this is a permanent failure — don't retry these
+		if isPermanentFailure(logs + err.Error()) {
+			log.Printf("[executor] Permanent failure for %s (attempt %d) — not retrying: %v", pkg.Name, attempt, err)
+			return logs, err
+		}
+
+		if attempt < maxAttempts {
+			delay := delays[attempt-1]
+			log.Printf("[executor] Transient failure for %s (attempt %d/%d) — retrying in %s: %v",
+				pkg.Name, attempt, maxAttempts, delay, err)
+			time.Sleep(delay)
+		} else {
+			log.Printf("[executor] All %d attempts failed for %s: %v", maxAttempts, pkg.Name, err)
+		}
+	}
+
+	return lastLogs, lastErr
+}
+
+// isPermanentFailure returns true when the output indicates a failure that
+// retrying cannot fix — broken package, wrong name, checksum mismatch, etc.
+func isPermanentFailure(output string) bool {
+	lower := strings.ToLower(output)
+	permanentSignals := []string{
+		"checksum",
+		"hash",
+		"hashes do not match",
+		"not found",
+		"404",
+		"package not installed",
+		"invalid package",
+		"access denied",
+		"permission denied",
+		"disk full",
+		"no space left",
+		"unknown package",
+		"no package",
+		"unable to find package",
+		"could not find",
+	}
+	for _, signal := range permanentSignals {
+		if strings.Contains(lower, signal) {
+			return true
+		}
+	}
+	return false
 }
