@@ -96,6 +96,29 @@ export async function fetchTenantBrandingAssetObjectUrl(
   return URL.createObjectURL(blob);
 }
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read branding asset'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Favicons cannot reliably use blob: URLs in browsers — they keep the page's
+ * default icon. Data URLs work for <link rel="icon">.
+ */
+export async function fetchTenantBrandingAssetDataUrl(
+  assetType: TenantBrandingAssetType,
+  cacheBust?: string | number
+): Promise<string | null> {
+  const blob = await fetchTenantBrandingAsset(assetType, cacheBust);
+  if (!blob) return null;
+  const dataUrl = await blobToDataUrl(blob);
+  return dataUrl || null;
+}
+
 export async function getTenantServices(): Promise<TenantAssignedService[]> {
   const data = await unwrap(
     tenantPortalRequest<ApiEnvelope<{ services: TenantAssignedService[] }>>(

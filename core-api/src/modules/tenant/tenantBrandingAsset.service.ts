@@ -91,6 +91,27 @@ async function updateTenantBrandingUrl(
   await Tenant.findByIdAndUpdate(tenantId, { $set: { [`branding.${field}`]: url } });
 }
 
+async function clearTenantBrandingUrl(
+  tenantId: string,
+  assetType: TenantBrandingAssetType
+): Promise<void> {
+  const field = BRANDING_FIELD[assetType];
+  await Tenant.findByIdAndUpdate(tenantId, { $unset: { [`branding.${field}`]: 1 } });
+}
+
+async function removeVolumeFiles(
+  tenantId: string,
+  assetType: TenantBrandingAssetType
+): Promise<void> {
+  const dir = tenantVolumeDir(tenantId);
+  const entries = await fs.readdir(dir).catch(() => [] as string[]);
+  await Promise.all(
+    entries
+      .filter((entry) => entry.startsWith(`${assetType}.`))
+      .map((entry) => fs.unlink(path.join(dir, entry)).catch(() => undefined))
+  );
+}
+
 export interface TenantBrandingAssetPayload {
   buffer: Buffer;
   mimeType: string;
@@ -178,6 +199,29 @@ export class TenantBrandingAssetService {
     await updateTenantBrandingUrl(tenantId, assetType);
 
     return doc;
+  }
+
+  /**
+   * Delete branding asset binary (MongoDB + volume cache) and clear the tenant branding URL field.
+   * Idempotent — safe when the asset or URL is already missing.
+   */
+  async deleteAsset(tenantId: string, assetType: TenantBrandingAssetType): Promise<void> {
+    if (!isValidObjectId(tenantId)) {
+      throw new ValidationError('Invalid tenant id format.');
+    }
+
+    const tenant = await Tenant.findById(tenantId);
+    if (!tenant) {
+      throw new NotFoundError('Tenant not found.');
+    }
+
+    await TenantBrandingAsset.deleteOne({
+      tenantId: new mongoose.Types.ObjectId(tenantId),
+      assetType,
+    });
+
+    await removeVolumeFiles(tenantId, assetType);
+    await clearTenantBrandingUrl(tenantId, assetType);
   }
 
   async getPublicBranding(tenantId: string): Promise<TenantBrandingPublic> {
