@@ -123,6 +123,10 @@ router.post(
   (req, res, next) => tenantController.uploadBrandingAsset(req, res, next)
 );
 
+router.delete('/:id/branding', (req, res, next) =>
+  tenantController.deleteBrandingAsset(req, res, next)
+);
+
 router.post(
   '/:tenantId/admin',
   validateRequest(createTenantAdminSchema),

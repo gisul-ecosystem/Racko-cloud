@@ -37,7 +37,11 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
         >
           {logoSrc ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={logoSrc} alt="" className="h-8 max-w-[120px] object-contain" aria-hidden />
+            <img
+              src={logoSrc}
+              alt={portalName || 'Portal'}
+              className="h-8 max-w-[120px] object-contain"
+            />
           ) : (
             <span
               className="flex h-8 w-8 items-center justify-center rounded-md text-sm font-bold text-white"
@@ -46,9 +50,6 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
               {(portalName || 'T').charAt(0).toUpperCase()}
             </span>
           )}
-          <span className="hidden text-base font-bold tracking-tight text-gray-900 sm:inline">
-            {portalName || 'Portal'}
-          </span>
         </Link>
 
         <div className="hidden min-w-0 border-l border-gray-200 pl-4 md:block">
