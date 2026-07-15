@@ -24,13 +24,29 @@ const logEvent = (level, event, details = {}) => {
   console.log(message);
 };
 
+async function isRequestEligibleForCleanupEmail(requestId) {
+  const request = await Request.findOne({
+    _id: requestId,
+    status: 'Completed',
+    endDate: { $gte: new Date() },
+    cleanupCompleted: { $ne: true },
+    enableResourceCleanup: true,
+  }).select('_id');
+
+  return Boolean(request);
+}
+
 async function processResourceCleanup(request) {
   const requestId = request._id;
   logEvent('info', 'resource_cleanup_started', { requestId: String(requestId) });
 
   const result = await runScheduledResourceCleanupForRequest(request);
+  const shouldEmail =
+    result.customerEmail &&
+    result.action !== 'pause' &&
+    (await isRequestEligibleForCleanupEmail(requestId));
 
-  if (result.customerEmail && result.action !== 'pause') {
+  if (shouldEmail) {
     try {
       await sendResourceCleanupEmail({
         to: result.customerEmail,
@@ -46,6 +62,11 @@ async function processResourceCleanup(request) {
         error: emailErr.message,
       });
     }
+  } else if (result.customerEmail && result.action !== 'pause') {
+    logEvent('info', 'resource_cleanup_email_skipped', {
+      requestId: String(requestId),
+      reason: 'request_expired_or_deleted',
+    });
   }
 
   logEvent('info', 'resource_cleanup_success', {
@@ -54,13 +75,16 @@ async function processResourceCleanup(request) {
     nextRun: result.nextCleanupAt.toISOString(),
   });
 
-  await createNotification({
-    type: 'cleanup_ran',
-    title: result.action === 'pause' ? 'AWS resource pause completed' : 'AWS resource cleanup completed',
-    message: `Lab ${result.action || 'cleanup'} ran for ${buildRequestLabel(request)} — ${result.deletedCount} resource action(s) applied`,
-    requestId,
-    metadata: { deletedCount: result.deletedCount },
-  });
+  const stillExists = await Request.exists({ _id: requestId });
+  if (stillExists) {
+    await createNotification({
+      type: 'cleanup_ran',
+      title: result.action === 'pause' ? 'AWS resource pause completed' : 'AWS resource cleanup completed',
+      message: `Lab ${result.action || 'cleanup'} ran for ${buildRequestLabel(request)} — ${result.deletedCount} resource action(s) applied`,
+      requestId,
+      metadata: { deletedCount: result.deletedCount },
+    });
+  }
 }
 
 async function runResourceCleanupPoll() {
@@ -70,6 +94,7 @@ async function runResourceCleanupPoll() {
   const due = await Request.find({
     status: 'Completed',
     enableResourceCleanup: true,
+    cleanupCompleted: { $ne: true },
     resourceCleanupNextRunAt: { $lte: now },
     endDate: { $gte: now },
   }).sort({ resourceCleanupNextRunAt: 1 });

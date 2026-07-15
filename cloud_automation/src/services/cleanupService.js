@@ -124,7 +124,11 @@ const markRequestExpired = async (client, requestId) => {
     SET
       status = $2,
       expired = TRUE,
-      cleanup_completed = TRUE
+      cleanup_completed = TRUE,
+      cleanup_enabled = FALSE,
+      next_cleanup_at = NULL,
+      resource_cleanup_enabled = FALSE,
+      resource_cleanup_next_run_at = NULL
     WHERE id = $1
     RETURNING id, status, expired, cleanup_completed
   `;
@@ -290,7 +294,14 @@ const runScheduledCleanupForRequest = async (requestId) => {
       WHERE id = $1
         AND cleanup_enabled = TRUE
         AND COALESCE(expired, false) = FALSE
+        AND COALESCE(cleanup_completed, false) = FALSE
         AND status = $3
+        AND (
+          CASE
+            WHEN expires_at IS NOT NULL THEN expires_at > NOW()
+            ELSE expiry_date IS NULL OR expiry_date > CURRENT_DATE
+          END
+        )
       RETURNING
         id,
         cleanup_interval_hours,
@@ -332,7 +343,7 @@ const runScheduledCleanupForRequest = async (requestId) => {
       const intervalHours = Number(lockedRequest.cleanup_interval_hours);
       const nextCleanup = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
 
-      await finalizeClient.query(
+      const finalizeResult = await finalizeClient.query(
         `
           UPDATE requests
           SET
@@ -340,11 +351,19 @@ const runScheduledCleanupForRequest = async (requestId) => {
             next_cleanup_at = $2,
             status = $3
           WHERE id = $4
+            AND COALESCE(expired, false) = FALSE
+            AND COALESCE(cleanup_completed, false) = FALSE
+          RETURNING id
         `,
         [now.toISOString(), nextCleanup.toISOString(), STATUS_COMPLETED, requestId]
       );
 
       await finalizeClient.query('COMMIT');
+
+      if (!finalizeResult.rowCount) {
+        await logCleanup(requestId, 'scheduled_cleanup_skipped_after_run', 'success');
+        return null;
+      }
 
       await logCleanup(requestId, 'scheduled_cleanup_completed', 'success');
 

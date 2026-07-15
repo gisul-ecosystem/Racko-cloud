@@ -8,11 +8,11 @@ import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ApiError } from '../../../lib/apiClient';
 import {
-  chargeAdminWalletForCloudRequest,
-  getMyAdminWallet,
-  linkAdminWalletCloudCharge,
-  refundAdminWalletCloudCharge,
-} from '../../../lib/adminBillingApi';
+  chargeCloudRequestWallet,
+  getCloudRequestWallet,
+  linkCloudRequestWalletCharge,
+  refundCloudRequestWallet,
+} from '../../../lib/cloudRequestWallet';
 import { createRequest } from '../../api/client';
 import { AWS_DEFAULT_REGION } from '../../constants';
 import { useAwsRoutes } from '../../../lib/cloudPortalRoutes';
@@ -263,7 +263,7 @@ export function RequestWorkspace() {
   const refreshWallet = useCallback(async () => {
     setWalletLoading(true);
     try {
-      const wallet = await getMyAdminWallet();
+      const wallet = await getCloudRequestWallet();
       setWalletBalance(wallet.balance);
       setWalletCurrency(wallet.currency || 'INR');
       if (wallet.usdToInrRate && wallet.usdToInrRate > 0) {
@@ -363,7 +363,7 @@ export function RequestWorkspace() {
 
     if (totalPrice > 0) {
       if (walletBalance == null) {
-        setSubmitError('Unable to load your wallet balance. Refresh and try again.');
+        setSubmitError('Unable to load your wallet balance.');
         return;
       }
 
@@ -441,7 +441,7 @@ export function RequestWorkspace() {
 
     try {
       if (totalPrice > 0) {
-        const charge = await chargeAdminWalletForCloudRequest(totalPrice, null, 'aws');
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'aws');
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
         setUsdToInrRate(charge.usdToInrRate);
@@ -452,14 +452,14 @@ export function RequestWorkspace() {
         const requestId = response.data?.requestId ?? response.requestId;
 
         if (chargedInr != null && chargedInr > 0) {
-          void linkAdminWalletCloudCharge(String(requestId)).catch(() => undefined);
+          void linkCloudRequestWalletCharge(String(requestId), 'aws').catch(() => undefined);
         }
 
         router.push(AWS_ROUTES.requestStatus(String(requestId)));
       } catch (createErr) {
         if (chargedInr != null && chargedInr > 0) {
           try {
-            const refunded = await refundAdminWalletCloudCharge(chargedInr);
+            const refunded = await refundCloudRequestWallet(chargedInr, null, 'aws');
             setWalletBalance(refunded.balance);
           } catch {
             // Best-effort refund; surface original create failure below.

@@ -44,6 +44,64 @@ export class WalletController {
       next(error);
     }
   }
+
+  async chargeCloudRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const { amountUsd, relatedRequestId, provider } = req.body as {
+        amountUsd: number;
+        relatedRequestId?: string | null;
+        provider?: 'azure' | 'aws';
+      };
+      const result = await walletService.chargeCloudRequest(
+        authReq.tenantUser.tenantId,
+        amountUsd,
+        relatedRequestId ?? null,
+        provider ?? 'azure'
+      );
+      success(res, 'Wallet charged for cloud lab request.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async refundCloudRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const { amountInr, relatedRequestId, provider } = req.body as {
+        amountInr: number;
+        relatedRequestId?: string | null;
+        provider?: 'azure' | 'aws';
+      };
+      const wallet = await walletService.refundCloudRequestCharge(
+        authReq.tenantUser.tenantId,
+        amountInr,
+        relatedRequestId ?? null,
+        provider ?? 'azure'
+      );
+      success(res, 'Cloud lab charge refunded to wallet.', wallet);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async linkCloudRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const { relatedRequestId, provider } = req.body as {
+        relatedRequestId: string;
+        provider?: 'azure' | 'aws';
+      };
+      await walletService.linkCloudRequestCharge(
+        authReq.tenantUser.tenantId,
+        relatedRequestId,
+        provider ?? 'azure'
+      );
+      success(res, 'Wallet charge linked to cloud request.', { relatedRequestId });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export const walletController = new WalletController();
