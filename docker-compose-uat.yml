@@ -110,6 +110,26 @@ services:
       retries: 3
       start_period: 40s
 
+  create-vm-catalog-agent:
+    image: gisuldocker/racko-create-vm-catalog-agent:uat
+    env_file:
+      - create-vm-catalog-agent/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    networks:
+      - racko-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3789/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
 volumes:
   tenant-assets:
     name: racko-uat-tenant-assets

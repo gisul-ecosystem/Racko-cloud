@@ -69,6 +69,20 @@ services:
       - cloud-gateway
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
+
+  create-vm-catalog-agent:
+    build:
+      context: .
+      dockerfile: create-vm-catalog-agent/Dockerfile
+    image: gisuldocker/racko-create-vm-catalog-agent:${IMAGE_TAG:-dev}
+    env_file:
+      - create-vm-catalog-agent/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
  
 volumes:
   tenant-assets:

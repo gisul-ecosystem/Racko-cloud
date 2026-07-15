@@ -1,0 +1,18 @@
+{
+  "name": "create-vm-catalog-agent",
+  "version": "1.0.0",
+  "private": true,
+  "description": "VM-side Create VM catalog agent (pricing scrape + cart APIs for Racko)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "playwright": "^1.61.1"
+  }
+}

@@ -11,6 +11,7 @@ export interface IAdminWalletTransaction extends Document {
     | 'vm_creation'
     | 'azure_lab_request'
     | 'aws_lab_request'
+    | 'catalog_vm_purchase'
     | 'manual_credit'
     | 'razorpay_topup'
     | 'refund';
@@ -40,7 +41,15 @@ const adminWalletTransactionSchema = new Schema<IAdminWalletTransaction>(
     },
     reason: {
       type: String,
-      enum: ['vm_creation', 'azure_lab_request', 'aws_lab_request', 'manual_credit', 'razorpay_topup', 'refund'],
+      enum: [
+        'vm_creation',
+        'azure_lab_request',
+        'aws_lab_request',
+        'catalog_vm_purchase',
+        'manual_credit',
+        'razorpay_topup',
+        'refund',
+      ],
       required: true,
     },
     relatedVmJobId: {
