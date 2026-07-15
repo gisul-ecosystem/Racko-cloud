@@ -1,12 +1,19 @@
 'use client';
 
-import { TenantComingSoon } from '@/components/tenant/TenantComingSoon';
+import { ExternalVMConsoleView } from '@/components/console/ExternalVMConsoleView';
+import {
+  fetchTenantExternalVM,
+  getTenantExternalVMConsole,
+} from '@/lib/tenantExternalVmApi';
+import { tenantConsole } from '@/lib/tenantAdminRoutes';
 
-export default function Page() {
+export default function TenantExternalVMConsolePage() {
   return (
-    <TenantComingSoon
-      title="Server console"
-      description="Browser console access for external servers is coming soon."
+    <ExternalVMConsoleView
+      backHref={tenantConsole.elastic}
+      disconnectHref={tenantConsole.elastic}
+      fetchVm={fetchTenantExternalVM}
+      openConsole={getTenantExternalVMConsole}
     />
   );
 }

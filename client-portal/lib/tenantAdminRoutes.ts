@@ -25,6 +25,7 @@ export const tenantConsole = {
   elasticOverview: `${TENANT_CONSOLE}/elastic-servers/overview`,
   elasticAdd: `${TENANT_CONSOLE}/elastic-servers/add`,
   elasticBulk: `${TENANT_CONSOLE}/elastic-servers/bulk`,
+  elasticConsole: (id: string) => `${TENANT_CONSOLE}/elastic-servers/${id}/console`,
   machineManager: `${TENANT_CONSOLE}/machine-manager`,
   machineSetup: `${TENANT_CONSOLE}/machine-manager/setup`,
   machineMachines: `${TENANT_CONSOLE}/machine-manager/machines`,

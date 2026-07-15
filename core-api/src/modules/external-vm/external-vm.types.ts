@@ -17,7 +17,8 @@ export interface ExternalVMResponse {
   protocol: ExternalVMProtocol;
   username: string;
   password: string;
-  adminId: string;
+  adminId?: string;
+  tenantId?: string;
   createdAt: string;
   updatedAt: string;
 }

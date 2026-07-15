@@ -11,7 +11,8 @@ export interface IExternalVM {
   protocol: ExternalVMProtocol;
   username: string;
   password: string;
-  adminId: string;
+  adminId?: string;
+  tenantId?: string;
   createdAt: string;
   updatedAt: string;
 }
