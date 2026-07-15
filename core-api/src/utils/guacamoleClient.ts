@@ -128,6 +128,8 @@ interface CachedToken {
   authToken: string;
   dataSource: string;
   expiresAt: number;
+  /** HAProxy backend name from GUACSRV cookie (e.g. "guac1"), for sticky browser routing. */
+  srvName: string;
 }
 
 let cachedToken: CachedToken | null = null;
@@ -148,10 +150,17 @@ async function login(): Promise<CachedToken> {
     if (!res.data?.authToken || !res.data?.dataSource) {
       throw new InternalError('Guacamole login returned no authToken.');
     }
+
+    // GUACSRV is set by HAProxy for sticky sessions (e.g. "guac1|abc123") — keep the name only.
+    const cookies = await guacamoleCookieJar.getCookies(env.baseUrl);
+    const guacSrv = cookies.find((c) => c.key === 'GUACSRV')?.value;
+    const srvName = guacSrv?.split('|')[0] ?? '';
+
     return {
       authToken: res.data.authToken,
       dataSource: res.data.dataSource,
       expiresAt: Date.now() + TOKEN_TTL_MS,
+      srvName,
     };
   } catch (err) {
     const status = err instanceof AxiosError ? err.response?.status : undefined;
@@ -312,16 +321,23 @@ async function upsertConnection(
  * Build the browser URL.
  *
  * Format (Guacamole 1.x):
- *   {publicUrl}/#/client/{base64( id + '\0' + 'c' + '\0' + dataSource )}?token={authToken}
+ *   {publicUrl}/#/client/{base64( id + '\0' + 'c' + '\0' + dataSource )}?token={authToken}&srv={srvName}
  *
  * 'c' = connection (vs 'g' for connection group, 'a' for active session).
  * The token is read by the Guacamole SPA from the URL fragment.
+ * `srv` steers the browser via HAProxy to the same Guacamole instance that issued the token.
  */
-function buildClientUrl(connectionId: string, authToken: string, dataSource: string): string {
+function buildClientUrl(
+  connectionId: string,
+  authToken: string,
+  dataSource: string,
+  srvName: string
+): string {
   const env = getEnv();
   const raw = `${connectionId}\u0000c\u0000${dataSource}`;
   const idHash = Buffer.from(raw, 'utf8').toString('base64').replace(/=+$/, '');
-  return `${env.publicUrl}/#/client/${idHash}?token=${encodeURIComponent(authToken)}`;
+  const url = `${env.publicUrl}/#/client/${idHash}?token=${encodeURIComponent(authToken)}`;
+  return srvName ? `${url}&srv=${encodeURIComponent(srvName)}` : url;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
@@ -346,7 +362,12 @@ export class GuacamoleClient {
 
     const connection = await upsertConnection(name, protocol, params);
     const token = await getToken();
-    const clientUrl = buildClientUrl(connection.identifier, token.authToken, token.dataSource);
+    const clientUrl = buildClientUrl(
+      connection.identifier,
+      token.authToken,
+      token.dataSource,
+      token.srvName
+    );
 
     logger.info('Guacamole console session created', {
       name,
