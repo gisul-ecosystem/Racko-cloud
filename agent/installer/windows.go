@@ -454,7 +454,7 @@ func ensureChocolatey() (string, error) {
 }
 
 // runWinget installs via winget in the active user's session.
-// Falls back to choco if winget is unavailable.
+// Falls back to choco ONLY if pkg.ChocoName is explicitly set.
 func runWinget(pkg SoftwarePackage) (string, error) {
 	wingetID := pkg.WingetID
 	if wingetID == "" {
@@ -463,14 +463,26 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 
 	wingetPath, err := exec.LookPath("winget")
 	if err != nil {
-		// Also check the known install location
+		// Check known install location
 		wingetPath = `C:\Program Files\WindowsApps\Microsoft.DesktopAppInstaller_8wekyb3d8bbwe\winget.exe`
 		if _, statErr := os.Stat(wingetPath); statErr != nil {
-			log.Printf("[winget] winget not found — falling back to choco for %s", pkg.Name)
-			if pkg.ChocoName != "" || pkg.Name != "" {
-				return runChoco(pkg)
+			// winget not found — try to install it
+			log.Printf("[winget] winget not found — installing App Installer...")
+			installOut, installErr := ensureWinget()
+			if installErr != nil {
+				log.Printf("[winget] Failed to install winget: %v", installErr)
+				// Only fall back to choco if a choco package name is explicitly provided
+				if pkg.ChocoName != "" {
+					log.Printf("[winget] Falling back to choco for %s", pkg.Name)
+					return runChoco(pkg)
+				}
+				return installOut, fmt.Errorf("winget not available and no choco fallback: %w", installErr)
 			}
-			return "", fmt.Errorf("winget not found and no choco fallback available")
+			log.Printf("[winget] winget installed successfully")
+			// Re-check path after install
+			if p, lookErr := exec.LookPath("winget"); lookErr == nil {
+				wingetPath = p
+			}
 		}
 	}
 	log.Printf("[winget] Found winget at: %s", wingetPath)
@@ -482,7 +494,6 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 	}
 
 	log.Printf("[winget] Running in active user session: winget %v", args)
-	// Use user session — winget needs interactive desktop context
 	out, err := runAsActiveUser(wingetPath, args...)
 	if err != nil {
 		outLower := strings.ToLower(out)
@@ -494,6 +505,26 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 		}
 	}
 	return out, err
+}
+
+// ensureWinget installs the Windows Package Manager (winget) if not present.
+// Uses the Microsoft.WinGet.Client PowerShell module — the officially recommended
+// method for Windows Server 2019/2022 where winget doesn't ship by default.
+func ensureWinget() (string, error) {
+	script := `
+$ErrorActionPreference = "Stop"
+Write-Host "[winget-install] Installing NuGet package provider..."
+Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
+Write-Host "[winget-install] Installing Microsoft.WinGet.Client module..."
+Install-Module -Name Microsoft.WinGet.Client -Force -Scope AllUsers -AllowClobber | Out-Null
+Write-Host "[winget-install] Running Repair-WinGetPackageManager..."
+Repair-WinGetPackageManager -AllUsers
+Write-Host "[winget-install] Verifying winget..."
+winget --version
+Write-Host "[winget-install] winget is ready."
+`
+	return runAsActiveUser("powershell.exe",
+		"-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 }
 
 // runChoco installs via choco in the active user's session.

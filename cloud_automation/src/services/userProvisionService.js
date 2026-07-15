@@ -3,9 +3,10 @@ const AppError = require('../utils/AppError');
 const {
   buildUserPayload,
   createGraphClient,
-  createGraphUserWithRetry,
+  createOrAdoptGraphUser,
   getVerifiedDomain,
-  logAzureUserEvent
+  logAzureUserEvent,
+  toGraphProvisionError
 } = require('../provisioners/azure/userProvisioner');
 const { runWithConcurrency } = require('../utils/concurrency');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
@@ -180,6 +181,7 @@ const provisionUsersForRequest = async (requestId) => {
     });
 
     const createdUsers = [];
+    let adoptedCount = 0;
 
     const userNumbers = Array.from({ length: accountCount }, (_, index) => index + 1);
     await runWithConcurrency(userNumbers, DEFAULT_CONCURRENCY, async (userNumber) => {
@@ -190,7 +192,15 @@ const provisionUsersForRequest = async (requestId) => {
         accountEnabled: !initialAccess.disableAzureAccount
       });
 
-      const createdUser = await createGraphUserWithRetry(graphClient, payload, requestId);
+      const { user: createdUser, adopted } = await createOrAdoptGraphUser(
+        graphClient,
+        { payload, temporaryPassword },
+        requestId
+      );
+
+      if (adopted) {
+        adoptedCount += 1;
+      }
 
       let resourceGroupName = null;
       let resourceGroupId = null;
@@ -232,7 +242,8 @@ const provisionUsersForRequest = async (requestId) => {
     logAzureUserEvent('info', 'azure_user_provision_success', {
       requestId,
       subscriptionId,
-      usersCreated: createdUsers.length
+      usersCreated: createdUsers.length,
+      usersAdopted: adoptedCount
     });
 
     try {
@@ -253,12 +264,13 @@ const provisionUsersForRequest = async (requestId) => {
     logAzureUserEvent('error', 'azure_user_provision_failed', {
       requestId,
       errorName: error?.name,
-      errorCode: error?.code,
+      errorCode: error?.code || error?.cause?.code,
       statusCode: error?.statusCode || error?.status,
-      message: error?.message
+      message: error?.message,
+      cause: error?.cause?.message || null
     });
 
-    throw error;
+    throw toGraphProvisionError(error);
   } finally {
     client.release();
   }

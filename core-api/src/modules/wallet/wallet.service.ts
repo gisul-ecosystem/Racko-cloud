@@ -23,7 +23,9 @@ export interface CreditWalletResult {
 }
 
 export class WalletService {
-  async getOrCreateWallet(tenantId: string): Promise<{ balance: number; currency: string }> {
+  async getOrCreateWallet(
+    tenantId: string
+  ): Promise<{ balance: number; currency: string; usdToInrRate: number }> {
     const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
     const wallet = await Wallet.findOneAndUpdate(
       { tenantId: tenantObjectId },
@@ -33,7 +35,24 @@ export class WalletService {
       { upsert: true, new: true }
     );
 
-    return { balance: wallet.balance, currency: wallet.currency };
+    return {
+      balance: wallet.balance,
+      currency: wallet.currency,
+      usdToInrRate: this.getUsdToInrRate(),
+    };
+  }
+
+  getUsdToInrRate(): number {
+    const configured = Number(process.env.USD_TO_INR_RATE);
+    if (Number.isFinite(configured) && configured > 0) {
+      return configured;
+    }
+    return 86;
+  }
+
+  usdToInr(amountUsd: number): number {
+    const converted = amountUsd * this.getUsdToInrRate();
+    return Math.round(converted * 100) / 100;
   }
 
   async getBalance(tenantId: string): Promise<number> {
@@ -113,7 +132,8 @@ export class WalletService {
     amount: number,
     reason: string,
     relatedOrderId: string | null = null,
-    relatedVmId: string | null = null
+    relatedVmId: string | null = null,
+    externalReference: string | null = null
   ): Promise<{ balance: number; currency: string }> {
     if (amount <= 0) {
       throw new AppError('Amount must be positive.', 400, 'VALIDATION_ERROR');
@@ -136,12 +156,92 @@ export class WalletService {
       amount,
       reason,
       source: 'system',
+      externalReference,
       relatedOrderId: relatedOrderId ? new mongoose.Types.ObjectId(relatedOrderId) : null,
       relatedVmId: relatedVmId ? new mongoose.Types.ObjectId(relatedVmId) : null,
       balanceAfter: wallet.balance,
     });
 
     return { balance: wallet.balance, currency: wallet.currency };
+  }
+
+  async chargeCloudRequest(
+    tenantId: string,
+    amountUsd: number,
+    relatedRequestId: string | null = null,
+    provider: 'azure' | 'aws' = 'azure'
+  ): Promise<{
+    balance: number;
+    currency: string;
+    chargedInr: number;
+    amountUsd: number;
+    usdToInrRate: number;
+    provider: 'azure' | 'aws';
+  }> {
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+      throw new AppError('Estimated amount must be a positive number.', 400, 'VALIDATION_ERROR');
+    }
+
+    const usdToInrRate = this.getUsdToInrRate();
+    const chargedInr = this.usdToInr(amountUsd);
+    const reason = provider === 'aws' ? 'aws_lab_request' : 'azure_lab_request';
+    const externalReference = relatedRequestId
+      ? `cloud_request:${provider}:${relatedRequestId}`
+      : null;
+    const wallet = await this.debitWallet(
+      tenantId,
+      chargedInr,
+      reason,
+      null,
+      null,
+      externalReference
+    );
+
+    return {
+      balance: wallet.balance,
+      currency: wallet.currency,
+      chargedInr,
+      amountUsd: Math.round(amountUsd * 100) / 100,
+      usdToInrRate,
+      provider,
+    };
+  }
+
+  async refundCloudRequestCharge(
+    tenantId: string,
+    amountInr: number,
+    relatedRequestId: string | null = null,
+    provider: 'azure' | 'aws' = 'azure'
+  ): Promise<{ balance: number; currency: string }> {
+    if (!Number.isFinite(amountInr) || amountInr <= 0) {
+      throw new AppError('Refund amount must be a positive number.', 400, 'VALIDATION_ERROR');
+    }
+
+    const reason = provider === 'aws' ? 'aws_lab_request_refund' : 'azure_lab_request_refund';
+    return this.creditWallet(tenantId, amountInr, reason, {
+      externalReference: relatedRequestId
+        ? `cloud_request_refund:${provider}:${relatedRequestId}`
+        : null,
+    });
+  }
+
+  async linkCloudRequestCharge(
+    tenantId: string,
+    relatedRequestId: string,
+    provider: 'azure' | 'aws' = 'azure'
+  ): Promise<void> {
+    const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
+    const reason = provider === 'aws' ? 'aws_lab_request' : 'azure_lab_request';
+    await WalletTransaction.findOneAndUpdate(
+      {
+        tenantId: tenantObjectId,
+        type: 'debit',
+        reason,
+        $or: [{ externalReference: null }, { externalReference: { $exists: false } }],
+      },
+      { $set: { externalReference: `cloud_request:${provider}:${relatedRequestId}` } },
+      { sort: { createdAt: -1 } }
+    );
   }
 
   async listTransactions(

@@ -8,7 +8,11 @@ interface ApiResponse<T> {
 
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
-export type NotificationType = 'vm_job' | 'tenant_order' | 'vm_plan_expired';
+export type NotificationType =
+  | 'vm_job'
+  | 'tenant_order'
+  | 'vm_plan_expired'
+  | 'catalog_vm_request';
 
 export interface AppNotification {
   _id: string;

@@ -1209,6 +1209,20 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
     throw new AppError('Request not found.', 404);
   }
 
+  // Stop schedulers from picking this request / sending cleanup emails during teardown.
+  await db.query(
+    `
+      UPDATE requests
+      SET
+        cleanup_enabled = FALSE,
+        next_cleanup_at = NULL,
+        resource_cleanup_enabled = FALSE,
+        resource_cleanup_next_run_at = NULL
+      WHERE id = $1
+    `,
+    [normalizedRequestId]
+  );
+
   const requestDetails = await db.query(
     `
       SELECT costing_mode, azure_resource_group_name

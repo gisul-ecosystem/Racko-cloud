@@ -12,9 +12,12 @@ const nextConfig = {
   },
   async rewrites() {
     return [
+      // Proxy to cloud-gateway, but keep local Next.js route handlers:
+      // - /api/create-vm/* (Create VM catalog → remote catalog agent VM)
+      // - /api/book-meet (website demo booking)
       {
-        source: "/api/:path*",
-        destination: `${gatewayUrl}/api/:path*`,
+        source: "/api/:path((?!create-vm(?:/|$)|book-meet(?:/|$)).*)",
+        destination: `${gatewayUrl}/api/:path`,
       },
       {
         source: "/webhooks/:path*",

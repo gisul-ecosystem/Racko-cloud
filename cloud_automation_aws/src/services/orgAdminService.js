@@ -860,6 +860,15 @@ export async function deleteRequest(requestId, { actor = 'org_admin' } = {}) {
     selectedServices: (request.selectedServices || []).map((service) => service.serviceName),
   };
 
+  // Stop schedulers from picking this request / sending cleanup emails during teardown.
+  await Request.findByIdAndUpdate(requestId, {
+    cleanupEnabled: false,
+    enableResourceCleanup: false,
+    resourceCleanupNextRunAt: null,
+    cleanupNextRunAt: null,
+    updatedAt: new Date(),
+  });
+
   try {
     await cleanupAllUsers(requestId);
   } catch (err) {

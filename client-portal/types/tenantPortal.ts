@@ -24,8 +24,20 @@ export interface TenantUsersResult {
   total: number;
 }
 
+export interface TenantBulkCreateUsersResult {
+  created: number;
+  failed: number;
+  users: Array<{
+    email: string;
+    password: string;
+    status: 'created' | 'failed';
+    error?: string;
+  }>;
+}
 
 export interface TenantBranding {
+  /** Tenant display name from the tenant record (white-label portal title). */
+  name?: string;
   logoUrl: string;
   faviconUrl: string;
   loginPageImageUrl: string;
@@ -37,6 +49,8 @@ export interface TenantBranding {
 export interface TenantWallet {
   balance: number;
   currency: string;
+  /** Present when returned from tenant-wallet — used to convert lab USD estimates to INR. */
+  usdToInrRate?: number;
 }
 
 export type TenantServiceKey =

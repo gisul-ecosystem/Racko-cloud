@@ -8,11 +8,11 @@ import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ApiError } from '../../../lib/apiClient';
 import {
-  chargeAdminWalletForCloudRequest,
-  getMyAdminWallet,
-  linkAdminWalletCloudCharge,
-  refundAdminWalletCloudCharge,
-} from '../../../lib/adminBillingApi';
+  chargeCloudRequestWallet,
+  getCloudRequestWallet,
+  linkCloudRequestWalletCharge,
+  refundCloudRequestWallet,
+} from '../../../lib/cloudRequestWallet';
 import { createRequest } from '../../api/client';
 import { AWS_DEFAULT_REGION } from '../../constants';
 import { useAwsRoutes } from '../../../lib/cloudPortalRoutes';
@@ -263,7 +263,7 @@ export function RequestWorkspace() {
   const refreshWallet = useCallback(async () => {
     setWalletLoading(true);
     try {
-      const wallet = await getMyAdminWallet();
+      const wallet = await getCloudRequestWallet();
       setWalletBalance(wallet.balance);
       setWalletCurrency(wallet.currency || 'INR');
       if (wallet.usdToInrRate && wallet.usdToInrRate > 0) {
@@ -363,7 +363,7 @@ export function RequestWorkspace() {
 
     if (totalPrice > 0) {
       if (walletBalance == null) {
-        setSubmitError('Unable to load your wallet balance. Refresh and try again.');
+        setSubmitError('Unable to load your wallet balance.');
         return;
       }
 
@@ -441,7 +441,7 @@ export function RequestWorkspace() {
 
     try {
       if (totalPrice > 0) {
-        const charge = await chargeAdminWalletForCloudRequest(totalPrice, null, 'aws');
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'aws');
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
         setUsdToInrRate(charge.usdToInrRate);
@@ -452,14 +452,14 @@ export function RequestWorkspace() {
         const requestId = response.data?.requestId ?? response.requestId;
 
         if (chargedInr != null && chargedInr > 0) {
-          void linkAdminWalletCloudCharge(String(requestId)).catch(() => undefined);
+          void linkCloudRequestWalletCharge(String(requestId), 'aws').catch(() => undefined);
         }
 
         router.push(AWS_ROUTES.requestStatus(String(requestId)));
       } catch (createErr) {
         if (chargedInr != null && chargedInr > 0) {
           try {
-            const refunded = await refundAdminWalletCloudCharge(chargedInr);
+            const refunded = await refundCloudRequestWallet(chargedInr, null, 'aws');
             setWalletBalance(refunded.balance);
           } catch {
             // Best-effort refund; surface original create failure below.
@@ -496,22 +496,22 @@ export function RequestWorkspace() {
   return (
     <div className="mx-auto max-w-screen-xl space-y-6 pb-10">
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="h-1 bg-gradient-to-r from-[#B91C1C] via-[#DC2626] to-[#B91C1C]" />
+        <div className="h-1 bg-gradient-to-r from-[var(--cloud-accent,#B91C1C)] via-[var(--cloud-accent,#B91C1C)] to-[var(--cloud-accent,#B91C1C)]" />
         <div className="p-6 lg:p-8">
           <Link
             href={AWS_ROUTES.dashboard}
-            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[var(--cloud-accent,#B91C1C)]"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to overview
           </Link>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)] ring-1 ring-[var(--cloud-accent,#B91C1C)]/10">
                 <FilePlus2 className="h-7 w-7" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--cloud-accent,#B91C1C)]">
                   AWS automation
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
@@ -523,7 +523,7 @@ export function RequestWorkspace() {
               </div>
             </div>
             <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-              <Server className="h-4 w-4 shrink-0 text-[#B91C1C]" />
+              <Server className="h-4 w-4 shrink-0 text-[var(--cloud-accent,#B91C1C)]" />
               <span>Complete each step — Next unlocks the following section</span>
             </div>
           </div>
