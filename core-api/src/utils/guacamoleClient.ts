@@ -1,4 +1,6 @@
 import axios, { AxiosError, type AxiosInstance } from 'axios';
+import { wrapper } from 'axios-cookiejar-support';
+import { CookieJar } from 'tough-cookie';
 import { logger } from './logger';
 import { InternalError } from './errors';
 
@@ -6,6 +8,8 @@ import { InternalError } from './errors';
  * Guacamole REST API client.
  *
  * - Logs in once with admin credentials (cached for ~50min).
+ * - Maintains a cookie jar so HAProxy GUACSRV sticky-session cookies
+ *   from login are sent on all subsequent API calls to the same backend.
  * - Creates/updates a Guacamole connection per VM (idempotent by name).
  * - Builds a one-shot browser URL using GUACAMOLE_PUBLIC_URL (nginx-proxied),
  *   never the internal Docker hostname.
@@ -59,15 +63,20 @@ function getEnv(): GuacamoleEnv {
 // ─── HTTP instance ────────────────────────────────────────────────────────────
 
 let cachedHttp: AxiosInstance | null = null;
+const guacamoleCookieJar = new CookieJar();
 
 function http(): AxiosInstance {
   if (cachedHttp) return cachedHttp;
   const env = getEnv();
-  cachedHttp = axios.create({
-    baseURL: env.baseUrl,
-    timeout: env.requestTimeoutMs,
-    headers: { Accept: 'application/json' },
-  });
+  cachedHttp = wrapper(
+    axios.create({
+      baseURL: env.baseUrl,
+      timeout: env.requestTimeoutMs,
+      headers: { Accept: 'application/json' },
+      jar: guacamoleCookieJar,
+      withCredentials: true,
+    })
+  );
   return cachedHttp;
 }
 
