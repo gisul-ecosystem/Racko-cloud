@@ -18,6 +18,13 @@ export interface IMachine {
   status: MachineStatus;
   adminId: string;
   lastSeen?: string;
+  specs?: {
+    hostname?: string;
+    osVersion?: string;
+    cpuCores?: number;
+    ramGb?: number;
+    diskGb?: number;
+  };
   createdAt: string;
   updatedAt: string;
 }
