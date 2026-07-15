@@ -119,6 +119,7 @@ export interface TenantBrandingAssetPayload {
 }
 
 export interface TenantBrandingPublic {
+  name: string;
   logoUrl: string;
   faviconUrl: string;
   loginPageImageUrl: string;
@@ -229,13 +230,14 @@ export class TenantBrandingAssetService {
       throw new ValidationError('Invalid tenant id format.');
     }
 
-    const tenant = await Tenant.findById(tenantId).select('branding').lean();
+    const tenant = await Tenant.findById(tenantId).select('name branding').lean();
     if (!tenant) {
       throw new NotFoundError('Tenant not found.');
     }
 
     const branding = tenant.branding ?? {};
     return {
+      name: tenant.name ?? '',
       logoUrl: branding.logoUrl ?? '',
       faviconUrl: branding.faviconUrl ?? '',
       loginPageImageUrl: branding.loginPageImageUrl ?? '',
