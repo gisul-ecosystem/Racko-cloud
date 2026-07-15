@@ -1,7 +1,5 @@
 import Request from '../models/Request.js';
 import { runExpiryCleanupForRequest } from '../services/labExpiryCleanupService.js';
-import { sendLabExpiryCleanupEmail } from '../services/cleanupEmailService.js';
-import { buildRequestLabel } from '../utils/cleanupMetrics.js';
 import { createNotification } from '../services/notificationService.js';
 
 let isRunning = false;
@@ -24,26 +22,7 @@ export async function runExpiryCheck() {
 
     for (const request of expiredRequests) {
       try {
-        const result = await runExpiryCleanupForRequest(request);
-        const requestLabel = buildRequestLabel(request);
-
-        try {
-          await sendLabExpiryCleanupEmail({
-            to: result.customerEmail,
-            requestLabel,
-            deletedCount: result.deletedCount,
-            rolesRemoved: result.rolesRemoved,
-            usersRemoved: result.usersRemoved,
-            cleanedAt: result.cleanedAt,
-            endDate: result.endDate,
-          });
-          console.log(`[expiryScheduler] Expiry cleanup email sent for ${request._id}`);
-        } catch (emailErr) {
-          console.error(
-            `[expiryScheduler] Expiry cleanup email failed for ${request._id}:`,
-            emailErr.message
-          );
-        }
+        await runExpiryCleanupForRequest(request);
 
         console.log(`[expiryScheduler] Expired and cleaned request ${request._id}`);
 
@@ -58,6 +37,8 @@ export async function runExpiryCheck() {
 
         await Request.findByIdAndUpdate(request._id, {
           status: 'Expired',
+          cleanupEnabled: false,
+          enableResourceCleanup: false,
           updatedAt: now,
           $push: {
             cleanupLogs: {

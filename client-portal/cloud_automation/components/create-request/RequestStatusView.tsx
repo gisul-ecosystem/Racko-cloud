@@ -23,6 +23,8 @@ import {
 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
+import { useCloudAccentColor } from '../../../lib/cloudAccent';
+import { hexToRgba } from '../../../lib/tenantAccentStyles';
 import { downloadCredentialSpreadsheet } from '../../api/client';
 import { useProvisionStatus } from '../../hooks/useProvisionStatus';
 import type { OrchestrationEvent, ProvisionSnapshot, ProvisionStepState } from '../../types/provisioning';
@@ -48,12 +50,18 @@ interface RequestStatusViewProps {
   backLabel?: string;
 }
 
-function StepIcon({ status }: { status: ProvisionStepState['status'] }) {
+function StepIcon({
+  status,
+  accent,
+}: {
+  status: ProvisionStepState['status'];
+  accent: string;
+}) {
   if (status === 'complete') {
     return <CheckCircle2 className="h-5 w-5 shrink-0 text-green-600" />;
   }
   if (status === 'active') {
-    return <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[#B91C1C]" />;
+    return <Loader2 className="h-5 w-5 shrink-0 animate-spin" style={{ color: accent }} />;
   }
   if (status === 'failed') {
     return <AlertCircle className="h-5 w-5 shrink-0 text-red-600" />;
@@ -72,18 +80,25 @@ function MetaChip({
   label,
   value,
   hint,
+  accent,
+  soft,
 }: {
   icon: React.ReactNode;
   label: string;
   value: string;
   hint?: string;
+  accent: string;
+  soft: string;
 }) {
   return (
     <div
       className="flex min-w-0 items-center gap-3 rounded-xl border border-gray-100 bg-gray-50/80 px-3.5 py-3"
       title={hint ?? value}
     >
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white text-[#B91C1C] shadow-sm">
+      <div
+        className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-white shadow-sm"
+        style={{ color: accent, backgroundColor: soft }}
+      >
         {icon}
       </div>
       <div className="min-w-0">
@@ -189,6 +204,8 @@ export function RequestStatusView({
   backLabel = 'Back to overview',
 }: RequestStatusViewProps) {
   const AZURE_ROUTES = useAzureRoutes();
+  const accent = useCloudAccentColor();
+  const soft = hexToRgba(accent, 0.1);
   const resolvedBackHref = backHref ?? AZURE_ROUTES.dashboard;
   const [tipsOpen, setTipsOpen] = useState(false);
   const [downloadingSpreadsheet, setDownloadingSpreadsheet] = useState(false);
@@ -238,7 +255,13 @@ export function RequestStatusView({
     <div className="mx-auto max-w-screen-xl space-y-6 pb-8">
       <Link
         href={resolvedBackHref}
-        className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+        className="inline-flex items-center gap-1.5 text-sm text-gray-500 transition"
+        onMouseEnter={(e) => {
+          e.currentTarget.style.color = accent;
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.color = '';
+        }}
       >
         <ArrowLeft className="h-4 w-4" />
         {backLabel}
@@ -254,14 +277,29 @@ export function RequestStatusView({
         <>
           {/* Header */}
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="h-1 bg-gradient-to-r from-[#B91C1C] via-[#DC2626] to-[#B91C1C]" />
+            <div
+              className="h-1"
+              style={{
+                background: `linear-gradient(90deg, ${accent}, ${hexToRgba(accent, 0.65)}, ${accent})`,
+              }}
+            />
             <div className="flex flex-col gap-5 p-6 lg:flex-row lg:items-start lg:justify-between lg:p-8">
               <div className="flex items-start gap-4">
-                <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
+                <div
+                  className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl ring-1"
+                  style={{
+                    backgroundColor: soft,
+                    color: accent,
+                    ['--tw-ring-color' as string]: hexToRgba(accent, 0.15),
+                  }}
+                >
                   <Cloud className="h-7 w-7" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                  <p
+                    className="text-xs font-semibold uppercase tracking-wider"
+                    style={{ color: accent }}
+                  >
                     Provisioning status
                   </p>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
@@ -298,22 +336,30 @@ export function RequestStatusView({
                   icon={<MapPin className="h-4 w-4" />}
                   label="Region"
                   value={regionLabel}
+                  accent={accent}
+                  soft={soft}
                 />
                 <MetaChip
                   icon={<Users className="h-4 w-4" />}
                   label="Accounts"
                   value={String(getAccountCount(request))}
+                  accent={accent}
+                  soft={soft}
                 />
                 <MetaChip
                   icon={<DollarSign className="h-4 w-4" />}
                   label="Est. price"
                   value={formatCurrency(getEstimatedPrice(request))}
+                  accent={accent}
+                  soft={soft}
                 />
                 <MetaChip
                   icon={<Calendar className="h-4 w-4" />}
                   label="Created"
                   value={formatRelativeTime(createdAt)}
                   hint={createdAt ? formatDateTime(createdAt) : undefined}
+                  accent={accent}
+                  soft={soft}
                 />
               </div>
             ) : null}
@@ -341,7 +387,7 @@ export function RequestStatusView({
 
           {failedStep ? (
             <div className="overflow-hidden rounded-xl border border-red-200 bg-red-50 shadow-sm">
-              <div className="h-0.5 bg-[#B91C1C]" />
+              <div className="h-0.5" style={{ backgroundColor: accent }} />
               <div className="flex flex-col gap-4 p-5 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex items-start gap-3">
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-100">
@@ -386,9 +432,16 @@ export function RequestStatusView({
                   <div className="mb-6 h-2 overflow-hidden rounded-full bg-gray-100">
                     <div
                       className={`h-full rounded-full transition-all duration-500 ${
-                        isComplete ? 'bg-green-600' : failedStep ? 'bg-red-500' : 'bg-[#B91C1C]'
+                        isComplete ? 'bg-green-600' : failedStep ? 'bg-red-500' : ''
                       }`}
-                      style={{ width: `${progressPct}%` }}
+                      style={{
+                        width: `${progressPct}%`,
+                        ...(isComplete || failedStep
+                          ? {}
+                          : {
+                              background: `linear-gradient(90deg, ${accent}, ${hexToRgba(accent, 0.75)})`,
+                            }),
+                      }}
                     />
                   </div>
 
@@ -396,12 +449,13 @@ export function RequestStatusView({
                     {steps.map((step, index) => (
                       <li
                         key={step.key}
-                        className={`flex items-start gap-3 rounded-lg px-2 py-3 ${
-                          step.status === 'active' ? 'bg-red-50/60' : ''
-                        }`}
+                        className="flex items-start gap-3 rounded-lg px-2 py-3"
+                        style={
+                          step.status === 'active' ? { backgroundColor: soft } : undefined
+                        }
                       >
                         <div className="flex flex-col items-center">
-                          <StepIcon status={step.status} />
+                          <StepIcon status={step.status} accent={accent} />
                           {index < steps.length - 1 ? (
                             <div
                               className={`mt-1 h-6 w-0.5 ${
@@ -415,12 +469,13 @@ export function RequestStatusView({
                             className={`text-sm font-medium ${
                               step.status === 'complete'
                                 ? 'text-gray-900'
-                                : step.status === 'active'
-                                  ? 'text-[#B91C1C]'
-                                  : step.status === 'failed'
-                                    ? 'text-red-700'
+                                : step.status === 'failed'
+                                  ? 'text-red-700'
+                                  : step.status === 'active'
+                                    ? ''
                                     : 'text-gray-500'
                             }`}
+                            style={step.status === 'active' ? { color: accent } : undefined}
                           >
                             {step.label}
                           </p>
@@ -517,7 +572,7 @@ export function RequestStatusView({
                     className="flex w-full items-center justify-between gap-3 px-6 py-4 text-left"
                   >
                     <span className="inline-flex items-center gap-2 text-sm font-semibold text-gray-900">
-                      <Info className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
+                      <Info className="h-4 w-4" style={{ color: accent }} />
                       Azure Portal tips
                     </span>
                     <ChevronRight
