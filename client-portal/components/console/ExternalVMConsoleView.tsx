@@ -18,6 +18,33 @@ const IFRAME_OVERLAY_MIN_MS = 5000;
 const IFRAME_OVERLAY_MAX_MS = 12000;
 const IFRAME_OVERLAY_FADE_MS = 300;
 
+/**
+ * Cross-site iframe → HAProxy GUACSRV cookie is often blocked by the browser,
+ * so Guacamole websockets land on the wrong node and show the login screen.
+ * Same-site (e.g. *.racko.ai → guac.racko.ai) can keep using an iframe.
+ */
+function isCrossSiteGuacamoleUrl(clientUrl: string): boolean {
+  try {
+    const guacHost = new URL(clientUrl).hostname.toLowerCase();
+    const pageHost = window.location.hostname.toLowerCase();
+    if (guacHost === pageHost) return false;
+    if (pageHost === 'localhost' || pageHost === '127.0.0.1') return true;
+    const guacBase = guacHost.split('.').slice(-2).join('.');
+    const pageBase = pageHost.split('.').slice(-2).join('.');
+    return guacBase !== pageBase;
+  } catch {
+    return true;
+  }
+}
+
+function openGuacamoleTopLevel(clientUrl: string): Window | null {
+  try {
+    return window.open(clientUrl, '_blank', 'noopener,noreferrer');
+  } catch {
+    return null;
+  }
+}
+
 const protocolColors: Record<ExternalVMProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
   ssh: { bg: 'rgba(34, 197, 94, 0.15)', border: 'rgba(34, 197, 94, 0.4)', text: '#86efac' },
@@ -60,6 +87,8 @@ export function ExternalVMConsoleView({
   const [iframeKey, setIframeKey] = useState(0);
   const [iframeLoading, setIframeLoading] = useState(false);
   const [overlayMounted, setOverlayMounted] = useState(false);
+  const [openedExternally, setOpenedExternally] = useState(false);
+  const [popupBlocked, setPopupBlocked] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const iframeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -95,9 +124,22 @@ export function ExternalVMConsoleView({
       if (!id) return;
       setLoading(true);
       setError(null);
+      setOpenedExternally(false);
+      setPopupBlocked(false);
       try {
         const data = await openConsole(id);
         if (signal?.aborted) return;
+
+        // Tenant portals (different eTLD+1 from guac.racko.ai) must open top-level,
+        // otherwise HAProxy sticky cookies fail in a third-party iframe.
+        if (isCrossSiteGuacamoleUrl(data.clientUrl)) {
+          setSession(data);
+          const popup = openGuacamoleTopLevel(data.clientUrl);
+          setOpenedExternally(true);
+          setPopupBlocked(!popup);
+          return;
+        }
+
         setSession(data);
         setIframeKey((k) => k + 1);
       } catch (err) {
@@ -135,10 +177,10 @@ export function ExternalVMConsoleView({
   }, [id, fetchVm]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!session || openedExternally) return;
     startIframeLoading();
     return () => clearIframeTimeout();
-  }, [session, iframeKey, startIframeLoading, clearIframeTimeout]);
+  }, [session, iframeKey, openedExternally, startIframeLoading, clearIframeTimeout]);
 
   useEffect(() => {
     if (!iframeLoading && overlayMounted) {
@@ -244,11 +286,11 @@ export function ExternalVMConsoleView({
           <button
             type="button"
             onClick={handleFullscreen}
-            disabled={!session}
+            disabled={!session || openedExternally}
             style={{
               ...styles.textButton,
-              opacity: !session ? 0.4 : 1,
-              cursor: !session ? 'not-allowed' : 'pointer',
+              opacity: !session || openedExternally ? 0.4 : 1,
+              cursor: !session || openedExternally ? 'not-allowed' : 'pointer',
             }}
             title="Enter fullscreen"
           >
@@ -284,7 +326,29 @@ export function ExternalVMConsoleView({
           </div>
         )}
 
-        {session && !error && (
+        {session && !error && openedExternally && (
+          <div style={styles.statusOverlay}>
+            <p style={styles.statusText}>
+              {popupBlocked
+                ? 'Pop-up blocked — open the console in a new tab to continue.'
+                : 'Console opened in a new tab (required for tenant domains).'}
+            </p>
+            <a
+              href={session.clientUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ ...styles.tryAgainButton, textDecoration: 'none' }}
+            >
+              Open Console
+            </a>
+            <button type="button" onClick={() => void fetchSession()} style={styles.textButton}>
+              <RefreshCw size={13} />
+              Reconnect
+            </button>
+          </div>
+        )}
+
+        {session && !error && !openedExternally && (
           <>
             <iframe
               key={iframeKey}
