@@ -74,7 +74,7 @@ export default function TenantLoginPage() {
   return (
     <TenantAuthFrame
       title="Welcome back"
-      description="Use your work email and the password your administrator gave you."
+      description="Use your work email and the password your administrator gave you. Tenant users must sign in here — not at /login."
     >
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
         <div>

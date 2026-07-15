@@ -37,8 +37,9 @@ function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
 
 export default function TenantMyServersPage() {
   const router = useRouter();
-  const { isAuthenticated } = useTenantAuth();
+  const { isAuthenticated, tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
+  const isAdmin = tenantUser?.role === 'tenant_admin';
   const listFn = useCallback(() => fetchTenantExternalVMs(), []);
   const { vms, loading, error, refetch } = useExternalVMs(isAuthenticated, listFn);
   const { toasts, addToast, dismiss } = useToast();
@@ -102,21 +103,25 @@ export default function TenantMyServersPage() {
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
             Refresh
           </button>
-          <Link
-            href={tenantConsole.elasticAdd}
-            className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90"
-            style={tenantAccentButton(accentColor)}
-          >
-            <Plus className="h-4 w-4" />
-            Add Server
-          </Link>
-          <Link
-            href={tenantConsole.elasticBulk}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
-          >
-            <Upload className="h-4 w-4" />
-            Bulk Import
-          </Link>
+          {isAdmin && (
+            <>
+              <Link
+                href={tenantConsole.elasticAdd}
+                className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90"
+                style={tenantAccentButton(accentColor)}
+              >
+                <Plus className="h-4 w-4" />
+                Add Server
+              </Link>
+              <Link
+                href={tenantConsole.elasticBulk}
+                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
+              >
+                <Upload className="h-4 w-4" />
+                Bulk Import
+              </Link>
+            </>
+          )}
         </div>
       </div>
 
@@ -131,16 +136,22 @@ export default function TenantMyServersPage() {
               <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
                 <Server className="h-7 w-7 text-gray-400" />
               </div>
-              <p className="font-medium text-gray-600">No servers added yet</p>
-              <p className="mt-1 text-sm text-gray-400">Click Add Server to get started.</p>
-              <Link
-                href={tenantConsole.elasticAdd}
-                className="mt-4 inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
-                style={tenantAccentButton(accentColor)}
-              >
-                <Plus className="h-4 w-4" />
-                Add Server
-              </Link>
+              <p className="font-medium text-gray-600">
+                {isAdmin ? 'No servers added yet' : 'No servers assigned yet'}
+              </p>
+              <p className="mt-1 text-sm text-gray-400">
+                {isAdmin ? 'Click Add Server to get started.' : 'Contact your administrator to get a server assigned.'}
+              </p>
+              {isAdmin && (
+                <Link
+                  href={tenantConsole.elasticAdd}
+                  className="mt-4 inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition hover:opacity-90"
+                  style={tenantAccentButton(accentColor)}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Server
+                </Link>
+              )}
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -198,14 +209,16 @@ export default function TenantMyServersPage() {
                             <Monitor className="h-3.5 w-3.5" />
                             Console
                           </button>
-                          <button
-                            onClick={() => setPendingDelete(vm)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
-                            title="Delete server"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Delete
-                          </button>
+                          {isAdmin && (
+                            <button
+                              onClick={() => setPendingDelete(vm)}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
+                              title="Delete server"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Delete
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
