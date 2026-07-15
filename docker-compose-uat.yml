@@ -95,9 +95,12 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: ${CLIENT_PORTAL_PORT:-3000}
       GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
     depends_on:
       cloud-gateway:
         condition: service_healthy
+      create-vm-catalog-agent:
+        condition: service_started
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
     networks:
