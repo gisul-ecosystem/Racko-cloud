@@ -156,6 +156,13 @@ async function login(): Promise<CachedToken> {
     const guacSrv = cookies.find((c) => c.key === 'GUACSRV')?.value;
     const srvName = guacSrv?.split('|')[0] ?? '';
 
+    logger.info('Guacamole login sticky cookie captured', {
+      guacSrv: guacSrv ?? null,
+      srvName: srvName || '(empty)',
+      cookieCount: cookies.length,
+      cookieKeys: cookies.map((c) => c.key),
+    });
+
     return {
       authToken: res.data.authToken,
       dataSource: res.data.dataSource,
@@ -336,6 +343,13 @@ function buildClientUrl(
   const raw = `${connectionId}\u0000c\u0000${dataSource}`;
   const idHash = Buffer.from(raw, 'utf8').toString('base64').replace(/=+$/, '');
   const srvParam = srvName ? `?srv=${encodeURIComponent(srvName)}` : '';
+
+  logger.info('Building Guacamole client URL', {
+    srvName,
+    publicUrl: env.publicUrl,
+    connectionId,
+  });
+
   return `${env.publicUrl}/${srvParam}#/client/${idHash}?token=${encodeURIComponent(authToken)}`;
 }
 
