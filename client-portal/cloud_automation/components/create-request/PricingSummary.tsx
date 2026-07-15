@@ -48,7 +48,7 @@ export function PricingSummary({
     <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
       <div className="border-b border-gray-100 px-5 py-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]">
             <DollarSign className="h-4 w-4" />
           </div>
           <div>
@@ -61,14 +61,14 @@ export function PricingSummary({
       <div className="p-5">
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Loader2 className="h-4 w-4 animate-spin text-[#B91C1C]" />
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--cloud-accent,#B91C1C)]" />
             Calculating…
           </div>
         ) : error ? (
           <p className="text-sm text-red-600">{error}</p>
         ) : totalPrice != null ? (
           <div className="space-y-3">
-            <p className="text-3xl font-bold tracking-tight text-[#B91C1C]">
+            <p className="text-3xl font-bold tracking-tight text-[var(--cloud-accent,#B91C1C)]">
               {formatCurrency(totalPrice)}
               <span className="ml-1.5 text-sm font-normal text-gray-400">{currency}</span>
             </p>

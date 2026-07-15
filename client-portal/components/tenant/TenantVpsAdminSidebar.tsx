@@ -27,27 +27,36 @@ export function TenantVpsAdminSidebar({
   onCloseSidebar,
 }: TenantVpsAdminSidebarProps) {
   const { tenantUser } = useTenantAuth();
-  const { accentColor } = useTenantBranding();
+  const { accentColor, portalName } = useTenantBranding();
   const isAdmin = tenantUser?.role === 'tenant_admin';
 
-  const links: ServiceNavLink[] = [
-    {
-      href: tenantVps.overview,
-      label: 'Overview',
-      icon: <LayoutDashboard className="h-4 w-4" />,
-      exact: true,
-    },
-    {
-      href: tenantVps.vms,
-      label: 'My VMs',
-      icon: <Server className="h-4 w-4" />,
-      isActive: (p) =>
-        p === tenantVps.vms ||
-        (p.startsWith(`${tenantVps.vms}/`) &&
-          !p.startsWith(tenantVps.restricted) &&
-          !p.startsWith(tenantVps.createVm)),
-    },
-  ];
+  const links: ServiceNavLink[] = isAdmin
+    ? [
+        {
+          href: tenantVps.overview,
+          label: 'Overview',
+          icon: <LayoutDashboard className="h-4 w-4" />,
+          exact: true,
+        },
+        {
+          href: tenantVps.vms,
+          label: 'My VMs',
+          icon: <Server className="h-4 w-4" />,
+          isActive: (p) =>
+            p === tenantVps.vms ||
+            (p.startsWith(`${tenantVps.vms}/`) &&
+              !p.startsWith(tenantVps.restricted) &&
+              !p.startsWith(tenantVps.createVm)),
+        },
+      ]
+    : [
+        {
+          href: tenantVps.vms,
+          label: 'My VMs',
+          icon: <Server className="h-4 w-4" />,
+          exact: true,
+        },
+      ];
 
   if (isAdmin) {
     links.push(
@@ -102,11 +111,11 @@ export function TenantVpsAdminSidebar({
     <ServiceNavSidebar
       sidebarOpen={sidebarOpen}
       onCloseSidebar={onCloseSidebar}
-      title="VPS Hosting"
-      subtitle="Virtual machines & jobs"
+      title={isAdmin ? 'VPS Hosting' : portalName || 'My VMs'}
+      subtitle={isAdmin ? 'Virtual machines & jobs' : 'Assigned resources'}
       links={links}
       accentColor={accentColor}
-      footerHref={TENANT_CONSOLE}
+      footerHref={isAdmin ? TENANT_CONSOLE : undefined}
       footerLabel="All services"
     />
   );

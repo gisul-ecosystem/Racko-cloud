@@ -8,16 +8,18 @@ import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ApiError } from '../../../lib/apiClient';
 import {
-  chargeAdminWalletForCloudRequest,
-  getMyAdminWallet,
-  linkAdminWalletCloudCharge,
-  refundAdminWalletCloudCharge,
-} from '../../../lib/adminBillingApi';
+  chargeCloudRequestWallet,
+  getCloudRequestWallet,
+  linkCloudRequestWalletCharge,
+  refundCloudRequestWallet,
+} from '../../../lib/cloudRequestWallet';
 import {
   createAdminAccessRequest,
   createRequestWithPricing,
 } from '../../api/client';
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
+import { useCloudAccentColor } from '../../../lib/cloudAccent';
+import { hexToRgba } from '../../../lib/tenantAccentStyles';
 import { useAvailableLocations } from '../../hooks/useAvailableLocations';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
 import { useServiceCatalog } from '../../hooks/useServiceCatalog';
@@ -212,6 +214,8 @@ function validateForm(input: {
 export function RequestWorkspace() {
   const router = useRouter();
   const AZURE_ROUTES = useAzureRoutes();
+  const accent = useCloudAccentColor();
+  const soft = hexToRgba(accent, 0.1);
   const { catalog, loading: catalogLoading, error: catalogError, refetch } = useServiceCatalog();
 
   const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([]);
@@ -253,7 +257,7 @@ export function RequestWorkspace() {
   const refreshWallet = useCallback(async () => {
     setWalletLoading(true);
     try {
-      const wallet = await getMyAdminWallet();
+      const wallet = await getCloudRequestWallet();
       setWalletBalance(wallet.balance);
       setWalletCurrency(wallet.currency || 'INR');
       if (wallet.usdToInrRate && wallet.usdToInrRate > 0) {
@@ -392,7 +396,7 @@ export function RequestWorkspace() {
 
     if (totalPrice > 0) {
       if (walletBalance == null) {
-        setSubmitError('Unable to load your wallet balance. Refresh and try again.');
+        setSubmitError('Unable to load your wallet balance.');
         return;
       }
 
@@ -409,7 +413,7 @@ export function RequestWorkspace() {
 
     try {
       if (totalPrice > 0) {
-        const charge = await chargeAdminWalletForCloudRequest(totalPrice, null, 'azure');
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure');
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
         setUsdToInrRate(charge.usdToInrRate);
@@ -447,13 +451,15 @@ export function RequestWorkspace() {
         });
 
         if (chargedInr != null && chargedInr > 0) {
-          void linkAdminWalletCloudCharge(String(response.requestId)).catch(() => undefined);
+          void linkCloudRequestWalletCharge(String(response.requestId), 'azure').catch(
+            () => undefined
+          );
         }
         router.push(AZURE_ROUTES.requestStatus(response.requestId));
       } catch (createErr) {
         if (chargedInr != null && chargedInr > 0) {
           try {
-            const refunded = await refundAdminWalletCloudCharge(chargedInr);
+            const refunded = await refundCloudRequestWallet(chargedInr, null, 'azure');
             setWalletBalance(refunded.balance);
           } catch {
             // Best-effort refund; surface original create failure below.
@@ -562,22 +568,44 @@ export function RequestWorkspace() {
     <div className="mx-auto max-w-screen-xl space-y-6 pb-10">
       {/* Page header */}
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="h-1 bg-gradient-to-r from-[#B91C1C] via-[#DC2626] to-[#B91C1C]" />
+        <div
+          className="h-1"
+          style={{
+            background: `linear-gradient(90deg, ${accent}, ${hexToRgba(accent, 0.65)}, ${accent})`,
+          }}
+        />
         <div className="p-6 lg:p-8">
           <Link
             href={AZURE_ROUTES.dashboard}
-            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:opacity-80"
+            style={{ ['--hover-accent' as string]: accent }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = accent;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = '';
+            }}
           >
             <ArrowLeft className="h-4 w-4" />
             Back to overview
           </Link>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
+              <div
+                className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl ring-1"
+                style={{
+                  backgroundColor: soft,
+                  color: accent,
+                  ['--tw-ring-color' as string]: hexToRgba(accent, 0.15),
+                }}
+              >
                 <FilePlus2 className="h-7 w-7" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                <p
+                  className="text-xs font-semibold uppercase tracking-wider"
+                  style={{ color: accent }}
+                >
                   Azure automation
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
@@ -589,7 +617,7 @@ export function RequestWorkspace() {
               </div>
             </div>
             <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-              <Cloud className="h-4 w-4 shrink-0 text-[#B91C1C]" />
+              <Cloud className="h-4 w-4 shrink-0" style={{ color: accent }} />
               <span>Fields unlock step by step as you complete each section</span>
             </div>
           </div>
@@ -612,7 +640,10 @@ export function RequestWorkspace() {
         <>
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="border-b border-gray-100 px-6 py-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+              <p
+                className="text-xs font-semibold uppercase tracking-wider"
+                style={{ color: accent }}
+              >
                 Request progress
               </p>
               <p className="mt-0.5 text-sm text-gray-500">
@@ -632,9 +663,10 @@ export function RequestWorkspace() {
                   <span
                     className={`relative z-10 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-semibold transition ${
                       step.done
-                        ? 'bg-[#B91C1C] text-white shadow-sm'
+                        ? 'text-white shadow-sm'
                         : 'border border-gray-200 bg-white text-gray-400'
                     }`}
+                    style={step.done ? { backgroundColor: accent } : undefined}
                   >
                     {step.done ? <Check className="h-4 w-4" /> : index + 1}
                   </span>

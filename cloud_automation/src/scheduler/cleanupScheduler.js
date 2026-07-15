@@ -25,6 +25,29 @@ const logSchedulerEvent = (level, event, details = {}) => {
   console.log(message);
 };
 
+const isRequestEligibleForCleanupEmail = async (requestId) => {
+  const result = await db.query(
+    `
+      SELECT id
+      FROM requests
+      WHERE id = $1
+        AND status = 'Completed'
+        AND COALESCE(expired, FALSE) = FALSE
+        AND COALESCE(cleanup_completed, FALSE) = FALSE
+        AND cleanup_enabled = TRUE
+        AND (
+          CASE
+            WHEN expires_at IS NOT NULL THEN expires_at > NOW()
+            ELSE expiry_date IS NULL OR expiry_date > CURRENT_DATE
+          END
+        )
+    `,
+    [requestId]
+  );
+
+  return Boolean(result.rows[0]);
+};
+
 const getDueScheduledCleanupRequests = async () => {
   const now = new Date().toISOString();
 
@@ -39,8 +62,15 @@ const getDueScheduledCleanupRequests = async () => {
         AND next_cleanup_at IS NOT NULL
         AND next_cleanup_at <= $1
         AND COALESCE(expired, false) = FALSE
+        AND COALESCE(cleanup_completed, false) = FALSE
         AND status NOT IN ('Expired', 'Cleanup In Progress', 'Cleanup Failed')
         AND status = 'Completed'
+        AND (
+          CASE
+            WHEN expires_at IS NOT NULL THEN expires_at > NOW()
+            ELSE expiry_date IS NULL OR expiry_date > CURRENT_DATE
+          END
+        )
       ORDER BY next_cleanup_at ASC, id ASC
     `,
     [now]
@@ -59,20 +89,29 @@ const handleScheduledCleanup = async (requestRow) => {
       return;
     }
 
-    try {
-      await sendCleanupNotificationEmailWithRetry({
-        to: result.customerEmail,
-        requestId: result.requestId,
-        requestLabel: `Request #${result.requestId}`,
-        cleanedAt: result.cleanedAt,
-        nextCleanupAt: result.nextCleanupAt,
-        intervalHours: result.intervalHours
-      });
-    } catch (emailError) {
-      logSchedulerEvent('error', 'scheduled_cleanup_email_failed', {
+    const shouldEmail = await isRequestEligibleForCleanupEmail(requestId);
+
+    if (!shouldEmail) {
+      logSchedulerEvent('info', 'scheduled_cleanup_email_skipped', {
         requestId,
-        message: emailError?.message
+        reason: 'request_expired_or_deleted'
       });
+    } else {
+      try {
+        await sendCleanupNotificationEmailWithRetry({
+          to: result.customerEmail,
+          requestId: result.requestId,
+          requestLabel: `Request #${result.requestId}`,
+          cleanedAt: result.cleanedAt,
+          nextCleanupAt: result.nextCleanupAt,
+          intervalHours: result.intervalHours
+        });
+      } catch (emailError) {
+        logSchedulerEvent('error', 'scheduled_cleanup_email_failed', {
+          requestId,
+          message: emailError?.message
+        });
+      }
     }
 
     logSchedulerEvent('info', 'scheduled_cleanup_completed', {

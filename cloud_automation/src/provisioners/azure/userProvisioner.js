@@ -34,10 +34,43 @@ const logAzureUserEvent = (level, event, details = {}) => {
 const isRetryableError = (error) => {
   const statusCode = Number(error?.statusCode || error?.status);
   const errorCode = String(error?.code || '').toUpperCase();
+  const message = String(error?.message || '').toLowerCase();
+  const causeCode = String(error?.cause?.code || '').toUpperCase();
 
   return (
     RETRYABLE_STATUS_CODES.has(statusCode) ||
-    ['ECONNRESET', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'REQUESTTIMEOUT'].includes(errorCode)
+    statusCode === -1 ||
+    ['ECONNRESET', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'REQUESTTIMEOUT', 'ECONNREFUSED', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'].includes(errorCode) ||
+    ['ECONNRESET', 'ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ECONNREFUSED', 'ENOTFOUND', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET'].includes(causeCode) ||
+    message.includes('fetch failed') ||
+    message.includes('network') ||
+    message.includes('socket hang up')
+  );
+};
+
+const toGraphProvisionError = (error) => {
+  if (error instanceof AppError) {
+    return error;
+  }
+
+  if (isRetryableError(error)) {
+    return new AppError(
+      'Unable to reach Microsoft Graph while provisioning users. Please try again.',
+      502
+    );
+  }
+
+  const statusCode = Number(error?.statusCode || error?.status);
+  if (Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599) {
+    return new AppError(
+      error?.body?.error?.message || error?.message || 'Microsoft Graph user provisioning failed.',
+      statusCode
+    );
+  }
+
+  return new AppError(
+    error?.message || 'Microsoft Graph user provisioning failed.',
+    500
   );
 };
 
@@ -232,6 +265,44 @@ const buildBulkUserPayload = ({ row, index, domain, jobId }) => {
   };
 };
 
+const isUpnConflictError = (error) => {
+  const statusCode = Number(error?.statusCode || error?.status);
+  const message = String(error?.message || '').toLowerCase();
+  const bodyMessage = String(error?.body?.error?.message || '').toLowerCase();
+
+  return (
+    statusCode === 400 &&
+    (message.includes('userprincipalname') || bodyMessage.includes('userprincipalname')) &&
+    (message.includes('already exists') || bodyMessage.includes('already exists'))
+  );
+};
+
+const getGraphUserByUpn = async (graphClient, userPrincipalName) => {
+  try {
+    return await graphClient
+      .api(`/users/${encodeURIComponent(userPrincipalName)}`)
+      .select('id,userPrincipalName,accountEnabled,displayName,mailNickname')
+      .get();
+  } catch (error) {
+    const statusCode = Number(error?.statusCode || error?.status);
+    if (statusCode === 404) {
+      return null;
+    }
+    throw toGraphProvisionError(error);
+  }
+};
+
+const syncAdoptedGraphUser = async (graphClient, azureUserId, { temporaryPassword, accountEnabled }) => {
+  await graphClient.api(`/users/${encodeURIComponent(azureUserId)}`).patch({
+    accountEnabled: accountEnabled !== false,
+    passwordProfile: {
+      forceChangePasswordNextSignIn: true,
+      password: temporaryPassword
+    },
+    passwordPolicies: 'DisablePasswordExpiration'
+  });
+};
+
 const createGraphUserWithRetry = async (graphClient, userPayload, requestId) => {
   let lastError;
 
@@ -241,8 +312,13 @@ const createGraphUserWithRetry = async (graphClient, userPayload, requestId) => 
     } catch (error) {
       lastError = error;
 
-      if (attempt === MAX_ATTEMPTS || !isRetryableError(error)) {
+      // Keep UPN conflicts unwrapped so callers can adopt the existing user.
+      if (isUpnConflictError(error)) {
         throw error;
+      }
+
+      if (attempt === MAX_ATTEMPTS || !isRetryableError(error)) {
+        throw toGraphProvisionError(error);
       }
 
       const delayMs = getRetryDelayMs(error, attempt);
@@ -252,16 +328,53 @@ const createGraphUserWithRetry = async (graphClient, userPayload, requestId) => 
         attempt,
         nextDelayMs: delayMs,
         errorName: error?.name,
-        errorCode: error?.code,
+        errorCode: error?.code || error?.cause?.code,
         statusCode: error?.statusCode || error?.status,
-        message: error?.message
+        message: error?.message,
+        cause: error?.cause?.message || null
       });
 
       await sleep(delayMs);
     }
   }
 
-  throw lastError;
+  throw toGraphProvisionError(lastError);
+};
+
+/**
+ * Create a Graph user, or adopt an existing one when the UPN already exists
+ * (common after a failed provision that created Azure users but rolled back DB rows).
+ */
+const createOrAdoptGraphUser = async (graphClient, { payload, temporaryPassword }, requestId) => {
+  try {
+    const created = await createGraphUserWithRetry(graphClient, payload, requestId);
+    return { user: created, adopted: false };
+  } catch (error) {
+    if (!isUpnConflictError(error)) {
+      throw toGraphProvisionError(error);
+    }
+
+    const existing = await getGraphUserByUpn(graphClient, payload.userPrincipalName);
+    if (!existing?.id) {
+      throw new AppError(
+        `User principal ${payload.userPrincipalName} already exists but could not be loaded from Microsoft Graph.`,
+        409
+      );
+    }
+
+    await syncAdoptedGraphUser(graphClient, existing.id, {
+      temporaryPassword,
+      accountEnabled: payload.accountEnabled
+    });
+
+    logAzureUserEvent('info', 'azure_user_provision_adopted_existing', {
+      requestId,
+      azureUserId: existing.id,
+      userPrincipalName: payload.userPrincipalName
+    });
+
+    return { user: existing, adopted: true };
+  }
 };
 
 module.exports = {
@@ -269,8 +382,12 @@ module.exports = {
   buildBulkUserPayload,
   createGraphClient,
   createGraphUserWithRetry,
+  createOrAdoptGraphUser,
   generateTemporaryPassword,
   getVerifiedDomain,
   logAzureUserEvent,
-  getRetryDelayMs
+  getRetryDelayMs,
+  isRetryableError,
+  isUpnConflictError,
+  toGraphProvisionError
 };

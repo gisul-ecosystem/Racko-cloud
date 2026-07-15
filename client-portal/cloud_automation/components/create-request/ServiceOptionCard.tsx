@@ -23,7 +23,7 @@ export function ServiceOptionCard({ service, checked, onToggle }: ServiceOptionC
     <label
       className={`group flex h-full cursor-pointer flex-col rounded-xl border p-4 transition ${
         checked
-          ? 'border-[#B91C1C] bg-red-50/60 ring-2 ring-[#B91C1C]/25 shadow-sm'
+          ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] ring-2 ring-[var(--cloud-accent,#B91C1C)]/25 shadow-sm'
           : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
       }`}
     >
@@ -32,13 +32,13 @@ export function ServiceOptionCard({ service, checked, onToggle }: ServiceOptionC
           type="checkbox"
           checked={checked}
           onChange={onToggle}
-          className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+          className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
         />
         <div className="min-w-0 flex-1">
           <div className="flex items-start justify-between gap-2">
             <span className="text-sm font-semibold leading-snug text-gray-900">{displayName}</span>
             {checked ? (
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#B91C1C] text-white">
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--cloud-accent,#B91C1C)] text-white">
                 <Check className="h-3 w-3" />
               </span>
             ) : null}

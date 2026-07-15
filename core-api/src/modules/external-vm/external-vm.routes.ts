@@ -7,11 +7,13 @@ import {
   createExternalVMSchema,
   bulkCreateExternalVMSchema,
   externalVMIdParamSchema,
+  userIdParamSchema,
+  assignExternalVMsSchema,
+  bulkAssignExternalPairsSchema,
 } from './external-vm.validation';
 
 const router = Router();
 
-// All external VM routes require an authenticated admin.
 router.use(requireAuth);
 
 // POST /api/v1/external-vms/bulk — bulk add (defined before /:id collisions)
@@ -30,7 +32,56 @@ router.post(
   (req, res, next) => externalVMController.create(req, res, next)
 );
 
-// GET /api/v1/external-vms — list my external VMs
+// ─── Assignment routes (admin only) ────────────────────────────────────────────
+
+router.get(
+  '/assign/available',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => externalVMController.getAvailable(req, res, next)
+);
+
+router.get(
+  '/assign/counts',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => externalVMController.getAssignedCounts(req, res, next)
+);
+
+router.get(
+  '/assign/user/:userId',
+  requireRole('admin', 'super_admin'),
+  validateRequest(userIdParamSchema),
+  (req, res, next) => externalVMController.getAssignedForUser(req, res, next)
+);
+
+router.post(
+  '/assign',
+  requireRole('admin', 'super_admin'),
+  validateRequest(assignExternalVMsSchema),
+  (req, res, next) => externalVMController.assign(req, res, next)
+);
+
+router.post(
+  '/assign/bulk',
+  requireRole('admin', 'super_admin'),
+  validateRequest(bulkAssignExternalPairsSchema),
+  (req, res, next) => externalVMController.bulkAssignOneToOne(req, res, next)
+);
+
+router.delete(
+  '/assign/:id',
+  requireRole('admin', 'super_admin'),
+  validateRequest(externalVMIdParamSchema),
+  (req, res, next) => externalVMController.unassign(req, res, next)
+);
+
+// GET /api/v1/external-vms/my-assigned — user sees assigned servers
+router.get(
+  '/my-assigned',
+  requireRole('user'),
+  (req, res, next) => externalVMController.getMyAssigned(req, res, next)
+);
+
+// GET /api/v1/external-vms — list my external VMs (admin)
 router.get(
   '/',
   requireRole('admin', 'super_admin'),
@@ -40,7 +91,7 @@ router.get(
 // GET /api/v1/external-vms/:id/console — Guacamole session URL
 router.get(
   '/:id/console',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(externalVMIdParamSchema),
   (req, res, next) => externalVMController.openConsole(req, res, next)
 );
@@ -48,7 +99,7 @@ router.get(
 // GET /api/v1/external-vms/:id — single external VM
 router.get(
   '/:id',
-  requireRole('admin', 'super_admin'),
+  requireRole('admin', 'super_admin', 'user'),
   validateRequest(externalVMIdParamSchema),
   (req, res, next) => externalVMController.getOne(req, res, next)
 );
