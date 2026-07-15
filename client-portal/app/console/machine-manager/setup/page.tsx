@@ -24,7 +24,7 @@ import {
 } from '../../../../lib/machineManagerApi';
 import {
   Monitor, Server, Layers, Download, Check,
-  RefreshCw, Plus, Trash2, Loader2,
+  RefreshCw, Plus, Trash2, Loader2, FileUp,
 } from 'lucide-react';
 
 // ─── Clipboard helper — works on HTTP and HTTPS ───────────────────────────────
@@ -415,12 +415,61 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const [pushing, setPushing] = useState(false);
   const [waiting, setWaiting] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const updateRow = (i: number, field: keyof VMPushTarget, value: string) => {
     setVmRows((prev) => prev.map((r, idx) => idx === i ? { ...r, [field]: value } : r));
   };
   const addRow = () => setVmRows((p) => [...p, { name: '', ipAddress: '', os: 'linux', username: '', password: '' }]);
   const removeRow = (i: number) => setVmRows((p) => p.filter((_, idx) => idx !== i));
+
+  const downloadSample = async () => {
+    const XLSX = await import('xlsx');
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['Name', 'IP Address', 'OS', 'Username', 'Password'],
+      ['Web Server 01', '192.168.1.10', 'windows', 'Administrator', 'YourPassword'],
+      ['DB Server', '10.0.0.5', 'linux', 'root', 'YourPassword'],
+    ]);
+    // Set column widths
+    ws['!cols'] = [{ wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 16 }, { wch: 16 }];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'VMs');
+    XLSX.writeFile(wb, 'racko-vms-template.xlsx');
+  };
+
+  const handleExcelUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const XLSX = await import('xlsx');
+      const data = await file.arrayBuffer();
+      const wb = XLSX.read(data);
+      const ws = wb.Sheets[wb.SheetNames[0]];
+      const rows = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' });
+
+      const parsed: VMPushTarget[] = rows
+        .filter((r) => r['IP Address']?.trim())
+        .map((r) => ({
+          name:      (r['Name'] || r['name'] || '').trim(),
+          ipAddress: (r['IP Address'] || r['ip address'] || r['ipAddress'] || '').trim(),
+          os:        ((r['OS'] || r['os'] || 'linux').toString().toLowerCase().trim()) as MachineOS,
+          username:  (r['Username'] || r['username'] || '').trim(),
+          password:  (r['Password'] || r['password'] || '').toString().trim(),
+        }))
+        .filter((r) => r.ipAddress);
+
+      if (!parsed.length) {
+        addToast('error', 'No valid rows found. Check the Excel format matches the template.');
+        return;
+      }
+      setVmRows(parsed);
+      addToast('success', `${parsed.length} VM${parsed.length !== 1 ? 's' : ''} loaded from Excel.`);
+    } catch {
+      addToast('error', 'Failed to parse Excel file. Download the sample template and try again.');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
 
   const handlePush = async () => {
     const valid = vmRows.filter((r) => r.name.trim() && r.ipAddress.trim() && r.username.trim() && r.password.trim());
@@ -431,15 +480,26 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
       setMachines(result.machines);
       setPushResults(result.pushResults);
       setWaiting(true);
-      // Poll until all pushed machines come online
-      const machineIds = new Set(result.machines.map((m) => m._id));
+
+      // Only wait for machines whose push actually succeeded
+      const successfulMachineIds = new Set(
+        result.pushResults.filter((r) => r.success).map((r) => r.machineId)
+      );
+
+      // If every push failed, skip polling and stay on step 1 so errors are visible
+      if (successfulMachineIds.size === 0) {
+        setWaiting(false);
+        return;
+      }
+
+      // Poll until all successfully-pushed machines come online
       intervalRef.current = setInterval(async () => {
         try {
           const all = await fetchMachines();
-          const online = all.filter((m) => machineIds.has(m._id) && m.status === 'online');
-          if (online.length === result.machines.length) {
+          const online = all.filter((m) => successfulMachineIds.has(m._id) && m.status === 'online');
+          if (online.length === successfulMachineIds.size) {
             clearInterval(intervalRef.current!);
-            setMachines(online);
+            setMachines(result.machines); // keep all (including failed) for display
             setWaiting(false);
             setStep(2);
           }
@@ -465,6 +525,32 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 
           {!waiting ? (
             <>
+              {/* Excel import/export toolbar */}
+              <div className="mb-4 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => void downloadSample()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
+                >
+                  <Download className="h-3.5 w-3.5" />
+                  Download Sample Excel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
+                >
+                  <FileUp className="h-3.5 w-3.5" />
+                  Upload Excel
+                </button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls,.csv"
+                  className="hidden"
+                  onChange={(e) => void handleExcelUpload(e)}
+                />
+              </div>
               <div className="space-y-3">
                 {vmRows.map((row, i) => (
                   <div key={i} className="grid grid-cols-1 gap-2 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:grid-cols-5">
