@@ -32,10 +32,10 @@ export function PricingSummary({
 
   return (
     <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-      <div className="h-0.5 bg-gradient-to-r from-[#B91C1C] to-[#DC2626]" />
+      <div className="h-0.5 bg-gradient-to-r from-[var(--cloud-accent,#B91C1C)] to-[var(--cloud-accent,#B91C1C)]" />
       <div className="p-6">
         <div className="mb-4 flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]">
             <DollarSign className="h-5 w-5" />
           </div>
           <div>
@@ -46,7 +46,7 @@ export function PricingSummary({
 
         {loading ? (
           <div className="flex items-center gap-2 text-sm text-gray-500">
-            <Loader2 className="h-4 w-4 animate-spin text-[#B91C1C]" />
+            <Loader2 className="h-4 w-4 animate-spin text-[var(--cloud-accent,#B91C1C)]" />
             Calculating…
           </div>
         ) : error ? (
@@ -54,7 +54,7 @@ export function PricingSummary({
         ) : totalPrice != null ? (
           <div className="space-y-4">
             <div>
-              <p className="text-3xl font-bold tracking-tight text-[#B91C1C]">
+              <p className="text-3xl font-bold tracking-tight text-[var(--cloud-accent,#B91C1C)]">
                 {formatCurrency(totalPrice)}
                 <span className="ml-1.5 text-sm font-normal text-gray-400">USD</span>
               </p>

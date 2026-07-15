@@ -47,7 +47,7 @@ export function ServiceSelector({ servicesByCategory, selectedServiceIds, onTogg
                       </span>
                     ) : null}
                     {service.pricingType === 'instance' ? (
-                      <span className="mt-2 inline-flex rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#B91C1C]">
+                      <span className="mt-2 inline-flex rounded-full bg-[var(--cloud-accent-soft,#fef2f2)] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[var(--cloud-accent,#B91C1C)]">
                         Instance required
                       </span>
                     ) : null}
