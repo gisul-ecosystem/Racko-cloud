@@ -394,7 +394,6 @@ async function ensureBrowser() {
     console.log('[webyne] Launching browser…');
     browser = await chromium.launch({
       headless: true,
-      channel: 'msedge',
     });
 
     const contextOptions = {
