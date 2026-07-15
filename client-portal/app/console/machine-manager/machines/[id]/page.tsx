@@ -15,9 +15,10 @@ import {
   type IJob,
   type JobStatus,
 } from '../../../../../lib/machineManagerApi';
+import { useJobStream } from '../../../../../hooks/useJobStream';
 import {
   Server, ArrowLeft, Cpu, HardDrive, MemoryStick,
-  Monitor, CheckCircle2, Loader2, RefreshCw, Package,
+  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X,
 } from 'lucide-react';
 
 const jobStatusCfg: Record<JobStatus, { label: string; dot: string; text: string }> = {
@@ -58,6 +59,75 @@ function SpecCard({ icon: Icon, label, value }: { icon: React.ElementType; label
   );
 }
 
+// ─── Logs modal ───────────────────────────────────────────────────────────────
+function LogsModal({ job, onClose }: { job: IJob; onClose: () => void }) {
+  const cfg = jobStatusCfg[job.status] ?? jobStatusCfg.pending;
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-2xl rounded-xl border border-gray-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">{job.softwareName || '—'} — Install Logs</p>
+            <p className="mt-0.5 font-mono text-xs text-gray-400">{job._id}</p>
+          </div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+        <div className="flex items-center gap-4 border-b border-gray-100 px-5 py-3">
+          <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${cfg.text}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+            {cfg.label}
+          </span>
+          <span className="text-xs text-gray-400">{job.attempts} attempt{job.attempts !== 1 ? 's' : ''}</span>
+        </div>
+        <div className="max-h-[400px] overflow-y-auto p-5">
+          {job.logs ? (
+            <pre className="whitespace-pre-wrap break-all font-mono text-xs leading-relaxed text-gray-700">{job.logs}</pre>
+          ) : (
+            <p className="text-sm text-gray-400">No logs yet.</p>
+          )}
+        </div>
+        <div className="border-t border-gray-100 px-5 py-3 text-right">
+          <button onClick={onClose} className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 hover:bg-gray-50">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Live job row for the Installation History table ─────────────────────────
+function LiveJobEntry({ job: initialJob, isAuthenticated, onViewLogs }: {
+  job: IJob;
+  isAuthenticated: boolean;
+  onViewLogs: (job: IJob) => void;
+}) {
+  const job = useJobStream(initialJob, isAuthenticated);
+  const cfg = jobStatusCfg[job.status] ?? jobStatusCfg.pending;
+  return (
+    <tr className="border-b border-gray-50 last:border-0 hover:bg-gray-50/60">
+      <td className="px-5 py-2.5 font-medium text-gray-800">{job.softwareName || '—'}</td>
+      <td className="px-5 py-2.5">
+        <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${cfg.text}`}>
+          <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
+          {cfg.label}
+        </span>
+      </td>
+      <td className="px-5 py-2.5 text-xs text-gray-400">{job.attempts}</td>
+      <td className="px-5 py-2.5 text-xs text-gray-400">{new Date(job.updatedAt).toLocaleString()}</td>
+      <td className="px-5 py-2.5">
+        <button
+          onClick={() => onViewLogs(job)}
+          className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1 text-xs text-gray-600 transition hover:bg-gray-50"
+        >
+          <FileText className="h-3 w-3" />
+          {job.logs ? 'View logs' : 'No logs'}
+        </button>
+      </td>
+    </tr>
+  );
+}
+
 export default function MachineDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -68,6 +138,7 @@ export default function MachineDetailPage() {
   const [machine, setMachine] = useState<IMachine | null>(null);
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState<IJob[]>([]);
+  const [selectedJob, setSelectedJob] = useState<IJob | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [installing, setInstalling] = useState(false);
 
@@ -122,6 +193,7 @@ export default function MachineDetailPage() {
   return (
     <div className="max-w-4xl">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
+      {selectedJob && <LogsModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
 
       {/* Back */}
       <Link href="/console/machine-manager/machines"
@@ -192,30 +264,15 @@ export default function MachineDetailPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
-                {['Software', 'Status', 'Attempts', 'Updated'].map((h) => (
+                {['Software', 'Status', 'Attempts', 'Updated', 'Logs'].map((h) => (
                   <th key={h} className="px-5 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {jobs.map((j) => {
-                const cfg = jobStatusCfg[j.status] ?? jobStatusCfg.pending;
-                return (
-                  <tr key={j._id} className="border-b border-gray-50 last:border-0 hover:bg-gray-50/60">
-                    <td className="px-5 py-2.5 font-medium text-gray-800">{j.softwareName || '—'}</td>
-                    <td className="px-5 py-2.5">
-                      <span className={`inline-flex items-center gap-1.5 text-xs font-medium ${cfg.text}`}>
-                        <span className={`h-1.5 w-1.5 rounded-full ${cfg.dot}`} />
-                        {cfg.label}
-                      </span>
-                    </td>
-                    <td className="px-5 py-2.5 text-xs text-gray-400">{j.attempts}</td>
-                    <td className="px-5 py-2.5 text-xs text-gray-400">
-                      {new Date(j.updatedAt).toLocaleString()}
-                    </td>
-                  </tr>
-                );
-              })}
+              {jobs.map((j) => (
+                <LiveJobEntry key={j._id} job={j} isAuthenticated={isAuthenticated} onViewLogs={setSelectedJob} />
+              ))}
             </tbody>
           </table>
         </div>

@@ -12,6 +12,7 @@ import {
   type IMachine, type MachineStatus, type IJob, type JobStatus,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
+import { useJobStream } from '../../../../hooks/useJobStream';
 import { Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp } from 'lucide-react';
 import Link from 'next/link';
 
@@ -47,26 +48,50 @@ const jobLabel: Record<JobStatus, string> = {
   retrying:   'Retrying',
 };
 
+// ─── Live job wrapper — connects SSE for a single job ─────────────────────────
+function LiveJobRow({ job, isAuthenticated, onUpdate }: {
+  job: IJob;
+  isAuthenticated: boolean;
+  onUpdate: (updated: IJob) => void;
+}) {
+  const live = useJobStream(job, isAuthenticated);
+  // Propagate updates to parent so SoftwareProgress re-renders
+  useEffect(() => { onUpdate(live); }, [live.status, live.logs]);
+  return null; // render nothing — just drives state
+}
+
 // ─── Software Progress cell ────────────────────────────────────────────────────
 const COLLAPSE_THRESHOLD = 3;
 
-function SoftwareProgress({ jobs }: { jobs: IJob[] }) {
+function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthenticated: boolean }) {
+  const [liveJobs, setLiveJobs] = useState<IJob[]>(jobs);
   const [expanded, setExpanded] = useState(false);
 
-  if (jobs.length === 0) return <span className="text-xs text-gray-400">—</span>;
+  // Sync if parent jobs list changes (e.g. on full refresh)
+  useEffect(() => { setLiveJobs(jobs); }, [jobs]);
+
+  const updateJob = useCallback((updated: IJob) => {
+    setLiveJobs((prev) => prev.map((j) => j._id === updated._id ? updated : j));
+  }, []);
+
+  if (liveJobs.length === 0) return <span className="text-xs text-gray-400">—</span>;
 
   const counts = {
-    success:    jobs.filter((j) => j.status === 'success').length,
-    failed:     jobs.filter((j) => j.status === 'failed').length,
-    installing: jobs.filter((j) => j.status === 'installing' || j.status === 'retrying').length,
-    pending:    jobs.filter((j) => j.status === 'pending').length,
+    success:    liveJobs.filter((j) => j.status === 'success').length,
+    failed:     liveJobs.filter((j) => j.status === 'failed').length,
+    installing: liveJobs.filter((j) => j.status === 'installing' || j.status === 'retrying').length,
+    pending:    liveJobs.filter((j) => j.status === 'pending').length,
   };
 
-  const visible = expanded ? jobs : jobs.slice(0, COLLAPSE_THRESHOLD);
-  const hasMore = jobs.length > COLLAPSE_THRESHOLD;
+  const visible = expanded ? liveJobs : liveJobs.slice(0, COLLAPSE_THRESHOLD);
+  const hasMore = liveJobs.length > COLLAPSE_THRESHOLD;
 
   return (
     <div className="min-w-[160px]">
+      {/* SSE drivers — invisible, one per non-terminal job */}
+      {liveJobs.map((j) => (
+        <LiveJobRow key={j._id} job={j} isAuthenticated={isAuthenticated} onUpdate={updateJob} />
+      ))}
       {/* Summary chips */}
       <div className="mb-1.5 flex flex-wrap gap-1">
         {counts.success > 0 && (
@@ -265,7 +290,7 @@ export default function MyMachinesPage() {
                       <td className="px-5 py-3 capitalize text-gray-600">{m.os}</td>
                       <td className="px-5 py-3"><MachineStatusBadge status={m.status} /></td>
                       <td className="px-5 py-3">
-                        <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} />
+                        <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
                       </td>
                       <td className="px-5 py-3 text-xs text-gray-400">
                         {m.lastSeen ? new Date(m.lastSeen).toLocaleString() : '—'}
