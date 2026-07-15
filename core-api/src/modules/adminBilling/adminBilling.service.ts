@@ -64,14 +64,18 @@ function applyBillingMultiplier(
 export class AdminBillingService {
   // ── Wallet ────────────────────────────────────────────────────────────────
 
-  async getOrCreateWallet(userId: string): Promise<AdminWalletPublic> {
+  async getOrCreateWallet(userId: string): Promise<AdminWalletPublic & { usdToInrRate: number }> {
     const oid = new mongoose.Types.ObjectId(userId);
     const wallet = await AdminWallet.findOneAndUpdate(
       { userId: oid },
       { $setOnInsert: { userId: oid, balance: 0, currency: 'INR' } },
       { upsert: true, new: true }
     );
-    return { balance: wallet.balance, currency: wallet.currency };
+    return {
+      balance: wallet.balance,
+      currency: wallet.currency,
+      usdToInrRate: this.getUsdToInrRate(),
+    };
   }
 
   async getBalance(userId: string): Promise<number> {
@@ -83,7 +87,7 @@ export class AdminBillingService {
     userId: string,
     amount: number,
     creditedBy: string,
-    reason: 'manual_credit' | 'razorpay_topup' = 'manual_credit'
+    reason: 'manual_credit' | 'razorpay_topup' | 'refund' = 'manual_credit'
   ): Promise<AdminWalletPublic> {
     if (amount <= 0) throw new ValidationError('Amount must be positive.');
     const oid = new mongoose.Types.ObjectId(userId);
@@ -108,10 +112,24 @@ export class AdminBillingService {
     return { balance: wallet.balance, currency: wallet.currency };
   }
 
+  getUsdToInrRate(): number {
+    const configured = Number(process.env.USD_TO_INR_RATE);
+    if (Number.isFinite(configured) && configured > 0) {
+      return configured;
+    }
+    return 86;
+  }
+
+  usdToInr(amountUsd: number): number {
+    const converted = amountUsd * this.getUsdToInrRate();
+    return Math.round(converted * 100) / 100;
+  }
+
   async debitWallet(
     userId: string,
     amount: number,
-    relatedVmJobId: string | null = null
+    relatedVmJobId: string | null = null,
+    reason: 'vm_creation' | 'azure_lab_request' | 'aws_lab_request' = 'vm_creation'
   ): Promise<AdminWalletPublic> {
     if (amount <= 0) throw new ValidationError('Amount must be positive.');
     const oid = new mongoose.Types.ObjectId(userId);
@@ -123,20 +141,78 @@ export class AdminBillingService {
     );
 
     if (!wallet) {
-      throw new AppError('INSUFFICIENT_BALANCE', 402, 'INSUFFICIENT_BALANCE');
+      throw new AppError(
+        'Insufficient wallet balance. Please top up your wallet and try again.',
+        402,
+        'INSUFFICIENT_BALANCE'
+      );
     }
 
     await AdminWalletTransaction.create({
       userId: oid,
       type: 'debit',
       amount,
-      reason: 'vm_creation',
+      reason,
       relatedVmJobId,
       creditedBy: null,
       balanceAfter: wallet.balance,
     });
 
     return { balance: wallet.balance, currency: wallet.currency };
+  }
+
+  async chargeCloudRequest(
+    userId: string,
+    amountUsd: number,
+    relatedRequestId: string | null = null,
+    provider: 'azure' | 'aws' = 'azure'
+  ): Promise<{
+    balance: number;
+    currency: string;
+    chargedInr: number;
+    amountUsd: number;
+    usdToInrRate: number;
+    provider: 'azure' | 'aws';
+  }> {
+    if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+      throw new ValidationError('Estimated amount must be a positive number.');
+    }
+
+    const usdToInrRate = this.getUsdToInrRate();
+    const chargedInr = this.usdToInr(amountUsd);
+    const reason = provider === 'aws' ? 'aws_lab_request' : 'azure_lab_request';
+    const wallet = await this.debitWallet(userId, chargedInr, relatedRequestId, reason);
+
+    return {
+      balance: wallet.balance,
+      currency: wallet.currency,
+      chargedInr,
+      amountUsd: Math.round(amountUsd * 100) / 100,
+      usdToInrRate,
+      provider,
+    };
+  }
+
+  async refundCloudRequestCharge(
+    userId: string,
+    amountInr: number,
+    relatedRequestId: string | null = null
+  ): Promise<AdminWalletPublic> {
+    return this.creditWallet(userId, amountInr, userId, 'refund').then(async (wallet) => {
+      if (relatedRequestId) {
+        await AdminWalletTransaction.findOneAndUpdate(
+          {
+            userId: new mongoose.Types.ObjectId(userId),
+            type: 'credit',
+            reason: 'refund',
+            relatedVmJobId: null,
+          },
+          { $set: { relatedVmJobId: relatedRequestId } },
+          { sort: { createdAt: -1 } }
+        );
+      }
+      return wallet;
+    });
   }
 
   /** Patches the jobId on the most recent unlinked debit transaction for a user. */

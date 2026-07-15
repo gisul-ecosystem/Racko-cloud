@@ -8,7 +8,7 @@ export const FORM_STEPS = [
   { id: 3, label: 'Cleanup' },
   { id: 4, label: 'Budget' },
   { id: 5, label: 'Services' },
-  { id: 6, label: 'Instances' },
+  { id: 6, label: 'Sizing' },
   { id: 7, label: 'Permissions' },
   { id: 8, label: 'Region' },
 ];

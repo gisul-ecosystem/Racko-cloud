@@ -39,10 +39,12 @@ export const DEFAULT_IAM_POLICIES = {
 };
 
 export const FLAT_RATE_INFO = {
-  S3: 'Billed per GB stored. No instance selection needed.',
-  Lambda: 'Billed per GB-second of execution.',
-  CloudFront: 'Billed per GB transferred. No instance selection needed.',
-  SQS: 'Billed per request. No instance selection needed.',
-  SNS: 'Billed per notification. No instance selection needed.',
-  VPC: 'No direct instance charge. Resources inside VPC are billed separately.',
+  S3: 'Billed per GB stored. Select a lab usage tier for the wallet estimate.',
+  Lambda: 'Billed per GB-second of execution. Select a lab usage tier for the wallet estimate.',
+  DynamoDB: 'Billed by on-demand read/write capacity. Select a lab usage tier for the wallet estimate.',
+  CloudFront: 'Billed per GB transferred. Select a lab usage tier for the wallet estimate.',
+  SQS: 'Billed per request. Select a lab usage tier for the wallet estimate.',
+  SNS: 'Billed per notification. Select a lab usage tier for the wallet estimate.',
+  Kinesis: 'Billed per shard-hour. Select a lab usage tier for the wallet estimate.',
+  VPC: 'NAT Gateway and related networking can incur charges. Select a lab network tier for the wallet estimate.',
 };
