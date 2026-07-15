@@ -79,3 +79,66 @@ export async function getTenantExternalVMConsole(id: string): Promise<ExternalVM
     )
   );
 }
+
+export async function fetchAvailableTenantExternalVMs(): Promise<IExternalVM[]> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ externalVms: IExternalVM[]; total: number }>>(
+      '/api/v1/tenant-external-vms/assign/available'
+    )
+  );
+  return data.externalVms;
+}
+
+export async function fetchTenantExternalVMAssignCounts(): Promise<Record<string, number>> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ counts: Record<string, number> }>>(
+      '/api/v1/tenant-external-vms/assign/counts'
+    )
+  );
+  return data.counts;
+}
+
+export async function fetchAssignedTenantExternalVMsForUser(userId: string): Promise<IExternalVM[]> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ externalVms: IExternalVM[]; total: number }>>(
+      `/api/v1/tenant-external-vms/assign/user/${userId}`
+    )
+  );
+  return data.externalVms;
+}
+
+export async function assignTenantExternalVMs(
+  userId: string,
+  externalVmIds: string[]
+): Promise<{ assigned: number }> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ assigned: number }>>('/api/v1/tenant-external-vms/assign', {
+      method: 'POST',
+      body: JSON.stringify({ userId, externalVmIds }),
+    })
+  );
+  return data;
+}
+
+export type {
+  BulkAssignExternalPairRow,
+  BulkAssignExternalPairsDto,
+  BulkAssignExternalPairsResult,
+} from './externalVmApi';
+
+export async function bulkAssignTenantExternalOneToOne(
+  dto: import('./externalVmApi').BulkAssignExternalPairsDto
+): Promise<import('./externalVmApi').BulkAssignExternalPairsResult> {
+  return unwrap(
+    tenantPortalRequest<
+      ApiEnvelope<import('./externalVmApi').BulkAssignExternalPairsResult>
+    >('/api/v1/tenant-external-vms/assign/bulk', {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    })
+  );
+}
+
+export async function unassignTenantExternalVM(id: string): Promise<void> {
+  await tenantPortalRequest(`/api/v1/tenant-external-vms/assign/${id}`, { method: 'DELETE' });
+}

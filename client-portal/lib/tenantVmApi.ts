@@ -1,6 +1,7 @@
 import { tenantPortalRequest } from './tenantPortalApiClient';
 import type {
   ApiEnvelope,
+  TenantBulkCreateUsersResult,
   TenantOnboardDto,
   TenantOnboardResult,
   TenantUserProfile,
@@ -131,6 +132,32 @@ export async function unassignTenantVm(vmId: string): Promise<void> {
 
 export async function fetchTenantUsers(): Promise<TenantUsersResult> {
   return unwrap(tenantPortalRequest<ApiEnvelope<TenantUsersResult>>('/api/v1/tenant-users'));
+}
+
+export async function createSingleTenantUser(dto: {
+  email: string;
+  password: string;
+}): Promise<TenantUserProfile> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ user: TenantUserProfile }>>('/api/v1/tenant-users/single', {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    })
+  );
+  return data.user;
+}
+
+export async function createBulkTenantUsers(dto: {
+  emailPrefix: string;
+  count: number;
+  password?: string;
+}): Promise<TenantBulkCreateUsersResult> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantBulkCreateUsersResult>>('/api/v1/tenant-users/bulk', {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    })
+  );
 }
 
 export async function setTenantUserActive(

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { VpsOverviewDashboard } from '@/components/dashboard/VpsOverviewDashboard';
 import { useTenantAuth } from '@/context/TenantAuthContext';
@@ -12,9 +13,16 @@ import { fetchTenantVms } from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
 
 export default function TenantAdminOverviewPage() {
+  const router = useRouter();
   const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const isAdmin = tenantUser?.role === 'tenant_admin';
+
+  useEffect(() => {
+    if (tenantUser?.role === 'tenant_user') {
+      router.replace(tenantVps.vms);
+    }
+  }, [router, tenantUser?.role]);
 
   const [vms, setVms] = useState<TenantVmSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -36,6 +44,8 @@ export default function TenantAdminOverviewPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  if (tenantUser?.role === 'tenant_user') return null;
 
   if (error && !loading) {
     return <ErrorState title="Overview unavailable" message={error} onRetry={() => void load()} />;

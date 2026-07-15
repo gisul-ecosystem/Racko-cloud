@@ -42,3 +42,30 @@ export function tenantAccentSelectedBox(accentColor: string): CSSProperties {
 export function tenantAccentButton(accentColor: string): CSSProperties {
   return { backgroundColor: accentColor };
 }
+
+/** Active tab underline + label color. */
+export function tenantAccentTabActive(accentColor: string): CSSProperties {
+  return {
+    borderColor: accentColor,
+    color: accentColor,
+  };
+}
+
+/** Selected toggle / segmented control option. */
+export function tenantAccentToggleActive(accentColor: string): CSSProperties {
+  return {
+    borderColor: accentColor,
+    backgroundColor: hexToRgba(accentColor, 0.1),
+    color: accentColor,
+  };
+}
+
+/** Text links and inline accents. */
+export function tenantAccentText(accentColor: string): CSSProperties {
+  return { color: accentColor };
+}
+
+/** Focus ring for inputs (use with focus:ring-2). */
+export function tenantAccentFocusRing(accentColor: string): CSSProperties {
+  return { ['--tw-ring-color' as string]: accentColor };
+}
