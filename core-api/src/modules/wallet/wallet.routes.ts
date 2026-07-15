@@ -21,6 +21,29 @@ const listTransactionsSchema = z.object({
   }),
 });
 
+const chargeCloudRequestSchema = z.object({
+  body: z.object({
+    amountUsd: z.number().positive(),
+    relatedRequestId: z.string().min(1).nullable().optional(),
+    provider: z.enum(['azure', 'aws']).optional().default('azure'),
+  }),
+});
+
+const refundCloudRequestSchema = z.object({
+  body: z.object({
+    amountInr: z.number().positive(),
+    relatedRequestId: z.string().min(1).nullable().optional(),
+    provider: z.enum(['azure', 'aws']).optional().default('azure'),
+  }),
+});
+
+const linkCloudRequestSchema = z.object({
+  body: z.object({
+    relatedRequestId: z.string().min(1),
+    provider: z.enum(['azure', 'aws']).optional().default('azure'),
+  }),
+});
+
 const router = Router();
 
 router.use(resolveTenantContext);
@@ -39,6 +62,27 @@ router.post(
   requireTenantRole('tenant_admin'),
   validateRequest(topupSchema),
   (req, res, next) => walletController.createTopup(req, res, next)
+);
+
+router.post(
+  '/charge-cloud-request',
+  requireTenantRole('tenant_admin'),
+  validateRequest(chargeCloudRequestSchema),
+  (req, res, next) => walletController.chargeCloudRequest(req, res, next)
+);
+
+router.post(
+  '/refund-cloud-request',
+  requireTenantRole('tenant_admin'),
+  validateRequest(refundCloudRequestSchema),
+  (req, res, next) => walletController.refundCloudRequest(req, res, next)
+);
+
+router.post(
+  '/link-cloud-request',
+  requireTenantRole('tenant_admin'),
+  validateRequest(linkCloudRequestSchema),
+  (req, res, next) => walletController.linkCloudRequest(req, res, next)
 );
 
 export default router;

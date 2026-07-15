@@ -152,6 +152,67 @@ export async function createTenantWalletTopup(amount: number): Promise<TenantTop
   );
 }
 
+export interface TenantCloudChargeResult {
+  balance: number;
+  currency: string;
+  chargedInr: number;
+  amountUsd: number;
+  usdToInrRate: number;
+  provider: 'azure' | 'aws';
+}
+
+export async function chargeTenantWalletForCloudRequest(
+  amountUsd: number,
+  relatedRequestId?: string | null,
+  provider: 'azure' | 'aws' = 'azure'
+): Promise<TenantCloudChargeResult> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantCloudChargeResult>>(
+      '/api/v1/tenant-wallet/charge-cloud-request',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          amountUsd,
+          provider,
+          ...(relatedRequestId ? { relatedRequestId } : {}),
+        }),
+      }
+    )
+  );
+}
+
+export async function refundTenantWalletCloudCharge(
+  amountInr: number,
+  relatedRequestId?: string | null,
+  provider: 'azure' | 'aws' = 'azure'
+): Promise<TenantWallet> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantWallet>>('/api/v1/tenant-wallet/refund-cloud-request', {
+      method: 'POST',
+      body: JSON.stringify({
+        amountInr,
+        provider,
+        ...(relatedRequestId ? { relatedRequestId } : {}),
+      }),
+    })
+  );
+}
+
+export async function linkTenantWalletCloudCharge(
+  relatedRequestId: string,
+  provider: 'azure' | 'aws' = 'azure'
+): Promise<void> {
+  await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ relatedRequestId: string }>>(
+      '/api/v1/tenant-wallet/link-cloud-request',
+      {
+        method: 'POST',
+        body: JSON.stringify({ relatedRequestId, provider }),
+      }
+    )
+  );
+}
+
 export async function getTenantOrderCatalog(): Promise<TenantOrderCatalog> {
   return unwrap(
     tenantPortalRequest<ApiEnvelope<TenantOrderCatalog>>('/api/v1/tenant-orders/templates')

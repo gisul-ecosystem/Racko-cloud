@@ -39,6 +39,8 @@ export interface TenantBranding {
 export interface TenantWallet {
   balance: number;
   currency: string;
+  /** Present when returned from tenant-wallet — used to convert lab USD estimates to INR. */
+  usdToInrRate?: number;
 }
 
 export type TenantServiceKey =

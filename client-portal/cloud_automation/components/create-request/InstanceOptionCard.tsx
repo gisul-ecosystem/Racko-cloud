@@ -32,7 +32,7 @@ export function InstanceOptionCard({ instance, selected, onSelect }: InstanceOpt
       onClick={onSelect}
       className={`group flex h-full w-full flex-col rounded-xl border p-4 text-left transition ${
         selected
-          ? 'border-[#B91C1C] bg-red-50/60 ring-2 ring-[#B91C1C]/25 shadow-sm'
+          ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] ring-2 ring-[var(--cloud-accent,#B91C1C)]/25 shadow-sm'
           : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
       }`}
     >
@@ -44,7 +44,7 @@ export function InstanceOptionCard({ instance, selected, onSelect }: InstanceOpt
               <span
                 className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
                   selected
-                    ? 'bg-[#B91C1C] text-white'
+                    ? 'bg-[var(--cloud-accent,#B91C1C)] text-white'
                     : 'bg-gray-100 text-gray-600 group-hover:bg-gray-200'
                 }`}
               >
@@ -57,7 +57,7 @@ export function InstanceOptionCard({ instance, selected, onSelect }: InstanceOpt
 
         <div className="flex shrink-0 flex-col items-end gap-1.5">
           {selected ? (
-            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[#B91C1C] text-white">
+            <span className="flex h-6 w-6 items-center justify-center rounded-full bg-[var(--cloud-accent,#B91C1C)] text-white">
               <Check className="h-3.5 w-3.5" />
             </span>
           ) : null}
@@ -80,7 +80,7 @@ export function InstanceOptionCard({ instance, selected, onSelect }: InstanceOpt
               key={`${spec.label}-${spec.value}`}
               className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium ${
                 selected
-                  ? 'border-[#B91C1C]/20 bg-white text-gray-700'
+                  ? 'border-[var(--cloud-accent,#B91C1C)]/20 bg-white text-gray-700'
                   : 'border-gray-200 bg-gray-50 text-gray-600'
               }`}
             >
