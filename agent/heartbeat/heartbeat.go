@@ -49,15 +49,21 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}) {
 }
 
 func sendHeartbeat(client *http.Client, platformURL, agentID string) error {
+	specs := collectSpecs()
+	log.Printf("[heartbeat] Specs collected — hostname=%s osVersion=%s cpuCores=%d ramGb=%.1f diskGb=%.1f",
+		specs.Hostname, specs.OSVersion, specs.CPUCores, specs.RAMGB, specs.DiskGB)
+
 	payload := heartbeatRequest{
 		AgentID: agentID,
 		Status:  "online",
-		Specs:   collectSpecs(),
+		Specs:   specs,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+
+	log.Printf("[heartbeat] Sending payload: %s", string(body))
 
 	resp, err := client.Post(platformURL+"/api/v1/agent/heartbeat", "application/json", bytes.NewReader(body))
 	if err != nil {
