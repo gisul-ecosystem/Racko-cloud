@@ -31,6 +31,13 @@ class MachineManagerService {
       status: doc.status,
       adminId: doc.adminId.toString(),
       lastSeen: doc.lastSeen?.toISOString(),
+      specs: doc.specs ? {
+        hostname:  doc.specs.hostname,
+        osVersion: doc.specs.osVersion,
+        cpuCores:  doc.specs.cpuCores,
+        ramGb:     doc.specs.ramGb,
+        diskGb:    doc.specs.diskGb,
+      } : undefined,
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
@@ -393,14 +400,22 @@ class MachineManagerService {
   async handleHeartbeat(dto: AgentHeartbeatDto): Promise<void> {
     const machine = await MachineModel.findOne({ agentId: dto.agentId });
     if (!machine) throw new NotFoundError('Agent not found.');
-    
-    // Reject deleted agents
+
     if (machine.deleted) {
       throw new ForbiddenError('Agent has been deleted.');
     }
 
     machine.status = dto.status === 'online' ? 'online' : 'offline';
     machine.lastSeen = new Date();
+    if (dto.specs) {
+      machine.specs = {
+        hostname:  dto.specs.hostname,
+        osVersion: dto.specs.osVersion,
+        cpuCores:  dto.specs.cpuCores,
+        ramGb:     dto.specs.ramGb,
+        diskGb:    dto.specs.diskGb,
+      };
+    }
     await machine.save();
   }
 
