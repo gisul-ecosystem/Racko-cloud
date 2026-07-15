@@ -9,7 +9,7 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import { deleteMachine, type IMachine, type MachineStatus } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
-import { Server, RefreshCw, Trash2 } from 'lucide-react';
+import { Server, RefreshCw, Trash2, Eye } from 'lucide-react';
 import Link from 'next/link';
 
 function MachineStatusBadge({ status }: { status: MachineStatus }) {
@@ -141,13 +141,22 @@ export default function MyMachinesPage() {
                         {m.lastSeen ? new Date(m.lastSeen).toLocaleString() : '—'}
                       </td>
                       <td className="px-5 py-3">
-                        <button
-                          onClick={() => setPendingDelete(m)}
-                          className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                          Delete
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <Link
+                            href={`/console/machine-manager/machines/${m._id}`}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+                          >
+                            <Eye className="h-3.5 w-3.5" />
+                            View
+                          </Link>
+                          <button
+                            onClick={() => setPendingDelete(m)}
+                            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   ))}

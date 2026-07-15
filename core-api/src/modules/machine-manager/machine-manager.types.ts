@@ -23,6 +23,13 @@ export interface MachineResponse {
   status: MachineStatus;
   adminId: string;
   lastSeen?: string;
+  specs?: {
+    hostname?: string;
+    osVersion?: string;
+    cpuCores?: number;
+    ramGb?: number;
+    diskGb?: number;
+  };
   createdAt: string;
   updatedAt: string;
 }
@@ -74,4 +81,11 @@ export interface AgentJobResultDto {
 export interface AgentHeartbeatDto {
   agentId: string;
   status: string;
+  specs?: {
+    hostname?: string;
+    osVersion?: string;
+    cpuCores?: number;
+    ramGb?: number;
+    diskGb?: number;
+  };
 }

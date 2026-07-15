@@ -11,13 +11,21 @@ import (
 	"github.com/racko-ai/agent/config"
 )
 
-type heartbeatRequest struct {
-	AgentID string `json:"agentId"`
-	Status  string `json:"status"`
+type MachineSpecs struct {
+	Hostname  string  `json:"hostname"`
+	OSVersion string  `json:"osVersion"`
+	CPUCores  int     `json:"cpuCores"`
+	RAMGB     float64 `json:"ramGb"`
+	DiskGB    float64 `json:"diskGb"`
 }
 
-// Start sends a heartbeat to the platform every 30 seconds.
-// It runs in a goroutine and logs failures without crashing.
+type heartbeatRequest struct {
+	AgentID string       `json:"agentId"`
+	Status  string       `json:"status"`
+	Specs   MachineSpecs `json:"specs"`
+}
+
+// Start sends a heartbeat to the platform every 30 seconds including machine specs.
 // Call this in a separate goroutine: go heartbeat.Start(cfg, agentID, done).
 func Start(cfg *config.Config, agentID string, done <-chan struct{}) {
 	const interval = 30 * time.Second
@@ -34,7 +42,6 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}) {
 			return
 		case <-ticker.C:
 			if err := sendHeartbeat(client, cfg.PlatformURL, agentID); err != nil {
-				// Log and continue — don't crash the agent on heartbeat failure.
 				log.Printf("[heartbeat] Failed: %v", err)
 			}
 		}
@@ -42,11 +49,21 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}) {
 }
 
 func sendHeartbeat(client *http.Client, platformURL, agentID string) error {
-	payload := heartbeatRequest{AgentID: agentID, Status: "online"}
+	specs := collectSpecs()
+	log.Printf("[heartbeat] Specs collected — hostname=%s osVersion=%s cpuCores=%d ramGb=%.1f diskGb=%.1f",
+		specs.Hostname, specs.OSVersion, specs.CPUCores, specs.RAMGB, specs.DiskGB)
+
+	payload := heartbeatRequest{
+		AgentID: agentID,
+		Status:  "online",
+		Specs:   specs,
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
 	}
+
+	log.Printf("[heartbeat] Sending payload: %s", string(body))
 
 	resp, err := client.Post(platformURL+"/api/v1/agent/heartbeat", "application/json", bytes.NewReader(body))
 	if err != nil {

@@ -11,7 +11,12 @@ interface UseExternalVMsResult {
   refetch: () => void;
 }
 
-export function useExternalVMs(isAuthenticated: boolean): UseExternalVMsResult {
+type ListExternalVMs = () => Promise<IExternalVM[]>;
+
+export function useExternalVMs(
+  isAuthenticated: boolean,
+  listFn: ListExternalVMs = fetchExternalVMs
+): UseExternalVMsResult {
   const [vms, setVMs] = useState<IExternalVM[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +25,7 @@ export function useExternalVMs(isAuthenticated: boolean): UseExternalVMsResult {
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchExternalVMs();
+      const result = await listFn();
       setVMs(result);
     } catch (err) {
       setError(
@@ -33,7 +38,7 @@ export function useExternalVMs(isAuthenticated: boolean): UseExternalVMsResult {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [listFn]);
 
   useEffect(() => {
     if (isAuthenticated) void load();
