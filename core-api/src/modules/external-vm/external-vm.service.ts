@@ -14,11 +14,12 @@ import { logger } from '../../utils/logger';
  * External VM (a.k.a. "Elastic Server") service.
  *
  * Unlike platform-provisioned VPS instances, external VMs are arbitrary servers
- * the admin already owns. We store the console password AES-256-CBC encrypted and
+ * the owner already runs. We store the console password AES-256-CBC encrypted and
  * decrypt it on demand to mint a browser Guacamole session.
+ *
+ * Ownership is either platform `adminId` or workspace `tenantId` — never both.
  */
 class ExternalVMService {
-  /** Map a DB document to the API response shape, decrypting the password. */
   private toResponse(doc: IExternalVM): ExternalVMResponse {
     return {
       _id: doc._id.toString(),
@@ -27,13 +28,13 @@ class ExternalVMService {
       protocol: doc.protocol,
       username: doc.username,
       password: decrypt(doc.password),
-      adminId: doc.adminId.toString(),
+      ...(doc.adminId ? { adminId: doc.adminId.toString() } : {}),
+      ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
   }
 
-  /** Add a single external VM. Encrypts the password before persisting. */
   async addExternalVM(
     dto: CreateExternalVMDto,
     adminId: mongoose.Types.ObjectId
@@ -42,7 +43,7 @@ class ExternalVMService {
       name: dto.name,
       ipAddress: dto.ipAddress,
       protocol: dto.protocol,
-      username: dto.username, // pre-validate hook fills protocol default when empty
+      username: dto.username,
       password: encrypt(dto.password),
       adminId,
     });
@@ -56,41 +57,36 @@ class ExternalVMService {
     return this.toResponse(doc);
   }
 
-  /** Bulk add external VMs. Each password is encrypted independently. */
   async bulkAddExternalVMs(
     dtos: CreateExternalVMDto[],
     adminId: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse[]> {
     const created: ExternalVMResponse[] = [];
     for (const dto of dtos) {
-      // Sequential create() so each doc runs its pre-validate/pre-save hooks.
       const vm = await this.addExternalVM(dto, adminId);
       created.push(vm);
     }
     return created;
   }
 
-  /** List all external VMs for an admin. Passwords are returned DECRYPTED. */
   async listExternalVMs(adminId: mongoose.Types.ObjectId): Promise<ExternalVMResponse[]> {
     const docs = await ExternalVMModel.find({ adminId }).sort({ createdAt: -1 });
     return docs.map((doc) => this.toResponse(doc));
   }
 
-  /** Get a single external VM (ownership enforced). Password DECRYPTED. */
   async getExternalVM(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse> {
-    const doc = await this.findOwned(id, adminId);
+    const doc = await this.findOwnedByAdmin(id, adminId);
     return this.toResponse(doc);
   }
 
-  /** Delete an external VM after an ownership check. */
   async deleteExternalVM(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
   ): Promise<void> {
-    const doc = await this.findOwned(id, adminId);
+    const doc = await this.findOwnedByAdmin(id, adminId);
     await doc.deleteOne();
 
     logger.info('[ExternalVM] Deleted external VM', {
@@ -99,35 +95,112 @@ class ExternalVMService {
     });
   }
 
-  /**
-   * Mint a Guacamole console session for an external VM.
-   * Decrypts the stored password and upserts a connection named
-   * `externalvm-<id>` so repeat calls reuse the same connection.
-   */
   async getConsoleSession(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
   ): Promise<ExternalVMConsoleSession> {
-    const doc = await this.findOwned(id, adminId);
+    const doc = await this.findOwnedByAdmin(id, adminId);
+    return this.openGuacamole(doc, { adminId: adminId.toString() });
+  }
 
+  // ─── Tenant-scoped operations ───────────────────────────────────────────────
+
+  async addTenantExternalVM(
+    dto: CreateExternalVMDto,
+    tenantId: mongoose.Types.ObjectId,
+    createdByTenantUserId?: mongoose.Types.ObjectId
+  ): Promise<ExternalVMResponse> {
+    const doc = await ExternalVMModel.create({
+      name: dto.name,
+      ipAddress: dto.ipAddress,
+      protocol: dto.protocol,
+      username: dto.username,
+      password: encrypt(dto.password),
+      tenantId,
+      ...(createdByTenantUserId ? { createdByTenantUserId } : {}),
+    });
+
+    logger.info('[ExternalVM] Added tenant external VM', {
+      externalVmId: doc._id.toString(),
+      tenantId: tenantId.toString(),
+      protocol: doc.protocol,
+    });
+
+    return this.toResponse(doc);
+  }
+
+  async bulkAddTenantExternalVMs(
+    dtos: CreateExternalVMDto[],
+    tenantId: mongoose.Types.ObjectId,
+    createdByTenantUserId?: mongoose.Types.ObjectId
+  ): Promise<ExternalVMResponse[]> {
+    const created: ExternalVMResponse[] = [];
+    for (const dto of dtos) {
+      created.push(await this.addTenantExternalVM(dto, tenantId, createdByTenantUserId));
+    }
+    return created;
+  }
+
+  async listTenantExternalVMs(tenantId: mongoose.Types.ObjectId): Promise<ExternalVMResponse[]> {
+    const docs = await ExternalVMModel.find({ tenantId }).sort({ createdAt: -1 });
+    return docs.map((doc) => this.toResponse(doc));
+  }
+
+  async getTenantExternalVM(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<ExternalVMResponse> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    return this.toResponse(doc);
+  }
+
+  async deleteTenantExternalVM(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<void> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    await doc.deleteOne();
+
+    logger.info('[ExternalVM] Deleted tenant external VM', {
+      externalVmId: id.toString(),
+      tenantId: tenantId.toString(),
+    });
+  }
+
+  async getTenantConsoleSession(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<ExternalVMConsoleSession> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    return this.openGuacamole(doc, { tenantId: tenantId.toString() });
+  }
+
+  private async openGuacamole(
+    doc: IExternalVM,
+    logContext: Record<string, string>
+  ): Promise<ExternalVMConsoleSession> {
     const password = decrypt(doc.password);
     const port = doc.protocol === 'rdp' ? 3389 : 22;
 
     logger.info('[ExternalVM] Opening Guacamole session', {
-      externalVmId: id.toString(),
-      adminId: adminId.toString(),
+      externalVmId: doc._id.toString(),
       protocol: doc.protocol,
       hostname: doc.ipAddress,
+      ...logContext,
     });
 
-    const session = await guacamoleClient.openConsole(`externalvm-${id.toString()}`, doc.protocol, {
-      hostname: doc.ipAddress,
-      port,
-      username: doc.username,
-      password,
-      ignoreCert: true,
-      securityMode: 'any',
-    });
+    const session = await guacamoleClient.openConsole(
+      `externalvm-${doc._id.toString()}`,
+      doc.protocol,
+      {
+        hostname: doc.ipAddress,
+        port,
+        username: doc.username,
+        password,
+        ignoreCert: true,
+        securityMode: 'any',
+      }
+    );
 
     return {
       protocol: doc.protocol,
@@ -136,14 +209,25 @@ class ExternalVMService {
     };
   }
 
-  /** Find a VM by id and assert the requesting admin owns it. */
-  private async findOwned(
+  private async findOwnedByAdmin(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
   ): Promise<IExternalVM> {
     const doc = await ExternalVMModel.findById(id);
     if (!doc) throw new NotFoundError('External VM not found.');
-    if (doc.adminId.toString() !== adminId.toString()) {
+    if (!doc.adminId || doc.adminId.toString() !== adminId.toString()) {
+      throw new ForbiddenError('You do not have permission to access this external VM.');
+    }
+    return doc;
+  }
+
+  private async findOwnedByTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<IExternalVM> {
+    const doc = await ExternalVMModel.findById(id);
+    if (!doc) throw new NotFoundError('External VM not found.');
+    if (!doc.tenantId || doc.tenantId.toString() !== tenantId.toString()) {
       throw new ForbiddenError('You do not have permission to access this external VM.');
     }
     return doc;

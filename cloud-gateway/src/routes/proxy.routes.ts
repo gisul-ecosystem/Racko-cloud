@@ -116,6 +116,7 @@ const tenantPlansProxy = createMountedCoreApiProxy('/api/v1/tenant-plans');
 const tenantNotificationsProxy = createMountedCoreApiProxy('/api/v1/tenant-notifications');
 const tenantUsersProxy = createMountedCoreApiProxy('/api/v1/tenant-users');
 const tenantVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-vms');
+const tenantExternalVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-external-vms');
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -308,6 +309,7 @@ router.use('/api/v1/tenant-plans', requireTenantBearer, tenantPlansProxy);
 router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificationsProxy);
 router.use('/api/v1/tenant-users', requireTenantBearer, tenantUsersProxy);
 router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
+router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVmsProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
