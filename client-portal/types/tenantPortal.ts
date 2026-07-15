@@ -26,6 +26,8 @@ export interface TenantUsersResult {
 
 
 export interface TenantBranding {
+  /** Tenant display name from the tenant record (white-label portal title). */
+  name?: string;
   logoUrl: string;
   faviconUrl: string;
   loginPageImageUrl: string;

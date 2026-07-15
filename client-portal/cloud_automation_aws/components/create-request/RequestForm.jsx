@@ -144,7 +144,7 @@ export function RequestForm({
   return (
     <div className="space-y-6">
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="h-0.5 bg-gradient-to-r from-[#B91C1C] to-[#DC2626]" />
+        <div className="h-0.5 bg-gradient-to-r from-[var(--cloud-accent,#B91C1C)] to-[var(--cloud-accent,#B91C1C)]" />
         <div className="px-4 py-5 sm:px-6">
           <RequestStepper
             currentStep={currentStep}
@@ -222,7 +222,7 @@ export function RequestForm({
                     Best for short labs (≤7 days). Admin generates one-click console links from the
                     manage portal. No password needed.
                   </p>
-                  <p className="mt-2 text-[11px] font-semibold text-[#B91C1C]">
+                  <p className="mt-2 text-[11px] font-semibold text-[var(--cloud-accent,#B91C1C)]">
                     Max session: 12 hours per link
                   </p>
                 </button>
