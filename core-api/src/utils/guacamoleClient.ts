@@ -320,12 +320,11 @@ async function upsertConnection(
 /**
  * Build the browser URL.
  *
- * Format (Guacamole 1.x):
- *   {publicUrl}/#/client/{base64( id + '\0' + 'c' + '\0' + dataSource )}?token={authToken}&srv={srvName}
+ * Format (Guacamole 1.x + HAProxy sticky routing):
+ *   {publicUrl}/?srv={srvName}#/client/{base64(...)}?token={authToken}
  *
- * 'c' = connection (vs 'g' for connection group, 'a' for active session).
- * The token is read by the Guacamole SPA from the URL fragment.
- * `srv` steers the browser via HAProxy to the same Guacamole instance that issued the token.
+ * `srv` must sit in the query string (before `#`) so HAProxy can read it.
+ * Guacamole's client route stays in the fragment.
  */
 function buildClientUrl(
   connectionId: string,
@@ -336,8 +335,8 @@ function buildClientUrl(
   const env = getEnv();
   const raw = `${connectionId}\u0000c\u0000${dataSource}`;
   const idHash = Buffer.from(raw, 'utf8').toString('base64').replace(/=+$/, '');
-  const url = `${env.publicUrl}/#/client/${idHash}?token=${encodeURIComponent(authToken)}`;
-  return srvName ? `${url}&srv=${encodeURIComponent(srvName)}` : url;
+  const srvParam = srvName ? `?srv=${encodeURIComponent(srvName)}` : '';
+  return `${env.publicUrl}/${srvParam}#/client/${idHash}?token=${encodeURIComponent(authToken)}`;
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
