@@ -175,6 +175,13 @@ const envSchema = z.object({
   TEST_VM_IP: z.string().optional(),
   TEST_VM_USERNAME: z.string().optional(),
   TEST_VM_PASSWORD: z.string().optional(),
+
+  // Create VM catalog agent (Webyne Playwright) — used by approve → fulfill
+  CREATE_VM_AGENT_URL: z
+    .string()
+    .url()
+    .optional()
+    .default('http://127.0.0.1:3789'),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -75,6 +75,20 @@ services:
     networks:
       - racko-network
     restart: unless-stopped
+
+  create-vm-catalog-agent:
+    image: gisuldocker/racko-create-vm-catalog-agent:qa
+    env_file:
+      - create-vm-catalog-agent/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    networks:
+      - racko-network
+    restart: unless-stopped
  
 volumes:
   tenant-assets:
