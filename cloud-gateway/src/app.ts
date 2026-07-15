@@ -42,6 +42,9 @@ const RATE_LIMIT_SKIP_PATHS = new Set(['/api/v1/auth/refresh', '/api/v1/auth/val
 
 function isRateLimitExemptPath(path: string): boolean {
   if (RATE_LIMIT_SKIP_PATHS.has(path)) return true;
+  // All agent endpoints are exempt — agents send frequent heartbeats and job
+  // results that would otherwise hit the per-IP rate limit with many VMs.
+  if (path.startsWith('/api/v1/agent/')) return true;
   return /^\/api\/v1\/admin-vm-templates\/[a-f\d]{24}\/stream$/i.test(path);
 }
 
