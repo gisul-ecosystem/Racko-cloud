@@ -537,6 +537,26 @@ class MachineManagerService {
     return { machines, pushResults };
   }
 
+  async execCommand(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    command: string
+  ): Promise<{ output: string; exitCode: number }> {
+    const doc = await this.findOwnedMachine(id, adminId);
+    if (!doc.agentId) throw new NotFoundError('Machine has no registered agent.');
+
+    const { wsManager } = await import('./websocket/wsManager');
+    if (!wsManager.isConnected(doc.agentId)) {
+      throw new NotFoundError('Agent is offline. Commands can only be run on online machines.');
+    }
+
+    const { v4: uuidv4 } = await import('uuid');
+    const commandId = uuidv4();
+
+    const result = await wsManager.sendExec(doc.agentId, commandId, command);
+    return { output: result.output, exitCode: result.exitCode };
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
   private async findOwnedMachine(
     id: mongoose.Types.ObjectId,

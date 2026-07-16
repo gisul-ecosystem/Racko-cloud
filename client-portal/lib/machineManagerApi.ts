@@ -131,6 +131,17 @@ export async function deleteMachine(id: string): Promise<void> {
   await apiRequest(`/api/v1/machines/${id}`, { method: 'DELETE' });
 }
 
+export async function execCommand(
+  machineId: string,
+  command: string
+): Promise<{ output: string; exitCode: number }> {
+  const res = await apiRequest<ApiResponse<{ output: string; exitCode: number }>>(
+    `/api/v1/machines/${machineId}/exec`,
+    { method: 'POST', body: JSON.stringify({ command }) }
+  );
+  return res.data;
+}
+
 // ─── Job API ──────────────────────────────────────────────────────────────────
 
 export async function createJobs(dto: CreateJobDto): Promise<IJob[]> {

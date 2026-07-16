@@ -17,9 +17,23 @@ interface AgentConnection {
   pongDeadlineTimer?: ReturnType<typeof setTimeout>;
 }
 
+interface PendingExec {
+  resolve: (result: ExecResult) => void;
+  reject: (err: Error) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
+export interface ExecResult {
+  commandId: string;
+  output: string;
+  exitCode: number;
+}
+
 // ─── WebSocket Manager ────────────────────────────────────────────────────────
 class WSManager {
   private connections = new Map<string, AgentConnection>();
+  // Pending exec commands awaiting result from agent — keyed by commandId
+  private pendingExecs = new Map<string, PendingExec>();
 
   /**
    * Attach to an existing HTTP server.
@@ -103,6 +117,37 @@ class WSManager {
       });
       return false;
     }
+  }
+
+  /**
+   * Send a PowerShell exec command to the agent and wait for the result.
+   * Returns a Promise that resolves with { output, exitCode } when the agent responds.
+   * Times out after 60 seconds for normal commands.
+   */
+  sendExec(agentId: string, commandId: string, command: string, timeoutMs = 60000): Promise<ExecResult> {
+    return new Promise((resolve, reject) => {
+      const conn = this.connections.get(agentId);
+      if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+        reject(new Error('Agent is not connected.'));
+        return;
+      }
+
+      const timer = setTimeout(() => {
+        this.pendingExecs.delete(commandId);
+        reject(new Error('Command timed out after 60 seconds.'));
+      }, timeoutMs);
+
+      this.pendingExecs.set(commandId, { resolve, reject, timer });
+
+      try {
+        conn.ws.send(JSON.stringify({ type: 'exec', payload: { commandId, command } }));
+        logger.info('[WSManager] Sent exec command', { agentId, commandId, command: command.slice(0, 100) });
+      } catch (err) {
+        clearTimeout(timer);
+        this.pendingExecs.delete(commandId);
+        reject(new Error(`Failed to send exec command: ${err instanceof Error ? err.message : String(err)}`));
+      }
+    });
   }
 
   /**
@@ -210,6 +255,17 @@ class WSManager {
     try {
       const msg = JSON.parse(data.toString()) as { type: string; payload?: unknown };
       logger.info('[WSManager] Message from agent', { agentId, type: msg.type });
+
+      if (msg.type === 'exec_result') {
+        const result = msg.payload as ExecResult;
+        const pending = this.pendingExecs.get(result.commandId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingExecs.delete(result.commandId);
+          pending.resolve(result);
+          logger.info('[WSManager] Exec result received', { agentId, commandId: result.commandId, exitCode: result.exitCode });
+        }
+      }
     } catch {
       logger.warn('[WSManager] Malformed message from agent', { agentId });
     }

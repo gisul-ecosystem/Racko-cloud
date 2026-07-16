@@ -135,6 +135,14 @@ machineRouter.delete(
   (req, res, next) => machineManagerController.remove(req, res, next)
 );
 
+// POST /api/v1/machines/:id/exec — run a PowerShell command on the machine via WebSocket
+machineRouter.post(
+  '/:id/exec',
+  requireRole('admin', 'super_admin'),
+  validateRequest(machineIdParamSchema),
+  (req, res, next) => machineManagerController.execCommand(req, res, next)
+);
+
 // ─── Agent routes (no JWT auth — uses accountToken in body) ──────────────────
 
 // GET /api/v1/agent/install/linux?token=<accountToken> — serves shell install script (public)

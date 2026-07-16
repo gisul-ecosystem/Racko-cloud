@@ -166,6 +166,17 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 			} else if msg.Type == "uninstall" {
 				log.Printf("[ws-poller] Received uninstall command — running cleanup script")
 				go runUninstall()
+			} else if msg.Type == "exec" {
+				var execMsg struct {
+					CommandID string `json:"commandId"`
+					Command   string `json:"command"`
+				}
+				if err := json.Unmarshal(msg.Payload, &execMsg); err != nil {
+					log.Printf("[ws-poller] Malformed exec payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received exec commandId=%s", execMsg.CommandID)
+				go p.runExec(execMsg.CommandID, execMsg.Command, safeWrite)
 			}
 		}
 	}()
@@ -199,6 +210,44 @@ func (p *WSPoller) increaseBackoff() {
 
 func (p *WSPoller) resetBackoff() {
 	p.backoff.current = 5 * time.Second
+}
+
+// ─── Exec ─────────────────────────────────────────────────────────────────────
+
+// runExec runs a PowerShell command and sends the result back over WebSocket.
+// Uses cmd.Output() (blocking) — runs in its own goroutine so it doesn't block the read loop.
+func (p *WSPoller) runExec(commandID, command string, safeWrite func(int, []byte) error) {
+	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+	out, err := cmd.CombinedOutput()
+
+	output := string(out)
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+			if output == "" {
+				output = err.Error()
+			}
+		}
+	}
+
+	result := map[string]interface{}{
+		"commandId": commandID,
+		"output":    output,
+		"exitCode":  exitCode,
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":    "exec_result",
+		"payload": result,
+	})
+
+	if err := safeWrite(websocket.TextMessage, payload); err != nil {
+		log.Printf("[ws-poller] runExec: failed to send result for commandId=%s: %v", commandID, err)
+	} else {
+		log.Printf("[ws-poller] runExec: sent result commandId=%s exitCode=%d", commandID, exitCode)
+	}
 }
 
 // ─── Uninstall ────────────────────────────────────────────────────────────────
