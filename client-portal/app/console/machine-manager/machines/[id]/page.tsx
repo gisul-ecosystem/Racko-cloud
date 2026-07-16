@@ -370,10 +370,10 @@ export default function MachineDetailPage() {
           )}
           {terminalHistory.map((entry, i) => (
             <div key={i} className="mb-3">
-              <div className="flex items-center gap-2 text-green-400">
-                <span className="text-gray-600 text-[10px]">{entry.ts}</span>
-                <span className="text-gray-500">PS&gt;</span>
-                <span>{entry.command}</span>
+              <div className="flex items-start gap-2 text-green-400">
+                <span className="text-gray-600 text-[10px] mt-0.5 shrink-0">{entry.ts}</span>
+                <span className="text-gray-500 shrink-0">PS&gt;</span>
+                <pre className="whitespace-pre-wrap break-all text-green-400">{entry.command}</pre>
               </div>
               <pre className={`mt-1 whitespace-pre-wrap break-all leading-relaxed ${entry.exitCode === 0 ? 'text-gray-200' : 'text-red-400'}`}>
                 {entry.output || '(no output)'}
@@ -390,21 +390,23 @@ export default function MachineDetailPage() {
         </div>
 
         {/* Input bar */}
-        <div className="flex items-center gap-2 border-t border-gray-800 px-4 py-3">
-          <span className="shrink-0 text-xs text-gray-500 font-mono">PS&gt;</span>
-          <input
-            type="text"
+        <div className="flex items-start gap-2 border-t border-gray-800 px-4 py-3">
+          <span className="mt-1 shrink-0 text-xs text-gray-500 font-mono">PS&gt;</span>
+          <textarea
             value={terminalInput}
             onChange={(e) => setTerminalInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') { void handleExec(); }
-              if (e.key === 'ArrowUp') {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void handleExec();
+              }
+              if (e.key === 'ArrowUp' && !terminalInput.includes('\n')) {
                 const cmds = terminalHistory.map((h) => h.command);
                 const next = Math.min(historyIndex + 1, cmds.length - 1);
                 setHistoryIndex(next);
                 setTerminalInput(cmds[cmds.length - 1 - next] ?? '');
               }
-              if (e.key === 'ArrowDown') {
+              if (e.key === 'ArrowDown' && !terminalInput.includes('\n')) {
                 const cmds = terminalHistory.map((h) => h.command);
                 const next = Math.max(historyIndex - 1, -1);
                 setHistoryIndex(next);
@@ -412,15 +414,16 @@ export default function MachineDetailPage() {
               }
             }}
             disabled={terminalRunning || machine.status !== 'online'}
-            placeholder={machine.status !== 'online' ? 'Agent is offline' : 'Get-Process, Get-Service, dir C:\\, …'}
-            className="flex-1 bg-transparent text-xs text-gray-200 placeholder-gray-600 outline-none font-mono disabled:opacity-40"
+            placeholder={machine.status !== 'online' ? 'Agent is offline' : 'Enter to run · Shift+Enter for new line'}
+            rows={terminalInput.split('\n').length > 3 ? terminalInput.split('\n').length : Math.max(1, terminalInput.split('\n').length)}
+            className="flex-1 resize-none bg-transparent text-xs text-gray-200 placeholder-gray-600 outline-none font-mono disabled:opacity-40 leading-relaxed"
             autoComplete="off"
             spellCheck={false}
           />
           <button
             onClick={() => void handleExec()}
             disabled={terminalRunning || !terminalInput.trim() || machine.status !== 'online'}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-green-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-green-600 disabled:opacity-40"
+            className="mt-0.5 inline-flex items-center gap-1.5 rounded-lg bg-green-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-green-600 disabled:opacity-40"
           >
             {terminalRunning
               ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
