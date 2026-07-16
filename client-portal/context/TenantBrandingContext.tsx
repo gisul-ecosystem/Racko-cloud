@@ -19,6 +19,7 @@ import { getTenantDevDomain } from '@/lib/gatewayUrl';
 import type { TenantBranding, TenantBrandingAssetType } from '@/types/tenantPortal';
 
 const DEFAULT_BRANDING: TenantBranding = {
+  name: '',
   logoUrl: '',
   faviconUrl: '',
   loginPageImageUrl: '',
@@ -117,10 +118,14 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
         const merged: TenantBranding = {
           ...DEFAULT_BRANDING,
           ...metadata,
+          name: metadata.name?.trim() || '',
           primaryColor: metadata.primaryColor || DEFAULT_BRANDING.primaryColor,
           secondaryColor: metadata.secondaryColor || DEFAULT_BRANDING.secondaryColor,
         };
         setBranding(merged);
+        if (merged.name) {
+          setPortalName(merged.name);
+        }
 
         const cacheBust = Date.now();
 
@@ -207,7 +212,7 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
       heroSrc: assetUrls['login-page-image'] ?? '',
       accentColor: branding.primaryColor || '#111827',
       secondaryColor: branding.secondaryColor || '#22c55e',
-      portalName,
+      portalName: branding.name?.trim() || portalName,
       tenantNotFound,
       brandingError,
       loading,

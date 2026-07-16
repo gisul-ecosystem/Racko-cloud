@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { TenantUser } from '../../models/tenantUser.model';
 import { VM } from '../vm/vm.model';
+import { ExternalVMModel } from '../external-vm/external-vm.model';
 import { logger } from '../../utils/logger';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../utils/errors';
 import { hashPassword } from '../../utils/argon2';
@@ -251,6 +252,11 @@ export class TenantUserService {
       { $unset: { assignedTenantUserId: 1 } }
     );
 
+    const externalUnassignResult = await ExternalVMModel.updateMany(
+      { tenantId, assignedTenantUserId: user._id },
+      { $unset: { assignedTenantUserId: 1 } }
+    );
+
     await user.deleteOne();
 
     logger.info('Tenant user deleted', {
@@ -258,6 +264,7 @@ export class TenantUserService {
       tenantUserId: targetUserId,
       email: user.email,
       vmsUnassigned: unassignResult.modifiedCount,
+      externalVmsUnassigned: externalUnassignResult.modifiedCount,
     });
   }
 }

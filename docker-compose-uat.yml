@@ -95,9 +95,12 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: ${CLIENT_PORTAL_PORT:-3000}
       GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
     depends_on:
       cloud-gateway:
         condition: service_healthy
+      create-vm-catalog-agent:
+        condition: service_started
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
     networks:
@@ -105,6 +108,26 @@ services:
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  create-vm-catalog-agent:
+    image: gisuldocker/racko-create-vm-catalog-agent:uat
+    env_file:
+      - create-vm-catalog-agent/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
+      HOSTNAME: 0.0.0.0
+    ports:
+      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    networks:
+      - racko-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3789/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

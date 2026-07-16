@@ -49,7 +49,8 @@ export function ExternalVMConsoleView({
   fetchVm = fetchExternalVM,
   openConsole = getExternalVMConsole,
 }: ExternalVMConsoleViewProps) {
-  const { id } = useParams<{ id: string }>();
+  const params = useParams<{ id?: string; serverId?: string }>();
+  const id = params.id ?? params.serverId;
   const router = useRouter();
 
   const [session, setSession] = useState<ExternalVMConsoleSession | null>(null);

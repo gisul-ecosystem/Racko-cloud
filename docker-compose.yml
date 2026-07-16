@@ -65,10 +65,32 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: ${CLIENT_PORTAL_PORT:-3000}
       GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
     depends_on:
       - cloud-gateway
+      - create-vm-catalog-agent
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
+
+  create-vm-catalog-agent:
+    build:
+      context: .
+      dockerfile: create-vm-catalog-agent/Dockerfile
+    image: gisuldocker/racko-create-vm-catalog-agent:${IMAGE_TAG:-dev}
+    env_file:
+      - create-vm-catalog-agent/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
+      HOSTNAME: 0.0.0.0
+      # When true, skip warm-up login on container start (useful during recovery)
+      SKIP_CATALOG_AGENT_WARMUP: ${SKIP_CATALOG_AGENT_WARMUP:-false}
+    ports:
+      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    volumes:
+      # Persist Playwright storage state so repeated logins are not required
+      # Mount a host directory to avoid file-vs-directory bind mount issues
+      - ./create-vm-catalog-agent/state:/app/state:rw
  
 volumes:
   tenant-assets:

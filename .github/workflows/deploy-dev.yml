@@ -117,6 +117,24 @@ jobs:
         run: |
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:${{ env.IMAGE_TAG }}
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:dev
+
+  build-create-vm-catalog-agent:
+    name: Build & Push create-vm-catalog-agent
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build create-vm-catalog-agent image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:dev -f create-vm-catalog-agent/Dockerfile create-vm-catalog-agent/
+
+      - name: Push create-vm-catalog-agent image
+        run: |
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:dev
  
   build-agent:
     name: Build Agent Binaries (${{ matrix.os }})
@@ -221,6 +239,7 @@ jobs:
       - build-cloud-automation
       - build-cloud-automation-aws
       - build-client-portal
+      - build-create-vm-catalog-agent
       - deploy-agent
  
     env:

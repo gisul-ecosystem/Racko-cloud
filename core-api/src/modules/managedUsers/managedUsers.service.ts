@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { User } from '../../models/user.model';
 import { VM } from '../vm/vm.model';
+import { ExternalVMModel } from '../external-vm/external-vm.model';
 import { logger } from '../../utils/logger';
 import { ConflictError, NotFoundError, ForbiddenError } from '../../utils/errors';
 import type {
@@ -215,6 +216,11 @@ export class ManagedUsersService {
       { $unset: { assignedTo: 1 } }
     );
 
+    const externalUnassignResult = await ExternalVMModel.updateMany(
+      { assignedTo: user._id, adminId },
+      { $unset: { assignedTo: 1 } }
+    );
+
     await user.deleteOne();
 
     logger.info('Admin deleted user', {
@@ -222,6 +228,7 @@ export class ManagedUsersService {
       deletedUserId: targetUserId,
       email: user.email,
       vmsUnassigned: unassignResult.modifiedCount,
+      externalVmsUnassigned: externalUnassignResult.modifiedCount,
     });
   }
 }

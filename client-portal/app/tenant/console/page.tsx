@@ -1,5 +1,7 @@
 'use client';
 
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
   BookOpen,
@@ -85,17 +87,24 @@ const SERVICE_TILES: Array<{
 ];
 
 export default function TenantConsolePage() {
+  const router = useRouter();
   const { tenantUser } = useTenantAuth();
   const { accentColor, portalName } = useTenantBranding();
   const { loading, hasActiveService } = useTenantServices();
   const isAdmin = tenantUser?.role === 'tenant_admin';
+
+  useEffect(() => {
+    if (tenantUser?.role === 'tenant_user') {
+      router.replace(tenantVps.vms);
+    }
+  }, [router, tenantUser?.role]);
 
   const tiles = SERVICE_TILES.filter((tile) => {
     if (tile.serviceKey === 'billing') return isAdmin;
     return hasActiveService(tile.serviceKey);
   });
 
-  if (loading) {
+  if (loading || tenantUser?.role === 'tenant_user') {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
         <Loader2 className="h-7 w-7 animate-spin" style={{ color: accentColor }} />

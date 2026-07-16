@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, Globe, Server, BookOpen, Wallet, Monitor } from 'lucide-react';
+import { Cloud, Globe, Server, BookOpen, Wallet, Monitor, SquarePlus } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
@@ -14,6 +14,14 @@ const services = [
     href: '/dashboard/admin',
     icon: Server,
     description: 'Provision and manage Racko cloud virtual machines',
+    available: true,
+  },
+  {
+    id: 'create-vm',
+    name: 'VM Catalog',
+    href: '/console/create-vm',
+    icon: SquarePlus,
+    description: 'Browse external VM plans, create instances, and manage your VMs',
     available: true,
   },
   {

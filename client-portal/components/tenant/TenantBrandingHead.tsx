@@ -6,9 +6,20 @@ import { useTenantBranding } from '@/context/TenantBrandingContext';
 const ICON_SELECTOR =
   "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']";
 
-/** Applies per-tenant favicon, replacing root-layout Racko icons while on tenant routes. */
+/** Applies per-tenant favicon + document title, replacing root-layout Racko defaults. */
 export function TenantBrandingHead() {
-  const { faviconSrc, loading } = useTenantBranding();
+  const { faviconSrc, portalName, loading } = useTenantBranding();
+
+  useEffect(() => {
+    if (loading) return;
+    if (!portalName || portalName === 'Portal') return;
+
+    const previousTitle = document.title;
+    document.title = portalName;
+    return () => {
+      document.title = previousTitle;
+    };
+  }, [portalName, loading]);
 
   useEffect(() => {
     if (loading) return;

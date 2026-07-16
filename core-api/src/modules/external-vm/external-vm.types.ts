@@ -9,18 +9,54 @@ export interface CreateExternalVMDto {
   password: string;
 }
 
-/** API-facing external VM shape. Password is returned DECRYPTED. */
+/** API-facing external VM shape. Password is returned DECRYPTED for admins only. */
 export interface ExternalVMResponse {
   _id: string;
   name: string;
   ipAddress: string;
   protocol: ExternalVMProtocol;
   username: string;
-  password: string;
+  password?: string;
   adminId?: string;
   tenantId?: string;
+  assignedTo?: string | null;
+  assignedTenantUserId?: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface BulkAssignExternalPairsDto {
+  externalVmIds: string[];
+  mode: 'create' | 'existing';
+  emailPrefix?: string;
+  passwordMode?: 'auto' | 'shared';
+  sharedPassword?: string;
+  userIds?: string[];
+}
+
+export interface BulkAssignExternalPairRow {
+  externalVmId: string;
+  externalVmName: string;
+  userId?: string;
+  userEmail: string;
+  password?: string;
+  status: 'assigned' | 'failed';
+  error?: string;
+}
+
+export interface BulkAssignExternalPairsResult {
+  assigned: number;
+  failed: number;
+  pairs: BulkAssignExternalPairRow[];
+}
+
+export interface TenantBulkAssignExternalPairsDto {
+  externalVmIds: string[];
+  mode: 'create' | 'existing';
+  emailPrefix?: string;
+  passwordMode?: 'auto' | 'shared';
+  sharedPassword?: string;
+  userIds?: string[];
 }
 
 /** Guacamole console session for an external VM (mirrors the VPS console shape). */

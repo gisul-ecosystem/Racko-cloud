@@ -11,7 +11,7 @@ export function RegionPicker({ region, onRegionChange, regions, loading, error }
   if (loading) {
     return (
       <div className="flex items-center gap-2 rounded-xl border border-gray-200 bg-gray-50/80 px-4 py-6 text-sm text-gray-500">
-        <Loader2 className="h-4 w-4 animate-spin text-[#B91C1C]" />
+        <Loader2 className="h-4 w-4 animate-spin text-[var(--cloud-accent,#B91C1C)]" />
         Loading regions from AWS…
       </div>
     );
@@ -48,7 +48,7 @@ export function RegionPicker({ region, onRegionChange, regions, loading, error }
             className={optionCardClass(active)}
           >
             <span className="flex items-center gap-2 text-sm font-semibold text-gray-900">
-              <MapPin className={`h-4 w-4 shrink-0 ${active ? 'text-[#B91C1C]' : 'text-gray-400'}`} />
+              <MapPin className={`h-4 w-4 shrink-0 ${active ? 'text-[var(--cloud-accent,#B91C1C)]' : 'text-gray-400'}`} />
               {entry.code}
             </span>
             <span className="mt-2 block text-xs leading-relaxed text-gray-500">
@@ -58,7 +58,7 @@ export function RegionPicker({ region, onRegionChange, regions, loading, error }
               <span className="mt-0.5 block text-xs text-gray-400">{subtitle}</span>
             ) : null}
             {entry.basePrice != null ? (
-              <span className="mt-3 inline-flex rounded-full bg-red-50 px-2.5 py-0.5 text-[11px] font-semibold text-[#B91C1C]">
+              <span className="mt-3 inline-flex rounded-full bg-[var(--cloud-accent-soft,#fef2f2)] px-2.5 py-0.5 text-[11px] font-semibold text-[var(--cloud-accent,#B91C1C)]">
                 from {formatHourly(entry.basePrice)}
               </span>
             ) : null}

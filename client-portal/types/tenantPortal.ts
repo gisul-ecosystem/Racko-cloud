@@ -24,8 +24,20 @@ export interface TenantUsersResult {
   total: number;
 }
 
+export interface TenantBulkCreateUsersResult {
+  created: number;
+  failed: number;
+  users: Array<{
+    email: string;
+    password: string;
+    status: 'created' | 'failed';
+    error?: string;
+  }>;
+}
 
 export interface TenantBranding {
+  /** Tenant display name from the tenant record (white-label portal title). */
+  name?: string;
   logoUrl: string;
   faviconUrl: string;
   loginPageImageUrl: string;

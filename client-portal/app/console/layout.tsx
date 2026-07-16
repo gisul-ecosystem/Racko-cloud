@@ -32,7 +32,8 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     (pathname?.startsWith('/console/azure') ?? false) ||
     (pathname?.startsWith('/console/machine-manager') ?? false) ||
     (pathname?.startsWith('/console/aws') ?? false) ||
-    (pathname?.startsWith('/console/docs') ?? false);
+    (pathname?.startsWith('/console/docs') ?? false) ||
+    (pathname?.startsWith('/console/create-vm') ?? false);
 
   useEffect(() => {
     if (isLoading) return;

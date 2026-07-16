@@ -3,5 +3,6 @@ node_modules
 out
 dist
 build
+.data
 .env
 .env.local

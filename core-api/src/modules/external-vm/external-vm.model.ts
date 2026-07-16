@@ -20,6 +20,11 @@ export interface IExternalVM extends Document {
   /** Tenant user who created the record (optional audit). */
   createdByTenantUserId?: mongoose.Types.ObjectId;
 
+  /** Platform managed user this server is assigned to (admin console). */
+  assignedTo?: mongoose.Types.ObjectId;
+  /** Tenant end-user this server is assigned to (tenant console). */
+  assignedTenantUserId?: mongoose.Types.ObjectId;
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -72,6 +77,18 @@ const externalVMSchema = new Schema<IExternalVM>(
       type: Schema.Types.ObjectId,
       ref: 'TenantUser',
       required: false,
+    },
+    assignedTo: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+      default: null,
+    },
+    assignedTenantUserId: {
+      type: Schema.Types.ObjectId,
+      ref: 'TenantUser',
+      index: true,
+      default: null,
     },
     createdAt: {
       type: Date,
