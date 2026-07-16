@@ -164,4 +164,4 @@ export function startUsageScheduler() {
   }
 }
 
-export { monitorUsageSessions, resetDailyUsageCounters, handleDailyLimitReached };
+export { monitorUsageSessions, resetDailyUsageCounters, enforceDailyLimitsForRequest };

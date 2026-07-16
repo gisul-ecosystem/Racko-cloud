@@ -3,8 +3,10 @@ const cleanupService = require('../services/cleanupService');
 const db = require('../db/postgres');
 const { createNotification, NotificationType } = require('../services/notificationService');
 const { runScheduledJob } = require('../utils/schedulerCoordinator');
+const { sendLabExpiryWarningEmail } = require('../services/email/labExpiryWarningEmailService');
 
 let scheduledTask = null;
+let expiryWarningColumnReady = false;
 
 const logSchedulerEvent = (level, event, details = {}) => {
   const entry = {
@@ -23,6 +25,18 @@ const logSchedulerEvent = (level, event, details = {}) => {
   }
 
   console.log(message);
+};
+
+const ensureExpiryWarningColumn = async () => {
+  if (expiryWarningColumnReady) {
+    return;
+  }
+
+  await db.query(`
+    ALTER TABLE requests
+      ADD COLUMN IF NOT EXISTS expiry_warning_sent_at TIMESTAMPTZ
+  `);
+  expiryWarningColumnReady = true;
 };
 
 const runExpiryCleanupJob = async () => {
@@ -50,6 +64,79 @@ const runExpiryCleanupJob = async () => {
   }
 };
 
+const runExpiryWarningJob = async () => {
+  await ensureExpiryWarningColumn();
+
+  const expiringSoon = await db.query(`
+    SELECT
+      id,
+      customer_email,
+      location,
+      expiry_date,
+      expires_at
+    FROM requests
+    WHERE status = 'Completed'
+      AND COALESCE(expired, false) = false
+      AND COALESCE(cleanup_completed, false) = false
+      AND expiry_warning_sent_at IS NULL
+      AND customer_email IS NOT NULL
+      AND (
+        CASE
+          WHEN expires_at IS NOT NULL THEN
+            expires_at > NOW()
+            AND expires_at <= NOW() + INTERVAL '24 hours'
+          ELSE
+            expiry_date > CURRENT_DATE
+            AND expiry_date <= CURRENT_DATE + INTERVAL '1 day'
+        END
+      )
+  `);
+
+  for (const request of expiringSoon.rows) {
+    const requestLabel = `Request #${request.id}`;
+    const expiresAt = request.expires_at
+      ? new Date(request.expires_at).toUTCString()
+      : request.expiry_date
+        ? String(request.expiry_date).slice(0, 10)
+        : 'within 24 hours';
+
+    try {
+      await sendLabExpiryWarningEmail({
+        to: request.customer_email,
+        requestLabel,
+        location: request.location,
+        expiresAt
+      });
+
+      await db.query(
+        `
+          UPDATE requests
+          SET expiry_warning_sent_at = NOW()
+          WHERE id = $1
+            AND expiry_warning_sent_at IS NULL
+        `,
+        [request.id]
+      );
+
+      await createNotification({
+        type: NotificationType.LAB_EXPIRING_SOON,
+        title: 'Lab expiring in 24 hours',
+        message: `Lab #${request.id} for ${request.customer_email} (${request.location}) expires in less than 24 hours`,
+        requestId: request.id
+      });
+
+      logSchedulerEvent('info', 'expiry_warning_email_sent', { requestId: request.id });
+    } catch (error) {
+      logSchedulerEvent('error', 'expiry_warning_email_failed', {
+        requestId: request.id,
+        message: error?.message
+      });
+    }
+  }
+
+  return expiringSoon.rows.length;
+};
+
 const startExpiryScheduler = () => {
   if (scheduledTask) {
     return scheduledTask;
@@ -62,30 +149,12 @@ const startExpiryScheduler = () => {
 
   cron.schedule(
     '0 9 * * *',
-    async () => {
-      try {
-        const expiringSoon = await db.query(`
-          SELECT id, customer_email, location
-          FROM requests
-          WHERE status = 'Completed'
-            AND expiry_date BETWEEN NOW() AND NOW() + INTERVAL '24 hours'
-            AND expiry_date > NOW()
-            AND COALESCE(expired, false) = false
-        `);
-
-        for (const request of expiringSoon.rows) {
-          await createNotification({
-            type: NotificationType.LAB_EXPIRING_SOON,
-            title: 'Lab expiring in 24 hours',
-            message: `Lab #${request.id} for ${request.customer_email} (${request.location}) expires in less than 24 hours`,
-            requestId: request.id
-          });
-        }
-      } catch (error) {
+    () => {
+      runScheduledJob('expiry-warning', runExpiryWarningJob).catch((error) => {
         logSchedulerEvent('error', 'expiry_warning_scheduler_failed', {
           message: error?.message
         });
-      }
+      });
     },
     {
       timezone: 'Asia/Kolkata'
@@ -114,10 +183,17 @@ const startExpiryScheduler = () => {
     }
   );
 
+  ensureExpiryWarningColumn().catch((error) => {
+    logSchedulerEvent('error', 'expiry_warning_column_ensure_failed', {
+      message: error?.message
+    });
+  });
+
   return scheduledTask;
 };
 
 module.exports = {
   runExpiryCleanupJob,
+  runExpiryWarningJob,
   startExpiryScheduler
 };

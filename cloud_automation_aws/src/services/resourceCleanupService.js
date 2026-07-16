@@ -89,8 +89,10 @@ import {
 } from '@aws-sdk/client-sqs';
 
 import {
-  createRegionalAwsClientsForAccount,
+  createRegionalAwsClients,
+  listEnabledAwsRegions,
   MASTER_ACCOUNT_ID,
+  resolveCleanupCredentials,
 } from '../config/aws.js';
 import Request from '../models/Request.js';
 
@@ -818,6 +820,48 @@ const SERVICE_PAUSERS = {
   RDS: pauseRDS,
 };
 
+const GLOBAL_CLEANUP_SERVICES = new Set(['S3', 'CloudFront']);
+
+function mergeCleanupResult(target, source) {
+  if (!source || typeof source !== 'object') {
+    return target;
+  }
+
+  const merged = { ...(target || {}) };
+
+  for (const [key, value] of Object.entries(source)) {
+    if (key === 'errors' && Array.isArray(value)) {
+      merged.errors = [...(merged.errors || []), ...value];
+      continue;
+    }
+
+    if (typeof value === 'number') {
+      merged[key] = Number(merged[key] || 0) + value;
+      continue;
+    }
+
+    if (key === 'error' && value) {
+      merged.errors = [...(merged.errors || []), String(value)];
+    }
+  }
+
+  return merged;
+}
+
+async function resolveCleanupRegions(labRegion, ec2Client) {
+  const normalizedLabRegion = String(labRegion || '').trim();
+  try {
+    const enabledRegions = await listEnabledAwsRegions(ec2Client);
+    if (!normalizedLabRegion) {
+      return enabledRegions;
+    }
+    return [...new Set([normalizedLabRegion, ...enabledRegions])];
+  } catch (err) {
+    console.warn(`[cleanup] Could not list AWS regions, using lab region only: ${err.message}`);
+    return normalizedLabRegion ? [normalizedLabRegion] : [];
+  }
+}
+
 export async function cleanupUserResources(requestId, userIndex) {
   const request = await Request.findById(requestId);
   if (!request) throw new Error('Request not found');
@@ -831,10 +875,13 @@ export async function cleanupUserResources(requestId, userIndex) {
   const cleanupAccountId =
     user.accountId || user.awsAccountId || request.awsAccountId ||
     request.provisionedResources?.targetAccountId || MASTER_ACCOUNT_ID;
-  const cleanupClients = await createRegionalAwsClientsForAccount(requestRegion, cleanupAccountId);
+  const cleanupCredentials = await resolveCleanupCredentials(cleanupAccountId);
+  const labClients = createRegionalAwsClients(requestRegion, cleanupCredentials);
+  const regionsToScan = await resolveCleanupRegions(requestRegion, labClients.EC2);
 
   console.log(`[cleanup] Starting cleanup for request ${requestId} user ${userIndex + 1}`);
   console.log(`[cleanup] Services to clean: ${allowedServices.join(', ')}`);
+  console.log(`[cleanup] Scanning ${regionsToScan.length} AWS region(s)`);
 
   const results = {};
 
@@ -845,13 +892,42 @@ export async function cleanupUserResources(requestId, userIndex) {
       continue;
     }
     try {
-      results[service] = await cleaner(
-        requestId,
-        userIndex,
-        cleanupClients[service],
-        requestRegion,
-        cleanupAccountId
-      );
+      if (GLOBAL_CLEANUP_SERVICES.has(service)) {
+        results[service] = await cleaner(
+          requestId,
+          userIndex,
+          labClients[service],
+          requestRegion,
+          cleanupAccountId
+        );
+        continue;
+      }
+
+      let aggregated = null;
+      for (const scanRegion of regionsToScan) {
+        try {
+          const regionalClients =
+            scanRegion === requestRegion
+              ? labClients
+              : createRegionalAwsClients(scanRegion, cleanupCredentials);
+          const regionalResult = await cleaner(
+            requestId,
+            userIndex,
+            regionalClients[service],
+            scanRegion,
+            cleanupAccountId
+          );
+          aggregated = aggregated
+            ? mergeCleanupResult(aggregated, regionalResult)
+            : { ...regionalResult };
+        } catch (regionErr) {
+          aggregated = mergeCleanupResult(aggregated || { deleted: 0, errors: [] }, {
+            deleted: 0,
+            errors: [`${scanRegion}: ${regionErr.message}`],
+          });
+        }
+      }
+      results[service] = aggregated || { deleted: 0, errors: [] };
     } catch (err) {
       console.error(`[cleanup] ${service} cleanup failed:`, err.message);
       results[service] = { error: err.message };
@@ -886,7 +962,8 @@ export async function pauseUserResources(requestId, userIndex) {
   const cleanupAccountId =
     user.accountId || user.awsAccountId || request.awsAccountId ||
     request.provisionedResources?.targetAccountId || MASTER_ACCOUNT_ID;
-  const clients = await createRegionalAwsClientsForAccount(requestRegion, cleanupAccountId);
+  const cleanupCredentials = await resolveCleanupCredentials(cleanupAccountId);
+  const clients = createRegionalAwsClients(requestRegion, cleanupCredentials);
   const results = {};
   for (const service of (request.selectedServices || []).map((entry) => entry.serviceName)) {
     const pauser = SERVICE_PAUSERS[service];

@@ -82,11 +82,14 @@ function getRequestUser(request, userIndex) {
 }
 
 function buildPolicyDocumentFromNames(policies = [], request = null) {
-  if (request?.permissions?.length) {
-    return buildPermissionPolicy(request);
-  }
+  const policyNames = policies?.length
+    ? policies
+    : (request?.permissions || []).flatMap((entry) => entry.policies || []);
 
-  return buildPermissionPolicyFromPolicyNames(policies);
+  return buildPermissionPolicyFromPolicyNames(policyNames, {
+    _id: request?._id,
+    region: request?.region,
+  });
 }
 
 function resolveUserPolicies(role, request) {
@@ -316,7 +319,14 @@ export async function generateUserConsoleUrl(requestId, userIndex) {
   }
 
   const sessionName = `racko-admin-u${userIndex + 1}-${String(requestId).slice(-6)}`;
-  const result = await generateAndLogConsoleUrl(requestId, userIndex, role.roleArn, sessionName, durationSeconds);
+  const result = await generateAndLogConsoleUrl(
+    requestId,
+    userIndex,
+    role.roleArn,
+    sessionName,
+    durationSeconds,
+    { region: request.region }
+  );
 
   await createNotification({
     type: 'console_access',
@@ -447,7 +457,7 @@ export async function updateUserPermissions(requestId, userIndex, policies = [])
   const { field, user } = getRequestUser(request, userIndex);
   if (!user) throw createError('User not found', 404);
 
-  const policyDocument = buildPolicyDocumentFromNames(policies);
+  const policyDocument = buildPolicyDocumentFromNames(policies, request);
   if (field === 'identityUsers') {
     const client = await getIamClientForAccount(
       user.accountId || user.awsAccountId || request.awsAccountId
@@ -617,6 +627,10 @@ export async function triggerUserCleanup(requestId, userIndex, { action = 'delet
     await recordHistory(requestId, 'user_cleanup', {
       userIndex,
       actor,
+      summary:
+        deletedCount > 0
+          ? `Cleanup removed ${deletedCount} resource(s) for labuser${userIndex + 1}`
+          : `Cleanup completed for labuser${userIndex + 1} — no matching tagged resources found`,
       snapshot: { action, deletedCount, results },
     });
 
@@ -655,6 +669,10 @@ export async function triggerAllCleanup(requestId, { action = 'delete', actor = 
     });
     await recordHistory(requestId, 'request_cleanup', {
       actor,
+      summary:
+        deletedCount > 0
+          ? `Request cleanup removed ${deletedCount} resource(s)`
+          : 'Request cleanup completed — no matching tagged resources found',
       snapshot: { action, deletedCount, results },
     });
     return { action, results, deletedCount, totalDeleted: deletedCount };
@@ -1031,24 +1049,76 @@ export async function getLabHistory(requestId, { userIndex = null, limit = 200 }
   if (!(await Request.exists({ _id: requestId }))) throw createError('Request not found', 404);
   const query = { requestId };
   if (userIndex !== null && userIndex !== '') query.userIndex = Number(userIndex);
-  const rows = await HistorySnapshot.find(query)
-    .sort({ createdAt: -1 })
-    .limit(Math.min(Math.max(Number(limit) || 200, 1), 500))
-    .lean();
+
+  const cleanupLogQuery = { requestId, status: 'success' };
+  if (userIndex !== null && userIndex !== '') cleanupLogQuery.userIndex = Number(userIndex);
+
+  const [rows, cleanupLogs] = await Promise.all([
+    HistorySnapshot.find(query)
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Math.max(Number(limit) || 200, 1), 500))
+      .lean(),
+    CleanupLog.find(cleanupLogQuery)
+      .sort({ completedAt: -1, ranAt: -1 })
+      .limit(Math.min(Math.max(Number(limit) || 200, 1), 500))
+      .lean(),
+  ]);
+
+  const resolveDeletedCount = (row) => {
+    const fromSnapshot = Number(row.snapshot?.deletedCount);
+    const fromResults = countCleanupDeleted(row.snapshot?.results);
+    let best = Math.max(
+      Number.isFinite(fromSnapshot) ? fromSnapshot : 0,
+      fromResults
+    );
+
+    if (row.event === 'user_cleanup' || row.event === 'request_cleanup') {
+      const rowTime = new Date(row.createdAt).getTime();
+      const matchedLog = cleanupLogs.find((log) => {
+        const logTime = new Date(log.completedAt || log.ranAt).getTime();
+        const sameUser =
+          row.event === 'request_cleanup'
+            ? log.userIndex == null
+            : Number(log.userIndex) === Number(row.userIndex);
+        return sameUser && Math.abs(logTime - rowTime) <= 15000;
+      });
+      if (matchedLog) {
+        best = Math.max(
+          best,
+          Number(matchedLog.totalDeleted) || 0,
+          countCleanupDeleted(matchedLog.results)
+        );
+      }
+    }
+
+    return best;
+  };
+
   return {
     requestId: String(requestId),
-    entries: rows.map((row) => ({
-      id: String(row._id),
-      type: row.event,
-      at: row.createdAt,
-      userIndex: row.userIndex,
-      title: row.summary || row.event.replace(/_/g, ' '),
-      subtitle: row.actor,
-      status: row.snapshot?.status,
-      costUsd: row.snapshot?.costUsd,
-      resourcesDeleted: row.snapshot?.deletedCount,
-      details: row.snapshot,
-    })),
+    entries: rows.map((row) => {
+      const resourcesDeleted = resolveDeletedCount(row);
+      const isCleanupEvent = row.event === 'user_cleanup' || row.event === 'request_cleanup';
+
+      return {
+        id: String(row._id),
+        type: row.event,
+        at: row.createdAt,
+        userIndex: row.userIndex,
+        title:
+          row.summary ||
+          (isCleanupEvent
+            ? resourcesDeleted > 0
+              ? `Cleanup removed ${resourcesDeleted} resource(s)`
+              : 'Cleanup completed — no matching tagged resources found'
+            : row.event.replace(/_/g, ' ')),
+        subtitle: row.actor,
+        status: row.snapshot?.status,
+        costUsd: row.snapshot?.costUsd,
+        resourcesDeleted,
+        details: row.snapshot,
+      };
+    }),
   };
 }
 

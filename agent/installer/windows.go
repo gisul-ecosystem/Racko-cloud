@@ -571,7 +571,7 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 	return combined, nil
 }
 
-// runMSI downloads and installs a .msi file.
+// runMSI downloads and installs a .msi file in the active user session.
 func runMSI(pkg SoftwarePackage) (string, error) {
 	path, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -579,14 +579,23 @@ func runMSI(pkg SoftwarePackage) (string, error) {
 	}
 	defer cleanup()
 
+	// Build msiexec args — note: don't duplicate /quiet /norestart from installArgs
 	args := []string{"/i", path, "/quiet", "/norestart"}
 	if pkg.InstallArgs != "" {
-		args = append(args, strings.Fields(pkg.InstallArgs)...)
+		extra := strings.Fields(pkg.InstallArgs)
+		// Filter out flags already added to avoid duplicates
+		for _, a := range extra {
+			lower := strings.ToLower(a)
+			if lower != "/quiet" && lower != "/norestart" {
+				args = append(args, a)
+			}
+		}
 	}
-	return runCmdWithTimeout(directInstallTimeout, "msiexec", args...)
+	log.Printf("[msi] Running in active user session: msiexec %v", args)
+	return runAsActiveUser("msiexec", args...)
 }
 
-// runEXE downloads and runs a silent .exe installer.
+// runEXE downloads and runs a silent .exe installer in the active user session.
 func runEXE(pkg SoftwarePackage) (string, error) {
 	path, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -598,10 +607,11 @@ func runEXE(pkg SoftwarePackage) (string, error) {
 	if pkg.InstallArgs != "" {
 		args = strings.Fields(pkg.InstallArgs)
 	}
-	return runCmdWithTimeout(directInstallTimeout, path, args...)
+	log.Printf("[exe] Running in active user session: %s %v", path, args)
+	return runAsActiveUser(path, args...)
 }
 
-// runZIP downloads, extracts, and runs the installer.
+// runZIP downloads, extracts, and runs the installer in the active user session.
 func runZIP(pkg SoftwarePackage) (string, error) {
 	zipPath, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -628,10 +638,11 @@ func runZIP(pkg SoftwarePackage) (string, error) {
 	if pkg.InstallArgs != "" {
 		args = strings.Fields(pkg.InstallArgs)
 	}
-	return runCmdWithTimeout(directInstallTimeout, installerPath, args...)
+	log.Printf("[zip] Running in active user session: %s %v", installerPath, args)
+	return runAsActiveUser(installerPath, args...)
 }
 
-// runPowerShell downloads and runs a .ps1 script.
+// runPowerShell downloads and runs a .ps1 script in the active user session.
 func runPowerShell(pkg SoftwarePackage) (string, error) {
 	path, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
@@ -643,7 +654,8 @@ func runPowerShell(pkg SoftwarePackage) (string, error) {
 	if pkg.InstallArgs != "" {
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
-	return runCmdWithTimeout(directInstallTimeout, "powershell.exe", args...)
+	log.Printf("[script] Running in active user session: powershell.exe %v", args)
+	return runAsActiveUser("powershell.exe", args...)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────

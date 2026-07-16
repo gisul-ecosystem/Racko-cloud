@@ -62,6 +62,16 @@ describe('AWS cleanup action metrics', () => {
       3
     );
   });
+
+  it('counts deletions even when a service also reports an error', () => {
+    assert.equal(
+      countCleanupDeleted({
+        DynamoDB: { deleted: 1, errors: ['eu-west-1: AccessDenied'] },
+        EC2: { error: 'No credentials' },
+      }),
+      1
+    );
+  });
 });
 
 describe('shared AWS cost attribution', () => {
