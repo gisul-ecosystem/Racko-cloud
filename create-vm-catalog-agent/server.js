@@ -22,6 +22,7 @@ const {
   purchaseAndScrape,
   ensureBrowser,
   shutdown,
+  getRateLimitInfo,
 } = require('./lib/catalog-session');
 
 const app = express();
@@ -29,10 +30,12 @@ app.use(express.json({ limit: '1mb' }));
 const PORT = Number(process.env.PORT) || 3789;
 
 app.get('/api/health', (_req, res) => {
+  const rl = (typeof getRateLimitInfo === 'function' && getRateLimitInfo()) || { limited: false };
   res.json({
     ok: true,
     service: 'create-vm-catalog-agent',
     categories: Object.keys(PRICING_URLS),
+    rateLimit: rl,
   });
 });
 

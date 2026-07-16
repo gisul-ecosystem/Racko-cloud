@@ -89,7 +89,8 @@ services:
       - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
     volumes:
       # Persist Playwright storage state so repeated logins are not required
-      - ./create-vm-catalog-agent/catalog-storage-state.json:/app/catalog-storage-state.json:rw
+      # Mount a host directory to avoid file-vs-directory bind mount issues
+      - ./create-vm-catalog-agent/state:/app/state:rw
  
 volumes:
   tenant-assets:
