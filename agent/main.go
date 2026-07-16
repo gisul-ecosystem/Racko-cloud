@@ -137,7 +137,7 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 		}
 	}()
 
-	go heartbeat.Start(cfg, agentID, cancelDone)
+	go heartbeat.Start(cfg, agentID, cancelDone, cancel)
 
 	rep := reporter.New(cfg)
 	exec := executor.New(agentID, cfg, rep)

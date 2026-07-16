@@ -265,7 +265,15 @@ func (p *WSPoller) runUninstall() {
 	// Small delay to let goroutines observe the cancel before the binary is deleted
 	time.Sleep(500 * time.Millisecond)
 
-	script := `& "C:\ProgramData\racko-agent\unins000.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART; Start-Sleep -Seconds 3; Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue; sc.exe delete RackoAgent 2>$null`
+	script := `
+if (Test-Path "C:\ProgramData\racko-agent\unins000.exe") {
+    & "C:\ProgramData\racko-agent\unins000.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART
+    Start-Sleep -Seconds 3
+}
+sc.exe stop RackoAgent 2>$null
+sc.exe delete RackoAgent 2>$null
+Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue
+`
 	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	if err := cmd.Start(); err != nil {
 		log.Printf("[ws-poller] runUninstall: failed to start cleanup script: %v", err)
