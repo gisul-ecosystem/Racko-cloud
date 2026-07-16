@@ -212,13 +212,32 @@ export interface VMPushResult {
 }
 
 export async function pushAgentToVMs(
-  vms: VMPushTarget[]
-): Promise<{ machines: IMachine[]; pushResults: VMPushResult[] }> {
-  const res = await apiRequest<ApiResponse<{ machines: IMachine[]; pushResults: VMPushResult[] }>>(
+  vms: VMPushTarget[],
+  sessionId: string
+): Promise<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }> {
+  const res = await apiRequest<ApiResponse<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }>>(
     '/api/v1/machines/push-agent',
-    { method: 'POST', body: JSON.stringify({ vms }) }
+    { method: 'POST', body: JSON.stringify({ vms, sessionId }) }
   );
   return res.data;
+}
+
+export async function issuePushStreamTicket(
+  sessionId: string
+): Promise<{ streamToken: string; expiresIn: number }> {
+  const res = await apiRequest<ApiResponse<{ streamToken: string; expiresIn: number }>>(
+    '/api/v1/machines/push-stream-ticket',
+    { method: 'POST', body: JSON.stringify({ sessionId }) }
+  );
+  return res.data;
+}
+
+export function openPushStatusStream(
+  sessionId: string,
+  streamToken: string
+): EventSource {
+  const url = `${getGatewayBaseUrl()}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
+  return new EventSource(url);
 }
 
 // ─── Enrollment Key API ───────────────────────────────────────────────────────
