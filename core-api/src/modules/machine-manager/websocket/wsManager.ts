@@ -82,6 +82,30 @@ class WSManager {
   }
 
   /**
+   * Send an uninstall command to a connected agent over the existing WebSocket.
+   * Agent receives { type: "uninstall" } and immediately runs the cleanup script.
+   * Returns true if delivered, false if agent is offline (403 fallback will handle it).
+   */
+  sendUninstall(agentId: string): boolean {
+    const conn = this.connections.get(agentId);
+    if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+      logger.warn('[WSManager] Cannot send uninstall — agent not connected', { agentId });
+      return false;
+    }
+    try {
+      conn.ws.send(JSON.stringify({ type: 'uninstall' }));
+      logger.info('[WSManager] Sent uninstall command to agent', { agentId });
+      return true;
+    } catch (err) {
+      logger.error('[WSManager] Failed to send uninstall command', {
+        agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
    * Close a specific agent connection with a reason code.
    */
   closeConnection(agentId: string, code: number, reason: string): void {

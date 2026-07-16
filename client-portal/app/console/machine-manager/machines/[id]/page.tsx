@@ -10,15 +10,17 @@ import {
   fetchMachine,
   createJobs,
   fetchJobs,
+  deleteMachine,
   type IMachine,
   type MachineStatus,
   type IJob,
   type JobStatus,
 } from '../../../../../lib/machineManagerApi';
 import { useJobStream } from '../../../../../hooks/useJobStream';
+import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
 import {
   Server, ArrowLeft, Cpu, HardDrive, MemoryStick,
-  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X,
+  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X, Trash2,
 } from 'lucide-react';
 
 const jobStatusCfg: Record<JobStatus, { label: string; dot: string; text: string }> = {
@@ -141,7 +143,8 @@ export default function MachineDetailPage() {
   const [selectedJob, setSelectedJob] = useState<IJob | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [installing, setInstalling] = useState(false);
-
+  const [removingAgent, setRemovingAgent] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -171,8 +174,20 @@ export default function MachineDetailPage() {
       setSelected([]);
       router.push('/console/machine-manager/jobs');
     } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to queue jobs.');
-      setInstalling(false);
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to queue jobs.');      setInstalling(false);
+    }
+  };
+
+  const handleRemoveAgent = async () => {
+    if (!machine) return;
+    setRemovingAgent(true);
+    try {
+      await deleteMachine(machine._id);
+      addToast('success', `"${machine.name}" removed. Agent will uninstall within a few seconds.`);
+      router.push('/console/machine-manager/machines');
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to remove machine.');
+      setRemovingAgent(false);
     }
   };
 
@@ -195,6 +210,19 @@ export default function MachineDetailPage() {
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
       {selectedJob && <LogsModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
 
+      {showRemoveConfirm && machine && (
+        <ConfirmModal
+          open
+          title="Remove Machine"
+          description={`This will uninstall the Racko agent from "${machine.name}" and remove it from your machine list.`}
+          confirmLabel="Remove Machine"
+          confirmVariant="danger"
+          loading={removingAgent}
+          onConfirm={() => void handleRemoveAgent()}
+          onCancel={() => setShowRemoveConfirm(false)}
+        />
+      )}
+
       {/* Back */}
       <Link href="/console/machine-manager/machines"
         className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
@@ -216,6 +244,12 @@ export default function MachineDetailPage() {
           <StatusBadge status={machine.status} />
           <button onClick={() => void load()} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+          <button
+            onClick={() => setShowRemoveConfirm(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Remove Machine
           </button>
         </div>
       </div>

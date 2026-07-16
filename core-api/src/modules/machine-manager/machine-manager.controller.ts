@@ -86,6 +86,18 @@ export class MachineManagerController {
     }
   }
 
+  /** POST /api/v1/machines/:id/remove-agent */
+  async removeAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      await machineManagerService.deleteMachine(id, adminId);
+      success(res, 'Agent removal initiated. Agent will self-uninstall on next heartbeat.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
   // ─── Jobs ──────────────────────────────────────────────────────────────────
 
   /** POST /api/v1/machines/jobs */

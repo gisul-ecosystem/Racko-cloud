@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/racko-ai/agent/config"
@@ -71,10 +73,40 @@ func sendHeartbeat(client *http.Client, platformURL, agentID string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden {
+		// 403 means the machine was deleted from the platform — uninstall and exit cleanly
+		log.Printf("[heartbeat] Received 403 — machine deleted from platform. Uninstalling agent...")
+		selfUninstall()
+		return nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
 	log.Printf("[heartbeat] %s — ok", time.Now().Format(time.RFC3339))
 	return nil
+}
+
+// selfUninstall cleanly removes the agent from the machine.
+// Uses the Inno Setup uninstaller which handles service stop, registry cleanup,
+// Control Panel removal, and file deletion.
+func selfUninstall() {
+	if runtime.GOOS != "windows" {
+		log.Printf("[heartbeat] selfUninstall: skipping on non-Windows OS")
+		return
+	}
+
+	script := `
+& "C:\ProgramData\racko-agent\unins000.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART
+Start-Sleep -Seconds 3
+Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue
+sc.exe delete RackoAgent 2>$null
+`
+	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	if err := cmd.Start(); err != nil {
+		log.Printf("[heartbeat] selfUninstall: failed to start uninstall script: %v", err)
+	}
+	// Don't wait — the script will stop and delete us, so we just exit
+	log.Printf("[heartbeat] selfUninstall: uninstall script launched, agent exiting")
 }

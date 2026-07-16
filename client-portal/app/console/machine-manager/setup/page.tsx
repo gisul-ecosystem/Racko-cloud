@@ -499,7 +499,8 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
           const online = all.filter((m) => successfulMachineIds.has(m._id) && m.status === 'online');
           if (online.length === successfulMachineIds.size) {
             clearInterval(intervalRef.current!);
-            setMachines(result.machines); // keep all (including failed) for display
+            // Only pass the actually connected VMs to step 2 — not failed ones
+            setMachines(online);
             setWaiting(false);
             setStep(2);
           }
@@ -634,7 +635,7 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
         <div>
           <div className="mb-5 flex items-center gap-2">
             <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500"><Check className="h-3.5 w-3.5 text-white" /></div>
-            <span className="text-sm font-medium text-green-700">All {machines.length} VM{machines.length !== 1 ? 's' : ''} connected</span>
+            <span className="text-sm font-medium text-green-700">{machines.length} VM{machines.length !== 1 ? 's' : ''} connected and ready</span>
           </div>
           <SoftwareStep machines={machines} isAuthenticated={isAuthenticated} />
         </div>
