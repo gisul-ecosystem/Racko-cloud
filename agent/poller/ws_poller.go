@@ -33,6 +33,7 @@ type WSPoller struct {
 	agentID string
 	handler JobHandler
 	backoff *backoffState
+	cancel  func() // called on uninstall to stop all goroutines cleanly
 }
 
 type backoffState struct {
@@ -41,11 +42,12 @@ type backoffState struct {
 }
 
 // NewWS creates a WebSocket poller.
-func NewWS(cfg *config.Config, agentID string, handler JobHandler) *WSPoller {
+func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func()) *WSPoller {
 	return &WSPoller{
 		cfg:     cfg,
 		agentID: agentID,
 		handler: handler,
+		cancel:  cancel,
 		backoff: &backoffState{
 			current: 5 * time.Second,
 			max:     60 * time.Second,
@@ -165,7 +167,7 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				go p.handler(job)
 			} else if msg.Type == "uninstall" {
 				log.Printf("[ws-poller] Received uninstall command — running cleanup script")
-				go runUninstall()
+				go p.runUninstall()
 			} else if msg.Type == "exec" {
 				var execMsg struct {
 					CommandID string `json:"commandId"`
@@ -252,17 +254,24 @@ func (p *WSPoller) runExec(commandID, command string, safeWrite func(int, []byte
 
 // ─── Uninstall ────────────────────────────────────────────────────────────────
 
-// runUninstall executes the cleanup script when the platform requests removal.
-// Runs in a goroutine — uses cmd.Start() (non-blocking) so the script can
-// delete the agent binary and service while we are still running.
-func runUninstall() {
+// runUninstall stops all agent goroutines first (heartbeat, poller) then
+// launches the cleanup script. Using cancel() ensures heartbeat stops
+// immediately so it cannot re-launch selfUninstall on the next tick.
+func (p *WSPoller) runUninstall() {
+	// Cancel the shared done channel — stops heartbeat and all other goroutines
+	if p.cancel != nil {
+		p.cancel()
+	}
+	// Small delay to let goroutines observe the cancel before the binary is deleted
+	time.Sleep(500 * time.Millisecond)
+
 	script := `& "C:\ProgramData\racko-agent\unins000.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART; Start-Sleep -Seconds 3; Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue; sc.exe delete RackoAgent 2>$null`
 	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
 	if err := cmd.Start(); err != nil {
 		log.Printf("[ws-poller] runUninstall: failed to start cleanup script: %v", err)
 		return
 	}
-	log.Printf("[ws-poller] runUninstall: cleanup script launched, agent will exit shortly")
+	log.Printf("[ws-poller] runUninstall: cleanup script launched, agent exiting")
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────
