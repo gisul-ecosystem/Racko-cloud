@@ -115,12 +115,34 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 
 	log.Printf("[agent] Starting heartbeat and WebSocket poller for agentId=%s", agentID)
 
-	go heartbeat.Start(cfg, agentID, done)
+	// cancelDone wraps the external done channel with a cancellable layer.
+	// This allows the WS poller to cancel all goroutines (including heartbeat)
+	// immediately when an uninstall command is received — without waiting for
+	// the next heartbeat tick.
+	cancelDone := make(chan struct{})
+	cancel := func() {
+		select {
+		case <-cancelDone:
+			// already closed
+		default:
+			close(cancelDone)
+		}
+	}
+	// Bridge: if the external done fires, also cancel our internal channel
+	go func() {
+		select {
+		case <-done:
+			cancel()
+		case <-cancelDone:
+		}
+	}()
+
+	go heartbeat.Start(cfg, agentID, cancelDone)
 
 	rep := reporter.New(cfg)
 	exec := executor.New(agentID, cfg, rep)
-	p := poller.NewWS(cfg, agentID, exec.Handle)
-	p.Start(done)
+	p := poller.NewWS(cfg, agentID, exec.Handle, cancel)
+	p.Start(cancelDone)
 
 	log.Println("[agent] Stopped.")
 }
