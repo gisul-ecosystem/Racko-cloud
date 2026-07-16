@@ -13,6 +13,7 @@ services:
       PORT: ${CORE_API_PORT:-8001}
       JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
       TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
     volumes:
       - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
