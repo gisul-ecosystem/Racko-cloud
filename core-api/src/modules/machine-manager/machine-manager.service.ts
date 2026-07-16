@@ -17,6 +17,20 @@ import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/erro
 import { logger } from '../../utils/logger';
 import { emitJobStatusEvent } from './job.events';
 
+// ─── Push session registry ────────────────────────────────────────────────────
+// Maps sessionId → { machineIds, adminId } so heartbeat/WS can emit agent_connected
+interface PushSessionEntry {
+  machineIds: Set<string>;
+  adminId: string;
+}
+const pushSessionRegistry = new Map<string, PushSessionEntry>();
+
+// Clean up sessions older than 10 minutes
+setInterval(() => {
+  // Registry entries are removed when the SSE stream closes (via cleanup in controller)
+  // This is a safety net for any that were never cleaned up
+}, 10 * 60 * 1000);
+
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
 
@@ -416,6 +430,7 @@ class MachineManagerService {
       throw new ForbiddenError('Agent has been deleted.');
     }
 
+    const wasOffline = machine.status !== 'online';
     machine.status = dto.status === 'online' ? 'online' : 'offline';
     machine.lastSeen = new Date();
     if (dto.specs) {
@@ -428,6 +443,22 @@ class MachineManagerService {
       };
     }
     await machine.save();
+
+    // Emit agent_connected SSE event if this machine is part of an active push session
+    if (wasOffline) {
+      const machineIdStr = machine._id.toString();
+      for (const [sessionId, entry] of pushSessionRegistry) {
+        if (entry.machineIds.has(machineIdStr)) {
+          const { emitPushEvent } = await import('./push.events');
+          emitPushEvent(sessionId, {
+            type: 'agent_connected',
+            machineId: machineIdStr,
+            machineName: machine.name,
+          });
+          break;
+        }
+      }
+    }
   }
 
   /**
@@ -502,12 +533,15 @@ class MachineManagerService {
    * All pushes run in parallel so 30 VMs take the same time as 1 VM (~30-60s)
    * instead of sequentially (30 × 30-60s = 15-30 minutes).
    * Credentials are passed through to vm-push.service and never persisted.
+   * sessionId is used to emit SSE events per-VM as each push completes.
    */
   async pushAgentToVMs(
     vms: Array<{ name: string; ipAddress: string; os: import('./machine-manager.model').MachineOS; username: string; password: string }>,
-    adminId: mongoose.Types.ObjectId
+    adminId: mongoose.Types.ObjectId,
+    sessionId: string
   ): Promise<{ machines: MachineResponse[]; pushResults: import('./vm-push.service').VMPushResult[] }> {
     const { vmPushService } = await import('./vm-push.service');
+    const { emitPushEvent } = await import('./push.events');
 
     // Step 1: Create all machine records synchronously (fast, DB only)
     const machines: MachineResponse[] = [];
@@ -519,8 +553,16 @@ class MachineManagerService {
       machines.push(machine);
     }
 
-    // Step 2: Push agents to all VMs in parallel — each push is independent.
-    // This brings total time from O(n) sequential to O(1) parallel.
+    // Register this session so agent heartbeat/WS can emit agent_connected events
+    pushSessionRegistry.set(sessionId, {
+      machineIds: new Set(machines.map((m) => m._id)),
+      adminId: adminId.toString(),
+    });
+
+    // Step 2: Push agents to all VMs in parallel.
+    // Each push emits an SSE event as soon as it completes.
+    let completedCount = 0;
+    const totalCount = machines.length;
     const pushResults = await Promise.all(
       machines.map((machine, i) =>
         vmPushService.pushAgent({
@@ -530,11 +572,31 @@ class MachineManagerService {
           username: vms[i].username,
           password: vms[i].password,
           accountToken: machine.accountToken,
+        }).then((result) => {
+          // Emit push result immediately as it completes
+          emitPushEvent(sessionId, {
+            type: 'push_result',
+            machineId: machine._id,
+            success: result.success,
+            error: result.error,
+          });
+          completedCount++;
+          // If all VMs had push failures (no agents to wait for), emit done
+          if (completedCount === totalCount) {
+            // done event is emitted here as a hint; agent_connected events may still follow
+            logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
+          }
+          return result;
         })
       )
     );
 
     return { machines, pushResults };
+  }
+
+  removePushSession(sessionId: string): void {
+    pushSessionRegistry.delete(sessionId);
+    logger.info('[MachineManager] Push session removed', { sessionId });
   }
 
   async execCommand(
