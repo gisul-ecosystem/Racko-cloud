@@ -8,7 +8,44 @@ const path = require('path');
 const LOGIN_URL = 'https://cloud.webyne.com/login';
 const WEBYNE_EMAIL = process.env.WEBYNE_EMAIL || 'sahil.goyal@gisul.co.in';
 const WEBYNE_PASSWORD = process.env.WEBYNE_PASSWORD || 'Password@123';
-const STORAGE_STATE_PATH = path.join(__dirname, '..', 'catalog-storage-state.json');
+// Persist Playwright storage in a dedicated directory to allow directory
+// mounts from the host (avoid file-vs-directory bind mount issues).
+const STORAGE_STATE_PATH = path.join(__dirname, '..', 'state', 'catalog-storage-state.json');
+
+function ensureStorageDir() {
+  const dir = path.dirname(STORAGE_STATE_PATH);
+  if (!fs.existsSync(dir)) {
+    try {
+      fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch (e) {
+      /* ignore creation errors; callers will surface failures */
+    }
+  }
+}
+
+const RATE_LIMIT_PATH = path.join(__dirname, '..', 'state', 'ratelimit.json');
+
+function readRateLimit() {
+  try {
+    if (fs.existsSync(RATE_LIMIT_PATH)) {
+      const txt = fs.readFileSync(RATE_LIMIT_PATH, 'utf8');
+      const obj = JSON.parse(txt || '{}');
+      return Number(obj.nextLoginAt) || 0;
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return 0;
+}
+
+function writeRateLimit(ts) {
+  try {
+    ensureStorageDir();
+    fs.writeFileSync(RATE_LIMIT_PATH, JSON.stringify({ nextLoginAt: Number(ts) || 0 }), 'utf8');
+  } catch (e) {
+    /* ignore */
+  }
+}
 
 const PRICING_URLS = {
   linux: 'https://cloud.webyne.com/admin/linux/pricing',
@@ -30,6 +67,8 @@ let ready = false;
 let loginPromise = null;
 // timestamp (ms) when next login attempt should be tried (rate-limit reset)
 let nextLoginAt = 0;
+// hydrate persisted rate-limit if present
+nextLoginAt = readRateLimit();
 
 function emptyPrice(value) {
   if (value == null) return null;
@@ -409,6 +448,8 @@ async function ensureBrowser() {
     const contextOptions = {
       viewport: { width: 1400, height: 900 },
     };
+    // If a host directory is mounted at /app/state, STORAGE_STATE_PATH will
+    // point inside that directory. Only set storageState if the file exists.
     if (fs.existsSync(STORAGE_STATE_PATH)) {
       contextOptions.storageState = STORAGE_STATE_PATH;
       console.log('[webyne] Reusing saved storage state');
@@ -462,10 +503,21 @@ async function ensureBrowser() {
             }
             if (resetTs) {
               nextLoginAt = resetTs + 1000;
+              writeRateLimit(nextLoginAt);
               console.warn('[webyne] Rate limited (429). Respecting reset at', new Date(nextLoginAt).toISOString());
               throw Object.assign(new Error('Webyne rate limited'), { status: 429, resetAt: nextLoginAt });
             }
           }
+          // No header — use exponential backoff with jitter to reduce pressure
+          const base = 30_000;
+          const maxWait = 5 * 60 * 1000;
+          const waitMs = Math.min(maxWait, Math.floor(base * Math.pow(2, rateTry)));
+          const jitter = Math.floor(Math.random() * 5000);
+          const totalWait = waitMs + jitter;
+          console.warn(`[webyne] Probe returned ${pre.status()} — waiting ${Math.round(totalWait/1000)}s before retry`);
+          await page.waitForTimeout(totalWait);
+          await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+          await page.waitForTimeout(1000);
         } catch (e) {
           console.warn('[webyne] Rate probe failed or limited, aborting login attempts:', e.message || e);
           throw e;
@@ -551,8 +603,14 @@ async function ensureBrowser() {
         throw new Error('Webyne login failed — still on /login after credentials');
       }
 
-      await context.storageState({ path: STORAGE_STATE_PATH });
-      console.log('[webyne] Login OK, storage state saved');
+      // Ensure host-mounted directory exists before saving storage state
+      try {
+        ensureStorageDir();
+        await context.storageState({ path: STORAGE_STATE_PATH });
+        console.log('[webyne] Login OK, storage state saved');
+      } catch (e) {
+        console.warn('[webyne] Failed to save storage state:', e && e.message ? e.message : e);
+      }
     } else {
       console.log('[webyne] Session already authenticated');
     }
@@ -572,6 +630,14 @@ async function ensureBrowser() {
     browser = null;
     context = null;
     page = null;
+    // persist rate-limit info on fatal error so orchestrators can inspect it
+    if (err && err.status === 429 && err.resetAt) {
+      try {
+        writeRateLimit(err.resetAt);
+      } catch {
+        /* ignore */
+      }
+    }
     throw err;
   } finally {
     loginPromise = null;
@@ -579,6 +645,19 @@ async function ensureBrowser() {
 
   return page;
 }
+
+// Expose rate-limit info for health checks
+function getRateLimitInfo() {
+  const now = Date.now();
+  const resetAt = readRateLimit() || nextLoginAt || 0;
+  return {
+    limited: Boolean(resetAt && resetAt > now),
+    resetAt: resetAt || null,
+    now,
+  };
+}
+
+module.exports.getRateLimitInfo = getRateLimitInfo;
 
 async function fetchPricingCategory(category) {
   const key = String(category || '').toLowerCase();
