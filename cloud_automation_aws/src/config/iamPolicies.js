@@ -576,7 +576,7 @@ export function buildPermissionPolicy(request, username) {
 }
 
 /** Build policy from catalog policy names (e.g. EC2FullAccess) — used by org admin updates. */
-export function buildPermissionPolicyFromPolicyNames(policyNames = []) {
+export function buildPermissionPolicyFromPolicyNames(policyNames = [], requestContext = {}) {
   const permissions = [];
 
   for (const policyName of policyNames) {
@@ -591,7 +591,11 @@ export function buildPermissionPolicyFromPolicyNames(policyNames = []) {
     });
   }
 
-  return buildPermissionPolicy({ permissions });
+  return buildPermissionPolicy({
+    _id: requestContext._id,
+    region: requestContext.region,
+    permissions,
+  });
 }
 
 function buildInlinePolicyDocument(actions) {

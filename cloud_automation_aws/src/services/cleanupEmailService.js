@@ -38,38 +38,6 @@ function buildResourceCleanupEmailHtml({
 </html>`;
 }
 
-function buildLabExpiryEmailHtml({
-  requestLabel,
-  deletedCount,
-  rolesRemoved,
-  usersRemoved,
-  cleanedAt,
-  endDate,
-}) {
-  return `<!doctype html>
-<html>
-  <body style="font-family: Arial, Helvetica, sans-serif; color: #111827; background: #f8fafc; margin: 0; padding: 24px;">
-    <div style="max-width: 720px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 24px;">
-      <h1 style="margin: 0 0 12px; font-size: 24px;">AWS lab expired — full cleanup completed</h1>
-      <p style="margin: 0 0 16px;">
-        Your AWS lab <strong>${escapeHtml(requestLabel)}</strong> has reached its end date and all associated access and resources have been removed.
-      </p>
-      <ul style="margin: 0 0 16px; padding-left: 20px;">
-        <li><strong>Lab end date:</strong> ${escapeHtml(new Date(endDate).toUTCString())}</li>
-        <li><strong>Cleaned at:</strong> ${escapeHtml(cleanedAt.toUTCString())}</li>
-        <li><strong>AWS resources removed:</strong> ${deletedCount}</li>
-        <li><strong>IAM roles removed:</strong> ${rolesRemoved}</li>
-        <li><strong>IAM users removed:</strong> ${usersRemoved}</li>
-      </ul>
-      <p style="margin: 0 0 16px;">
-        All tagged AWS resources, IAM roles, and IAM users for this lab have been deleted. Lab access is no longer available.
-      </p>
-      <p style="margin: 0; color: #6b7280;">— The Racko Team</p>
-    </div>
-  </body>
-</html>`;
-}
-
 export async function sendResourceCleanupEmail({
   to,
   requestLabel,
@@ -96,30 +64,41 @@ export async function sendResourceCleanupEmail({
   });
 }
 
-export async function sendLabExpiryCleanupEmail({
-  to,
-  requestLabel,
-  deletedCount,
-  rolesRemoved,
-  usersRemoved,
-  cleanedAt,
-  endDate,
-}) {
+export async function sendLabExpiryCleanupEmail() {
+  // Lab-expiry teardown must never email customers. Only the 1-day-before warning is allowed.
+  console.log('[cleanupEmail] Lab expiry cleanup email suppressed (no mail after expiry)');
+  return { sent: false, mode: 'suppressed' };
+}
+
+export async function sendLabExpiryWarningEmail({ to, requestLabel, region, endDate }) {
   if (!to) {
-    console.log('[cleanupEmail] No recipient — skipping lab expiry email');
+    console.log('[cleanupEmail] No recipient — skipping lab expiry warning email');
     return { sent: false, mode: 'skipped' };
   }
 
+  const expiresAt = endDate ? new Date(endDate).toUTCString() : 'within 24 hours';
+
   return sendEmailWithRetry({
     to,
-    subject: `[Racko] AWS lab expired — ${requestLabel}`,
-    html: buildLabExpiryEmailHtml({
-      requestLabel,
-      deletedCount,
-      rolesRemoved,
-      usersRemoved,
-      cleanedAt,
-      endDate,
-    }),
+    subject: `[Racko] AWS lab expires in 24 hours — ${requestLabel}`,
+    html: `<!doctype html>
+<html>
+  <body style="font-family: Arial, Helvetica, sans-serif; color: #111827; background: #f8fafc; margin: 0; padding: 24px;">
+    <div style="max-width: 720px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 24px;">
+      <h1 style="margin: 0 0 12px; font-size: 24px;">AWS lab expires in 24 hours</h1>
+      <p style="margin: 0 0 16px;">
+        Your AWS lab <strong>${escapeHtml(requestLabel)}</strong> is scheduled to expire soon.
+      </p>
+      <ul style="margin: 0 0 16px; padding-left: 20px;">
+        <li><strong>Region:</strong> ${escapeHtml(region || '—')}</li>
+        <li><strong>Expires:</strong> ${escapeHtml(expiresAt)}</li>
+      </ul>
+      <p style="margin: 0 0 16px;">
+        After expiry, lab access and resources will be cleaned up automatically. No further cleanup emails will be sent after the lab expires.
+      </p>
+      <p style="margin: 0; color: #6b7280;">— The Racko Team</p>
+    </div>
+  </body>
+</html>`,
   });
 }

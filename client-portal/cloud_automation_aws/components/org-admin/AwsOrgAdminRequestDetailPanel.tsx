@@ -253,7 +253,11 @@ export function AwsOrgAdminRequestDetailPanel({
           )}
 
           {activeTab === 'history' && (
-            <AwsOrgAdminHistoryTab requestId={request.requestId} users={requestDetail.users} />
+            <AwsOrgAdminHistoryTab
+              requestId={request.requestId}
+              users={requestDetail.users}
+              refreshToken={lastUpdatedAt?.getTime()}
+            />
           )}
 
           {activeTab === 'custom-config' && (

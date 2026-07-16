@@ -16,6 +16,7 @@ import {
   INLINE_IAM_POLICY_ALIASES,
   SERVICE_IAM_POLICIES,
   buildPermissionPolicy,
+  buildPermissionPolicyFromPolicyNames,
   buildRegionRestrictionStatements,
   REGION_EXEMPT_NOT_ACTIONS,
 } from '../src/config/iamPolicies.js';
@@ -196,6 +197,28 @@ describe('iamPolicies', () => {
   it('returns no regional restrictions when request region is missing', () => {
     assert.deepEqual(buildRegionRestrictionStatements(''), []);
     assert.deepEqual(buildRegionRestrictionStatements(null), []);
+  });
+
+  it('builds permission updates with request region and tag context', () => {
+    const doc = buildPermissionPolicyFromPolicyNames(['DynamoDBFullAccess'], {
+      _id: '6a587a52ded4ef1005ef0d3d',
+      region: 'ap-south-1',
+    });
+
+    const regionDeny = doc.Statement.find((entry) => entry.Sid === 'DenyOutsideLabRegion');
+    assert.ok(regionDeny);
+    assert.equal(regionDeny.Condition.StringNotEquals['aws:RequestedRegion'], 'ap-south-1');
+
+    const allowTagOnCreate = doc.Statement.find((entry) => entry.Sid === 'AllowTagOnCreate');
+    assert.ok(allowTagOnCreate);
+    assert.equal(
+      allowTagOnCreate.Condition.StringEquals['aws:RequestTag/racko:request'],
+      '6a587a52ded4ef1005ef0d3d'
+    );
+
+    const dynamoAllow = doc.Statement.find((entry) => entry.Sid === 'RackoDynamoDBFull');
+    assert.ok(dynamoAllow);
+    assert.ok(dynamoAllow.Action.includes('dynamodb:*'));
   });
 });
 
