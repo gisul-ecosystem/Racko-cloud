@@ -108,8 +108,20 @@ class MachineManagerService {
     adminId: mongoose.Types.ObjectId
   ): Promise<void> {
     const doc = await this.findOwnedMachine(id, adminId);
-    
-    // Soft delete — set deleted flag instead of removing record
+
+    // Send uninstall command via WebSocket — agent runs cleanup script immediately.
+    // If agent is offline the 403 fallback on next heartbeat will handle it.
+    const { wsManager } = await import('./websocket/wsManager');
+    if (doc.agentId) {
+      const delivered = wsManager.sendUninstall(doc.agentId);
+      logger.info('[MachineManager] Uninstall command sent via WebSocket', {
+        machineId: id.toString(),
+        agentId: doc.agentId,
+        delivered,
+      });
+    }
+
+    // Soft delete — agent gets 403 on next heartbeat as a fallback if WS delivery failed
     doc.deleted = true;
     doc.status = 'offline';
     await doc.save();
@@ -119,8 +131,7 @@ class MachineManagerService {
       adminId: adminId.toString(),
     });
 
-    // Notify WebSocket manager to close connection if agent is connected
-    const { wsManager } = await import('./websocket/wsManager');
+    // Close the WebSocket connection so agent reconnects and immediately gets 403
     if (doc.agentId) {
       wsManager.closeConnection(doc.agentId, 4010, 'Machine deleted');
     }
@@ -488,6 +499,8 @@ class MachineManagerService {
 
   /**
    * VM push flow — creates machine records then triggers SSH/WinRM agent push.
+   * All pushes run in parallel so 30 VMs take the same time as 1 VM (~30-60s)
+   * instead of sequentially (30 × 30-60s = 15-30 minutes).
    * Credentials are passed through to vm-push.service and never persisted.
    */
   async pushAgentToVMs(
@@ -496,29 +509,52 @@ class MachineManagerService {
   ): Promise<{ machines: MachineResponse[]; pushResults: import('./vm-push.service').VMPushResult[] }> {
     const { vmPushService } = await import('./vm-push.service');
 
+    // Step 1: Create all machine records synchronously (fast, DB only)
     const machines: MachineResponse[] = [];
-    const pushResults: import('./vm-push.service').VMPushResult[] = [];
-
     for (const vm of vms) {
       const machine = await this.addMachine(
         { name: vm.name, ipAddress: vm.ipAddress, os: vm.os },
         adminId
       );
       machines.push(machine);
-
-      const result = await vmPushService.pushAgent({
-        machineId: machine._id,
-        ipAddress: vm.ipAddress,
-        os: vm.os,
-        username: vm.username,
-        password: vm.password,
-        accountToken: machine.accountToken,
-      });
-
-      pushResults.push(result);
     }
 
+    // Step 2: Push agents to all VMs in parallel — each push is independent.
+    // This brings total time from O(n) sequential to O(1) parallel.
+    const pushResults = await Promise.all(
+      machines.map((machine, i) =>
+        vmPushService.pushAgent({
+          machineId: machine._id,
+          ipAddress: vms[i].ipAddress,
+          os: vms[i].os,
+          username: vms[i].username,
+          password: vms[i].password,
+          accountToken: machine.accountToken,
+        })
+      )
+    );
+
     return { machines, pushResults };
+  }
+
+  async execCommand(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    command: string
+  ): Promise<{ output: string; exitCode: number }> {
+    const doc = await this.findOwnedMachine(id, adminId);
+    if (!doc.agentId) throw new NotFoundError('Machine has no registered agent.');
+
+    const { wsManager } = await import('./websocket/wsManager');
+    if (!wsManager.isConnected(doc.agentId)) {
+      throw new NotFoundError('Agent is offline. Commands can only be run on online machines.');
+    }
+
+    const { v4: uuidv4 } = await import('uuid');
+    const commandId = uuidv4();
+
+    const result = await wsManager.sendExec(doc.agentId, commandId, command);
+    return { output: result.output, exitCode: result.exitCode };
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────

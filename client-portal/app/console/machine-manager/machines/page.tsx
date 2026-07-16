@@ -192,11 +192,11 @@ export default function MyMachinesPage() {
     setDeleteLoading(true);
     try {
       await deleteMachine(pendingDelete._id);
-      addToast('success', `${pendingDelete.name} deleted.`);
+      addToast('success', `"${pendingDelete.name}" removed. Agent will uninstall within a few seconds.`);
       setPendingDelete(null);
       refetch();
     } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to delete machine.');
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to remove machine.');
     } finally {
       setDeleteLoading(false);
     }
@@ -209,9 +209,9 @@ export default function MyMachinesPage() {
       {pendingDelete && (
         <ConfirmModal
           open
-          title="Delete machine"
-          description={`Permanently remove "${pendingDelete.name}" (${pendingDelete.ipAddress})? This cannot be undone.`}
-          confirmLabel="Delete"
+          title="Remove Machine"
+          description={`This will uninstall the Racko agent from "${pendingDelete.name}" and remove it from your machine list.`}
+          confirmLabel="Remove Machine"
           confirmVariant="danger"
           loading={deleteLoading}
           onConfirm={() => void handleDelete()}
@@ -309,7 +309,7 @@ export default function MyMachinesPage() {
                             className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
                           >
                             <Trash2 className="h-3.5 w-3.5" />
-                            Delete
+                            Remove Machine
                           </button>
                         </div>
                       </td>

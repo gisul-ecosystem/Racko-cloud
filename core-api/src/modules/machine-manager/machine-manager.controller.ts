@@ -86,6 +86,18 @@ export class MachineManagerController {
     }
   }
 
+  /** POST /api/v1/machines/:id/remove-agent */
+  async removeAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      await machineManagerService.deleteMachine(id, adminId);
+      success(res, 'Agent removal initiated. Agent will self-uninstall on next heartbeat.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
   // ─── Jobs ──────────────────────────────────────────────────────────────────
 
   /** POST /api/v1/machines/jobs */
@@ -481,6 +493,22 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     req.on('close', () => {
       jobStatusEmitter.removeListener(jobId, listener);
     });
+  }
+  /** POST /api/v1/machines/:id/exec */
+  async execCommand(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const { command } = req.body as { command: string };
+      if (!command || typeof command !== 'string' || !command.trim()) {
+        res.status(400).json({ success: false, message: 'command is required.' });
+        return;
+      }
+      const result = await machineManagerService.execCommand(id, adminId, command.trim());
+      success(res, 'Command executed.', result);
+    } catch (err) {
+      next(err);
+    }
   }
 }
 

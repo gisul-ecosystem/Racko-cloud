@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"os/exec"
 	"sync"
 	"time"
 
@@ -162,6 +163,20 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				}
 				log.Printf("[ws-poller] Received job id=%s", job.ID)
 				go p.handler(job)
+			} else if msg.Type == "uninstall" {
+				log.Printf("[ws-poller] Received uninstall command — running cleanup script")
+				go runUninstall()
+			} else if msg.Type == "exec" {
+				var execMsg struct {
+					CommandID string `json:"commandId"`
+					Command   string `json:"command"`
+				}
+				if err := json.Unmarshal(msg.Payload, &execMsg); err != nil {
+					log.Printf("[ws-poller] Malformed exec payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received exec commandId=%s", execMsg.CommandID)
+				go p.runExec(execMsg.CommandID, execMsg.Command, safeWrite)
 			}
 		}
 	}()
@@ -195,6 +210,59 @@ func (p *WSPoller) increaseBackoff() {
 
 func (p *WSPoller) resetBackoff() {
 	p.backoff.current = 5 * time.Second
+}
+
+// ─── Exec ─────────────────────────────────────────────────────────────────────
+
+// runExec runs a PowerShell command and sends the result back over WebSocket.
+// Uses cmd.Output() (blocking) — runs in its own goroutine so it doesn't block the read loop.
+func (p *WSPoller) runExec(commandID, command string, safeWrite func(int, []byte) error) {
+	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
+	out, err := cmd.CombinedOutput()
+
+	output := string(out)
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+			if output == "" {
+				output = err.Error()
+			}
+		}
+	}
+
+	result := map[string]interface{}{
+		"commandId": commandID,
+		"output":    output,
+		"exitCode":  exitCode,
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":    "exec_result",
+		"payload": result,
+	})
+
+	if err := safeWrite(websocket.TextMessage, payload); err != nil {
+		log.Printf("[ws-poller] runExec: failed to send result for commandId=%s: %v", commandID, err)
+	} else {
+		log.Printf("[ws-poller] runExec: sent result commandId=%s exitCode=%d", commandID, exitCode)
+	}
+}
+
+// ─── Uninstall ────────────────────────────────────────────────────────────────
+
+// runUninstall executes the cleanup script when the platform requests removal.
+// Runs in a goroutine — uses cmd.Start() (non-blocking) so the script can
+// delete the agent binary and service while we are still running.
+func runUninstall() {
+	script := `& "C:\ProgramData\racko-agent\unins000.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART; Start-Sleep -Seconds 3; Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue; sc.exe delete RackoAgent 2>$null`
+	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	if err := cmd.Start(); err != nil {
+		log.Printf("[ws-poller] runUninstall: failed to start cleanup script: %v", err)
+		return
+	}
+	log.Printf("[ws-poller] runUninstall: cleanup script launched, agent will exit shortly")
 }
 
 // ─── Error helpers ────────────────────────────────────────────────────────────

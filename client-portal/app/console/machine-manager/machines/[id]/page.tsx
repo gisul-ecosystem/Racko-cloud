@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '../../../../../context/AuthContext';
 import { useSoftwareCatalog } from '../../../../../hooks/useSoftwareCatalog';
@@ -10,15 +10,18 @@ import {
   fetchMachine,
   createJobs,
   fetchJobs,
+  deleteMachine,
+  execCommand,
   type IMachine,
   type MachineStatus,
   type IJob,
   type JobStatus,
 } from '../../../../../lib/machineManagerApi';
 import { useJobStream } from '../../../../../hooks/useJobStream';
+import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
 import {
   Server, ArrowLeft, Cpu, HardDrive, MemoryStick,
-  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X,
+  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X, Trash2, Terminal, Play,
 } from 'lucide-react';
 
 const jobStatusCfg: Record<JobStatus, { label: string; dot: string; text: string }> = {
@@ -141,7 +144,16 @@ export default function MachineDetailPage() {
   const [selectedJob, setSelectedJob] = useState<IJob | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [installing, setInstalling] = useState(false);
+  const [removingAgent, setRemovingAgent] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
 
+  // Terminal state
+  interface TerminalEntry { command: string; output: string; exitCode: number; ts: string }
+  const [terminalInput, setTerminalInput] = useState('');
+  const [terminalHistory, setTerminalHistory] = useState<TerminalEntry[]>([]);
+  const [terminalRunning, setTerminalRunning] = useState(false);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const terminalBottomRef = useRef<HTMLDivElement>(null);
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -171,10 +183,44 @@ export default function MachineDetailPage() {
       setSelected([]);
       router.push('/console/machine-manager/jobs');
     } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to queue jobs.');
-      setInstalling(false);
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to queue jobs.');      setInstalling(false);
     }
   };
+
+  const handleRemoveAgent = async () => {
+    if (!machine) return;
+    setRemovingAgent(true);
+    try {
+      await deleteMachine(machine._id);
+      addToast('success', `"${machine.name}" removed. Agent will uninstall within a few seconds.`);
+      router.push('/console/machine-manager/machines');
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to remove machine.');
+      setRemovingAgent(false);
+    }
+  };
+
+  const handleExec = async () => {
+    if (!terminalInput.trim() || !machine || terminalRunning) return;
+    const cmd = terminalInput.trim();
+    setTerminalInput('');
+    setHistoryIndex(-1);
+    setTerminalRunning(true);
+    try {
+      const result = await execCommand(machine._id, cmd);
+      setTerminalHistory((prev) => [...prev, { command: cmd, output: result.output, exitCode: result.exitCode, ts: new Date().toLocaleTimeString() }]);
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Command failed.');
+      setTerminalHistory((prev) => [...prev, { command: cmd, output: msg, exitCode: 1, ts: new Date().toLocaleTimeString() }]);
+    } finally {
+      setTerminalRunning(false);
+    }
+  };
+
+  // Auto-scroll terminal to bottom on new output
+  useEffect(() => {
+    terminalBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [terminalHistory]);
 
   if (loading) {
     return (
@@ -194,6 +240,19 @@ export default function MachineDetailPage() {
     <div className="max-w-4xl">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
       {selectedJob && <LogsModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
+
+      {showRemoveConfirm && machine && (
+        <ConfirmModal
+          open
+          title="Remove Machine"
+          description={`This will uninstall the Racko agent from "${machine.name}" and remove it from your machine list.`}
+          confirmLabel="Remove Machine"
+          confirmVariant="danger"
+          loading={removingAgent}
+          onConfirm={() => void handleRemoveAgent()}
+          onCancel={() => setShowRemoveConfirm(false)}
+        />
+      )}
 
       {/* Back */}
       <Link href="/console/machine-manager/machines"
@@ -216,6 +275,12 @@ export default function MachineDetailPage() {
           <StatusBadge status={machine.status} />
           <button onClick={() => void load()} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+          <button
+            onClick={() => setShowRemoveConfirm(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Remove Machine
           </button>
         </div>
       </div>
@@ -278,11 +343,98 @@ export default function MachineDetailPage() {
         </div>
       )}
 
+      {/* Remote Terminal */}
+      <div className="mb-6 rounded-xl border border-gray-200 bg-gray-950 overflow-hidden">
+        <div className="flex items-center justify-between border-b border-gray-800 px-4 py-3">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-green-400" />
+            <h2 className="text-sm font-semibold text-green-400">Remote PowerShell</h2>
+            {machine.status !== 'online' && (
+              <span className="ml-2 rounded-full bg-yellow-900/40 px-2 py-0.5 text-xs text-yellow-400">Agent offline — commands unavailable</span>
+            )}
+          </div>
+          {terminalHistory.length > 0 && (
+            <button
+              onClick={() => setTerminalHistory([])}
+              className="text-xs text-gray-500 hover:text-gray-300"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+
+        {/* Output area */}
+        <div className="h-72 overflow-y-auto p-4 font-mono text-xs">
+          {terminalHistory.length === 0 && (
+            <p className="text-gray-600">Type a PowerShell command below and press Enter or click Run.</p>
+          )}
+          {terminalHistory.map((entry, i) => (
+            <div key={i} className="mb-3">
+              <div className="flex items-center gap-2 text-green-400">
+                <span className="text-gray-600 text-[10px]">{entry.ts}</span>
+                <span className="text-gray-500">PS&gt;</span>
+                <span>{entry.command}</span>
+              </div>
+              <pre className={`mt-1 whitespace-pre-wrap break-all leading-relaxed ${entry.exitCode === 0 ? 'text-gray-200' : 'text-red-400'}`}>
+                {entry.output || '(no output)'}
+              </pre>
+            </div>
+          ))}
+          {terminalRunning && (
+            <div className="flex items-center gap-2 text-yellow-400">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-yellow-400" />
+              <span>Running…</span>
+            </div>
+          )}
+          <div ref={terminalBottomRef} />
+        </div>
+
+        {/* Input bar */}
+        <div className="flex items-center gap-2 border-t border-gray-800 px-4 py-3">
+          <span className="shrink-0 text-xs text-gray-500 font-mono">PS&gt;</span>
+          <input
+            type="text"
+            value={terminalInput}
+            onChange={(e) => setTerminalInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') { void handleExec(); }
+              if (e.key === 'ArrowUp') {
+                const cmds = terminalHistory.map((h) => h.command);
+                const next = Math.min(historyIndex + 1, cmds.length - 1);
+                setHistoryIndex(next);
+                setTerminalInput(cmds[cmds.length - 1 - next] ?? '');
+              }
+              if (e.key === 'ArrowDown') {
+                const cmds = terminalHistory.map((h) => h.command);
+                const next = Math.max(historyIndex - 1, -1);
+                setHistoryIndex(next);
+                setTerminalInput(next === -1 ? '' : (cmds[cmds.length - 1 - next] ?? ''));
+              }
+            }}
+            disabled={terminalRunning || machine.status !== 'online'}
+            placeholder={machine.status !== 'online' ? 'Agent is offline' : 'Get-Process, Get-Service, dir C:\\, …'}
+            className="flex-1 bg-transparent text-xs text-gray-200 placeholder-gray-600 outline-none font-mono disabled:opacity-40"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            onClick={() => void handleExec()}
+            disabled={terminalRunning || !terminalInput.trim() || machine.status !== 'online'}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-green-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-green-600 disabled:opacity-40"
+          >
+            {terminalRunning
+              ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              : <Play className="h-3 w-3" />
+            }
+            Run
+          </button>
+        </div>
+      </div>
+
       {/* Install Software */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-700">Install Software</h2>
-          {selected.length > 0 && (
+          <h2 className="text-sm font-semibold text-gray-700">Install Software</h2>          {selected.length > 0 && (
             <button
               onClick={() => void handleInstall()}
               disabled={installing}
