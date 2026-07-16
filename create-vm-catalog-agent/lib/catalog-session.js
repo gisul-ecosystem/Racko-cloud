@@ -28,6 +28,8 @@ let context = null;
 let page = null;
 let ready = false;
 let loginPromise = null;
+// timestamp (ms) when next login attempt should be tried (rate-limit reset)
+let nextLoginAt = 0;
 
 function emptyPrice(value) {
   if (value == null) return null;
@@ -390,6 +392,14 @@ async function ensureBrowser() {
     return page;
   }
 
+  // If provider signalled a rate-limit reset window, defer attempts until then
+  if (nextLoginAt && Date.now() < nextLoginAt) {
+    const err = new Error(`Webyne rate limited until ${new Date(nextLoginAt).toISOString()}`);
+    err.status = 429;
+    err.resetAt = nextLoginAt;
+    throw err;
+  }
+
   loginPromise = (async () => {
     console.log('[webyne] Launching browser…');
     browser = await chromium.launch({
@@ -430,18 +440,36 @@ async function ensureBrowser() {
       await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
       await page.waitForTimeout(1000);
 
-      // Webyne rate-limits aggressive automation
+      // Webyne rate-limits aggressive automation. Probe provider headers and
+      // respect their reset window instead of busy-loop retrying.
       for (let rateTry = 0; rateTry < 6; rateTry += 1) {
         const blocked = await page.evaluate(() => {
           const t = `${document.title} ${document.body?.innerText || ''}`;
           return /429|too many requests/i.test(t);
         });
         if (!blocked) break;
-        const waitMs = 30_000 * (rateTry + 1);
-        console.warn(`[webyne] Rate limited (429). Waiting ${waitMs / 1000}s before retry…`);
-        await page.waitForTimeout(waitMs);
-        await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
-        await page.waitForTimeout(1000);
+        try {
+          const pre = await context.request.get(LOGIN_URL, { timeout: 60000 });
+          if (pre.status() === 429) {
+            const headers = pre.headers();
+            const resetHdr = headers['x-ratelimit-reset'] || headers['X-RateLimit-Reset'];
+            const retryAfter = headers['retry-after'] || headers['Retry-After'];
+            let resetTs = null;
+            if (resetHdr && !Number.isNaN(Number(resetHdr))) {
+              resetTs = Number(resetHdr) * 1000;
+            } else if (retryAfter && !Number.isNaN(Number(retryAfter))) {
+              resetTs = Date.now() + Number(retryAfter) * 1000;
+            }
+            if (resetTs) {
+              nextLoginAt = resetTs + 1000;
+              console.warn('[webyne] Rate limited (429). Respecting reset at', new Date(nextLoginAt).toISOString());
+              throw Object.assign(new Error('Webyne rate limited'), { status: 429, resetAt: nextLoginAt });
+            }
+          }
+        } catch (e) {
+          console.warn('[webyne] Rate probe failed or limited, aborting login attempts:', e.message || e);
+          throw e;
+        }
       }
 
       const emailInput = page
