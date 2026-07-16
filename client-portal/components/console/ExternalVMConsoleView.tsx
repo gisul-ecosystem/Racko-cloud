@@ -32,7 +32,10 @@ export interface ExternalVMConsoleViewProps {
   disconnectHref: string;
   /** Defaults to platform admin external-vms APIs. */
   fetchVm?: (id: string) => Promise<{ name: string }>;
-  openConsole?: (id: string) => Promise<ExternalVMConsoleSession>;
+  openConsole?: (
+    id: string,
+    dimensions?: { width?: number; height?: number }
+  ) => Promise<ExternalVMConsoleSession>;
 }
 
 /**
@@ -96,7 +99,10 @@ export function ExternalVMConsoleView({
       setLoading(true);
       setError(null);
       try {
-        const data = await openConsole(id);
+        const data = await openConsole(id, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
         if (signal?.aborted) return;
         setSession(data);
         setIframeKey((k) => k + 1);

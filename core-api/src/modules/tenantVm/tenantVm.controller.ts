@@ -104,7 +104,23 @@ export class TenantVmController {
     try {
       const { vmId } = req.params as { vmId: string };
       const protocol = (req.query['protocol'] as 'rdp' | 'ssh' | 'vnc' | undefined);
-      const consoleSession = await tenantVmService.openConsole(actorFromRequest(req), vmId, req, protocol);
+
+      const rawWidth = req.query['width'] as string | undefined;
+      const rawHeight = req.query['height'] as string | undefined;
+      const width = rawWidth ? parseInt(rawWidth, 10) : undefined;
+      const height = rawHeight ? parseInt(rawHeight, 10) : undefined;
+      const dimensions = {
+        width: width && Number.isFinite(width) && width > 0 ? width : undefined,
+        height: height && Number.isFinite(height) && height > 0 ? height : undefined,
+      };
+
+      const consoleSession = await tenantVmService.openConsole(
+        actorFromRequest(req),
+        vmId,
+        req,
+        protocol,
+        dimensions
+      );
       success(res, 'Console session ready.', consoleSession);
     } catch (error) {
       next(error);
