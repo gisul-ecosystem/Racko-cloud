@@ -162,7 +162,11 @@ async function start() {
 
   console.log('[catalog-agent] Warming provider session…');
   try {
-    await ensureBrowser();
+    if (String(process.env.SKIP_CATALOG_AGENT_WARMUP || 'false').toLowerCase() !== 'true') {
+      await ensureBrowser();
+    } else {
+      console.log('[catalog-agent] SKIP_CATALOG_AGENT_WARMUP=true — skipping warm-up login');
+    }
   } catch (err) {
     console.warn('[catalog-agent] Warm-up failed (will retry on first request):', err.message);
   }

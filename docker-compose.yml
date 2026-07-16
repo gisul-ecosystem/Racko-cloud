@@ -83,8 +83,13 @@ services:
       NODE_ENV: production
       PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
       HOSTNAME: 0.0.0.0
+      # When true, skip warm-up login on container start (useful during recovery)
+      SKIP_CATALOG_AGENT_WARMUP: ${SKIP_CATALOG_AGENT_WARMUP:-false}
     ports:
       - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    volumes:
+      # Persist Playwright storage state so repeated logins are not required
+      - ./create-vm-catalog-agent/catalog-storage-state.json:/app/catalog-storage-state.json:rw
  
 volumes:
   tenant-assets:
