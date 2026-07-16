@@ -4,7 +4,7 @@ import { CloudFrontClient } from '@aws-sdk/client-cloudfront';
 import { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
 import { CostExplorerClient } from '@aws-sdk/client-cost-explorer';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
-import { EC2Client } from '@aws-sdk/client-ec2';
+import { DescribeRegionsCommand, EC2Client } from '@aws-sdk/client-ec2';
 import { EKSClient } from '@aws-sdk/client-eks';
 import { ElastiCacheClient } from '@aws-sdk/client-elasticache';
 import { EMRClient } from '@aws-sdk/client-emr';
@@ -103,10 +103,10 @@ export function createRegionalAwsClients(requestRegion, clientCredentials = cred
   };
 }
 
-export async function createRegionalAwsClientsForAccount(requestRegion, accountId) {
+export async function resolveCleanupCredentials(accountId) {
   const targetAccountId = String(accountId || MASTER_ACCOUNT_ID || '').trim();
   if (!targetAccountId || targetAccountId === String(MASTER_ACCOUNT_ID || '').trim()) {
-    return createRegionalAwsClients(requestRegion);
+    return credentials;
   }
 
   const roleName = process.env.RACKO_LAB_ADMIN_ROLE_NAME || 'RackoLabAdmin';
@@ -120,9 +120,20 @@ export async function createRegionalAwsClientsForAccount(requestRegion, accountI
   if (!Credentials) {
     throw new Error(`Unable to assume cleanup role in AWS account ${targetAccountId}`);
   }
-  return createRegionalAwsClients(requestRegion, {
+
+  return {
     accessKeyId: Credentials.AccessKeyId,
     secretAccessKey: Credentials.SecretAccessKey,
     sessionToken: Credentials.SessionToken,
-  });
+  };
+}
+
+export async function listEnabledAwsRegions(ec2Client) {
+  const { Regions = [] } = await ec2Client.send(new DescribeRegionsCommand({ AllRegions: false }));
+  return [...new Set(Regions.map((entry) => entry.RegionName).filter(Boolean))].sort();
+}
+
+export async function createRegionalAwsClientsForAccount(requestRegion, accountId) {
+  const cleanupCredentials = await resolveCleanupCredentials(accountId);
+  return createRegionalAwsClients(requestRegion, cleanupCredentials);
 }

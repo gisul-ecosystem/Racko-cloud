@@ -17,7 +17,10 @@ import { assertConsoleAccessAllowed } from '../utils/servicePeriodAccess.js';
 
 import { assertUsageAccessAllowed, resolveUsageUserId } from '../services/usageService.js';
 
-import { cleanupUserResources, cleanupAllUsers } from '../services/resourceCleanupService.js';
+import {
+  triggerAllCleanup,
+  triggerUserCleanup,
+} from '../services/orgAdminService.js';
 
 import { syncRequestUserSpend } from '../services/costTrackingService.js';
 
@@ -56,6 +59,27 @@ function authMiddleware(req, res, next) {
 
 }
 
+function assertAdmin(req, res) {
+  if (req.user?.role === 'user') {
+    res.status(403).json({ success: false, message: 'Admin access is required for this action.' });
+    return false;
+  }
+  return true;
+}
+
+function assertSelfOrAdmin(req, res, userIndex) {
+  if (req.user?.role !== 'user') {
+    return true;
+  }
+
+  if (Number(req.user.userIndex) === Number(userIndex)) {
+    return true;
+  }
+
+  res.status(403).json({ success: false, message: 'You can only access your own account.' });
+  return false;
+}
+
 
 
 router.post('/manage/aws/login', async (req, res) => {
@@ -70,7 +94,7 @@ router.post('/manage/aws/login', async (req, res) => {
 
   } catch (err) {
 
-    res.status(401).json({ success: false, message: err.message });
+    res.status(err.statusCode || 401).json({ success: false, message: err.message });
 
   }
 
@@ -88,7 +112,10 @@ router.get('/manage/aws/request/:id', authMiddleware, async (req, res, next) => 
 
     }
 
-    const data = await getManagePortalData(req.params.id);
+    const data = await getManagePortalData(req.params.id, {
+      role: req.user.role || 'admin',
+      userIndex: req.user.userIndex,
+    });
 
     res.json({ success: true, data });
 
@@ -121,6 +148,9 @@ router.post('/manage/aws/request/:id/users/:userIndex/console-url', authMiddlewa
 
 
     const userIndex = Number(req.params.userIndex);
+    if (!assertSelfOrAdmin(req, res, userIndex)) {
+      return;
+    }
 
     if (!Number.isInteger(userIndex) || userIndex < 0) {
       return res.status(400).json({ success: false, message: 'Invalid user index' });
@@ -183,7 +213,8 @@ router.post('/manage/aws/request/:id/users/:userIndex/console-url', authMiddlewa
       userIndex,
       role.roleArn,
       sessionName,
-      durationSeconds
+      durationSeconds,
+      { region: request.region }
     );
 
     await createNotification({
@@ -224,9 +255,13 @@ router.get('/manage/aws/request/:id/users/:userIndex/sessions', authMiddleware, 
 
 
 
-    await syncActiveMagicLinkUsageSessions(req.params.id);
+    const userIndex = Number(req.params.userIndex);
+    if (!assertSelfOrAdmin(req, res, userIndex)) {
+      return;
+    }
 
-    const stats = await getUserSessionStats(req.params.id, Number(req.params.userIndex));
+    await syncActiveMagicLinkUsageSessions(req.params.id);
+    const stats = await getUserSessionStats(req.params.id, userIndex);
 
     res.json({ success: true, stats });
 
@@ -248,6 +283,10 @@ router.post('/manage/aws/request/:id/users/:userIndex/suspend', authMiddleware, 
 
       return res.status(403).json({ success: false, message: 'Forbidden' });
 
+    }
+
+    if (!assertAdmin(req, res)) {
+      return;
     }
 
 
@@ -292,6 +331,10 @@ router.post('/manage/aws/request/:id/users/:userIndex/reinstate', authMiddleware
 
       return res.status(403).json({ success: false, message: 'Forbidden' });
 
+    }
+
+    if (!assertAdmin(req, res)) {
+      return;
     }
 
 
@@ -345,9 +388,16 @@ router.post('/manage/aws/request/:id/users/:userIndex/cleanup', authMiddleware, 
 
     }
 
-    const results = await cleanupUserResources(req.params.id, Number(req.params.userIndex));
+    if (!assertAdmin(req, res)) {
+      return;
+    }
 
-    res.json({ success: true, results });
+    const results = await triggerUserCleanup(req.params.id, Number(req.params.userIndex), {
+      action: 'delete',
+      actor: 'manage_portal',
+    });
+
+    res.json({ success: true, ...results });
 
   } catch (err) {
 
@@ -369,9 +419,16 @@ router.post('/manage/aws/request/:id/cleanup-all', authMiddleware, async (req, r
 
     }
 
-    const results = await cleanupAllUsers(req.params.id);
+    if (!assertAdmin(req, res)) {
+      return;
+    }
 
-    res.json({ success: true, results });
+    const results = await triggerAllCleanup(req.params.id, {
+      action: 'delete',
+      actor: 'manage_portal',
+    });
+
+    res.json({ success: true, ...results });
 
   } catch (err) {
 
@@ -391,6 +448,10 @@ router.put('/manage/aws/request/:id/cleanup-settings', authMiddleware, async (re
 
       return res.status(403).json({ success: false, message: 'Forbidden' });
 
+    }
+
+    if (!assertAdmin(req, res)) {
+      return;
     }
 
     const { cleanupEnabled, cleanupIntervalHours } = req.body;
@@ -447,6 +508,10 @@ router.post('/manage/aws/request/:id/users/:userIndex/renew-budget', authMiddlew
 
       return res.status(403).json({ success: false, message: 'Forbidden' });
 
+    }
+
+    if (!assertAdmin(req, res)) {
+      return;
     }
 
 

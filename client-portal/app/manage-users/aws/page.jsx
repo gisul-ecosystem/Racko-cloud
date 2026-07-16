@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useCallback, useEffect, useState } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { Shield } from 'lucide-react';
 import {
@@ -13,6 +13,7 @@ import {
   loadAwsManagePortalSession,
   saveAwsManagePortalSession,
 } from '../../../cloud_automation_aws/utils/awsManagePortalSession';
+import AwsUserAccountView from './components/AwsUserAccountView';
 import InfoCards from './components/InfoCards';
 import ManagePortalLogin from './components/ManagePortalLogin';
 import PortalHeader from './components/PortalHeader';
@@ -26,6 +27,7 @@ function AwsManagePortalContent() {
   const [bootstrapping, setBootstrapping] = useState(true);
   const [loginLoading, setLoginLoading] = useState(false);
   const [loginError, setLoginError] = useState(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
 
   const [portalData, setPortalData] = useState(null);
   const [dataLoading, setDataLoading] = useState(false);
@@ -44,7 +46,7 @@ function AwsManagePortalContent() {
     setDataError(null);
 
     try {
-      if (syncSpend) {
+      if (syncSpend && activeSession.role !== 'user') {
         try {
           await syncAwsRequestSpend(activeSession.requestId, activeSession.jwtToken);
         } catch {
@@ -61,6 +63,7 @@ function AwsManagePortalContent() {
       if (err.status === 401) {
         clearAwsManagePortalSession();
         setSession(null);
+        setSessionExpired(true);
         setLoginError('Session expired. Please sign in again.');
       } else {
         setDataError(err.message || 'Failed to load lab users.');
@@ -83,6 +86,7 @@ function AwsManagePortalContent() {
       if (!urlToken) return;
 
       setLoginError(null);
+      setSessionExpired(false);
       setLoginLoading(true);
 
       try {
@@ -93,6 +97,9 @@ function AwsManagePortalContent() {
           requestId: String(result.requestId),
           customerEmail: result.customerEmail,
           expiresAt,
+          role: result.role === 'user' ? 'user' : 'admin',
+          userIndex: result.userIndex ?? null,
+          username: result.username || credentials.username,
         };
 
         saveAwsManagePortalSession(nextSession);
@@ -117,12 +124,31 @@ function AwsManagePortalContent() {
     setSession(null);
     setPortalData(null);
     setFeedback(null);
+    setSessionExpired(false);
   }, []);
 
   const handleRefresh = useCallback(() => {
     setFeedback(null);
     void loadPortalData(session, true);
   }, [session, loadPortalData]);
+
+  const isUser = session?.role === 'user';
+  const currentUser = useMemo(() => {
+    if (!isUser || !portalData?.consoleUrls?.length) return null;
+    return (
+      portalData.consoleUrls.find((user) => Number(user.userIndex) === Number(session.userIndex)) ||
+      portalData.consoleUrls[0]
+    );
+  }, [isUser, portalData, session?.userIndex]);
+
+  const signedInAs = isUser
+    ? session?.username || `labuser${Number(session?.userIndex) + 1}`
+    : 'Admin';
+
+  const portalTitle = isUser ? 'My Account' : 'Manage Provisioned Users';
+  const portalDescription = isUser
+    ? 'View your provisioned AWS account status, session activity, and open the AWS console.'
+    : 'Review provisioned AWS users, launch console access, and manage budgets and cleanup.';
 
   if (bootstrapping) {
     return (
@@ -154,14 +180,15 @@ function AwsManagePortalContent() {
             <div className="mx-auto max-w-lg text-center">
               <h2 className="text-2xl font-bold text-gray-900">Manage Portal</h2>
               <p className="mt-2 text-sm text-gray-500">
-                Sign in with the admin credentials from your provisioning email to manage lab users,
-                launch AWS console access, and control budgets and cleanup.
+                Admins sign in with the temporary credentials from your email. Provisioned users sign in
+                with your IAM username and temporary password.
               </p>
             </div>
             <ManagePortalLogin
               token={urlToken}
               loading={loginLoading}
               error={loginError}
+              sessionExpired={sessionExpired}
               onSubmit={handleLogin}
             />
           </div>
@@ -180,14 +207,12 @@ function AwsManagePortalContent() {
 
       <main className="mx-auto max-w-screen-xl space-y-6 px-4 py-8 sm:px-6 lg:px-8">
         <div>
-          <h2 className="text-2xl font-bold text-gray-900">Manage Provisioned Users</h2>
-          <p className="mt-1 text-sm text-gray-500">
-            Review provisioned AWS users, launch console access, manage budgets and cleanup.
-          </p>
+          <h2 className="text-2xl font-bold text-gray-900">{portalTitle}</h2>
+          <p className="mt-1 text-sm text-gray-500">{portalDescription}</p>
         </div>
 
         <InfoCards
-          signedInAs="Admin"
+          signedInAs={signedInAs}
           requestId={session.requestId}
           awsAccountId={portalData?.awsAccountId}
           customerEmail={portalData?.customerEmail || session.customerEmail}
@@ -213,15 +238,31 @@ function AwsManagePortalContent() {
           </div>
         )}
 
-        {portalData && (
-          <UsersTable
-            requestId={session.requestId}
-            jwtToken={session.jwtToken}
-            portalData={portalData}
-            loading={dataLoading}
-            onRefresh={() => void loadPortalData(session, true)}
-            onFeedback={setFeedback}
-          />
+        {isUser ? (
+          dataLoading || !currentUser ? (
+            <div className="flex items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-16 shadow-sm">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[#B91C1C]" />
+            </div>
+          ) : (
+            <AwsUserAccountView
+              user={currentUser}
+              requestId={session.requestId}
+              jwtToken={session.jwtToken}
+              portalData={portalData}
+              onFeedback={setFeedback}
+            />
+          )
+        ) : (
+          portalData && (
+            <UsersTable
+              requestId={session.requestId}
+              jwtToken={session.jwtToken}
+              portalData={portalData}
+              loading={dataLoading}
+              onRefresh={() => void loadPortalData(session, true)}
+              onFeedback={setFeedback}
+            />
+          )
         )}
       </main>
     </div>

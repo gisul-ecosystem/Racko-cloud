@@ -60,6 +60,8 @@ export async function runExpiryCleanupForRequest(request) {
     expiryCleanupAt: now,
     cleanupEnabled: false,
     enableResourceCleanup: false,
+    resourceCleanupNextRunAt: null,
+    cleanupNextRunAt: null,
     labRoles: [],
     identityUsers: [],
     permissionSetArns: [],

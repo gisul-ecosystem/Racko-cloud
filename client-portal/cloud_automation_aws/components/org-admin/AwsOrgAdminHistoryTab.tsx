@@ -9,9 +9,11 @@ import type { AwsOrgAdminLabHistory, AwsOrgAdminUser } from '../../types/orgAdmi
 export function AwsOrgAdminHistoryTab({
   requestId,
   users,
+  refreshToken,
 }: {
   requestId: string;
   users: AwsOrgAdminUser[];
+  refreshToken?: string | number | null;
 }) {
   const [history, setHistory] = useState<AwsOrgAdminLabHistory | null>(null);
   const [loading, setLoading] = useState(true);
@@ -34,6 +36,11 @@ export function AwsOrgAdminHistoryTab({
       setLoading(false);
     }
   }, [requestId, userIndex]);
+
+  useEffect(() => {
+    if (refreshToken == null) return;
+    void load();
+  }, [refreshToken, load]);
 
   useEffect(() => {
     void load();

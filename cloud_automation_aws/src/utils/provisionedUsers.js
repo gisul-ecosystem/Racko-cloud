@@ -3,9 +3,17 @@ import Request from '../models/Request.js';
 const DAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
 function parseUserIndexFromUserId(userId) {
-  const match = String(userId || '').match(/^labuser(\d+)$/i);
-  if (!match) return null;
-  return Number(match[1]) - 1;
+  const labUserMatch = String(userId || '').match(/^labuser(\d+)$/i);
+  if (labUserMatch) {
+    return Number(labUserMatch[1]) - 1;
+  }
+
+  const rackoMatch = String(userId || '').match(/^rackolab(\d+)-/i);
+  if (rackoMatch) {
+    return Number(rackoMatch[1]) - 1;
+  }
+
+  return null;
 }
 
 /**
@@ -35,11 +43,22 @@ export function getProvisionedUsers(request) {
   }
 
   const labRoles = request.labRoles || [];
-  return labRoles.map((role) => ({
-    userId: `labuser${role.userIndex + 1}`,
-    userIndex: role.userIndex,
-    username: `labuser${role.userIndex + 1}`,
-    email: null,
+  if (labRoles.length > 0) {
+    return labRoles.map((role) => ({
+      userId: `labuser${role.userIndex + 1}`,
+      userIndex: role.userIndex,
+      username: role.username || `labuser${role.userIndex + 1}`,
+      email: role.email || null,
+      dailyLimitReached: false,
+    }));
+  }
+
+  const identityUsers = request.identityUsers || [];
+  return identityUsers.map((user) => ({
+    userId: user.userId || user.username || `labuser${user.userIndex + 1}`,
+    userIndex: user.userIndex,
+    username: user.username || `labuser${user.userIndex + 1}`,
+    email: user.email || null,
     dailyLimitReached: false,
   }));
 }
