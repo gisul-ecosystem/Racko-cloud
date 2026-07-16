@@ -583,7 +583,7 @@ export class VMController {
    * the VM. The URL points at GUACAMOLE_PUBLIC_URL — never the internal
    * docker hostname.
    *
-   * Query: ?protocol=rdp|ssh|vnc (default: rdp)
+   * Query: ?protocol=rdp|ssh|vnc (default: rdp)&width=1920&height=1080
    */
   async openConsole(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -592,7 +592,16 @@ export class VMController {
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
       const protocol = req.query['protocol'] as GuacamoleProtocol | undefined;
 
-      const session = await vmService.openConsole(vmId, adminId, req, protocol);
+      const rawWidth = req.query['width'] as string | undefined;
+      const rawHeight = req.query['height'] as string | undefined;
+      const width = rawWidth ? parseInt(rawWidth, 10) : undefined;
+      const height = rawHeight ? parseInt(rawHeight, 10) : undefined;
+      const dimensions = {
+        width: width && Number.isFinite(width) && width > 0 ? width : undefined,
+        height: height && Number.isFinite(height) && height > 0 ? height : undefined,
+      };
+
+      const session = await vmService.openConsole(vmId, adminId, req, protocol, dimensions);
       success(res, 'VM console session created.', session);
     } catch (error) {
       next(error);

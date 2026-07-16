@@ -2895,7 +2895,8 @@ export class VMService {
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     req: Request,
-    protocolOverride?: GuacamoleProtocol
+    protocolOverride?: GuacamoleProtocol,
+    dimensions?: { width?: number; height?: number }
   ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
     const authReq = req as AuthenticatedRequest;
 
@@ -2981,6 +2982,8 @@ export class VMService {
         password,
         ignoreCert: true,
         securityMode: 'any',
+        width: dimensions?.width,
+        height: dimensions?.height,
       }
     );
 

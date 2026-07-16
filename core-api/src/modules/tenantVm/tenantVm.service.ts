@@ -217,10 +217,22 @@ export class TenantVmService {
     return vmService.restartVM(vm._id, vm.adminId, buildPlatformVmRequest(req, vm.adminId));
   }
 
-  async openConsole(actor: TenantVmActor, vmId: string, req: Request, protocol?: 'rdp' | 'ssh' | 'vnc') {
+  async openConsole(
+    actor: TenantVmActor,
+    vmId: string,
+    req: Request,
+    protocol?: 'rdp' | 'ssh' | 'vnc',
+    dimensions?: { width?: number; height?: number }
+  ) {
     const vm = await this.loadTenantVmForActor(actor, vmId);
     this.assertPlanActiveForOperations(vm);
-    return vmService.openConsole(vm._id, vm.adminId, buildPlatformVmRequest(req, vm.adminId), protocol);
+    return vmService.openConsole(
+      vm._id,
+      vm.adminId,
+      buildPlatformVmRequest(req, vm.adminId),
+      protocol,
+      dimensions
+    );
   }
 
   async getAvailableVms(tenantId: mongoose.Types.ObjectId): Promise<TenantVmSummary[]> {

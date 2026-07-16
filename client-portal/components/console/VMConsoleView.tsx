@@ -89,7 +89,10 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
       setLoading(true);
       setError(null);
       try {
-        const data = await getConsoleSession(vmId, protocol);
+        const data = await getConsoleSession(vmId, protocol, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
         if (signal?.aborted) return;
         setSession(data);
         sessionRef.current = data;

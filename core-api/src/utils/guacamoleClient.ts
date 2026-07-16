@@ -262,6 +262,16 @@ function buildPayload(
     parameters['security'] = params.securityMode ?? 'any';
     parameters['resize-method'] = 'display-update';
     parameters['server-layout'] = 'en-us-qwerty';
+    parameters['color-depth'] = '32';
+    parameters['dpi'] = '120';
+    parameters['enable-font-smoothing'] = 'true';
+    parameters['enable-desktop-composition'] = 'true';
+    parameters['disable-gfx'] = 'false';
+    parameters['cursor'] = 'local';
+    parameters['enable-wallpaper'] = 'false';
+    parameters['enable-theming'] = 'true';
+    parameters['enable-full-window-drag'] = 'false';
+    parameters['enable-menu-animations'] = 'false';
     if (params.width) parameters['width'] = String(params.width);
     if (params.height) parameters['height'] = String(params.height);
   }

@@ -72,10 +72,18 @@ export async function deleteTenantExternalVM(id: string): Promise<void> {
   await tenantPortalRequest(`/api/v1/tenant-external-vms/${id}`, { method: 'DELETE' });
 }
 
-export async function getTenantExternalVMConsole(id: string): Promise<ExternalVMConsoleSession> {
+export async function getTenantExternalVMConsole(
+  id: string,
+  dimensions?: { width?: number; height?: number }
+): Promise<ExternalVMConsoleSession> {
+  const params = new URLSearchParams();
+  if (dimensions?.width) params.set('width', String(Math.round(dimensions.width)));
+  if (dimensions?.height) params.set('height', String(Math.round(dimensions.height)));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+
   return unwrap(
     tenantPortalRequest<ApiEnvelope<ExternalVMConsoleSession>>(
-      `/api/v1/tenant-external-vms/${id}/console`
+      `/api/v1/tenant-external-vms/${id}/console${qs}`
     )
   );
 }
