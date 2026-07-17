@@ -142,10 +142,13 @@ export class MachineManagerController {
     try {
       const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
       const { vms, sessionId } = req.body as PushAgentInput & { sessionId?: string };
+      logger.info('[PushDebug] pushAgent called', { vmCount: vms?.length, sessionId });
       const sid = sessionId ?? `push-${Date.now()}`;
       const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid);
+      logger.info('[PushDebug] pushAgent complete', { machineCount: result.machines.length, sessionId: sid });
       success(res, 'Agent push initiated.', { ...result, sessionId: sid }, 201);
     } catch (err) {
+      logger.error('[PushDebug] pushAgent error', { error: err instanceof Error ? err.message : String(err) });
       next(err);
     }
   }
@@ -158,14 +161,17 @@ export class MachineManagerController {
     try {
       const userId = (req as AuthenticatedRequest).user.userId;
       const { sessionId } = req.body as { sessionId: string };
+      logger.info('[PushDebug] issuePushStreamTicket called', { userId, sessionId });
       if (!sessionId) {
         res.status(400).json({ success: false, message: 'sessionId required.' });
         return;
       }
       const { issuePushStreamTicket } = await import('./push.streamTicket');
       const ticket = issuePushStreamTicket(sessionId, userId);
+      logger.info('[PushDebug] Stream ticket issued', { sessionId, streamToken: ticket.streamToken.slice(0, 10) });
       success(res, 'Push stream ticket issued.', ticket);
     } catch (err) {
+      logger.error('[PushDebug] issuePushStreamTicket error', { error: err instanceof Error ? err.message : String(err) });
       next(err);
     }
   }
@@ -179,13 +185,16 @@ export class MachineManagerController {
     const sessionId = req.params['sessionId'] as string;
     const rawToken = req.query['streamToken'];
     const streamToken = typeof rawToken === 'string' ? rawToken : '';
+    logger.info('[PushDebug] streamPushStatus called', { sessionId, hasToken: !!streamToken });
 
     const { consumePushStreamTicket } = await import('./push.streamTicket');
     const ticket = streamToken ? consumePushStreamTicket(streamToken, sessionId) : null;
     if (!ticket) {
+      logger.warn('[PushDebug] streamPushStatus unauthorized', { sessionId, streamToken: streamToken.slice(0, 10) });
       res.status(401).json({ success: false, message: 'Unauthorized.' });
       return;
     }
+    logger.info('[PushDebug] streamPushStatus authorized, opening SSE', { sessionId });
 
     // SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
