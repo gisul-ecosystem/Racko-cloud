@@ -402,6 +402,16 @@ export default function MachineDetailPage() {
               </div>
             ))}
           </div>
+          {/* Clear active tab */}
+          {activeTab.history.length > 0 && (
+            <button
+              onClick={() => updateTab(activeTabId, { history: [] })}
+              className="shrink-0 px-3 py-2.5 text-xs text-gray-500 hover:text-gray-300 transition-colors border-l border-gray-800"
+              title="Clear terminal"
+            >
+              Clear
+            </button>
+          )}
           {/* + new tab */}
           <button
             onClick={addTab}
