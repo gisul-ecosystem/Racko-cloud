@@ -3034,7 +3034,7 @@ export class VMService {
         username,
         password,
         ignoreCert: true,
-        securityMode: 'any',
+        securityMode: 'nla',
         width: dimensions?.width,
         height: dimensions?.height,
       }
