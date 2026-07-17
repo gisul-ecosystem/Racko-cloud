@@ -8,8 +8,9 @@ const {
   logAzureRoleEvent,
   roleAssignmentIdFromSeed
 } = require('./roleProvisioner');
+const { getRoleProvisionConcurrency } = require('../../utils/provisionConcurrency');
 
-const CONCURRENCY_LIMIT = 10;
+const CONCURRENCY_LIMIT = getRoleProvisionConcurrency();
 
 const API_VERSIONS = {
   'microsoft.cognitiveservices/accounts': '2023-05-01',

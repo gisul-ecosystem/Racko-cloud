@@ -246,7 +246,9 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   useEffect(() => {
     if (selectedRequestId == null) return undefined;
 
-    const refreshInterval = hasActiveUsers ? 10_000 : 60_000;
+    // Always poll frequently so Offline → Online after login/stale-reopen appears quickly.
+    // Slightly faster when someone is already active.
+    const refreshInterval = hasActiveUsers ? 8_000 : 15_000;
 
     const intervalId = window.setInterval(() => {
       void refreshDetailSilent();
@@ -363,8 +365,12 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       setActionSuccess(null);
 
       try {
-        await forceOrgAdminLogout(selectedRequestId, userId);
-        setActionSuccess('User session ended.');
+        const result = await forceOrgAdminLogout(selectedRequestId, userId);
+        const detail =
+          typeof result === 'object' && result && 'data' in result
+            ? (result as { data?: { message?: string } }).data
+            : null;
+        setActionSuccess(detail?.message || 'User force logged out and blocked.');
         await refreshDetail();
         return true;
       } catch (err) {

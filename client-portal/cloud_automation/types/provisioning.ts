@@ -63,18 +63,25 @@ export interface ProvisionSnapshot {
     status?: string;
     resourceGroup?: string | null;
     resourceGroupId?: string | null;
+    resourceGroupCount?: number | null;
+    accountCount?: number | null;
+    complete?: boolean;
   } | null;
   services: {
     resources: ProvisionedServiceResource[];
     count: number;
+    complete?: boolean;
   };
   users: {
     users: ProvisionedUser[];
     count: number;
+    complete?: boolean;
   };
   roles: {
     roles: ProvisionedRole[];
     count: number;
+    complete?: boolean;
+    remaining?: number;
   };
   credentials: CredentialDelivery | null;
   fetchedAt: string;

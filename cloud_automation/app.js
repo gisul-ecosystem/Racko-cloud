@@ -149,6 +149,11 @@ const startServer = () => {
   }
 
   server = app.listen(port, () => {
+    server.timeout = 0;
+    server.requestTimeout = 0;
+    server.headersTimeout = 0;
+    server.keepAliveTimeout = 0;
+
     console.log(`Service Catalog API listening on port ${port}`);
 
     const smtpStatus = getSmtpConfigStatus();

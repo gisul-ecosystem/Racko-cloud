@@ -75,14 +75,19 @@ export function getGatewayBaseUrl(): string {
 }
 
 /**
- * Direct gateway URL for browser SSE streams.
- * Bypasses Next.js rewrites, which buffer long-lived text/event-stream responses.
+ * Direct gateway URL for long-running browser requests.
+ * Bypasses Next.js dev rewrites, which can reset sockets on slow provision calls.
  */
-export function getSseGatewayBaseUrl(): string {
+export function getDirectGatewayBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const configured = process.env['NEXT_PUBLIC_GATEWAY_URL']?.trim();
     if (configured) return stripTrailingSlash(configured);
     return DEFAULT_GATEWAY;
   }
   return getServerGatewayBaseUrl();
+}
+
+/** Alias for SSE streams and other long-lived direct gateway connections. */
+export function getSseGatewayBaseUrl(): string {
+  return getDirectGatewayBaseUrl();
 }

@@ -1,4 +1,5 @@
 import { ApiError, apiRequest } from '../../lib/apiClient';
+import { directGatewayRequest } from '../../lib/directGatewayRequest';
 import { AWS_ORG_ADMIN_API_PREFIX } from '../constants';
 import type {
   AwsCustomIamPolicy,
@@ -36,8 +37,14 @@ function classifyError(status: number): AwsOrgAdminErrorKind {
 }
 
 async function orgAdminRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const fullPath = `${AWS_ORG_ADMIN_API_PREFIX}${path}`;
+
   try {
-    return await apiRequest<T>(`${AWS_ORG_ADMIN_API_PREFIX}${path}`, options);
+    if (typeof window !== 'undefined') {
+      return await directGatewayRequest<T>(fullPath, options);
+    }
+
+    return await apiRequest<T>(fullPath, options);
   } catch (err) {
     if (err instanceof ApiError) {
       throw new AwsOrgAdminError(err.message, err.status, classifyError(err.status));
