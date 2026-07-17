@@ -202,19 +202,33 @@ export class MachineManagerController {
     res.setHeader('Connection', 'keep-alive');
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
+    logger.info('[PushDebug] SSE headers flushed', { sessionId });
 
-    const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+    let eventCount = 0;
+    const send = (data: object) => {
+      eventCount++;
+      const payload = `data: ${JSON.stringify(data)}\n\n`;
+      logger.info('[PushDebug] SSE writing event to stream', { sessionId, eventCount, dataLength: payload.length, type: (data as Record<string,unknown>).type });
+      const written = res.write(payload);
+      logger.info('[PushDebug] SSE res.write result', { sessionId, eventCount, written, finished: res.writableFinished, destroyed: res.destroyed });
+    };
+
+    // Send a test event immediately to confirm stream is alive
+    send({ type: 'ping', sessionId });
 
     const { pushSessionEmitter } = await import('./push.events');
 
     const listener = (event: object) => {
+      logger.info('[PushDebug] SSE listener fired', { sessionId, type: (event as Record<string,unknown>).type });
       send(event);
     };
 
     pushSessionEmitter.on(sessionId, listener);
+    logger.info('[PushDebug] SSE listener registered', { sessionId, listenerCount: pushSessionEmitter.listenerCount(sessionId) });
 
     // Cleanup when client disconnects
     req.on('close', () => {
+      logger.info('[PushDebug] SSE client disconnected', { sessionId, eventCount });
       pushSessionEmitter.removeListener(sessionId, listener);
       machineManagerService.removePushSession(sessionId);
     });
