@@ -2932,6 +2932,25 @@ export class VMService {
     protocolOverride?: GuacamoleProtocol,
     dimensions?: { width?: number; height?: number }
   ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
+    try {
+      return await this.openConsoleInternal(vmId, adminId, req, protocolOverride, dimensions);
+    } catch (err) {
+      logger.error('openConsole failed', {
+        vmId: vmId.toString(),
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      throw err;
+    }
+  }
+
+  private async openConsoleInternal(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request,
+    protocolOverride?: GuacamoleProtocol,
+    dimensions?: { width?: number; height?: number }
+  ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
     const authReq = req as AuthenticatedRequest;
 
     const vm = await VM.findById(vmId);
