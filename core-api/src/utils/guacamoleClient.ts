@@ -258,21 +258,23 @@ function buildPayload(
   if (params.password) parameters['password'] = params.password;
 
   if (protocol === 'rdp') {
-    // A few display-quality parameters (dpi, wallpaper, theming, window-drag,
-    // menu animations) are intentionally NOT set here — they're applied
-    // automatically by the PostgreSQL trigger (003_display_quality_trigger.sql)
-    // after connection creation. The ones below are safe to set from both
-    // places since the trigger uses ON CONFLICT DO UPDATE, and keeping them
-    // here ensures a good first-connect experience even before the trigger runs.
+    // Display-quality parameters are set entirely by core-api — the
+    // PostgreSQL display-quality trigger (003_display_quality_trigger.sql)
+    // has been removed, so there is no other writer of these fields anymore.
     parameters['ignore-cert'] = String(params.ignoreCert ?? true);
     parameters['security'] = params.securityMode ?? 'any';
     parameters['resize-method'] = 'display-update';
     parameters['server-layout'] = 'en-us-qwerty';
     parameters['cursor'] = 'local';
     parameters['color-depth'] = '32';
+    parameters['dpi'] = '120';
     parameters['enable-font-smoothing'] = 'true';
     parameters['enable-desktop-composition'] = 'true';
     parameters['disable-gfx'] = 'false';
+    parameters['enable-wallpaper'] = 'false';
+    parameters['enable-theming'] = 'true';
+    parameters['enable-full-window-drag'] = 'false';
+    parameters['enable-menu-animations'] = 'false';
     if (params.width) parameters['width'] = String(params.width);
     if (params.height) parameters['height'] = String(params.height);
   }
