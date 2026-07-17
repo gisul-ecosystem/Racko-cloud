@@ -6,8 +6,9 @@
 #   VM_SSH_KEY_QA      — Private SSH key for the VM user
 #
 # Service env files live on the VM under /opt/racko-qa/<service>/.env (e.g. cloud-automation/.env) — not in GitHub secrets.
-# client-portal image bakes NEXT_PUBLIC_GATEWAY_URL=http://cloud-gateway:8000 (Docker internal).
-# Nginx must proxy /api/ → :8000 on qa.racko.ai and each tenant domain.
+# client-portal bakes NEXT_PUBLIC_GATEWAY_URL to the public API (e.g. https://api-qa.racko.ai).
+# cloud-automation large-lab batch sizes are also set in docker-compose.yml (defaults: 25).
+# Nginx must proxy /api/ → :8000 on qa.racko.ai and each tenant domain (proxy_read_timeout >= 300s).
 
 name: Build & Deploy QA via SSH
 
@@ -19,7 +20,7 @@ on:
 env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
-  IMAGE_TAG: ${{ github.sha }}
+  IMAGE_TAG: qa
 
 jobs:
   build-core-api:
@@ -36,8 +37,7 @@ jobs:
         run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:qa -f core-api/Dockerfile core-api/
 
       - name: Push core-api image
-        run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:qa
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:qa
 
   build-cloud-gateway:
     name: Build & Push cloud-gateway
@@ -53,8 +53,7 @@ jobs:
         run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:qa -f cloud-gateway/Dockerfile cloud-gateway/
 
       - name: Push cloud-gateway image
-        run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:qa
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-gateway:qa
 
   build-cloud-automation:
     name: Build & Push cloud-automation
@@ -70,8 +69,7 @@ jobs:
         run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:qa -f cloud_automation/Dockerfile cloud_automation/
 
       - name: Push cloud-automation image
-        run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:qa
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation:qa
 
   build-cloud-automation-aws:
     name: Build & Push cloud-automation-aws
@@ -87,8 +85,7 @@ jobs:
         run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:qa -f cloud_automation_aws/Dockerfile cloud_automation_aws/
 
       - name: Push cloud-automation-aws image
-        run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:qa
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:qa
 
   build-client-portal:
     name: Build & Push client-portal
@@ -103,13 +100,13 @@ jobs:
       - name: Build client-portal image
         run: |
           docker build \
+            --build-arg NEXT_PUBLIC_VM_MAX_BULK_COUNT=50 \
             --build-arg NEXT_PUBLIC_GATEWAY_URL=https://api-qa.racko.ai \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:qa \
             -f client-portal/Dockerfile client-portal/
 
       - name: Push client-portal image
-        run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:qa
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:qa
 
   build-create-vm-catalog-agent:
     name: Build & Push create-vm-catalog-agent
@@ -125,8 +122,101 @@ jobs:
         run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:qa -f create-vm-catalog-agent/Dockerfile create-vm-catalog-agent/
 
       - name: Push create-vm-catalog-agent image
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:qa
+
+  build-agent:
+    name: Build Agent Binaries (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            platform: linux
+            output: racko-agent
+            goos: linux
+            goarch: amd64
+            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai'
+          - os: windows-latest
+            platform: windows
+            output: racko-agent.exe
+            goos: windows
+            goarch: amd64
+            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai -H windowsgui'
+            ldflags_url: 'https://api-qa.racko.ai'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: agent/go.mod
+
+      - name: Build agent binary
+        working-directory: agent
+        shell: bash
         run: |
-          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-create-vm-catalog-agent:qa
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
+          go build -ldflags "${{ matrix.ldflags }}" -o dist/${{ matrix.output }} .
+
+      - name: Build Windows installer (Windows only)
+        if: matrix.platform == 'windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DPlatformURL=${{ matrix.ldflags_url }}" "installer\racko-agent-setup.iss"
+
+      - name: Upload binary as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: agent-${{ matrix.platform }}
+          path: |
+            agent/dist/${{ matrix.output }}
+            ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
+          retention-days: 1
+
+  deploy-agent:
+    name: Deploy Agent Binaries to VM
+    runs-on: ubuntu-latest
+    needs: build-agent
+    env:
+      VM_HOST: ${{ secrets.VM_HOST_QA }}
+      VM_USER: ${{ secrets.VM_USER_QA }}
+      VM_SSH_KEY: ${{ secrets.VM_SSH_KEY_QA }}
+      DEPLOY_PATH: /opt/racko
+    steps:
+      - name: Download all agent artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: agent-artifacts
+
+      - name: Setup SSH key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${VM_SSH_KEY}" > ~/.ssh/vm_key
+          chmod 600 ~/.ssh/vm_key
+          ssh-keyscan -H "${VM_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Upload agent binaries to VM
+        run: |
+          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" \
+            "mkdir -p ${DEPLOY_PATH}/agent/dist"
+          # Linux
+          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
+            agent-artifacts/agent-linux/racko-agent \
+            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent"
+          # Windows binary
+          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
+            agent-artifacts/agent-windows/racko-agent.exe \
+            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent.exe"
+          # Windows installer
+          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
+            agent-artifacts/agent-windows/racko-agent-setup.exe \
+            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
+          # macOS binary removed — not needed
+          echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
 
   deploy:
     name: Deploy to QA VM
@@ -138,6 +228,7 @@ jobs:
       - build-cloud-automation-aws
       - build-client-portal
       - build-create-vm-catalog-agent
+      - deploy-agent
 
     env:
       VM_HOST: ${{ secrets.VM_HOST_QA }}
@@ -184,12 +275,12 @@ jobs:
              export DOCKERHUB_USERNAME='${DOCKERHUB_USERNAME}'; \
              export IMAGE_TAG='qa'; \
              echo 'Docker login...'; \
-             echo '${DOCKERHUB_TOKEN}' | sudo docker login -u '${DOCKERHUB_USERNAME}' --password-stdin; \
+             echo '${DOCKERHUB_TOKEN}' | docker login -u '${DOCKERHUB_USERNAME}' --password-stdin; \
              echo 'Deploying...'; \
-             sudo docker compose -f docker-compose.yml down --remove-orphans; \
-             sudo docker compose -f docker-compose.yml pull; \
-             sudo docker compose -f docker-compose.yml up -d; \
-             sudo docker compose -f docker-compose.yml ps"
+             sudo docker-compose -f docker-compose.yml down --remove-orphans; \
+             sudo docker-compose -f docker-compose.yml pull; \
+             sudo docker-compose -f docker-compose.yml up -d; \
+             sudo docker-compose -f docker-compose.yml ps"
 
       - name: Summary
         run: |

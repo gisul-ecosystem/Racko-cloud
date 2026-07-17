@@ -19,12 +19,6 @@ services:
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
   cloud-automation:
     image: gisuldocker/racko-cloud-automation:uat
@@ -32,6 +26,8 @@ services:
       - cloud-automation/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_PORT:-3002}
+      # Large-lab defaults (override in cloud-automation/.env). One batch per HTTP request
+      # when PROVISION_STEP_TIME_BUDGET_MS=0 so nginx/CDN do not kill 100-user role assign.
       BULK_PROVISION_CONCURRENCY: ${BULK_PROVISION_CONCURRENCY:-30}
       DELETE_AZURE_CONCURRENCY: ${DELETE_AZURE_CONCURRENCY:-30}
       RESOURCE_GROUP_BATCH_SIZE: ${RESOURCE_GROUP_BATCH_SIZE:-25}
@@ -48,12 +44,6 @@ services:
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
   cloud-automation-aws:
     image: gisuldocker/racko-cloud-automation-aws:uat
@@ -66,12 +56,6 @@ services:
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3003/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
   cloud-gateway:
     image: gisuldocker/racko-cloud-gateway:uat
@@ -81,23 +65,14 @@ services:
       PORT: ${GATEWAY_PORT:-8000}
       JWT_ACCESS_EXPIRES_IN: ${GATEWAY_JWT_ACCESS_EXPIRES_IN:-15m}
     depends_on:
-      core-api:
-        condition: service_healthy
-      cloud-automation:
-        condition: service_healthy
-      cloud-automation-aws:
-        condition: service_healthy
+      - core-api
+      - cloud-automation
+      - cloud-automation-aws
     ports:
       - "${GATEWAY_PORT:-8000}:8000"
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
   client-portal:
     image: gisuldocker/racko-client-portal:uat
@@ -109,21 +84,13 @@ services:
       GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
       CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
     depends_on:
-      cloud-gateway:
-        condition: service_healthy
-      create-vm-catalog-agent:
-        condition: service_started
+      - cloud-gateway
+      - create-vm-catalog-agent
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
   create-vm-catalog-agent:
     image: gisuldocker/racko-create-vm-catalog-agent:uat
@@ -133,17 +100,17 @@ services:
       NODE_ENV: production
       PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
       HOSTNAME: 0.0.0.0
+      # When true, skip warm-up login on container start (useful during recovery)
+      SKIP_CATALOG_AGENT_WARMUP: ${SKIP_CATALOG_AGENT_WARMUP:-false}
     ports:
       - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    volumes:
+      # Persist Playwright storage state so repeated logins are not required
+      # Mount a host directory to avoid file-vs-directory bind mount issues
+      - ./create-vm-catalog-agent/state:/app/state:rw
     networks:
       - racko-network
     restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3789/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
 volumes:
   tenant-assets:
@@ -153,4 +120,3 @@ networks:
   racko-network:
     name: racko-uat-network
     driver: bridge
-
