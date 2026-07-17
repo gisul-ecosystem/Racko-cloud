@@ -54,12 +54,25 @@ const RATE_LIMIT_SKIP_PREFIXES = [
 function isRateLimitExemptPath(path: string): boolean {
   if (RATE_LIMIT_SKIP_PATHS.has(path)) return true;
   if (RATE_LIMIT_SKIP_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
-  // SSE VM template streams
-  if (/^\/api\/v1\/admin-vm-templates\/[a-f\d]{24}\/stream$/i.test(path)) return true;
+  // SSE / push streams are long-lived and must not be rate limited
+  if (path.includes('/push-stream') || path.includes('/stream')) return true;
   // Local development — avoid blocking dashboards during provisioning tests
   if (config.NODE_ENV === 'development') return true;
   return false;
 }
+
+// Debug logging for push endpoints — remove after issue is resolved
+app.use((req, _res, next) => {
+  if (req.path.includes('push') || req.path.includes('machines/push')) {
+    logger.info('[Gateway][Debug] Push endpoint hit', {
+      method: req.method,
+      path: req.path,
+      hasAuth: !!req.headers['authorization'],
+      hasCookie: !!req.headers['cookie'],
+    });
+  }
+  next();
+});
 
 app.use((req, res, next) => {
   if (isRateLimitExemptPath(req.path)) return next();

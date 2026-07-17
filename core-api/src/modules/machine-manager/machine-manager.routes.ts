@@ -39,6 +39,12 @@ machineRouter.get(
   (req, res) => void machineManagerController.streamJobStatus(req, res)
 );
 
+// GET /api/v1/machines/push-stream/:sessionId — SSE stream for push status (before requireAuth)
+machineRouter.get(
+  '/push-stream/:sessionId',
+  (req, res) => void machineManagerController.streamPushStatus(req, res)
+);
+
 machineRouter.use(requireAuth);
 
 // POST /api/v1/machines/bulk — must come before /:id to avoid collision
@@ -55,6 +61,13 @@ machineRouter.post(
   requireRole('admin', 'super_admin'),
   validateRequest(pushAgentSchema),
   (req, res, next) => machineManagerController.pushAgent(req, res, next)
+);
+
+// POST /api/v1/machines/push-stream-ticket — issue SSE ticket for push session
+machineRouter.post(
+  '/push-stream-ticket',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => machineManagerController.issuePushStreamTicket(req, res, next)
 );
 
 // POST /api/v1/machines/jobs — must come before /:id

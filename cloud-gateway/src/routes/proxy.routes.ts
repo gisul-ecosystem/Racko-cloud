@@ -274,6 +274,9 @@ router.delete('/api/v1/managed-users/:userId', authMiddleware, verifyMiddleware,
 // ─── MACHINE MANAGER ROUTES (admin + super_admin) ────────────────────────────
 // Static sub-routes must come before /:id to avoid collision
 router.post('/api/v1/machines/push-agent', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/push-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// SSE stream for push status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
+router.get('/api/v1/machines/push-stream/:sessionId', sseProxy);
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -288,6 +291,7 @@ router.get('/api/v1/machines', authMiddleware, verifyMiddleware, requireRole('ad
 // Issue download token — authenticated
 router.post('/api/v1/machines/:id/download-agent/token', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/:id/download-agent', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/:id/exec', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
