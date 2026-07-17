@@ -82,6 +82,7 @@ const vmPushBody = z.object({
 export const pushAgentSchema = z.object({
   body: z.object({
     vms: z.array(vmPushBody).min(1).max(50),
+    sessionId: z.string().optional(),
   }),
 });
 
