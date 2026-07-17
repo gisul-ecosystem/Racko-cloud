@@ -489,6 +489,10 @@ func runWinget(pkg SoftwarePackage) (string, error) {
 
 	args := []string{"install", "--id", wingetID, "-e",
 		"--accept-source-agreements", "--accept-package-agreements", "--silent", "--scope", "machine"}
+	// Pin to specific version if provided and not a placeholder
+	if pkg.Version != "" && pkg.Version != "latest" && pkg.Version != "vlatest" {
+		args = append(args, "--version", pkg.Version)
+	}
 	if pkg.InstallArgs != "" {
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
 	}
@@ -540,6 +544,10 @@ func runChoco(pkg SoftwarePackage) (string, error) {
 		name = pkg.Name
 	}
 	args := []string{"install", name, "-y", "--no-progress"}
+	// Pin to specific version if provided and not a placeholder
+	if pkg.Version != "" && pkg.Version != "latest" && pkg.Version != "vlatest" {
+		args = append(args, "--version="+pkg.Version)
+	}
 	if pkg.InstallArgs != "" {
 		log.Printf("[choco] Extra installArgs: %s", pkg.InstallArgs)
 		args = append(args, strings.Fields(pkg.InstallArgs)...)
