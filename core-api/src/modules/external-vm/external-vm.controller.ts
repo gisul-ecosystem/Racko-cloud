@@ -173,16 +173,27 @@ export class ExternalVMController {
     }
   }
 
-  /** GET /api/v1/external-vms/:id/console */
+  /** GET /api/v1/external-vms/:id/console?width=1920&height=1080 */
   async openConsole(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as AuthenticatedRequest;
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
       const userId = new mongoose.Types.ObjectId(authReq.user.userId);
+
+      const rawWidth = req.query['width'] as string | undefined;
+      const rawHeight = req.query['height'] as string | undefined;
+      const width = rawWidth ? parseInt(rawWidth, 10) : undefined;
+      const height = rawHeight ? parseInt(rawHeight, 10) : undefined;
+      const dimensions = {
+        width: width && Number.isFinite(width) && width > 0 ? width : undefined,
+        height: height && Number.isFinite(height) && height > 0 ? height : undefined,
+      };
+
       const session = await externalVMService.getConsoleSessionForActor(
         id,
         userId,
-        authReq.user.role
+        authReq.user.role,
+        dimensions
       );
       success(res, 'External VM console session created.', session);
     } catch (err) {

@@ -184,8 +184,12 @@ export function OrgAdminRequestDetailPanel({
               disabled={saving}
               className="ml-auto inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
             >
-              <Trash2 className="h-3.5 w-3.5" />
-              Delete Request
+              {saving ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Trash2 className="h-3.5 w-3.5" />
+              )}
+              {saving ? 'Deleting from Azure...' : 'Delete Request'}
             </button>
           )}
         </div>

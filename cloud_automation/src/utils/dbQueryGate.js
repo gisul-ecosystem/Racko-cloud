@@ -42,8 +42,11 @@ class DbQueryGate {
 }
 
 const configuredMax = Number(process.env.SUPABASE_DB_MAX_CONCURRENT_QUERIES);
+// Allow a bit more concurrency so live schedulers can overlap with UI traffic.
 const maxConcurrent =
-  Number.isFinite(configuredMax) && configuredMax > 0 ? Math.min(configuredMax, 6) : 2;
+  Number.isFinite(configuredMax) && configuredMax > 0
+    ? Math.min(configuredMax, 8)
+    : Math.min(4, Math.max(2, Number(process.env.SUPABASE_DB_POOL_MAX || 10) - 2));
 
 const dbQueryGate = new DbQueryGate(maxConcurrent);
 

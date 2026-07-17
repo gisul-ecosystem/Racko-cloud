@@ -691,70 +691,78 @@ async function forceLogoutUser({ requestId, userId }) {
   console.log(`[FORCE_LOGOUT] Force logging out user ${userId} for request ${requestId}`);
 
   const client = await db.connect();
+  let totalMinutesUsed = 0;
+  let sessionsClosedCount = 0;
+  let blockedUntil = null;
+  let username = `user-${userId}`;
 
   try {
     await client.query('BEGIN');
 
-    // Get all active sessions for this user
+    const userResult = await client.query(
+      `
+      SELECT
+        au.id,
+        au.username,
+        au.used_today_minutes,
+        r.enable_daily_usage,
+        r.daily_limit_minutes,
+        r.usage_schedule
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      WHERE au.id = $1 AND au.request_id = $2
+      FOR UPDATE OF au
+      `,
+      [userId, requestId]
+    );
+
+    if (!userResult.rows.length) {
+      throw new AppError('User not found for this request.', 404);
+    }
+
+    const context = userResult.rows[0];
+    username = context.username || username;
+
     const activeSessionsResult = await client.query(
       `
-      SELECT 
+      SELECT
         id,
         login_at,
         EXTRACT(EPOCH FROM (NOW() - login_at)) / 60 as elapsed_minutes
       FROM user_usage_sessions
-      WHERE request_id = $1 
-        AND user_id = $2 
+      WHERE request_id = $1
+        AND user_id = $2
         AND logout_at IS NULL
+      FOR UPDATE
       `,
       [requestId, userId]
     );
 
-    if (activeSessionsResult.rows.length === 0) {
-      console.log(`[FORCE_LOGOUT] No active sessions found for user ${userId}`);
-      await client.query('COMMIT');
-      return {
-        success: true,
-        message: 'No active sessions to logout.',
-        sessionsClosedCount: 0
-      };
-    }
-
-    // Calculate total minutes used in active sessions
-    let totalMinutesUsed = 0;
+    sessionsClosedCount = activeSessionsResult.rows.length;
     for (const session of activeSessionsResult.rows) {
-      const minutesUsed = Math.ceil(Number(session.elapsed_minutes || 0));
-      totalMinutesUsed += minutesUsed;
+      totalMinutesUsed += Math.ceil(Number(session.elapsed_minutes || 0));
     }
 
-    // Close all active sessions
-    await client.query(
-      `
-      UPDATE user_usage_sessions
-      SET 
-        logout_at = NOW(),
-        minutes_used = EXTRACT(EPOCH FROM (NOW() - login_at)) / 60
-      WHERE request_id = $1 
-        AND user_id = $2 
-        AND logout_at IS NULL
-      `,
-      [requestId, userId]
-    );
+    if (sessionsClosedCount > 0) {
+      await client.query(
+        `
+        UPDATE user_usage_sessions
+        SET
+          logout_at = NOW(),
+          minutes_used = EXTRACT(EPOCH FROM (NOW() - login_at)) / 60,
+          ended_reason = 'admin_force_logout'
+        WHERE request_id = $1
+          AND user_id = $2
+          AND logout_at IS NULL
+        `,
+        [requestId, userId]
+      );
+    } else {
+      console.log(
+        `[FORCE_LOGOUT] No open sessions for user ${userId}; still blocking Azure access.`
+      );
+    }
 
-    const contextResult = await client.query(
-      `
-      SELECT
-        r.enable_daily_usage,
-        r.daily_limit_minutes,
-        r.usage_schedule,
-        au.used_today_minutes
-      FROM requests r
-      JOIN azure_users au ON au.request_id = r.id
-      WHERE r.id = $1 AND au.id = $2
-      `,
-      [requestId, userId]
-    );
-    const context = contextResult.rows[0] || {};
     const projectedUsedMinutes =
       Number(context.used_today_minutes || 0) + Number(totalMinutesUsed || 0);
     const access = evaluateUsageAccess({
@@ -765,30 +773,26 @@ async function forceLogoutUser({ requestId, userId }) {
       currentSessionMinutes: 0
     });
 
+    blockedUntil = access.blockedUntil || new Date(Date.now() + 24 * 60 * 60 * 1000);
+
     const userUpdateResult = await client.query(
       `
       UPDATE azure_users
       SET
         used_today_minutes = COALESCE(used_today_minutes, 0) + $1,
-        blocked_until = $4
+        blocked_until = $4,
+        blocked_reason = 'admin_force_logout',
+        status = 'Blocked',
+        azure_account_enabled = false,
+        window_enforcement_paused_until = NULL
       WHERE id = $2 AND request_id = $3
-      RETURNING used_today_minutes, blocked_until
+      RETURNING used_today_minutes, blocked_until, status, azure_account_enabled
       `,
-      [
-        totalMinutesUsed,
-        userId,
-        requestId,
-        access.blockedUntil || new Date(Date.now() + 24 * 60 * 60 * 1000)
-      ]
+      [totalMinutesUsed, userId, requestId, blockedUntil]
     );
 
     await client.query('COMMIT');
-
-    const usernameResult = await db.query(
-      `SELECT username FROM azure_users WHERE id = $1 AND request_id = $2 LIMIT 1`,
-      [userId, requestId]
-    );
-    const username = usernameResult.rows[0]?.username || `user-${userId}`;
+    blockedUntil = userUpdateResult.rows[0].blocked_until;
 
     await createNotification({
       type: NotificationType.FORCE_LOGOUT,
@@ -798,25 +802,10 @@ async function forceLogoutUser({ requestId, userId }) {
     });
 
     console.log(
-      `[FORCE_LOGOUT] Closed ${activeSessionsResult.rows.length} session(s) for user ${userId}. ` +
-      `Total minutes: ${userUpdateResult.rows[0].used_today_minutes}. ` +
-      `Blocked until: ${userUpdateResult.rows[0].blocked_until}`
+      `[FORCE_LOGOUT] Closed ${sessionsClosedCount} session(s) for user ${userId}. ` +
+        `Total minutes: ${userUpdateResult.rows[0].used_today_minutes}. ` +
+        `Blocked until: ${blockedUntil}`
     );
-
-    // Trigger Azure enforcement asynchronously
-    usageEnforcementService
-      .revokeAzureAccessForUser({ requestId, userId })
-      .catch((error) => {
-        console.error('[FORCE_LOGOUT] Error revoking Azure access:', error);
-      });
-
-    return {
-      success: true,
-      message: 'User has been force logged out. All active sessions closed.',
-      sessionsClosedCount: activeSessionsResult.rows.length,
-      totalMinutesUsed,
-      blockedUntil: userUpdateResult.rows[0].blocked_until
-    };
   } catch (error) {
     await client.query('ROLLBACK');
     console.error(`[FORCE_LOGOUT] Error force logging out user:`, error);
@@ -824,6 +813,36 @@ async function forceLogoutUser({ requestId, userId }) {
   } finally {
     client.release();
   }
+
+  // Await Azure revoke so the UI result reflects disable/revoke outcome.
+  let azureRevoke = null;
+  try {
+    azureRevoke = await usageEnforcementService.revokeAzureAccessForUser({
+      requestId,
+      userId
+    });
+  } catch (error) {
+    console.error('[FORCE_LOGOUT] Error revoking Azure access:', error);
+    azureRevoke = {
+      success: false,
+      enforced: false,
+      error: error.message
+    };
+  }
+
+  const accountDisabled = azureRevoke?.accountDisabled === true;
+  const message = accountDisabled
+    ? 'User force logged out. Azure account disabled and sessions revoked.'
+    : 'User session ended and blocked in portal. Azure account disable may still be pending — refresh and retry if they can still sign in.';
+
+  return {
+    success: true,
+    message,
+    sessionsClosedCount,
+    totalMinutesUsed,
+    blockedUntil,
+    azureRevoke
+  };
 }
 
 module.exports = {

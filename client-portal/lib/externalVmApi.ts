@@ -84,9 +84,27 @@ export async function deleteExternalVM(id: string): Promise<void> {
   await apiRequest(`/api/v1/external-vms/${id}`, { method: 'DELETE' });
 }
 
-export async function getExternalVMConsole(id: string): Promise<ExternalVMConsoleSession> {
+export interface ExternalVMConsoleDimensions {
+  width?: number;
+  height?: number;
+}
+
+/**
+ * Pass the browser's actual viewport dimensions (window.innerWidth /
+ * window.innerHeight) so Guacamole renders at native resolution instead of
+ * scaling — sharper text, no blur.
+ */
+export async function getExternalVMConsole(
+  id: string,
+  dimensions?: ExternalVMConsoleDimensions
+): Promise<ExternalVMConsoleSession> {
+  const params = new URLSearchParams();
+  if (dimensions?.width) params.set('width', String(Math.round(dimensions.width)));
+  if (dimensions?.height) params.set('height', String(Math.round(dimensions.height)));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+
   const res = await apiRequest<ApiResponse<ExternalVMConsoleSession>>(
-    `/api/v1/external-vms/${id}/console`
+    `/api/v1/external-vms/${id}/console${qs}`
   );
   return res.data;
 }

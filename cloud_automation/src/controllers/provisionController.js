@@ -15,7 +15,11 @@ const provisionRequestResourceGroup = async (req, res, next) => {
 
     res.status(200).json({
       success: true,
-      resourceGroup: result.resourceGroup
+      resourceGroup: result.resourceGroup,
+      resourceGroupCount: result.resourceGroupCount ?? null,
+      accountCount: result.accountCount ?? null,
+      complete: result.complete ?? true,
+      remaining: result.remaining ?? 0
     });
   } catch (error) {
     next(error);
@@ -35,7 +39,10 @@ const getProvisionedRequest = async (req, res, next) => {
     res.status(200).json({
       success: true,
       status: request.status,
-      resourceGroup: request.resourceGroup
+      resourceGroup: request.resourceGroup,
+      resourceGroupCount: request.resourceGroupCount ?? null,
+      accountCount: request.accountCount ?? null,
+      complete: request.complete ?? Boolean(request.resourceGroup)
     });
   } catch (error) {
     next(error);

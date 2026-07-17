@@ -30,6 +30,8 @@ const {
 } = require('./customRoleService');
 const usageService = require('./usageService');
 const { requestHasUsageWindows } = require('./usageWindowAccessService');
+const { runWithConcurrency } = require('../utils/concurrency');
+const { getDeleteAzureConcurrency } = require('../utils/provisionConcurrency');
 
 const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
@@ -1236,10 +1238,11 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
   const costingMode = requestDetails.rows[0]?.costing_mode || null;
   const sharedResourceGroupName = requestDetails.rows[0]?.azure_resource_group_name || null;
 
+  const deleteConcurrency = getDeleteAzureConcurrency();
   const customAssignments = await getCustomRoleAssignmentsForRequest(normalizedRequestId);
   let customRolesRevoked = 0;
 
-  for (const assignment of customAssignments) {
+  await runWithConcurrency(customAssignments, deleteConcurrency, async (assignment) => {
     try {
       await revokeCustomRoleAssignment(assignment.id);
       customRolesRevoked += 1;
@@ -1250,7 +1253,7 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
         message: error?.message
       });
     }
-  }
+  });
 
   const roleAssignments = await getUserRoleAssignmentsForRequest(normalizedRequestId);
   let rolesRemoved = 0;
@@ -1259,11 +1262,13 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
   try {
     const { authorizationClient, resourceClient, graphClient } = createCleanupClients();
 
-    for (const assignment of roleAssignments) {
+    const validRoleAssignments = roleAssignments.filter((assignment) => {
       const assignmentId = assignment.assignment_id || assignment.assignmentId;
-      if (!assignmentId || !assignment.scope) {
-        continue;
-      }
+      return Boolean(assignmentId && assignment.scope);
+    });
+
+    await runWithConcurrency(validRoleAssignments, deleteConcurrency, async (assignment) => {
+      const assignmentId = assignment.assignment_id || assignment.assignmentId;
 
       try {
         const removed = await deleteRoleAssignmentWithRetry(
@@ -1290,88 +1295,83 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
           message: error?.message
         });
       }
-    }
+    });
 
-    const budgetUsers = await db.query(
-      `
-      SELECT id, azure_resource_group_name, budget_id
-      FROM azure_users
-      WHERE request_id = $1
-    `,
-      [normalizedRequestId]
-    );
+    const [budgetUsersResult, azureUsers, resourceGroupsToDelete] = await Promise.all([
+      db.query(
+        `
+          SELECT id, azure_resource_group_name, budget_id
+          FROM azure_users
+          WHERE request_id = $1
+        `,
+        [normalizedRequestId]
+      ),
+      getUsersForRequest(normalizedRequestId),
+      getResourceGroupNamesForCleanup(normalizedRequestId, costingMode, sharedResourceGroupName)
+    ]);
 
     let budgetsDeleted = 0;
-
-    for (const user of budgetUsers.rows) {
-      if (!user.budget_id || !user.azure_resource_group_name) {
-        continue;
-      }
-
-      try {
-        await deleteUserBudget({
-          resourceGroupName: user.azure_resource_group_name,
-          userId: user.id
-        });
-        budgetsDeleted += 1;
-      } catch (error) {
-        logManagePortalEvent('error', 'budget_delete_failed', {
-          requestId: normalizedRequestId,
-          userId: user.id,
-          message: error?.message
-        });
-      }
-    }
-
-    const azureUsers = await getUsersForRequest(normalizedRequestId);
     let usersDeleted = 0;
-    const userErrors = [];
-
-    for (const user of azureUsers) {
-      if (!user.azureUserId) {
-        userErrors.push({
-          username: user.username,
-          reason: 'Missing Azure user ID'
-        });
-        continue;
-      }
-
-      try {
-        await deleteAzureUserWithRetry(graphClient, user.azureUserId, normalizedRequestId);
-        usersDeleted += 1;
-      } catch (error) {
-        userErrors.push({
-          username: user.username,
-          reason: error?.message || 'Azure user deletion failed'
-        });
-      }
-    }
-
-    const resourceGroupsToDelete = await getResourceGroupNamesForCleanup(
-      normalizedRequestId,
-      costingMode,
-      sharedResourceGroupName
-    );
-
     let resourceGroupsDeleted = 0;
+    const userErrors = [];
     const resourceGroupErrors = [];
 
-    for (const resourceGroupName of resourceGroupsToDelete) {
-      const started = await startResourceGroupDeletion(
-        resourceClient,
-        resourceGroupName,
-        normalizedRequestId
-      );
+    const budgetUsers = budgetUsersResult.rows.filter(
+      (user) => user.budget_id && user.azure_resource_group_name
+    );
 
-      if (started) {
-        resourceGroupsDeleted += 1;
-      } else {
-        resourceGroupErrors.push({
+    await Promise.all([
+      runWithConcurrency(budgetUsers, deleteConcurrency, async (user) => {
+        try {
+          await deleteUserBudget({
+            resourceGroupName: user.azure_resource_group_name,
+            userId: user.id
+          });
+          budgetsDeleted += 1;
+        } catch (error) {
+          logManagePortalEvent('error', 'budget_delete_failed', {
+            requestId: normalizedRequestId,
+            userId: user.id,
+            message: error?.message
+          });
+        }
+      }),
+      runWithConcurrency(azureUsers, deleteConcurrency, async (user) => {
+        if (!user.azureUserId) {
+          userErrors.push({
+            username: user.username,
+            reason: 'Missing Azure user ID'
+          });
+          return;
+        }
+
+        try {
+          await deleteAzureUserWithRetry(graphClient, user.azureUserId, normalizedRequestId);
+          usersDeleted += 1;
+        } catch (error) {
+          userErrors.push({
+            username: user.username,
+            reason: error?.message || 'Azure user deletion failed'
+          });
+        }
+      }),
+      runWithConcurrency(resourceGroupsToDelete, deleteConcurrency, async (resourceGroupName) => {
+        const started = await startResourceGroupDeletion(
+          resourceClient,
           resourceGroupName,
-          reason: 'Could not start resource group deletion in Azure'
-        });
-      }
-    }
+          normalizedRequestId
+        );
+
+        if (started) {
+          resourceGroupsDeleted += 1;
+        } else {
+          resourceGroupErrors.push({
+            resourceGroupName,
+            reason: 'Could not start resource group deletion in Azure'
+          });
+        }
+      })
+    ]);
 
     try {
       const auditClient = await db.connect();

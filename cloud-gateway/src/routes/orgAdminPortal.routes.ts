@@ -22,8 +22,8 @@ function requireRole(...roles: string[]) {
 const orgAdminPortalProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_URL,
   changeOrigin: true,
-  timeout: Math.max(config.REQUEST_TIMEOUT_MS, 120_000),
-  proxyTimeout: Math.max(config.REQUEST_TIMEOUT_MS, 120_000),
+  timeout: 0,
+  proxyTimeout: 0,
   pathRewrite: (path) => {
     const suffix = path.startsWith('/api/org-admin')
       ? path.slice('/api/org-admin'.length) || '/'

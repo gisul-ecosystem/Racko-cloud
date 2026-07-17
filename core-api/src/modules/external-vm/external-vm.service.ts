@@ -155,24 +155,30 @@ class ExternalVMService {
 
   async getConsoleSession(
     id: mongoose.Types.ObjectId,
-    adminId: mongoose.Types.ObjectId
+    adminId: mongoose.Types.ObjectId,
+    dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
     const doc = await this.findOwnedByAdmin(id, adminId);
-    return this.openGuacamole(doc, { adminId: adminId.toString() });
+    return this.openGuacamole(doc, { adminId: adminId.toString() }, dimensions);
   }
 
   async getConsoleSessionForActor(
     id: mongoose.Types.ObjectId,
     requestingUserId: mongoose.Types.ObjectId,
-    requestingRole: PlatformActorRole
+    requestingRole: PlatformActorRole,
+    dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
     const doc = await ExternalVMModel.findById(id);
     if (!doc) throw new NotFoundError('External VM not found.');
     this.assertPlatformAccess(doc, requestingUserId.toString(), requestingRole);
-    return this.openGuacamole(doc, {
-      userId: requestingUserId.toString(),
-      role: requestingRole,
-    });
+    return this.openGuacamole(
+      doc,
+      {
+        userId: requestingUserId.toString(),
+        role: requestingRole,
+      },
+      dimensions
+    );
   }
 
   async getMyAssignedExternalVMs(
@@ -467,11 +473,16 @@ class ExternalVMService {
 
   async getTenantConsoleSession(
     id: mongoose.Types.ObjectId,
-    actor: TenantExternalVmActor
+    actor: TenantExternalVmActor,
+    dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
     const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
     this.assertTenantAccess(doc, actor);
-    return this.openGuacamole(doc, { tenantId: actor.tenantId, tenantUserId: actor.id });
+    return this.openGuacamole(
+      doc,
+      { tenantId: actor.tenantId, tenantUserId: actor.id },
+      dimensions
+    );
   }
 
   async getTenantAssignedCounts(tenantId: mongoose.Types.ObjectId): Promise<Record<string, number>> {
@@ -677,7 +688,8 @@ class ExternalVMService {
 
   private async openGuacamole(
     doc: IExternalVM,
-    logContext: Record<string, string>
+    logContext: Record<string, string>,
+    dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
     const password = decrypt(doc.password);
     const port = doc.protocol === 'rdp' ? 3389 : 22;
@@ -699,6 +711,8 @@ class ExternalVMService {
         password,
         ignoreCert: true,
         securityMode: 'any',
+        width: dimensions?.width,
+        height: dimensions?.height,
       }
     );
 
