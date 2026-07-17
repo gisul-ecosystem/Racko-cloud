@@ -208,6 +208,11 @@ class WSManager {
     await MachineModel.updateOne({ agentId }, { status: 'online', lastSeen: new Date() });
     logger.info('[WSManager] Agent connected', { agentId, machine: machine.name });
 
+    // Notify push session registry — emits agent_connected SSE event if this machine
+    // is part of an active push session. This is the authoritative "agent is alive" signal.
+    const { machineManagerService } = await import('../machine-manager.service');
+    void machineManagerService.notifyAgentConnected(machine._id.toString(), machine.name);
+
     // Start ping/pong keepalive every 30s
     conn.pingTimer = setInterval(() => this.sendPing(agentId), 30 * 1000);
 
