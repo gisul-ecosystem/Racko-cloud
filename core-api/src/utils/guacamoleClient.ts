@@ -262,7 +262,7 @@ function buildPayload(
     // PostgreSQL display-quality trigger (003_display_quality_trigger.sql)
     // has been removed, so there is no other writer of these fields anymore.
     parameters['ignore-cert'] = String(params.ignoreCert ?? true);
-    parameters['security'] = params.securityMode ?? 'nla';
+    parameters['security'] = params.securityMode ?? 'any';
     parameters['resize-method'] = 'display-update';
     parameters['server-layout'] = 'en-us-qwerty';
     parameters['cursor'] = 'local';
