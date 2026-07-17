@@ -600,6 +600,25 @@ class MachineManagerService {
     logger.info('[MachineManager] Push session removed', { sessionId });
   }
 
+  /**
+   * Called by wsManager when an agent connects via WebSocket.
+   * Looks up any active push session containing this machineId and emits agent_connected.
+   */
+  async notifyAgentConnected(machineId: string, machineName: string): Promise<void> {
+    for (const [sessionId, entry] of pushSessionRegistry) {
+      if (entry.machineIds.has(machineId)) {
+        const { emitPushEvent } = await import('./push.events');
+        emitPushEvent(sessionId, {
+          type: 'agent_connected',
+          machineId,
+          machineName,
+        });
+        logger.info('[MachineManager] agent_connected emitted via WS connection', { sessionId, machineId });
+        break;
+      }
+    }
+  }
+
   async execCommand(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
