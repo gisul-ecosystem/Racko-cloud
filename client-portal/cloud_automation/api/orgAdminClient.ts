@@ -1,4 +1,5 @@
 import { ApiError, apiRequest } from '../../lib/apiClient';
+import { directGatewayRequest } from '../../lib/directGatewayRequest';
 import { ORG_ADMIN_API_PREFIX } from '../constants';
 import type {
   OrgAdminAccessRequest,
@@ -45,8 +46,14 @@ function classifyError(status: number, message: string): OrgAdminErrorKind {
 }
 
 async function orgAdminRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  const fullPath = `${ORG_ADMIN_API_PREFIX}${path}`;
+
   try {
-    return await apiRequest<T>(`${ORG_ADMIN_API_PREFIX}${path}`, options);
+    if (typeof window !== 'undefined') {
+      return await directGatewayRequest<T>(fullPath, options);
+    }
+
+    return await apiRequest<T>(fullPath, options);
   } catch (err) {
     if (err instanceof ApiError) {
       throw new OrgAdminError(err.message, err.status, classifyError(err.status, err.message));
@@ -132,7 +139,15 @@ export async function updateOrgAdminUserRoles(
 export async function forceOrgAdminLogout(
   requestId: number,
   userId: number
-): Promise<{ success: boolean }> {
+): Promise<{
+  success: boolean;
+  data?: {
+    message?: string;
+    sessionsClosedCount?: number;
+    blockedUntil?: string;
+    azureRevoke?: { accountDisabled?: boolean };
+  };
+}> {
   return orgAdminRequest(
     `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/force-logout`,
     {
@@ -282,6 +297,20 @@ export async function getOrgUserSessions(
 ): Promise<{ success: boolean; sessions: import('../types/orgAdmin').OrgAdminUserSession[] }> {
   return orgAdminRequest(
     `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/sessions`
+  );
+}
+
+export async function getOrgUserLiveResources(
+  requestId: number,
+  userId: number
+): Promise<{
+  success: boolean;
+  liveResources: import('../types/orgAdmin').OrgAdminLiveAzureResource[];
+  liveResourceCount: number;
+  peakResourceCount?: number;
+}> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/users/${encodeURIComponent(userId)}/live-resources`
   );
 }
 

@@ -224,7 +224,7 @@ export function RequestWorkspace() {
   const [location, setLocation] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
-  const [costingMode, setCostingMode] = useState<CostingMode>('shared');
+  const costingMode: CostingMode = 'per_user';
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
   const [usageWindows, setUsageWindows] = useState<UsageWindow[]>([]);
@@ -263,7 +263,8 @@ export function RequestWorkspace() {
       if (wallet.usdToInrRate && wallet.usdToInrRate > 0) {
         setUsdToInrRate(wallet.usdToInrRate);
       }
-    } catch {
+    } catch (err) {
+      console.error('[wallet] Failed to load balance:', err);
       setWalletBalance(null);
     } finally {
       setWalletLoading(false);
@@ -703,8 +704,6 @@ export function RequestWorkspace() {
               onCustomerEmailChange={setCustomerEmail}
               accountCount={accountCount}
               onAccountCountChange={setAccountCount}
-              costingMode={costingMode}
-              onCostingModeChange={setCostingMode}
               startDate={startDate}
               onStartDateChange={setStartDate}
               endDate={endDate}

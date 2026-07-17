@@ -37,17 +37,28 @@ app.use(tenantResolver);
 app.use(loggerMiddleware);
 
 // 5. User ID-based rate limit — per-user independent buckets, falls back to IP for unauthenticated requests
-// Skip rate limiting for auth token endpoints and long-lived SSE streams.
+// Skip rate limiting for auth token endpoints, long-lived streams, and high-frequency
+// authenticated cloud automation traffic (provisioning polls many endpoints in parallel).
 const RATE_LIMIT_SKIP_PATHS = new Set(['/api/v1/auth/refresh', '/api/v1/auth/validate']);
+
+const RATE_LIMIT_SKIP_PREFIXES = [
+  '/api/v1/agent/',
+  '/api/v1/cloud-automation',
+  '/api/v1/cloud-automation-aws',
+  '/api/v1/cloud-automation-gcp',
+  '/api/v1/tenant-cloud',
+  '/api/org-admin',
+  '/api/manage',
+];
 
 function isRateLimitExemptPath(path: string): boolean {
   if (RATE_LIMIT_SKIP_PATHS.has(path)) return true;
-  // All agent endpoints are exempt — agents send frequent heartbeats and job
-  // results that would otherwise hit the per-IP rate limit with many VMs.
-  if (path.startsWith('/api/v1/agent/')) return true;
-  // SSE streams are long-lived and must not be rate limited
+  if (RATE_LIMIT_SKIP_PREFIXES.some((prefix) => path.startsWith(prefix))) return true;
+  // SSE / push streams are long-lived and must not be rate limited
   if (path.includes('/push-stream') || path.includes('/stream')) return true;
-  return /^\/api\/v1\/admin-vm-templates\/[a-f\d]{24}\/stream$/i.test(path);
+  // Local development — avoid blocking dashboards during provisioning tests
+  if (config.NODE_ENV === 'development') return true;
+  return false;
 }
 
 // Debug logging for push endpoints — remove after issue is resolved

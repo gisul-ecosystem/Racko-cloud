@@ -19,6 +19,7 @@ import type {
 } from '../types/provisioning';
 import type { StepCompletionOverrides } from '../utils/provisionSnapshot';
 import {
+  areProvisionPrerequisitesMet,
   buildProgressSummary,
   createOrchestrationEvent,
   deriveStepStates,
@@ -27,7 +28,7 @@ import {
   isSnapshotProvisioningComplete,
 } from '../utils/provisionSnapshot';
 
-const POLL_INTERVAL_MS = 4000;
+const POLL_INTERVAL_MS = 2000;
 
 function isAccessLinkDeliveryPending(snapshot: ProvisionSnapshot | null): boolean {
   const status = String(snapshot?.credentials?.deliveryStatus ?? '').toLowerCase();
@@ -81,6 +82,7 @@ export function useProvisionStatus({
   const stepErrorsRef = useRef<Partial<Record<ProvisionStepKey, string>>>({});
   const isCompleteRef = useRef(false);
   const deliveryPendingRef = useRef(false);
+  const snapshotRef = useRef<ProvisionSnapshot | null>(initialSnapshot);
 
   const [snapshot, setSnapshot] = useState<ProvisionSnapshot | null>(initialSnapshot);
   const [overrides, setOverrides] = useState<StepCompletionOverrides>({});
@@ -107,6 +109,7 @@ export function useProvisionStatus({
   const loadSnapshot = useCallback(async () => {
     const nextSnapshot = await fetchProvisionSnapshot(requestId);
     deliveryPendingRef.current = isAccessLinkDeliveryPending(nextSnapshot);
+    snapshotRef.current = nextSnapshot;
 
     if (isCredentialDeliveryComplete(nextSnapshot.credentials)) {
       const nextOverrides = { ...overridesRef.current, credentials: true };
@@ -142,6 +145,17 @@ export function useProvisionStatus({
       );
       if (!nextStep) return;
 
+      if (!areProvisionPrerequisitesMet(nextStep, currentSnapshot, currentOverrides)) {
+        appendEvent(
+          createOrchestrationEvent(
+            `Waiting for earlier provisioning steps before ${nextStep}.`,
+            'info',
+            nextStep
+          )
+        );
+        return;
+      }
+
       if (
         nextStep === 'credentials' &&
         isCredentialDeliveryComplete(currentSnapshot.credentials)
@@ -161,10 +175,19 @@ export function useProvisionStatus({
         createOrchestrationEvent(`${stepLabel} — orchestration started.`, 'info', nextStep)
       );
 
-      try {
-        await STEP_ACTIONS[nextStep](requestId);
+      let shouldChainNextStep = false;
+      let refreshedSnapshot: ProvisionSnapshot | null = null;
 
-        if (nextStep === 'services' || nextStep === 'credentials') {
+      try {
+        const stepResult = await STEP_ACTIONS[nextStep](requestId);
+
+        const partialProgress =
+          stepResult &&
+          typeof stepResult === 'object' &&
+          'complete' in stepResult &&
+          stepResult.complete === false;
+
+        if (nextStep === 'credentials' || (nextStep === 'services' && !partialProgress)) {
           const nextOverrides = { ...overridesRef.current, [nextStep]: true };
           overridesRef.current = nextOverrides;
           setOverrides(nextOverrides);
@@ -176,13 +199,31 @@ export function useProvisionStatus({
           return next;
         });
 
-        appendEvent(
-          createOrchestrationEvent(`${stepLabel} — completed successfully.`, 'success', nextStep)
-        );
+        if (partialProgress) {
+          const remaining =
+            'remaining' in stepResult && typeof stepResult.remaining === 'number'
+              ? stepResult.remaining
+              : null;
+          appendEvent(
+            createOrchestrationEvent(
+              remaining != null
+                ? `${stepLabel} — batch complete, ${remaining} remaining. Continuing…`
+                : `${stepLabel} — batch complete. Continuing…`,
+              'info',
+              nextStep
+            )
+          );
+        } else {
+          appendEvent(
+            createOrchestrationEvent(`${stepLabel} — completed successfully.`, 'success', nextStep)
+          );
+        }
 
-        const refreshed = await loadSnapshot();
-        if (isSnapshotProvisioningComplete(refreshed, overridesRef.current)) {
+        refreshedSnapshot = await loadSnapshot();
+        if (isSnapshotProvisioningComplete(refreshedSnapshot, overridesRef.current)) {
           isCompleteRef.current = true;
+        } else {
+          shouldChainNextStep = true;
         }
       } catch (err) {
         const message =
@@ -199,46 +240,62 @@ export function useProvisionStatus({
       } finally {
         orchestratingRef.current = false;
       }
+
+      if (shouldChainNextStep && refreshedSnapshot && !isCompleteRef.current) {
+        void runNextStep(refreshedSnapshot);
+      }
     },
     [appendEvent, loadSnapshot, requestId]
   );
 
-  const refresh = useCallback(async (isManual = false) => {
-    if (!Number.isInteger(requestId) || requestId <= 0) {
-      setError('Invalid request ID.');
-      setLoading(false);
-      return;
+  const startOrchestration = useCallback(async () => {
+    if (orchestratingRef.current || isCompleteRef.current) return;
+
+    const currentSnapshot = snapshotRef.current ?? (await loadSnapshot());
+    if (!isSnapshotProvisioningComplete(currentSnapshot, overridesRef.current)) {
+      await runNextStep(currentSnapshot);
+    } else {
+      isCompleteRef.current = true;
     }
+  }, [loadSnapshot, runNextStep]);
 
-    try {
-      if (!snapshot) setLoading(true);
-
-      const currentSnapshot = await loadSnapshot();
-      if (isManual) {
-        appendEvent(createOrchestrationEvent('Snapshot refreshed from backend.', 'info'));
+  const refresh = useCallback(
+    async (isManual = false) => {
+      if (!Number.isInteger(requestId) || requestId <= 0) {
+        setError('Invalid request ID.');
+        setLoading(false);
+        return;
       }
 
-      if (!isSnapshotProvisioningComplete(currentSnapshot, overridesRef.current)) {
-        await runNextStep(currentSnapshot);
-      } else {
-        isCompleteRef.current = true;
-      }
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : err instanceof Error
+      try {
+        if (!snapshotRef.current) setLoading(true);
+
+        await loadSnapshot();
+        if (isManual) {
+          appendEvent(createOrchestrationEvent('Snapshot refreshed from backend.', 'info'));
+        }
+
+        if (isManual && !isCompleteRef.current) {
+          await startOrchestration();
+        }
+      } catch (err) {
+        setError(
+          err instanceof ApiError
             ? err.message
-            : 'Failed to load provisioning status.'
-      );
-    } finally {
-      setLoading(false);
-    }
-  }, [appendEvent, loadSnapshot, requestId, runNextStep, snapshot]);
+            : err instanceof Error
+              ? err.message
+              : 'Failed to load provisioning status.'
+        );
+      } finally {
+        setLoading(false);
+      }
+    },
+    [appendEvent, loadSnapshot, requestId, startOrchestration]
+  );
 
   const retryFailedStep = useCallback(async () => {
     const failed = deriveStepStates(
-      snapshot ?? EMPTY_SNAPSHOT,
+      snapshotRef.current ?? EMPTY_SNAPSHOT,
       overridesRef.current,
       stepErrorsRef.current
     ).find((step) => step.status === 'failed');
@@ -251,8 +308,8 @@ export function useProvisionStatus({
     }
 
     try {
-      const currentSnapshot = snapshot ?? (await loadSnapshot());
-      await runNextStep(currentSnapshot);
+      await loadSnapshot();
+      await startOrchestration();
     } catch (err) {
       setError(
         err instanceof ApiError
@@ -262,15 +319,53 @@ export function useProvisionStatus({
             : 'Failed to retry provisioning step.'
       );
     }
-  }, [loadSnapshot, runNextStep, snapshot]);
+  }, [loadSnapshot, startOrchestration]);
 
   useEffect(() => {
-    void refresh();
+    isCompleteRef.current = false;
+    orchestratingRef.current = false;
+    overridesRef.current = {};
+    stepErrorsRef.current = {};
+    snapshotRef.current = initialSnapshot;
+    setOverrides({});
+    setStepErrors({});
+    setEvents(
+      initialSnapshot
+        ? [
+            createOrchestrationEvent(
+              `Loaded provisioning snapshot for request #${requestId}.`,
+              'info'
+            ),
+          ]
+        : []
+    );
+
+    void (async () => {
+      try {
+        setLoading(true);
+        await loadSnapshot();
+        await startOrchestration();
+      } catch (err) {
+        setError(
+          err instanceof ApiError
+            ? err.message
+            : err instanceof Error
+              ? err.message
+              : 'Failed to load provisioning status.'
+        );
+      } finally {
+        setLoading(false);
+      }
+    })();
 
     pollRef.current = setInterval(() => {
-      if (!isCompleteRef.current || deliveryPendingRef.current) {
-        void refresh();
+      if (isCompleteRef.current && !deliveryPendingRef.current) {
+        return;
       }
+
+      void loadSnapshot().catch(() => {
+        // Keep the last known snapshot visible while polling.
+      });
     }, POLL_INTERVAL_MS);
 
     return () => {

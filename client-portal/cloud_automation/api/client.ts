@@ -158,6 +158,12 @@ export interface ProvisionStepStatus {
   success: boolean;
   status?: string;
   resourceGroup?: unknown;
+  resourceGroupCount?: number | null;
+  accountCount?: number | null;
+  complete?: boolean;
+  remaining?: number;
+  resourcesProvisioned?: number;
+  resourcesSkipped?: number;
   users?: unknown[];
   roles?: unknown[];
   resources?: unknown[];
@@ -334,18 +340,30 @@ export async function fetchProvisionSnapshot(requestId: number): Promise<Provisi
       resourceGroup:
         typeof provisionRaw.resourceGroup === 'string' ? provisionRaw.resourceGroup : null,
       resourceGroupId: null,
+      resourceGroupCount:
+        typeof provisionRaw.resourceGroupCount === 'number'
+          ? provisionRaw.resourceGroupCount
+          : null,
+      accountCount:
+        typeof provisionRaw.accountCount === 'number' ? provisionRaw.accountCount : null,
+      complete: provisionRaw.complete === true,
     },
     services: {
       resources: servicesResources,
       count: servicesRaw.count ?? servicesResources.length,
+      complete: servicesRaw.complete === true,
     },
     users: {
       users,
-      count: users.length,
+      count: usersRaw.count ?? users.length,
+      complete: usersRaw.complete === true,
     },
     roles: {
       roles,
-      count: roles.length,
+      count: rolesRaw.count ?? roles.length,
+      complete: rolesRaw.complete === true,
+      remaining:
+        typeof rolesRaw.remaining === 'number' ? rolesRaw.remaining : undefined,
     },
     credentials: {
       deliveryStatus: credentialsRaw.deliveryStatus ?? null,

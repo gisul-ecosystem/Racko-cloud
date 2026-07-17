@@ -60,6 +60,11 @@ router.post(
   orgAdminController.unblockUser
 );
 router.get(
+  '/resource-groups/:requestId/users/:userId/live-resources',
+  requireSuperAdmin,
+  orgAdminController.getUserLiveResources
+);
+router.get(
   '/resource-groups/:requestId/users/:userId/sessions',
   requireSuperAdmin,
   orgAdminController.getUserSessions
