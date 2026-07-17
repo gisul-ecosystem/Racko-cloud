@@ -533,33 +533,44 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 
       // Handle SSE events
       sse.onmessage = (e: MessageEvent) => {
-        console.log('[Push] SSE event received:', e.data);
+        console.log('[Push] SSE raw message received:', e.data);
         type PushEvent = { type: string; machineId: string; success?: boolean; error?: string; machineName?: string };
-        const event = JSON.parse(e.data as string) as PushEvent;
-        if (event.type === 'push_result') {
-          setVmStatus((prev) => ({
-            ...prev,
-            [event.machineId]: {
-              ...prev[event.machineId],
-              pushSuccess: event.success,
-              pushError: event.error,
-              agentConnected: prev[event.machineId]?.agentConnected ?? false,
-            },
-          }));
-        } else if (event.type === 'agent_connected') {
-          setVmStatus((prev) => ({
-            ...prev,
-            [event.machineId]: {
-              ...prev[event.machineId],
-              pushSuccess: prev[event.machineId]?.pushSuccess ?? true,
-              agentConnected: true,
-            },
-          }));
+        try {
+          const event = JSON.parse(e.data as string) as PushEvent;
+          console.log('[Push] SSE event parsed:', event.type, event.machineId, event.success);
+          if (event.type === 'ping') {
+            console.log('[Push] SSE ping received — stream is alive ✓');
+          } else if (event.type === 'push_result') {
+            setVmStatus((prev) => ({
+              ...prev,
+              [event.machineId]: {
+                ...prev[event.machineId],
+                pushSuccess: event.success,
+                pushError: event.error,
+                agentConnected: prev[event.machineId]?.agentConnected ?? false,
+              },
+            }));
+          } else if (event.type === 'agent_connected') {
+            setVmStatus((prev) => ({
+              ...prev,
+              [event.machineId]: {
+                ...prev[event.machineId],
+                pushSuccess: prev[event.machineId]?.pushSuccess ?? true,
+                agentConnected: true,
+              },
+            }));
+          }
+        } catch (parseErr) {
+          console.error('[Push] SSE parse error:', parseErr, 'raw:', e.data);
         }
       };
 
+      sse.onopen = () => {
+        console.log('[Push] SSE connection opened, readyState:', sse.readyState);
+      };
+
       sse.onerror = (e) => {
-        console.log('[Push] SSE error/close:', e);
+        console.error('[Push] SSE error/close, readyState:', sse.readyState, e);
         sse.close();
       };
 
