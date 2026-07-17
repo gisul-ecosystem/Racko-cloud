@@ -710,7 +710,7 @@ class ExternalVMService {
         username: doc.username,
         password,
         ignoreCert: true,
-        securityMode: 'nla',
+        securityMode: 'any',
         width: dimensions?.width,
         height: dimensions?.height,
       }
