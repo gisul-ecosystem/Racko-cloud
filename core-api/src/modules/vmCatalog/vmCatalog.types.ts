@@ -12,7 +12,8 @@ export interface CatalogVmResponse {
   _id: string;
   adminId: string;
   adminEmail?: string;
-  provider: VmCatalogProvider;
+  /** Omitted for admin-role callers (provider leak guard). */
+  provider?: VmCatalogProvider;
   category: VmCatalogCategory;
   planId: string;
   planName: string;
@@ -38,6 +39,14 @@ export interface CatalogVmResponse {
   rejectionReason?: string;
   reviewedBy?: string;
   reviewedAt?: string;
+  /** Super-admin only */
+  region?: string;
+  /** Super-admin only */
+  providerInstanceId?: string;
+  expiresAt?: string;
+  autoProvisioned?: boolean;
+  /** Super-admin only */
+  rawProviderCostPerHr?: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -65,6 +74,9 @@ export interface CreateCatalogVmRequestDto {
   quantity: number;
   template: VmCatalogTemplate;
   pricingSnapshot: VmCatalogPricingSnapshot;
+  /** Optional; inferred from billing when omitted. */
+  durationDays?: number;
+  canonicalSpec?: string;
 }
 
 export interface CatalogVmRequesterGroup {

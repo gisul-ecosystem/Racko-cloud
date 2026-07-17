@@ -31,6 +31,8 @@ export const createCatalogVmRequestSchema = z.object({
       total: z.coerce.number().min(0),
       billingLabel: z.string().max(100).trim().optional(),
     }),
+    durationDays: z.coerce.number().int().min(1).max(3650).optional(),
+    canonicalSpec: z.string().min(1).max(100).trim().optional(),
   }),
 });
 
@@ -63,6 +65,7 @@ export const listCatalogVmRequestsQuerySchema = z.object({
         'rejected',
         'cancelled',
         'suspended',
+        'terminated',
         'all',
       ])
       .optional()

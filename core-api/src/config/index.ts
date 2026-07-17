@@ -182,6 +182,20 @@ const envSchema = z.object({
     .url()
     .optional()
     .default('http://127.0.0.1:3789'),
+
+  // Multi-cloud reseller service (AWS/Azure pricing + provision)
+  RESELLER_SERVICE_URL: z
+    .string()
+    .url()
+    .optional()
+    .default('http://127.0.0.1:3005'),
+
+  // Auto-provisioned catalog VM expiry check interval
+  CATALOG_VM_EXPIRY_CHECK_INTERVAL_MS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('300000'),
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -43,6 +43,7 @@ import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
 import tenantExternalVmRoutes from './modules/tenantExternalVm/tenantExternalVm.routes';
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
+import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
 import adminBillingRoutes from './modules/adminBilling/adminBilling.routes';
@@ -187,6 +188,7 @@ startStorageReconcileSweeper();
 startVmAutomationScheduler();
 startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
+startCatalogVmExpiryScheduler();
 
 // 404 handler
 app.use(notFoundHandler);
