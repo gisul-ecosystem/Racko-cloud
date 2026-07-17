@@ -408,13 +408,16 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 }
 
 // ─── FLOW 2: VM (SSH/WinRM Push) ──────────────────────────────────────────────
-function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
+function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; onStepChange?: (step: number) => void }) {
   const { addToast } = useToast();
   const [step, setStep] = useState(1);
   const [vmRows, setVmRows] = useState<VMPushTarget[]>([{ name: '', ipAddress: '', os: 'linux', username: '', password: '' }]);
   const [machines, setMachines] = useState<IMachine[]>([]);
   const [pushing, setPushing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Notify parent when step changes — used to hide "Change setup type" on steps 2+
+  useEffect(() => { onStepChange?.(step); }, [step, onStepChange]);
 
   // Step 2 — per-machine live status
   type VMStatus = { pushSuccess?: boolean; pushError?: string; agentConnected: boolean };
@@ -667,7 +670,7 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
                 }
               </p>
             </div>
-            {!timeoutReached && !allResolved && (
+            {(timeoutReached || allResolved) && (
               <button onClick={handleContinue}
                 className="text-sm text-gray-400 hover:text-gray-700 underline">
                 Skip waiting
@@ -945,6 +948,7 @@ export default function SetupWizardPage() {
   const { isAuthenticated } = useAuth();
   const { toasts, addToast, dismiss } = useToast();
   const [path, setPath] = useState<SetupPath>(null);
+  const [vmStep, setVmStep] = useState(1);
 
   return (
     <div className="max-w-3xl">
@@ -960,13 +964,14 @@ export default function SetupWizardPage() {
 
         {path && (
           <div>
-            <button onClick={() => setPath(null)}
-              className="mb-5 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700">
-              ← Change setup type
-            </button>
-
+            {(path !== 'vm' || vmStep === 1) && (
+              <button onClick={() => { setPath(null); setVmStep(1); }}
+                className="mb-5 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700">
+                ← Change setup type
+              </button>
+            )}
             {path === 'physical' && <PhysicalFlow isAuthenticated={isAuthenticated} />}
-            {path === 'vm' && <VMFlow isAuthenticated={isAuthenticated} />}
+            {path === 'vm' && <VMFlow isAuthenticated={isAuthenticated} onStepChange={setVmStep} />}
             {path === 'template' && <TemplateFlow isAuthenticated={isAuthenticated} />}
           </div>
         )}
