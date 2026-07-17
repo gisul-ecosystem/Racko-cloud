@@ -76,14 +76,40 @@ export function getGatewayBaseUrl(): string {
 
 /**
  * Direct gateway URL for long-running browser requests.
- * Bypasses Next.js dev rewrites, which can reset sockets on slow provision calls.
+ * Bypasses Next.js rewrites, which can reset sockets on slow provision calls.
+ * Never use Docker-internal hostnames from the browser.
  */
 export function getDirectGatewayBaseUrl(): string {
   if (typeof window !== 'undefined') {
     const configured = process.env['NEXT_PUBLIC_GATEWAY_URL']?.trim();
-    if (configured) return stripTrailingSlash(configured);
-    return DEFAULT_GATEWAY;
+    if (configured) {
+      const url = stripTrailingSlash(configured);
+      const host = (() => {
+        try {
+          return new URL(url).hostname.toLowerCase();
+        } catch {
+          return '';
+        }
+      })();
+
+      const isDockerInternal =
+        host === 'cloud-gateway' ||
+        host.endsWith('.internal') ||
+        (host.endsWith('.local') && host.includes('gateway'));
+
+      if (!isDockerInternal) {
+        return url;
+      }
+    }
+
+    if (isLocalDevHost(window.location.hostname)) {
+      return DEFAULT_GATEWAY;
+    }
+
+    // Production fallback: same public origin (nginx should proxy /api → gateway).
+    return stripTrailingSlash(window.location.origin);
   }
+
   return getServerGatewayBaseUrl();
 }
 

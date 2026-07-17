@@ -253,7 +253,12 @@ const provisionUsersForRequest = async (requestId) => {
   let adoptedCount = 0;
   let batchCreated = 0;
 
-  while (pendingUserNumbers.length > 0 && (timeBudgetMs === 0 || Date.now() - startedAt < timeBudgetMs)) {
+  // With no time budget: one HTTP request = one user batch (proxy-safe for large labs).
+  let processedBatch = false;
+  while (
+    pendingUserNumbers.length > 0 &&
+    (timeBudgetMs === 0 ? !processedBatch : Date.now() - startedAt < timeBudgetMs)
+  ) {
     const batchUserNumbers = pendingUserNumbers.splice(0, batchSize);
     const createdUsers = [];
 
@@ -332,6 +337,8 @@ const provisionUsersForRequest = async (requestId) => {
         client.release();
       }
     }
+
+    processedBatch = true;
   }
 
   const totalUsers = (await getExistingUsersForRequest(requestId)).length;

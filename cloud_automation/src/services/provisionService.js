@@ -270,12 +270,21 @@ const provisionPerUserResourceGroupsForRequest = async (request) => {
     failures: []
   };
 
-  while (!progress.done && (timeBudgetMs === 0 || Date.now() - startedAt < timeBudgetMs)) {
+  while (!progress.done) {
     progress = await provisionPerUserResourceGroups({
       requestId: request.id,
       accountCount,
       location
     });
+
+    // No time budget: one resource-group batch per HTTP request (proxy-safe).
+    if (timeBudgetMs === 0) {
+      break;
+    }
+
+    if (Date.now() - startedAt >= timeBudgetMs) {
+      break;
+    }
   }
 
   if (!progress.done) {

@@ -700,9 +700,12 @@ const provisionRolesForRequest = async (requestId) => {
     let batchAssigned = 0;
     const pendingDbInserts = [...groupDbInserts];
 
+    // With no time budget: one HTTP request = one RBAC batch (safe behind proxies for 100-user labs).
+    // With a time budget: keep assigning until the budget expires, then return complete:false.
+    let processedBatch = false;
     while (
       rbacTasks.length > 0 &&
-      (timeBudgetMs === 0 || Date.now() - startedAt < timeBudgetMs)
+      (timeBudgetMs === 0 ? !processedBatch : Date.now() - startedAt < timeBudgetMs)
     ) {
       const batch = rbacTasks.splice(0, batchSize);
       const rbacResults = await runConcurrent(batch, CONCURRENCY_LIMIT);
@@ -721,6 +724,8 @@ const provisionRolesForRequest = async (requestId) => {
         pendingDbInserts.push(...batchInserts);
         batchAssigned += batchInserts.length;
       }
+
+      processedBatch = true;
     }
 
     const rbacComplete = rbacTasks.length === 0;

@@ -19,13 +19,13 @@ const getServiceProvisionConcurrency = () =>
   );
 
 const getResourceGroupBatchSize = () =>
-  parsePositiveInt(process.env.RESOURCE_GROUP_BATCH_SIZE, 50);
+  parsePositiveInt(process.env.RESOURCE_GROUP_BATCH_SIZE, 25);
 
 const getRoleProvisionBatchSize = () =>
-  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 150);
+  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 25);
 
 const getUserProvisionBatchSize = () =>
-  parsePositiveInt(process.env.USER_PROVISION_BATCH_SIZE, 50);
+  parsePositiveInt(process.env.USER_PROVISION_BATCH_SIZE, 25);
 
 const getProvisionStepTimeBudgetMs = () => {
   const raw = process.env.PROVISION_STEP_TIME_BUDGET_MS;

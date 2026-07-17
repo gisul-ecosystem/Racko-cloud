@@ -6,8 +6,9 @@
 #   VM_SSH_KEY_DEV     — Private SSH key for the VM user
 #
 # Service env files live on the VM under /opt/racko/<service>/.env (e.g. cloud-automation/.env) — not in GitHub secrets.
-# client-portal image bakes NEXT_PUBLIC_GATEWAY_URL=http://cloud-gateway:8000 (Docker internal).
-# Nginx must proxy /api/ → :8000 on dev.racko.ai and each tenant domain.
+# client-portal bakes NEXT_PUBLIC_GATEWAY_URL to the public API (e.g. https://api-dev.racko.ai).
+# cloud-automation large-lab batch sizes are also set in docker-compose.yml (defaults: 25).
+# Nginx must proxy /api/ → :8000 on dev.racko.ai and each tenant domain (proxy_read_timeout >= 300s).
  
 name: Build & Deploy Dev via SSH
  
