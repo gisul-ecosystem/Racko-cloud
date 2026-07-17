@@ -13,6 +13,10 @@ const {
   provisionPerUserResourceGroups,
   summarizePerUserResourceGroups
 } = require('./userResourceGroupService');
+const {
+  getMaxProvisionAccountCount,
+  getProvisionStepTimeBudgetMs
+} = require('../utils/provisionConcurrency');
 
 const STATUS_COMPLETED = 'Completed';
 
@@ -93,6 +97,7 @@ const getProvisionedRequest = async (requestId) => {
       id,
       status,
       costing_mode,
+      account_count,
       azure_resource_group_id,
       azure_resource_group_name
     FROM requests
@@ -109,11 +114,15 @@ const getProvisionedRequest = async (requestId) => {
 
   if (isPerUserCosting(request.costing_mode)) {
     const resourceGroups = await getStagingResourceGroups(requestId);
+    const accountCount = Number(request.account_count) || 0;
 
     return {
       id: request.id,
       status: request.status,
       costingMode: request.costing_mode,
+      accountCount,
+      resourceGroupCount: resourceGroups.length,
+      complete: accountCount > 0 && resourceGroups.length >= accountCount,
       resourceGroup: summarizePerUserResourceGroups(resourceGroups),
       resourceGroups: resourceGroups.map((row) => ({
         userNumber: Number(row.user_number),
@@ -127,6 +136,9 @@ const getProvisionedRequest = async (requestId) => {
     id: request.id,
     status: request.status,
     costingMode: request.costing_mode,
+    accountCount: Number(request.account_count) || 0,
+    resourceGroupCount: request.azure_resource_group_name ? 1 : 0,
+    complete: Boolean(request.azure_resource_group_name),
     resourceGroup: request.azure_resource_group_name || null,
     resourceGroupId: request.azure_resource_group_id || null
   };
@@ -191,13 +203,32 @@ const provisionSharedResourceGroup = async (client, request) => {
   };
 };
 
-const provisionPerUserResourceGroupsForRequest = async (client, request) => {
-  const existingGroups = await getStagingResourceGroups(request.id, client);
+const provisionPerUserResourceGroupsForRequest = async (request) => {
   const accountCount = Number(request.account_count);
+  const maxAccountCount = getMaxProvisionAccountCount();
 
-  if (existingGroups.length >= accountCount && accountCount > 0) {
-    await markPerUserProvisioningComplete(client, request.id);
-    await client.query('COMMIT');
+  if (!Number.isInteger(accountCount) || accountCount <= 0) {
+    throw new AppError('Request account count is invalid.', 400);
+  }
+
+  if (accountCount > maxAccountCount) {
+    throw new AppError(
+      `Account count exceeds the maximum supported limit of ${maxAccountCount}.`,
+      400
+    );
+  }
+
+  const existingGroups = await getStagingResourceGroups(request.id);
+
+  if (existingGroups.length >= accountCount) {
+    await db.query(
+      `
+        UPDATE requests
+        SET status = $2
+        WHERE id = $1
+      `,
+      [request.id, STATUS_COMPLETED]
+    );
 
     logProvisionEvent('info', 'provision_request_reused_existing', {
       requestId: request.id,
@@ -209,7 +240,9 @@ const provisionPerUserResourceGroupsForRequest = async (client, request) => {
     return {
       resourceGroup: summarizePerUserResourceGroups(existingGroups),
       resourceGroupCount: existingGroups.length,
-      costingMode: request.costing_mode
+      accountCount,
+      complete: true,
+      remaining: 0
     };
   }
 
@@ -220,43 +253,102 @@ const provisionPerUserResourceGroupsForRequest = async (client, request) => {
     requestId: request.id,
     status: request.status,
     accountCount,
+    existingResourceGroupCount: existingGroups.length,
     location,
     costingMode: request.costing_mode
   });
 
   await preflightAzureManagementAccess({ requestId: request.id });
 
-  const resourceGroups = await provisionPerUserResourceGroups({
-    requestId: request.id,
-    accountCount,
-    location,
-    client
-  });
+  const startedAt = Date.now();
+  const timeBudgetMs = getProvisionStepTimeBudgetMs();
+  let progress = {
+    completed: existingGroups.length,
+    remaining: Math.max(0, accountCount - existingGroups.length),
+    done: false,
+    batchCreated: 0,
+    failures: []
+  };
 
-  await markPerUserProvisioningComplete(client, request.id);
-  await client.query('COMMIT');
+  while (!progress.done) {
+    progress = await provisionPerUserResourceGroups({
+      requestId: request.id,
+      accountCount,
+      location
+    });
+
+    // No time budget: one resource-group batch per HTTP request (proxy-safe).
+    if (timeBudgetMs === 0) {
+      break;
+    }
+
+    if (Date.now() - startedAt >= timeBudgetMs) {
+      break;
+    }
+  }
+
+  if (!progress.done) {
+    logProvisionEvent('info', 'provision_request_partial', {
+      requestId: request.id,
+      resourceGroupCount: progress.completed,
+      accountCount,
+      remaining: progress.remaining,
+      batchCreated: progress.batchCreated
+    });
+
+    return {
+      resourceGroup: summarizePerUserResourceGroups(progress.rows),
+      resourceGroupCount: progress.completed,
+      accountCount,
+      complete: false,
+      remaining: progress.remaining
+    };
+  }
+
+  await db.query(
+    `
+      UPDATE requests
+      SET status = $2
+      WHERE id = $1
+    `,
+    [request.id, STATUS_COMPLETED]
+  );
 
   logProvisionEvent('info', 'provision_request_completed', {
     requestId: request.id,
-    resourceGroupCount: resourceGroups.length,
+    resourceGroupCount: progress.completed,
     costingMode: request.costing_mode
   });
 
   return {
-    resourceGroup: summarizePerUserResourceGroups(resourceGroups),
-    resourceGroupCount: resourceGroups.length,
-    costingMode: request.costing_mode
+    resourceGroup: summarizePerUserResourceGroups(progress.rows),
+    resourceGroupCount: progress.completed,
+    accountCount,
+    complete: true,
+    remaining: 0
   };
 };
 
 const provisionRequestResourceGroup = async (requestId) => {
-  const client = await db.connect();
+  const requestResult = await db.query(
+    `
+      SELECT
+        id,
+        status,
+        location,
+        account_count,
+        costing_mode,
+        azure_resource_group_id,
+        azure_resource_group_name
+      FROM requests
+      WHERE id = $1
+    `,
+    [requestId]
+  );
+
+  const request = requestResult.rows[0];
 
   try {
-    await client.query('BEGIN');
-
-    const request = await getRequestForProvisioning(client, requestId);
-
     if (!request) {
       throw new AppError('Request not found.', 404);
     }
@@ -266,16 +358,31 @@ const provisionRequestResourceGroup = async (requestId) => {
     }
 
     if (isPerUserCosting(request.costing_mode)) {
-      return provisionPerUserResourceGroupsForRequest(client, request);
+      return provisionPerUserResourceGroupsForRequest(request);
     }
 
-    if (isSharedCosting(request.costing_mode)) {
-      return provisionSharedResourceGroup(client, request);
-    }
+    const client = await db.connect();
 
-    throw new AppError('Request costing mode is invalid.', 400);
+    try {
+      await client.query('BEGIN');
+      const lockedRequest = await getRequestForProvisioning(client, requestId);
+
+      if (!lockedRequest) {
+        throw new AppError('Request not found.', 404);
+      }
+
+      if (isSharedCosting(lockedRequest.costing_mode)) {
+        return provisionSharedResourceGroup(client, lockedRequest);
+      }
+
+      throw new AppError('Request costing mode is invalid.', 400);
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
-    await client.query('ROLLBACK');
 
     logProvisionEvent('error', 'provision_request_failed', {
       requestId,
@@ -285,11 +392,11 @@ const provisionRequestResourceGroup = async (requestId) => {
       message: error?.message
     });
 
-    const requestResult = await db.query(
+    const failedRequestResult = await db.query(
       `SELECT id, customer_email FROM requests WHERE id = $1 LIMIT 1`,
       [requestId]
     );
-    const failedRequest = requestResult.rows[0];
+    const failedRequest = failedRequestResult.rows[0];
 
     await createNotification({
       type: NotificationType.PROVISIONING_FAILED,
@@ -299,8 +406,6 @@ const provisionRequestResourceGroup = async (requestId) => {
     });
 
     throw error;
-  } finally {
-    client.release();
   }
 };
 

@@ -2,7 +2,9 @@ const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
 const { provisionServiceResource } = require('../provisioners/azure/serviceResourceProvisioner');
 const { isPerUserCosting } = require('../utils/costingMode');
-const { getStagingResourceGroups } = require('./userResourceGroupService');
+const { getStagingResourceGroups, getPerUserResourceGroupProgress } = require('./userResourceGroupService');
+const { runWithConcurrency } = require('../utils/concurrency');
+const { getServiceProvisionConcurrency, getProvisionStepTimeBudgetMs } = require('../utils/provisionConcurrency');
 
 const logEvent = (event, details = {}) => {
   console.log(
@@ -104,90 +106,170 @@ const upsertProvisionedResource = async (client, data) => {
   );
 };
 
-const provisionServiceResourcesForRequest = async (requestId) => {
-  const client = await db.connect();
+const provisionPoliciesAcrossResourceGroups = async ({
+  requestId,
+  instance,
+  resourceGroupNames,
+  location
+}) => {
+  const serviceId = Number(instance.service_id);
+  const results = new Array(resourceGroupNames.length);
 
-  try {
-    await client.query('BEGIN');
-
-    const request = await getRequestContext(client, requestId);
-
-    if (!request) {
-      throw new AppError('Request not found.', 404);
-    }
-
-    const resourceGroupNames = isPerUserCosting(request.costing_mode)
-      ? (await getStagingResourceGroups(requestId, client)).map(
-          (row) => row.azure_resource_group_name
-        )
-      : request.azure_resource_group_name
-        ? [request.azure_resource_group_name]
-        : [];
-
-    if (resourceGroupNames.length === 0) {
-      throw new AppError('Resource group must be created before provisioning service instances.', 400);
-    }
-
-    const instances = await getInstancesForRequest(client, requestId);
-
-    if (instances.length === 0) {
-      await client.query('COMMIT');
-      return { resourcesProvisioned: 0, resourcesSkipped: 0 };
-    }
-
-    const existingCount = await getProvisionedCount(client, requestId);
-
-    if (existingCount >= instances.length) {
-      await client.query('COMMIT');
-      logEvent('service_resources_reused_existing', { requestId, count: existingCount });
-      return { resourcesProvisioned: existingCount, resourcesSkipped: 0 };
-    }
-
-    let provisioned = 0;
-    let skipped = 0;
-
-    for (const instance of instances) {
-      const serviceId = Number(instance.service_id);
-      const existing = await client.query(
-        `
-          SELECT status
-          FROM provisioned_service_resources
-          WHERE request_id = $1 AND service_id = $2
-        `,
-        [requestId, serviceId]
-      );
-
-      if (
-        ['policy_configured', 'provisioned', 'skipped'].includes(existing.rows[0]?.status)
-      ) {
-        if (existing.rows[0].status === 'skipped') {
-          skipped += 1;
-        } else {
-          provisioned += 1;
-        }
-        continue;
-      }
-
-      const result = await provisionServiceResource({
+  await runWithConcurrency(
+    resourceGroupNames,
+    getServiceProvisionConcurrency(),
+    async (resourceGroupName, index) => {
+      results[index] = await provisionServiceResource({
         requestId,
         serviceId,
         serviceName: instance.service_name,
-        resourceGroupName: resourceGroupNames[0],
-        location: request.location,
+        resourceGroupName,
+        location,
         instanceOption: instance.instance_option
       });
+    }
+  );
 
-      for (const resourceGroupName of resourceGroupNames.slice(1)) {
-        await provisionServiceResource({
-          requestId,
-          serviceId,
-          serviceName: instance.service_name,
-          resourceGroupName,
-          location: request.location,
-          instanceOption: instance.instance_option
-        });
+  return results[0];
+};
+
+const provisionServiceResourcesForRequest = async (requestId) => {
+  const requestResult = await db.query(
+    `
+      SELECT
+        id,
+        location,
+        costing_mode,
+        account_count,
+        azure_resource_group_name,
+        status
+      FROM requests
+      WHERE id = $1
+    `,
+    [requestId]
+  );
+
+  const request = requestResult.rows[0];
+
+  if (!request) {
+    throw new AppError('Request not found.', 404);
+  }
+
+  const perUserProgress = await getPerUserResourceGroupProgress(requestId);
+
+  if (perUserProgress.required && !perUserProgress.ready) {
+    return {
+      resourcesProvisioned: 0,
+      resourcesSkipped: 0,
+      complete: false,
+      remaining: perUserProgress.remaining,
+      resourceGroupCount: perUserProgress.completed,
+      accountCount: perUserProgress.accountCount
+    };
+  }
+
+  const resourceGroupNames = isPerUserCosting(request.costing_mode)
+    ? (await getStagingResourceGroups(requestId)).map((row) => row.azure_resource_group_name)
+    : request.azure_resource_group_name
+      ? [request.azure_resource_group_name]
+      : [];
+
+  if (resourceGroupNames.length === 0) {
+    throw new AppError('Resource group must be created before provisioning service instances.', 400);
+  }
+
+  const instancesResult = await db.query(
+    `
+      SELECT
+        rsi.service_id,
+        rsi.instance_option,
+        s.name AS service_name
+      FROM request_service_instances rsi
+      INNER JOIN services s ON s.id = rsi.service_id
+      WHERE rsi.request_id = $1
+      ORDER BY s.name
+    `,
+    [requestId]
+  );
+
+  const instances = instancesResult.rows;
+
+  if (instances.length === 0) {
+    return {
+      resourcesProvisioned: 0,
+      resourcesSkipped: 0,
+      complete: true,
+      remaining: 0
+    };
+  }
+
+  const existingCountResult = await db.query(
+    `
+      SELECT COUNT(*)::int AS count
+      FROM provisioned_service_resources
+      WHERE request_id = $1
+        AND status IN ('policy_configured', 'provisioned', 'skipped')
+    `,
+    [requestId]
+  );
+
+  const existingCount = Number(existingCountResult.rows[0]?.count || 0);
+  const perUserCosting = isPerUserCosting(request.costing_mode);
+
+  if (existingCount >= instances.length && !perUserCosting) {
+    logEvent('service_resources_reused_existing', { requestId, count: existingCount });
+    return {
+      resourcesProvisioned: existingCount,
+      resourcesSkipped: 0,
+      complete: true,
+      remaining: 0
+    };
+  }
+
+  let provisioned = 0;
+  let skipped = 0;
+  const startedAt = Date.now();
+  const timeBudgetMs = getProvisionStepTimeBudgetMs();
+
+  for (const instance of instances) {
+    if (timeBudgetMs > 0 && Date.now() - startedAt >= timeBudgetMs) {
+      break;
+    }
+
+    const serviceId = Number(instance.service_id);
+    const existing = await db.query(
+      `
+        SELECT status
+        FROM provisioned_service_resources
+        WHERE request_id = $1 AND service_id = $2
+      `,
+      [requestId, serviceId]
+    );
+
+    const alreadyConfigured = ['policy_configured', 'provisioned', 'skipped'].includes(
+      existing.rows[0]?.status
+    );
+
+    if (alreadyConfigured && !perUserCosting) {
+      if (existing.rows[0].status === 'skipped') {
+        skipped += 1;
+      } else {
+        provisioned += 1;
       }
+      continue;
+    }
 
+    const result = await provisionPoliciesAcrossResourceGroups({
+      requestId,
+      instance,
+      resourceGroupNames,
+      location: request.location
+    });
+
+    const client = await db.connect();
+
+    try {
+      await client.query('BEGIN');
       await upsertProvisionedResource(client, {
         requestId,
         serviceId,
@@ -198,36 +280,52 @@ const provisionServiceResourcesForRequest = async (requestId) => {
         status: result.status,
         errorMessage: result.errorMessage
       });
+      await client.query('COMMIT');
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
 
-      if (result.status === 'skipped') {
+    if (result.status === 'skipped') {
+      skipped += 1;
+    } else if (result.status === 'policy_configured' || result.status === 'provisioned') {
+      provisioned += 1;
+    } else if (alreadyConfigured) {
+      if (existing.rows[0].status === 'skipped') {
         skipped += 1;
-      } else if (result.status === 'policy_configured' || result.status === 'provisioned') {
+      } else {
         provisioned += 1;
       }
     }
-
-    await client.query('COMMIT');
-
-    logEvent('service_resources_provision_completed', {
-      requestId,
-      provisioned,
-      skipped
-    });
-
-    return {
-      resourcesProvisioned: provisioned,
-      resourcesSkipped: skipped
-    };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
   }
+
+  const complete = perUserProgress.ready && provisioned + skipped >= instances.length;
+
+  logEvent('service_resources_provision_completed', {
+    requestId,
+    provisioned,
+    skipped,
+    resourceGroupCount: resourceGroupNames.length,
+    complete
+  });
+
+  return {
+    resourcesProvisioned: provisioned,
+    resourcesSkipped: skipped,
+    complete,
+    remaining: Math.max(0, instances.length - provisioned - skipped)
+  };
 };
 
 const getProvisionedResourcesForRequest = async (requestId) => {
-  const result = await db.query(
+  const status = await getServiceProvisionStatus(requestId);
+  return status.resources;
+};
+
+const getServiceProvisionStatus = async (requestId) => {
+  const resourcesResult = await db.query(
     `
       SELECT
         service_id,
@@ -244,7 +342,38 @@ const getProvisionedResourcesForRequest = async (requestId) => {
     [requestId]
   );
 
-  return result.rows;
+  const resources = resourcesResult.rows;
+
+  const [instancesResult, perUserProgress] = await Promise.all([
+    db.query(
+      `
+        SELECT COUNT(*)::int AS count
+        FROM request_service_instances
+        WHERE request_id = $1
+      `,
+      [requestId]
+    ),
+    getPerUserResourceGroupProgress(requestId)
+  ]);
+
+  const expectedInstances = Number(instancesResult.rows[0]?.count || 0);
+  const configuredCount = resources.filter((row) =>
+    ['policy_configured', 'provisioned', 'skipped'].includes(String(row.status || ''))
+  ).length;
+
+  const resourceGroupsReady = !perUserProgress.required || perUserProgress.ready;
+  const complete =
+    resourceGroupsReady &&
+    (expectedInstances === 0 ? true : configuredCount >= expectedInstances);
+
+  return {
+    resources,
+    count: resources.length,
+    complete,
+    remaining: resourceGroupsReady
+      ? Math.max(0, expectedInstances - configuredCount)
+      : perUserProgress.remaining
+  };
 };
 
 const repairInstancePoliciesForRequest = async (requestId) => {
@@ -296,20 +425,29 @@ const repairInstancePoliciesForRequest = async (requestId) => {
   }
 
   let repaired = 0;
+  const repairTasks = [];
 
   for (const instance of instances.rows) {
     for (const resourceGroupName of resourceGroupNames) {
-      await provisionServiceResource({
-        requestId,
-        serviceId: Number(instance.service_id),
-        serviceName: instance.service_name,
-        resourceGroupName,
-        location: request.location,
-        instanceOption: instance.instance_option
+      repairTasks.push({
+        instance,
+        resourceGroupName
       });
-      repaired += 1;
     }
   }
+
+  await runWithConcurrency(repairTasks, getServiceProvisionConcurrency(), async (task) => {
+    await provisionServiceResource({
+      requestId,
+      serviceId: Number(task.instance.service_id),
+      serviceName: task.instance.service_name,
+      resourceGroupName: task.resourceGroupName,
+      location: request.location,
+      instanceOption: task.instance.instance_option
+    });
+  });
+
+  repaired = repairTasks.length;
 
   logEvent('instance_policies_repaired', {
     requestId,
@@ -328,5 +466,6 @@ const repairInstancePoliciesForRequest = async (requestId) => {
 module.exports = {
   provisionServiceResourcesForRequest,
   getProvisionedResourcesForRequest,
+  getServiceProvisionStatus,
   repairInstancePoliciesForRequest
 };

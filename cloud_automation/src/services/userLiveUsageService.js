@@ -290,5 +290,6 @@ const attachLiveUsageToUsers = async (requestId, users, location, options = {}) 
 
 module.exports = {
   getLiveUsageForRequest,
-  attachLiveUsageToUsers
+  attachLiveUsageToUsers,
+  getSessionStatsByUser
 };

@@ -75,7 +75,10 @@ function openPopupShell(): Window | null {
 async function launchConsole(vmId: string, protocol?: 'rdp' | 'ssh' | 'vnc'): Promise<void> {
   const popup = openPopupShell();
   try {
-    const session = await openTenantVmConsole(vmId, protocol);
+    const session = await openTenantVmConsole(vmId, protocol, {
+      width: window.innerWidth,
+      height: window.innerHeight,
+    });
     if (popup) {
       popup.location.href = session.clientUrl;
     } else {

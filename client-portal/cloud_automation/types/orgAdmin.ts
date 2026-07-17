@@ -206,6 +206,7 @@ export interface OrgAdminRequestDetail {
   cleanupIntervalHours?: number | null;
   createdAt: string;
   liveSummary?: OrgAdminLiveSummary | null;
+  liveResourcesSkipped?: boolean;
 }
 
 export interface OrgAdminUser {

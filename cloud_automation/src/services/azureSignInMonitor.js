@@ -49,8 +49,10 @@ const REQUEST_NOT_EXPIRED_SQL = `
   )
 `;
 
-const STALE_SESSION_MINUTES = Number(process.env.SIGNIN_STALE_SESSION_MINUTES || 20);
-const SIGN_IN_LOOKBACK_MINUTES = Number(process.env.SIGNIN_MONITOR_LOOKBACK_MINUTES || 10);
+// Azure Portal rarely emits continuous sign-in events while a user stays logged in.
+// Keep sessions open longer, and treat recent portal sign-ins as presence heartbeats.
+const STALE_SESSION_MINUTES = Number(process.env.SIGNIN_STALE_SESSION_MINUTES || 90);
+const SIGN_IN_LOOKBACK_MINUTES = Number(process.env.SIGNIN_MONITOR_LOOKBACK_MINUTES || 180);
 
 /**
  * Create Microsoft Graph client with app-only authentication.
@@ -86,7 +88,9 @@ const createGraphClient = () => {
 const PASSWORD_INDEPENDENT_ERROR_CODES = new Set([
   50055,
   50125,
-  50056
+  50056,
+  // Keep me signed in interrupt — part of a successful interactive login flow.
+  50140
 ]);
 
 const ALLOWED_APPS = [
@@ -279,6 +283,33 @@ async function heartbeatUsageSession({
 async function openUsageSession(user, signIn, loginTime) {
   let access = { allowed: true, reason: 'ok' };
 
+  // Force-logout / admin block must apply for window-based labs too.
+  // (enable_daily_usage may be false while request_usage_windows is configured.)
+  const blockedUntil = user.blocked_until ? new Date(user.blocked_until) : null;
+  const hasActiveBlock =
+    user.status === 'Blocked' ||
+    user.azure_account_enabled === false ||
+    (blockedUntil &&
+      Number.isFinite(blockedUntil.getTime()) &&
+      blockedUntil.getTime() > Date.now());
+
+  if (hasActiveBlock && !isWindowEnforcementPaused(user)) {
+    console.log(
+      `[SIGNIN_MONITOR] User ${user.id} (${user.username}) denied — blocked` +
+        (blockedUntil ? ` until ${blockedUntil.toISOString()}` : '')
+    );
+
+    if (user.enforce_in_azure !== false) {
+      usageEnforcementService
+        .revokeAzureAccessForUser({ requestId: user.request_id, userId: user.id })
+        .catch((error) =>
+          console.error('[SIGNIN_MONITOR] Re-revoke after blocked sign-in failed:', error.message)
+        );
+    }
+
+    return { action: 'denied', reason: 'blocked' };
+  }
+
   if (isWindowEnforcementPaused(user)) {
     access = { allowed: true, reason: 'ok' };
   } else if (user.enable_daily_usage) {
@@ -450,10 +481,29 @@ async function openUsageSession(user, signIn, loginTime) {
   }
 }
 
+async function getLastClosedLogoutAt(requestId, userId) {
+  const result = await db.query(
+    `
+      SELECT logout_at
+      FROM user_usage_sessions
+      WHERE request_id = $1
+        AND user_id = $2
+        AND logout_at IS NOT NULL
+      ORDER BY logout_at DESC
+      LIMIT 1
+    `,
+    [requestId, userId]
+  );
+
+  return result.rows[0]?.logout_at ? new Date(result.rows[0].logout_at) : null;
+}
+
 async function handleActiveSignIn(signIn, user) {
   const signInId = signIn.id || null;
   const azureUserId = signIn.userId;
   const loginTime = new Date(signIn.createdDateTime);
+  const signInAgeMs = Date.now() - loginTime.getTime();
+  const reopenWindowMs = STALE_SESSION_MINUTES * 60 * 1000;
 
   const existingSession = await findOpenSessionForSignIn(user.request_id, user.id, loginTime);
 
@@ -469,14 +519,7 @@ async function handleActiveSignIn(signIn, user) {
 
   if (signInId && (await isSignInAlreadyProcessed(signInId))) {
     const nearbyOpenSession = await findOpenSessionForSignIn(user.request_id, user.id, loginTime);
-    if (
-      nearbyOpenSession &&
-      isSignInNearOpenSession(
-        loginTime,
-        nearbyOpenSession.login_at,
-        getSignInSessionProximityMs()
-      )
-    ) {
+    if (nearbyOpenSession) {
       return heartbeatUsageSession({
         sessionId: nearbyOpenSession.id,
         userId: user.id,
@@ -485,6 +528,23 @@ async function handleActiveSignIn(signIn, user) {
         requestId: user.request_id
       });
     }
+
+    // Session was closed as stale after this sign-in was processed.
+    // Reopen while the sign-in is still within the presence window.
+    if (Number.isFinite(signInAgeMs) && signInAgeMs <= reopenWindowMs) {
+      const lastLogoutAt = await getLastClosedLogoutAt(user.request_id, user.id);
+      const reopenAt =
+        lastLogoutAt && loginTime.getTime() <= lastLogoutAt.getTime()
+          ? new Date()
+          : loginTime;
+
+      console.log(
+        `[SIGNIN_MONITOR] Reopening session for ${user.username} after stale close (sign-in still recent).`
+      );
+
+      return openUsageSession(user, signIn, reopenAt);
+    }
+
     return { action: 'skipped' };
   }
 
@@ -510,6 +570,154 @@ async function handleActiveSignIn(signIn, user) {
 }
 
 /**
+ * Fetch audit-log sign-ins. Avoid $orderby+$filter combos that often return empty.
+ * Falls back to beta interactive events when v1 returns nothing.
+ */
+async function fetchRecentSignIns(client, sinceIso) {
+  const select =
+    'id,userId,userPrincipalName,createdDateTime,appDisplayName,resourceDisplayName,status,ipAddress';
+
+  try {
+    const response = await client
+      .api('/auditLogs/signIns')
+      .filter(`createdDateTime ge ${sinceIso}`)
+      .select(select)
+      .top(999)
+      .get();
+
+    if (response?.value?.length) {
+      return { source: 'v1', value: response.value };
+    }
+  } catch (error) {
+    console.warn(
+      `[SIGNIN_MONITOR] v1 signIns query failed (${error.statusCode || 'n/a'}): ${error.message}`
+    );
+  }
+
+  try {
+    // Some tenants only expose interactive events reliably on beta.
+    const response = await client
+      .api('/auditLogs/signIns')
+      .version('beta')
+      .filter(
+        `createdDateTime ge ${sinceIso} and signInEventTypes/any(t: t eq 'interactiveUser')`
+      )
+      .select(select)
+      .top(999)
+      .get();
+
+    if (response?.value?.length) {
+      return { source: 'beta-interactive', value: response.value };
+    }
+  } catch (error) {
+    console.warn(
+      `[SIGNIN_MONITOR] beta signIns query failed (${error.statusCode || 'n/a'}): ${error.message}`
+    );
+  }
+
+  return { source: 'none', value: [] };
+}
+
+/**
+ * Fallback when auditLogs/signIns is empty (common without Entra P1 or delayed logs).
+ * Uses users?$filter=signInActivity/... to find who signed in recently.
+ */
+async function reconcilePresenceFromSignInActivity(
+  client,
+  trackedUsersMap,
+  recentPortalActivityByUserId
+) {
+  const since = new Date(Date.now() - SIGN_IN_LOOKBACK_MINUTES * 60 * 1000);
+  const sinceIso = since.toISOString();
+  let sessionsTouched = 0;
+
+  let graphUsers = [];
+
+  try {
+    const response = await client
+      .api('/users')
+      .filter(`signInActivity/lastSuccessfulSignInDateTime ge ${sinceIso}`)
+      .select('id,userPrincipalName,signInActivity')
+      .top(999)
+      .header('ConsistencyLevel', 'eventual')
+      .count(true)
+      .get();
+    graphUsers = response?.value || [];
+  } catch (error) {
+    console.warn(
+      `[SIGNIN_MONITOR] signInActivity filter failed (${error.statusCode || 'n/a'}): ${error.message}`
+    );
+
+    try {
+      const response = await client
+        .api('/users')
+        .filter(`signInActivity/lastSignInDateTime ge ${sinceIso}`)
+        .select('id,userPrincipalName,signInActivity')
+        .top(999)
+        .header('ConsistencyLevel', 'eventual')
+        .count(true)
+        .get();
+      graphUsers = response?.value || [];
+    } catch (fallbackError) {
+      console.warn(
+        `[SIGNIN_MONITOR] signInActivity lastSignInDateTime filter failed (${fallbackError.statusCode || 'n/a'}): ${fallbackError.message}`
+      );
+      return { sessionsTouched: 0 };
+    }
+  }
+
+  console.log(
+    `[SIGNIN_MONITOR] signInActivity fallback found ${graphUsers.length} recently signed-in directory user(s).`
+  );
+
+  for (const graphUser of graphUsers) {
+    const normalizedUserId = graphUser.id ? String(graphUser.id).toLowerCase() : null;
+    if (!normalizedUserId || !trackedUsersMap.has(normalizedUserId)) {
+      continue;
+    }
+
+    const activity = graphUser.signInActivity || {};
+    const activityAtRaw =
+      activity.lastSuccessfulSignInDateTime ||
+      activity.lastSignInDateTime ||
+      activity.lastNonInteractiveSignInDateTime;
+
+    if (!activityAtRaw) {
+      continue;
+    }
+
+    const activityAt = new Date(activityAtRaw);
+    if (!Number.isFinite(activityAt.getTime()) || activityAt < since) {
+      continue;
+    }
+
+    const user = trackedUsersMap.get(normalizedUserId);
+    recentPortalActivityByUserId.set(Number(user.id), activityAt);
+
+    const syntheticSignIn = {
+      id: `signin-activity-${normalizedUserId}-${activityAt.toISOString()}`,
+      userId: graphUser.id,
+      userPrincipalName: graphUser.userPrincipalName || user.username,
+      createdDateTime: activityAt.toISOString(),
+      appDisplayName: 'Microsoft Azure Portal',
+      resourceDisplayName: 'Azure',
+      status: { errorCode: 0 },
+      ipAddress: null
+    };
+
+    const result = await handleActiveSignIn(syntheticSignIn, user);
+    if (result.action === 'created' || result.action === 'heartbeat') {
+      sessionsTouched += 1;
+      console.log(
+        `[SIGNIN_MONITOR] Presence via signInActivity for ${user.username} at ${activityAt.toISOString()} (${result.action}).`
+      );
+    }
+  }
+
+  return { sessionsTouched };
+}
+
+/**
  * Fetch recent Azure portal sign-ins and open/update usage sessions.
  */
 async function detectActiveSignIns() {
@@ -517,6 +725,8 @@ async function detectActiveSignIns() {
   let trackedCount = 0;
   let azurePortalCount = 0;
   let sessionsTouched = 0;
+  /** @type {Map<number, Date>} azure_users.id -> latest portal sign-in time */
+  const recentPortalActivityByUserId = new Map();
 
   try {
     console.log('[SIGNIN_MONITOR] Starting Azure sign-in detection...');
@@ -526,30 +736,29 @@ async function detectActiveSignIns() {
 
     if (trackedUsersMap.size === 0) {
       console.log('[SIGNIN_MONITOR] No provisioned users to track. Exiting.');
-      return 0;
+      return { sessionsTouched: 0, recentPortalActivityByUserId };
     }
 
     const client = createGraphClient();
     const since = new Date(Date.now() - SIGN_IN_LOOKBACK_MINUTES * 60 * 1000).toISOString();
     console.log(`[SIGNIN_MONITOR] Fetching sign-ins since ${since}...`);
 
-    const signIns = await client
-      .api('/auditLogs/signIns')
-      .filter(`createdDateTime ge ${since}`)
-      .select('id,userId,userPrincipalName,createdDateTime,appDisplayName,resourceDisplayName,status,ipAddress')
-      .top(999)
-      .orderby('createdDateTime desc')
-      .get();
+    const fetched = await fetchRecentSignIns(client, since);
+    const signInRows = fetched.value || [];
+    fetchedCount = signInRows.length;
 
-    if (!signIns?.value?.length) {
-      console.log('[SIGNIN_MONITOR] No sign-ins returned from Graph API.');
-      return 0;
+    if (!fetchedCount) {
+      console.warn(
+        '[SIGNIN_MONITOR] Audit-log signIns empty. Falling back to user signInActivity. ' +
+          'If this persists, confirm Entra ID P1/P2 and AuditLog.Read.All admin consent.'
+      );
+    } else {
+      console.log(
+        `[SIGNIN_MONITOR] Found ${fetchedCount} recent sign-in(s) via ${fetched.source}`
+      );
     }
 
-    fetchedCount = signIns.value.length;
-    console.log(`[SIGNIN_MONITOR] Found ${fetchedCount} recent sign-in(s)`);
-
-    const orderedSignIns = [...signIns.value].sort(
+    const orderedSignIns = [...signInRows].sort(
       (left, right) =>
         new Date(left.createdDateTime).getTime() - new Date(right.createdDateTime).getTime()
     );
@@ -572,6 +781,12 @@ async function detectActiveSignIns() {
 
       azurePortalCount++;
       const user = trackedUsersMap.get(normalizedUserId);
+      const signInAt = new Date(signIn.createdDateTime);
+      const previous = recentPortalActivityByUserId.get(Number(user.id));
+      if (!previous || signInAt > previous) {
+        recentPortalActivityByUserId.set(Number(user.id), signInAt);
+      }
+
       const result = await handleActiveSignIn(signIn, user);
 
       if (result.action === 'created' || result.action === 'heartbeat') {
@@ -579,11 +794,19 @@ async function detectActiveSignIns() {
       }
     }
 
+    // Always run signInActivity fallback for users audit logs missed (empty logs / filtering).
+    const activityResult = await reconcilePresenceFromSignInActivity(
+      client,
+      trackedUsersMap,
+      recentPortalActivityByUserId
+    );
+    sessionsTouched += Number(activityResult.sessionsTouched || 0);
+
     console.log(
-      `[SIGNIN_MONITOR] Completed. Fetched=${fetchedCount}, Tracked=${trackedCount}, AzurePortal=${azurePortalCount}, SessionsTouched=${sessionsTouched}`
+      `[SIGNIN_MONITOR] Completed. Fetched=${fetchedCount}, Tracked=${trackedCount}, AzurePortal=${azurePortalCount}, SessionsTouched=${sessionsTouched}, PresenceUsers=${recentPortalActivityByUserId.size}`
     );
 
-    return sessionsTouched;
+    return { sessionsTouched, recentPortalActivityByUserId };
   } catch (error) {
     console.error('[SIGNIN_MONITOR] Error fetching sign-ins:', error.message);
 
@@ -598,7 +821,7 @@ async function detectActiveSignIns() {
       );
     }
 
-    return 0;
+    return { sessionsTouched: 0, recentPortalActivityByUserId };
   }
 }
 
@@ -643,8 +866,9 @@ async function syncDailyUsageTracking({ requestId, userId, request }) {
 
 /**
  * Close sessions with no Azure sign-in heartbeat for STALE_SESSION_MINUTES.
+ * If Graph still shows recent portal activity for that user, heartbeat instead.
  */
-async function detectEndedSessions() {
+async function detectEndedSessions(recentPortalActivityByUserId = new Map()) {
   try {
     const staleThreshold = new Date(Date.now() - STALE_SESSION_MINUTES * 60 * 1000);
 
@@ -656,7 +880,8 @@ async function detectEndedSessions() {
           us.user_id,
           us.login_at,
           COALESCE(us.last_seen_at, us.login_at) AS effective_last_seen,
-          au.username
+          au.username,
+          au.azure_user_id
         FROM user_usage_sessions us
         JOIN azure_users au ON au.id = us.user_id AND au.request_id = us.request_id
         WHERE us.logout_at IS NULL
@@ -666,6 +891,35 @@ async function detectEndedSessions() {
     );
 
     for (const session of staleSessions.rows) {
+      const recentActivity = recentPortalActivityByUserId.get(Number(session.user_id));
+      if (recentActivity && recentActivity.getTime() >= staleThreshold.getTime()) {
+        await db.query(
+          `
+            UPDATE user_usage_sessions
+            SET last_seen_at = NOW()
+            WHERE id = $1
+              AND logout_at IS NULL
+          `,
+          [session.id]
+        );
+        await db.query(
+          `
+            UPDATE azure_users
+            SET last_signin_at = NOW(),
+                status = CASE
+                  WHEN status = 'Blocked' THEN status
+                  ELSE 'Active'
+                END
+            WHERE id = $1
+          `,
+          [session.user_id]
+        );
+        console.log(
+          `[SIGNIN_MONITOR] Kept session open for ${session.username} — recent portal activity at ${recentActivity.toISOString()}`
+        );
+        continue;
+      }
+
       const lastSeen = new Date(session.effective_last_seen);
       const loginAt = new Date(session.login_at);
 

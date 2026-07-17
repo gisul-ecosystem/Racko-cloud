@@ -129,8 +129,37 @@ interface ConsolePollOptions {
   mode?: 'cold-start' | 'resume';
 }
 
+/**
+ * Fresh Windows templates often ship with the built-in Administrator account
+ * disabled/expired and NLA-only RDP, which silently blocks Guacamole logins.
+ * Runs a one-shot guest-exec PowerShell fixup via the Proxmox QEMU agent so
+ * every new Windows VM is RDP-ready without manual intervention.
+ *
+ * Best-effort only — never throws. A failure here must not block consoleReady
+ * or any other part of the boot flow (guest agent may not support exec on all
+ * templates, WinRM policies may block it, etc.).
+ */
+async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
+  try {
+    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
+      command: 'powershell.exe',
+      args: [
+        '-Command',
+        "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0",
+      ],
+    });
+    logger.info('[VMConsolePoll] Windows RDP access fixup executed', { node, vmid });
+  } catch (err) {
+    logger.warn('[VMConsolePoll] Windows RDP access fixup failed — continuing anyway', {
+      node,
+      vmid,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
 async function startIpPolling(
-  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress'>,
+  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress' | 'consoleProtocol'>,
   trigger = 'unknown',
   options: ConsolePollOptions = {}
 ): Promise<void> {
@@ -194,6 +223,11 @@ async function startIpPolling(
       const consoleReadyAt = new Date().toISOString();
       await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
       logger.info(`[BulkVM] [vmid=${vmid}] STEP: consoleReady set to true | data: timestamp=${consoleReadyAt} assignedIp=${vm.ipAddress}`);
+
+      if (vm.consoleProtocol === 'rdp') {
+        await fixWindowsRdpAccess(node, vmid);
+      }
+
       logger.debug('[VMConsolePoll] consoleReady=true — guest agent confirmed boot', {
         vmId: vmObjectId.toString(),
         vmid,
@@ -2895,7 +2929,27 @@ export class VMService {
     vmId: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
     req: Request,
-    protocolOverride?: GuacamoleProtocol
+    protocolOverride?: GuacamoleProtocol,
+    dimensions?: { width?: number; height?: number }
+  ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
+    try {
+      return await this.openConsoleInternal(vmId, adminId, req, protocolOverride, dimensions);
+    } catch (err) {
+      logger.error('openConsole failed', {
+        vmId: vmId.toString(),
+        error: err instanceof Error ? err.message : String(err),
+        stack: err instanceof Error ? err.stack : undefined,
+      });
+      throw err;
+    }
+  }
+
+  private async openConsoleInternal(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    req: Request,
+    protocolOverride?: GuacamoleProtocol,
+    dimensions?: { width?: number; height?: number }
   ): Promise<{ protocol: GuacamoleProtocol; clientUrl: string; connectionId: string }> {
     const authReq = req as AuthenticatedRequest;
 
@@ -2981,6 +3035,8 @@ export class VMService {
         password,
         ignoreCert: true,
         securityMode: 'any',
+        width: dimensions?.width,
+        height: dimensions?.height,
       }
     );
 

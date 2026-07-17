@@ -17,7 +17,7 @@ export default function ExternalVmPricingHubPage() {
   return (
     <div className="mx-auto max-w-screen-xl space-y-8">
       <section>
-        <h1 className="mb-1 text-2xl font-bold text-gray-900">External VM Pricing</h1>
+        <h1 className="mb-1 text-2xl font-bold text-gray-900">External VM Pricing and Configuration</h1>
         <p className="mb-5 text-sm text-gray-500">
           Override catalog plan prices from the external provider
         </p>

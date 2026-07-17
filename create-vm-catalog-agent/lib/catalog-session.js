@@ -459,7 +459,7 @@ async function ensureBrowser() {
     page = await context.newPage();
 
     // Probe if session is valid — only treat real login redirects as needing auth
-    await page.goto(PRICING_URLS.linux, { waitUntil: 'domcontentloaded', timeout: 120000 });
+    await robustGoto(page, PRICING_URLS.linux, { waitUntil: 'domcontentloaded', timeout: 120000 });
     let needsLogin = page.url().includes('/login');
     if (!needsLogin) {
       // Some expired sessions land on a soft login form without changing the URL
@@ -478,7 +478,7 @@ async function ensureBrowser() {
 
     if (needsLogin) {
       console.log('[webyne] Logging in…');
-      await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+      await robustGoto(page, LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
       await page.waitForTimeout(1000);
 
       // Webyne rate-limits aggressive automation. Probe provider headers and
@@ -516,7 +516,7 @@ async function ensureBrowser() {
           const totalWait = waitMs + jitter;
           console.warn(`[webyne] Probe returned ${pre.status()} — waiting ${Math.round(totalWait/1000)}s before retry`);
           await page.waitForTimeout(totalWait);
-          await page.goto(LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
+          await robustGoto(page, LOGIN_URL, { waitUntil: 'domcontentloaded', timeout: 120000 });
           await page.waitForTimeout(1000);
         } catch (e) {
           console.warn('[webyne] Rate probe failed or limited, aborting login attempts:', e.message || e);
@@ -659,6 +659,29 @@ function getRateLimitInfo() {
 
 module.exports.getRateLimitInfo = getRateLimitInfo;
 
+async function robustGoto(p, url, options = {}) {
+  const maxAttempts = 3;
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await p.goto(url, options);
+      return;
+    } catch (err) {
+      lastError = err;
+      const message = String(err?.message || '').toLowerCase();
+      const aborted = /net::err_aborted|err_aborted|aborted/.test(message);
+      if (!aborted || attempt === maxAttempts) {
+        throw err;
+      }
+      console.warn(`[webyne] page.goto aborted on attempt ${attempt} for ${url}. Retrying...`);
+      await p.waitForTimeout(1000 * attempt);
+    }
+  }
+
+  throw lastError;
+}
+
 async function fetchPricingCategory(category) {
   const key = String(category || '').toLowerCase();
   const url = PRICING_URLS[key];
@@ -668,7 +691,7 @@ async function fetchPricingCategory(category) {
 
   const p = await ensureBrowser();
   console.log(`[webyne] Live scrape → ${url}`);
-  await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await robustGoto(p, url, { waitUntil: 'domcontentloaded', timeout: 120000 });
 
   // Wait for table rows to appear (DataTables / SPA)
   await p.waitForSelector('table tbody tr, table tr td', { timeout: 60000 }).catch(() => {});
@@ -761,14 +784,14 @@ async function purchaseAndScrape(category, {
 
   if (!scrapeOnly) {
     // Fresh CSRF from an authenticated admin page
-    await p.goto(PRICING_URLS[key] || PRICING_URLS.linux, {
+    await robustGoto(p, PRICING_URLS[key] || PRICING_URLS.linux, {
       waitUntil: 'domcontentloaded',
       timeout: 120000,
     });
     if (p.url().includes('/login')) {
       ready = false;
       await ensureBrowser();
-      await p.goto(PRICING_URLS[key] || PRICING_URLS.linux, {
+      await robustGoto(p, PRICING_URLS[key] || PRICING_URLS.linux, {
         waitUntil: 'domcontentloaded',
         timeout: 120000,
       });
@@ -869,11 +892,11 @@ async function scrapeLatestServer({
   const p = await ensureBrowser();
   const url = 'https://cloud.webyne.com/admin/server';
   console.log(`[webyne] Scraping servers → ${url}`);
-  await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+  await robustGoto(p, url, { waitUntil: 'domcontentloaded', timeout: 120000 });
   if (p.url().includes('/login')) {
     ready = false;
     await ensureBrowser();
-    await p.goto(url, { waitUntil: 'domcontentloaded', timeout: 120000 });
+    await robustGoto(p, url, { waitUntil: 'domcontentloaded', timeout: 120000 });
   }
 
   if (initialWaitMs > 0) {
@@ -1004,7 +1027,7 @@ async function scrapeLatestServer({
     try {
       if (p.url() !== detailUrl && !p.url().startsWith(detailUrl.split('?')[0])) {
         console.log(`[webyne] Opening server detail → ${detailUrl}`);
-        await p.goto(detailUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
+        await robustGoto(p, detailUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
       } else {
         console.log(`[webyne] Already on detail → ${p.url()}`);
       }

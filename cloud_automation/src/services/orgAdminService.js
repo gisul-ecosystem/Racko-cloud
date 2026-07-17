@@ -8,7 +8,17 @@ const usageService = require('./usageService');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroups, getResourceGroupNameForUser } = require('./userResourceGroupService');
-const { attachLiveUsageToUsers } = require('./userLiveUsageService');
+const { attachLiveUsageToUsers, getSessionStatsByUser } = require('./userLiveUsageService');
+const { runWithConcurrency } = require('../utils/concurrency');
+
+const LIVE_RESOURCE_USER_THRESHOLD = Math.max(
+  1,
+  Number(process.env.ORG_ADMIN_LIVE_RESOURCE_USER_THRESHOLD || 50)
+);
+const LIVE_RESOURCE_RG_CONCURRENCY = Math.max(
+  1,
+  Number(process.env.ORG_ADMIN_LIVE_RG_CONCURRENCY || 10)
+);
 const { isRequestExpired } = require('../utils/requestExpiry');
 const {
   getResourceGroupCosts,
@@ -108,11 +118,13 @@ const getLiveResourcesByUser = async (users, sharedResourceGroup, costingMode) =
     }
   }
 
-  await Promise.all(
-    [...rgNameByKey.entries()].map(async ([rgKey, rgName]) => {
+  await runWithConcurrency(
+    [...rgNameByKey.entries()],
+    LIVE_RESOURCE_RG_CONCURRENCY,
+    async ([rgKey, rgName]) => {
       const resources = await listResourcesForResourceGroup(rgName);
       resourcesByRg.set(rgKey, resources.map(formatArmResource));
-    })
+    }
   );
 
   for (const user of users) {
@@ -452,17 +464,76 @@ const loadResourceGroupDetail = async (requestId) => {
     ? await getStagingResourceGroups(requestId)
     : [];
 
-  const liveResourcesByUser = await getLiveResourcesByUser(
-    usersResult.rows,
-    request.azure_resource_group_name,
-    request.costing_mode
-  );
+  const skipLiveResourceSync = usersResult.rows.length > LIVE_RESOURCE_USER_THRESHOLD;
+  let liveResourcesByUser = new Map();
+  let liveResourceCountByUser = new Map();
 
-  const liveResourceCountByUser = new Map(
-    [...liveResourcesByUser.entries()].map(([userId, resources]) => [userId, resources.length])
-  );
+  if (skipLiveResourceSync) {
+    for (const row of usersResult.rows) {
+      const userId = Number(row.id);
+      const cachedCount = Number(row.last_resource_count || 0);
+      liveResourceCountByUser.set(userId, cachedCount);
+      liveResourcesByUser.set(userId, []);
+    }
 
-  await batchUpdateResourceCountHistory(liveResourceCountByUser);
+    const openSessionsResult = await db.query(
+      `
+        SELECT DISTINCT user_id
+        FROM user_usage_sessions
+        WHERE request_id = $1
+          AND logout_at IS NULL
+      `,
+      [requestId]
+    );
+
+    const activeUserIds = new Set(
+      openSessionsResult.rows.map((row) => Number(row.user_id)).filter(Number.isFinite)
+    );
+
+    const neverSyncedLimit = Math.max(
+      1,
+      Number(process.env.ORG_ADMIN_LIVE_RESOURCE_STALE_SYNC_BATCH || 20)
+    );
+    const neverSyncedUserIds = new Set(
+      usersResult.rows
+        .filter((row) => !row.resources_synced_at)
+        .slice(0, neverSyncedLimit)
+        .map((row) => Number(row.id))
+    );
+
+    const userIdsToSync = new Set([...activeUserIds, ...neverSyncedUserIds]);
+    const usersToSyncLive = usersResult.rows.filter((row) => userIdsToSync.has(Number(row.id)));
+
+    if (usersToSyncLive.length > 0) {
+      const syncedResourcesByUser = await getLiveResourcesByUser(
+        usersToSyncLive,
+        request.azure_resource_group_name,
+        request.costing_mode
+      );
+
+      const syncedCounts = new Map();
+
+      for (const [userId, resources] of syncedResourcesByUser.entries()) {
+        liveResourcesByUser.set(userId, resources);
+        liveResourceCountByUser.set(userId, resources.length);
+        syncedCounts.set(userId, resources.length);
+      }
+
+      await batchUpdateResourceCountHistory(syncedCounts);
+    }
+  } else {
+    liveResourcesByUser = await getLiveResourcesByUser(
+      usersResult.rows,
+      request.azure_resource_group_name,
+      request.costing_mode
+    );
+
+    liveResourceCountByUser = new Map(
+      [...liveResourcesByUser.entries()].map(([userId, resources]) => [userId, resources.length])
+    );
+
+    await batchUpdateResourceCountHistory(liveResourceCountByUser);
+  }
 
   const mappedUsers = usersResult.rows.map((row) => ({
     ...mapUserUsage(row),
@@ -658,7 +729,8 @@ const loadResourceGroupDetail = async (requestId) => {
       liveSummary: {
         ...liveSummary,
         activeSessions
-      }
+      },
+      liveResourcesSkipped: skipLiveResourceSync
     },
     users
   };
@@ -801,6 +873,83 @@ const getMonitoringLogs = async (requestId, { userId = null, limit = 50 } = {}) 
       details: row.details,
       createdAt: row.created_at
     }))
+  };
+};
+
+const getUserLiveResources = async (requestId, userId) => {
+  const normalizedRequestId = Number(requestId);
+  const normalizedUserId = Number(userId);
+
+  if (!Number.isInteger(normalizedRequestId) || normalizedRequestId <= 0) {
+    throw new AppError('Request id must be a positive integer.', 400);
+  }
+
+  if (!Number.isInteger(normalizedUserId) || normalizedUserId <= 0) {
+    throw new AppError('User id must be a positive integer.', 400);
+  }
+
+  const requestResult = await db.query(
+    `
+      SELECT
+        id,
+        costing_mode,
+        azure_resource_group_name
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [normalizedRequestId]
+  );
+
+  const request = requestResult.rows[0];
+
+  if (!request) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  const userResult = await db.query(
+    `
+      SELECT
+        id,
+        username,
+        azure_user_id,
+        azure_resource_group_name,
+        user_number,
+        peak_resource_count,
+        last_resource_count
+      FROM azure_users
+      WHERE request_id = $1
+        AND id = $2
+        AND COALESCE(is_deleted, false) = false
+      LIMIT 1
+    `,
+    [normalizedRequestId, normalizedUserId]
+  );
+
+  const user = userResult.rows[0];
+
+  if (!user) {
+    throw new AppError('User not found.', 404);
+  }
+
+  const syncedResourcesByUser = await getLiveResourcesByUser(
+    [user],
+    request.azure_resource_group_name,
+    request.costing_mode
+  );
+
+  const liveResources = syncedResourcesByUser.get(normalizedUserId) ?? [];
+  const liveResourceCount = liveResources.length;
+
+  await updateResourceCountHistory(normalizedUserId, liveResourceCount);
+
+  return {
+    userId: normalizedUserId,
+    liveResources,
+    liveResourceCount,
+    peakResourceCount: Math.max(Number(user.peak_resource_count || 0), liveResourceCount),
+    lastResourceCount: liveResourceCount,
+    syncedAt: new Date().toISOString()
   };
 };
 
@@ -1396,9 +1545,7 @@ const getDailyUsageForRequest = async (requestId) => {
           au.username,
           au.azure_user_id,
           au.azure_account_enabled,
-          COALESCE(dut.consumed_minutes, 0) AS tracked_consumed_minutes,
-          COALESCE(dut.limit_reached, FALSE) AS limit_reached,
-          dut.tracking_date
+          COALESCE(dut.limit_reached, FALSE) AS limit_reached
         FROM azure_users au
         LEFT JOIN daily_usage_tracking dut
           ON dut.azure_user_id = au.id
@@ -1410,10 +1557,16 @@ const getDailyUsageForRequest = async (requestId) => {
       [todayDate, requestId]
     );
 
+    // Use live merged session minutes (same source as Time Spent / detail),
+    // not the stale daily_usage_tracking.consumed_minutes counter.
+    const sessionStatsByUser = await getSessionStatsByUser(requestId, tz);
+
     const data = users.map((user) => {
+      const sessionStats = sessionStatsByUser.get(Number(user.id));
+      const liveConsumedMinutes = Number(sessionStats?.todayMinutes || 0);
       const windowAccess = evaluateWindowDailyLimitAccessSync({
         windows: usageWindows,
-        consumedMinutes: Number(user.tracked_consumed_minutes || 0),
+        consumedMinutes: liveConsumedMinutes,
         limitReachedInDb: user.limit_reached === true
       });
       const consumedMinutes = Number(windowAccess.consumedMinutes || 0);
@@ -2209,6 +2362,7 @@ module.exports = {
   listResourceGroups,
   listRequests,
   getResourceGroupDetail,
+  getUserLiveResources,
   getMonitoringLogs,
   deleteUser,
   deleteRequest,

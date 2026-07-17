@@ -4,7 +4,7 @@ import {
   linkAdminWalletCloudCharge,
   refundAdminWalletCloudCharge,
 } from './adminBillingApi';
-import { isTenantPortalClient } from './cloudAutomationRequest';
+import { isTenantPortalClient } from './portalClient';
 import {
   chargeTenantWalletForCloudRequest,
   getTenantWallet,

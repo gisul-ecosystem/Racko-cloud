@@ -24,7 +24,7 @@ const services = [
   },
   {
     id: 'external-vm-pricing',
-    name: 'External VM Pricing',
+    name: 'External VM Pricing and Configuration',
     href: '/super-admin-console/external-vm-pricing',
     icon: IndianRupee,
     description: 'Override catalog plan prices from the external provider',
