@@ -61,19 +61,6 @@ function isRateLimitExemptPath(path: string): boolean {
   return false;
 }
 
-// Debug logging for push endpoints — remove after issue is resolved
-app.use((req, _res, next) => {
-  if (req.path.includes('push') || req.path.includes('machines/push')) {
-    logger.info('[Gateway][Debug] Push endpoint hit', {
-      method: req.method,
-      path: req.path,
-      hasAuth: !!req.headers['authorization'],
-      hasCookie: !!req.headers['cookie'],
-    });
-  }
-  next();
-});
-
 app.use((req, res, next) => {
   if (isRateLimitExemptPath(req.path)) return next();
   return userRateLimiter(req, res, next);
