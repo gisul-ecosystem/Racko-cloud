@@ -559,39 +559,40 @@ class MachineManagerService {
       adminId: adminId.toString(),
     });
 
-    // Step 2: Push agents to all VMs in parallel.
-    // Each push emits an SSE event as soon as it completes.
-    let completedCount = 0;
-    const totalCount = machines.length;
-    const pushResults = await Promise.all(
-      machines.map((machine, i) =>
-        vmPushService.pushAgent({
-          machineId: machine._id,
-          ipAddress: vms[i].ipAddress,
-          os: vms[i].os,
-          username: vms[i].username,
-          password: vms[i].password,
-          accountToken: machine.accountToken,
-        }).then((result) => {
-          // Emit push result immediately as it completes
-          emitPushEvent(sessionId, {
-            type: 'push_result',
+    // Fire WinRM/SSH pushes in the background — do NOT await.
+    // The HTTP response is returned immediately after machine records are created.
+    // Push results are delivered to the frontend via the SSE stream as each push completes.
+    // This prevents gateway timeouts on large batches (30s WinRM timeout × N machines).
+    void (async () => {
+      let completedCount = 0;
+      const totalCount = machines.length;
+      await Promise.all(
+        machines.map((machine, i) =>
+          vmPushService.pushAgent({
             machineId: machine._id,
-            success: result.success,
-            error: result.error,
-          });
-          completedCount++;
-          // If all VMs had push failures (no agents to wait for), emit done
-          if (completedCount === totalCount) {
-            // done event is emitted here as a hint; agent_connected events may still follow
-            logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
-          }
-          return result;
-        })
-      )
-    );
+            ipAddress: vms[i].ipAddress,
+            os: vms[i].os,
+            username: vms[i].username,
+            password: vms[i].password,
+            accountToken: machine.accountToken,
+          }).then((result) => {
+            emitPushEvent(sessionId, {
+              type: 'push_result',
+              machineId: machine._id,
+              success: result.success,
+              error: result.error,
+            });
+            completedCount++;
+            if (completedCount === totalCount) {
+              logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
+            }
+            return result;
+          })
+        )
+      );
+    })();
 
-    return { machines, pushResults };
+    return { machines, pushResults: [] };
   }
 
   removePushSession(sessionId: string): void {
