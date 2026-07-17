@@ -1,5 +1,5 @@
 import { apiRequest } from './apiClient';
-import { getGatewayBaseUrl } from './gatewayUrl';
+import { getGatewayBaseUrl, getSseGatewayBaseUrl } from './gatewayUrl';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -236,8 +236,8 @@ export function openPushStatusStream(
   sessionId: string,
   streamToken: string
 ): EventSource {
-  const url = `${getGatewayBaseUrl()}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
-  return new EventSource(url);
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
+  return new EventSource(url, { withCredentials: true });
 }
 
 // ─── Enrollment Key API ───────────────────────────────────────────────────────
