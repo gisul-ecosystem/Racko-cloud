@@ -42,26 +42,10 @@ const RATE_LIMIT_SKIP_PATHS = new Set(['/api/v1/auth/refresh', '/api/v1/auth/val
 
 function isRateLimitExemptPath(path: string): boolean {
   if (RATE_LIMIT_SKIP_PATHS.has(path)) return true;
-  // All agent endpoints are exempt — agents send frequent heartbeats and job
-  // results that would otherwise hit the per-IP rate limit with many VMs.
   if (path.startsWith('/api/v1/agent/')) return true;
-  // SSE streams are long-lived and must not be rate limited
   if (path.includes('/push-stream') || path.includes('/stream')) return true;
   return /^\/api\/v1\/admin-vm-templates\/[a-f\d]{24}\/stream$/i.test(path);
 }
-
-// Debug logging for push endpoints — remove after issue is resolved
-app.use((req, _res, next) => {
-  if (req.path.includes('push') || req.path.includes('machines/push')) {
-    logger.info('[Gateway][Debug] Push endpoint hit', {
-      method: req.method,
-      path: req.path,
-      hasAuth: !!req.headers['authorization'],
-      hasCookie: !!req.headers['cookie'],
-    });
-  }
-  next();
-});
 
 app.use((req, res, next) => {
   if (isRateLimitExemptPath(req.path)) return next();
