@@ -580,8 +580,11 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
       console.log('[Push] pushAgentToVMs returned:', result.machines.length, 'machines');
       setMachines(result.machines);
 
-      // Initialize status map for all machines
-      setVmStatus(Object.fromEntries(result.machines.map((m) => [m._id, { agentConnected: false }])));
+      // Initialize status map — merge with any SSE events already received before API returned
+      setVmStatus((prev) => {
+        const init = Object.fromEntries(result.machines.map((m) => [m._id, { agentConnected: false }]));
+        return { ...init, ...prev };
+      });
 
       // Move to step 2 immediately after push API responds
       console.log('[Push] Moving to step 2');
