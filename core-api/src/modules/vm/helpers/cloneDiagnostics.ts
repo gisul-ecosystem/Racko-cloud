@@ -1,0 +1,171 @@
+import { proxmoxClient } from '../../../utils/proxmoxClient';
+import { logger } from '../../../utils/logger';
+import { ProxmoxConnectionError } from '../../../utils/errors';
+
+const DISK_KEY_PATTERN = /^(scsi|ide|sata|virtio|efidisk|unused)\d+$/i;
+
+export type BulkClonePath =
+  | 'standard_bulk'
+  | 'golden_seed'
+  | 'golden_delivery';
+
+export interface SourceVmDiagnostics {
+  vmid: number;
+  node: string;
+  name?: string;
+  template?: number;
+  powerState?: string;
+  disks: Record<string, string>;
+  bios?: string;
+  machine?: string;
+  efidisk0?: string;
+  scsi0?: string;
+}
+
+/** Pull disk-related keys from a Proxmox VM config object. */
+export function extractDiskConfig(config: Record<string, unknown>): Record<string, string> {
+  const disks: Record<string, string> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (typeof value === 'string' && DISK_KEY_PATTERN.test(key)) {
+      disks[key] = value;
+    }
+  }
+  return disks;
+}
+
+/** Parse storage pool from a Proxmox disk string, e.g. "nvme-pool-2:vm-109-disk-0,size=32G". */
+export function parseDiskStorage(diskValue: string | undefined): string | undefined {
+  if (!diskValue) return undefined;
+  const colonIdx = diskValue.indexOf(':');
+  if (colonIdx <= 0) return undefined;
+  return diskValue.slice(0, colonIdx);
+}
+
+/** Fetch source VM/template config and power state for clone diagnostics. */
+export async function fetchSourceVmDiagnostics(
+  node: string,
+  vmid: number
+): Promise<SourceVmDiagnostics> {
+  const configResponse = await proxmoxClient.get<{ data: Record<string, unknown> }>(
+    `/nodes/${node}/qemu/${vmid}/config`
+  );
+  const cfg = configResponse.data.data;
+  const disks = extractDiskConfig(cfg);
+
+  let powerState: string | undefined;
+  try {
+    const statusResponse = await proxmoxClient.get<{ data: { status: string } }>(
+      `/nodes/${node}/qemu/${vmid}/status/current`
+    );
+    powerState = statusResponse.data.data.status;
+  } catch {
+    powerState = 'unknown';
+  }
+
+  return {
+    vmid,
+    node,
+    name: typeof cfg.name === 'string' ? cfg.name : undefined,
+    template: typeof cfg.template === 'number' ? cfg.template : undefined,
+    powerState,
+    disks,
+    bios: typeof cfg.bios === 'string' ? cfg.bios : undefined,
+    machine: typeof cfg.machine === 'string' ? cfg.machine : undefined,
+    efidisk0: typeof cfg.efidisk0 === 'string' ? cfg.efidisk0 : undefined,
+    scsi0: typeof cfg.scsi0 === 'string' ? cfg.scsi0 : undefined,
+  };
+}
+
+/** Summarize disk placement for log comparison between base template and golden template. */
+export function summarizeDiskPlacement(diag: SourceVmDiagnostics): Record<string, string | undefined> {
+  const summary: Record<string, string | undefined> = {};
+  for (const [key, value] of Object.entries(diag.disks)) {
+    summary[key] = parseDiskStorage(value);
+  }
+  return summary;
+}
+
+/**
+ * Resolve the correct storage pool to use for cloning a template.
+ *
+ * Rules (in priority order):
+ * 1. If shared storage (Ceph/NFS) exists on the node → use it (enables live-migration later)
+ * 2. Otherwise → use the exact storage the template's scsi0 disk lives on
+ * 3. Fallback → undefined (let Proxmox decide, only for linked clones where storage param is not sent)
+ *
+ * For linked clones, always pass undefined — Proxmox enforces same storage automatically.
+ */
+export async function resolveCloneStorage(
+  node: string,
+  templateScsi0: string | undefined,
+  cloneType: 'dedicated_storage' | 'dynamic_storage'
+): Promise<string | undefined> {
+  // Linked clones: never send a storage param — Proxmox enforces template storage
+  if (cloneType === 'dynamic_storage') return undefined;
+
+  // Fetch node storage list
+  const res = await proxmoxClient.get<{
+    data: Array<{ storage: string; avail: number; active: number; enabled: number; content: string; shared?: number }>;
+  }>(`/nodes/${node}/storage`);
+
+  const eligible = res.data.data.filter(
+    (s) => s.active === 1 && s.enabled === 1 && s.content?.includes('images')
+  );
+
+  // Prefer shared storage (Ceph/NFS) — supports live-migration
+  const shared = eligible.filter((s) => s.shared === 1).sort((a, b) => b.avail - a.avail);
+  if (shared.length > 0) return shared[0]!.storage;
+
+  // No shared storage — use the exact storage the template disk is on
+  const templateStorage = parseDiskStorage(templateScsi0);
+  if (templateStorage) {
+    const templatePoolExists = eligible.some((s) => s.storage === templateStorage);
+    if (templatePoolExists) return templateStorage;
+  }
+
+  // Last fallback: local pool with most free space
+  const local = eligible.sort((a, b) => b.avail - a.avail);
+  return local[0]?.storage;
+}
+
+export function bulkCloneDiagLog(
+  message: string,
+  meta: Record<string, unknown> = {}
+): void {
+  logger.info(`[BulkClone][Diag] ${message}`, meta);
+}
+
+/** Resolve the best error message for logs — Proxmox detail is in internalMessage. */
+export function resolveCloneErrorMessage(error: unknown): string {
+  if (error instanceof ProxmoxConnectionError) {
+    return error.internalMessage || error.message;
+  }
+  if (error instanceof Error) {
+    return error.message;
+  }
+  return String(error);
+}
+
+/** LVM / cloudinit volume name collisions (not generic "already exists" errors). */
+export function isLvmConflictError(errorMsg: string): boolean {
+  const lower = errorMsg.toLowerCase();
+  if (lower.includes('lvcreate')) return true;
+  if (/vm-\d+-cloudinit/.test(lower)) return true;
+  if (lower.includes('logical volume') && lower.includes('exist')) return true;
+  if (lower.includes('cloudinit') && lower.includes('already exists')) return true;
+  return false;
+}
+
+/**
+ * Bulk clone reroute: only when Proxmox was unreachable (no HTTP response).
+ * Skips task failures, LVM conflicts, and API errors with a real status code.
+ */
+export function shouldAttemptConnectivityReroute(
+  error: unknown,
+  errorMsg: string
+): boolean {
+  if (!(error instanceof ProxmoxConnectionError)) return false;
+  if (isLvmConflictError(errorMsg)) return false;
+  if (errorMsg.includes('(upid:')) return false;
+  return error.httpStatus === 0;
+}

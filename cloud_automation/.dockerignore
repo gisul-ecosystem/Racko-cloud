@@ -1,0 +1,15 @@
+node_modules
+npm-debug.log*
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+.DS_Store
+*.md
+test_*.js
+debug_roles.js
+FIX_CLEANUP_LOGS.sql
+test_enforcement_setup.sql
+database
+scripts
