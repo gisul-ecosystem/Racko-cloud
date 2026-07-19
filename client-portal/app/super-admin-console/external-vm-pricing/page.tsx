@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud } from 'lucide-react';
+import { Cloud, HardDrive } from 'lucide-react';
 
 const providers = [
   {
@@ -10,6 +10,13 @@ const providers = [
     href: '/super-admin-console/external-vm-pricing/webyne',
     icon: Cloud,
     description: 'Override Webyne catalog plan prices (Linux, Windows, GPU)',
+  },
+  {
+    id: 'dedicated-server',
+    name: 'Dedicated Server Pricing',
+    href: '/super-admin-console/external-vm-pricing/dedicated-server',
+    icon: HardDrive,
+    description: 'Define dedicated server plans and monthly pricing',
   },
 ] as const;
 

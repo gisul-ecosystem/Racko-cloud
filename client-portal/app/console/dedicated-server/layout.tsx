@@ -3,13 +3,13 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../context/AuthContext';
-import { MachineManagerSidebar } from '../../../components/console/MachineManagerSidebar';
+import { DedicatedServerSidebar } from '../../../components/console/DedicatedServerSidebar';
 import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar';
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
 import { RequireAdminService } from '../../../components/console/RequireAdminService';
 
-export default function MachineManagerLayout({ children }: { children: React.ReactNode }) {
+export default function DedicatedServerLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
   const { sidebarOpen, setSidebarOpen, toggleSidebar } = useServiceShell(true);
@@ -36,11 +36,11 @@ export default function MachineManagerLayout({ children }: { children: React.Rea
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
 
   return (
-    <RequireAdminService serviceKey="machine-manager">
+    <RequireAdminService serviceKey="dedicated-server">
       <ServiceShellLayout
         sidebarOpen={sidebarOpen}
         sidebar={
-          <MachineManagerSidebar
+          <DedicatedServerSidebar
             sidebarOpen={sidebarOpen}
             onCloseSidebar={() => setSidebarOpen(false)}
           />
@@ -48,8 +48,8 @@ export default function MachineManagerLayout({ children }: { children: React.Rea
         topBar={
           <RackoGlobalTopBar
             onToggleSidebar={toggleSidebar}
-            title="Machine Manager"
-            subtitle="Install &amp; manage software"
+            title="Dedicated Server"
+            subtitle="Request & manage dedicated servers"
           />
         }
         mainClassName="p-6 lg:p-8"

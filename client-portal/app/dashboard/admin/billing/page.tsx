@@ -37,6 +37,7 @@ const REASON_LABELS: Record<string, string> = {
   vm_creation: 'VM Creation',
   azure_lab_request: 'Azure Lab Request',
   aws_lab_request: 'AWS Lab Request',
+  dedicated_server_purchase: 'Dedicated Server',
   manual_credit: 'Manual Credit',
   razorpay_topup: 'Razorpay Top-up',
   refund: 'Refund',

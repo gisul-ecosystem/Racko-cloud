@@ -30,6 +30,7 @@ import {
 } from '../../utils/errors';
 import type { RegisterDto, LoginDto, LoginResult, TokenValidationResult } from './auth.types';
 import type { UserRole } from '../../types';
+import { adminServicesService } from '../adminServices/adminServices.service';
 
 /** Secure only on HTTPS — HTTP sites must not set Secure cookies. */
 function isRefreshCookieSecure(): boolean {
@@ -147,6 +148,16 @@ export class AuthService {
     });
 
     await user.save();
+
+    // New platform admins only get VM Catalog + Dedicated Server by default
+    try {
+      await adminServicesService.seedDefaultsForNewAdmin(user._id);
+    } catch (seedErr) {
+      logger.warn('[Auth] Failed to seed admin services on register', {
+        userId: user._id.toString(),
+        error: seedErr instanceof Error ? seedErr.message : String(seedErr),
+      });
+    }
 
     await sendVerificationEmail(data.email, rawToken);
 

@@ -12,7 +12,8 @@ export type NotificationType =
   | 'vm_job'
   | 'tenant_order'
   | 'vm_plan_expired'
-  | 'catalog_vm_request';
+  | 'catalog_vm_request'
+  | 'dedicated_server_request';
 
 export interface AppNotification {
   _id: string;
