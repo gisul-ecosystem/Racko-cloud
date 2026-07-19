@@ -408,13 +408,16 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 }
 
 // ─── FLOW 2: VM (SSH/WinRM Push) ──────────────────────────────────────────────
-function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
+function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; onStepChange?: (step: number) => void }) {
   const { addToast } = useToast();
   const [step, setStep] = useState(1);
   const [vmRows, setVmRows] = useState<VMPushTarget[]>([{ name: '', ipAddress: '', os: 'linux', username: '', password: '' }]);
   const [machines, setMachines] = useState<IMachine[]>([]);
   const [pushing, setPushing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Notify parent when step changes — used to hide "Change setup type" on steps 2+
+  useEffect(() => { onStepChange?.(step); }, [step, onStepChange]);
 
   // Step 2 — per-machine live status
   type VMStatus = { pushSuccess?: boolean; pushError?: string; agentConnected: boolean };
@@ -493,24 +496,18 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
   const handlePush = async () => {
     const valid = vmRows.filter((r) => r.name.trim() && r.ipAddress.trim() && r.username.trim() && r.password.trim());
     if (!valid.length) { addToast('error', 'Fill in all required fields.'); return; }
-    console.log('[Push] Starting push for', valid.length, 'VMs');
     setPushing(true);
 
     try {
       // Generate a unique session ID for this push batch
       const sessionId = `push-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      console.log('[Push] sessionId:', sessionId);
 
       // Issue SSE stream ticket first (before opening EventSource)
-      console.log('[Push] Issuing stream ticket...');
       const { streamToken } = await issuePushStreamTicket(sessionId);
-      console.log('[Push] Stream ticket received:', streamToken.slice(0, 10) + '...');
 
       // Open SSE stream
-      console.log('[Push] Opening SSE stream...');
       const sse = openPushStatusStream(sessionId, streamToken);
       sseRef.current = sse;
-      console.log('[Push] SSE stream opened');
 
       // Start 3-minute countdown
       setSecondsLeft(180);
@@ -533,14 +530,10 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 
       // Handle SSE events
       sse.onmessage = (e: MessageEvent) => {
-        console.log('[Push] SSE raw message received:', e.data);
         type PushEvent = { type: string; machineId: string; success?: boolean; error?: string; machineName?: string };
         try {
           const event = JSON.parse(e.data as string) as PushEvent;
-          console.log('[Push] SSE event parsed:', event.type, event.machineId, event.success);
-          if (event.type === 'ping') {
-            console.log('[Push] SSE ping received — stream is alive ✓');
-          } else if (event.type === 'push_result') {
+          if (event.type === 'push_result') {
             setVmStatus((prev) => ({
               ...prev,
               [event.machineId]: {
@@ -560,24 +553,17 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
               },
             }));
           }
-        } catch (parseErr) {
-          console.error('[Push] SSE parse error:', parseErr, 'raw:', e.data);
+        } catch {
+          // ignore malformed SSE events
         }
       };
 
-      sse.onopen = () => {
-        console.log('[Push] SSE connection opened, readyState:', sse.readyState);
-      };
-
-      sse.onerror = (e) => {
-        console.error('[Push] SSE error/close, readyState:', sse.readyState, e);
+      sse.onerror = () => {
         sse.close();
       };
 
       // Trigger the actual push (runs in parallel with SSE receiving events)
-      console.log('[Push] Calling pushAgentToVMs...');
       const result = await pushAgentToVMs(valid, sessionId);
-      console.log('[Push] pushAgentToVMs returned:', result.machines.length, 'machines');
       setMachines(result.machines);
 
       // Initialize status map — merge with any SSE events already received before API returned
@@ -587,10 +573,8 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
       });
 
       // Move to step 2 immediately after push API responds
-      console.log('[Push] Moving to step 2');
       setStep(2);
     } catch (err) {
-      console.error('[Push] ERROR:', err);
       addToast('error', err instanceof ApiError ? err.message : 'Failed to push agent.');
       cleanup();
     } finally {
@@ -686,7 +670,7 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
                 }
               </p>
             </div>
-            {!timeoutReached && !allResolved && (
+            {(timeoutReached || allResolved) && (
               <button onClick={handleContinue}
                 className="text-sm text-gray-400 hover:text-gray-700 underline">
                 Skip waiting
@@ -964,6 +948,7 @@ export default function SetupWizardPage() {
   const { isAuthenticated } = useAuth();
   const { toasts, addToast, dismiss } = useToast();
   const [path, setPath] = useState<SetupPath>(null);
+  const [vmStep, setVmStep] = useState(1);
 
   return (
     <div className="max-w-3xl">
@@ -979,13 +964,14 @@ export default function SetupWizardPage() {
 
         {path && (
           <div>
-            <button onClick={() => setPath(null)}
-              className="mb-5 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700">
-              ← Change setup type
-            </button>
-
+            {(path !== 'vm' || vmStep === 1) && (
+              <button onClick={() => { setPath(null); setVmStep(1); }}
+                className="mb-5 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700">
+                ← Change setup type
+              </button>
+            )}
             {path === 'physical' && <PhysicalFlow isAuthenticated={isAuthenticated} />}
-            {path === 'vm' && <VMFlow isAuthenticated={isAuthenticated} />}
+            {path === 'vm' && <VMFlow isAuthenticated={isAuthenticated} onStepChange={setVmStep} />}
             {path === 'template' && <TemplateFlow isAuthenticated={isAuthenticated} />}
           </div>
         )}
