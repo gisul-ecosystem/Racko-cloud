@@ -7,6 +7,7 @@ import { ConsoleProvider, useConsoleShell } from '../../components/console/Conso
 import { ConsoleSidebar } from '../../components/console/ConsoleSidebar';
 import { ConsoleTopBar } from '../../components/console/ConsoleTopBar';
 import { ServiceShellLayout } from '../../components/console/ServiceShellLayout';
+import { AdminServicesProvider } from '../../context/AdminServicesContext';
 
 function ConsoleShell({ children }: { children: React.ReactNode }) {
   const { sidebarOpen } = useConsoleShell();
@@ -33,7 +34,8 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     (pathname?.startsWith('/console/machine-manager') ?? false) ||
     (pathname?.startsWith('/console/aws') ?? false) ||
     (pathname?.startsWith('/console/docs') ?? false) ||
-    (pathname?.startsWith('/console/create-vm') ?? false);
+    (pathname?.startsWith('/console/create-vm') ?? false) ||
+    (pathname?.startsWith('/console/dedicated-server') ?? false);
 
   useEffect(() => {
     if (isLoading) return;
@@ -58,13 +60,15 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
 
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
 
-  if (usesOwnShell) {
-    return <>{children}</>;
-  }
-
   return (
-    <ConsoleProvider>
-      <ConsoleShell>{children}</ConsoleShell>
-    </ConsoleProvider>
+    <AdminServicesProvider>
+      {usesOwnShell ? (
+        children
+      ) : (
+        <ConsoleProvider>
+          <ConsoleShell>{children}</ConsoleShell>
+        </ConsoleProvider>
+      )}
+    </AdminServicesProvider>
   );
 }

@@ -7,6 +7,7 @@ import { CreateVmCatalogSidebar } from '../../../components/console/CreateVmCata
 import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar';
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
+import { RequireAdminService } from '../../../components/console/RequireAdminService';
 
 export default function CreateVmCatalogLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -35,24 +36,26 @@ export default function CreateVmCatalogLayout({ children }: { children: React.Re
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
 
   return (
-    <ServiceShellLayout
-      sidebarOpen={sidebarOpen}
-      sidebar={
-        <CreateVmCatalogSidebar
-          sidebarOpen={sidebarOpen}
-          onCloseSidebar={() => setSidebarOpen(false)}
-        />
-      }
-      topBar={
-        <RackoGlobalTopBar
-          onToggleSidebar={toggleSidebar}
-          title="VM Catalog"
-          subtitle="Browse plans & manage VMs"
-        />
-      }
-      mainClassName="p-6 lg:p-8"
-    >
-      {children}
-    </ServiceShellLayout>
+    <RequireAdminService serviceKey="create-vm">
+      <ServiceShellLayout
+        sidebarOpen={sidebarOpen}
+        sidebar={
+          <CreateVmCatalogSidebar
+            sidebarOpen={sidebarOpen}
+            onCloseSidebar={() => setSidebarOpen(false)}
+          />
+        }
+        topBar={
+          <RackoGlobalTopBar
+            onToggleSidebar={toggleSidebar}
+            title="VM Catalog"
+            subtitle="Browse plans & manage VMs"
+          />
+        }
+        mainClassName="p-6 lg:p-8"
+      >
+        {children}
+      </ServiceShellLayout>
+    </RequireAdminService>
   );
 }

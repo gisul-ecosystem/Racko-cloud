@@ -133,7 +133,8 @@ export class AdminBillingService {
       | 'vm_creation'
       | 'azure_lab_request'
       | 'aws_lab_request'
-      | 'catalog_vm_purchase' = 'vm_creation'
+      | 'catalog_vm_purchase'
+      | 'dedicated_server_purchase' = 'vm_creation'
   ): Promise<AdminWalletPublic> {
     if (amount <= 0) throw new ValidationError('Amount must be positive.');
     const oid = new mongoose.Types.ObjectId(userId);

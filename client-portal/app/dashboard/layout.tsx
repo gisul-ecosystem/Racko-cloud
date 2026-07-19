@@ -7,6 +7,8 @@ import Image from 'next/image';
 import { useAuth } from '../../context/AuthContext';
 import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
 import { VpsAdminShell } from '../../components/console/VpsAdminShell';
+import { AdminServicesProvider } from '../../context/AdminServicesContext';
+import { RequireAdminService } from '../../components/console/RequireAdminService';
 
 import {
   LayoutDashboard,
@@ -110,7 +112,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }
 
   if (user.role === 'admin') {
-    return <VpsAdminShell>{children}</VpsAdminShell>;
+    const isBilling = pathname.startsWith('/dashboard/admin/billing');
+    return (
+      <AdminServicesProvider>
+        {isBilling ? (
+          <VpsAdminShell>{children}</VpsAdminShell>
+        ) : (
+          <RequireAdminService serviceKey="vm-management">
+            <VpsAdminShell>{children}</VpsAdminShell>
+          </RequireAdminService>
+        )}
+      </AdminServicesProvider>
+    );
   }
 
   const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'super_admin' | 'user'));

@@ -13,6 +13,7 @@ import {
   Users,
 } from 'lucide-react';
 import { fetchCatalogVmRequesters } from '@/lib/vmCatalogApi';
+import { fetchDedicatedRequesters } from '@/lib/dedicatedServerApi';
 
 const services = [
   {
@@ -35,7 +36,15 @@ const services = [
     href: '/super-admin-console/webyne-vm-requests',
     icon: ClipboardList,
     description: 'Review catalog VM buy requests from admins, grouped by requester',
-    showPendingBadge: true,
+    badgeKey: 'webyne' as const,
+  },
+  {
+    id: 'dedicated-server-requests',
+    name: 'Dedicated Server Request',
+    href: '/super-admin-console/dedicated-server-requests',
+    icon: ClipboardList,
+    description: 'Review dedicated server requests and attach machines manually',
+    badgeKey: 'dedicated' as const,
   },
   {
     id: 'azure',
@@ -76,17 +85,24 @@ const services = [
 
 export default function SuperAdminConsolePage() {
   const [webynePendingCount, setWebynePendingCount] = useState(0);
+  const [dedicatedPendingCount, setDedicatedPendingCount] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const requesters = await fetchCatalogVmRequesters();
+        const [webyne, dedicated] = await Promise.all([
+          fetchCatalogVmRequesters().catch(() => []),
+          fetchDedicatedRequesters().catch(() => []),
+        ]);
         if (cancelled) return;
-        const total = requesters.reduce((sum, r) => sum + r.pendingCount, 0);
-        setWebynePendingCount(total);
+        setWebynePendingCount(webyne.reduce((sum, r) => sum + r.pendingCount, 0));
+        setDedicatedPendingCount(dedicated.reduce((sum, r) => sum + r.pendingCount, 0));
       } catch {
-        if (!cancelled) setWebynePendingCount(0);
+        if (!cancelled) {
+          setWebynePendingCount(0);
+          setDedicatedPendingCount(0);
+        }
       }
     })();
     return () => {
@@ -103,8 +119,10 @@ export default function SuperAdminConsolePage() {
           {services.map((service) => {
             const Icon = service.icon;
             const badgeCount =
-              'showPendingBadge' in service && service.showPendingBadge
-                ? webynePendingCount
+              'badgeKey' in service
+                ? service.badgeKey === 'webyne'
+                  ? webynePendingCount
+                  : dedicatedPendingCount
                 : 0;
 
             return (
@@ -116,7 +134,7 @@ export default function SuperAdminConsolePage() {
                 {badgeCount > 0 ? (
                   <span
                     className="absolute right-3 top-3 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#B91C1C] px-1.5 text-[11px] font-bold text-white"
-                    aria-label={`${badgeCount} pending Webyne VM request${badgeCount === 1 ? '' : 's'}`}
+                    aria-label={`${badgeCount} pending`}
                   >
                     {badgeCount > 99 ? '99+' : badgeCount}
                   </span>
