@@ -181,29 +181,29 @@ export default function AdminBillingPage() {
               </div>
             </div>
 
-            {/* Top-up form */}
-            <form onSubmit={(e) => void handleTopup(e)} className="flex items-center gap-2">
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={topupAmount}
-                onChange={(e) => setTopupAmount(e.target.value)}
-                placeholder="Amount (₹)"
-                className="w-36 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
-              />
-              <button
-                type="submit"
-                disabled={topupLoading || !topupAmount || Number(topupAmount) <= 0}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-50"
-              >
-                {topupLoading
-                  ? <Loader2 className="h-4 w-4 animate-spin" />
-                  : <Plus className="h-4 w-4" />
-                }
-                Top up
-              </button>
-            </form>
+            {/* Online Razorpay top-up — temporarily disabled */}
+            <div className="flex flex-col items-end gap-1">
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={topupAmount}
+                  disabled
+                  placeholder="Amount (₹)"
+                  className="w-36 rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-400"
+                />
+                <button
+                  type="button"
+                  disabled
+                  className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white opacity-50"
+                >
+                  <Plus className="h-4 w-4" />
+                  Top up
+                </button>
+              </div>
+              <p className="text-xs text-gray-500">Online payment — coming soon</p>
+            </div>
           </div>
 
           {pendingMsg && (

@@ -13,7 +13,8 @@ import {
   type ICatalogVm,
   type VmCatalogCategory,
 } from '../../../../lib/vmCatalogApi';
-import { ChevronDown, ChevronUp, Plus, Server } from 'lucide-react';
+import { ChevronDown, ChevronUp, Monitor, Plus, Server } from 'lucide-react';
+import { useRouter } from 'next/navigation';
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('en-US', {
@@ -99,6 +100,7 @@ export default function MyVmsPage() {
   const { isAuthenticated } = useAuth();
   const { vms, loading, error, refetch } = useVmCatalogVms(isAuthenticated);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const router = useRouter();
 
   return (
     <div className="max-w-screen-xl">
@@ -183,6 +185,9 @@ export default function MyVmsPage() {
                         onToggle={() =>
                           setExpandedId((prev) => (prev === vm._id ? null : vm._id))
                         }
+                        onOpenConsole={() =>
+                          router.push(`/console/create-vm/my-vms/${vm._id}/console`)
+                        }
                       />
                     );
                   })}
@@ -202,12 +207,14 @@ function FragmentRow({
   isActive,
   isExpanded,
   onToggle,
+  onOpenConsole,
 }: {
   vm: ICatalogVm;
   index: number;
   isActive: boolean;
   isExpanded: boolean;
   onToggle: () => void;
+  onOpenConsole: () => void;
 }) {
   return (
     <>
@@ -249,18 +256,28 @@ function FragmentRow({
         <td className="px-4 py-3.5 text-gray-500">{formatDateTime(vm.createdAt)}</td>
         <td className="px-4 py-3.5 text-right">
           {isActive ? (
-            <button
-              type="button"
-              onClick={onToggle}
-              className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-            >
-              {isExpanded ? (
-                <ChevronUp className="h-3.5 w-3.5" />
-              ) : (
-                <ChevronDown className="h-3.5 w-3.5" />
-              )}
-              {isExpanded ? 'Hide' : 'Connect'}
-            </button>
+            <div className="inline-flex flex-wrap items-center justify-end gap-2">
+              <button
+                type="button"
+                onClick={onOpenConsole}
+                className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717]"
+              >
+                <Monitor className="h-3.5 w-3.5" />
+                Console
+              </button>
+              <button
+                type="button"
+                onClick={onToggle}
+                className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+              >
+                {isExpanded ? (
+                  <ChevronUp className="h-3.5 w-3.5" />
+                ) : (
+                  <ChevronDown className="h-3.5 w-3.5" />
+                )}
+                {isExpanded ? 'Hide' : 'Details'}
+              </button>
+            </div>
           ) : (
             <span className="text-xs text-gray-400">—</span>
           )}
