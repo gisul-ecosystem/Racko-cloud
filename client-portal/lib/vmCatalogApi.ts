@@ -154,6 +154,34 @@ export async function fetchCatalogVmRequests(opts?: {
   return res.data.requests;
 }
 
+export async function fetchCatalogVm(id: string): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ vm: ICatalogVm }>>(
+    `/api/v1/vm-catalog/vms/${id}`
+  );
+  return res.data.vm;
+}
+
+export interface CatalogVmConsoleSession {
+  protocol: 'rdp' | 'ssh';
+  clientUrl: string;
+  connectionId: string;
+}
+
+export async function getCatalogVmConsole(
+  id: string,
+  dimensions?: { width?: number; height?: number }
+): Promise<CatalogVmConsoleSession> {
+  const params = new URLSearchParams();
+  if (dimensions?.width) params.set('width', String(Math.round(dimensions.width)));
+  if (dimensions?.height) params.set('height', String(Math.round(dimensions.height)));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+
+  const res = await apiRequest<ApiResponse<CatalogVmConsoleSession>>(
+    `/api/v1/vm-catalog/vms/${id}/console${qs}`
+  );
+  return res.data;
+}
+
 export async function approveCatalogVmRequest(id: string): Promise<ICatalogVm> {
   const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
     `/api/v1/vm-catalog/requests/${id}/approve`,

@@ -12,12 +12,19 @@ import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
 import { callCatalogAgentPurchase, callCatalogAgentScrape } from './catalogAgentClient';
 import type { CatalogAgentError } from './catalogAgentClient';
+import { guacamoleClient } from '../../utils/guacamoleClient';
 import type {
   CatalogVmOverview,
   CatalogVmRequesterGroup,
   CatalogVmResponse,
   CreateCatalogVmRequestDto,
 } from './vmCatalog.types';
+
+export interface CatalogVmConsoleSession {
+  protocol: 'rdp' | 'ssh';
+  clientUrl: string;
+  connectionId: string;
+}
 
 const PENDING_STATUSES: VmCatalogStatus[] = [
   'pending_approval',
@@ -269,6 +276,87 @@ class VmCatalogService {
   async listForAdmin(adminId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({ adminId }).sort({ createdAt: -1 });
     return docs.map((doc) => this.toResponse(doc, { forAdmin: true }));
+  }
+
+  /** Admin: single owned VM (for console toolbar name, etc.). */
+  async getForAdmin(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    const doc = await this.findOwnedByAdmin(id, adminId);
+    return this.toResponse(doc, { forAdmin: true });
+  }
+
+  /**
+   * Admin Guacamole console — same path as Elastic Servers (IP + creds).
+   * Only active catalog VMs with connection details.
+   */
+  async openConsole(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    dimensions?: { width?: number; height?: number }
+  ): Promise<CatalogVmConsoleSession> {
+    const doc = await this.findOwnedByAdmin(id, adminId);
+
+    if (doc.status !== 'active') {
+      throw new ValidationError('Console is only available after the VM is attached (active).');
+    }
+    if (!doc.ipAddress) {
+      throw new ValidationError('This VM has no IP address for console access.');
+    }
+    if (!doc.password) {
+      throw new ValidationError('This VM has no password for console access.');
+    }
+
+    const protocol = doc.protocol || (doc.category === 'windows' ? 'rdp' : 'ssh');
+    const username = doc.username || (protocol === 'rdp' ? 'Administrator' : 'root');
+    let password: string;
+    try {
+      password = decrypt(doc.password);
+    } catch {
+      throw new ValidationError('Stored password could not be decrypted for console access.');
+    }
+
+    const port = protocol === 'rdp' ? 3389 : 22;
+
+    logger.info('[VmCatalog] Opening Guacamole session', {
+      catalogVmId: doc._id.toString(),
+      protocol,
+      hostname: doc.ipAddress,
+    });
+
+    const session = await guacamoleClient.openConsole(
+      `catalogvm-${doc._id.toString()}`,
+      protocol,
+      {
+        hostname: doc.ipAddress,
+        port,
+        username,
+        password,
+        ignoreCert: true,
+        securityMode: 'any',
+        width: dimensions?.width,
+        height: dimensions?.height,
+      }
+    );
+
+    return {
+      protocol,
+      clientUrl: session.clientUrl,
+      connectionId: session.connectionId,
+    };
+  }
+
+  private async findOwnedByAdmin(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<ICatalogVm> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM not found.');
+    if (doc.adminId.toString() !== adminId.toString()) {
+      throw new ForbiddenError('You do not have permission to access this catalog VM.');
+    }
+    return doc;
   }
 
   async getOverview(adminId: mongoose.Types.ObjectId): Promise<CatalogVmOverview> {

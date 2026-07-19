@@ -24,6 +24,24 @@ router.get('/vms', requireRole('admin', 'super_admin'), (req, res, next) => {
   vmCatalogController.list(req, res, next);
 });
 
+router.get(
+  '/vms/:id',
+  requireRole('admin', 'super_admin'),
+  validateRequest(catalogVmRequestIdParamSchema),
+  (req, res, next) => {
+    vmCatalogController.getOne(req, res, next);
+  }
+);
+
+router.get(
+  '/vms/:id/console',
+  requireRole('admin', 'super_admin'),
+  validateRequest(catalogVmRequestIdParamSchema),
+  (req, res, next) => {
+    vmCatalogController.openConsole(req, res, next);
+  }
+);
+
 /** Admin: submit Buy Now request */
 router.post(
   '/requests',
