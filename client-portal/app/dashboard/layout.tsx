@@ -7,6 +7,7 @@ import Image from 'next/image';
 import { useAuth } from '../../context/AuthContext';
 import { ErrorBoundary } from '../../components/ui/ErrorBoundary';
 import { VpsAdminShell } from '../../components/console/VpsAdminShell';
+import { BillingShell } from '../../components/console/BillingShell';
 import { AdminServicesProvider } from '../../context/AdminServicesContext';
 import { RequireAdminService } from '../../components/console/RequireAdminService';
 
@@ -116,7 +117,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     return (
       <AdminServicesProvider>
         {isBilling ? (
-          <VpsAdminShell>{children}</VpsAdminShell>
+          <BillingShell>{children}</BillingShell>
         ) : (
           <RequireAdminService serviceKey="vm-management">
             <VpsAdminShell>{children}</VpsAdminShell>
