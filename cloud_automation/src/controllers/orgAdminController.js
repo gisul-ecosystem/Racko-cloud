@@ -484,6 +484,27 @@ const getUserSessions = async (req, res, next) => {
   }
 };
 
+const getUserLiveResources = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const userId = Number(req.params.userId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(userId) || userId <= 0) {
+      throw new AppError('User id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.getUserLiveResources(requestId, userId);
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getCleanupLogs = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
@@ -585,6 +606,7 @@ module.exports = {
   reprovisionRolesForRequest,
   repairResourceScopedPermissions,
   getUserSessions,
+  getUserLiveResources,
   getCleanupLogs,
   getLabHistory,
   triggerRequestCleanup,

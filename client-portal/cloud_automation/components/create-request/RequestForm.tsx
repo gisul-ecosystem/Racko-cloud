@@ -11,7 +11,6 @@ import type {
   ServiceCatalogResponse,
   SelectedInstance,
   UsageWindow,
-  CostingMode,
 } from '../../types/catalog';
 import {
   catalogInstancesForServices,
@@ -29,10 +28,10 @@ import { InstanceOptionCard } from './InstanceOptionCard';
 import { ServiceOptionCard } from './ServiceOptionCard';
 
 const inputClass =
-  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
+  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition placeholder:text-gray-400 focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-2 focus:ring-[var(--cloud-accent,#B91C1C)]/20';
 
 const timeInputClass =
-  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
+  'rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-2 focus:ring-[var(--cloud-accent,#B91C1C)]/20';
 
 const labelClass = 'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500';
 
@@ -49,7 +48,7 @@ function SectionHeader({
 }) {
   return (
     <div className="flex items-start gap-4 border-b border-gray-100 pb-5">
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-red-50 text-sm font-bold text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
+      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-sm font-bold text-[var(--cloud-accent,#B91C1C)] ring-1 ring-[var(--cloud-accent,#B91C1C)]/10">
         {step}
       </span>
       <div className="min-w-0">
@@ -91,8 +90,6 @@ interface RequestFormProps {
   onCustomerEmailChange: (value: string) => void;
   accountCount: number;
   onAccountCountChange: (value: number) => void;
-  costingMode: CostingMode;
-  onCostingModeChange: (value: CostingMode) => void;
   startDate: string;
   onStartDateChange: (value: string) => void;
   endDate: string;
@@ -185,8 +182,6 @@ export function RequestForm({
   onCustomerEmailChange,
   accountCount,
   onAccountCountChange,
-  costingMode,
-  onCostingModeChange,
   startDate,
   onStartDateChange,
   endDate,
@@ -334,40 +329,13 @@ export function RequestForm({
             />
           </div>
           <div className="sm:col-span-2">
-            <span className={labelClass}>Resource group costing</span>
-            <div className="mt-2 grid gap-3 sm:grid-cols-2">
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/60">
-                <input
-                  type="radio"
-                  name="costingMode"
-                  value="shared"
-                  checked={costingMode === 'shared'}
-                  onChange={() => onCostingModeChange('shared')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-gray-900">Shared resource group</span>
-                  <span className="mt-1 block text-xs text-gray-500">
-                    One resource group for all users. Best for shared labs and total request costing.
-                  </span>
-                </span>
-              </label>
-              <label className="flex cursor-pointer gap-3 rounded-lg border border-gray-200 p-4 transition hover:border-gray-300 has-[:checked]:border-[#B91C1C] has-[:checked]:bg-red-50/60">
-                <input
-                  type="radio"
-                  name="costingMode"
-                  value="per_user"
-                  checked={costingMode === 'per_user'}
-                  onChange={() => onCostingModeChange('per_user')}
-                  className="mt-1 h-4 w-4 border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
-                />
-                <span>
-                  <span className="block text-sm font-medium text-gray-900">Per-user resource groups</span>
-                  <span className="mt-1 block text-xs text-gray-500">
-                    Separate resource group per user for isolated access and per-user costing.
-                  </span>
-                </span>
-              </label>
+            <span className={labelClass}>Resource groups</span>
+            <div className="mt-2 rounded-lg border border-[var(--cloud-accent,#B91C1C)]/20 bg-[var(--cloud-accent-soft,#fef2f2)] p-4">
+              <span className="block text-sm font-medium text-gray-900">Per-user resource groups</span>
+              <span className="mt-1 block text-xs text-gray-500">
+                Each lab user gets a separate Azure resource group for isolated access and per-user
+                costing.
+              </span>
             </div>
           </div>
           <div>
@@ -671,7 +639,7 @@ export function RequestForm({
           <SectionHeader
             step={4}
             title="Per-user budget"
-            description="Optional spending cap when using per-user resource groups."
+            description="Optional spending cap per lab user."
           />
 
           <div className="mt-5">
@@ -767,7 +735,7 @@ export function RequestForm({
                       {service.service_name || service.name}
                     </p>
                     {selected ? (
-                      <span className="rounded-full bg-[#B91C1C] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+                      <span className="rounded-full bg-[var(--cloud-accent,#B91C1C)] px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
                         {selected}
                       </span>
                     ) : (
@@ -823,7 +791,7 @@ export function RequestForm({
                       {entry.roles.map((role) => (
                         <span
                           key={role}
-                          className="rounded-full border border-[#B91C1C]/30 bg-red-50 px-3 py-1 text-xs font-medium text-[#B91C1C]"
+                          className="rounded-full border border-[var(--cloud-accent,#B91C1C)]/30 bg-[var(--cloud-accent-soft,#fef2f2)] px-3 py-1 text-xs font-medium text-[var(--cloud-accent,#B91C1C)]"
                         >
                           {role}
                           {isAutomated ? ' (auto)' : ''}
@@ -873,7 +841,7 @@ export function RequestForm({
                               }}
                               className={`rounded-full border px-3 py-1 text-xs font-medium transition ${
                                 active
-                                  ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                                  ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]'
                                   : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
                               }`}
                             >
@@ -964,7 +932,7 @@ export function RequestForm({
             className="flex w-full items-center justify-between gap-2 text-left"
           >
             <div className="flex items-center gap-3">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
+              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]">
                 <Shield className="h-4 w-4" />
               </div>
               <div>

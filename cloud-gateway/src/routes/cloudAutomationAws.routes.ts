@@ -73,7 +73,8 @@ function rewriteAwsOrgAdminPath(path: string): string {
 const awsManagePortalProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
-  timeout: config.AWS_REQUEST_TIMEOUT_MS,
+  timeout: 0,
+  proxyTimeout: 0,
   pathRewrite: rewriteAwsManagePortalPath,
   on: {
     error: (_err, _req, res) => {
@@ -89,7 +90,8 @@ const awsManagePortalProxy = createProxyMiddleware({
 const awsOrgAdminProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
-  timeout: config.AWS_REQUEST_TIMEOUT_MS,
+  timeout: 0,
+  proxyTimeout: 0,
   pathRewrite: rewriteAwsOrgAdminPath,
   on: {
     error: (_err, _req, res) => {
@@ -105,7 +107,8 @@ const awsOrgAdminProxy = createProxyMiddleware({
 const cloudAutomationAwsProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
-  timeout: config.AWS_REQUEST_TIMEOUT_MS,
+  timeout: 0,
+  proxyTimeout: 0,
   pathRewrite: rewriteCloudAutomationAwsPath,
   on: {
     error: (_err, _req, res) => {

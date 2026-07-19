@@ -28,14 +28,15 @@ const getProvisionedServiceResources = async (req, res, next) => {
   try {
     validateRequestId(req.params.id);
 
-    const resources = await serviceResourceProvisionService.getProvisionedResourcesForRequest(
-      Number(req.params.id)
-    );
+    const requestId = Number(req.params.id);
+    const status = await serviceResourceProvisionService.getServiceProvisionStatus(requestId);
 
     res.status(200).json({
       success: true,
-      resources,
-      count: resources.length
+      resources: status.resources,
+      count: status.count,
+      complete: status.complete,
+      remaining: status.remaining
     });
   } catch (error) {
     next(error);

@@ -30,6 +30,12 @@ function getProtocolSubtitle(p: ExternalVMProtocol): string {
 export interface ExternalVMConsoleViewProps {
   backHref: string;
   disconnectHref: string;
+  /** Defaults to platform admin external-vms APIs. */
+  fetchVm?: (id: string) => Promise<{ name: string }>;
+  openConsole?: (
+    id: string,
+    dimensions?: { width?: number; height?: number }
+  ) => Promise<ExternalVMConsoleSession>;
 }
 
 /**
@@ -40,8 +46,14 @@ export interface ExternalVMConsoleViewProps {
  *  - shows the external VM name in the toolbar
  *  - no "VM must be running" check and no consoleReady / IP-polling gate
  */
-export function ExternalVMConsoleView({ backHref, disconnectHref }: ExternalVMConsoleViewProps) {
-  const { id } = useParams<{ id: string }>();
+export function ExternalVMConsoleView({
+  backHref,
+  disconnectHref,
+  fetchVm = fetchExternalVM,
+  openConsole = getExternalVMConsole,
+}: ExternalVMConsoleViewProps) {
+  const params = useParams<{ id?: string; serverId?: string }>();
+  const id = params.id ?? params.serverId;
   const router = useRouter();
 
   const [session, setSession] = useState<ExternalVMConsoleSession | null>(null);
@@ -87,7 +99,10 @@ export function ExternalVMConsoleView({ backHref, disconnectHref }: ExternalVMCo
       setLoading(true);
       setError(null);
       try {
-        const data = await getExternalVMConsole(id);
+        const data = await openConsole(id, {
+          width: window.innerWidth,
+          height: window.innerHeight,
+        });
         if (signal?.aborted) return;
         setSession(data);
         setIframeKey((k) => k + 1);
@@ -102,7 +117,7 @@ export function ExternalVMConsoleView({ backHref, disconnectHref }: ExternalVMCo
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [id]
+    [id, openConsole]
   );
 
   useEffect(() => {
@@ -115,7 +130,7 @@ export function ExternalVMConsoleView({ backHref, disconnectHref }: ExternalVMCo
   useEffect(() => {
     if (!id) return;
     const ctrl = new AbortController();
-    fetchExternalVM(id)
+    fetchVm(id)
       .then((vm) => {
         if (!ctrl.signal.aborted) setVmName(vm.name);
       })
@@ -123,7 +138,7 @@ export function ExternalVMConsoleView({ backHref, disconnectHref }: ExternalVMCo
         // Name is cosmetic — fall back to the short id if it can't be fetched.
       });
     return () => ctrl.abort();
-  }, [id]);
+  }, [id, fetchVm]);
 
   useEffect(() => {
     if (!session) return;

@@ -26,6 +26,29 @@ const logEvent = (level, event, details = {}) => {
   console.log(message);
 };
 
+const isRequestEligibleForCleanupEmail = async (requestId) => {
+  const result = await db.query(
+    `
+      SELECT id
+      FROM requests
+      WHERE id = $1
+        AND status = 'Completed'
+        AND COALESCE(expired, FALSE) = FALSE
+        AND COALESCE(cleanup_completed, FALSE) = FALSE
+        AND resource_cleanup_enabled = TRUE
+        AND (
+          CASE
+            WHEN expires_at IS NOT NULL THEN expires_at > NOW()
+            ELSE expiry_date IS NULL OR expiry_date > CURRENT_DATE
+          END
+        )
+    `,
+    [requestId]
+  );
+
+  return Boolean(result.rows[0]);
+};
+
 async function processResourceCleanup(req) {
   const { id, resource_cleanup_interval_hours, customer_email } = req;
   const requestLabel = req.request_name || `Request #${id}`;
@@ -36,6 +59,15 @@ async function processResourceCleanup(req) {
       SET status = 'Resource Cleanup In Progress'
       WHERE id = $1
         AND status = 'Completed'
+        AND COALESCE(expired, FALSE) = FALSE
+        AND COALESCE(cleanup_completed, FALSE) = FALSE
+        AND resource_cleanup_enabled = TRUE
+        AND (
+          CASE
+            WHEN expires_at IS NOT NULL THEN expires_at > NOW()
+            ELSE expiry_date IS NULL OR expiry_date > CURRENT_DATE
+          END
+        )
     `,
     [id]
   );
@@ -50,16 +82,27 @@ async function processResourceCleanup(req) {
     const now = new Date();
     const nextRun = new Date(now.getTime() + resource_cleanup_interval_hours * 60 * 60 * 1000);
 
-    await db.query(
+    const finalizeResult = await db.query(
       `
         UPDATE requests
         SET status = 'Completed',
             resource_cleanup_last_ran_at = $1,
             resource_cleanup_next_run_at = $2
         WHERE id = $3
+          AND COALESCE(expired, FALSE) = FALSE
+          AND COALESCE(cleanup_completed, FALSE) = FALSE
+        RETURNING id
       `,
       [now.toISOString(), nextRun.toISOString(), id]
     );
+
+    if (!finalizeResult.rowCount) {
+      logEvent('info', 'resource_cleanup_skipped_after_run', {
+        requestId: id,
+        reason: 'request_expired_or_deleted'
+      });
+      return;
+    }
 
     await db.query(
       `
@@ -70,7 +113,9 @@ async function processResourceCleanup(req) {
       [id, now.toISOString(), JSON.stringify(affected), affected.length, totalDeleted]
     );
 
-    if (customer_email) {
+    const shouldEmail = customer_email && (await isRequestEligibleForCleanupEmail(id));
+
+    if (shouldEmail) {
       await sendResourceCleanupEmail({
         to: customer_email,
         requestName: requestLabel,
@@ -80,6 +125,11 @@ async function processResourceCleanup(req) {
         cleanedAt: now,
         nextCleanupAt: nextRun,
         intervalHours: resource_cleanup_interval_hours
+      });
+    } else {
+      logEvent('info', 'resource_cleanup_email_skipped', {
+        requestId: id,
+        reason: 'request_expired_or_deleted'
       });
     }
 
@@ -106,6 +156,7 @@ async function processResourceCleanup(req) {
         UPDATE requests
         SET status = 'Completed'
         WHERE id = $1
+          AND status = 'Resource Cleanup In Progress'
       `,
       [id]
     );
@@ -147,7 +198,13 @@ function startResourceCleanupScheduler() {
             AND resource_cleanup_next_run_at IS NOT NULL
             AND resource_cleanup_next_run_at <= NOW()
             AND COALESCE(expired, FALSE) = FALSE
-            AND expiry_date > NOW()
+            AND COALESCE(cleanup_completed, FALSE) = FALSE
+            AND (
+              CASE
+                WHEN expires_at IS NOT NULL THEN expires_at > NOW()
+                ELSE expiry_date IS NULL OR expiry_date > CURRENT_DATE
+              END
+            )
           ORDER BY resource_cleanup_next_run_at ASC, id ASC
         `
       );

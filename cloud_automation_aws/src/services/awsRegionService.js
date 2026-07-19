@@ -69,11 +69,7 @@ async function evaluateRegionForServices(regionCode, services, selectedInstances
       displayName = pricing.locationName;
     }
 
-    if (service.pricingType === 'instance') {
-      totalHourlyPrice += pricing.pricePerHour;
-    } else {
-      totalHourlyPrice += pricing.unitPrice || 0;
-    }
+    totalHourlyPrice += Number(pricing.pricePerHour) || 0;
   }
 
   return {

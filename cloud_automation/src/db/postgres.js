@@ -16,10 +16,21 @@ const poolMax = Number.isFinite(configuredPoolMax) && configuredPoolMax > 0
   ? Math.min(configuredPoolMax, maxConcurrentDbOperations)
   : maxConcurrentDbOperations;
 
+const configuredStatementTimeout = Number(process.env.SUPABASE_DB_STATEMENT_TIMEOUT_MS);
+const configuredQueryTimeout = Number(process.env.SUPABASE_DB_QUERY_TIMEOUT_MS);
+const statementTimeout =
+  Number.isFinite(configuredStatementTimeout) && configuredStatementTimeout >= 0
+    ? configuredStatementTimeout
+    : 0;
+const queryTimeout =
+  Number.isFinite(configuredQueryTimeout) && configuredQueryTimeout >= 0
+    ? configuredQueryTimeout
+    : 0;
+
 const pool = new Pool({
   connectionString,
-  statement_timeout: 15000,
-  query_timeout: 15000,
+  statement_timeout: statementTimeout,
+  query_timeout: queryTimeout,
   ssl: process.env.SUPABASE_DB_SSL === 'false'
     ? false
     : { rejectUnauthorized: false },

@@ -96,7 +96,7 @@ export default function AdminUsersPage() {
           )}
         </div>
         <p className="mt-0.5 text-sm text-gray-500">
-          Active admins, their wallet balances, and billing management.
+          Active admins, wallet balances, billing, and service entitlements.
         </p>
       </div>
 
@@ -179,10 +179,16 @@ export default function AdminUsersPage() {
               </dl>
 
               {/* Action */}
-              <div className="mt-4 border-t border-gray-100 pt-3">
+              <div className="mt-4 flex flex-wrap gap-3 border-t border-gray-100 pt-3">
+                <Link
+                  href={`/super-admin-console/admin-users/${admin.id}/services?email=${encodeURIComponent(admin.email)}`}
+                  className="text-xs font-medium text-[#B91C1C] hover:underline"
+                >
+                  Manage services →
+                </Link>
                 <Link
                   href={`/super-admin-console/vm-management/admin-wallets?userId=${admin.id}&email=${encodeURIComponent(admin.email)}`}
-                  className="text-xs font-medium text-[#B91C1C] hover:underline"
+                  className="text-xs font-medium text-gray-600 hover:underline"
                 >
                   Manage wallet →
                 </Link>

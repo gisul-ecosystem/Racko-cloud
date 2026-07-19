@@ -17,6 +17,16 @@ export interface AdminPricingConfig {
 export interface AdminWallet {
   balance: number;
   currency: string;
+  /** Present when returned from wallet/me — used to convert Azure USD estimates to INR. */
+  usdToInrRate?: number;
+}
+
+export interface AdminCloudChargeResult {
+  balance: number;
+  currency: string;
+  chargedInr: number;
+  amountUsd: number;
+  usdToInrRate: number;
 }
 
 export interface AdminWalletTransaction {

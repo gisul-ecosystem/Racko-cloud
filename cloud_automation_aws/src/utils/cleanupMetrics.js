@@ -20,12 +20,16 @@ export function countCleanupDeleted(results) {
 
   for (const [key, value] of Object.entries(results)) {
     if (key === 'userIndex') continue;
+    if (!value || typeof value !== 'object') continue;
 
-    if (!value || typeof value !== 'object' || value.error) continue;
-
+    let serviceCount = 0;
     for (const metric of COUNTABLE_KEYS) {
-      count += Number(value[metric] || 0);
+      serviceCount += Number(value[metric] || 0);
     }
+
+    if (serviceCount === 0 && value.error) continue;
+
+    count += serviceCount;
   }
 
   return count;

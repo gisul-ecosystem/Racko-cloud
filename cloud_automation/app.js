@@ -93,14 +93,26 @@ app.all('*', (req, res, next) => {
 });
 
 app.use((error, req, res, next) => {
-  const statusCode = error.statusCode || 500;
-  const message = error.isOperational ? error.message : 'Internal server error.';
+  const rawStatus = Number(error.statusCode ?? error.status);
+  const statusCode =
+    Number.isInteger(rawStatus) && rawStatus >= 400 && rawStatus <= 599 ? rawStatus : 500;
+
+  const isNetworkFailure =
+    rawStatus === -1 ||
+    error?.code === 'TypeError' ||
+    /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(String(error?.message || ''));
+
+  const message = error.isOperational
+    ? error.message
+    : isNetworkFailure
+      ? 'Unable to reach Microsoft Graph. Check network connectivity and try again.'
+      : 'Internal server error.';
 
   if (!error.isOperational) {
     console.error('Unhandled error:', error);
   }
 
-  res.status(statusCode).json({
+  res.status(isNetworkFailure && statusCode === 500 ? 502 : statusCode).json({
     success: false,
     message
   });
@@ -137,6 +149,11 @@ const startServer = () => {
   }
 
   server = app.listen(port, () => {
+    server.timeout = 0;
+    server.requestTimeout = 0;
+    server.headersTimeout = 0;
+    server.keepAliveTimeout = 0;
+
     console.log(`Service Catalog API listening on port ${port}`);
 
     const smtpStatus = getSmtpConfigStatus();

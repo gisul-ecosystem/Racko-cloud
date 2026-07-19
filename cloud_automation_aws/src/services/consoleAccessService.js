@@ -22,6 +22,15 @@ async function resolveSessionDuration(roleArn, requestedSeconds) {
   return requestedSeconds;
 }
 
+export function buildConsoleHomeUrl(region) {
+  const normalized = String(region || '').trim();
+  if (!normalized) {
+    return 'https://console.aws.amazon.com/';
+  }
+
+  return `https://${normalized}.console.aws.amazon.com/console/home?region=${encodeURIComponent(normalized)}`;
+}
+
 async function getSigninToken(credentials) {
   const sessionJson = JSON.stringify({
     sessionId: credentials.AccessKeyId,
@@ -51,7 +60,7 @@ async function getSigninToken(credentials) {
   });
 }
 
-export async function generateConsoleUrl(roleArn, sessionName, durationSeconds) {
+export async function generateConsoleUrl(roleArn, sessionName, durationSeconds, options = {}) {
   const requestedDuration = durationSeconds ?? magicLinkSessionSeconds();
   const resolvedDuration = await resolveSessionDuration(roleArn, requestedDuration);
   const assumed = await stsClient.send(
@@ -67,7 +76,7 @@ export async function generateConsoleUrl(roleArn, sessionName, durationSeconds) 
 
   const signinToken = await getSigninToken(credentials);
 
-  const destination = encodeURIComponent('https://console.aws.amazon.com/');
+  const destination = encodeURIComponent(buildConsoleHomeUrl(options.region));
   const consoleUrl = `https://signin.aws.amazon.com/federation?Action=login&Issuer=racko.ai&Destination=${destination}&SigninToken=${signinToken}`;
 
   return {
@@ -78,13 +87,13 @@ export async function generateConsoleUrl(roleArn, sessionName, durationSeconds) 
   };
 }
 
-export async function generateAllConsoleUrls(labRoles, requestId) {
+export async function generateAllConsoleUrls(labRoles, requestId, region) {
   const urls = [];
 
   for (const role of labRoles) {
     try {
       const sessionName = `racko-lab-u${role.userIndex + 1}-${String(requestId).slice(-6)}`;
-      const result = await generateConsoleUrl(role.roleArn, sessionName);
+      const result = await generateConsoleUrl(role.roleArn, sessionName, undefined, { region });
       urls.push({
         userIndex: role.userIndex,
         username: `labuser${role.userIndex + 1}`,
@@ -101,8 +110,15 @@ export async function generateAllConsoleUrls(labRoles, requestId) {
   return urls;
 }
 
-export async function generateAndLogConsoleUrl(requestId, userIndex, roleArn, sessionName, durationSeconds) {
-  const result = await generateConsoleUrl(roleArn, sessionName, durationSeconds);
+export async function generateAndLogConsoleUrl(
+  requestId,
+  userIndex,
+  roleArn,
+  sessionName,
+  durationSeconds,
+  options = {}
+) {
+  const result = await generateConsoleUrl(roleArn, sessionName, durationSeconds, options);
 
   await startMagicLinkSession(
     requestId,

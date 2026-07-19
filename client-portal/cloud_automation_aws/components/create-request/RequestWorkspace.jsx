@@ -6,6 +6,13 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, FilePlus2, Server } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
+import { ApiError } from '../../../lib/apiClient';
+import {
+  chargeCloudRequestWallet,
+  getCloudRequestWallet,
+  linkCloudRequestWalletCharge,
+  refundCloudRequestWallet,
+} from '../../../lib/cloudRequestWallet';
 import { createRequest } from '../../api/client';
 import { AWS_DEFAULT_REGION } from '../../constants';
 import { useAwsRoutes } from '../../../lib/cloudPortalRoutes';
@@ -13,6 +20,11 @@ import { DEFAULT_IAM_POLICIES } from '../../config/iamPolicies';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
 import { useAvailableRegions } from '../../hooks/useAvailableRegions';
 import { useServiceCatalog } from '../../hooks/useServiceCatalog';
+import {
+  convertUsdToInr,
+  DEFAULT_USD_TO_INR_RATE,
+  formatInr,
+} from '../../../cloud_automation/utils/walletBilling';
 import { getEffectivePolicies } from './PermissionsPicker';
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
@@ -91,6 +103,12 @@ function validateStep(step, input) {
         errors.push(`Select an instance for ${service.name}.`);
       }
     }
+    for (const service of input.flatRateServices || []) {
+      const hasTier = input.selectedInstances.some((entry) => entry.serviceId === service._id);
+      if (!hasTier) {
+        errors.push(`Select a usage estimate for ${service.name}.`);
+      }
+    }
   }
 
   if (step === 8 && !input.region) {
@@ -139,6 +157,10 @@ export function RequestWorkspace() {
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(null);
   const [validationErrors, setValidationErrors] = useState([]);
+  const [walletBalance, setWalletBalance] = useState(null);
+  const [walletCurrency, setWalletCurrency] = useState('INR');
+  const [usdToInrRate, setUsdToInrRate] = useState(DEFAULT_USD_TO_INR_RATE);
+  const [walletLoading, setWalletLoading] = useState(true);
 
   const durationDays = useMemo(
     () => durationDaysBetween(startDate, endDate),
@@ -157,6 +179,11 @@ export function RequestWorkspace() {
     [selectedServices]
   );
 
+  const flatRateServices = useMemo(
+    () => selectedServices.filter((service) => service.pricingType === 'flat_rate'),
+    [selectedServices]
+  );
+
   const validationInput = useMemo(
     () => ({
       customerEmail,
@@ -172,6 +199,7 @@ export function RequestWorkspace() {
       selectedServiceIds,
       selectedInstances,
       instanceServices,
+      flatRateServices,
       region,
     }),
     [
@@ -188,12 +216,13 @@ export function RequestWorkspace() {
       selectedServiceIds,
       selectedInstances,
       instanceServices,
+      flatRateServices,
       region,
     ]
   );
 
   const estimatePayload = useMemo(() => {
-    if (selectedServiceIds.length === 0 || accountCount <= 0 || durationDays <= 0) {
+    if (selectedServiceIds.length === 0 || accountCount <= 0 || !startDate || !endDate) {
       return null;
     }
 
@@ -203,9 +232,10 @@ export function RequestWorkspace() {
       selectedServices,
       region: pricingRegion,
       accountCount,
-      durationDays,
       startDate,
       endDate,
+      usageWindows: enableDailyUsage ? usageWindows : [],
+      costingMode: 'shared',
     };
   }, [
     selectedServiceIds,
@@ -213,9 +243,10 @@ export function RequestWorkspace() {
     selectedServices,
     pricingRegion,
     accountCount,
-    durationDays,
     startDate,
     endDate,
+    enableDailyUsage,
+    usageWindows,
   ]);
 
   const { estimate, loading: estimateLoading, error: estimateError } =
@@ -228,6 +259,26 @@ export function RequestWorkspace() {
   } = useAvailableRegions(selectedServiceIds, selectedInstances);
 
   const showFinalStepPanel = currentStep === 8;
+
+  const refreshWallet = useCallback(async () => {
+    setWalletLoading(true);
+    try {
+      const wallet = await getCloudRequestWallet();
+      setWalletBalance(wallet.balance);
+      setWalletCurrency(wallet.currency || 'INR');
+      if (wallet.usdToInrRate && wallet.usdToInrRate > 0) {
+        setUsdToInrRate(wallet.usdToInrRate);
+      }
+    } catch {
+      setWalletBalance(null);
+    } finally {
+      setWalletLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshWallet();
+  }, [refreshWallet]);
 
   const handleToggleService = useCallback((serviceId) => {
     setSelectedServiceIds((current) => {
@@ -303,6 +354,27 @@ export function RequestWorkspace() {
     setSubmitError(null);
     if (errors.length > 0) return;
 
+    if (totalPrice == null) {
+      setSubmitError('Complete the form to calculate an estimate before creating the request.');
+      return;
+    }
+
+    const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate) ?? 0;
+
+    if (totalPrice > 0) {
+      if (walletBalance == null) {
+        setSubmitError('Unable to load your wallet balance.');
+        return;
+      }
+
+      if (walletBalance < estimatedInr) {
+        setSubmitError(
+          `Insufficient wallet balance. This request needs ${formatInr(estimatedInr)} but your wallet has ${formatInr(walletBalance)}.`
+        );
+        return;
+      }
+    }
+
     const breakdownMap = new Map(
       (estimate?.breakdown ?? []).map((entry) => [entry.serviceName, entry])
     );
@@ -365,38 +437,81 @@ export function RequestWorkspace() {
     };
 
     setSubmitting(true);
+    let chargedInr = null;
+
     try {
-      const response = await createRequest(payload);
-      const requestId = response.data?.requestId ?? response.requestId;
-      router.push(AWS_ROUTES.requestStatus(String(requestId)));
+      if (totalPrice > 0) {
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'aws');
+        chargedInr = charge.chargedInr;
+        setWalletBalance(charge.balance);
+        setUsdToInrRate(charge.usdToInrRate);
+      }
+
+      try {
+        const response = await createRequest(payload);
+        const requestId = response.data?.requestId ?? response.requestId;
+
+        if (chargedInr != null && chargedInr > 0) {
+          void linkCloudRequestWalletCharge(String(requestId), 'aws').catch(() => undefined);
+        }
+
+        router.push(AWS_ROUTES.requestStatus(String(requestId)));
+      } catch (createErr) {
+        if (chargedInr != null && chargedInr > 0) {
+          try {
+            const refunded = await refundCloudRequestWallet(chargedInr, null, 'aws');
+            setWalletBalance(refunded.balance);
+          } catch {
+            // Best-effort refund; surface original create failure below.
+          }
+        }
+        throw createErr;
+      }
     } catch (err) {
-      setSubmitError(`Failed to create request: ${err?.message || 'Unknown error'}`);
+      if (err instanceof ApiError && err.status === 402) {
+        setSubmitError(
+          'Insufficient wallet balance. Top up your wallet, then try creating the request again.'
+        );
+        void refreshWallet();
+      } else {
+        setSubmitError(
+          err instanceof ApiError
+            ? err.message
+            : `Failed to create request: ${err?.message || 'Unknown error'}`
+        );
+      }
     } finally {
       setSubmitting(false);
     }
   };
 
-  const totalPrice = estimate?.total ?? null;
+  const totalPrice = estimate?.total ?? estimate?.totalPrice ?? null;
+  const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate);
+  const insufficientBalance =
+    Boolean(totalPrice && totalPrice > 0) &&
+    estimatedInr != null &&
+    walletBalance != null &&
+    walletBalance < estimatedInr;
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-6 pb-10">
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="h-1 bg-gradient-to-r from-[#B91C1C] via-[#DC2626] to-[#B91C1C]" />
+        <div className="h-1 bg-gradient-to-r from-[var(--cloud-accent,#B91C1C)] via-[var(--cloud-accent,#B91C1C)] to-[var(--cloud-accent,#B91C1C)]" />
         <div className="p-6 lg:p-8">
           <Link
             href={AWS_ROUTES.dashboard}
-            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[var(--cloud-accent,#B91C1C)]"
           >
             <ArrowLeft className="h-4 w-4" />
             Back to overview
           </Link>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] ring-1 ring-[#B91C1C]/10">
+              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)] ring-1 ring-[var(--cloud-accent,#B91C1C)]/10">
                 <FilePlus2 className="h-7 w-7" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--cloud-accent,#B91C1C)]">
                   AWS automation
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
@@ -408,7 +523,7 @@ export function RequestWorkspace() {
               </div>
             </div>
             <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-              <Server className="h-4 w-4 shrink-0 text-[#B91C1C]" />
+              <Server className="h-4 w-4 shrink-0 text-[var(--cloud-accent,#B91C1C)]" />
               <span>Complete each step — Next unlocks the following section</span>
             </div>
           </div>
@@ -485,8 +600,14 @@ export function RequestWorkspace() {
               <PricingSummary
                 totalPrice={totalPrice}
                 breakdown={estimate?.breakdown ?? []}
-                duration={durationDays}
+                durationHours={estimate?.durationHours}
+                calendarHours={estimate?.calendarHours}
+                billableHours={estimate?.billableHours}
+                usesUsageWindows={estimate?.usesUsageWindows}
                 accountCount={accountCount}
+                baseHourlyPrice={estimate?.baseHourlyPrice}
+                portalHourlyTotal={estimate?.portalHourlyTotal}
+                infraHourlyTotal={estimate?.infraHourlyTotal}
                 loading={estimateLoading}
                 error={estimateError}
               />
@@ -495,7 +616,14 @@ export function RequestWorkspace() {
                 submitting={submitting}
                 submitError={submitError}
                 totalPrice={totalPrice}
+                currency="USD"
                 onSubmit={handleSubmit}
+                walletBalance={walletBalance}
+                walletCurrency={walletCurrency}
+                estimatedInr={estimatedInr}
+                usdToInrRate={usdToInrRate}
+                walletLoading={walletLoading}
+                insufficientBalance={insufficientBalance}
               />
             </div>
           ) : null}

@@ -96,6 +96,29 @@ export async function fetchTenantBrandingAssetObjectUrl(
   return URL.createObjectURL(blob);
 }
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(String(reader.result ?? ''));
+    reader.onerror = () => reject(reader.error ?? new Error('Failed to read branding asset'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Favicons cannot reliably use blob: URLs in browsers — they keep the page's
+ * default icon. Data URLs work for <link rel="icon">.
+ */
+export async function fetchTenantBrandingAssetDataUrl(
+  assetType: TenantBrandingAssetType,
+  cacheBust?: string | number
+): Promise<string | null> {
+  const blob = await fetchTenantBrandingAsset(assetType, cacheBust);
+  if (!blob) return null;
+  const dataUrl = await blobToDataUrl(blob);
+  return dataUrl || null;
+}
+
 export async function getTenantServices(): Promise<TenantAssignedService[]> {
   const data = await unwrap(
     tenantPortalRequest<ApiEnvelope<{ services: TenantAssignedService[] }>>(
@@ -126,6 +149,67 @@ export async function createTenantWalletTopup(amount: number): Promise<TenantTop
       method: 'POST',
       body: JSON.stringify({ amount }),
     })
+  );
+}
+
+export interface TenantCloudChargeResult {
+  balance: number;
+  currency: string;
+  chargedInr: number;
+  amountUsd: number;
+  usdToInrRate: number;
+  provider: 'azure' | 'aws';
+}
+
+export async function chargeTenantWalletForCloudRequest(
+  amountUsd: number,
+  relatedRequestId?: string | null,
+  provider: 'azure' | 'aws' = 'azure'
+): Promise<TenantCloudChargeResult> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantCloudChargeResult>>(
+      '/api/v1/tenant-wallet/charge-cloud-request',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          amountUsd,
+          provider,
+          ...(relatedRequestId ? { relatedRequestId } : {}),
+        }),
+      }
+    )
+  );
+}
+
+export async function refundTenantWalletCloudCharge(
+  amountInr: number,
+  relatedRequestId?: string | null,
+  provider: 'azure' | 'aws' = 'azure'
+): Promise<TenantWallet> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<TenantWallet>>('/api/v1/tenant-wallet/refund-cloud-request', {
+      method: 'POST',
+      body: JSON.stringify({
+        amountInr,
+        provider,
+        ...(relatedRequestId ? { relatedRequestId } : {}),
+      }),
+    })
+  );
+}
+
+export async function linkTenantWalletCloudCharge(
+  relatedRequestId: string,
+  provider: 'azure' | 'aws' = 'azure'
+): Promise<void> {
+  await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ relatedRequestId: string }>>(
+      '/api/v1/tenant-wallet/link-cloud-request',
+      {
+        method: 'POST',
+        body: JSON.stringify({ relatedRequestId, provider }),
+      }
+    )
   );
 }
 

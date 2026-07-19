@@ -1,6 +1,11 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export type NotificationType = 'vm_job' | 'tenant_order' | 'vm_plan_expired';
+export type NotificationType =
+  | 'vm_job'
+  | 'tenant_order'
+  | 'vm_plan_expired'
+  | 'catalog_vm_request'
+  | 'dedicated_server_request';
 export type NotificationSeverity = 'info' | 'success' | 'warning' | 'error';
 
 export interface INotification extends Document {
@@ -28,7 +33,13 @@ const notificationSchema = new Schema<INotification>(
     },
     type: {
       type: String,
-      enum: ['vm_job', 'tenant_order', 'vm_plan_expired'],
+      enum: [
+        'vm_job',
+        'tenant_order',
+        'vm_plan_expired',
+        'catalog_vm_request',
+        'dedicated_server_request',
+      ],
       required: true,
     },
     title: {

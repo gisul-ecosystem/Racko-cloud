@@ -116,6 +116,26 @@ export function NotificationBell() {
 
     if (notification.type === 'tenant_order') {
       router.push('/super-admin-console/white-labelling/orders');
+      return;
+    }
+
+    if (notification.type === 'catalog_vm_request') {
+      const adminId = notification.metadata?.adminId;
+      if (typeof adminId === 'string' && adminId) {
+        router.push(`/super-admin-console/webyne-vm-requests/${adminId}`);
+        return;
+      }
+      router.push('/super-admin-console/webyne-vm-requests');
+      return;
+    }
+
+    if (notification.type === 'dedicated_server_request') {
+      const adminId = notification.metadata?.adminId;
+      if (typeof adminId === 'string' && adminId) {
+        router.push(`/super-admin-console/dedicated-server-requests/${adminId}`);
+        return;
+      }
+      router.push('/super-admin-console/dedicated-server-requests');
     }
   }
 

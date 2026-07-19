@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ChevronLeft, LayoutDashboard, Plus, Server, Upload } from 'lucide-react';
+import { ChevronLeft, LayoutDashboard, Plus, Server, Upload, UserCheck, Users } from 'lucide-react';
 
 interface NavLink {
   href: string;
@@ -30,6 +30,21 @@ const navLinks: NavLink[] = [
     href: '/console/elastic-servers/bulk',
     label: 'Bulk Import',
     icon: <Upload className="h-4 w-4" />,
+  },
+  {
+    href: '/console/elastic-servers/users',
+    label: 'Users',
+    icon: <Users className="h-4 w-4" />,
+  },
+  {
+    href: '/console/elastic-servers/assign-servers',
+    label: 'Assign Servers',
+    icon: <UserCheck className="h-4 w-4" />,
+  },
+  {
+    href: '/console/elastic-servers/assign-servers/bulk',
+    label: 'Bulk Assign',
+    icon: <Users className="h-4 w-4" />,
   },
 ];
 
@@ -68,7 +83,10 @@ export function ElasticServersSidebar({
 
           <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
             {navLinks.map((link) => {
-              const isActive = pathname === link.href;
+              const isActive =
+                pathname === link.href ||
+                (link.href.includes('/users') && pathname.startsWith(`${link.href}`)) ||
+                (link.href.includes('/assign-servers') && pathname.startsWith(`${link.href}`));
 
               return (
                 <Link

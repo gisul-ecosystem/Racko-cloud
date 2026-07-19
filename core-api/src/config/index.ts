@@ -54,7 +54,7 @@ const envSchema = z.object({
 
   // Super admin seed
   SUPER_ADMIN_EMAIL: z.string().email('SUPER_ADMIN_EMAIL must be a valid email'),
-  SUPER_ADMIN_PASSWORD: z.string().min(16, 'SUPER_ADMIN_PASSWORD must be at least 16 characters'),
+  SUPER_ADMIN_PASSWORD: z.string().min(12, 'SUPER_ADMIN_PASSWORD must be at least 12 characters'),
 
   // Internal service secret
   INTERNAL_SERVICE_SECRET: z.string().min(64, 'INTERNAL_SERVICE_SECRET must be at least 64 characters'),
@@ -175,6 +175,13 @@ const envSchema = z.object({
   TEST_VM_IP: z.string().optional(),
   TEST_VM_USERNAME: z.string().optional(),
   TEST_VM_PASSWORD: z.string().optional(),
+
+  // Create VM catalog agent (Webyne Playwright) — used by approve → fulfill
+  CREATE_VM_AGENT_URL: z
+    .string()
+    .url()
+    .optional()
+    .default('http://127.0.0.1:3789'),
 });
 
 const parsed = envSchema.safeParse(process.env);

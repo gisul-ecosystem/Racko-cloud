@@ -10,6 +10,7 @@ import React, {
 } from 'react';
 import { ApiError } from '@/lib/apiClient';
 import {
+  fetchTenantBrandingAssetDataUrl,
   fetchTenantBrandingAssetObjectUrl,
   getTenantBranding,
 } from '@/lib/tenantPortalApi';
@@ -18,6 +19,7 @@ import { getTenantDevDomain } from '@/lib/gatewayUrl';
 import type { TenantBranding, TenantBrandingAssetType } from '@/types/tenantPortal';
 
 const DEFAULT_BRANDING: TenantBranding = {
+  name: '',
   logoUrl: '',
   faviconUrl: '',
   loginPageImageUrl: '',
@@ -75,6 +77,17 @@ function resolveLogoSrc(
   return assetUrls.logo ?? '';
 }
 
+function resolveFaviconSrc(
+  metadata: TenantBranding,
+  assetUrls: Partial<Record<TenantBrandingAssetType, string>>
+): string {
+  if (assetUrls.favicon) return assetUrls.favicon;
+  if (metadata.faviconUrl && !isTenantBrandingAssetPath(metadata.faviconUrl)) {
+    return resolveTenantBrandingUrl(metadata.faviconUrl);
+  }
+  return '';
+}
+
 export function TenantBrandingProvider({ children }: { children: React.ReactNode }) {
   const [branding, setBranding] = useState<TenantBranding>(DEFAULT_BRANDING);
   const [assetUrls, setAssetUrls] = useState<Partial<Record<TenantBrandingAssetType, string>>>(
@@ -105,10 +118,14 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
         const merged: TenantBranding = {
           ...DEFAULT_BRANDING,
           ...metadata,
+          name: metadata.name?.trim() || '',
           primaryColor: metadata.primaryColor || DEFAULT_BRANDING.primaryColor,
           secondaryColor: metadata.secondaryColor || DEFAULT_BRANDING.secondaryColor,
         };
         setBranding(merged);
+        if (merged.name) {
+          setPortalName(merged.name);
+        }
 
         const cacheBust = Date.now();
 
@@ -123,8 +140,12 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
 
             if (!hasAsset) return [assetType, null] as const;
 
-            const objectUrl = await fetchTenantBrandingAssetObjectUrl(assetType, cacheBust);
-            return [assetType, objectUrl] as const;
+            // Favicon must be a data URL — browsers ignore blob: for <link rel="icon">.
+            const url =
+              assetType === 'favicon'
+                ? await fetchTenantBrandingAssetDataUrl(assetType, cacheBust)
+                : await fetchTenantBrandingAssetObjectUrl(assetType, cacheBust);
+            return [assetType, url] as const;
           })
         );
 
@@ -136,7 +157,10 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
         for (const [type, url] of entries) {
           if (url) {
             next[type] = url;
-            nextObjectUrls.push(url);
+            // Only blob: object URLs need revoke — data URLs for favicon do not.
+            if (type !== 'favicon' && url.startsWith('blob:')) {
+              nextObjectUrls.push(url);
+            }
           }
         }
         objectUrlsRef.current = nextObjectUrls;
@@ -184,11 +208,11 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
     () => ({
       branding,
       logoSrc: resolveLogoSrc(branding, assetUrls),
-      faviconSrc: assetUrls.favicon ?? '',
+      faviconSrc: resolveFaviconSrc(branding, assetUrls),
       heroSrc: assetUrls['login-page-image'] ?? '',
       accentColor: branding.primaryColor || '#111827',
       secondaryColor: branding.secondaryColor || '#22c55e',
-      portalName,
+      portalName: branding.name?.trim() || portalName,
       tenantNotFound,
       brandingError,
       loading,

@@ -234,6 +234,19 @@ export async function uploadTenantBrandingAsset(
   return data.tenant;
 }
 
+export async function deleteTenantBrandingAsset(
+  tenantId: string,
+  assetType: BrandingAssetType
+): Promise<Tenant> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ tenant: Tenant }>>(
+      `/api/v1/tenants/${tenantId}/branding?assetType=${encodeURIComponent(assetType)}`,
+      { method: 'DELETE' }
+    )
+  );
+  return data.tenant;
+}
+
 export async function fetchSuperAdminOrders(
   status?: SuperAdminOrderStatus
 ): Promise<SuperAdminOrder[]> {

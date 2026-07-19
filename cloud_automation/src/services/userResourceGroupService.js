@@ -6,8 +6,12 @@ const {
   isPerUserCosting
 } = require('../utils/costingMode');
 const { runWithConcurrency } = require('../utils/concurrency');
+const {
+  getBulkProvisionConcurrency,
+  getResourceGroupBatchSize
+} = require('../utils/provisionConcurrency');
 
-const DEFAULT_CONCURRENCY = Math.max(1, Number(process.env.BULK_PROVISION_CONCURRENCY || 20));
+const DEFAULT_CONCURRENCY = getBulkProvisionConcurrency();
 
 const getStagingResourceGroups = async (requestId, client = db) => {
   const result = await client.query(
@@ -47,8 +51,25 @@ const getStagingResourceGroupForUserNumber = async (requestId, userNumber, clien
   return result.rows[0] || null;
 };
 
-const insertStagingResourceGroup = async (client, requestId, userNumber, resourceGroup) => {
-  await client.query(
+const bulkInsertStagingResourceGroups = async (requestId, entries) => {
+  if (!Array.isArray(entries) || entries.length === 0) {
+    return;
+  }
+
+  const values = [];
+  const params = [requestId];
+  let paramIndex = 2;
+
+  for (const entry of entries) {
+    values.push(`($1, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`);
+    params.push(
+      entry.userNumber,
+      entry.provisioned.resourceGroupName,
+      entry.provisioned.resourceGroupId
+    );
+  }
+
+  await db.query(
     `
       INSERT INTO request_user_resource_groups (
         request_id,
@@ -56,51 +77,145 @@ const insertStagingResourceGroup = async (client, requestId, userNumber, resourc
         azure_resource_group_name,
         azure_resource_group_id
       )
-      VALUES ($1, $2, $3, $4)
+      VALUES ${values.join(', ')}
       ON CONFLICT (request_id, user_number)
       DO UPDATE SET
         azure_resource_group_name = EXCLUDED.azure_resource_group_name,
         azure_resource_group_id = EXCLUDED.azure_resource_group_id
     `,
-    [
-      requestId,
-      userNumber,
-      resourceGroup.resourceGroupName,
-      resourceGroup.resourceGroupId
-    ]
+    params
   );
 };
 
-const provisionPerUserResourceGroups = async ({ requestId, accountCount, location, client }) => {
+const provisionPerUserResourceGroups = async ({
+  requestId,
+  accountCount,
+  location,
+  batchSize = getResourceGroupBatchSize()
+}) => {
   const resolvedAccountCount = Number(accountCount);
 
   if (!Number.isInteger(resolvedAccountCount) || resolvedAccountCount <= 0) {
     throw new AppError('Request account count is invalid.', 400);
   }
 
-  const existing = await getStagingResourceGroups(requestId, client);
+  const existing = await getStagingResourceGroups(requestId);
 
   if (existing.length >= resolvedAccountCount) {
-    return existing;
+    return {
+      rows: existing,
+      completed: existing.length,
+      remaining: 0,
+      done: true,
+      batchCreated: 0,
+      failures: []
+    };
   }
 
   const existingNumbers = new Set(existing.map((row) => Number(row.user_number)));
-  const userNumbers = Array.from({ length: resolvedAccountCount }, (_, index) => index + 1).filter(
+  const pendingUserNumbers = Array.from({ length: resolvedAccountCount }, (_, index) => index + 1).filter(
     (userNumber) => !existingNumbers.has(userNumber)
   );
+  const batchUserNumbers = pendingUserNumbers.slice(0, batchSize);
+  const provisionedEntries = [];
+  const failures = [];
 
-  await runWithConcurrency(userNumbers, DEFAULT_CONCURRENCY, async (userNumber) => {
-    const resourceGroupName = buildPerUserResourceGroupName(requestId, userNumber);
-    const provisioned = await provisionResourceGroup({
-      requestId,
-      resourceGroupName,
-      location
-    });
+  await runWithConcurrency(
+    batchUserNumbers,
+    DEFAULT_CONCURRENCY,
+    async (userNumber) => {
+      const resourceGroupName = buildPerUserResourceGroupName(requestId, userNumber);
 
-    await insertStagingResourceGroup(client, requestId, userNumber, provisioned);
-  });
+      try {
+        const provisioned = await provisionResourceGroup({
+          requestId,
+          resourceGroupName,
+          location
+        });
 
-  return getStagingResourceGroups(requestId, client);
+        provisionedEntries.push({ userNumber, provisioned });
+      } catch (error) {
+        failures.push({
+          userNumber,
+          message: error?.message || 'Unable to create Azure resource group.'
+        });
+      }
+    },
+    { continueOnError: true }
+  );
+
+  if (provisionedEntries.length > 0) {
+    await bulkInsertStagingResourceGroups(requestId, provisionedEntries);
+  }
+
+  const updated = await getStagingResourceGroups(requestId);
+  const completed = updated.length;
+  const remaining = Math.max(0, resolvedAccountCount - completed);
+
+  if (batchUserNumbers.length > 0 && provisionedEntries.length === 0 && failures.length > 0) {
+    throw new AppError(
+      `Failed to create resource groups for users ${failures
+        .slice(0, 3)
+        .map((entry) => entry.userNumber)
+        .join(', ')}${failures.length > 3 ? '...' : ''}: ${failures[0].message}`,
+      502
+    );
+  }
+
+  return {
+    rows: updated,
+    completed,
+    remaining,
+    done: remaining === 0,
+    batchCreated: provisionedEntries.length,
+    failures
+  };
+};
+
+const getPerUserResourceGroupProgress = async (requestId, client = db) => {
+  const result = await client.query(
+    `
+      SELECT account_count, costing_mode
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  const request = result.rows[0];
+
+  if (!request || !isPerUserCosting(request.costing_mode)) {
+    return {
+      required: false,
+      ready: true,
+      accountCount: 0,
+      completed: 0,
+      remaining: 0
+    };
+  }
+
+  const accountCount = Number(request.account_count);
+
+  if (!Number.isInteger(accountCount) || accountCount <= 0) {
+    return {
+      required: true,
+      ready: false,
+      accountCount: 0,
+      completed: 0,
+      remaining: 0
+    };
+  }
+
+  const stagingRows = await getStagingResourceGroups(requestId, client);
+
+  return {
+    required: true,
+    ready: stagingRows.length >= accountCount,
+    accountCount,
+    completed: stagingRows.length,
+    remaining: Math.max(0, accountCount - stagingRows.length)
+  };
 };
 
 const summarizePerUserResourceGroups = (rows) => {
@@ -108,7 +223,11 @@ const summarizePerUserResourceGroups = (rows) => {
     return null;
   }
 
-  return rows.map((row) => row.azure_resource_group_name).join(', ');
+  if (rows.length <= 3) {
+    return rows.map((row) => row.azure_resource_group_name).join(', ');
+  }
+
+  return `${rows.length} per-user resource groups`;
 };
 
 const getResourceGroupNamesForCleanup = async (requestId, costingMode, sharedResourceGroupName) => {
@@ -172,6 +291,7 @@ const getResourceGroupNameForUser = async (requestId, userId) => {
 module.exports = {
   getStagingResourceGroups,
   getStagingResourceGroupForUserNumber,
+  getPerUserResourceGroupProgress,
   provisionPerUserResourceGroups,
   summarizePerUserResourceGroups,
   getResourceGroupNamesForCleanup,

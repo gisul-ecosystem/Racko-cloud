@@ -174,12 +174,17 @@ const restoreScheduledAccess = async () => {
 const startUsageScheduler = () => {
   console.log('Starting usage schedulers...');
 
-  // Every minute — detect sign-ins, end stale sessions, enforce limits
-  cron.schedule('* * * * *', async () => {
+  // Every minute — detect sign-ins, end stale sessions, enforce limits.
+  // Starts at :05s so it doesn't collide with other top-of-minute jobs.
+  cron.schedule('5 * * * * *', async () => {
     await runScheduledJob('usage-monitor', async () => {
       console.log('[usageScheduler] Running sign-in check...');
-      await detectActiveSignIns();
-      await detectEndedSessions();
+      const signInResult = await detectActiveSignIns();
+      const recentActivity =
+        signInResult && typeof signInResult === 'object'
+          ? signInResult.recentPortalActivityByUserId || new Map()
+          : new Map();
+      await detectEndedSessions(recentActivity);
       await enforceUsageLimits();
       await enforceBlockedAzureUsers();
       await restoreScheduledAccess();
@@ -188,7 +193,7 @@ const startUsageScheduler = () => {
       console.error('[usageScheduler] Error:', error.message);
     });
   });
-  console.log('Usage monitor scheduled (every minute)');
+  console.log('Usage monitor scheduled (every minute at :05s)');
 
   // Reset daily usage counters at midnight
   cron.schedule(

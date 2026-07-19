@@ -6,6 +6,7 @@ import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { TenantNotificationBell } from './TenantNotificationBell';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
+import { tenantVps } from '@/lib/tenantAdminRoutes';
 
 interface TenantTopBarProps {
   onToggleSidebar: () => void;
@@ -17,6 +18,7 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
   const { tenantUser, logout } = useTenantAuth();
   const { logoSrc, portalName, accentColor } = useTenantBranding();
   const isAdmin = tenantUser?.role === 'tenant_admin';
+  const homeHref = isAdmin ? '/tenant/console' : tenantVps.vms;
 
   return (
     <header className="sticky top-0 z-10 border-b border-gray-200 bg-white">
@@ -31,13 +33,17 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
         </button>
 
         <Link
-          href="/tenant/console"
+          href={homeHref}
           className="inline-flex shrink-0 items-center gap-2 rounded-md focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2"
           style={{ ['--tw-ring-color' as string]: accentColor }}
         >
           {logoSrc ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={logoSrc} alt="" className="h-8 max-w-[120px] object-contain" aria-hidden />
+            <img
+              src={logoSrc}
+              alt={portalName || 'Portal'}
+              className="h-8 max-w-[120px] object-contain"
+            />
           ) : (
             <span
               className="flex h-8 w-8 items-center justify-center rounded-md text-sm font-bold text-white"
@@ -46,9 +52,6 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
               {(portalName || 'T').charAt(0).toUpperCase()}
             </span>
           )}
-          <span className="hidden text-base font-bold tracking-tight text-gray-900 sm:inline">
-            {portalName || 'Portal'}
-          </span>
         </Link>
 
         <div className="hidden min-w-0 border-l border-gray-200 pl-4 md:block">

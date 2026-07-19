@@ -13,6 +13,7 @@ services:
       PORT: ${CORE_API_PORT:-8001}
       JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
       TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
     volumes:
       - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
@@ -25,6 +26,19 @@ services:
       - cloud-automation/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_PORT:-3002}
+      # Large-lab defaults (override in cloud-automation/.env). One batch per HTTP request
+      # when PROVISION_STEP_TIME_BUDGET_MS=0 so nginx/CDN do not kill 100-user role assign.
+      BULK_PROVISION_CONCURRENCY: ${BULK_PROVISION_CONCURRENCY:-30}
+      DELETE_AZURE_CONCURRENCY: ${DELETE_AZURE_CONCURRENCY:-30}
+      RESOURCE_GROUP_BATCH_SIZE: ${RESOURCE_GROUP_BATCH_SIZE:-25}
+      USER_PROVISION_BATCH_SIZE: ${USER_PROVISION_BATCH_SIZE:-25}
+      ROLE_PROVISION_BATCH_SIZE: ${ROLE_PROVISION_BATCH_SIZE:-25}
+      MAX_PROVISION_ACCOUNT_COUNT: ${MAX_PROVISION_ACCOUNT_COUNT:-1000}
+      PROVISION_STEP_TIME_BUDGET_MS: ${PROVISION_STEP_TIME_BUDGET_MS:-0}
+      SUPABASE_DB_STATEMENT_TIMEOUT_MS: ${SUPABASE_DB_STATEMENT_TIMEOUT_MS:-0}
+      SUPABASE_DB_QUERY_TIMEOUT_MS: ${SUPABASE_DB_QUERY_TIMEOUT_MS:-0}
+      SIGNIN_STALE_SESSION_MINUTES: ${SIGNIN_STALE_SESSION_MINUTES:-90}
+      SIGNIN_MONITOR_LOOKBACK_MINUTES: ${SIGNIN_MONITOR_LOOKBACK_MINUTES:-180}
     ports:
       - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
  
@@ -65,10 +79,32 @@ services:
       HOSTNAME: 0.0.0.0
       PORT: ${CLIENT_PORTAL_PORT:-3000}
       GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
     depends_on:
       - cloud-gateway
+      - create-vm-catalog-agent
     ports:
       - "${CLIENT_PORTAL_PORT:-3000}:3000"
+
+  create-vm-catalog-agent:
+    build:
+      context: .
+      dockerfile: create-vm-catalog-agent/Dockerfile
+    image: gisuldocker/racko-create-vm-catalog-agent:${IMAGE_TAG:-dev}
+    env_file:
+      - create-vm-catalog-agent/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
+      HOSTNAME: 0.0.0.0
+      # When true, skip warm-up login on container start (useful during recovery)
+      SKIP_CATALOG_AGENT_WARMUP: ${SKIP_CATALOG_AGENT_WARMUP:-false}
+    ports:
+      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    volumes:
+      # Persist Playwright storage state so repeated logins are not required
+      # Mount a host directory to avoid file-vs-directory bind mount issues
+      - ./create-vm-catalog-agent/state:/app/state:rw
  
 volumes:
   tenant-assets:

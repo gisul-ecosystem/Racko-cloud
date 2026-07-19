@@ -82,6 +82,7 @@ const vmPushBody = z.object({
 export const pushAgentSchema = z.object({
   body: z.object({
     vms: z.array(vmPushBody).min(1).max(50),
+    sessionId: z.string().optional(),
   }),
 });
 
@@ -109,6 +110,13 @@ export const agentHeartbeatSchema = z.object({
   body: z.object({
     agentId: z.string({ required_error: 'agentId is required' }).min(1),
     status: z.string().min(1).max(32),
+    specs: z.object({
+      hostname:  z.string().optional(),
+      osVersion: z.string().optional(),
+      cpuCores:  z.number().optional(),
+      ramGb:     z.number().optional(),
+      diskGb:    z.number().optional(),
+    }).optional(),
   }),
 });
 

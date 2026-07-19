@@ -8,7 +8,7 @@ export const FORM_STEPS = [
   { id: 3, label: 'Cleanup' },
   { id: 4, label: 'Budget' },
   { id: 5, label: 'Services' },
-  { id: 6, label: 'Instances' },
+  { id: 6, label: 'Sizing' },
   { id: 7, label: 'Permissions' },
   { id: 8, label: 'Region' },
 ];
@@ -20,7 +20,7 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
     <nav aria-label="Request form progress" className="w-full">
       <div className="mb-4 flex items-center justify-between gap-3 border-b border-gray-100 pb-4">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+          <p className="text-xs font-semibold uppercase tracking-wider text-[var(--cloud-accent,#B91C1C)]">
             Request progress
           </p>
           <p className="mt-0.5 text-sm text-gray-500">
@@ -28,7 +28,7 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
             {completedCount > 0 ? ` · ${completedCount} completed` : ''}
           </p>
         </div>
-        <span className="hidden rounded-full bg-red-50 px-3 py-1 text-xs font-semibold text-[#B91C1C] ring-1 ring-[#B91C1C]/10 sm:inline">
+        <span className="hidden rounded-full bg-[var(--cloud-accent-soft,#fef2f2)] px-3 py-1 text-xs font-semibold text-[var(--cloud-accent,#B91C1C)] ring-1 ring-[var(--cloud-accent,#B91C1C)]/10 sm:inline">
           {FORM_STEPS[currentStep - 1]?.label}
         </span>
       </div>
@@ -54,9 +54,9 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 <span
                   className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-sm font-semibold transition-all ${
                     completed
-                      ? 'bg-[#B91C1C] text-white shadow-sm'
+                      ? 'bg-[var(--cloud-accent,#B91C1C)] text-white shadow-sm'
                       : active
-                        ? 'border-2 border-[#B91C1C] bg-red-50 text-[#B91C1C] shadow-sm'
+                        ? 'border-2 border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)] shadow-sm'
                         : reachable
                           ? 'border-2 border-gray-200 bg-white text-gray-500'
                           : 'border-2 border-gray-100 bg-gray-50 text-gray-300'
@@ -67,7 +67,7 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 <span
                   className={`mt-2 max-w-full truncate text-center text-[10px] font-medium leading-tight sm:text-xs ${
                     active
-                      ? 'font-semibold text-[#B91C1C]'
+                      ? 'font-semibold text-[var(--cloud-accent,#B91C1C)]'
                       : completed
                         ? 'text-gray-700'
                         : reachable
@@ -83,7 +83,7 @@ export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
                 <div
                   aria-hidden="true"
                   className={`mx-0.5 mt-[1.125rem] h-0.5 min-w-[8px] flex-1 shrink rounded-full ${
-                    completed ? 'bg-[#B91C1C]' : 'bg-gray-200'
+                    completed ? 'bg-[var(--cloud-accent,#B91C1C)]' : 'bg-gray-200'
                   }`}
                 />
               ) : null}

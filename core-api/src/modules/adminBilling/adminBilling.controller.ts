@@ -119,6 +119,58 @@ export class AdminBillingController {
       next(err);
     }
   }
+
+  async chargeCloudRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const { amountUsd, relatedRequestId, provider } = req.body as {
+        amountUsd: number;
+        relatedRequestId?: string | null;
+        provider?: 'azure' | 'aws';
+      };
+      const result = await adminBillingService.chargeCloudRequest(
+        authReq.user.userId,
+        amountUsd,
+        relatedRequestId ?? null,
+        provider === 'aws' ? 'aws' : 'azure'
+      );
+      success(res, 'Wallet charged for cloud lab request.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async refundCloudRequestCharge(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const { amountInr, relatedRequestId } = req.body as {
+        amountInr: number;
+        relatedRequestId?: string | null;
+      };
+      const wallet = await adminBillingService.refundCloudRequestCharge(
+        authReq.user.userId,
+        amountInr,
+        relatedRequestId ?? null
+      );
+      success(res, 'Cloud lab charge refunded to wallet.', wallet);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async linkCloudRequestCharge(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const { relatedRequestId } = req.body as { relatedRequestId: string };
+      await adminBillingService.patchLatestTransactionJobId(
+        authReq.user.userId,
+        relatedRequestId
+      );
+      success(res, 'Wallet charge linked to cloud request.', { relatedRequestId });
+    } catch (err) {
+      next(err);
+    }
+  }
 }
 
 export const adminBillingController = new AdminBillingController();

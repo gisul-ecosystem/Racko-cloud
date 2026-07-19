@@ -2,11 +2,26 @@ import Request from '../models/Request.js';
 import cron from 'node-cron';
 import { cleanupUserResources, pauseUserResources } from '../services/resourceCleanupService.js';
 import CleanupLog from '../models/CleanupLog.js';
-import { sendResourceCleanupEmail } from '../services/cleanupEmailService.js';
+import {
+  sendLabExpiryWarningEmail,
+  sendResourceCleanupEmail,
+} from '../services/cleanupEmailService.js';
 import { buildRequestLabel, countCleanupDeleted } from '../utils/cleanupMetrics.js';
 import { createNotification } from '../services/notificationService.js';
 
 let isRunning = false;
+
+async function isRequestEligibleForCleanupEmail(requestId) {
+  const request = await Request.findOne({
+    _id: requestId,
+    status: 'Completed',
+    cleanupEnabled: true,
+    endDate: { $gte: new Date() },
+    cleanupCompleted: { $ne: true },
+  }).select('_id');
+
+  return Boolean(request);
+}
 
 export async function runCleanupCheck() {
   if (isRunning) {
@@ -20,6 +35,7 @@ export async function runCleanupCheck() {
       status: 'Completed',
       cleanupEnabled: true,
       enableResourceCleanup: { $ne: true },
+      cleanupCompleted: { $ne: true },
       endDate: { $gte: new Date() },
     });
 
@@ -69,6 +85,14 @@ export async function runCleanupCheck() {
       if (requestHadCleanup) {
         const intervalHours = request.cleanupIntervalHours || 2;
         const nextCleanupAt = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
+        const stillActive = await isRequestEligibleForCleanupEmail(request._id);
+
+        if (!stillActive) {
+          console.log(
+            `[cleanupScheduler] Skipping cleanup email for ${request._id} — request expired or deleted`
+          );
+          continue;
+        }
 
         await Request.findByIdAndUpdate(request._id, {
           cleanupNextRunAt: nextCleanupAt,
@@ -135,26 +159,59 @@ export function startCleanupScheduler() {
   console.log('[cleanupScheduler] Started — checking every 5 minutes');
   runCleanupCheck();
 
-  cron.schedule('0 9 * * *', async () => {
-    try {
-      const expiringSoon = await Request.find({
-        status: 'Completed',
-        endDate: {
-          $gte: new Date(),
-          $lte: new Date(Date.now() + 24 * 60 * 60 * 1000),
-        },
-      });
-
-      for (const request of expiringSoon) {
-        await createNotification({
-          type: 'lab_expiring_soon',
-          title: 'AWS Lab expiring in 24 hours',
-          message: `AWS Lab for ${request.customerEmail} (${request.region}) expires in less than 24 hours`,
-          requestId: request._id,
+  cron.schedule(
+    '0 9 * * *',
+    async () => {
+      try {
+        const now = new Date();
+        const expiringSoon = await Request.find({
+          status: 'Completed',
+          cleanupCompleted: { $ne: true },
+          customerEmail: { $exists: true, $nin: [null, ''] },
+          endDate: {
+            $gte: now,
+            $lte: new Date(now.getTime() + 24 * 60 * 60 * 1000),
+          },
+          $or: [
+            { expiryWarningEmailSentAt: { $exists: false } },
+            { expiryWarningEmailSentAt: null },
+          ],
         });
+
+        for (const request of expiringSoon) {
+          const requestLabel = buildRequestLabel(request);
+          try {
+            await sendLabExpiryWarningEmail({
+              to: request.customerEmail,
+              requestLabel,
+              region: request.region,
+              endDate: request.endDate,
+            });
+
+            await Request.findByIdAndUpdate(request._id, {
+              expiryWarningEmailSentAt: now,
+              updatedAt: now,
+            });
+
+            await createNotification({
+              type: 'lab_expiring_soon',
+              title: 'AWS Lab expiring in 24 hours',
+              message: `AWS Lab for ${request.customerEmail} (${request.region}) expires in less than 24 hours`,
+              requestId: request._id,
+            });
+
+            console.log(`[cleanupScheduler] Expiry warning email sent for ${request._id}`);
+          } catch (emailErr) {
+            console.error(
+              `[cleanupScheduler] Expiry warning email failed for ${request._id}:`,
+              emailErr.message
+            );
+          }
+        }
+      } catch (err) {
+        console.error('[cleanupScheduler] Expiry warning check failed:', err.message);
       }
-    } catch (err) {
-      console.error('[cleanupScheduler] Expiry warning check failed:', err.message);
-    }
-  });
+    },
+    { timezone: 'Asia/Kolkata' }
+  );
 }

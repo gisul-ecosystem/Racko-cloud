@@ -1,10 +1,5 @@
 'use client';
 
-import { useState } from 'react';
-import {
-  reinstateAwsLabUser,
-  suspendAwsLabUser,
-} from '../../../../cloud_automation_aws/api/managePortalClient';
 import BudgetCleanupCell from './BudgetCleanupCell';
 import LaunchConsoleButton from './LaunchConsoleButton';
 import SessionInfo from './SessionInfo';
@@ -50,43 +45,7 @@ export default function UserRow({
   onRefresh,
   onFeedback,
 }) {
-  const [actionLoading, setActionLoading] = useState(false);
   const allowedServices = portalData.allowedServices || [];
-
-  async function handleSuspend(event) {
-    event.stopPropagation();
-    if (!window.confirm(`Suspend ${user.username}?`)) return;
-
-    setActionLoading(true);
-    onFeedback?.(null);
-
-    try {
-      await suspendAwsLabUser(requestId, user.userIndex, jwtToken);
-      onFeedback?.(`${user.username} suspended.`);
-      onRefresh();
-    } catch (err) {
-      onFeedback?.(`Suspend failed: ${err.message}`);
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
-  async function handleReinstate(event) {
-    event.stopPropagation();
-    setActionLoading(true);
-    onFeedback?.(null);
-
-    try {
-      await reinstateAwsLabUser(requestId, user.userIndex, jwtToken);
-      onFeedback?.(`${user.username} reinstated.`);
-      onRefresh();
-    } catch (err) {
-      onFeedback?.(`Reinstate failed: ${err.message}`);
-    } finally {
-      setActionLoading(false);
-    }
-  }
-
   const expiryDate = portalData.endDate
     ? new Date(portalData.endDate).toISOString().split('T')[0]
     : '—';
@@ -98,11 +57,11 @@ export default function UserRow({
         <div>{user.username}</div>
         {isIdentityCenter ? (
           <span className="mt-1 inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-800">
-            🔐 Direct IAM Login
+            Direct IAM Login
           </span>
         ) : (
           <span className="mt-1 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-900">
-            🔗 Magic Link
+            Magic Link
           </span>
         )}
       </td>
@@ -122,25 +81,6 @@ export default function UserRow({
               {user.servicePeriodMessage}
             </p>
           ) : null}
-          {user.suspended ? (
-            <button
-              type="button"
-              onClick={handleReinstate}
-              disabled={actionLoading}
-              className="w-fit rounded border border-green-200 bg-green-50 px-2 py-0.5 text-[11px] font-medium text-green-700 transition hover:bg-green-100 disabled:opacity-50"
-            >
-              Reinstate
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={handleSuspend}
-              disabled={actionLoading}
-              className="w-fit rounded border border-gray-200 bg-white px-2 py-0.5 text-[11px] font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
-            >
-              Suspend
-            </button>
-          )}
         </div>
       </td>
 

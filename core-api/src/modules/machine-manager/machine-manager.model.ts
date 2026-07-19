@@ -8,6 +8,14 @@ export type JobStatus = 'pending' | 'installing' | 'success' | 'failed' | 'retry
 
 // ─── Machine ──────────────────────────────────────────────────────────────────
 
+export interface IMachineSpecs {
+  hostname?: string;
+  osVersion?: string;
+  cpuCores?: number;
+  ramGb?: number;
+  diskGb?: number;
+}
+
 export interface IMachine extends Document {
   _id: mongoose.Types.ObjectId;
   name: string;
@@ -18,6 +26,7 @@ export interface IMachine extends Document {
   status: MachineStatus;
   adminId: mongoose.Types.ObjectId;
   lastSeen?: Date;
+  specs?: IMachineSpecs;
   deleted: boolean;
   createdAt: Date;
   updatedAt: Date;
@@ -33,6 +42,13 @@ const machineSchema = new Schema<IMachine>(
     status: { type: String, enum: ['pending', 'online', 'offline'], default: 'pending' },
     adminId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     lastSeen: { type: Date },
+    specs: {
+      hostname:  { type: String },
+      osVersion: { type: String },
+      cpuCores:  { type: Number },
+      ramGb:     { type: Number },
+      diskGb:    { type: Number },
+    },
     deleted: { type: Boolean, default: false, index: true },
   },
   {

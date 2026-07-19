@@ -131,6 +131,25 @@ export class TenantController {
       next(error);
     }
   }
+
+  async deleteBrandingAsset(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params as { id: string };
+      const assetType = resolveBrandingAssetType(req.query['assetType']);
+      if (!assetType) {
+        throw new ValidationError(
+          'assetType query parameter is required. Use logo, favicon, or login-page-image.'
+        );
+      }
+
+      await tenantBrandingAssetService.deleteAsset(id, assetType);
+      const tenant = await tenantService.getTenantById(id);
+
+      success(res, 'Branding asset removed.', { assetType, tenant });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
  
 export const tenantController = new TenantController();

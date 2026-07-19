@@ -106,8 +106,14 @@ export function RequestForm({
     [services, selectedServiceIds]
   );
 
-  const instanceServices = selectedServices.filter((service) => service.pricingType === 'instance');
-  const flatRateServices = selectedServices.filter((service) => service.pricingType === 'flat_rate');
+  const instanceServices = useMemo(
+    () => selectedServices.filter((service) => service.pricingType === 'instance'),
+    [selectedServices]
+  );
+  const flatRateServices = useMemo(
+    () => selectedServices.filter((service) => service.pricingType === 'flat_rate'),
+    [selectedServices]
+  );
 
   const toggleUsageWindowDay = (dayIndex, enabled) => {
     if (!enabled) {
@@ -138,7 +144,7 @@ export function RequestForm({
   return (
     <div className="space-y-6">
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="h-0.5 bg-gradient-to-r from-[#B91C1C] to-[#DC2626]" />
+        <div className="h-0.5 bg-gradient-to-r from-[var(--cloud-accent,#B91C1C)] to-[var(--cloud-accent,#B91C1C)]" />
         <div className="px-4 py-5 sm:px-6">
           <RequestStepper
             currentStep={currentStep}
@@ -216,7 +222,7 @@ export function RequestForm({
                     Best for short labs (≤7 days). Admin generates one-click console links from the
                     manage portal. No password needed.
                   </p>
-                  <p className="mt-2 text-[11px] font-semibold text-[#B91C1C]">
+                  <p className="mt-2 text-[11px] font-semibold text-[var(--cloud-accent,#B91C1C)]">
                     Max session: 12 hours per link
                   </p>
                 </button>
@@ -586,8 +592,8 @@ export function RequestForm({
           <div className="p-6">
             <SectionHeader
               step={6}
-              title="Instance sizes"
-              description={`Choose instance tiers for sized services. Preview uses ${pricingRegion} until you pick a region in step 8.`}
+              title="Instances & usage estimates"
+              description={`Choose instance sizes for compute services and lab usage tiers for GB/request-based services. Preview uses ${pricingRegion} until you pick a region in step 8.`}
             />
             <div className="mt-6">
             <InstancePicker

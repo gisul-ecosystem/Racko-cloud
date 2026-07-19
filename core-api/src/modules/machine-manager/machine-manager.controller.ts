@@ -86,6 +86,18 @@ export class MachineManagerController {
     }
   }
 
+  /** POST /api/v1/machines/:id/remove-agent */
+  async removeAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      await machineManagerService.deleteMachine(id, adminId);
+      success(res, 'Agent removal initiated. Agent will self-uninstall on next heartbeat.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
   // ─── Jobs ──────────────────────────────────────────────────────────────────
 
   /** POST /api/v1/machines/jobs */
@@ -129,12 +141,78 @@ export class MachineManagerController {
   async pushAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
-      const { vms } = req.body as PushAgentInput;
-      const result = await machineManagerService.pushAgentToVMs(vms, adminId);
-      success(res, 'Agent push initiated.', result, 201);
+      const { vms, sessionId } = req.body as PushAgentInput & { sessionId?: string };
+      const sid = sessionId ?? `push-${Date.now()}`;
+      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid);
+      success(res, 'Agent push initiated.', { ...result, sessionId: sid }, 201);
     } catch (err) {
       next(err);
     }
+  }
+
+  /**
+   * POST /api/v1/machines/push-stream-ticket — issues a short-lived SSE stream ticket
+   * for a push session. Called immediately before opening the SSE stream.
+   */
+  async issuePushStreamTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = (req as AuthenticatedRequest).user.userId;
+      const { sessionId } = req.body as { sessionId: string };
+      if (!sessionId) {
+        res.status(400).json({ success: false, message: 'sessionId required.' });
+        return;
+      }
+      const { issuePushStreamTicket } = await import('./push.streamTicket');
+      const ticket = issuePushStreamTicket(sessionId, userId);
+      success(res, 'Push stream ticket issued.', ticket);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/v1/machines/push-stream/:sessionId?streamToken=xxx
+   * SSE stream for real-time push status updates.
+   * Auth via short-lived streamToken (EventSource cannot set auth headers).
+   */
+  async streamPushStatus(req: Request, res: Response): Promise<void> {
+    const sessionId = req.params['sessionId'] as string;
+    const rawToken = req.query['streamToken'];
+    const streamToken = typeof rawToken === 'string' ? rawToken : '';
+
+    const { consumePushStreamTicket } = await import('./push.streamTicket');
+    const ticket = streamToken ? consumePushStreamTicket(streamToken, sessionId) : null;
+    if (!ticket) {
+      res.status(401).json({ success: false, message: 'Unauthorized.' });
+      return;
+    }
+    logger.info('[PushStream] SSE stream opened', { sessionId });
+
+    // SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+    // Send a ping immediately to confirm stream is alive
+    send({ type: 'ping', sessionId });
+
+    const { pushSessionEmitter } = await import('./push.events');
+
+    const listener = (event: object) => {
+      send(event);
+    };
+
+    pushSessionEmitter.on(sessionId, listener);
+
+    // Cleanup when client disconnects
+    req.on('close', () => {
+      pushSessionEmitter.removeListener(sessionId, listener);
+      machineManagerService.removePushSession(sessionId);
+    });
   }
 
   // ─── Agent (no auth — token-based) ────────────────────────────────────────
@@ -481,6 +559,22 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     req.on('close', () => {
       jobStatusEmitter.removeListener(jobId, listener);
     });
+  }
+  /** POST /api/v1/machines/:id/exec */
+  async execCommand(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const { command } = req.body as { command: string };
+      if (!command || typeof command !== 'string' || !command.trim()) {
+        res.status(400).json({ success: false, message: 'command is required.' });
+        return;
+      }
+      const result = await machineManagerService.execCommand(id, adminId, command.trim());
+      success(res, 'Command executed.', result);
+    } catch (err) {
+      next(err);
+    }
   }
 }
 

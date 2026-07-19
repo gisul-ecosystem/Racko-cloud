@@ -210,6 +210,7 @@ const requestSchema = new mongoose.Schema(
     cleanupNextRunAt: Date,
     cleanupCompleted: { type: Boolean, default: false },
     expiryCleanupAt: Date,
+    expiryWarningEmailSentAt: Date,
     cleanupLogs: [cleanupLogSchema],
 
     perUserBudgetUsd: { type: Number, default: null },

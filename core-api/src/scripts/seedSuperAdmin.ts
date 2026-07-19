@@ -1,7 +1,7 @@
 /**
- * Super Admin Seed Script 
- * Run once: npx ts-node src/scripts/seedSuperAdmin.ts
- * Idempotent — skips if super_admin already exists.
+ * Super Admin Seed Script
+ * Run once: npm run seed
+ * Upserts by SUPER_ADMIN_EMAIL — creates or updates password/role.
  * NEVER expose this as an API endpoint.
  */
 import 'dotenv/config';
@@ -15,29 +15,36 @@ async function seedSuperAdmin(): Promise<void> {
 
   await connectDatabase();
 
-  const existing = await User.findOne({ role: 'super_admin' });
+  const email = config.SUPER_ADMIN_EMAIL.toLowerCase().trim();
+  const password = config.SUPER_ADMIN_PASSWORD;
+
+  const existing = await User.findOne({ email }).select('+password');
 
   if (existing) {
-    console.log('✅ super_admin already exists — skipping seed.');
-    await disconnectDatabase();
-    return;
+    existing.password = password; // pre-save hook re-hashes
+    existing.role = 'super_admin';
+    existing.isEmailVerified = true;
+    existing.isActive = true;
+    existing.isLocked = false;
+    existing.failedLoginAttempts = 0;
+    existing.lockedUntil = undefined;
+    await existing.save();
+    console.log(`✅ super_admin updated: ${email}`);
+  } else {
+    const superAdmin = new User({
+      email,
+      password, // pre-save hook hashes with argon2id
+      role: 'super_admin',
+      isEmailVerified: true,
+      isActive: true,
+      isLocked: false,
+      failedLoginAttempts: 0,
+    });
+    await superAdmin.save();
+    console.log(`✅ super_admin created: ${email}`);
   }
 
-  const superAdmin = new User({
-    email: config.SUPER_ADMIN_EMAIL,
-    password: config.SUPER_ADMIN_PASSWORD, // pre-save hook hashes with argon2id
-    role: 'super_admin',
-    isEmailVerified: true,
-    isActive: true,
-    isLocked: false,
-    failedLoginAttempts: 0,
-  });
-
-  await superAdmin.save();
-
-  console.log(`✅ super_admin created: ${config.SUPER_ADMIN_EMAIL}`);
-  console.log('⚠  Store the password securely. This script should not be run again.');
-
+  console.log('⚠  Store the password securely.');
   await disconnectDatabase();
 }
 

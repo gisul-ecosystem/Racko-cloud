@@ -3,18 +3,24 @@ const AppError = require('../utils/AppError');
 const {
   buildUserPayload,
   createGraphClient,
-  createGraphUserWithRetry,
+  createOrAdoptGraphUser,
   getVerifiedDomain,
-  logAzureUserEvent
+  logAzureUserEvent,
+  toGraphProvisionError
 } = require('../provisioners/azure/userProvisioner');
 const { runWithConcurrency } = require('../utils/concurrency');
+const {
+  getBulkProvisionConcurrency,
+  getUserProvisionBatchSize,
+  getProvisionStepTimeBudgetMs
+} = require('../utils/provisionConcurrency');
 const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { isPerUserCosting } = require('../utils/costingMode');
-const { getStagingResourceGroupForUserNumber } = require('./userResourceGroupService');
+const { getStagingResourceGroups, getPerUserResourceGroupProgress } = require('./userResourceGroupService');
 const { provisionBudgetsForRequest } = require('./budgetProvisionService');
 
 const STATUS_CREATED = 'Created';
-const DEFAULT_CONCURRENCY = Math.max(1, Number(process.env.BULK_PROVISION_CONCURRENCY || 20));
+const DEFAULT_CONCURRENCY = getBulkProvisionConcurrency();
 const STATUS_BLOCKED = 'Blocked';
 
 const getRequestByIdForUserProvisioning = async (client, requestId) => {
@@ -40,10 +46,10 @@ const getRequestByIdForUserProvisioning = async (client, requestId) => {
 
 const getExistingUsersForRequest = async (requestId) => {
   const query = `
-    SELECT request_id, azure_user_id, username, status
+    SELECT request_id, azure_user_id, username, status, user_number
     FROM azure_users
     WHERE request_id = $1
-    ORDER BY username ASC
+    ORDER BY user_number ASC NULLS LAST, username ASC
   `;
 
   const result = await db.query(query, [requestId]);
@@ -94,24 +100,19 @@ const getInitialScheduleAccess = (request) => {
 };
 
 const insertAzureUsers = async (client, requestId, createdUsers) => {
-  const insertQuery = `
-    INSERT INTO azure_users (
-      request_id,
-      azure_user_id,
-      username,
-      temporary_password,
-      status,
-      blocked_until,
-      user_number,
-      azure_resource_group_name,
-      azure_resource_group_id
-    )
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-  `;
+  if (!createdUsers.length) {
+    return;
+  }
+
+  const values = [];
+  const params = [requestId];
+  let paramIndex = 2;
 
   for (const user of createdUsers) {
-    await client.query(insertQuery, [
-      requestId,
+    values.push(
+      `($1, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++}, $${paramIndex++})`
+    );
+    params.push(
       user.azureUserId,
       user.username,
       user.temporaryPassword,
@@ -120,119 +121,80 @@ const insertAzureUsers = async (client, requestId, createdUsers) => {
       user.userNumber,
       user.resourceGroupName || null,
       user.resourceGroupId || null
-    ]);
+    );
   }
+
+  await client.query(
+    `
+      INSERT INTO azure_users (
+        request_id,
+        azure_user_id,
+        username,
+        temporary_password,
+        status,
+        blocked_until,
+        user_number,
+        azure_resource_group_name,
+        azure_resource_group_id
+      )
+      VALUES ${values.join(', ')}
+    `,
+    params
+  );
 };
 
 const provisionUsersForRequest = async (requestId) => {
-  const client = await db.connect();
+  const requestResult = await db.query(
+    `
+      SELECT
+        id,
+        account_count,
+        status,
+        expiry_date,
+        enable_daily_usage,
+        daily_limit_minutes,
+        usage_schedule,
+        enforce_in_azure,
+        costing_mode
+      FROM requests
+      WHERE id = $1
+    `,
+    [requestId]
+  );
 
-  try {
-    await client.query('BEGIN');
+  const request = requestResult.rows[0];
 
-    const request = await getRequestByIdForUserProvisioning(client, requestId);
+  if (!request) {
+    throw new AppError('Request not found.', 404);
+  }
 
-    if (!request) {
-      throw new AppError('Request not found.', 404);
-    }
+  const perUserProgress = await getPerUserResourceGroupProgress(requestId);
 
-    const accountCount = Number(request.account_count);
-
-    if (!Number.isInteger(accountCount) || accountCount <= 0) {
-      throw new AppError('Request account count is invalid.', 400);
-    }
-
+  if (isPerUserCosting(request.costing_mode)) {
     const existingUsers = await getExistingUsersForRequest(requestId);
 
-    if (existingUsers.length === accountCount) {
-      await client.query('COMMIT');
-
-      logAzureUserEvent('info', 'azure_user_provision_reused_existing', {
-        requestId,
-        usersCreated: existingUsers.length
-      });
-
+    if (!perUserProgress.ready) {
       return {
-        usersCreated: existingUsers.length
+        usersCreated: existingUsers.length,
+        accountCount: perUserProgress.accountCount,
+        complete: false,
+        remaining: perUserProgress.remaining
       };
     }
+  }
 
-    if (existingUsers.length > 0 && existingUsers.length !== accountCount) {
-      throw new AppError(
-        'Partial Azure user provisioning exists for this request. Manual review is required.',
-        409
-      );
-    }
+  const accountCount = Number(request.account_count);
 
-    const { graphClient, subscriptionId } = createGraphClient();
-    const verifiedDomain = await getVerifiedDomain(graphClient);
+  if (!Number.isInteger(accountCount) || accountCount <= 0) {
+    throw new AppError('Request account count is invalid.', 400);
+  }
 
-    const initialAccess = getInitialScheduleAccess(request);
+  const existingUsers = await getExistingUsersForRequest(requestId);
 
-    logAzureUserEvent('info', 'azure_user_provision_started', {
+  if (existingUsers.length >= accountCount) {
+    logAzureUserEvent('info', 'azure_user_provision_reused_existing', {
       requestId,
-      subscriptionId,
-      accountCount,
-      verifiedDomain,
-      scheduleAccessAllowed: initialAccess.allowed,
-      scheduleAccessReason: initialAccess.reason,
-      azureAccountDisabledAtCreation: initialAccess.disableAzureAccount
-    });
-
-    const createdUsers = [];
-
-    const userNumbers = Array.from({ length: accountCount }, (_, index) => index + 1);
-    await runWithConcurrency(userNumbers, DEFAULT_CONCURRENCY, async (userNumber) => {
-      const { username, temporaryPassword, payload } = buildUserPayload({
-        requestId,
-        userNumber,
-        domain: verifiedDomain,
-        accountEnabled: !initialAccess.disableAzureAccount
-      });
-
-      const createdUser = await createGraphUserWithRetry(graphClient, payload, requestId);
-
-      let resourceGroupName = null;
-      let resourceGroupId = null;
-
-      if (isPerUserCosting(request.costing_mode)) {
-        const stagedResourceGroup = await getStagingResourceGroupForUserNumber(
-          requestId,
-          userNumber,
-          client
-        );
-
-        if (!stagedResourceGroup) {
-          throw new AppError(
-            `Per-user resource group is missing for user slot ${userNumber}. Create resource groups first.`,
-            400
-          );
-        }
-
-        resourceGroupName = stagedResourceGroup.azure_resource_group_name;
-        resourceGroupId = stagedResourceGroup.azure_resource_group_id;
-      }
-
-      createdUsers.push({
-        azureUserId: createdUser.id,
-        username,
-        temporaryPassword,
-        status: initialAccess.status,
-        blockedUntil: initialAccess.blockedUntil,
-        userNumber,
-        resourceGroupName,
-        resourceGroupId
-      });
-    });
-
-    await insertAzureUsers(client, requestId, createdUsers);
-
-    await client.query('COMMIT');
-
-    logAzureUserEvent('info', 'azure_user_provision_success', {
-      requestId,
-      subscriptionId,
-      usersCreated: createdUsers.length
+      usersCreated: existingUsers.length
     });
 
     try {
@@ -245,23 +207,170 @@ const provisionUsersForRequest = async (requestId) => {
     }
 
     return {
-      usersCreated: createdUsers.length
+      usersCreated: existingUsers.length,
+      accountCount,
+      complete: true,
+      remaining: 0
     };
-  } catch (error) {
-    await client.query('ROLLBACK');
-
-    logAzureUserEvent('error', 'azure_user_provision_failed', {
-      requestId,
-      errorName: error?.name,
-      errorCode: error?.code,
-      statusCode: error?.statusCode || error?.status,
-      message: error?.message
-    });
-
-    throw error;
-  } finally {
-    client.release();
   }
+
+  const existingUserNumbers = new Set(
+    existingUsers
+      .map((user) => Number(user.user_number))
+      .filter((userNumber) => Number.isInteger(userNumber) && userNumber > 0)
+  );
+  const pendingUserNumbers = Array.from({ length: accountCount }, (_, index) => index + 1).filter(
+    (userNumber) => !existingUserNumbers.has(userNumber)
+  );
+
+  const { graphClient, subscriptionId } = createGraphClient();
+  const verifiedDomain = await getVerifiedDomain(graphClient);
+  const initialAccess = getInitialScheduleAccess(request);
+
+  const stagingResourceGroupByUserNumber = new Map();
+  if (isPerUserCosting(request.costing_mode)) {
+    const stagingRows = await getStagingResourceGroups(requestId);
+    for (const row of stagingRows) {
+      stagingResourceGroupByUserNumber.set(Number(row.user_number), row);
+    }
+  }
+
+  logAzureUserEvent('info', 'azure_user_provision_started', {
+    requestId,
+    subscriptionId,
+    accountCount,
+    existingUsers: existingUsers.length,
+    pendingUsers: pendingUserNumbers.length,
+    verifiedDomain,
+    scheduleAccessAllowed: initialAccess.allowed,
+    scheduleAccessReason: initialAccess.reason,
+    azureAccountDisabledAtCreation: initialAccess.disableAzureAccount
+  });
+
+  const startedAt = Date.now();
+  const timeBudgetMs = getProvisionStepTimeBudgetMs();
+  const batchSize = getUserProvisionBatchSize();
+  let adoptedCount = 0;
+  let batchCreated = 0;
+
+  // With no time budget: one HTTP request = one user batch (proxy-safe for large labs).
+  let processedBatch = false;
+  while (
+    pendingUserNumbers.length > 0 &&
+    (timeBudgetMs === 0 ? !processedBatch : Date.now() - startedAt < timeBudgetMs)
+  ) {
+    const batchUserNumbers = pendingUserNumbers.splice(0, batchSize);
+    const createdUsers = [];
+
+    try {
+      await runWithConcurrency(batchUserNumbers, DEFAULT_CONCURRENCY, async (userNumber) => {
+        const { username, temporaryPassword, payload } = buildUserPayload({
+          requestId,
+          userNumber,
+          domain: verifiedDomain,
+          accountEnabled: !initialAccess.disableAzureAccount
+        });
+
+        const { user: createdUser, adopted } = await createOrAdoptGraphUser(
+          graphClient,
+          { payload, temporaryPassword },
+          requestId
+        );
+
+        if (adopted) {
+          adoptedCount += 1;
+        }
+
+        let resourceGroupName = null;
+        let resourceGroupId = null;
+
+        if (isPerUserCosting(request.costing_mode)) {
+          const stagedResourceGroup = stagingResourceGroupByUserNumber.get(userNumber);
+
+          if (!stagedResourceGroup) {
+            throw new AppError(
+              `Per-user resource group is missing for user slot ${userNumber}. Create resource groups first.`,
+              400
+            );
+          }
+
+          resourceGroupName = stagedResourceGroup.azure_resource_group_name;
+          resourceGroupId = stagedResourceGroup.azure_resource_group_id;
+        }
+
+        createdUsers.push({
+          azureUserId: createdUser.id,
+          username,
+          temporaryPassword,
+          status: initialAccess.status,
+          blockedUntil: initialAccess.blockedUntil,
+          userNumber,
+          resourceGroupName,
+          resourceGroupId
+        });
+      });
+    } catch (error) {
+      logAzureUserEvent('error', 'azure_user_provision_failed', {
+        requestId,
+        errorName: error?.name,
+        errorCode: error?.code || error?.cause?.code,
+        statusCode: error?.statusCode || error?.status,
+        message: error?.message,
+        cause: error?.cause?.message || null
+      });
+
+      throw toGraphProvisionError(error);
+    }
+
+    if (createdUsers.length > 0) {
+      const client = await db.connect();
+
+      try {
+        await client.query('BEGIN');
+        await insertAzureUsers(client, requestId, createdUsers);
+        await client.query('COMMIT');
+        batchCreated += createdUsers.length;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        throw error;
+      } finally {
+        client.release();
+      }
+    }
+
+    processedBatch = true;
+  }
+
+  const totalUsers = (await getExistingUsersForRequest(requestId)).length;
+  const remaining = Math.max(0, accountCount - totalUsers);
+  const complete = remaining === 0;
+
+  logAzureUserEvent(complete ? 'info' : 'info', complete ? 'azure_user_provision_success' : 'azure_user_provision_partial', {
+    requestId,
+    subscriptionId,
+    usersCreated: totalUsers,
+    usersAdopted: adoptedCount,
+    batchCreated,
+    remaining
+  });
+
+  if (complete) {
+    try {
+      await provisionBudgetsForRequest(requestId);
+    } catch (budgetError) {
+      logAzureUserEvent('error', 'azure_user_budget_provision_failed', {
+        requestId,
+        message: budgetError?.message
+      });
+    }
+  }
+
+  return {
+    usersCreated: totalUsers,
+    accountCount,
+    complete,
+    remaining
+  };
 };
 
 const getUsersForRequest = async (requestId) => {

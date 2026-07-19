@@ -40,22 +40,44 @@ export interface AwsPricingOption {
   flatRate: boolean;
 }
 
+export interface AwsUsageWindow {
+  dayOfWeek?: number;
+  day_of_week?: number;
+  windowStartTime?: string;
+  window_start_time?: string;
+  windowEndTime?: string;
+  window_end_time?: string;
+  timezone?: string;
+  dailyLimitHours?: number;
+  daily_limit_hours?: number | null;
+}
+
 export interface AwsPricingEstimatePayload {
   serviceIds: string[];
   region: string;
   accountCount: number;
-  durationDays: number;
+  durationDays?: number;
   instanceSelections?: Array<{ serviceId: string; instanceType: string }>;
+  startDate?: string;
+  endDate?: string;
+  usageWindows?: AwsUsageWindow[];
+  costingMode?: 'shared' | 'per_user';
 }
 
 export interface AwsPricingEstimateBreakdown {
   serviceName: string;
   instanceType: string;
+  label?: string | null;
+  pricingType?: 'instance' | 'flat_rate';
+  pricePerHour?: number;
   pricePerDay: number;
   priceUnit?: string;
   unitPrice?: number;
   flatRate?: boolean;
+  estimated?: boolean;
   accountCount: number;
+  accountMultiplier?: number;
+  durationHours?: number;
   durationDays: number;
   cost: number;
 }
@@ -63,7 +85,22 @@ export interface AwsPricingEstimateBreakdown {
 export interface AwsPricingEstimateResponse {
   success: boolean;
   total: number;
+  totalPrice?: number;
   breakdown: AwsPricingEstimateBreakdown[];
+  accounts?: number;
+  accountCount?: number;
+  costingMode?: 'shared' | 'per_user';
+  currency?: string;
+  durationHours?: number;
+  calendarHours?: number;
+  billableHours?: number;
+  usesUsageWindows?: boolean;
+  duration?: number;
+  durationDays?: number;
+  baseHourlyPrice?: number;
+  infraHourlyTotal?: number;
+  portalHourlyTotal?: number;
+  effectiveHourlyRate?: number;
 }
 
 export async function getCategories(): Promise<AwsServiceCategory[]> {
@@ -140,18 +177,6 @@ export async function calculatePricingEstimate(
     method: 'POST',
     body: JSON.stringify(payload),
   });
-}
-
-export interface AwsUsageWindow {
-  dayOfWeek?: number;
-  day_of_week?: number;
-  windowStartTime?: string;
-  window_start_time?: string;
-  windowEndTime?: string;
-  window_end_time?: string;
-  timezone?: string;
-  dailyLimitHours?: number;
-  daily_limit_hours?: number | null;
 }
 
 export interface AwsCreateRequestPayload {

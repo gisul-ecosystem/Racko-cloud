@@ -1,6 +1,6 @@
 'use client';
 
-import { Loader2, Lock } from 'lucide-react';
+import { AlertCircle, Loader2, Lock, Shield } from 'lucide-react';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
@@ -11,6 +11,7 @@ export default function ManagePortalLogin({
   token,
   loading,
   error,
+  sessionExpired,
   onSubmit,
 }) {
   const missingToken = !token?.trim();
@@ -31,31 +32,52 @@ export default function ManagePortalLogin({
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 bg-gray-50 px-6 py-8 text-center">
           <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
-            <Lock className="h-7 w-7" />
+            <Shield className="h-7 w-7" />
           </div>
           <h1 className="text-xl font-bold text-gray-900">AWS Lab Portal</h1>
           <p className="mt-2 text-sm text-gray-500">
-            Enter your portal credentials from the provisioning email.
+            Admins: use the temporary admin username and password from your email. Provisioned users:
+            sign in with your IAM username and temporary password.
           </p>
         </div>
 
         <div className="p-6">
           {missingToken && (
-            <div className="mb-5 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-              Open the secure link from your email to sign in. The link includes a one-time token.
+            <div className="mb-5 flex gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Access link required</p>
+                <p className="mt-0.5">
+                  Open the secure link from your email to sign in. The link includes a one-time token.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {sessionExpired && (
+            <div className="mb-5 flex gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Session expired</p>
+                <p className="mt-0.5">Please sign in again using your portal credentials.</p>
+              </div>
             </div>
           )}
 
           {error && (
-            <div className="mb-5 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-              {error}
+            <div className="mb-5 flex gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+              <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+              <div>
+                <p className="font-medium">Sign in failed</p>
+                <p className="mt-0.5">{error}</p>
+              </div>
             </div>
           )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
               <label htmlFor="username" className={labelClass}>
-                Username
+                Username or IAM User ID
               </label>
               <input
                 id="username"
@@ -65,13 +87,13 @@ export default function ManagePortalLogin({
                 required
                 disabled={missingToken || loading}
                 className={inputClass}
-                placeholder="admin-xxxx"
+                placeholder="admin-xxxx or rackolab1-xxxxxx"
               />
             </div>
 
             <div>
               <label htmlFor="password" className={labelClass}>
-                Password
+                Temporary Password
               </label>
               <input
                 id="password"

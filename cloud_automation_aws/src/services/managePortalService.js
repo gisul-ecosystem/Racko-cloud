@@ -6,6 +6,12 @@ import { evaluateServicePeriodAccess } from '../utils/servicePeriodAccess.js';
 
 const JWT_SECRET = process.env.PROVISION_ACCESS_TOKEN_SECRET || 'dev-secret';
 
+function createPortalError(message, statusCode = 401) {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+}
+
 function generatePortalCredentials() {
   const username = `admin-${crypto.randomBytes(4).toString('hex')}`;
   const password = `Rk!${crypto.randomBytes(8).toString('base64url')}9a`;
@@ -14,6 +20,102 @@ function generatePortalCredentials() {
 
 function hashPassword(password) {
   return crypto.createHmac('sha256', JWT_SECRET).update(password).digest('hex');
+}
+
+function normalizeLoginId(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+async function getPortalTokenSession(token) {
+  const session = await ManagePortalSession.findOne({ token });
+  if (!session) {
+    throw createPortalError('Invalid or expired access link.');
+  }
+  if (new Date() > session.expiresAt) {
+    throw createPortalError('Access link expired.');
+  }
+  return session;
+}
+
+async function verifyAdminCredentials(token, username, password) {
+  const session = await getPortalTokenSession(token);
+
+  if (session.username !== username) {
+    throw createPortalError('Invalid username or password.');
+  }
+
+  const passwordHash = hashPassword(password);
+  if (passwordHash !== session.passwordHash) {
+    throw createPortalError('Invalid username or password.');
+  }
+
+  return session;
+}
+
+async function verifyLabUserCredentials(requestId, username, password) {
+  const loginId = normalizeLoginId(username);
+  if (!loginId || !password) {
+    throw createPortalError('Username and password are required.', 400);
+  }
+
+  const request = await Request.findById(requestId);
+  if (!request) {
+    throw createPortalError('Request not found.', 404);
+  }
+
+  const accessType = request.accessType || 'magic_link';
+  if (accessType !== 'identity_center') {
+    throw createPortalError('Invalid username or password.');
+  }
+
+  const identityUser = (request.identityUsers || []).find((entry) => {
+    const candidates = [
+      entry.username,
+      `labuser${Number(entry.userIndex) + 1}`,
+    ]
+      .map(normalizeLoginId)
+      .filter(Boolean);
+    return candidates.includes(loginId);
+  });
+
+  if (!identityUser || String(identityUser.password) !== String(password)) {
+    throw createPortalError('Invalid username or password.');
+  }
+
+  if (identityUser.suspended) {
+    throw createPortalError('This account is suspended and cannot sign in.', 403);
+  }
+
+  return {
+    userIndex: identityUser.userIndex,
+    username: identityUser.username || `labuser${identityUser.userIndex + 1}`,
+  };
+}
+
+async function resolvePortalActor(token, username, password) {
+  try {
+    const session = await verifyAdminCredentials(token, username, password);
+    return {
+      role: 'admin',
+      session,
+      userIndex: null,
+      username: session.username,
+    };
+  } catch (adminError) {
+    if (adminError.statusCode && adminError.statusCode !== 401) {
+      throw adminError;
+    }
+
+    const session = await getPortalTokenSession(token);
+    const labUser = await verifyLabUserCredentials(session.requestId, username, password);
+
+    return {
+      role: 'user',
+      session,
+      userIndex: labUser.userIndex,
+      username: labUser.username,
+    };
+  }
 }
 
 export async function createManagePortalSession(request) {
@@ -39,24 +141,26 @@ export async function createManagePortalSession(request) {
 }
 
 export async function verifyManagePortalLogin(token, username, password) {
-  const session = await ManagePortalSession.findOne({ token });
-  if (!session) throw new Error('Invalid session token');
-  if (new Date() > session.expiresAt) throw new Error('Session expired');
-  if (session.username !== username) throw new Error('Invalid credentials');
-
-  const passwordHash = hashPassword(password);
-  if (passwordHash !== session.passwordHash) throw new Error('Invalid credentials');
+  const actor = await resolvePortalActor(token, username, password);
 
   const jwt_token = jwt.sign(
-    { requestId: String(session.requestId), username },
+    {
+      requestId: String(actor.session.requestId),
+      username: actor.username,
+      role: actor.role,
+      userIndex: actor.userIndex,
+    },
     JWT_SECRET,
     { expiresIn: '7d' }
   );
 
   return {
     jwt_token,
-    requestId: session.requestId,
-    customerEmail: session.customerEmail,
+    requestId: actor.session.requestId,
+    customerEmail: actor.session.customerEmail,
+    role: actor.role,
+    userIndex: actor.userIndex,
+    username: actor.username,
   };
 }
 
@@ -117,7 +221,7 @@ function buildIdentityCenterUserEntry(user, servicePeriod) {
   };
 }
 
-export async function getManagePortalData(requestId) {
+export async function getManagePortalData(requestId, { role = 'admin', userIndex = null } = {}) {
   const request = await Request.findById(requestId);
   if (!request) throw new Error('Request not found');
 
@@ -125,9 +229,13 @@ export async function getManagePortalData(requestId) {
   const accessType = request.accessType || 'magic_link';
   const isMagicLink = accessType !== 'identity_center';
 
-  const consoleUrls = isMagicLink
-    ? (request.labRoles || []).map((role) => buildMagicLinkUserEntry(role, servicePeriod))
+  let consoleUrls = isMagicLink
+    ? (request.labRoles || []).map((roleEntry) => buildMagicLinkUserEntry(roleEntry, servicePeriod))
     : (request.identityUsers || []).map((user) => buildIdentityCenterUserEntry(user, servicePeriod));
+
+  if (role === 'user' && userIndex != null) {
+    consoleUrls = consoleUrls.filter((entry) => Number(entry.userIndex) === Number(userIndex));
+  }
 
   return {
     requestId,
@@ -145,5 +253,6 @@ export async function getManagePortalData(requestId) {
     cleanupIntervalHours: request.cleanupIntervalHours,
     servicePeriod,
     consoleUrls,
+    role,
   };
 }

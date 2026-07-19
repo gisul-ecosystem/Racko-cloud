@@ -124,7 +124,7 @@ function createTenantCloudProxy(target: string, gatewayPrefix: string, timeoutMs
 const azureProxy = createTenantCloudProxy(
   config.CLOUD_AUTOMATION_URL,
   AZURE_PREFIX,
-  Math.max(config.REQUEST_TIMEOUT_MS, 120_000)
+  0
 );
 
 const awsProxy = createTenantCloudProxy(

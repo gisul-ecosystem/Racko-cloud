@@ -40,11 +40,16 @@ import tenantPlanRoutes from './modules/tenantPlan/tenantPlan.routes';
 import tenantNotificationRoutes from './modules/tenantNotification/tenantNotification.routes';
 import tenantUserRoutes from './modules/tenantUser/tenantUser.routes';
 import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
+import tenantExternalVmRoutes from './modules/tenantExternalVm/tenantExternalVm.routes';
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
 import adminBillingRoutes from './modules/adminBilling/adminBilling.routes';
+import externalVmPricingRoutes from './modules/externalVmPricing/externalVmPricing.routes';
+import vmCatalogRoutes from './modules/vmCatalog/vmCatalog.routes';
+import dedicatedServerRoutes from './modules/dedicatedServer/dedicatedServer.routes';
+import adminServicesRoutes from './modules/adminServices/adminServices.routes';
 
 const app = express();
 
@@ -157,6 +162,7 @@ app.use('/api/v1/tenant-plans', tenantPlanRoutes);
 app.use('/api/v1/tenant-notifications', tenantNotificationRoutes);
 app.use('/api/v1/tenant-users', tenantUserRoutes);
 app.use('/api/v1/tenant-vms', tenantVmRoutes);
+app.use('/api/v1/tenant-external-vms', tenantExternalVmRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -173,6 +179,10 @@ app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 app.use('/api/v1/ip-pool', ipPoolRoutes);
 app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
 app.use('/api/v1/admin-billing', adminBillingRoutes);
+app.use('/api/v1/external-vm-pricing', externalVmPricingRoutes);
+app.use('/api/v1/vm-catalog', vmCatalogRoutes);
+app.use('/api/v1/dedicated-servers', dedicatedServerRoutes);
+app.use('/api/v1/admin-services', adminServicesRoutes);
 
 // Start background services
 startNodeMonitoring();

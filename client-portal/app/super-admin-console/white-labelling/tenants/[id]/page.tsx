@@ -621,7 +621,7 @@ export default function TenantDetailPage() {
               setTenant(updated);
               setGeneralForm((f) => ({
                 ...f,
-                logoUrl: updated.branding?.logoUrl ?? f.logoUrl,
+                logoUrl: updated.branding?.logoUrl ?? '',
                 primaryColor: updated.branding?.primaryColor ?? f.primaryColor,
                 supportEmail: updated.branding?.supportEmail ?? f.supportEmail,
               }));
