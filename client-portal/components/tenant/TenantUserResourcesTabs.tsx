@@ -144,13 +144,20 @@ export function TenantUserResourcesTabs() {
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-gray-500">{s.ipAddress}</td>
                       <td className="px-4 py-3 text-right">
-                        <Link
-                          href={`${tenantConsole.elastic}/${s._id}/console`}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            window.open(
+                              `${tenantConsole.elastic}/${s._id}/console`,
+                              '_blank',
+                              'noopener,noreferrer'
+                            )
+                          }
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline"
                           style={accentLinkStyle}
                         >
                           Console <ChevronRight className="h-3.5 w-3.5" />
-                        </Link>
+                        </button>
                       </td>
                     </tr>
                   ))}
