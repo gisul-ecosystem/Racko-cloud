@@ -4,9 +4,11 @@ import {
   type ICatalogVm,
   type VmCatalogStatus,
 } from '../../models/catalogVm.model';
+import { VmCatalogPlan } from '../../models/vmCatalogPlan.model';
 import { User } from '../../models/user.model';
 import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
+import { externalVmPricingService } from '../externalVmPricing/externalVmPricing.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
@@ -19,6 +21,13 @@ import type {
   CatalogVmResponse,
   CreateCatalogVmRequestDto,
 } from './vmCatalog.types';
+
+const GST_RATE = 0.18;
+const BILLING_PERIODS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
+
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 export interface CatalogVmConsoleSession {
   protocol: 'rdp' | 'ssh';
@@ -198,7 +207,32 @@ class VmCatalogService {
       throw new ForbiddenError('Only active admins can submit catalog VM requests.');
     }
 
-    const total = Number(dto.pricingSnapshot.total);
+    const plan = await VmCatalogPlan.findById(dto.planId).lean();
+    if (!plan || !plan.isActive) {
+      throw new ValidationError('Selected template is not available.');
+    }
+
+    const billing = String(dto.billing || '').toLowerCase();
+    if (!BILLING_PERIODS.includes(billing as (typeof BILLING_PERIODS)[number])) {
+      throw new ValidationError('Invalid billing cycle.');
+    }
+
+    const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
+    if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
+      throw new ValidationError('Selected billing cycle is not priced for this template.');
+    }
+
+    const pricingCfg = await externalVmPricingService.getByProvider('webyne');
+    const multiplierRaw = Number(pricingCfg.categories[dto.category]?.multiplier);
+    const multiplier =
+      Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
+
+    const quantity = Math.max(1, Math.floor(Number(dto.quantity) || 1));
+    const unitPrice = roundMoney(baseUnit * multiplier);
+    const subtotal = roundMoney(unitPrice * quantity);
+    const tax = roundMoney(subtotal * GST_RATE);
+    const total = roundMoney(subtotal + tax);
+
     if (!Number.isFinite(total) || total <= 0) {
       throw new ValidationError('Invalid purchase total.');
     }
@@ -217,18 +251,22 @@ class VmCatalogService {
         adminId,
         provider: 'webyne',
         category: dto.category,
-        planId: dto.planId,
-        planName: dto.planName,
-        specs: dto.specs ?? {},
-        billing: dto.billing,
-        quantity: dto.quantity,
+        planId: plan._id.toString(),
+        planName: plan.name,
+        specs: {
+          cpu: `${plan.vcpu} vCPU`,
+          ram: `${plan.ramGb} GB`,
+          disk: `${plan.ssdGb} GB SSD`,
+        },
+        billing,
+        quantity,
         template: dto.template,
         pricingSnapshot: {
-          currency: dto.pricingSnapshot.currency || 'INR',
-          subtotal: dto.pricingSnapshot.subtotal,
-          tax: dto.pricingSnapshot.tax,
+          currency: plan.currency || dto.pricingSnapshot.currency || 'INR',
+          subtotal,
+          tax,
           total,
-          billingLabel: dto.pricingSnapshot.billingLabel,
+          billingLabel: 'GST 18%',
         },
         status: 'provisioning',
         chargedAmount: total,
