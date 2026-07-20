@@ -29,18 +29,32 @@ interface ApiResponse<T> {
   data: T;
 }
 
+export interface ConsoleDimensions {
+  width?: number;
+  height?: number;
+}
+
 /**
  * Request a Guacamole console session for a VM.
  *
  * Uses the shared apiClient — sends auth headers, handles 401 refresh.
  * Throws ApiError on failure; callers should render a user-friendly message.
+ *
+ * Pass the browser's actual viewport dimensions (window.innerWidth /
+ * window.innerHeight) so Guacamole renders at native resolution instead of
+ * scaling — sharper text, no blur.
  */
 export async function getConsoleSession(
   vmId: string,
-  protocol: ConsoleProtocol
+  protocol: ConsoleProtocol,
+  dimensions?: ConsoleDimensions
 ): Promise<ConsoleSession> {
+  const params = new URLSearchParams({ protocol });
+  if (dimensions?.width) params.set('width', String(Math.round(dimensions.width)));
+  if (dimensions?.height) params.set('height', String(Math.round(dimensions.height)));
+
   const res = await apiRequest<ApiResponse<ConsoleSession>>(
-    `/api/v1/vms/${vmId}/console?protocol=${encodeURIComponent(protocol)}`
+    `/api/v1/vms/${vmId}/console?${params.toString()}`
   );
   return res.data;
 }

@@ -11,6 +11,8 @@ import { getGatewayBaseUrl } from '../../../../lib/gatewayUrl';
 import {
   createMachine,
   pushAgentToVMs,
+  issuePushStreamTicket,
+  openPushStatusStream,
   fetchEnrollmentKey,
   fetchMachines,
   createJobs,
@@ -406,16 +408,42 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 }
 
 // ─── FLOW 2: VM (SSH/WinRM Push) ──────────────────────────────────────────────
-function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
+function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; onStepChange?: (step: number) => void }) {
   const { addToast } = useToast();
   const [step, setStep] = useState(1);
   const [vmRows, setVmRows] = useState<VMPushTarget[]>([{ name: '', ipAddress: '', os: 'linux', username: '', password: '' }]);
   const [machines, setMachines] = useState<IMachine[]>([]);
-  const [pushResults, setPushResults] = useState<Array<{ machineId: string; success: boolean; error?: string }>>([]);
   const [pushing, setPushing] = useState(false);
-  const [waiting, setWaiting] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Notify parent when step changes — used to hide "Change setup type" on steps 2+
+  useEffect(() => { onStepChange?.(step); }, [step, onStepChange]);
+
+  // Step 2 — per-machine live status
+  type VMStatus = { pushSuccess?: boolean; pushError?: string; agentConnected: boolean };
+  const [vmStatus, setVmStatus] = useState<Record<string, VMStatus>>({});
+  const [timeoutReached, setTimeoutReached] = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(180);
+  const sseRef = useRef<EventSource | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const PUSH_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+
+  const connectedMachines = machines.filter((m) => vmStatus[m._id]?.agentConnected);
+  const allResolved = machines.length > 0 && machines.every(
+    (m) => vmStatus[m._id]?.agentConnected || vmStatus[m._id]?.pushSuccess === false
+  );
+
+  // Cleanup SSE + timers
+  const cleanup = useCallback(() => {
+    sseRef.current?.close();
+    sseRef.current = null;
+    if (timerRef.current) clearTimeout(timerRef.current);
+    if (countdownRef.current) clearInterval(countdownRef.current);
+  }, []);
+
+  useEffect(() => () => cleanup(), [cleanup]);
 
   const updateRow = (i: number, field: keyof VMPushTarget, value: string) => {
     setVmRows((prev) => prev.map((r, idx) => idx === i ? { ...r, [field]: value } : r));
@@ -430,7 +458,6 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
       ['Web Server 01', '192.168.1.10', 'windows', 'Administrator', 'YourPassword'],
       ['DB Server', '10.0.0.5', 'linux', 'root', 'YourPassword'],
     ]);
-    // Set column widths
     ws['!cols'] = [{ wch: 18 }, { wch: 16 }, { wch: 10 }, { wch: 16 }, { wch: 16 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, 'VMs');
@@ -446,26 +473,21 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
       const wb = XLSX.read(data);
       const ws = wb.Sheets[wb.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json<Record<string, string>>(ws, { defval: '' });
-
       const parsed: VMPushTarget[] = rows
         .filter((r) => r['IP Address']?.trim())
         .map((r) => ({
-          name:      (r['Name'] || r['name'] || '').trim(),
-          ipAddress: (r['IP Address'] || r['ip address'] || r['ipAddress'] || '').trim(),
-          os:        ((r['OS'] || r['os'] || 'linux').toString().toLowerCase().trim()) as MachineOS,
-          username:  (r['Username'] || r['username'] || '').trim(),
-          password:  (r['Password'] || r['password'] || '').toString().trim(),
+          name:      (r['Name'] || '').trim(),
+          ipAddress: (r['IP Address'] || '').trim(),
+          os:        ((r['OS'] || 'linux').toString().toLowerCase().trim()) as MachineOS,
+          username:  (r['Username'] || '').trim(),
+          password:  (r['Password'] || '').toString().trim(),
         }))
         .filter((r) => r.ipAddress);
-
-      if (!parsed.length) {
-        addToast('error', 'No valid rows found. Check the Excel format matches the template.');
-        return;
-      }
+      if (!parsed.length) { addToast('error', 'No valid rows found.'); return; }
       setVmRows(parsed);
-      addToast('success', `${parsed.length} VM${parsed.length !== 1 ? 's' : ''} loaded from Excel.`);
+      addToast('success', `${parsed.length} VM${parsed.length !== 1 ? 's' : ''} loaded.`);
     } catch {
-      addToast('error', 'Failed to parse Excel file. Download the sample template and try again.');
+      addToast('error', 'Failed to parse Excel file.');
     } finally {
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
@@ -475,171 +497,305 @@ function VMFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
     const valid = vmRows.filter((r) => r.name.trim() && r.ipAddress.trim() && r.username.trim() && r.password.trim());
     if (!valid.length) { addToast('error', 'Fill in all required fields.'); return; }
     setPushing(true);
+
     try {
-      const result = await pushAgentToVMs(valid);
-      setMachines(result.machines);
-      setPushResults(result.pushResults);
-      setWaiting(true);
+      // Generate a unique session ID for this push batch
+      const sessionId = `push-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      // Only wait for machines whose push actually succeeded
-      const successfulMachineIds = new Set(
-        result.pushResults.filter((r) => r.success).map((r) => r.machineId)
-      );
+      // Issue SSE stream ticket first (before opening EventSource)
+      const { streamToken } = await issuePushStreamTicket(sessionId);
 
-      // If every push failed, skip polling and stay on step 1 so errors are visible
-      if (successfulMachineIds.size === 0) {
-        setWaiting(false);
-        return;
-      }
+      // Open SSE stream
+      const sse = openPushStatusStream(sessionId, streamToken);
+      sseRef.current = sse;
 
-      // Poll until all successfully-pushed machines come online
-      intervalRef.current = setInterval(async () => {
-        try {
-          const all = await fetchMachines();
-          const online = all.filter((m) => successfulMachineIds.has(m._id) && m.status === 'online');
-          if (online.length === successfulMachineIds.size) {
-            clearInterval(intervalRef.current!);
-            setMachines(result.machines); // keep all (including failed) for display
-            setWaiting(false);
-            setStep(2);
+      // Start 3-minute countdown
+      setSecondsLeft(180);
+      setTimeoutReached(false);
+      countdownRef.current = setInterval(() => {
+        setSecondsLeft((s) => {
+          if (s <= 1) {
+            clearInterval(countdownRef.current!);
+            return 0;
           }
-        } catch { /* ignore */ }
-      }, 4000);
+          return s - 1;
+        });
+      }, 1000);
+
+      // 3-minute timeout — move forward regardless
+      timerRef.current = setTimeout(() => {
+        setTimeoutReached(true);
+        cleanup();
+      }, PUSH_TIMEOUT_MS);
+
+      // Handle SSE events
+      sse.onmessage = (e: MessageEvent) => {
+        type PushEvent = { type: string; machineId: string; success?: boolean; error?: string; machineName?: string };
+        try {
+          const event = JSON.parse(e.data as string) as PushEvent;
+          if (event.type === 'push_result') {
+            setVmStatus((prev) => ({
+              ...prev,
+              [event.machineId]: {
+                ...prev[event.machineId],
+                pushSuccess: event.success,
+                pushError: event.error,
+                agentConnected: prev[event.machineId]?.agentConnected ?? false,
+              },
+            }));
+          } else if (event.type === 'agent_connected') {
+            setVmStatus((prev) => ({
+              ...prev,
+              [event.machineId]: {
+                ...prev[event.machineId],
+                pushSuccess: prev[event.machineId]?.pushSuccess ?? true,
+                agentConnected: true,
+              },
+            }));
+          }
+        } catch {
+          // ignore malformed SSE events
+        }
+      };
+
+      sse.onerror = () => {
+        sse.close();
+      };
+
+      // Trigger the actual push (runs in parallel with SSE receiving events)
+      const result = await pushAgentToVMs(valid, sessionId);
+      setMachines(result.machines);
+
+      // Initialize status map — merge with any SSE events already received before API returned
+      setVmStatus((prev) => {
+        const init = Object.fromEntries(result.machines.map((m) => [m._id, { agentConnected: false }]));
+        return { ...init, ...prev };
+      });
+
+      // Move to step 2 immediately after push API responds
+      setStep(2);
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to push agent.');
+      cleanup();
     } finally {
       setPushing(false);
     }
   };
 
-  const STEPS = ['Add VMs & Push Agent', 'Install Software'];
+  const handleContinue = () => {
+    cleanup();
+    setStep(3);
+  };
+
+  const STEPS = ['Add VMs', 'Connection Status', 'Install Software'];
 
   return (
     <div>
       <StepIndicator steps={STEPS} current={step} />
 
+      {/* ── Step 1: Enter VMs ── */}
       {step === 1 && (
         <div>
           <h2 className="mb-1 text-lg font-semibold text-gray-900">Add VMs</h2>
           <p className="mb-5 text-sm text-gray-500">Enter VM details. The platform will SSH/WinRM into each VM and install the agent automatically.</p>
 
-          {!waiting ? (
+          <div className="mb-4 flex items-center gap-2">
+            <button type="button" onClick={() => void downloadSample()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50">
+              <Download className="h-3.5 w-3.5" /> Download Sample Excel
+            </button>
+            <button type="button" onClick={() => fileInputRef.current?.click()}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50">
+              <FileUp className="h-3.5 w-3.5" /> Upload Excel
+            </button>
+            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden"
+              onChange={(e) => void handleExcelUpload(e)} />
+          </div>
+
+          <div className="space-y-3">
+            {vmRows.map((row, i) => (
+              <div key={i} className="grid grid-cols-1 gap-2 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:grid-cols-5">
+                <div><label className={labelClass}>Name *</label>
+                  <input className={inputClass} value={row.name} onChange={(e) => updateRow(i, 'name', e.target.value)} placeholder="Web Server 01" /></div>
+                <div><label className={labelClass}>IP Address *</label>
+                  <input className={inputClass} value={row.ipAddress} onChange={(e) => updateRow(i, 'ipAddress', e.target.value)} placeholder="192.168.1.10" /></div>
+                <div><label className={labelClass}>OS</label>
+                  <select className={inputClass} value={row.os} onChange={(e) => updateRow(i, 'os', e.target.value as MachineOS)}>
+                    <option value="linux">Linux</option>
+                    <option value="windows">Windows</option>
+                    <option value="macos">macOS</option>
+                  </select></div>
+                <div><label className={labelClass}>Username *</label>
+                  <input className={inputClass} value={row.username} onChange={(e) => updateRow(i, 'username', e.target.value)} placeholder="root" /></div>
+                <div className="relative"><label className={labelClass}>Password *</label>
+                  <input className={inputClass} type="password" value={row.password} onChange={(e) => updateRow(i, 'password', e.target.value)} placeholder="••••••••" />
+                  {vmRows.length > 1 && (
+                    <button type="button" onClick={() => removeRow(i)} className="absolute right-2 top-7 text-gray-400 hover:text-red-500">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="mt-3 flex items-center gap-3">
+            <button onClick={addRow} className="inline-flex items-center gap-1.5 text-sm text-[#B91C1C] hover:underline">
+              <Plus className="h-3.5 w-3.5" /> Add another VM
+            </button>
+          </div>
+
+          <div className="mt-6 flex justify-end border-t border-gray-100 pt-5">
+            <button onClick={() => void handlePush()} disabled={pushing}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:opacity-50">
+              {pushing && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />}
+              Push Agent to All VMs
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 2: Live Connection Status ── */}
+      {step === 2 && (
+        <div>
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-lg font-semibold text-gray-900">Connection Status</h2>
+              <p className="text-sm text-gray-500 mt-0.5">
+                {timeoutReached
+                  ? 'Timed out after 3 minutes.'
+                  : allResolved
+                  ? 'All VMs have reported a status.'
+                  : `Waiting for agents to connect… ${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')} remaining`
+                }
+              </p>
+            </div>
+            {(timeoutReached || allResolved) && (
+              <button onClick={handleContinue}
+                className="text-sm text-gray-400 hover:text-gray-700 underline">
+                Skip waiting
+              </button>
+            )}
+          </div>
+
+          {/* Progress bar */}
+          {!timeoutReached && !allResolved && (
+            <div className="mb-4 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
+              <div
+                className="h-full bg-[#B91C1C] transition-all duration-1000"
+                style={{ width: `${((180 - secondsLeft) / 180) * 100}%` }}
+              />
+            </div>
+          )}
+
+          {/* Summary chips */}
+          <div className="mb-4 flex flex-wrap gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-green-50 px-3 py-1 text-xs font-medium text-green-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-green-500" />
+              {connectedMachines.length} connected
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-red-50 px-3 py-1 text-xs font-medium text-red-600">
+              <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+              {machines.filter((m) => vmStatus[m._id]?.pushSuccess === false).length} push failed
+            </span>
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-yellow-50 px-3 py-1 text-xs font-medium text-yellow-700">
+              <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />
+              {machines.filter((m) => vmStatus[m._id]?.pushSuccess !== false && !vmStatus[m._id]?.agentConnected).length} connecting
+            </span>
+          </div>
+
+          {/* Per-VM table */}
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-gray-100 bg-gray-50">
+                  {['Machine', 'IP', 'Push', 'Agent'].map((h) => (
+                    <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {machines.map((m) => {
+                  const st = vmStatus[m._id];
+                  return (
+                    <tr key={m._id} className="border-b border-gray-50 last:border-0">
+                      <td className="px-4 py-3 font-medium text-gray-900">{m.name}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-gray-500">{m.ipAddress}</td>
+                      <td className="px-4 py-3">
+                        {st?.pushSuccess === undefined ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-transparent" /> Pushing…
+                          </span>
+                        ) : st.pushSuccess ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600">
+                            <Check className="h-3.5 w-3.5" /> Success
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600" title={st.pushError}>
+                            <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                            Failed{st.pushError ? ` — ${st.pushError.slice(0, 40)}` : ''}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3">
+                        {st?.agentConnected ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600">
+                            <Check className="h-3.5 w-3.5" /> Connected
+                          </span>
+                        ) : st?.pushSuccess === false ? (
+                          <span className="text-xs text-gray-400">—</span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-transparent" /> Waiting…
+                          </span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+
+          <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-5">
+            <p className="text-xs text-gray-400">
+              {connectedMachines.length > 0
+                ? `${connectedMachines.length} machine${connectedMachines.length !== 1 ? 's' : ''} will receive software in the next step.`
+                : 'No machines connected yet.'}
+            </p>
+            <button
+              onClick={handleContinue}
+              disabled={connectedMachines.length === 0}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:opacity-40"
+            >
+              Continue with {connectedMachines.length} VM{connectedMachines.length !== 1 ? 's' : ''} →
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── Step 3: Install Software ── */}
+      {step === 3 && (
+        <div>
+          {connectedMachines.length > 0 ? (
             <>
-              {/* Excel import/export toolbar */}
-              <div className="mb-4 flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void downloadSample()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
-                >
-                  <Download className="h-3.5 w-3.5" />
-                  Download Sample Excel
-                </button>
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50"
-                >
-                  <FileUp className="h-3.5 w-3.5" />
-                  Upload Excel
-                </button>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  className="hidden"
-                  onChange={(e) => void handleExcelUpload(e)}
-                />
+              <div className="mb-5 flex items-center gap-2">
+                <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500">
+                  <Check className="h-3.5 w-3.5 text-white" />
+                </div>
+                <span className="text-sm font-medium text-green-700">
+                  {connectedMachines.length} VM{connectedMachines.length !== 1 ? 's' : ''} connected and ready
+                </span>
               </div>
-              <div className="space-y-3">
-                {vmRows.map((row, i) => (
-                  <div key={i} className="grid grid-cols-1 gap-2 rounded-xl border border-gray-200 bg-gray-50 p-4 sm:grid-cols-5">
-                    <div>
-                      <label className={labelClass}>Name *</label>
-                      <input className={inputClass} value={row.name} onChange={(e) => updateRow(i, 'name', e.target.value)} placeholder="Web Server 01" />
-                    </div>
-                    <div>
-                      <label className={labelClass}>IP Address *</label>
-                      <input className={inputClass} value={row.ipAddress} onChange={(e) => updateRow(i, 'ipAddress', e.target.value)} placeholder="192.168.1.10" />
-                    </div>
-                    <div>
-                      <label className={labelClass}>OS</label>
-                      <select className={inputClass} value={row.os} onChange={(e) => updateRow(i, 'os', e.target.value as MachineOS)}>
-                        <option value="linux">Linux</option>
-                        <option value="windows">Windows</option>
-                        <option value="macos">macOS</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className={labelClass}>Username *</label>
-                      <input className={inputClass} value={row.username} onChange={(e) => updateRow(i, 'username', e.target.value)} placeholder="root" />
-                    </div>
-                    <div className="relative">
-                      <label className={labelClass}>Password *</label>
-                      <input className={inputClass} type="password" value={row.password} onChange={(e) => updateRow(i, 'password', e.target.value)} placeholder="••••••••" />
-                      {vmRows.length > 1 && (
-                        <button type="button" onClick={() => removeRow(i)} className="absolute right-2 top-7 text-gray-400 hover:text-red-500">
-                          <Trash2 className="h-4 w-4" />
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-3 flex items-center gap-3">
-                <button onClick={addRow} className="inline-flex items-center gap-1.5 text-sm text-[#B91C1C] hover:underline">
-                  <Plus className="h-3.5 w-3.5" /> Add another VM
-                </button>
-              </div>
-
-              <div className="mt-6 flex justify-end border-t border-gray-100 pt-5">
-                <button onClick={() => void handlePush()} disabled={pushing}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:opacity-50">
-                  {pushing && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />}
-                  Push Agent to All VMs
-                </button>
-              </div>
+              <SoftwareStep machines={connectedMachines} isAuthenticated={isAuthenticated} />
             </>
           ) : (
-            <div className="space-y-3">
-              {machines.map((m) => {
-                const res = pushResults.find((r) => r.machineId === m._id);
-                return (
-                  <div key={m._id} className="flex items-center justify-between rounded-lg border border-gray-200 bg-white px-4 py-3">
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{m.name}</p>
-                      <p className="text-xs text-gray-400">{m.ipAddress}</p>
-                    </div>
-                    {res?.success === false ? (
-                      <span className="text-xs text-red-600">Push failed: {res.error}</span>
-                    ) : m.status === 'online' ? (
-                      <div className="flex items-center gap-1.5 text-green-600 text-xs font-medium">
-                        <Check className="h-4 w-4" /> Connected
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-1.5 text-gray-400 text-xs">
-                        <Loader2 className="h-4 w-4 animate-spin" /> Waiting…
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+            <div className="py-12 text-center">
+              <p className="text-sm text-gray-500">No machines connected. Go to <a href="/console/machine-manager/machines" className="text-[#B91C1C] hover:underline">My Machines</a> to manage your VMs.</p>
             </div>
           )}
         </div>
       )}
-
-      {step === 2 && (
-        <div>
-          <div className="mb-5 flex items-center gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-full bg-green-500"><Check className="h-3.5 w-3.5 text-white" /></div>
-            <span className="text-sm font-medium text-green-700">All {machines.length} VM{machines.length !== 1 ? 's' : ''} connected</span>
-          </div>
-          <SoftwareStep machines={machines} isAuthenticated={isAuthenticated} />
-        </div>
-      )}
-
     </div>
   );
 }
@@ -792,6 +948,7 @@ export default function SetupWizardPage() {
   const { isAuthenticated } = useAuth();
   const { toasts, addToast, dismiss } = useToast();
   const [path, setPath] = useState<SetupPath>(null);
+  const [vmStep, setVmStep] = useState(1);
 
   return (
     <div className="max-w-3xl">
@@ -807,13 +964,14 @@ export default function SetupWizardPage() {
 
         {path && (
           <div>
-            <button onClick={() => setPath(null)}
-              className="mb-5 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700">
-              ← Change setup type
-            </button>
-
+            {(path !== 'vm' || vmStep === 1) && (
+              <button onClick={() => { setPath(null); setVmStep(1); }}
+                className="mb-5 inline-flex items-center gap-1 text-xs text-gray-400 hover:text-gray-700">
+                ← Change setup type
+              </button>
+            )}
             {path === 'physical' && <PhysicalFlow isAuthenticated={isAuthenticated} />}
-            {path === 'vm' && <VMFlow isAuthenticated={isAuthenticated} />}
+            {path === 'vm' && <VMFlow isAuthenticated={isAuthenticated} onStepChange={setVmStep} />}
             {path === 'template' && <TemplateFlow isAuthenticated={isAuthenticated} />}
           </div>
         )}

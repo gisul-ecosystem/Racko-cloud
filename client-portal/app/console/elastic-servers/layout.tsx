@@ -7,6 +7,7 @@ import { ElasticServersSidebar } from '../../../components/console/ElasticServer
 import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar';
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
+import { RequireAdminService } from '../../../components/console/RequireAdminService';
 
 export default function ElasticServersLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -35,24 +36,26 @@ export default function ElasticServersLayout({ children }: { children: React.Rea
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
 
   return (
-    <ServiceShellLayout
-      sidebarOpen={sidebarOpen}
-      sidebar={
-        <ElasticServersSidebar
-          sidebarOpen={sidebarOpen}
-          onCloseSidebar={() => setSidebarOpen(false)}
-        />
-      }
-      topBar={
-        <RackoGlobalTopBar
-          onToggleSidebar={toggleSidebar}
-          title="Elastic Server Import"
-          subtitle="External server console"
-        />
-      }
-      mainClassName="p-6 lg:p-8"
-    >
-      {children}
-    </ServiceShellLayout>
+    <RequireAdminService serviceKey="elastic-servers">
+      <ServiceShellLayout
+        sidebarOpen={sidebarOpen}
+        sidebar={
+          <ElasticServersSidebar
+            sidebarOpen={sidebarOpen}
+            onCloseSidebar={() => setSidebarOpen(false)}
+          />
+        }
+        topBar={
+          <RackoGlobalTopBar
+            onToggleSidebar={toggleSidebar}
+            title="Elastic Server Import"
+            subtitle="External server console"
+          />
+        }
+        mainClassName="p-6 lg:p-8"
+      >
+        {children}
+      </ServiceShellLayout>
+    </RequireAdminService>
   );
 }

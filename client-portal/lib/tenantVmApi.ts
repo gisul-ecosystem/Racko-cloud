@@ -81,9 +81,15 @@ export async function restartTenantVm(vmId: string): Promise<TenantVmOperationRe
 
 export async function openTenantVmConsole(
   vmId: string,
-  protocol?: 'rdp' | 'ssh' | 'vnc'
+  protocol?: 'rdp' | 'ssh' | 'vnc',
+  dimensions?: { width?: number; height?: number }
 ): Promise<TenantVmConsoleResult> {
-  const qs = protocol ? `?protocol=${protocol}` : '';
+  const params = new URLSearchParams();
+  if (protocol) params.set('protocol', protocol);
+  if (dimensions?.width) params.set('width', String(Math.round(dimensions.width)));
+  if (dimensions?.height) params.set('height', String(Math.round(dimensions.height)));
+  const qs = params.toString() ? `?${params.toString()}` : '';
+
   return unwrap(
     tenantPortalRequest<ApiEnvelope<TenantVmConsoleResult>>(
       `/api/v1/tenant-vms/${vmId}/console${qs}`

@@ -1,8 +1,11 @@
 /** @type {import('next').NextConfig} */
-const gatewayUrl = (process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000").replace(
-  /\/$/,
-  ""
-);
+// Prefer Docker-internal gateway for rewrites so SSR/proxy does not hairpin
+// through the public Cloudflare hostname (which can return 1010/5xx).
+const gatewayUrl = (
+  process.env.GATEWAY_INTERNAL_URL ||
+  process.env.NEXT_PUBLIC_GATEWAY_URL ||
+  "http://localhost:8000"
+).replace(/\/$/, "");
 
 const nextConfig = {
   output: "standalone",

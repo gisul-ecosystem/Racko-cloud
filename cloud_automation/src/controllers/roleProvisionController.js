@@ -21,7 +21,9 @@ const provisionRolesForRequest = async (req, res, next) => {
       permissionsComplete: result.permissionsComplete,
       provisioningStatus: result.provisioningStatus,
       resourceScopedAssignments: result.resourceScopedAssignments,
-      permissionFailures: result.permissionFailures
+      permissionFailures: result.permissionFailures,
+      complete: result.complete ?? true,
+      remaining: result.remaining ?? 0
     });
   } catch (error) {
     next(error);
@@ -86,11 +88,18 @@ const getRoleAssignmentsForRequest = async (req, res, next) => {
   try {
     validateRequestId(req.params.id);
 
-    const roles = await roleProvisionService.getUserRoleAssignmentsForRequest(Number(req.params.id));
+    const requestId = Number(req.params.id);
+    const [roles, status] = await Promise.all([
+      roleProvisionService.getUserRoleAssignmentsForRequest(requestId),
+      roleProvisionService.getRoleProvisionStatus(requestId)
+    ]);
 
     res.status(200).json({
       success: true,
-      roles
+      roles,
+      count: roles.length,
+      complete: status.complete,
+      remaining: status.remaining
     });
   } catch (error) {
     next(error);

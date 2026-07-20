@@ -7,6 +7,7 @@ import { MachineManagerSidebar } from '../../../components/console/MachineManage
 import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar';
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
+import { RequireAdminService } from '../../../components/console/RequireAdminService';
 
 export default function MachineManagerLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -35,24 +36,26 @@ export default function MachineManagerLayout({ children }: { children: React.Rea
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
 
   return (
-    <ServiceShellLayout
-      sidebarOpen={sidebarOpen}
-      sidebar={
-        <MachineManagerSidebar
-          sidebarOpen={sidebarOpen}
-          onCloseSidebar={() => setSidebarOpen(false)}
-        />
-      }
-      topBar={
-        <RackoGlobalTopBar
-          onToggleSidebar={toggleSidebar}
-          title="Machine Manager"
-          subtitle="Install &amp; manage software"
-        />
-      }
-      mainClassName="p-6 lg:p-8"
-    >
-      {children}
-    </ServiceShellLayout>
+    <RequireAdminService serviceKey="machine-manager">
+      <ServiceShellLayout
+        sidebarOpen={sidebarOpen}
+        sidebar={
+          <MachineManagerSidebar
+            sidebarOpen={sidebarOpen}
+            onCloseSidebar={() => setSidebarOpen(false)}
+          />
+        }
+        topBar={
+          <RackoGlobalTopBar
+            onToggleSidebar={toggleSidebar}
+            title="Machine Manager"
+            subtitle="Install &amp; manage software"
+          />
+        }
+        mainClassName="p-6 lg:p-8"
+      >
+        {children}
+      </ServiceShellLayout>
+    </RequireAdminService>
   );
 }

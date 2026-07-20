@@ -10,11 +10,18 @@ const {
   roleAssignmentIdFromSeed
 } = require('../provisioners/azure/roleProvisioner');
 const { isPerUserCosting } = require('../utils/costingMode');
+const { getPerUserResourceGroupProgress } = require('./userResourceGroupService');
 const { getDependencyRolesForServices } = require('./serviceRoleDependencyService');
 const { finalizeAiFoundryTierRoles, applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments } = require('./instanceRoleMappingService');
 const { ResourceManagementClient } = require('@azure/arm-resources');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
-const { assignResourceScopedPermissions } = require('../provisioners/azure/resourceScopedRoleProvisioner');
+const { assignResourceScopedPermissions, RESOURCE_SCOPED_SCANNED_ROLE } = require('../provisioners/azure/resourceScopedRoleProvisioner');
+const {
+  getRoleProvisionConcurrency,
+  getRoleProvisionBatchSize,
+  getProvisionStepTimeBudgetMs,
+  getResourceScopedUserBatchSize
+} = require('../utils/provisionConcurrency');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -288,38 +295,95 @@ const batchUpsertAssignments = async (assignments) => {
 };
 
 const getUserRoleAssignmentsForRequest = async (requestId) => {
-  try {
-    const result = await db.query(
-      `SELECT
-         ura.assignment_id,
-         ura.azure_role,
-         ura.scope,
-         ura.assigned_at,
-         ura.assignment_kind,
-         ura.entra_group_id,
-         ura.assignment_status,
-         au.username,
-         au.azure_user_id,
-         s.name AS service_name
-       FROM user_role_assignments ura
-       LEFT JOIN azure_users au ON au.id = ura.user_id
-       LEFT JOIN request_service_roles rsr
-         ON rsr.request_id = ura.request_id AND rsr.azure_role = ura.azure_role
-       LEFT JOIN services s ON s.id = rsr.service_id
-       WHERE ura.request_id = $1
-       ORDER BY au.username, s.name, ura.azure_role`,
-      [requestId]
-    );
-    return result.rows;
-  } catch (error) {
-    console.error('Role assignment query failed', error);
-    throw error;
+  const result = await db.query(
+    `SELECT
+       ura.assignment_id,
+       ura.azure_role,
+       ura.scope,
+       ura.assigned_at,
+       ura.assignment_kind,
+       ura.entra_group_id,
+       ura.assignment_status,
+       au.username,
+       au.azure_user_id,
+       s.name AS service_name
+     FROM user_role_assignments ura
+     LEFT JOIN azure_users au ON au.id = ura.user_id
+     LEFT JOIN request_service_roles rsr
+       ON rsr.request_id = ura.request_id AND rsr.azure_role = ura.azure_role
+     LEFT JOIN services s ON s.id = rsr.service_id
+     WHERE ura.request_id = $1
+       AND ura.azure_role <> '__resource_scoped_scanned__'
+     ORDER BY au.username, s.name, ura.azure_role`,
+    [requestId]
+  );
+
+  return result.rows;
+};
+
+const getRoleProvisionStatus = async (requestId) => {
+  const request = await getRequestContext(db, requestId);
+  if (!request) {
+    return { complete: false, remaining: 0 };
   }
+
+  const [users, baseRoles] = await Promise.all([
+    getAzureUsersForRequest(db, requestId),
+    getSelectedRolesForRequest(db, requestId)
+  ]);
+
+  if (users.length === 0 || baseRoles.length === 0) {
+    return { complete: false, remaining: 0 };
+  }
+
+  const existingMap = await getAllExistingAssignments(
+    db,
+    requestId,
+    users.map((user) => user.id)
+  );
+
+  let remaining = 0;
+  for (const user of users) {
+    const existingRoles = existingMap.get(user.id) || new Set();
+    for (const role of baseRoles) {
+      if (!existingRoles.has(role.azureRole)) {
+        remaining += 1;
+      }
+    }
+  }
+
+  const selectedServices = await getSelectedServicesForRequest(db, requestId);
+  const activeResourceScopedRules = selectedServices.some((service) =>
+    [
+      'Azure AI Speech',
+      'Azure AI Search',
+      'Azure Key Vault',
+      'Azure AI Foundry',
+      'Azure API Management',
+      'Log Analytics Workspace',
+      'Azure Container Registry'
+    ].includes(service.serviceName)
+  );
+
+  let resourceScopedRemaining = 0;
+  if (activeResourceScopedRules) {
+    for (const user of users) {
+      const existingRoles = existingMap.get(user.id) || new Set();
+      if (!existingRoles.has(RESOURCE_SCOPED_SCANNED_ROLE)) {
+        resourceScopedRemaining += 1;
+      }
+    }
+  }
+
+  return {
+    complete: remaining === 0 && resourceScopedRemaining === 0,
+    remaining: remaining + resourceScopedRemaining
+  };
 };
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
-const CONCURRENCY_LIMIT = 10; // max parallel Azure calls
+const CONCURRENCY_LIMIT = getRoleProvisionConcurrency();
 
 const runConcurrent = async (tasks, limit) => {
   const results = [];
@@ -450,12 +514,41 @@ const provisionRolesForRequest = async (requestId) => {
     const request = await getRequestContext(db, requestId);
     if (!request) throw new AppError('Request not found', 404);
 
+    const perUserProgress = await getPerUserResourceGroupProgress(requestId);
+
+    if (perUserProgress.required && !perUserProgress.ready) {
+      return {
+        success: true,
+        complete: false,
+        remaining: perUserProgress.remaining,
+        usersProcessed: 0,
+        rolesAssigned: 0
+      };
+    }
+
     const [users, baseRoles, selectedServices, selectedInstances] = await Promise.all([
       getAzureUsersForRequest(db, requestId),
       getSelectedRolesForRequest(db, requestId),
       getSelectedServicesForRequest(db, requestId),
       getSelectedInstancesForRequest(db, requestId)
     ]);
+
+    const accountCount = Number(request.account_count);
+
+    if (
+      perUserProgress.required &&
+      Number.isInteger(accountCount) &&
+      accountCount > 0 &&
+      users.length < accountCount
+    ) {
+      return {
+        success: true,
+        complete: false,
+        remaining: accountCount - users.length,
+        usersProcessed: users.length,
+        rolesAssigned: 0
+      };
+    }
 
     let roles = await augmentRolesWithDependencies(db, baseRoles, requestId);
     roles = await filterRolesByAiFoundryTier(db, roles, requestId, selectedServices, selectedInstances);
@@ -481,6 +574,8 @@ const provisionRolesForRequest = async (requestId) => {
     if (users.length === 0 || roles.length === 0) {
       return {
         success: true,
+        complete: true,
+        remaining: 0,
         usersProcessed: users.length,
         rolesAssigned: 0
       };
@@ -547,8 +642,8 @@ const provisionRolesForRequest = async (requestId) => {
 
     // 3. Build all RBAC tasks and group assignments
     const rbacTasks = [];
-    const groupAssignments = new Map(); // groupId -> users[]
-    const pendingDbInserts = [];
+    const groupAssignments = new Map();
+    const groupDbInserts = [];
 
     for (const user of users) {
       const existingRoles = existingMap.get(user.id) || new Set();
@@ -557,14 +652,13 @@ const provisionRolesForRequest = async (requestId) => {
       for (const role of rolesForResourceGroup) {
         if (existingRoles.has(role.azureRole)) continue;
 
-        // Group assignment
         if (role.assignmentMode === 'group' && role.entraGroupId) {
           if (!groupAssignments.has(role.entraGroupId)) {
             groupAssignments.set(role.entraGroupId, []);
           }
           groupAssignments.get(role.entraGroupId).push(user);
 
-          pendingDbInserts.push({
+          groupDbInserts.push({
             assignmentId: roleAssignmentIdFromSeed(
               `${requestId}-${user.id}-${role.azureRole}-${role.entraGroupId}`
             ),
@@ -580,7 +674,6 @@ const provisionRolesForRequest = async (requestId) => {
           continue;
         }
 
-        // RBAC assignment
         const definition = isPerUserCosting(request.costing_mode)
           ? roleDefMap.get(`${resolveUserResourceGroupName(request, user)}:${role.azureRole}`)
           : roleDefMap.get(role.azureRole);
@@ -588,7 +681,6 @@ const provisionRolesForRequest = async (requestId) => {
 
         const assignmentId = roleAssignmentIdFromSeed(`${requestId}-${user.id}-${definition.id}`);
 
-        // Collect task for parallel execution
         rbacTasks.push(async () => {
           try {
             await createRoleAssignmentWithRetry(
@@ -623,27 +715,82 @@ const provisionRolesForRequest = async (requestId) => {
       }
     }
 
-    // 4. Run all RBAC Azure calls in parallel (with concurrency limit)
-    const rbacResults = await runConcurrent(rbacTasks, CONCURRENCY_LIMIT);
+    if (groupDbInserts.length > 0) {
+      await batchUpsertAssignments(groupDbInserts);
+    }
 
-    for (const result of rbacResults) {
-      if (result.status === 'fulfilled' && result.value) {
-        pendingDbInserts.push(result.value);
+    const startedAt = Date.now();
+    const timeBudgetMs = getProvisionStepTimeBudgetMs();
+    const batchSize = getRoleProvisionBatchSize();
+    let batchAssigned = 0;
+    const pendingDbInserts = [...groupDbInserts];
+
+    // With no time budget: one HTTP request = one RBAC batch (proxy-safe for large labs).
+    // With a time budget: keep assigning until the budget expires, then return complete:false.
+    let processedBatch = false;
+    while (
+      rbacTasks.length > 0 &&
+      (timeBudgetMs === 0 ? !processedBatch : Date.now() - startedAt < timeBudgetMs)
+    ) {
+      const batch = rbacTasks.splice(0, batchSize);
+      const rbacResults = await runConcurrent(batch, CONCURRENCY_LIMIT);
+
+      const batchInserts = [];
+      for (const result of rbacResults) {
+        if (result.status === 'fulfilled' && result.value) {
+          batchInserts.push(result.value);
+        } else if (result.status === 'rejected') {
+          throw result.reason;
+        }
       }
+
+      if (batchInserts.length > 0) {
+        await batchUpsertAssignments(batchInserts);
+        pendingDbInserts.push(...batchInserts);
+        batchAssigned += batchInserts.length;
+      }
+
+      processedBatch = true;
+    }
+
+    const rbacComplete = rbacTasks.length === 0;
+
+    if (!rbacComplete) {
+      return {
+        success: true,
+        complete: false,
+        remaining: rbacTasks.length,
+        usersProcessed: users.length,
+        rolesAssigned: batchAssigned,
+        successful: pendingDbInserts.length,
+        rolesProvisioned: [...new Set(roles.map((r) => r.azureRole))],
+        hasAiFoundry,
+        permissionsComplete: false,
+        provisioningStatus: 'provisioning_roles',
+        resourceScopedAssignments: 0,
+        permissionFailures: []
+      };
     }
 
     if (hasAiFoundry && includesAcrPull) {
-      try {
-        await assignAcrPullAtRegistryScope({
-          authorizationClient,
-          users,
-          request,
-          requestId,
-          existingMap,
-          pendingDbInserts
-        });
-      } catch (err) {
-        console.warn('[roleProvision] AcrPull assignment failed — continuing:', err.message);
+      const alreadyScanningResourceScoped = users.some((user) => {
+        const existingRoles = existingMap.get(user.id);
+        return existingRoles && existingRoles.has(RESOURCE_SCOPED_SCANNED_ROLE);
+      });
+
+      if (!alreadyScanningResourceScoped) {
+        try {
+          await assignAcrPullAtRegistryScope({
+            authorizationClient,
+            users,
+            request,
+            requestId,
+            existingMap,
+            pendingDbInserts
+          });
+        } catch (err) {
+          console.warn('[roleProvision] AcrPull assignment failed — continuing:', err.message);
+        }
       }
     }
 
@@ -651,7 +798,9 @@ const provisionRolesForRequest = async (requestId) => {
       assignments: [],
       failures: [],
       permissionsComplete: true,
-      resourcesProcessed: 0
+      resourcesProcessed: 0,
+      usersProcessed: 0,
+      usersRemaining: 0
     };
 
     try {
@@ -661,7 +810,9 @@ const provisionRolesForRequest = async (requestId) => {
         request,
         requestId,
         selectedServices,
-        resolveUserResourceGroupName
+        resolveUserResourceGroupName,
+        existingRoleMap: existingMap,
+        batchSize: getResourceScopedUserBatchSize()
       });
       pendingDbInserts.push(...resourcePermissionResult.assignments);
     } catch (err) {
@@ -670,14 +821,35 @@ const provisionRolesForRequest = async (requestId) => {
         assignments: [],
         failures: [{ message: err.message || 'Resource-scoped permission assignment failed' }],
         permissionsComplete: false,
-        resourcesProcessed: 0
+        resourcesProcessed: 0,
+        usersProcessed: 0,
+        usersRemaining: users.length
       };
     }
 
-    // 5. Batch insert all DB records in one shot
-    await batchUpsertAssignments(pendingDbInserts);
+    if (resourcePermissionResult.assignments.length > 0) {
+      await batchUpsertAssignments(resourcePermissionResult.assignments);
+      pendingDbInserts.push(...resourcePermissionResult.assignments);
+    }
 
-    // 6. Batch group memberships in parallel
+    if (resourcePermissionResult.usersRemaining > 0) {
+      return {
+        success: true,
+        complete: false,
+        remaining: resourcePermissionResult.usersRemaining,
+        usersProcessed: users.length,
+        rolesAssigned: pendingDbInserts.length,
+        successful: pendingDbInserts.length,
+        rolesProvisioned: [...new Set(roles.map((r) => r.azureRole))],
+        hasAiFoundry,
+        permissionsComplete: false,
+        provisioningStatus: 'provisioning_resource_permissions',
+        resourceScopedAssignments: resourcePermissionResult.resourcesProcessed,
+        permissionFailures: resourcePermissionResult.failures
+      };
+    }
+
+    // Batch group memberships in parallel
     await Promise.all(
       [...groupAssignments.entries()].map(([groupId, members]) =>
         batchAddUsersToGroups(graphClient, groupId, members, `request-${requestId}-group-${groupId}`)
@@ -688,6 +860,8 @@ const provisionRolesForRequest = async (requestId) => {
 
     return {
       success: permissionsComplete,
+      complete: permissionsComplete,
+      remaining: 0,
       usersProcessed: users.length,
       rolesAssigned: pendingDbInserts.length,
       successful: pendingDbInserts.length,
@@ -695,7 +869,7 @@ const provisionRolesForRequest = async (requestId) => {
       hasAiFoundry,
       permissionsComplete,
       provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioned_permissions_incomplete',
-      resourceScopedAssignments: resourcePermissionResult.assignments.length,
+      resourceScopedAssignments: resourcePermissionResult.resourcesProcessed,
       permissionFailures: resourcePermissionResult.failures
     };
   } catch (error) {
@@ -732,33 +906,43 @@ const repairResourceScopedPermissionsForRequest = async (requestId) => {
   }
 
   const { authorizationClient } = createAuthorizationClient();
+  const existingMap = await getAllExistingAssignments(
+    db,
+    requestId,
+    users.map((user) => user.id)
+  );
   const result = await assignResourceScopedPermissions({
     authorizationClient,
     users,
     request,
     requestId,
     selectedServices,
-    resolveUserResourceGroupName
+    resolveUserResourceGroupName,
+    existingRoleMap: existingMap,
+    batchSize: getResourceScopedUserBatchSize()
   });
 
   if (result.assignments.length > 0) {
     await batchUpsertAssignments(result.assignments);
   }
 
-  const permissionsComplete = result.permissionsComplete;
+  const permissionsComplete = result.usersRemaining === 0 && result.permissionsComplete;
 
   return {
     success: permissionsComplete,
+    complete: permissionsComplete,
+    remaining: result.usersRemaining || 0,
     usersProcessed: users.length,
     permissionsComplete,
-    provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioned_permissions_incomplete',
-    resourceScopedAssignments: result.assignments.length,
+    provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioning_resource_permissions',
+    resourceScopedAssignments: result.resourcesProcessed,
     permissionFailures: result.failures
   };
 };
 
 module.exports = {
   getUserRoleAssignmentsForRequest,
+  getRoleProvisionStatus,
   provisionRolesForRequest,
   reprovisionRolesForRequest,
   repairResourceScopedPermissionsForRequest

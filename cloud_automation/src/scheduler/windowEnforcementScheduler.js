@@ -237,7 +237,8 @@ function startWindowEnforcementScheduler() {
     return;
   }
 
-  scheduledTask = cron.schedule('* * * * *', async () => {
+  // Stagger to :20s so live usage-monitor (:05s) can run without fighting this job.
+  scheduledTask = cron.schedule('20 * * * * *', async () => {
     await runScheduledJob('window-enforcement', async () => {
       await enforceUsageWindows();
       await enforceDailyHourLimits();
@@ -246,7 +247,7 @@ function startWindowEnforcementScheduler() {
     });
   });
 
-  logEvent('info', 'window_enforcement_scheduler_started');
+  logEvent('info', 'window_enforcement_scheduler_started', { schedule: 'every minute at :20s' });
 }
 
 module.exports = {

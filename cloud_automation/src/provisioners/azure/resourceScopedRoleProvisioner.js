@@ -8,8 +8,13 @@ const {
   logAzureRoleEvent,
   roleAssignmentIdFromSeed
 } = require('./roleProvisioner');
+const {
+  getRoleProvisionConcurrency,
+  getResourceScopedUserBatchSize
+} = require('../../utils/provisionConcurrency');
 
-const CONCURRENCY_LIMIT = 10;
+const CONCURRENCY_LIMIT = getRoleProvisionConcurrency();
+const RESOURCE_SCOPED_SCANNED_ROLE = '__resource_scoped_scanned__';
 
 const API_VERSIONS = {
   'microsoft.cognitiveservices/accounts': '2023-05-01',
@@ -52,8 +57,6 @@ const SERVICE_RESOURCE_RULES = {
 };
 
 const KEY_VAULT_TRIGGER_SERVICES = new Set(['Azure Key Vault', 'Azure AI Foundry']);
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const runConcurrent = async (tasks, limit) => {
   const results = [];
@@ -340,13 +343,27 @@ const buildActiveRules = (selectedServices) => {
   return rules;
 };
 
+const buildScannedMarkerAssignment = ({ requestId, user, scope }) => ({
+  assignmentId: roleAssignmentIdFromSeed(`${requestId}-${user.id}-${RESOURCE_SCOPED_SCANNED_ROLE}`),
+  requestId,
+  userId: user.id,
+  azureRole: RESOURCE_SCOPED_SCANNED_ROLE,
+  scope: scope || 'resource-scoped-scan',
+  status: 'assigned',
+  assignedAt: new Date(),
+  assignmentKind: 'marker',
+  entraGroupId: null
+});
+
 const assignResourceScopedPermissions = async ({
   authorizationClient,
   users,
   request,
   requestId,
   selectedServices,
-  resolveUserResourceGroupName
+  resolveUserResourceGroupName,
+  existingRoleMap = null,
+  batchSize = getResourceScopedUserBatchSize()
 }) => {
   const activeRules = buildActiveRules(selectedServices);
   const assignments = [];
@@ -357,21 +374,43 @@ const assignResourceScopedPermissions = async ({
       assignments,
       failures,
       permissionsComplete: true,
-      resourcesProcessed: 0
+      resourcesProcessed: 0,
+      usersProcessed: 0,
+      usersRemaining: 0
     };
   }
 
+  const pendingUsers = users.filter((user) => {
+    const existingRoles = existingRoleMap?.get(user.id);
+    return !(existingRoles && existingRoles.has(RESOURCE_SCOPED_SCANNED_ROLE));
+  });
+
+  if (pendingUsers.length === 0) {
+    return {
+      assignments,
+      failures,
+      permissionsComplete: true,
+      resourcesProcessed: 0,
+      usersProcessed: users.length,
+      usersRemaining: 0
+    };
+  }
+
+  const userBatch = pendingUsers.slice(0, Math.max(1, batchSize));
   const { resourceClient, keyVaultClient } = createResourceClient();
   const tasks = [];
 
-  for (const user of users) {
+  for (const user of userBatch) {
     const resourceGroupName = resolveUserResourceGroupName(request, user);
     if (!resourceGroupName) {
+      assignments.push(buildScannedMarkerAssignment({ requestId, user, scope: 'missing-rg' }));
       continue;
     }
 
-    for (const rule of activeRules) {
-      tasks.push(async () => {
+    tasks.push(async () => {
+      const userAssignments = [];
+
+      for (const rule of activeRules) {
         let resources = [];
 
         try {
@@ -385,8 +424,8 @@ const assignResourceScopedPermissions = async ({
             role: rule.roles?.join(', ') || rule.rbacRole,
             message: error?.message || 'Failed to list resources'
           });
-          return [];
-          }
+          continue;
+        }
 
         if (resources.length === 0) {
           logAzureRoleEvent('info', 'resource_scoped_permissions_no_resources', {
@@ -395,10 +434,8 @@ const assignResourceScopedPermissions = async ({
             resourceGroupName,
             resourceType: rule.resourceType
           });
-          return [];
+          continue;
         }
-
-        const userAssignments = [];
 
         for (const resource of resources) {
           if (rule.resourceType === 'microsoft.keyvault/vaults') {
@@ -479,14 +516,20 @@ const assignResourceScopedPermissions = async ({
                 message: error?.message
               });
             }
-
-            await sleep(100);
           }
         }
+      }
 
-        return userAssignments;
-      });
-    }
+      userAssignments.push(
+        buildScannedMarkerAssignment({
+          requestId,
+          user,
+          scope: `/resourceGroups/${resourceGroupName}`
+        })
+      );
+
+      return userAssignments;
+    });
   }
 
   const results = await runConcurrent(tasks, CONCURRENCY_LIMIT);
@@ -496,16 +539,22 @@ const assignResourceScopedPermissions = async ({
     }
   }
 
+  const usersRemaining = Math.max(0, pendingUsers.length - userBatch.length);
+
   return {
     assignments,
     failures,
-    permissionsComplete: failures.length === 0,
-    resourcesProcessed: assignments.length
+    permissionsComplete: usersRemaining === 0 && failures.length === 0,
+    resourcesProcessed: assignments.filter((row) => row.azureRole !== RESOURCE_SCOPED_SCANNED_ROLE)
+      .length,
+    usersProcessed: userBatch.length,
+    usersRemaining
   };
 };
 
 module.exports = {
   SERVICE_RESOURCE_RULES,
+  RESOURCE_SCOPED_SCANNED_ROLE,
   assignResourceScopedPermissions,
   buildActiveRules,
   ensureKeyVaultPermissions,

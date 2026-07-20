@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../context/AuthContext';
 import { useExternalVMs } from '../../../hooks/useExternalVMs';
 import { ToastContainer, useToast } from '../../../components/ui/Toast';
@@ -32,20 +31,18 @@ function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
 }
 
 export default function MyServersPage() {
-  const router = useRouter();
   const { isAuthenticated } = useAuth();
   const { vms, loading, error, refetch } = useExternalVMs(isAuthenticated);
   const { toasts, addToast, dismiss } = useToast();
 
   const [pendingDelete, setPendingDelete] = useState<IExternalVM | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [consoleLoadingId, setConsoleLoadingId] = useState<string | null>(null);
 
   const handleOpenConsole = (vm: IExternalVM) => {
     // The console viewer page fetches the Guacamole session by id, so the
     // session token never appears in the browser address bar / history.
-    setConsoleLoadingId(vm._id);
-    router.push(`/console/elastic-servers/${vm._id}/console`);
+    // Opened in a new tab so the server list stays available in the original tab.
+    window.open(`/console/elastic-servers/${vm._id}/console`, '_blank', 'noopener,noreferrer');
   };
 
   const handleDelete = async () => {
@@ -180,9 +177,8 @@ export default function MyServersPage() {
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => handleOpenConsole(vm)}
-                            disabled={consoleLoadingId === vm._id}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
-                            title="Open browser console"
+                            title="Open browser console in a new tab"
                           >
                             <Monitor className="h-3.5 w-3.5" />
                             Console

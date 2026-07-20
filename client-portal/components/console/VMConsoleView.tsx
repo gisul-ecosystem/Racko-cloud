@@ -35,6 +35,21 @@ function getProtocolSubtitle(p: ConsoleProtocol): string {
   return 'Establishing secure RDP session';
 }
 
+/** Ignore sub-pixel/rounding drift so we don't loop re-fetching forever. */
+const DIMENSION_MATCH_TOLERANCE_PX = 4;
+
+function dimensionsDrifted(
+  a: { width?: number; height?: number },
+  b: { width?: number; height?: number }
+): boolean {
+  if (a.width === undefined || a.height === undefined) return false;
+  if (b.width === undefined || b.height === undefined) return false;
+  return (
+    Math.abs(a.width - b.width) > DIMENSION_MATCH_TOLERANCE_PX ||
+    Math.abs(a.height - b.height) > DIMENSION_MATCH_TOLERANCE_PX
+  );
+}
+
 export interface VMConsoleViewProps {
   backHref: string;
   disconnectHref: string;
@@ -52,11 +67,41 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   const [iframeKey, setIframeKey] = useState(0);
   const [iframeLoading, setIframeLoading] = useState(false);
   const [overlayMounted, setOverlayMounted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<ConsoleSession | null>(null);
   const iframeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayStartedAtRef = useRef(0);
+  /** Dimensions actually sent with the last console-session request. */
+  const lastFetchDimsRef = useRef<{ width?: number; height?: number }>({});
+  /** Prevents overlapping fetches when onLoad-recheck and ResizeObserver fire close together. */
+  const isFetchingRef = useRef(false);
+  const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Mirrors isFullscreen for reads inside stable closures (ResizeObserver callback). */
+  const isFullscreenRef = useRef(false);
+
+  /**
+   * Prefer the iframe's actual container box over window.innerWidth/innerHeight
+   * so Guacamole renders at the real on-screen resolution — no scaling, no
+   * black bars, no need to go fullscreen first. Falls back to window size
+   * before the container has been measured (e.g. the very first fetch, when
+   * no <iframe> has mounted yet).
+   *
+   * NOTE: We never call this while fullscreen — reloading the iframe (new
+   * iframeKey) destroys the fullscreen DOM element and kicks the browser out
+   * of fullscreen. RDP/VNC resizing while fullscreen is instead left to
+   * Guacamole's own resize-method=display-update, which resizes the existing
+   * session in place without any iframe reload. See handleFullscreenChange,
+   * the ResizeObserver, and handleIframeLoad for the isFullscreenRef guards.
+   */
+  const getContainerDimensions = useCallback((): { width?: number; height?: number } => {
+    const container = iframeRef.current?.parentElement ?? containerRef.current;
+    const width = container?.clientWidth ?? window.innerWidth;
+    const height = container?.clientHeight ?? window.innerHeight;
+    return { width, height };
+  }, []);
 
   const clearIframeTimeout = useCallback(() => {
     if (iframeTimeoutRef.current) {
@@ -86,10 +131,14 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   const fetchSession = useCallback(
     async (signal?: AbortSignal) => {
       if (!vmId) return;
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
       setLoading(true);
       setError(null);
       try {
-        const data = await getConsoleSession(vmId, protocol);
+        const dims = getContainerDimensions();
+        lastFetchDimsRef.current = dims;
+        const data = await getConsoleSession(vmId, protocol, dims);
         if (signal?.aborted) return;
         setSession(data);
         sessionRef.current = data;
@@ -102,16 +151,23 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
             : 'Failed to start console session. Please try again.'
         );
       } finally {
+        isFetchingRef.current = false;
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [vmId, protocol]
+    [vmId, protocol, getContainerDimensions]
   );
 
   useEffect(() => {
     const ctrl = new AbortController();
-    void fetchSession(ctrl.signal);
+    // Small delay to allow TenantAuthContext to read the _s URL param (a
+    // console opened via window.open() into a new tab) and persist the
+    // session into sessionStorage before we make the first API call.
+    const timer = setTimeout(() => {
+      void fetchSession(ctrl.signal);
+    }, 300);
     return () => {
+      clearTimeout(timer);
       ctrl.abort();
       const cached = sessionRef.current;
       if (cached) {
@@ -125,6 +181,39 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
     startIframeLoading();
     return () => clearIframeTimeout();
   }, [session, iframeKey, startIframeLoading, clearIframeTimeout]);
+
+  // Keep the console sized to its container — if the container is resized
+  // (window resize, sidebar toggle, panel drag, etc.), re-request the session
+  // with the new dimensions and reload the iframe so Guacamole re-renders at
+  // the correct resolution instead of scaling/letterboxing.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+
+      if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current);
+      resizeDebounceRef.current = setTimeout(() => {
+        if (isFullscreenRef.current) return; // entering/inside fullscreen isn't a real resize — don't reload
+        if (!sessionRef.current) return; // no active session yet — initial fetch will size correctly
+        if (dimensionsDrifted({ width, height }, lastFetchDimsRef.current)) {
+          void fetchSession();
+        }
+      }, 400);
+    });
+
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      if (resizeDebounceRef.current) {
+        clearTimeout(resizeDebounceRef.current);
+        resizeDebounceRef.current = null;
+      }
+    };
+  }, [fetchSession]);
 
   useEffect(() => {
     if (!iframeLoading && overlayMounted) {
@@ -141,6 +230,18 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
     const remainingMax = Math.max(0, IFRAME_OVERLAY_MAX_MS - elapsed);
     scheduleOverlayHide(Math.min(remainingMin, remainingMax));
     iframeRef.current?.focus();
+
+    // The container may not have been laid out yet when we requested this
+    // session (flex layout settling, fonts affecting toolbar height, etc.).
+    // Now that the iframe has actually rendered, re-check against the real
+    // container size and self-correct if it drifted from what we requested.
+    // Skip while fullscreen — entering fullscreen changes the container size
+    // on purpose and should never trigger a reload.
+    if (isFullscreenRef.current) return;
+    const currentDims = getContainerDimensions();
+    if (dimensionsDrifted(currentDims, lastFetchDimsRef.current)) {
+      void fetchSession();
+    }
   };
 
   useEffect(() => {
@@ -153,6 +254,14 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
 
   useEffect(() => {
     const handleFullscreenChange = () => {
+      // Deliberately does NOT re-fetch the session / reload the iframe here.
+      // Bumping iframeKey while fullscreen destroys the fullscreen DOM element
+      // and kicks the browser straight back out of fullscreen. Resizing the
+      // existing RDP/VNC display is left entirely to Guacamole's own
+      // resize-method=display-update, which resizes in place with no reload.
+      const nowFullscreen = !!document.fullscreenElement;
+      isFullscreenRef.current = nowFullscreen;
+      setIsFullscreen(nowFullscreen);
       setTimeout(() => iframeRef.current?.focus(), 300);
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -180,7 +289,14 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   };
 
   const handleFullscreen = () => {
-    const el = iframeRef.current;
+    // Fullscreen the wrapping container, not the <iframe> itself. Some page
+    // shells (e.g. dashboard layouts with a persistent header) put the iframe
+    // inside a box that's already smaller than the true viewport (room
+    // reserved for our own toolbar above it). Requesting fullscreen on the
+    // iframe alone can end up bounded by that layout, leaving a gap top/bottom.
+    // The container is a plain <div> with no reserved header space, so making
+    // IT the fullscreen element gives Guacamole the full screen to resize into.
+    const el = containerRef.current;
     if (!el || typeof el.requestFullscreen !== 'function') return;
     el.requestFullscreen()
       .then(() => {
@@ -276,7 +392,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
         </div>
       </div>
 
-      <div style={styles.body} onClick={() => iframeRef.current?.focus()}>
+      <div ref={containerRef} style={styles.body} onClick={() => iframeRef.current?.focus()}>
         {loading && !session && (
           <div style={styles.statusOverlay}>
             <div style={styles.spinner} />

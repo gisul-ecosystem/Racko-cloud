@@ -42,8 +42,11 @@ class DbQueryGate {
 }
 
 const configuredMax = Number(process.env.SUPABASE_DB_MAX_CONCURRENT_QUERIES);
+// Allow enough concurrency for large-lab provisioning without exhausting the pooler.
 const maxConcurrent =
-  Number.isFinite(configuredMax) && configuredMax > 0 ? Math.min(configuredMax, 6) : 2;
+  Number.isFinite(configuredMax) && configuredMax > 0
+    ? Math.min(configuredMax, 12)
+    : Math.min(8, Math.max(2, Number(process.env.SUPABASE_DB_POOL_MAX || 10) - 2));
 
 const dbQueryGate = new DbQueryGate(maxConcurrent);
 

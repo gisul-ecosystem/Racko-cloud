@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
+	"runtime"
 	"time"
 
 	"github.com/racko-ai/agent/config"
@@ -26,8 +28,9 @@ type heartbeatRequest struct {
 }
 
 // Start sends a heartbeat to the platform every 30 seconds including machine specs.
-// Call this in a separate goroutine: go heartbeat.Start(cfg, agentID, done).
-func Start(cfg *config.Config, agentID string, done <-chan struct{}) {
+// Call this in a separate goroutine: go heartbeat.Start(cfg, agentID, done, cancel).
+// cancel is called on 403 to stop all goroutines before self-uninstalling.
+func Start(cfg *config.Config, agentID string, done <-chan struct{}, cancel func()) {
 	const interval = 30 * time.Second
 	client := &http.Client{Timeout: 10 * time.Second}
 	ticker := time.NewTicker(interval)
@@ -41,14 +44,14 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}) {
 			log.Println("[heartbeat] Stopping.")
 			return
 		case <-ticker.C:
-			if err := sendHeartbeat(client, cfg.PlatformURL, agentID); err != nil {
+			if err := sendHeartbeat(client, cfg.PlatformURL, agentID, cancel); err != nil {
 				log.Printf("[heartbeat] Failed: %v", err)
 			}
 		}
 	}
 }
 
-func sendHeartbeat(client *http.Client, platformURL, agentID string) error {
+func sendHeartbeat(client *http.Client, platformURL, agentID string, cancel func()) error {
 	specs := collectSpecs()
 	log.Printf("[heartbeat] Specs collected — hostname=%s osVersion=%s cpuCores=%d ramGb=%.1f diskGb=%.1f",
 		specs.Hostname, specs.OSVersion, specs.CPUCores, specs.RAMGB, specs.DiskGB)
@@ -71,10 +74,51 @@ func sendHeartbeat(client *http.Client, platformURL, agentID string) error {
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusForbidden {
+		// 403 means the machine was deleted from the platform — cancel all goroutines
+		// then uninstall cleanly. cancel() stops the heartbeat ticker so this only
+		// runs once, not on every subsequent tick.
+		log.Printf("[heartbeat] Received 403 — machine deleted from platform. Stopping agent and uninstalling...")
+		selfUninstall(cancel)
+		return nil
+	}
+
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
 	log.Printf("[heartbeat] %s — ok", time.Now().Format(time.RFC3339))
 	return nil
+}
+
+// selfUninstall stops all agent goroutines then removes the agent from the machine.
+// cancel() is called first so the heartbeat goroutine stops immediately — preventing
+// repeated 403 responses from re-launching the uninstall script on every tick.
+func selfUninstall(cancel func()) {
+	if runtime.GOOS != "windows" {
+		log.Printf("[heartbeat] selfUninstall: skipping on non-Windows OS")
+		return
+	}
+
+	// Stop all goroutines first
+	if cancel != nil {
+		cancel()
+	}
+	// Brief pause to let goroutines observe the cancel
+	time.Sleep(500 * time.Millisecond)
+
+	script := `
+if (Test-Path "C:\ProgramData\racko-agent\unins000.exe") {
+    & "C:\ProgramData\racko-agent\unins000.exe" /SILENT /SUPPRESSMSGBOXES /NORESTART
+    Start-Sleep -Seconds 3
+}
+sc.exe stop RackoAgent 2>$null
+sc.exe delete RackoAgent 2>$null
+Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue
+`
+	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
+	if err := cmd.Start(); err != nil {
+		log.Printf("[heartbeat] selfUninstall: failed to start uninstall script: %v", err)
+	}
+	log.Printf("[heartbeat] selfUninstall: uninstall script launched, agent exiting")
 }

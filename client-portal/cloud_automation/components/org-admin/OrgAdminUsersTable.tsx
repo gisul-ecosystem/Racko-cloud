@@ -17,7 +17,7 @@ import {
   Users,
 } from 'lucide-react';
 
-import { getOrgDailyUsage, getOrgUserSessions } from '../../api/orgAdminClient';
+import { getOrgDailyUsage, getOrgUserLiveResources, getOrgUserSessions } from '../../api/orgAdminClient';
 
 import { RequestStatusBadge } from '../RequestStatusBadge';
 
@@ -108,26 +108,57 @@ function formatSessionCost(minutes: number | null, hourlyRate: number): string {
   return `$${((minutes / 60) * hourlyRate).toFixed(2)}`;
 }
 
-function DailyUsageBar({ usage }: { usage: OrgAdminDailyUsageEntry }) {
-  if (usage.dailyLimitHours === null) {
+function DailyUsageBar({
+  usage,
+  user,
+}: {
+  usage: OrgAdminDailyUsageEntry;
+  user?: OrgAdminUser | null;
+}) {
+  if (usage.dailyLimitHours === null && !(user?.dailyLimitMinutes && user.dailyLimitMinutes > 0)) {
     return <p className="mt-1 text-[11px] text-gray-400">No daily limit set</p>;
   }
 
-  const limitMinutes = usage.dailyLimitHours * 60;
-  const pct = Math.min(100, Math.round((usage.consumedMinutes / limitMinutes) * 100));
-  const dailyLimitHit = usage.limitReached === true;
-  const blockedForToday = usage.blockedForToday === true;
-  const blockedLabel = usage.blockedReasonLabel;
+  // Prefer live values from the detail payload (session-merged) so the bar
+  // matches the Time Spent card. Fall back to daily-usage API when needed.
+  const consumedMinutes = Math.round(
+    Number(user?.usedTodayMinutes ?? user?.todayMinutes ?? usage.consumedMinutes ?? 0)
+  );
+  const dailyLimitMinutes =
+    user?.dailyLimitMinutes && user.dailyLimitMinutes > 0
+      ? user.dailyLimitMinutes
+      : Math.round(Number(usage.dailyLimitHours || 0) * 60);
+  const remainingMinutes =
+    user?.remainingMinutes != null
+      ? Math.round(Number(user.remainingMinutes))
+      : usage.remainingMinutes != null
+        ? Math.round(Number(usage.remainingMinutes))
+        : dailyLimitMinutes > 0
+          ? Math.max(0, dailyLimitMinutes - consumedMinutes)
+          : null;
+  const dailyLimitHours =
+    usage.dailyLimitHours != null
+      ? Number(usage.dailyLimitHours)
+      : dailyLimitMinutes > 0
+        ? dailyLimitMinutes / 60
+        : null;
+  const pct =
+    dailyLimitMinutes > 0
+      ? Math.min(100, Math.round((consumedMinutes / dailyLimitMinutes) * 100))
+      : 0;
+  const dailyLimitHit = user?.dailyLimitReached === true || usage.limitReached === true;
+  const blockedForToday = user?.blockedForToday === true || usage.blockedForToday === true;
+  const blockedLabel = user?.blockedReasonLabel || usage.blockedReasonLabel;
 
   return (
     <div className="mt-1.5 flex flex-col gap-1">
       <div className="text-xs text-gray-500">
-        <span className="font-medium text-gray-700">{usage.consumedFormatted} used</span>
+        <span className="font-medium text-gray-700">{formatMinutes(consumedMinutes)} used</span>
         <span className="mx-1 text-gray-300">·</span>
         {dailyLimitHit ? (
           <span className="font-medium text-red-600">Daily limit reached</span>
-        ) : usage.remainingMinutes != null && usage.remainingMinutes > 0 ? (
-          <span className="text-emerald-600">{usage.remainingFormatted} remaining</span>
+        ) : remainingMinutes != null && remainingMinutes > 0 ? (
+          <span className="text-emerald-600">{formatMinutes(remainingMinutes)} remaining</span>
         ) : (
           <span className="text-gray-400">No time remaining</span>
         )}
@@ -138,7 +169,9 @@ function DailyUsageBar({ usage }: { usage: OrgAdminDailyUsageEntry }) {
           </>
         )}
         <span className="mx-1 text-gray-300">·</span>
-        <span className="text-gray-400">Limit: {usage.dailyLimitHours}h/day</span>
+        <span className="text-gray-400">
+          Limit: {dailyLimitHours != null ? `${dailyLimitHours}h/day` : '—'}
+        </span>
         {usage.todayWindow && (
           <span className="text-gray-400">
             {' '}
@@ -160,8 +193,11 @@ function DailyUsageBar({ usage }: { usage: OrgAdminDailyUsageEntry }) {
 }
 
 function TimeSpentCell({ user }: { user: OrgAdminUser }) {
-  const usedTodayMinutes = user.usedTodayMinutes ?? user.todayMinutes ?? 0;
-  const liveSessionMins = user.activeSessionMinutes ?? user.liveSessionMins ?? 0;
+  // Keep in sync with DailyUsageBar — prefer usedTodayMinutes from detail API.
+  const usedTodayMinutes = Math.round(Number(user.usedTodayMinutes ?? user.todayMinutes ?? 0));
+  const liveSessionMins = Math.round(
+    Number(user.activeSessionMinutes ?? user.liveSessionMins ?? 0)
+  );
   const remainingMins = user.remainingMinutes;
   const dailyLimitHit = user.dailyLimitReached === true;
   const blockedForToday = user.blockedForToday === true;
@@ -210,15 +246,26 @@ function ResourcesCell({
   liveCount,
   peakCount,
   expanded,
+  loading = false,
   onToggle,
 }: {
   resources: OrgAdminLiveAzureResource[];
   liveCount: number;
   peakCount: number;
   expanded: boolean;
+  loading?: boolean;
   onToggle: (event: React.MouseEvent) => void;
 }) {
   const canExpand = resources.length > 0;
+
+  if (loading) {
+    return (
+      <span className="inline-flex items-center gap-1.5 text-gray-500">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        Syncing from Azure…
+      </span>
+    );
+  }
 
   return (
     <div>
@@ -487,6 +534,10 @@ export function OrgAdminUsersTable({
   const [expandedResourcesUserId, setExpandedResourcesUserId] = useState<number | null>(null);
   const [expandedSessionsUserId, setExpandedSessionsUserId] = useState<number | null>(null);
   const [expandedUserId, setExpandedUserId] = useState<number | null>(null);
+  const [liveResourceOverrides, setLiveResourceOverrides] = useState<
+    Record<number, { resources: OrgAdminLiveAzureResource[]; count: number }>
+  >({});
+  const [loadingLiveResourcesUserId, setLoadingLiveResourcesUserId] = useState<number | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [page, setPage] = useState(1);
@@ -507,6 +558,52 @@ export function OrgAdminUsersTable({
   useEffect(() => {
     setPage(1);
   }, [searchQuery, statusFilter, pageSize]);
+
+  useEffect(() => {
+    setLiveResourceOverrides({});
+  }, [requestId, users]);
+
+  useEffect(() => {
+    if (!expandedUserId || !requestId) return;
+
+    const user = users.find((entry) => entry.id === expandedUserId);
+    if (!user) return;
+
+    if (liveResourceOverrides[expandedUserId]) return;
+
+    const shouldFetch =
+      request?.liveResourcesSkipped === true ||
+      ((user.liveResources?.length ?? 0) === 0 && (user.liveResourceCount ?? 0) === 0);
+
+    if (!shouldFetch) return;
+
+    let cancelled = false;
+    setLoadingLiveResourcesUserId(expandedUserId);
+
+    void getOrgUserLiveResources(requestId, expandedUserId)
+      .then((response) => {
+        if (cancelled) return;
+        setLiveResourceOverrides((current) => ({
+          ...current,
+          [expandedUserId]: {
+            resources: response.liveResources ?? [],
+            count: response.liveResourceCount ?? response.liveResources?.length ?? 0,
+          },
+        }));
+      })
+      .catch(() => {
+        // Keep cached counts if live sync fails.
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setLoadingLiveResourcesUserId(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [expandedUserId, liveResourceOverrides, request?.liveResourcesSkipped, requestId, users]);
 
   const filteredUsers = useMemo(() => {
     const query = searchQuery.trim().toLowerCase();
@@ -888,11 +985,16 @@ export function OrgAdminUsersTable({
             const azureCost = azureCosts[user.id];
             const loadingAzureCost = loadingAzureCostUserId === user.id;
             const displayStatus = user.displayStatus ?? user.status;
-            const liveResources = user.liveResources ?? [];
+            const resourceOverride = liveResourceOverrides[user.id];
+            const liveResources = resourceOverride?.resources ?? user.liveResources ?? [];
             const liveResourceCount =
-              user.liveResourceCount ?? user.resourceCount ?? liveResources.length;
+              resourceOverride?.count ??
+              user.liveResourceCount ??
+              user.resourceCount ??
+              liveResources.length;
             const peakResourceCount = user.peakResourceCount ?? 0;
             const resourcesExpanded = expandedResourcesUserId === user.id;
+            const loadingLiveResources = loadingLiveResourcesUserId === user.id;
             const sessionsExpanded = expandedSessionsUserId === user.id;
             const isBlocked = displayStatus === 'Blocked';
             const canUnblock =
@@ -1002,9 +1104,44 @@ export function OrgAdminUsersTable({
                       </span>
                     )}
 
-                    {(showUsageTracking ? dailyUsage[user.id] : null) && (
+                    {showUsageTracking &&
+                      (dailyUsage[user.id] ||
+                        (user.dailyLimitMinutes != null && user.dailyLimitMinutes > 0)) && (
                       <div className="mb-4 max-w-md">
-                        <DailyUsageBar usage={dailyUsage[user.id]!} />
+                        <DailyUsageBar
+                          usage={
+                            dailyUsage[user.id] ?? {
+                              userId: user.id,
+                              username: user.username,
+                              email: user.username,
+                              accountEnabled: user.azureAccountEnabled !== false,
+                              limitReached: user.dailyLimitReached === true,
+                              blockedForToday: user.blockedForToday === true,
+                              blockedReason: user.blockedReason ?? null,
+                              blockedReasonLabel: user.blockedReasonLabel ?? null,
+                              dailyLimitHours:
+                                user.dailyLimitMinutes > 0
+                                  ? user.dailyLimitMinutes / 60
+                                  : null,
+                              consumedMinutes: Math.round(
+                                Number(user.usedTodayMinutes ?? user.todayMinutes ?? 0)
+                              ),
+                              remainingMinutes:
+                                user.remainingMinutes != null
+                                  ? Math.round(Number(user.remainingMinutes))
+                                  : null,
+                              consumedFormatted: formatMinutes(
+                                Math.round(Number(user.usedTodayMinutes ?? user.todayMinutes ?? 0))
+                              ),
+                              remainingFormatted:
+                                user.remainingMinutes != null
+                                  ? formatMinutes(Math.round(Number(user.remainingMinutes)))
+                                  : null,
+                              todayWindow: null,
+                            }
+                          }
+                          user={user}
+                        />
                       </div>
                     )}
 
@@ -1028,6 +1165,7 @@ export function OrgAdminUsersTable({
                             liveCount={liveResourceCount}
                             peakCount={peakResourceCount}
                             expanded={resourcesExpanded}
+                            loading={loadingLiveResources}
                             onToggle={(event) => {
                               event.stopPropagation();
                               setExpandedResourcesUserId((current) =>
@@ -1102,7 +1240,8 @@ export function OrgAdminUsersTable({
                     </div>
 
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {user.hasActiveSession && (
+                      {(user.hasActiveSession ||
+                        (user.status !== 'Blocked' && user.azureAccountEnabled !== false)) && (
                         <button
                           type="button"
                           onClick={(event) => void handleForceLogout(event, user)}

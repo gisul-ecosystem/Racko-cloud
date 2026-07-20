@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import { useAuth } from '../../../../../context/AuthContext';
 import { useSoftwareCatalog } from '../../../../../hooks/useSoftwareCatalog';
@@ -10,15 +10,18 @@ import {
   fetchMachine,
   createJobs,
   fetchJobs,
+  deleteMachine,
+  execCommand,
   type IMachine,
   type MachineStatus,
   type IJob,
   type JobStatus,
 } from '../../../../../lib/machineManagerApi';
 import { useJobStream } from '../../../../../hooks/useJobStream';
+import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
 import {
   Server, ArrowLeft, Cpu, HardDrive, MemoryStick,
-  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X,
+  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X, Trash2, Terminal, Play,
 } from 'lucide-react';
 
 const jobStatusCfg: Record<JobStatus, { label: string; dot: string; text: string }> = {
@@ -141,7 +144,39 @@ export default function MachineDetailPage() {
   const [selectedJob, setSelectedJob] = useState<IJob | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [installing, setInstalling] = useState(false);
+  const [removingAgent, setRemovingAgent] = useState(false);
+  const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
 
+  // Terminal tabs state — each tab is an independent terminal session
+  interface TerminalEntry { command: string; output: string; exitCode: number; ts: string }
+  interface TerminalTab { id: number; label: string; history: TerminalEntry[]; input: string; historyIndex: number; running: boolean }
+  const [terminalTabs, setTerminalTabs] = useState<TerminalTab[]>([
+    { id: 1, label: 'Terminal 1', history: [], input: '', historyIndex: -1, running: false }
+  ]);
+  const [activeTabId, setActiveTabId] = useState(1);
+  const nextTabId = useRef(2);
+  const terminalBottomRef = useRef<HTMLDivElement>(null);
+
+  const activeTab = terminalTabs.find((t) => t.id === activeTabId) ?? terminalTabs[0];
+
+  const updateTab = (id: number, patch: Partial<TerminalTab>) =>
+    setTerminalTabs((prev) => prev.map((t) => t.id === id ? { ...t, ...patch } : t));
+
+  const addTab = () => {
+    const id = nextTabId.current++;
+    const label = `Terminal ${id}`;
+    setTerminalTabs((prev) => [...prev, { id, label, history: [], input: '', historyIndex: -1, running: false }]);
+    setActiveTabId(id);
+  };
+
+  const closeTab = (id: number) => {
+    setTerminalTabs((prev) => {
+      const remaining = prev.filter((t) => t.id !== id);
+      if (remaining.length === 0) return prev; // keep at least one
+      if (activeTabId === id) setActiveTabId(remaining[remaining.length - 1].id);
+      return remaining;
+    });
+  };
   const load = useCallback(async () => {
     setLoading(true);
     try {
@@ -171,10 +206,49 @@ export default function MachineDetailPage() {
       setSelected([]);
       router.push('/console/machine-manager/jobs');
     } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to queue jobs.');
-      setInstalling(false);
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to queue jobs.');      setInstalling(false);
     }
   };
+
+  const handleRemoveAgent = async () => {
+    if (!machine) return;
+    setRemovingAgent(true);
+    try {
+      await deleteMachine(machine._id);
+      addToast('success', `"${machine.name}" removed. Agent will uninstall within a few seconds.`);
+      router.push('/console/machine-manager/machines');
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to remove machine.');
+      setRemovingAgent(false);
+    }
+  };
+
+  const handleExec = async () => {
+    if (!activeTab.input.trim() || !machine || activeTab.running) return;
+    const cmd = activeTab.input.trim();
+    const tabId = activeTab.id;
+    updateTab(tabId, { input: '', historyIndex: -1, running: true });
+    try {
+      const result = await execCommand(machine._id, cmd);
+      setTerminalTabs((prev) => prev.map((t) =>
+        t.id === tabId
+          ? { ...t, history: [...t.history, { command: cmd, output: result.output, exitCode: result.exitCode, ts: new Date().toLocaleTimeString() }], running: false }
+          : t
+      ));
+    } catch (err) {
+      const msg = err instanceof ApiError ? err.message : (err instanceof Error ? err.message : 'Command failed.');
+      setTerminalTabs((prev) => prev.map((t) =>
+        t.id === tabId
+          ? { ...t, history: [...t.history, { command: cmd, output: msg, exitCode: 1, ts: new Date().toLocaleTimeString() }], running: false }
+          : t
+      ));
+    }
+  };
+
+  // Auto-scroll terminal to bottom on new output in active tab
+  useEffect(() => {
+    terminalBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [activeTab?.history]);
 
   if (loading) {
     return (
@@ -194,6 +268,19 @@ export default function MachineDetailPage() {
     <div className="max-w-4xl">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
       {selectedJob && <LogsModal job={selectedJob} onClose={() => setSelectedJob(null)} />}
+
+      {showRemoveConfirm && machine && (
+        <ConfirmModal
+          open
+          title="Remove Machine"
+          description={`This will uninstall the Racko agent from "${machine.name}" and remove it from your machine list.`}
+          confirmLabel="Remove Machine"
+          confirmVariant="danger"
+          loading={removingAgent}
+          onConfirm={() => void handleRemoveAgent()}
+          onCancel={() => setShowRemoveConfirm(false)}
+        />
+      )}
 
       {/* Back */}
       <Link href="/console/machine-manager/machines"
@@ -216,6 +303,12 @@ export default function MachineDetailPage() {
           <StatusBadge status={machine.status} />
           <button onClick={() => void load()} className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50">
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
+          </button>
+          <button
+            onClick={() => setShowRemoveConfirm(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
+          >
+            <Trash2 className="h-3.5 w-3.5" /> Remove Machine
           </button>
         </div>
       </div>
@@ -278,11 +371,136 @@ export default function MachineDetailPage() {
         </div>
       )}
 
+      {/* Remote Terminal — tabbed like VS Code */}
+      <div className="mb-6 rounded-xl border border-gray-200 bg-gray-950 overflow-hidden">
+        {/* Tab bar */}
+        <div className="flex items-center border-b border-gray-800 overflow-x-auto">
+          <div className="flex items-center shrink-0">
+            <Terminal className="ml-3 h-3.5 w-3.5 text-green-400 shrink-0" />
+          </div>
+          <div className="flex items-center flex-1 overflow-x-auto">
+            {terminalTabs.map((tab) => (
+              <div
+                key={tab.id}
+                className={`group flex items-center gap-1.5 px-3 py-2.5 text-xs font-mono cursor-pointer border-r border-gray-800 shrink-0 select-none transition-colors ${
+                  tab.id === activeTabId
+                    ? 'bg-gray-900 text-green-400 border-b-2 border-b-green-400'
+                    : 'text-gray-500 hover:text-gray-300 hover:bg-gray-900/50'
+                }`}
+                onClick={() => setActiveTabId(tab.id)}
+              >
+                <span>{tab.label}</span>
+                {tab.running && <span className="h-1.5 w-1.5 rounded-full bg-yellow-400 animate-pulse" />}
+                {terminalTabs.length > 1 && (
+                  <button
+                    onClick={(e) => { e.stopPropagation(); closeTab(tab.id); }}
+                    className="opacity-0 group-hover:opacity-100 hover:text-red-400 transition-opacity ml-0.5"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+          {/* Clear active tab */}
+          {activeTab.history.length > 0 && (
+            <button
+              onClick={() => updateTab(activeTabId, { history: [] })}
+              className="shrink-0 px-3 py-2.5 text-xs text-gray-500 hover:text-gray-300 transition-colors border-l border-gray-800"
+              title="Clear terminal"
+            >
+              Clear
+            </button>
+          )}
+          {/* + new tab */}
+          <button
+            onClick={addTab}
+            className="shrink-0 px-3 py-2.5 text-gray-500 hover:text-green-400 transition-colors border-l border-gray-800"
+            title="New terminal"
+          >
+            <span className="text-base leading-none">+</span>
+          </button>
+          {/* offline badge */}
+          {machine.status !== 'online' && (
+            <span className="shrink-0 mx-2 rounded-full bg-yellow-900/40 px-2 py-0.5 text-xs text-yellow-400">
+              Offline
+            </span>
+          )}
+        </div>
+
+        {/* Output area — shows active tab's history */}
+        <div className="h-72 overflow-y-auto p-4 font-mono text-xs">
+          {activeTab.history.length === 0 && (
+            <p className="text-gray-600">Type a PowerShell command below and press Enter or click Run.</p>
+          )}
+          {activeTab.history.map((entry, i) => (
+            <div key={i} className="mb-3">
+              <div className="flex items-start gap-2 text-green-400">
+                <span className="text-gray-600 text-[10px] mt-0.5 shrink-0">{entry.ts}</span>
+                <span className="text-gray-500 shrink-0">PS&gt;</span>
+                <pre className="whitespace-pre-wrap break-all text-green-400">{entry.command}</pre>
+              </div>
+              <pre className={`mt-1 whitespace-pre-wrap break-all leading-relaxed ${entry.exitCode === 0 ? 'text-gray-200' : 'text-red-400'}`}>
+                {entry.output || '(no output)'}
+              </pre>
+            </div>
+          ))}
+          {activeTab.running && (
+            <div className="flex items-center gap-2 text-yellow-400">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-yellow-400" />
+              <span>Running…</span>
+            </div>
+          )}
+          <div ref={terminalBottomRef} />
+        </div>
+
+        {/* Input bar */}
+        <div className="flex items-start gap-2 border-t border-gray-800 px-4 py-3">
+          <span className="mt-1 shrink-0 text-xs text-gray-500 font-mono">PS&gt;</span>
+          <textarea
+            value={activeTab.input}
+            onChange={(e) => updateTab(activeTabId, { input: e.target.value })}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                void handleExec();
+              }
+              if (e.key === 'ArrowUp' && !activeTab.input.includes('\n')) {
+                const cmds = activeTab.history.map((h) => h.command);
+                const next = Math.min(activeTab.historyIndex + 1, cmds.length - 1);
+                updateTab(activeTabId, { historyIndex: next, input: cmds[cmds.length - 1 - next] ?? '' });
+              }
+              if (e.key === 'ArrowDown' && !activeTab.input.includes('\n')) {
+                const cmds = activeTab.history.map((h) => h.command);
+                const next = Math.max(activeTab.historyIndex - 1, -1);
+                updateTab(activeTabId, { historyIndex: next, input: next === -1 ? '' : (cmds[cmds.length - 1 - next] ?? '') });
+              }
+            }}
+            disabled={activeTab.running || machine.status !== 'online'}
+            placeholder={machine.status !== 'online' ? 'Agent is offline' : 'Enter to run · Shift+Enter for new line'}
+            rows={activeTab.input.split('\n').length > 3 ? activeTab.input.split('\n').length : Math.max(1, activeTab.input.split('\n').length)}
+            className="flex-1 resize-none bg-transparent text-xs text-gray-200 placeholder-gray-600 outline-none font-mono disabled:opacity-40 leading-relaxed"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            onClick={() => void handleExec()}
+            disabled={activeTab.running || !activeTab.input.trim() || machine.status !== 'online'}
+            className="mt-0.5 inline-flex items-center gap-1.5 rounded-lg bg-green-700 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-green-600 disabled:opacity-40"
+          >
+            {activeTab.running
+              ? <span className="h-3 w-3 animate-spin rounded-full border-2 border-white border-t-transparent" />
+              : <Play className="h-3 w-3" />
+            }
+            Run
+          </button>
+        </div>
+      </div>
+
       {/* Install Software */}
       <div className="rounded-xl border border-gray-200 bg-white p-5">
         <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-gray-700">Install Software</h2>
-          {selected.length > 0 && (
+          <h2 className="text-sm font-semibold text-gray-700">Install Software</h2>          {selected.length > 0 && (
             <button
               onClick={() => void handleInstall()}
               disabled={installing}

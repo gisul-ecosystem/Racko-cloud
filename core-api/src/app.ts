@@ -49,6 +49,8 @@ import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
 import adminBillingRoutes from './modules/adminBilling/adminBilling.routes';
 import externalVmPricingRoutes from './modules/externalVmPricing/externalVmPricing.routes';
 import vmCatalogRoutes from './modules/vmCatalog/vmCatalog.routes';
+import dedicatedServerRoutes from './modules/dedicatedServer/dedicatedServer.routes';
+import adminServicesRoutes from './modules/adminServices/adminServices.routes';
 
 const app = express();
 
@@ -180,6 +182,8 @@ app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
 app.use('/api/v1/admin-billing', adminBillingRoutes);
 app.use('/api/v1/external-vm-pricing', externalVmPricingRoutes);
 app.use('/api/v1/vm-catalog', vmCatalogRoutes);
+app.use('/api/v1/dedicated-servers', dedicatedServerRoutes);
+app.use('/api/v1/admin-services', adminServicesRoutes);
 
 // Start background services
 startNodeMonitoring();

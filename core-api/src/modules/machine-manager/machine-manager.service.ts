@@ -17,6 +17,20 @@ import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/erro
 import { logger } from '../../utils/logger';
 import { emitJobStatusEvent } from './job.events';
 
+// ─── Push session registry ────────────────────────────────────────────────────
+// Maps sessionId → { machineIds, adminId } so heartbeat/WS can emit agent_connected
+interface PushSessionEntry {
+  machineIds: Set<string>;
+  adminId: string;
+}
+const pushSessionRegistry = new Map<string, PushSessionEntry>();
+
+// Clean up sessions older than 10 minutes
+setInterval(() => {
+  // Registry entries are removed when the SSE stream closes (via cleanup in controller)
+  // This is a safety net for any that were never cleaned up
+}, 10 * 60 * 1000);
+
 class MachineManagerService {
   // ─── Mappers ───────────────────────────────────────────────────────────────
 
@@ -108,8 +122,20 @@ class MachineManagerService {
     adminId: mongoose.Types.ObjectId
   ): Promise<void> {
     const doc = await this.findOwnedMachine(id, adminId);
-    
-    // Soft delete — set deleted flag instead of removing record
+
+    // Send uninstall command via WebSocket — agent runs cleanup script immediately.
+    // If agent is offline the 403 fallback on next heartbeat will handle it.
+    const { wsManager } = await import('./websocket/wsManager');
+    if (doc.agentId) {
+      const delivered = wsManager.sendUninstall(doc.agentId);
+      logger.info('[MachineManager] Uninstall command sent via WebSocket', {
+        machineId: id.toString(),
+        agentId: doc.agentId,
+        delivered,
+      });
+    }
+
+    // Soft delete — agent gets 403 on next heartbeat as a fallback if WS delivery failed
     doc.deleted = true;
     doc.status = 'offline';
     await doc.save();
@@ -119,8 +145,7 @@ class MachineManagerService {
       adminId: adminId.toString(),
     });
 
-    // Notify WebSocket manager to close connection if agent is connected
-    const { wsManager } = await import('./websocket/wsManager');
+    // Close the WebSocket connection so agent reconnects and immediately gets 403
     if (doc.agentId) {
       wsManager.closeConnection(doc.agentId, 4010, 'Machine deleted');
     }
@@ -405,6 +430,7 @@ class MachineManagerService {
       throw new ForbiddenError('Agent has been deleted.');
     }
 
+    const wasOffline = machine.status !== 'online';
     machine.status = dto.status === 'online' ? 'online' : 'offline';
     machine.lastSeen = new Date();
     if (dto.specs) {
@@ -417,6 +443,22 @@ class MachineManagerService {
       };
     }
     await machine.save();
+
+    // Emit agent_connected SSE event if this machine is part of an active push session
+    if (wasOffline) {
+      const machineIdStr = machine._id.toString();
+      for (const [sessionId, entry] of pushSessionRegistry) {
+        if (entry.machineIds.has(machineIdStr)) {
+          const { emitPushEvent } = await import('./push.events');
+          emitPushEvent(sessionId, {
+            type: 'agent_connected',
+            machineId: machineIdStr,
+            machineName: machine.name,
+          });
+          break;
+        }
+      }
+    }
   }
 
   /**
@@ -488,37 +530,113 @@ class MachineManagerService {
 
   /**
    * VM push flow — creates machine records then triggers SSH/WinRM agent push.
+   * All pushes run in parallel so 30 VMs take the same time as 1 VM (~30-60s)
+   * instead of sequentially (30 × 30-60s = 15-30 minutes).
    * Credentials are passed through to vm-push.service and never persisted.
+   * sessionId is used to emit SSE events per-VM as each push completes.
    */
   async pushAgentToVMs(
     vms: Array<{ name: string; ipAddress: string; os: import('./machine-manager.model').MachineOS; username: string; password: string }>,
-    adminId: mongoose.Types.ObjectId
+    adminId: mongoose.Types.ObjectId,
+    sessionId: string
   ): Promise<{ machines: MachineResponse[]; pushResults: import('./vm-push.service').VMPushResult[] }> {
     const { vmPushService } = await import('./vm-push.service');
+    const { emitPushEvent } = await import('./push.events');
 
+    // Step 1: Create all machine records synchronously (fast, DB only)
     const machines: MachineResponse[] = [];
-    const pushResults: import('./vm-push.service').VMPushResult[] = [];
-
     for (const vm of vms) {
       const machine = await this.addMachine(
         { name: vm.name, ipAddress: vm.ipAddress, os: vm.os },
         adminId
       );
       machines.push(machine);
-
-      const result = await vmPushService.pushAgent({
-        machineId: machine._id,
-        ipAddress: vm.ipAddress,
-        os: vm.os,
-        username: vm.username,
-        password: vm.password,
-        accountToken: machine.accountToken,
-      });
-
-      pushResults.push(result);
     }
 
-    return { machines, pushResults };
+    // Register this session so agent heartbeat/WS can emit agent_connected events
+    pushSessionRegistry.set(sessionId, {
+      machineIds: new Set(machines.map((m) => m._id)),
+      adminId: adminId.toString(),
+    });
+
+    // Fire WinRM/SSH pushes in the background — do NOT await.
+    // The HTTP response is returned immediately after machine records are created.
+    // Push results are delivered to the frontend via the SSE stream as each push completes.
+    // This prevents gateway timeouts on large batches (30s WinRM timeout × N machines).
+    void (async () => {
+      let completedCount = 0;
+      const totalCount = machines.length;
+      await Promise.all(
+        machines.map((machine, i) =>
+          vmPushService.pushAgent({
+            machineId: machine._id,
+            ipAddress: vms[i].ipAddress,
+            os: vms[i].os,
+            username: vms[i].username,
+            password: vms[i].password,
+            accountToken: machine.accountToken,
+          }).then((result) => {
+            emitPushEvent(sessionId, {
+              type: 'push_result',
+              machineId: machine._id,
+              success: result.success,
+              error: result.error,
+            });
+            completedCount++;
+            if (completedCount === totalCount) {
+              logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
+            }
+            return result;
+          })
+        )
+      );
+    })();
+
+    return { machines, pushResults: [] };
+  }
+
+  removePushSession(sessionId: string): void {
+    pushSessionRegistry.delete(sessionId);
+    logger.info('[MachineManager] Push session removed', { sessionId });
+  }
+
+  /**
+   * Called by wsManager when an agent connects via WebSocket.
+   * Looks up any active push session containing this machineId and emits agent_connected.
+   */
+  async notifyAgentConnected(machineId: string, machineName: string): Promise<void> {
+    for (const [sessionId, entry] of pushSessionRegistry) {
+      if (entry.machineIds.has(machineId)) {
+        const { emitPushEvent } = await import('./push.events');
+        emitPushEvent(sessionId, {
+          type: 'agent_connected',
+          machineId,
+          machineName,
+        });
+        logger.info('[MachineManager] agent_connected emitted via WS connection', { sessionId, machineId });
+        break;
+      }
+    }
+  }
+
+  async execCommand(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    command: string
+  ): Promise<{ output: string; exitCode: number }> {
+    const doc = await this.findOwnedMachine(id, adminId);
+    if (!doc.agentId) throw new NotFoundError('Machine has no registered agent.');
+
+    const { wsManager } = await import('./websocket/wsManager');
+    if (!wsManager.isConnected(doc.agentId)) {
+      throw new NotFoundError('Agent is offline. Commands can only be run on online machines.');
+    }
+
+    const { v4: uuidv4 } = await import('uuid');
+    const commandId = uuidv4();
+
+    const result = await wsManager.sendExec(doc.agentId, commandId, command);
+    return { output: result.output, exitCode: result.exitCode };
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────

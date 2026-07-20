@@ -40,6 +40,46 @@ const createGraphClient = () => {
  * Revoke Azure access by terminating sessions and disabling account
  * Does NOT remove RBAC assignments - preserves permissions for next day
  */
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function disableAzureAccountWithRetry(client, azureUserId, { attempts = 3 } = {}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await client.api(`/users/${azureUserId}`).patch({
+        accountEnabled: false
+      });
+
+      // Graph can briefly return stale accountEnabled after a successful patch.
+      await sleep(attempt === 1 ? 400 : 1000 * attempt);
+
+      const userState = await client
+        .api(`/users/${azureUserId}`)
+        .select('accountEnabled')
+        .get();
+
+      if (userState.accountEnabled === false) {
+        return { status: 'success', attempts: attempt };
+      }
+
+      lastError = 'account_still_enabled';
+      console.warn(
+        `[AZURE_REVOKE] Account ${azureUserId} still enabled after disable attempt ${attempt}/${attempts}`
+      );
+    } catch (error) {
+      lastError = error.message;
+      console.error(
+        `[AZURE_REVOKE] Disable attempt ${attempt}/${attempts} failed for ${azureUserId}: ${error.message}`
+      );
+    }
+  }
+
+  return { status: 'failed', error: lastError || 'account_still_enabled', attempts };
+}
+
 async function revokeAzureAccess({ azureUserId, userId, requestId }) {
   try {
     console.log(`[AZURE_REVOKE] Revoking Azure access for user ${userId} (Azure ID: ${azureUserId})`);
@@ -47,7 +87,27 @@ async function revokeAzureAccess({ azureUserId, userId, requestId }) {
     const client = createGraphClient();
     const actions = [];
 
-    // Step 1: Revoke all active sign-in sessions
+    // Step 1: Disable the Azure account first so new tokens cannot be minted.
+    const disableResult = await disableAzureAccountWithRetry(client, azureUserId);
+    if (disableResult.status === 'success') {
+      console.log(`[ACCOUNT_DISABLED] Azure account disabled for user ${azureUserId}`);
+      actions.push({
+        action: 'disable_account',
+        status: 'success',
+        attempts: disableResult.attempts
+      });
+    } else {
+      console.error(
+        `[AZURE_REVOKE] Account ${azureUserId} could not be disabled: ${disableResult.error}`
+      );
+      actions.push({
+        action: 'disable_account',
+        status: 'failed',
+        error: disableResult.error
+      });
+    }
+
+    // Step 2: Revoke all active sign-in sessions
     try {
       await client.api(`/users/${azureUserId}/revokeSignInSessions`).post({});
       console.log(`[AZURE_SESSION_REVOKED] All sign-in sessions revoked for Azure user ${azureUserId}`);
@@ -57,34 +117,9 @@ async function revokeAzureAccess({ azureUserId, userId, requestId }) {
       actions.push({ action: 'revoke_sessions', status: 'failed', error: error.message });
     }
 
-    // Step 2: Disable the Azure account
-    try {
-      await client.api(`/users/${azureUserId}`).patch({
-        accountEnabled: false
-      });
-
-      const userState = await client
-        .api(`/users/${azureUserId}`)
-        .select('accountEnabled')
-        .get();
-
-      if (userState.accountEnabled !== false) {
-        console.error(
-          `[AZURE_REVOKE] Account ${azureUserId} is still enabled after disable attempt`
-        );
-        actions.push({ action: 'disable_account', status: 'failed', error: 'account_still_enabled' });
-      } else {
-        console.log(`[ACCOUNT_DISABLED] Azure account disabled for user ${azureUserId}`);
-        actions.push({ action: 'disable_account', status: 'success' });
-      }
-    } catch (error) {
-      console.error(`[AZURE_REVOKE] Error disabling account: ${error.message}`);
-      actions.push({ action: 'disable_account', status: 'failed', error: error.message });
-    }
-
     console.log(
       '[AZURE_REVOKE] Active portal tabs may stay usable until the current access token expires ' +
-      '(often up to ~60 minutes). Refresh/revoke blocks new sign-ins immediately.'
+      '(often up to ~60 minutes). Disable + revoke blocks new sign-ins immediately.'
     );
 
     return actions;
@@ -645,6 +680,27 @@ async function revokeAzureAccessForUser({ requestId, userId }) {
     requestId
   });
 
+  const disableSucceeded = azureActions.some(
+    (action) => action.action === 'disable_account' && action.status === 'success'
+  );
+
+  await db.query(
+    `
+      UPDATE azure_users
+      SET
+        azure_account_enabled = CASE
+          WHEN $3::boolean THEN false
+          ELSE azure_account_enabled
+        END,
+        status = CASE
+          WHEN $3::boolean THEN 'Blocked'
+          ELSE status
+        END
+      WHERE id = $1 AND request_id = $2
+    `,
+    [userId, requestId, disableSucceeded]
+  );
+
   await db.query(
     `
       INSERT INTO usage_enforcement_logs (
@@ -670,7 +726,8 @@ async function revokeAzureAccessForUser({ requestId, userId }) {
   return {
     success: true,
     enforced: true,
-    azureActions
+    azureActions,
+    accountDisabled: disableSucceeded
   };
 }
 

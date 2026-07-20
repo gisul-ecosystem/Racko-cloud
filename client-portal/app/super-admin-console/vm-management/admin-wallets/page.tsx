@@ -29,6 +29,7 @@ function formatDate(iso: string): string {
 
 const REASON_LABELS: Record<string, string> = {
   vm_creation: 'VM Creation',
+  dedicated_server_purchase: 'Dedicated Server',
   manual_credit: 'Manual Credit',
   razorpay_topup: 'Razorpay Top-up',
   refund: 'Refund',

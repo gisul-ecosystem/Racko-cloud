@@ -1,6 +1,11 @@
 const db = require('../db/postgres');
 const { createUserBudget } = require('../provisioners/azure/azureBudgetProvisioner');
 const { createGraphClient, getVerifiedDomain } = require('../provisioners/azure/userProvisioner');
+const { runWithConcurrency } = require('../utils/concurrency');
+const {
+  getBulkProvisionConcurrency,
+  getBudgetProvisionBatchSize
+} = require('../utils/provisionConcurrency');
 
 const logBudgetEvent = (level, event, details = {}) => {
   const entry = {
@@ -56,70 +61,95 @@ const getUsersForBudgetProvisioning = async (requestId) => {
   return result.rows;
 };
 
-const provisionBudgetsForRequest = async (requestId) => {
+const provisionBudgetsForRequest = async (requestId, options = {}) => {
   const request = await getRequestBudgetContext(requestId);
   const budgetAmountUsd = Number(request?.per_user_budget_usd);
 
   if (!request || !Number.isFinite(budgetAmountUsd) || budgetAmountUsd <= 0) {
-    return { budgetsCreated: 0 };
+    return { budgetsCreated: 0, complete: true, remaining: 0 };
   }
 
   const users = await getUsersForBudgetProvisioning(requestId);
 
   if (!users.length) {
-    return { budgetsCreated: 0 };
+    return { budgetsCreated: 0, complete: true, remaining: 0 };
   }
 
   const { graphClient } = createGraphClient();
   const verifiedDomain = await getVerifiedDomain(graphClient);
   const startDate = request.created_at ? new Date(request.created_at) : new Date();
-  const endDate = request.expiry_date ? new Date(request.expiry_date) : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
+  const endDate = request.expiry_date
+    ? new Date(request.expiry_date)
+    : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 
-  let budgetsCreated = 0;
-
-  for (const user of users) {
-    if (user.budget_id) {
-      continue;
-    }
-
-    const userEmail = `${user.username}@${verifiedDomain}`;
-
-    try {
-      const { budgetId } = await createUserBudget({
-        resourceGroupName: user.azure_resource_group_name,
-        userId: user.id,
-        userEmail,
-        budgetAmountUsd,
-        startDate,
-        endDate
-      });
-
-      await db.query(
-        `
-          UPDATE azure_users
-          SET budget_id = $1
-          WHERE id = $2
-        `,
-        [budgetId, user.id]
-      );
-
-      budgetsCreated += 1;
-
-      logBudgetEvent('info', 'user_budget_created', {
-        requestId,
-        userId: user.id,
-        budgetId
-      });
-    } catch (error) {
-      logBudgetEvent('error', 'user_budget_create_failed', {
-        requestId,
-        userId: user.id,
-        message: error?.message
-      });
-    }
+  const usersNeedingBudgets = users.filter((user) => !user.budget_id);
+  if (usersNeedingBudgets.length === 0) {
+    return { budgetsCreated: 0, complete: true, remaining: 0 };
   }
 
-  return { budgetsCreated };
+  const batchSize = Math.max(
+    1,
+    Number(options.batchSize) || getBudgetProvisionBatchSize()
+  );
+  const batchUsers = usersNeedingBudgets.slice(0, batchSize);
+  let budgetsCreated = 0;
+
+  await runWithConcurrency(
+    batchUsers,
+    getBulkProvisionConcurrency(),
+    async (user) => {
+      const userEmail = `${user.username}@${verifiedDomain}`;
+
+      try {
+        const { budgetId } = await createUserBudget({
+          resourceGroupName: user.azure_resource_group_name,
+          userId: user.id,
+          userEmail,
+          budgetAmountUsd,
+          startDate,
+          endDate
+        });
+
+        await db.query(
+          `
+            UPDATE azure_users
+            SET budget_id = $1
+            WHERE id = $2
+          `,
+          [budgetId, user.id]
+        );
+
+        budgetsCreated += 1;
+
+        logBudgetEvent('info', 'user_budget_created', {
+          requestId,
+          userId: user.id,
+          budgetId
+        });
+      } catch (error) {
+        logBudgetEvent('error', 'user_budget_create_failed', {
+          requestId,
+          userId: user.id,
+          message: error?.message
+        });
+      }
+    }
+  );
+
+  const remaining = Math.max(0, usersNeedingBudgets.length - batchUsers.length);
+
+  logBudgetEvent('info', 'user_budget_provision_batch', {
+    requestId,
+    budgetsCreated,
+    batchSize: batchUsers.length,
+    remaining
+  });
+
+  return {
+    budgetsCreated,
+    complete: remaining === 0,
+    remaining
+  };
 };
 
 module.exports = {
