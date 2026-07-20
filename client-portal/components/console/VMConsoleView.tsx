@@ -160,8 +160,14 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
 
   useEffect(() => {
     const ctrl = new AbortController();
-    void fetchSession(ctrl.signal);
+    // Small delay to allow TenantAuthContext to read the _s URL param (a
+    // console opened via window.open() into a new tab) and persist the
+    // session into sessionStorage before we make the first API call.
+    const timer = setTimeout(() => {
+      void fetchSession(ctrl.signal);
+    }, 300);
     return () => {
+      clearTimeout(timer);
       ctrl.abort();
       const cached = sessionRef.current;
       if (cached) {
