@@ -33,6 +33,10 @@ interface TenantAuthContextValue extends TenantAuthState {
 const TenantAuthContext = createContext<TenantAuthContextValue | null>(null);
 
 export function TenantAuthProvider({ children }: { children: React.ReactNode }) {
+  // isLoading starts true and only ever flips to false once, after the
+  // mount effect below has checked sessionStorage. Consumers (e.g. route
+  // guards) must treat isLoading=true as "unknown yet" — NOT as logged out —
+  // and only redirect once isLoading is false AND isAuthenticated is false.
   const [state, setState] = useState<TenantAuthState>({
     tenantUser: null,
     isLoading: true,
@@ -48,9 +52,26 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
         isLoading: false,
         isAuthenticated: true,
       });
-    } else {
-      setState({ tenantUser: null, isLoading: false, isAuthenticated: false });
+      return;
     }
+
+    // sessionStorage may not be cloned yet in a new tab opened via
+    // window.open() — retry once after a short delay before concluding
+    // the user is unauthenticated.
+    const timer = setTimeout(() => {
+      const retrySession = loadTenantSession();
+      if (retrySession) {
+        setState({
+          tenantUser: retrySession.tenantUser,
+          isLoading: false,
+          isAuthenticated: true,
+        });
+      } else {
+        setState({ tenantUser: null, isLoading: false, isAuthenticated: false });
+      }
+    }, 200);
+
+    return () => clearTimeout(timer);
   }, []);
 
   const logout = useCallback(() => {
