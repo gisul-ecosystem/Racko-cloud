@@ -277,10 +277,10 @@ jobs:
              echo 'Docker login...'; \
              echo '${DOCKERHUB_TOKEN}' | docker login -u '${DOCKERHUB_USERNAME}' --password-stdin; \
              echo 'Deploying...'; \
-             sudo docker-compose -f docker-compose.yml down --remove-orphans; \
-             sudo docker-compose -f docker-compose.yml pull; \
-             sudo docker-compose -f docker-compose.yml up -d; \
-             sudo docker-compose -f docker-compose.yml ps"
+             sudo docker compose -f docker-compose.yml down --remove-orphans; \
+             sudo docker compose -f docker-compose.yml pull; \
+             sudo docker compose -f docker-compose.yml up -d; \
+             sudo docker compose -f docker-compose.yml ps"
 
       - name: Summary
         run: |
