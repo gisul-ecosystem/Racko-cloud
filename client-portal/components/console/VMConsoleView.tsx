@@ -35,6 +35,21 @@ function getProtocolSubtitle(p: ConsoleProtocol): string {
   return 'Establishing secure RDP session';
 }
 
+/** Ignore sub-pixel/rounding drift so we don't loop re-fetching forever. */
+const DIMENSION_MATCH_TOLERANCE_PX = 4;
+
+function dimensionsDrifted(
+  a: { width?: number; height?: number },
+  b: { width?: number; height?: number }
+): boolean {
+  if (a.width === undefined || a.height === undefined) return false;
+  if (b.width === undefined || b.height === undefined) return false;
+  return (
+    Math.abs(a.width - b.width) > DIMENSION_MATCH_TOLERANCE_PX ||
+    Math.abs(a.height - b.height) > DIMENSION_MATCH_TOLERANCE_PX
+  );
+}
+
 export interface VMConsoleViewProps {
   backHref: string;
   disconnectHref: string;
@@ -54,9 +69,29 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   const [overlayMounted, setOverlayMounted] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
   const sessionRef = useRef<ConsoleSession | null>(null);
   const iframeTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const overlayStartedAtRef = useRef(0);
+  /** Dimensions actually sent with the last console-session request. */
+  const lastFetchDimsRef = useRef<{ width?: number; height?: number }>({});
+  /** Prevents overlapping fetches when onLoad-recheck and ResizeObserver fire close together. */
+  const isFetchingRef = useRef(false);
+  const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * Prefer the iframe's actual container box over window.innerWidth/innerHeight
+   * so Guacamole renders at the real on-screen resolution — no scaling, no
+   * black bars, no need to go fullscreen first. Falls back to window size
+   * before the container has been measured (e.g. the very first fetch, when
+   * no <iframe> has mounted yet).
+   */
+  const getContainerDimensions = useCallback((): { width?: number; height?: number } => {
+    const container = iframeRef.current?.parentElement ?? containerRef.current;
+    const width = container?.clientWidth ?? window.innerWidth;
+    const height = container?.clientHeight ?? window.innerHeight;
+    return { width, height };
+  }, []);
 
   const clearIframeTimeout = useCallback(() => {
     if (iframeTimeoutRef.current) {
@@ -86,13 +121,14 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   const fetchSession = useCallback(
     async (signal?: AbortSignal) => {
       if (!vmId) return;
+      if (isFetchingRef.current) return;
+      isFetchingRef.current = true;
       setLoading(true);
       setError(null);
       try {
-        const data = await getConsoleSession(vmId, protocol, {
-          width: window.innerWidth,
-          height: window.innerHeight,
-        });
+        const dims = getContainerDimensions();
+        lastFetchDimsRef.current = dims;
+        const data = await getConsoleSession(vmId, protocol, dims);
         if (signal?.aborted) return;
         setSession(data);
         sessionRef.current = data;
@@ -105,10 +141,11 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
             : 'Failed to start console session. Please try again.'
         );
       } finally {
+        isFetchingRef.current = false;
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [vmId, protocol]
+    [vmId, protocol, getContainerDimensions]
   );
 
   useEffect(() => {
@@ -129,6 +166,38 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
     return () => clearIframeTimeout();
   }, [session, iframeKey, startIframeLoading, clearIframeTimeout]);
 
+  // Keep the console sized to its container — if the container is resized
+  // (window resize, sidebar toggle, panel drag, etc.), re-request the session
+  // with the new dimensions and reload the iframe so Guacamole re-renders at
+  // the correct resolution instead of scaling/letterboxing.
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) return;
+      const { width, height } = entry.contentRect;
+
+      if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current);
+      resizeDebounceRef.current = setTimeout(() => {
+        if (!sessionRef.current) return; // no active session yet — initial fetch will size correctly
+        if (dimensionsDrifted({ width, height }, lastFetchDimsRef.current)) {
+          void fetchSession();
+        }
+      }, 400);
+    });
+
+    observer.observe(container);
+    return () => {
+      observer.disconnect();
+      if (resizeDebounceRef.current) {
+        clearTimeout(resizeDebounceRef.current);
+        resizeDebounceRef.current = null;
+      }
+    };
+  }, [fetchSession]);
+
   useEffect(() => {
     if (!iframeLoading && overlayMounted) {
       const timer = setTimeout(() => setOverlayMounted(false), IFRAME_OVERLAY_FADE_MS);
@@ -144,6 +213,15 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
     const remainingMax = Math.max(0, IFRAME_OVERLAY_MAX_MS - elapsed);
     scheduleOverlayHide(Math.min(remainingMin, remainingMax));
     iframeRef.current?.focus();
+
+    // The container may not have been laid out yet when we requested this
+    // session (flex layout settling, fonts affecting toolbar height, etc.).
+    // Now that the iframe has actually rendered, re-check against the real
+    // container size and self-correct if it drifted from what we requested.
+    const currentDims = getContainerDimensions();
+    if (dimensionsDrifted(currentDims, lastFetchDimsRef.current)) {
+      void fetchSession();
+    }
   };
 
   useEffect(() => {
@@ -279,7 +357,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
         </div>
       </div>
 
-      <div style={styles.body} onClick={() => iframeRef.current?.focus()}>
+      <div ref={containerRef} style={styles.body} onClick={() => iframeRef.current?.focus()}>
         {loading && !session && (
           <div style={styles.statusOverlay}>
             <div style={styles.spinner} />
