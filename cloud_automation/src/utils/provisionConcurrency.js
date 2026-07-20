@@ -3,29 +3,49 @@ const parsePositiveInt = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 };
 
+// Defaults tuned for ~500–1000 user labs with multi-service selection.
+// Keep PROVISION_STEP_TIME_BUDGET_MS=0 so each HTTP call does one batch (proxy-safe).
 const getBulkProvisionConcurrency = () =>
-  parsePositiveInt(process.env.BULK_PROVISION_CONCURRENCY, 30);
+  parsePositiveInt(process.env.BULK_PROVISION_CONCURRENCY, 40);
 
 const getRoleProvisionConcurrency = () =>
   parsePositiveInt(
     process.env.ROLE_PROVISION_CONCURRENCY || process.env.BULK_PROVISION_CONCURRENCY,
-    30
+    40
   );
 
 const getServiceProvisionConcurrency = () =>
   parsePositiveInt(
     process.env.SERVICE_PROVISION_CONCURRENCY || process.env.BULK_PROVISION_CONCURRENCY,
-    30
+    40
   );
 
 const getResourceGroupBatchSize = () =>
-  parsePositiveInt(process.env.RESOURCE_GROUP_BATCH_SIZE, 25);
+  parsePositiveInt(process.env.RESOURCE_GROUP_BATCH_SIZE, 50);
 
 const getRoleProvisionBatchSize = () =>
-  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 25);
+  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 50);
 
 const getUserProvisionBatchSize = () =>
-  parsePositiveInt(process.env.USER_PROVISION_BATCH_SIZE, 25);
+  parsePositiveInt(process.env.USER_PROVISION_BATCH_SIZE, 50);
+
+const getServicePolicyBatchSize = () =>
+  parsePositiveInt(
+    process.env.SERVICE_POLICY_BATCH_SIZE || process.env.RESOURCE_GROUP_BATCH_SIZE,
+    50
+  );
+
+const getBudgetProvisionBatchSize = () =>
+  parsePositiveInt(
+    process.env.BUDGET_PROVISION_BATCH_SIZE || process.env.USER_PROVISION_BATCH_SIZE,
+    50
+  );
+
+const getResourceScopedUserBatchSize = () =>
+  parsePositiveInt(
+    process.env.RESOURCE_SCOPED_USER_BATCH_SIZE || process.env.ROLE_PROVISION_BATCH_SIZE,
+    50
+  );
 
 const getProvisionStepTimeBudgetMs = () => {
   const raw = process.env.PROVISION_STEP_TIME_BUDGET_MS;
@@ -57,6 +77,9 @@ module.exports = {
   getResourceGroupBatchSize,
   getRoleProvisionBatchSize,
   getUserProvisionBatchSize,
+  getServicePolicyBatchSize,
+  getBudgetProvisionBatchSize,
+  getResourceScopedUserBatchSize,
   getProvisionStepTimeBudgetMs,
   getMaxProvisionAccountCount,
   getDeleteAzureConcurrency

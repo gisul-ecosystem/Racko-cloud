@@ -15,11 +15,12 @@ const { getDependencyRolesForServices } = require('./serviceRoleDependencyServic
 const { finalizeAiFoundryTierRoles, applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments } = require('./instanceRoleMappingService');
 const { ResourceManagementClient } = require('@azure/arm-resources');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
-const { assignResourceScopedPermissions } = require('../provisioners/azure/resourceScopedRoleProvisioner');
+const { assignResourceScopedPermissions, RESOURCE_SCOPED_SCANNED_ROLE } = require('../provisioners/azure/resourceScopedRoleProvisioner');
 const {
   getRoleProvisionConcurrency,
   getRoleProvisionBatchSize,
-  getProvisionStepTimeBudgetMs
+  getProvisionStepTimeBudgetMs,
+  getResourceScopedUserBatchSize
 } = require('../utils/provisionConcurrency');
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -312,6 +313,7 @@ const getUserRoleAssignmentsForRequest = async (requestId) => {
        ON rsr.request_id = ura.request_id AND rsr.azure_role = ura.azure_role
      LEFT JOIN services s ON s.id = rsr.service_id
      WHERE ura.request_id = $1
+       AND ura.azure_role <> '__resource_scoped_scanned__'
      ORDER BY au.username, s.name, ura.azure_role`,
     [requestId]
   );
@@ -350,9 +352,32 @@ const getRoleProvisionStatus = async (requestId) => {
     }
   }
 
+  const selectedServices = await getSelectedServicesForRequest(db, requestId);
+  const activeResourceScopedRules = selectedServices.some((service) =>
+    [
+      'Azure AI Speech',
+      'Azure AI Search',
+      'Azure Key Vault',
+      'Azure AI Foundry',
+      'Azure API Management',
+      'Log Analytics Workspace',
+      'Azure Container Registry'
+    ].includes(service.serviceName)
+  );
+
+  let resourceScopedRemaining = 0;
+  if (activeResourceScopedRules) {
+    for (const user of users) {
+      const existingRoles = existingMap.get(user.id) || new Set();
+      if (!existingRoles.has(RESOURCE_SCOPED_SCANNED_ROLE)) {
+        resourceScopedRemaining += 1;
+      }
+    }
+  }
+
   return {
-    complete: remaining === 0,
-    remaining
+    complete: remaining === 0 && resourceScopedRemaining === 0,
+    remaining: remaining + resourceScopedRemaining
   };
 };
 
@@ -700,7 +725,7 @@ const provisionRolesForRequest = async (requestId) => {
     let batchAssigned = 0;
     const pendingDbInserts = [...groupDbInserts];
 
-    // With no time budget: one HTTP request = one RBAC batch (safe behind proxies for 100-user labs).
+    // With no time budget: one HTTP request = one RBAC batch (proxy-safe for large labs).
     // With a time budget: keep assigning until the budget expires, then return complete:false.
     let processedBatch = false;
     while (
@@ -748,17 +773,24 @@ const provisionRolesForRequest = async (requestId) => {
     }
 
     if (hasAiFoundry && includesAcrPull) {
-      try {
-        await assignAcrPullAtRegistryScope({
-          authorizationClient,
-          users,
-          request,
-          requestId,
-          existingMap,
-          pendingDbInserts
-        });
-      } catch (err) {
-        console.warn('[roleProvision] AcrPull assignment failed — continuing:', err.message);
+      const alreadyScanningResourceScoped = users.some((user) => {
+        const existingRoles = existingMap.get(user.id);
+        return existingRoles && existingRoles.has(RESOURCE_SCOPED_SCANNED_ROLE);
+      });
+
+      if (!alreadyScanningResourceScoped) {
+        try {
+          await assignAcrPullAtRegistryScope({
+            authorizationClient,
+            users,
+            request,
+            requestId,
+            existingMap,
+            pendingDbInserts
+          });
+        } catch (err) {
+          console.warn('[roleProvision] AcrPull assignment failed — continuing:', err.message);
+        }
       }
     }
 
@@ -766,7 +798,9 @@ const provisionRolesForRequest = async (requestId) => {
       assignments: [],
       failures: [],
       permissionsComplete: true,
-      resourcesProcessed: 0
+      resourcesProcessed: 0,
+      usersProcessed: 0,
+      usersRemaining: 0
     };
 
     try {
@@ -776,7 +810,9 @@ const provisionRolesForRequest = async (requestId) => {
         request,
         requestId,
         selectedServices,
-        resolveUserResourceGroupName
+        resolveUserResourceGroupName,
+        existingRoleMap: existingMap,
+        batchSize: getResourceScopedUserBatchSize()
       });
       pendingDbInserts.push(...resourcePermissionResult.assignments);
     } catch (err) {
@@ -785,13 +821,32 @@ const provisionRolesForRequest = async (requestId) => {
         assignments: [],
         failures: [{ message: err.message || 'Resource-scoped permission assignment failed' }],
         permissionsComplete: false,
-        resourcesProcessed: 0
+        resourcesProcessed: 0,
+        usersProcessed: 0,
+        usersRemaining: users.length
       };
     }
 
     if (resourcePermissionResult.assignments.length > 0) {
       await batchUpsertAssignments(resourcePermissionResult.assignments);
       pendingDbInserts.push(...resourcePermissionResult.assignments);
+    }
+
+    if (resourcePermissionResult.usersRemaining > 0) {
+      return {
+        success: true,
+        complete: false,
+        remaining: resourcePermissionResult.usersRemaining,
+        usersProcessed: users.length,
+        rolesAssigned: pendingDbInserts.length,
+        successful: pendingDbInserts.length,
+        rolesProvisioned: [...new Set(roles.map((r) => r.azureRole))],
+        hasAiFoundry,
+        permissionsComplete: false,
+        provisioningStatus: 'provisioning_resource_permissions',
+        resourceScopedAssignments: resourcePermissionResult.resourcesProcessed,
+        permissionFailures: resourcePermissionResult.failures
+      };
     }
 
     // Batch group memberships in parallel
@@ -814,7 +869,7 @@ const provisionRolesForRequest = async (requestId) => {
       hasAiFoundry,
       permissionsComplete,
       provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioned_permissions_incomplete',
-      resourceScopedAssignments: resourcePermissionResult.assignments.length,
+      resourceScopedAssignments: resourcePermissionResult.resourcesProcessed,
       permissionFailures: resourcePermissionResult.failures
     };
   } catch (error) {
@@ -851,27 +906,36 @@ const repairResourceScopedPermissionsForRequest = async (requestId) => {
   }
 
   const { authorizationClient } = createAuthorizationClient();
+  const existingMap = await getAllExistingAssignments(
+    db,
+    requestId,
+    users.map((user) => user.id)
+  );
   const result = await assignResourceScopedPermissions({
     authorizationClient,
     users,
     request,
     requestId,
     selectedServices,
-    resolveUserResourceGroupName
+    resolveUserResourceGroupName,
+    existingRoleMap: existingMap,
+    batchSize: getResourceScopedUserBatchSize()
   });
 
   if (result.assignments.length > 0) {
     await batchUpsertAssignments(result.assignments);
   }
 
-  const permissionsComplete = result.permissionsComplete;
+  const permissionsComplete = result.usersRemaining === 0 && result.permissionsComplete;
 
   return {
     success: permissionsComplete,
+    complete: permissionsComplete,
+    remaining: result.usersRemaining || 0,
     usersProcessed: users.length,
     permissionsComplete,
-    provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioned_permissions_incomplete',
-    resourceScopedAssignments: result.assignments.length,
+    provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioning_resource_permissions',
+    resourceScopedAssignments: result.resourcesProcessed,
     permissionFailures: result.failures
   };
 };
