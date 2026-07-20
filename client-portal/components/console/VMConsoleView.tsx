@@ -67,6 +67,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   const [iframeKey, setIframeKey] = useState(0);
   const [iframeLoading, setIframeLoading] = useState(false);
   const [overlayMounted, setOverlayMounted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -78,6 +79,8 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
   /** Prevents overlapping fetches when onLoad-recheck and ResizeObserver fire close together. */
   const isFetchingRef = useRef(false);
   const resizeDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Mirrors isFullscreen for reads inside stable closures (ResizeObserver callback). */
+  const isFullscreenRef = useRef(false);
 
   /**
    * Prefer the iframe's actual container box over window.innerWidth/innerHeight
@@ -181,6 +184,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
 
       if (resizeDebounceRef.current) clearTimeout(resizeDebounceRef.current);
       resizeDebounceRef.current = setTimeout(() => {
+        if (isFullscreenRef.current) return; // entering/inside fullscreen isn't a real resize — don't reload
         if (!sessionRef.current) return; // no active session yet — initial fetch will size correctly
         if (dimensionsDrifted({ width, height }, lastFetchDimsRef.current)) {
           void fetchSession();
@@ -218,6 +222,9 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
     // session (flex layout settling, fonts affecting toolbar height, etc.).
     // Now that the iframe has actually rendered, re-check against the real
     // container size and self-correct if it drifted from what we requested.
+    // Skip while fullscreen — entering fullscreen changes the container size
+    // on purpose and should never trigger a reload.
+    if (isFullscreenRef.current) return;
     const currentDims = getContainerDimensions();
     if (dimensionsDrifted(currentDims, lastFetchDimsRef.current)) {
       void fetchSession();
@@ -234,6 +241,9 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
 
   useEffect(() => {
     const handleFullscreenChange = () => {
+      const nowFullscreen = !!document.fullscreenElement;
+      isFullscreenRef.current = nowFullscreen;
+      setIsFullscreen(nowFullscreen);
       setTimeout(() => iframeRef.current?.focus(), 300);
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
