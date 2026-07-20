@@ -12,6 +12,7 @@ import { ApiError } from '@/lib/apiClient';
 import { hexToRgba, tenantAccentSurface } from '@/lib/tenantAccentStyles';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { fetchTenantExternalVMs } from '@/lib/tenantExternalVmApi';
+import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
 import { fetchTenantVms } from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
 import type { IExternalVM } from '@/lib/externalVmApi';
@@ -144,13 +145,16 @@ export function TenantUserResourcesTabs() {
                       </td>
                       <td className="px-4 py-3 font-mono text-xs text-gray-500">{s.ipAddress}</td>
                       <td className="px-4 py-3 text-right">
-                        <Link
-                          href={`${tenantConsole.elastic}/${s._id}/console`}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            openTenantUrlWithSession(`${tenantConsole.elastic}/${s._id}/console`)
+                          }
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline"
                           style={accentLinkStyle}
                         >
                           Console <ChevronRight className="h-3.5 w-3.5" />
-                        </Link>
+                        </button>
                       </td>
                     </tr>
                   ))}

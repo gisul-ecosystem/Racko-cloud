@@ -54,7 +54,7 @@ const envSchema = z.object({
 
   // Super admin seed
   SUPER_ADMIN_EMAIL: z.string().email('SUPER_ADMIN_EMAIL must be a valid email'),
-  SUPER_ADMIN_PASSWORD: z.string().min(16, 'SUPER_ADMIN_PASSWORD must be at least 16 characters'),
+  SUPER_ADMIN_PASSWORD: z.string().min(12, 'SUPER_ADMIN_PASSWORD must be at least 12 characters'),
 
   // Internal service secret
   INTERNAL_SERVICE_SECRET: z.string().min(64, 'INTERNAL_SERVICE_SECRET must be at least 64 characters'),

@@ -23,6 +23,8 @@ export interface IUser extends Document {
   passwordResetExpires?: Date;
   createdBy?: mongoose.Types.ObjectId;  // admin who provisioned this user (null for self-registered)
   enrollmentKey: string;                // used for VM template agent auto-registration
+  /** Platform admin service entitlements were initialized (defaults or full catalog). */
+  adminServicesSeeded?: boolean;
   // MFA_SLOT: mfaEnabled: boolean (default: false)
   // MFA_SLOT: mfaSecret?: string
   createdAt: Date;
@@ -113,6 +115,10 @@ const userSchema = new Schema<IUser, IUserModel>(
       unique: true,
       sparse: true,
       index: true,
+    },
+    adminServicesSeeded: {
+      type: Boolean,
+      default: false,
     },
   },
   {

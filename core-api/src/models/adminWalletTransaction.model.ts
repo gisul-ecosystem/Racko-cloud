@@ -12,6 +12,7 @@ export interface IAdminWalletTransaction extends Document {
     | 'azure_lab_request'
     | 'aws_lab_request'
     | 'catalog_vm_purchase'
+    | 'dedicated_server_purchase'
     | 'manual_credit'
     | 'razorpay_topup'
     | 'refund';
@@ -46,6 +47,7 @@ const adminWalletTransactionSchema = new Schema<IAdminWalletTransaction>(
         'azure_lab_request',
         'aws_lab_request',
         'catalog_vm_purchase',
+        'dedicated_server_purchase',
         'manual_credit',
         'razorpay_topup',
         'refund',
