@@ -6,17 +6,17 @@ import { Cloud, HardDrive } from 'lucide-react';
 const providers = [
   {
     id: 'webyne',
-    name: 'Webyne Pricing',
+    name: 'Webyne Templates',
     href: '/super-admin-console/external-vm-pricing/webyne',
     icon: Cloud,
-    description: 'Override Webyne catalog plan prices (Linux, Windows, GPU)',
+    description: 'Manage VM templates and pricing shown on Create VM',
   },
   {
     id: 'dedicated-server',
-    name: 'Dedicated Server Pricing',
+    name: 'Dedicated Server Plans',
     href: '/super-admin-console/external-vm-pricing/dedicated-server',
     icon: HardDrive,
-    description: 'Define dedicated server plans and monthly pricing',
+    description: 'Bare-metal catalog, setup fees, and sell multiplier',
   },
 ] as const;
 

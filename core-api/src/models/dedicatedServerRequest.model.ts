@@ -21,6 +21,9 @@ export interface IDedicatedServerRequest extends Document {
     location?: string;
   };
   monthlyPrice: number;
+  setupFee?: number | null;
+  subtotal?: number;
+  tax?: number;
   currency: string;
   notes?: string;
   status: DedicatedServerStatus;
@@ -51,6 +54,9 @@ const dedicatedServerRequestSchema = new Schema<IDedicatedServerRequest>(
       location: { type: String },
     },
     monthlyPrice: { type: Number, required: true, min: 0 },
+    setupFee: { type: Number, min: 0, default: null },
+    subtotal: { type: Number, min: 0 },
+    tax: { type: Number, min: 0 },
     currency: { type: String, default: 'INR' },
     notes: { type: String, trim: true, maxlength: 1000 },
     status: {

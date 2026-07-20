@@ -3,6 +3,7 @@ import {
   DedicatedServerPlanModel,
   type IDedicatedServerPlan,
 } from '../../models/dedicatedServerPlan.model';
+import { DedicatedServerSettingsModel } from '../../models/dedicatedServerSettings.model';
 import {
   DedicatedServerRequestModel,
   type DedicatedServerStatus,
@@ -24,11 +25,24 @@ import type {
 import type {
   DedicatedConsoleSession,
   DedicatedPlanResponse,
+  DedicatedPricingSettings,
   DedicatedRequesterGroup,
   DedicatedServerResponse,
 } from './dedicatedServer.types';
+import { DEFAULT_DEDICATED_SERVER_PLANS } from './dedicatedServerPlans.seed';
 
 const OPEN_STATUSES: DedicatedServerStatus[] = ['provisioning'];
+
+const GST_RATE = 0.18;
+
+function roundMoney(n: number): number {
+  return Math.round(n * 100) / 100;
+}
+
+function applyMultiplier(amount: number, multiplier: number): number {
+  const m = Number.isFinite(multiplier) && multiplier > 0 ? multiplier : 1;
+  return roundMoney(amount * m);
+}
 
 class DedicatedServerService {
   private toPlan(doc: IDedicatedServerPlan): DedicatedPlanResponse {
@@ -40,7 +54,9 @@ class DedicatedServerService {
       ram: doc.ram,
       disk: doc.disk,
       ...(doc.location ? { location: doc.location } : {}),
+      features: Array.isArray(doc.features) ? doc.features.filter(Boolean) : [],
       monthlyPrice: doc.monthlyPrice,
+      setupFee: doc.setupFee ?? null,
       currency: doc.currency || 'INR',
       isActive: doc.isActive,
       sortOrder: doc.sortOrder ?? 0,
@@ -65,6 +81,9 @@ class DedicatedServerService {
       planName: doc.planName,
       specs: doc.specs,
       monthlyPrice: doc.monthlyPrice,
+      ...(doc.setupFee != null ? { setupFee: doc.setupFee } : { setupFee: null }),
+      ...(doc.subtotal != null ? { subtotal: doc.subtotal } : {}),
+      ...(doc.tax != null ? { tax: doc.tax } : {}),
       currency: doc.currency || 'INR',
       ...(doc.notes ? { notes: doc.notes } : {}),
       status: doc.status,
@@ -116,7 +135,7 @@ class DedicatedServerService {
         userId: sa._id,
         type: 'dedicated_server_request',
         title: 'Dedicated server request',
-        message: `${adminEmail} requested ${doc.planName} (₹${doc.monthlyPrice}/mo).`,
+        message: `${adminEmail} requested ${doc.planName} (₹${doc.chargedAmount ?? doc.monthlyPrice} charged).`,
         severity: 'info',
         read: false,
         actionUrl: `/super-admin-console/dedicated-server-requests/${doc.adminId.toString()}`,
@@ -166,15 +185,56 @@ class DedicatedServerService {
     }
   }
 
+  async getPricingSettings(): Promise<DedicatedPricingSettings> {
+    const doc = await DedicatedServerSettingsModel.findOne().sort({ updatedAt: -1 }).lean();
+    return {
+      sellMultiplier: doc?.sellMultiplier && doc.sellMultiplier > 0 ? doc.sellMultiplier : 1,
+      updatedAt: doc?.updatedAt ? doc.updatedAt.toISOString() : null,
+    };
+  }
+
+  async updatePricingSettings(
+    sellMultiplier: number,
+    updatedBy: mongoose.Types.ObjectId
+  ): Promise<DedicatedPricingSettings> {
+    const doc = await DedicatedServerSettingsModel.findOneAndUpdate(
+      {},
+      { $set: { sellMultiplier, updatedBy } },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    ).lean();
+    return {
+      sellMultiplier: doc!.sellMultiplier,
+      updatedAt: doc!.updatedAt.toISOString(),
+    };
+  }
+
+  private async resolveSellMultiplier(): Promise<number> {
+    const settings = await this.getPricingSettings();
+    return settings.sellMultiplier;
+  }
+
   // ─── Plans ───────────────────────────────────────────────────────────────
 
-  async listPlans(opts?: { activeOnly?: boolean }): Promise<DedicatedPlanResponse[]> {
+  async listPlans(opts?: {
+    activeOnly?: boolean;
+    applySellPrice?: boolean;
+  }): Promise<DedicatedPlanResponse[]> {
     const filter = opts?.activeOnly ? { isActive: true } : {};
     const docs = await DedicatedServerPlanModel.find(filter).sort({
       sortOrder: 1,
       createdAt: -1,
     });
-    return docs.map((d) => this.toPlan(d));
+    const multiplier = opts?.applySellPrice ? await this.resolveSellMultiplier() : 1;
+    return docs.map((d) => {
+      const plan = this.toPlan(d);
+      if (!opts?.applySellPrice || multiplier === 1) return plan;
+      return {
+        ...plan,
+        monthlyPrice: applyMultiplier(plan.monthlyPrice, multiplier),
+        setupFee:
+          plan.setupFee != null ? applyMultiplier(plan.setupFee, multiplier) : plan.setupFee,
+      };
+    });
   }
 
   async createPlan(
@@ -183,6 +243,8 @@ class DedicatedServerService {
   ): Promise<DedicatedPlanResponse> {
     const doc = await DedicatedServerPlanModel.create({
       ...input,
+      features: input.features ?? [],
+      setupFee: input.setupFee ?? null,
       currency: input.currency || 'INR',
       createdBy,
     });
@@ -206,6 +268,8 @@ class DedicatedServerService {
     if (input.location !== undefined) {
       doc.location = input.location === null ? undefined : input.location;
     }
+    if (input.features !== undefined) doc.features = input.features;
+    if (input.setupFee !== undefined) doc.setupFee = input.setupFee;
     if (input.monthlyPrice !== undefined) doc.monthlyPrice = input.monthlyPrice;
     if (input.currency !== undefined) doc.currency = input.currency;
     if (input.isActive !== undefined) doc.isActive = input.isActive;
@@ -217,6 +281,25 @@ class DedicatedServerService {
   async deletePlan(id: mongoose.Types.ObjectId): Promise<void> {
     const doc = await DedicatedServerPlanModel.findByIdAndDelete(id);
     if (!doc) throw new NotFoundError('Dedicated server plan not found.');
+  }
+
+  async seedPlansIfEmpty(
+    createdBy?: mongoose.Types.ObjectId
+  ): Promise<{ inserted: number; total: number }> {
+    const total = await DedicatedServerPlanModel.countDocuments();
+    if (total > 0) return { inserted: 0, total };
+
+    const docs = DEFAULT_DEDICATED_SERVER_PLANS.map((p, i) => ({
+      ...p,
+      features: p.features ?? [],
+      setupFee: p.setupFee ?? null,
+      currency: 'INR',
+      isActive: true,
+      sortOrder: i,
+      ...(createdBy ? { createdBy } : {}),
+    }));
+    await DedicatedServerPlanModel.insertMany(docs);
+    return { inserted: docs.length, total: docs.length };
   }
 
   // ─── Admin requests ──────────────────────────────────────────────────────
@@ -235,10 +318,21 @@ class DedicatedServerService {
       throw new NotFoundError('Dedicated server plan not found or inactive.');
     }
 
-    const total = Number(plan.monthlyPrice);
-    if (!Number.isFinite(total) || total < 0) {
+    const multiplier = await this.resolveSellMultiplier();
+    const baseMonthly = Number(plan.monthlyPrice);
+    const baseSetup = Number(plan.setupFee ?? 0);
+    if (!Number.isFinite(baseMonthly) || baseMonthly < 0) {
       throw new ValidationError('Invalid plan price.');
     }
+    if (!Number.isFinite(baseSetup) || baseSetup < 0) {
+      throw new ValidationError('Invalid setup fee.');
+    }
+
+    const sellMonthly = applyMultiplier(baseMonthly, multiplier);
+    const sellSetup = baseSetup > 0 ? applyMultiplier(baseSetup, multiplier) : 0;
+    const subtotal = roundMoney(sellMonthly + sellSetup);
+    const tax = roundMoney(subtotal * GST_RATE);
+    const total = roundMoney(subtotal + tax);
 
     if (total > 0) {
       await adminBillingService.debitWallet(
@@ -261,7 +355,10 @@ class DedicatedServerService {
           disk: plan.disk,
           location: plan.location,
         },
-        monthlyPrice: total,
+        monthlyPrice: sellMonthly,
+        setupFee: sellSetup > 0 ? sellSetup : null,
+        subtotal,
+        tax,
         currency: plan.currency || 'INR',
         notes: input.notes,
         status: 'provisioning',
@@ -293,7 +390,7 @@ class DedicatedServerService {
     await this.notifyRequester(
       adminId,
       'Dedicated server request submitted',
-      `Your ${plan.name} request (₹${total}/mo) was charged and is awaiting fulfillment.`,
+      `Your ${plan.name} request (₹${total} charged) is awaiting fulfillment.`,
       { requestId: doc._id.toString(), event: 'submitted', planName: plan.name, total }
     );
 
