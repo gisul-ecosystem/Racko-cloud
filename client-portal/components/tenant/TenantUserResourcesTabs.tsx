@@ -12,6 +12,7 @@ import { ApiError } from '@/lib/apiClient';
 import { hexToRgba, tenantAccentSurface } from '@/lib/tenantAccentStyles';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { fetchTenantExternalVMs } from '@/lib/tenantExternalVmApi';
+import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
 import { fetchTenantVms } from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
 import type { IExternalVM } from '@/lib/externalVmApi';
@@ -147,12 +148,7 @@ export function TenantUserResourcesTabs() {
                         <button
                           type="button"
                           onClick={() =>
-                            // Deliberately no 'noopener'/'noreferrer' here: tenant auth is
-                            // stored in sessionStorage (not cookies), which browsers only
-                            // clone into a new same-origin tab when an opener relationship
-                            // is kept. noopener would leave the new tab with an empty
-                            // session and bounce straight to /tenant/login.
-                            window.open(`${tenantConsole.elastic}/${s._id}/console`, '_blank')
+                            openTenantUrlWithSession(`${tenantConsole.elastic}/${s._id}/console`)
                           }
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline"
                           style={accentLinkStyle}

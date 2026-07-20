@@ -17,6 +17,7 @@ import {
   type IExternalVM,
 } from '@/lib/tenantExternalVmApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
+import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
 import { hexToRgba, tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { Server, Plus, Upload, RefreshCw, Monitor, Trash2 } from 'lucide-react';
 
@@ -46,12 +47,11 @@ export default function TenantMyServersPage() {
   const [deleteLoading, setDeleteLoading] = useState(false);
 
   const handleOpenConsole = (vm: IExternalVM) => {
-    // Opened in a new tab so the server list stays available in the original tab.
-    // Deliberately no 'noopener'/'noreferrer' here: tenant auth is stored in
-    // sessionStorage (not cookies), which browsers only clone into a new
-    // same-origin tab when an opener relationship is kept. noopener would
-    // leave the new tab with an empty session and bounce to /tenant/login.
-    window.open(`${tenantConsole.elastic}/${vm._id}/console`, '_blank');
+    // Opened in a new tab so the server list stays available in the original
+    // tab. openTenantUrlWithSession carries the session along explicitly via
+    // a one-time URL param, since sessionStorage cloning into a new tab
+    // isn't guaranteed/instant.
+    openTenantUrlWithSession(`${tenantConsole.elastic}/${vm._id}/console`);
   };
 
   const handleDelete = async () => {

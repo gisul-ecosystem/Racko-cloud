@@ -45,6 +45,32 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
   const router = useRouter();
 
   useEffect(() => {
+    // A console opened via window.open() into a new tab appends a one-time
+    // `_s` param carrying the caller's session (see TenantUserResourcesTabs /
+    // tenant elastic-servers list). This is more reliable than depending on
+    // the browser's same-origin sessionStorage cloning behavior. Consume it
+    // before the normal sessionStorage check so it takes effect immediately,
+    // then strip it from the URL so it never lingers in history/bookmarks.
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search);
+      const sessionParam = urlParams.get('_s');
+      if (sessionParam) {
+        try {
+          const raw = decodeURIComponent(atob(sessionParam));
+          const session = JSON.parse(raw);
+          if (session.accessToken && session.tenantUser) {
+            persistTenantSession(session);
+          }
+        } catch {
+          // Malformed/tampered _s param — ignore and fall through to the
+          // normal sessionStorage check below.
+        }
+        const newUrl = new URL(window.location.href);
+        newUrl.searchParams.delete('_s');
+        window.history.replaceState({}, '', newUrl.toString());
+      }
+    }
+
     const session = loadTenantSession();
     if (session) {
       setState({
