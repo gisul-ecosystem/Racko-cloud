@@ -1,6 +1,6 @@
 # Cloud Automation Reseller API
 
-Internal API for dynamic AWS/Azure pricing, provider selection, VM provisioning, and termination.
+Internal API for dynamic AWS/Azure/OCI/GCP pricing, provider selection, VM provisioning, and termination.
 
 ## Base URL
 
@@ -78,7 +78,7 @@ If both are supplied, `canonicalSpec` takes precedence.
 Unknown specs are resolved dynamically:
 
 1. Parse requested vCPU, RAM, and disk.
-2. Find a matching AWS instance type and Azure VM size.
+2. Find a matching AWS instance type, Azure VM size, OCI Flex shape, and GCP machine type.
 3. Fetch live compute pricing for configured regions.
 4. Add estimated public-IP and disk costs.
 5. Store the rows in MongoDB.
@@ -96,7 +96,7 @@ Example response:
 {
   "ok": true,
   "service": "cloud-automation-reseller",
-  "providers": ["aws", "azure"]
+  "providers": ["aws", "azure", "oci", "gcp"]
 }
 ```
 
@@ -104,7 +104,7 @@ Example response:
 
 ### `POST /api/select`
 
-For durations below 30 days, returns the cheapest matching AWS/Azure provider and region.
+For durations below 30 days, returns the cheapest matching AWS/Azure/OCI/GCP provider and region.
 
 For durations of 30 days or more, returns Webyne for manual fulfillment.
 
@@ -140,6 +140,18 @@ Fields:
 - `specs`: optional when `canonicalSpec` is supplied.
 - `category`: `linux`, `windows`, or `gpu`.
 - `durationDays`: number of service days.
+- `providers`: optional. Limit comparison to specific clouds. Array or comma-separated string. Examples: `["azure"]`, `"aws,azure"`, `"oci"`. Omit for all providers (`aws`, `azure`, `oci`, `gcp`).
+
+Azure-only select request:
+
+```json
+{
+  "canonicalSpec": "2vcpu-8gb-50gbssd",
+  "category": "linux",
+  "durationDays": 1,
+  "providers": ["azure"]
+}
+```
 
 Cached-price response:
 
@@ -159,6 +171,7 @@ Cached-price response:
     "currency": "USD",
     "autoProvisioned": true,
     "reason": "cheapest_cloud",
+    "providersUsed": ["aws", "azure", "oci", "gcp"],
     "fetchedAt": "2026-07-17T05:49:23.312Z"
   }
 }
@@ -198,7 +211,7 @@ Possible reasons:
 - `cheapest_cloud`: selected from cached exact-spec prices.
 - `cheapest_cloud_dynamic`: dynamically resolved and priced the exact spec.
 - `duration_gte_30_days`: Webyne manual route.
-- `no_cloud_pricing_for_spec`: no AWS/Azure price was available for the requested spec.
+- `no_cloud_pricing_for_spec`: no AWS/Azure/OCI/GCP price was available for the requested spec.
 
 ## 3. Provision a VM
 
@@ -230,9 +243,21 @@ Azure request:
 }
 ```
 
+OCI request:
+
+```json
+{
+  "provider": "oci",
+  "region": "ap-mumbai-1",
+  "category": "linux",
+  "canonicalSpec": "2vcpu-8gb-50gbssd",
+  "catalogVmId": "665f1a2b3c4d5e6f7a8b9c0d"
+}
+```
+
 Fields:
 
-- `provider`: required; `aws` or `azure`.
+- `provider`: required; `aws`, `azure`, `oci`, or `gcp`.
 - `canonicalSpec`: required.
 - `region`: recommended; use the value returned by `/api/select`.
 - `category`: `linux`, `windows`, or `gpu`; defaults to `linux`.
@@ -286,9 +311,19 @@ Azure request:
 
 Fields:
 
-- `provider`: required; `aws` or `azure`.
+- `provider`: required; `aws`, `azure`, `oci`, or `gcp`.
 - `providerInstanceId`: required.
-- `region`: required in practice for AWS; retained for provider routing.
+- `region`: required in practice for AWS/OCI; retained for provider routing.
+
+OCI request:
+
+```json
+{
+  "provider": "oci",
+  "region": "ap-mumbai-1",
+  "providerInstanceId": "ocid1.instance.oc1.ap-mumbai-1.xxxxx"
+}
+```
 
 Example response:
 
@@ -307,7 +342,7 @@ Example response:
 
 ### `POST /api/pricing/sync`
 
-Refreshes prices for all common/static spec mappings across configured AWS and Azure regions.
+Refreshes prices for all common/static spec mappings across configured AWS, Azure, OCI, and GCP regions.
 
 Dynamic specs are fetched on demand through `/api/select`; this endpoint primarily refreshes common configured specs.
 
@@ -317,12 +352,31 @@ Request body:
 {}
 ```
 
+Sync only Azure:
+
+```json
+{
+  "providers": ["azure"]
+}
+```
+
+Or comma-separated:
+
+```json
+{
+  "providers": "aws,oci"
+}
+```
+
+Omit `providers` to sync all four clouds.
+
 Example response:
 
 ```json
 {
   "success": true,
   "data": {
+    "providersUsed": ["aws", "azure", "oci", "gcp"],
     "results": [
       {
         "provider": "aws",
@@ -335,6 +389,20 @@ Example response:
         "written": 52,
         "errors": [],
         "errorCount": 0
+      },
+      {
+        "provider": "oci",
+        "written": 48,
+        "errors": [],
+        "errorCount": 0,
+        "ratesSource": "api"
+      },
+      {
+        "provider": "gcp",
+        "written": 48,
+        "errors": [],
+        "errorCount": 0,
+        "ratesSource": "api+fallback"
       }
     ]
   }
@@ -351,7 +419,8 @@ Returns stored pricing rows ordered by `rawTotalPricePerHr` ascending.
 
 No request body. Supported query parameters:
 
-- `provider`: `aws` or `azure`.
+- `provider`: single provider filter (`aws`, `azure`, `oci`, or `gcp`).
+- `providers`: comma-separated list, e.g. `providers=aws,azure` (overrides `provider` when both set).
 - `category`: `linux`, `windows`, or `gpu`.
 - `canonicalSpec`: exact canonical spec.
 - `limit`: defaults to 100; maximum 500.

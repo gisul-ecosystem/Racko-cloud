@@ -11,8 +11,8 @@ async function runSync(label) {
   running = true;
   console.log(`[pricingSync] starting (${label})`);
   try {
-    const results = await syncAllPricing();
-    console.log('[pricingSync] done', JSON.stringify(results));
+    const { providersUsed, results } = await syncAllPricing();
+    console.log('[pricingSync] done', JSON.stringify({ providersUsed, results }));
   } catch (err) {
     console.error('[pricingSync] failed', err instanceof Error ? err.message : err);
   } finally {

@@ -6,7 +6,7 @@ router.get('/', (_req, res) => {
   res.json({
     ok: true,
     service: 'cloud-automation-reseller',
-    providers: ['aws', 'azure'],
+    providers: ['aws', 'azure', 'oci', 'gcp'],
   });
 });
 

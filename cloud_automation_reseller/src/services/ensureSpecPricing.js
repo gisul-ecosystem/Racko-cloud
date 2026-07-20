@@ -1,47 +1,15 @@
-import { GetProductsCommand } from '@aws-sdk/client-pricing';
-import { pricingClient } from '../config/aws.js';
 import {
   AWS_PRICING_REGIONS,
   AZURE_PRICING_REGIONS,
-  awsLocationName,
+  OCI_PRICING_REGIONS,
+  GCP_PRICING_REGIONS,
 } from '../config/specMap.js';
 import CloudRegionPricing from '../models/CloudRegionPricing.js';
 import { ensureSkuMappings } from './dynamicSkuResolver.js';
-
-function extractOnDemandUsd(priceList) {
-  if (!priceList?.length) return null;
-  try {
-    const product = JSON.parse(priceList[0]);
-    const onDemand = product.terms?.OnDemand;
-    if (!onDemand) return null;
-    const term = onDemand[Object.keys(onDemand)[0]];
-    const dims = term?.priceDimensions;
-    if (!dims) return null;
-    const dim = dims[Object.keys(dims)[0]];
-    const unitPrice = parseFloat(dim?.pricePerUnit?.USD ?? 'NaN');
-    return Number.isFinite(unitPrice) ? unitPrice : null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchEc2Hourly(instanceType, regionCode, os = 'Linux') {
-  const location = awsLocationName(regionCode);
-  const command = new GetProductsCommand({
-    ServiceCode: 'AmazonEC2',
-    Filters: [
-      { Type: 'TERM_MATCH', Field: 'instanceType', Value: instanceType },
-      { Type: 'TERM_MATCH', Field: 'location', Value: location },
-      { Type: 'TERM_MATCH', Field: 'operatingSystem', Value: os },
-      { Type: 'TERM_MATCH', Field: 'tenancy', Value: 'Shared' },
-      { Type: 'TERM_MATCH', Field: 'capacitystatus', Value: 'Used' },
-      { Type: 'TERM_MATCH', Field: 'preInstalledSw', Value: 'NA' },
-    ],
-    MaxResults: 1,
-  });
-  const res = await pricingClient.send(command);
-  return extractOnDemandUsd(res.PriceList);
-}
+import { getOciUnitRates, computeOciHourly } from './ociPricing.js';
+import { getGcpUnitRates, computeGcpHourly } from './gcpPricing.js';
+import { normalizeProviders } from '../config/cloudProviders.js';
+import { fetchEc2Hourly, ebsHourly, AWS_IP_HOURLY } from './awsPriceFetch.js';
 
 const RETAIL_API = 'https://prices.azure.com/api/retail/prices';
 
@@ -72,19 +40,23 @@ async function fetchAzureVmHourly(armSkuName, armRegionName, windows = false) {
   return match?.retailPrice ?? null;
 }
 
-function ebsHourly(ebsGb) {
-  return (Number(ebsGb) || 0) * (0.08 / 730);
-}
 function diskHourly(diskGb) {
   return (Number(diskGb) || 0) * (0.12 / 730);
 }
 
-const AWS_IP = 0.005;
 const AZURE_IP = 0.004;
+
+async function providersWithPricing(canonicalSpec, category, providers) {
+  return CloudRegionPricing.distinct('provider', {
+    canonicalSpec,
+    category,
+    provider: { $in: providers },
+  });
+}
 
 /**
  * Ensure CloudRegionPricing has rows for this exact canonicalSpec.
- * Resolves SKUs dynamically when not in the static map, then prices AWS+Azure regions.
+ * Resolves SKUs dynamically when not in the static map, then prices requested providers.
  */
 export async function ensureSpecPricing({
   canonicalSpec,
@@ -93,14 +65,17 @@ export async function ensureSpecPricing({
   ramGb,
   diskGb,
   gpu = false,
+  providers,
 } = {}) {
-  const existing = await CloudRegionPricing.countDocuments({
+  const providersUsed = normalizeProviders(providers);
+  const existingProviders = await providersWithPricing(
     canonicalSpec,
     category,
-    provider: { $in: ['aws', 'azure'] },
-  });
-  if (existing > 0) {
-    return { cached: true, written: 0, mappings: null };
+    providersUsed
+  );
+  const missingProviders = providersUsed.filter((p) => !existingProviders.includes(p));
+  if (missingProviders.length === 0) {
+    return { cached: true, written: 0, mappings: null, providersUsed };
   }
 
   const mappings = await ensureSkuMappings({
@@ -117,7 +92,7 @@ export async function ensureSpecPricing({
   const categories =
     category === 'gpu' ? ['gpu'] : category === 'windows' ? ['windows'] : [category];
 
-  if (mappings.aws?.instanceType) {
+  if (providersUsed.includes('aws') && mappings.aws?.instanceType) {
     for (const region of AWS_PRICING_REGIONS) {
       for (const cat of categories) {
         try {
@@ -128,7 +103,7 @@ export async function ensureSpecPricing({
             continue;
           }
           const storage = ebsHourly(mappings.aws.ebsGb);
-          const total = compute + storage + AWS_IP;
+          const total = compute + storage + AWS_IP_HOURLY;
           await CloudRegionPricing.findOneAndUpdate(
             { provider: 'aws', region, category: cat, canonicalSpec },
             {
@@ -138,7 +113,7 @@ export async function ensureSpecPricing({
               canonicalSpec,
               rawComputePricePerHr: compute,
               rawStoragePricePerHr: storage,
-              rawIpPricePerHr: AWS_IP,
+              rawIpPricePerHr: AWS_IP_HOURLY,
               rawTotalPricePerHr: total,
               currency: 'USD',
               instanceType: mappings.aws.instanceType,
@@ -157,7 +132,7 @@ export async function ensureSpecPricing({
     }
   }
 
-  if (mappings.azure?.vmSize) {
+  if (providersUsed.includes('azure') && mappings.azure?.vmSize) {
     for (const region of AZURE_PRICING_REGIONS) {
       for (const cat of categories) {
         try {
@@ -200,12 +175,102 @@ export async function ensureSpecPricing({
     }
   }
 
+  if (providersUsed.includes('oci') && mappings.oci?.shape) {
+    let ociRates;
+    try {
+      ociRates = await getOciUnitRates();
+    } catch (err) {
+      errors.push(`oci rates: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    if (ociRates) {
+      for (const region of OCI_PRICING_REGIONS) {
+        for (const cat of categories) {
+          try {
+            const priced = computeOciHourly({
+              ocpus: mappings.oci.ocpus,
+              memoryInGBs: mappings.oci.memoryInGBs,
+              bootVolumeGb: mappings.oci.bootVolumeGb,
+              category: cat,
+              rates: ociRates,
+            });
+            await CloudRegionPricing.findOneAndUpdate(
+              { provider: 'oci', region, category: cat, canonicalSpec },
+              {
+                provider: 'oci',
+                region,
+                category: cat,
+                canonicalSpec,
+                ...priced,
+                currency: 'USD',
+                instanceType: `${mappings.oci.shape}/${mappings.oci.ocpus}ocpu/${mappings.oci.memoryInGBs}gb`,
+                fetchedAt: now,
+                source: 'api',
+              },
+              { upsert: true, new: true }
+            );
+            written += 1;
+          } catch (err) {
+            errors.push(
+              `oci ${region}/${cat}: ${err instanceof Error ? err.message : String(err)}`
+            );
+          }
+        }
+      }
+    }
+  }
+
+  if (providersUsed.includes('gcp') && mappings.gcp?.machineType) {
+    for (const region of GCP_PRICING_REGIONS) {
+      let gcpRates;
+      try {
+        gcpRates = await getGcpUnitRates(region);
+      } catch (err) {
+        errors.push(`gcp rates ${region}: ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      for (const cat of categories) {
+        try {
+          const priced = computeGcpHourly({
+            machineType: mappings.gcp.machineType,
+            diskGb: mappings.gcp.diskGb,
+            category: cat,
+            acceleratorCount: mappings.gcp.acceleratorCount || 0,
+            rates: gcpRates,
+          });
+          await CloudRegionPricing.findOneAndUpdate(
+            { provider: 'gcp', region, category: cat, canonicalSpec },
+            {
+              provider: 'gcp',
+              region,
+              category: cat,
+              canonicalSpec,
+              ...priced,
+              currency: 'USD',
+              instanceType: mappings.gcp.machineType,
+              fetchedAt: now,
+              source: 'api',
+            },
+            { upsert: true, new: true }
+          );
+          written += 1;
+        } catch (err) {
+          errors.push(
+            `gcp ${region}/${cat}: ${err instanceof Error ? err.message : String(err)}`
+          );
+        }
+      }
+    }
+  }
+
   return {
     cached: false,
     written,
+    providersUsed,
     mappings: {
       aws: mappings.aws,
       azure: mappings.azure,
+      oci: mappings.oci,
+      gcp: mappings.gcp,
     },
     errors: errors.slice(0, 30),
     errorCount: errors.length,

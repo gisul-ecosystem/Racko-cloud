@@ -6,6 +6,10 @@ export interface ResellerSelectInput {
   category: string;
   durationDays: number;
   specs?: { cpu?: string; ram?: string; disk?: string };
+  /** Limit cheapest-provider search to these clouds. Omit for all. */
+  providers?: string[] | string;
+  /** Backward-compatible alias for providers. */
+  provider?: string[] | string;
 }
 
 export interface ResellerSelectResult {
@@ -21,6 +25,7 @@ export interface ResellerSelectResult {
   currency?: string;
   autoProvisioned: boolean;
   reason?: string;
+  providersUsed?: string[];
 }
 
 export interface ResellerProvisionInput {

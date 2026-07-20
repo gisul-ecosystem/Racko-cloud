@@ -5,8 +5,13 @@ import { getAzureCredential, azureConfig } from '../config/azure.js';
 import {
   awsSpecMap,
   azureSpecMap,
+  ociSpecMap,
+  gcpSpecMap,
   registerAwsSpec,
   registerAzureSpec,
+  registerOciSpec,
+  registerGcpSpec,
+  vcpuToOcpus,
 } from '../config/specMap.js';
 
 const PREFERRED_AWS_FAMILIES = [
@@ -219,12 +224,77 @@ function azureSizeLadder(vcpu, ramGb) {
 }
 
 /**
- * Resolve + register AWS/Azure mappings for a canonical spec.
+ * OCI Flex shape for arbitrary vCPU/RAM (1 OCPU ≈ 2 vCPUs on x86).
+ */
+export function resolveOciSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
+  const needVcpu = Math.max(1, Number(vcpu) || 1);
+  const needRam = Math.max(1, Number(ramGb) || 1);
+  const disk = Math.max(50, Number(diskGb) || 50);
+  const ocpus = vcpuToOcpus(needVcpu);
+
+  if (gpu) {
+    return {
+      shape: 'VM.GPU.A10.1',
+      ocpus: 15,
+      memoryInGBs: Math.max(240, needRam),
+      bootVolumeGb: disk,
+      source: 'dynamic',
+    };
+  }
+
+  return {
+    shape: 'VM.Standard.E4.Flex',
+    ocpus,
+    // Flex minimum memory is typically 1 GB per OCPU; honor requested RAM.
+    memoryInGBs: Math.max(needRam, ocpus),
+    bootVolumeGb: disk,
+    source: 'dynamic',
+  };
+}
+
+/**
+ * GCP size ladder (E2 standard / shared-core).
+ */
+export function resolveGcpSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
+  const needVcpu = Math.max(1, Number(vcpu) || 1);
+  const needRam = Math.max(1, Number(ramGb) || 1);
+  const disk = Math.max(10, Number(diskGb) || 50);
+
+  if (gpu) {
+    return {
+      machineType: needVcpu >= 8 ? 'n1-standard-8' : 'n1-standard-4',
+      diskGb: disk,
+      acceleratorType: 'nvidia-tesla-t4',
+      acceleratorCount: 1,
+      source: 'dynamic',
+    };
+  }
+
+  const ladder = [
+    { v: 1, r: 1, name: 'e2-micro' },
+    { v: 1, r: 2, name: 'e2-small' },
+    { v: 2, r: 4, name: 'e2-medium' },
+    { v: 2, r: 8, name: 'e2-standard-2' },
+    { v: 4, r: 16, name: 'e2-standard-4' },
+    { v: 8, r: 32, name: 'e2-standard-8' },
+    { v: 16, r: 64, name: 'e2-standard-16' },
+    { v: 32, r: 128, name: 'e2-standard-32' },
+  ];
+  const hit = ladder.find((x) => x.v >= needVcpu && x.r >= needRam);
+  return {
+    machineType: hit?.name || 'e2-standard-16',
+    diskGb: disk,
+    source: 'ladder',
+  };
+}
+
+/**
+ * Resolve + register AWS/Azure/OCI/GCP mappings for a canonical spec.
  * Uses static map when present; otherwise discovers dynamically.
  */
 export async function ensureSkuMappings(parts) {
   const { canonicalSpec, vcpu, ramGb, diskGb, gpu } = parts;
-  const result = { aws: null, azure: null, errors: [] };
+  const result = { aws: null, azure: null, oci: null, gcp: null, errors: [] };
 
   if (awsSpecMap[canonicalSpec]?.instanceType) {
     result.aws = awsSpecMap[canonicalSpec];
@@ -255,6 +325,30 @@ export async function ensureSkuMappings(parts) {
       }
     } catch (err) {
       result.errors.push(`azure: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (ociSpecMap[canonicalSpec]?.shape) {
+    result.oci = ociSpecMap[canonicalSpec];
+  } else {
+    try {
+      const oci = resolveOciSku({ vcpu, ramGb, diskGb, gpu });
+      registerOciSpec(canonicalSpec, oci);
+      result.oci = ociSpecMap[canonicalSpec];
+    } catch (err) {
+      result.errors.push(`oci: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
+  if (gcpSpecMap[canonicalSpec]?.machineType) {
+    result.gcp = gcpSpecMap[canonicalSpec];
+  } else {
+    try {
+      const gcp = resolveGcpSku({ vcpu, ramGb, diskGb, gpu });
+      registerGcpSpec(canonicalSpec, gcp);
+      result.gcp = gcpSpecMap[canonicalSpec];
+    } catch (err) {
+      result.errors.push(`gcp: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 

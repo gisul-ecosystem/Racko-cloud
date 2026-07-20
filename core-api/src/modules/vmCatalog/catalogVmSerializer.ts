@@ -62,8 +62,15 @@ export function computeExpiresAt(durationDays: number): Date {
   return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 }
 
-export function isAutoCloudProvider(provider: string | undefined): provider is 'aws' | 'azure' {
-  return provider === 'aws' || provider === 'azure';
+export function isAutoCloudProvider(
+  provider: string | undefined
+): provider is 'aws' | 'azure' | 'oci' | 'gcp' {
+  return (
+    provider === 'aws' ||
+    provider === 'azure' ||
+    provider === 'oci' ||
+    provider === 'gcp'
+  );
 }
 
 export type { VmCatalogProvider };

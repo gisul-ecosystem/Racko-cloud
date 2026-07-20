@@ -1,5 +1,7 @@
 import { launchEc2Vm, terminateEc2Vm } from '../provisioners/aws/ec2Launch.js';
 import { launchAzureVm, terminateAzureVm } from '../provisioners/azure/vmLaunch.js';
+import { launchOciVm, terminateOciVm } from '../provisioners/oci/instanceLaunch.js';
+import { launchGcpVm, terminateGcpVm } from '../provisioners/gcp/instanceLaunch.js';
 
 export async function provisionVm(input = {}) {
   const provider = String(input.provider || '').toLowerCase();
@@ -9,6 +11,12 @@ export async function provisionVm(input = {}) {
   }
   if (provider === 'azure') {
     return launchAzureVm(input);
+  }
+  if (provider === 'oci') {
+    return launchOciVm(input);
+  }
+  if (provider === 'gcp') {
+    return launchGcpVm(input);
   }
 
   const err = new Error(`Unsupported provider for auto-provision: ${provider}`);
@@ -24,6 +32,12 @@ export async function terminateVm(input = {}) {
   }
   if (provider === 'azure') {
     return terminateAzureVm(input);
+  }
+  if (provider === 'oci') {
+    return terminateOciVm(input);
+  }
+  if (provider === 'gcp') {
+    return terminateGcpVm(input);
   }
 
   const err = new Error(`Unsupported provider for terminate: ${provider}`);
