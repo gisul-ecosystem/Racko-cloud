@@ -15,7 +15,7 @@ const installMethodEnum = z.enum(
 export const createSoftwareCatalogSchema = z.object({
   body: z.object({
     name:          z.string({ required_error: 'name is required' }).min(1).max(100).trim(),
-    version:       z.string({ required_error: 'version is required' }).min(1).max(50).trim(),
+    version:       z.string().max(50).trim().optional().default('latest'),
     supportedOS:   z.array(machineOSEnum).min(1, 'At least one supported OS is required'),
     installMethod: installMethodEnum,
     // Package manager identifiers

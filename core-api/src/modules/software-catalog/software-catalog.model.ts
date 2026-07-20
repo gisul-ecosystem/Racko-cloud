@@ -28,7 +28,7 @@ export interface ISoftwareCatalog extends Document {
 const softwareCatalogSchema = new Schema<ISoftwareCatalog>(
   {
     name: { type: String, required: true, trim: true },
-    version: { type: String, required: true, trim: true },
+    version: { type: String, default: 'latest', trim: true },
     supportedOS: {
       type: [{ type: String, enum: ['windows', 'linux', 'macos'] }],
       required: true,
