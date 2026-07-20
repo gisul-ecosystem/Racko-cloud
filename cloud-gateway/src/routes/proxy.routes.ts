@@ -253,8 +253,17 @@ router.get('/api/v1/external-vms/:id/console', authMiddleware, verifyMiddleware,
 router.get('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
 router.delete('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
+// ─── EXTERNAL VM PRICING (sell multipliers / overrides) ──────────────────────
+router.get('/api/v1/external-vm-pricing/:provider', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.put('/api/v1/external-vm-pricing/:provider', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+
 // ─── VM CATALOG ROUTES (admin + super_admin) ─────────────────────────────────
 router.get('/api/v1/vm-catalog/overview', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/vm-catalog/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/vm-catalog/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/vm-catalog/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.patch('/api/v1/vm-catalog/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.delete('/api/v1/vm-catalog/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/vm-catalog/vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vm-catalog/vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vm-catalog/vms/:id/console', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -268,6 +277,9 @@ router.patch('/api/v1/vm-catalog/requests/:id/reject', authMiddleware, verifyMid
 
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/dedicated-servers/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/dedicated-servers/pricing-settings', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.put('/api/v1/dedicated-servers/pricing-settings', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.patch('/api/v1/dedicated-servers/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.delete('/api/v1/dedicated-servers/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/dedicated-servers/servers', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);

@@ -8,7 +8,10 @@ export interface IDedicatedServerPlan extends Document {
   ram: string;
   disk: string;
   location?: string;
+  /** Extra bullet points (network, SLA, IPMI, OS, etc.). */
+  features?: string[];
   monthlyPrice: number;
+  setupFee?: number | null;
   currency: string;
   isActive: boolean;
   sortOrder: number;
@@ -25,7 +28,9 @@ const dedicatedServerPlanSchema = new Schema<IDedicatedServerPlan>(
     ram: { type: String, required: true, trim: true, maxlength: 100 },
     disk: { type: String, required: true, trim: true, maxlength: 100 },
     location: { type: String, trim: true, maxlength: 200 },
+    features: { type: [String], default: [] },
     monthlyPrice: { type: Number, required: true, min: 0 },
+    setupFee: { type: Number, min: 0, default: null },
     currency: { type: String, default: 'INR', trim: true, maxlength: 8 },
     isActive: { type: Boolean, default: true, index: true },
     sortOrder: { type: Number, default: 0 },

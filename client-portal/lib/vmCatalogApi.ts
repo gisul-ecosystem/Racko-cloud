@@ -102,10 +102,92 @@ export interface CreateCatalogVmRequestDto {
   };
 }
 
+export interface IVmCatalogPlan {
+  _id: string;
+  sno?: number;
+  name: string;
+  vcpu: number;
+  ramGb: number;
+  ssdGb: number;
+  hourly: number | null;
+  monthly: number | null;
+  quarterly: number | null;
+  yearly: number | null;
+  currency: string;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  sellPricesByCategory?: Record<
+    VmCatalogCategory,
+    {
+      hourly: number | null;
+      monthly: number | null;
+      quarterly: number | null;
+      yearly: number | null;
+    }
+  >;
+}
+
+export type CreateVmCatalogPlanDto = {
+  sno?: number;
+  name: string;
+  vcpu: number;
+  ramGb: number;
+  ssdGb: number;
+  hourly?: number | null;
+  monthly?: number | null;
+  quarterly?: number | null;
+  yearly?: number | null;
+  currency?: string;
+  isActive?: boolean;
+  sortOrder?: number;
+};
+
 interface ApiResponse<T> {
   success: boolean;
   message: string;
   data: T;
+}
+
+export async function fetchVmCatalogPlans(): Promise<IVmCatalogPlan[]> {
+  const res = await apiRequest<ApiResponse<{ plans: IVmCatalogPlan[]; total: number }>>(
+    '/api/v1/vm-catalog/plans'
+  );
+  return res.data.plans;
+}
+
+export async function createVmCatalogPlan(
+  body: CreateVmCatalogPlanDto
+): Promise<IVmCatalogPlan> {
+  const res = await apiRequest<ApiResponse<{ plan: IVmCatalogPlan }>>(
+    '/api/v1/vm-catalog/plans',
+    { method: 'POST', body: JSON.stringify(body) }
+  );
+  return res.data.plan;
+}
+
+export async function updateVmCatalogPlan(
+  id: string,
+  body: Partial<CreateVmCatalogPlanDto>
+): Promise<IVmCatalogPlan> {
+  const res = await apiRequest<ApiResponse<{ plan: IVmCatalogPlan }>>(
+    `/api/v1/vm-catalog/plans/${id}`,
+    { method: 'PATCH', body: JSON.stringify(body) }
+  );
+  return res.data.plan;
+}
+
+export async function deleteVmCatalogPlan(id: string): Promise<void> {
+  await apiRequest(`/api/v1/vm-catalog/plans/${id}`, { method: 'DELETE' });
+}
+
+export async function seedVmCatalogPlans(): Promise<{ inserted: number; total: number }> {
+  const res = await apiRequest<ApiResponse<{ inserted: number; total: number }>>(
+    '/api/v1/vm-catalog/plans/seed',
+    { method: 'POST' }
+  );
+  return res.data;
 }
 
 export async function fetchVmCatalogOverview(): Promise<CatalogVmOverview> {

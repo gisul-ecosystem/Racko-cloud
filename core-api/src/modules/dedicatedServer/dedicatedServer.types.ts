@@ -11,12 +11,19 @@ export interface DedicatedPlanResponse {
   ram: string;
   disk: string;
   location?: string;
+  features: string[];
   monthlyPrice: number;
+  setupFee: number | null;
   currency: string;
   isActive: boolean;
   sortOrder: number;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface DedicatedPricingSettings {
+  sellMultiplier: number;
+  updatedAt: string | null;
 }
 
 export interface DedicatedServerResponse {
@@ -32,6 +39,9 @@ export interface DedicatedServerResponse {
     location?: string;
   };
   monthlyPrice: number;
+  setupFee?: number | null;
+  subtotal?: number;
+  tax?: number;
   currency: string;
   notes?: string;
   status: DedicatedServerStatus;
