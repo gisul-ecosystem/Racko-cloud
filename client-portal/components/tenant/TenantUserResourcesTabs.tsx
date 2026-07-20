@@ -147,11 +147,12 @@ export function TenantUserResourcesTabs() {
                         <button
                           type="button"
                           onClick={() =>
-                            window.open(
-                              `${tenantConsole.elastic}/${s._id}/console`,
-                              '_blank',
-                              'noopener,noreferrer'
-                            )
+                            // Deliberately no 'noopener'/'noreferrer' here: tenant auth is
+                            // stored in sessionStorage (not cookies), which browsers only
+                            // clone into a new same-origin tab when an opener relationship
+                            // is kept. noopener would leave the new tab with an empty
+                            // session and bounce straight to /tenant/login.
+                            window.open(`${tenantConsole.elastic}/${s._id}/console`, '_blank')
                           }
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline"
                           style={accentLinkStyle}
