@@ -2,7 +2,6 @@
 
 import { useState, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useExternalVMs } from '@/hooks/useExternalVMs';
@@ -36,7 +35,6 @@ function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
 }
 
 export default function TenantMyServersPage() {
-  const router = useRouter();
   const { isAuthenticated, tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const isAdmin = tenantUser?.role === 'tenant_admin';
@@ -46,11 +44,10 @@ export default function TenantMyServersPage() {
 
   const [pendingDelete, setPendingDelete] = useState<IExternalVM | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
-  const [consoleLoadingId, setConsoleLoadingId] = useState<string | null>(null);
 
   const handleOpenConsole = (vm: IExternalVM) => {
-    setConsoleLoadingId(vm._id);
-    router.push(`${tenantConsole.elastic}/${vm._id}/console`);
+    // Opened in a new tab so the server list stays available in the original tab.
+    window.open(`${tenantConsole.elastic}/${vm._id}/console`, '_blank', 'noopener,noreferrer');
   };
 
   const handleDelete = async () => {
@@ -202,9 +199,8 @@ export default function TenantMyServersPage() {
                         <div className="flex items-center justify-end gap-2">
                           <button
                             onClick={() => handleOpenConsole(vm)}
-                            disabled={consoleLoadingId === vm._id}
                             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
-                            title="Open browser console"
+                            title="Open browser console in a new tab"
                           >
                             <Monitor className="h-3.5 w-3.5" />
                             Console
