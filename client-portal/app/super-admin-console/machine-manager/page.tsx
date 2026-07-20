@@ -93,7 +93,7 @@ export default function SuperAdminSoftwareCatalogPage() {
     setSelectedOS((prev) => prev.includes(os) ? prev.filter((o) => o !== os) : [...prev, os]);
 
   const canSubmit = !!(
-    name.trim() && version.trim() && selectedOS.length > 0 &&
+    name.trim() && selectedOS.length > 0 &&
     (isFileBased ? fileUrl.trim() : true) &&
     (installMethod === 'apt'    ? aptName.trim() :
      installMethod === 'brew'   ? brewName.trim() :
@@ -107,7 +107,7 @@ export default function SuperAdminSoftwareCatalogPage() {
     try {
       await createSoftwareCatalogEntry({
         name: name.trim(),
-        version: version.trim(),
+        version: version.trim() || 'latest',
         supportedOS: selectedOS,
         installMethod,
         wingetId:    wingetId.trim()    || undefined,
@@ -184,8 +184,8 @@ export default function SuperAdminSoftwareCatalogPage() {
 
           {/* Version */}
           <div>
-            <label className={labelClass}>Version <span className="text-red-500">*</span></label>
-            <input className={inputClass} value={version} onChange={(e) => setVersion(e.target.value)} placeholder="120.0.0" />
+            <label className={labelClass}>Version <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input className={inputClass} value={version} onChange={(e) => setVersion(e.target.value)} placeholder="e.g. 3.12.0 — leave blank for latest" />
           </div>
 
           {/* Install method */}

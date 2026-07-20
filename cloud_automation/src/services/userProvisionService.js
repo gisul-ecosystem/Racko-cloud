@@ -198,7 +198,16 @@ const provisionUsersForRequest = async (requestId) => {
     });
 
     try {
-      await provisionBudgetsForRequest(requestId);
+      const budgetResult = await provisionBudgetsForRequest(requestId);
+      if (budgetResult && budgetResult.complete === false) {
+        return {
+          usersCreated: existingUsers.length,
+          accountCount,
+          complete: false,
+          remaining: Math.max(1, Number(budgetResult.remaining) || 0),
+          budgetsRemaining: budgetResult.remaining
+        };
+      }
     } catch (budgetError) {
       logAzureUserEvent('error', 'azure_user_budget_provision_failed', {
         requestId,
@@ -356,7 +365,16 @@ const provisionUsersForRequest = async (requestId) => {
 
   if (complete) {
     try {
-      await provisionBudgetsForRequest(requestId);
+      const budgetResult = await provisionBudgetsForRequest(requestId);
+      if (budgetResult && budgetResult.complete === false) {
+        return {
+          usersCreated: totalUsers,
+          accountCount,
+          complete: false,
+          remaining: Math.max(1, Number(budgetResult.remaining) || 0),
+          budgetsRemaining: budgetResult.remaining
+        };
+      }
     } catch (budgetError) {
       logAzureUserEvent('error', 'azure_user_budget_provision_failed', {
         requestId,

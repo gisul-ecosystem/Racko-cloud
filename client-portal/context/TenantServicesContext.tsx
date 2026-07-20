@@ -23,7 +23,7 @@ interface TenantServicesState {
 const TenantServicesContext = createContext<TenantServicesState | null>(null);
 
 export function TenantServicesProvider({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated } = useTenantAuth();
+  const { isAuthenticated, isLoading: authLoading } = useTenantAuth();
   const [services, setServices] = useState<TenantAssignedService[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -50,8 +50,16 @@ export function TenantServicesProvider({ children }: { children: React.ReactNode
   }, [isAuthenticated]);
 
   useEffect(() => {
+    // TenantAuthContext mounts *below* us in effect order, so on first mount
+    // isAuthenticated is still its initial `false` — before the real check
+    // (sessionStorage / a new-tab `_s` param handoff) has run. Without this
+    // guard we'd synchronously conclude "unauthenticated, no services" and
+    // commit loading=false before auth ever gets a chance to resolve, which
+    // lets RequireTenantService fire its redirect on stale data. Only decide
+    // once TenantAuthContext itself is done loading.
+    if (authLoading) return;
     void refresh();
-  }, [refresh]);
+  }, [refresh, authLoading]);
 
   const hasActiveService = useCallback(
     (serviceKey: TenantServiceKey) =>
