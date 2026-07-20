@@ -88,8 +88,17 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
    * black bars, no need to go fullscreen first. Falls back to window size
    * before the container has been measured (e.g. the very first fetch, when
    * no <iframe> has mounted yet).
+   *
+   * requestFullscreen() is called on the <iframe> itself (see handleFullscreen),
+   * not on its parent container — the browser resizes the fullscreen element
+   * to fill the viewport, but the parent div's clientWidth/clientHeight stay
+   * at their pre-fullscreen size. So while fullscreen, go straight to
+   * window.innerWidth/innerHeight instead of measuring the (stale) container.
    */
   const getContainerDimensions = useCallback((): { width?: number; height?: number } => {
+    if (isFullscreenRef.current) {
+      return { width: window.innerWidth, height: window.innerHeight };
+    }
     const container = iframeRef.current?.parentElement ?? containerRef.current;
     const width = container?.clientWidth ?? window.innerWidth;
     const height = container?.clientHeight ?? window.innerHeight;
@@ -244,6 +253,24 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
       const nowFullscreen = !!document.fullscreenElement;
       isFullscreenRef.current = nowFullscreen;
       setIsFullscreen(nowFullscreen);
+
+      if (nowFullscreen) {
+        // Entering fullscreen — re-fetch so getContainerDimensions() picks up
+        // window.innerWidth/innerHeight (the iframe's container now IS the
+        // full screen). The delay lets the browser finish the fullscreen
+        // transition before we measure.
+        setTimeout(() => {
+          if (isFullscreenRef.current) void fetchSession();
+        }, 300);
+      } else {
+        // Exiting fullscreen — re-fetch so Guacamole shrinks back down to
+        // the real (non-fullscreen) container size instead of staying
+        // scaled/letterboxed at the old fullscreen resolution.
+        setTimeout(() => {
+          if (!isFullscreenRef.current) void fetchSession();
+        }, 300);
+      }
+
       setTimeout(() => iframeRef.current?.focus(), 300);
     };
     document.addEventListener('fullscreenchange', handleFullscreenChange);
@@ -252,7 +279,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
     };
-  }, []);
+  }, [fetchSession]);
 
   useEffect(() => {
     const handleVisibilityChange = () => {
