@@ -55,6 +55,8 @@ export interface TenantWallet {
 
 export type TenantServiceKey =
   | 'vm-management'
+  | 'create-vm'
+  | 'dedicated-server'
   | 'elastic-servers'
   | 'azure'
   | 'aws'

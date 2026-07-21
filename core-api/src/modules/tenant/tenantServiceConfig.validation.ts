@@ -71,6 +71,8 @@ export const serviceConfigCreateSchema = z.discriminatedUnion('serviceKey', [
     limits: vmManagementLimitsSchema,
     pricing: vmManagementPricingSchema,
   }),
+  genericServiceCreateSchema('create-vm'),
+  genericServiceCreateSchema('dedicated-server'),
   genericServiceCreateSchema('elastic-servers'),
   genericServiceCreateSchema('azure'),
   genericServiceCreateSchema('aws'),

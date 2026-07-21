@@ -10,8 +10,11 @@ import {
   type IDedicatedServerRequest,
 } from '../../models/dedicatedServerRequest.model';
 import { User } from '../../models/user.model';
+import { TenantUser } from '../../models/tenantUser.model';
+import { TenantNotification } from '../../models/tenantNotification.model';
 import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
+import { walletService } from '../wallet/wallet.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
@@ -75,7 +78,9 @@ class DedicatedServerService {
 
     return {
       _id: doc._id.toString(),
-      adminId: doc.adminId.toString(),
+      ...(doc.adminId ? { adminId: doc.adminId.toString() } : {}),
+      ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
+      ...(doc.tenantUserId ? { tenantUserId: doc.tenantUserId.toString() } : {}),
       ...(opts?.adminEmail ? { adminEmail: opts.adminEmail } : {}),
       planId: doc.planId.toString(),
       planName: doc.planName,
@@ -117,13 +122,13 @@ class DedicatedServerService {
   ): Promise<IDedicatedServerRequest> {
     const doc = await DedicatedServerRequestModel.findById(id);
     if (!doc) throw new NotFoundError('Dedicated server request not found.');
-    if (doc.adminId.toString() !== adminId.toString()) {
+    if (!doc.adminId || doc.adminId.toString() !== adminId.toString()) {
       throw new ForbiddenError('You do not have permission to access this dedicated server.');
     }
     return doc;
   }
 
-  private async notifySuperAdmins(doc: IDedicatedServerRequest, adminEmail: string): Promise<void> {
+  private async notifySuperAdmins(doc: IDedicatedServerRequest, requesterEmail: string): Promise<void> {
     const superAdmins = await User.find({ role: 'super_admin', isActive: true })
       .select('_id')
       .lean();
@@ -135,14 +140,17 @@ class DedicatedServerService {
         userId: sa._id,
         type: 'dedicated_server_request',
         title: 'Dedicated server request',
-        message: `${adminEmail} requested ${doc.planName} (₹${doc.chargedAmount ?? doc.monthlyPrice} charged).`,
+        message: `${requesterEmail} requested ${doc.planName} (₹${doc.chargedAmount ?? doc.monthlyPrice} charged).`,
         severity: 'info',
         read: false,
-        actionUrl: `/super-admin-console/dedicated-server-requests/${doc.adminId.toString()}`,
+        actionUrl: doc.tenantId
+          ? '/super-admin-console/dedicated-server-requests'
+          : `/super-admin-console/dedicated-server-requests/${doc.adminId?.toString() ?? ''}`,
         metadata: {
           jobId: requestId,
           requestId,
-          adminId: doc.adminId.toString(),
+          ...(doc.adminId ? { adminId: doc.adminId.toString() } : {}),
+          ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
           event: 'dedicated_submitted',
           planName: doc.planName,
           total: doc.monthlyPrice,
@@ -454,6 +462,40 @@ class DedicatedServerService {
     };
   }
 
+  private async notifyOwner(
+    doc: IDedicatedServerRequest,
+    title: string,
+    message: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    if (doc.adminId) {
+      await this.notifyRequester(doc.adminId, title, message, metadata);
+      return;
+    }
+    if (doc.tenantId && doc.tenantUserId) {
+      await this.notifyTenantRequester(doc.tenantId, doc.tenantUserId, title, message, metadata);
+    }
+  }
+
+  private async refundOwner(doc: IDedicatedServerRequest, amount: number): Promise<void> {
+    if (doc.adminId) {
+      await adminBillingService.refundCloudRequestCharge(
+        doc.adminId.toString(),
+        amount,
+        doc._id.toString()
+      );
+      return;
+    }
+    if (doc.tenantId) {
+      await walletService.creditWallet(
+        doc.tenantId.toString(),
+        amount,
+        'dedicated_server_purchase_refund',
+        { relatedVmId: doc._id.toString() }
+      );
+    }
+  }
+
   // ─── Super-admin requests ────────────────────────────────────────────────
 
   async listRequesterGroups(): Promise<DedicatedRequesterGroup[]> {
@@ -463,6 +505,7 @@ class DedicatedServerService {
       totalCount: number;
       lastRequestedAt: Date | null;
     }>([
+      { $match: { adminId: { $exists: true, $ne: null } } },
       {
         $group: {
           _id: '$adminId',
@@ -498,7 +541,11 @@ class DedicatedServerService {
     if (opts.status && opts.status !== 'all') filter.status = opts.status;
 
     const docs = await DedicatedServerRequestModel.find(filter).sort({ createdAt: -1 });
-    const adminIds = [...new Set(docs.map((d) => d.adminId.toString()))];
+    const adminIds = [
+      ...new Set(
+        docs.map((d) => d.adminId?.toString()).filter((id): id is string => Boolean(id))
+      ),
+    ];
     const admins = await User.find({
       _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
     })
@@ -508,7 +555,7 @@ class DedicatedServerService {
 
     return docs.map((doc) =>
       this.toRequest(doc, {
-        adminEmail: emailById.get(doc.adminId.toString()),
+        adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
         includeSecrets: true,
       })
     );
@@ -536,8 +583,8 @@ class DedicatedServerService {
     doc.reviewedAt = new Date();
     await doc.save();
 
-    await this.notifyRequester(
-      doc.adminId,
+    await this.notifyOwner(
+      doc,
       'Dedicated server is ready',
       `Your ${doc.planName} dedicated server is now available in My Servers.`,
       { requestId: doc._id.toString(), event: 'attached' }
@@ -567,15 +614,11 @@ class DedicatedServerService {
     await doc.save();
 
     if (shouldRefund) {
-      await adminBillingService.refundCloudRequestCharge(
-        doc.adminId.toString(),
-        refundAmount,
-        doc._id.toString()
-      );
+      await this.refundOwner(doc, refundAmount);
     }
 
-    await this.notifyRequester(
-      doc.adminId,
+    await this.notifyOwner(
+      doc,
       'Dedicated server request rejected',
       shouldRefund
         ? `Your request for ${doc.planName} was rejected and ₹${refundAmount} was refunded: ${reason}`
@@ -589,6 +632,174 @@ class DedicatedServerService {
     );
 
     return this.toRequest(doc, { includeSecrets: true });
+  }
+
+  // ─── Tenant portal (white-label) ─────────────────────────────────────────
+
+  private async findOwnedByTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<IDedicatedServerRequest> {
+    const doc = await DedicatedServerRequestModel.findById(id);
+    if (!doc) throw new NotFoundError('Dedicated server request not found.');
+    if (!doc.tenantId || doc.tenantId.toString() !== tenantId.toString()) {
+      throw new ForbiddenError('You do not have permission to access this dedicated server.');
+    }
+    return doc;
+  }
+
+  private async notifyTenantRequester(
+    tenantId: mongoose.Types.ObjectId,
+    tenantUserId: mongoose.Types.ObjectId,
+    title: string,
+    message: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      await TenantNotification.create({
+        tenantId,
+        tenantUserId,
+        type: 'dedicated_server_request',
+        title,
+        message,
+        severity: metadata['event'] === 'rejected' ? 'warning' : 'info',
+        read: false,
+        metadata,
+      });
+    } catch (err: unknown) {
+      logger.error('[DedicatedServer] Failed to notify tenant requester', {
+        tenantId: tenantId.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async createRequestForTenant(
+    input: CreateDedicatedRequestInput,
+    tenantId: mongoose.Types.ObjectId,
+    tenantUserId: mongoose.Types.ObjectId
+  ): Promise<DedicatedServerResponse> {
+    const tenantUser = await TenantUser.findById(tenantUserId).select('email role isActive tenantId').lean();
+    if (
+      !tenantUser ||
+      tenantUser.role !== 'tenant_admin' ||
+      !tenantUser.isActive ||
+      tenantUser.tenantId.toString() !== tenantId.toString()
+    ) {
+      throw new ForbiddenError('Only active tenant admins can request dedicated servers.');
+    }
+
+    const plan = await DedicatedServerPlanModel.findById(input.planId);
+    if (!plan || !plan.isActive) {
+      throw new NotFoundError('Dedicated server plan not found or inactive.');
+    }
+
+    const multiplier = await this.resolveSellMultiplier();
+    const sellMonthly = applyMultiplier(Number(plan.monthlyPrice), multiplier);
+    const sellSetup =
+      Number(plan.setupFee ?? 0) > 0
+        ? applyMultiplier(Number(plan.setupFee), multiplier)
+        : 0;
+    const subtotal = roundMoney(sellMonthly + sellSetup);
+    const tax = roundMoney(subtotal * GST_RATE);
+    const total = roundMoney(subtotal + tax);
+
+    if (total > 0) {
+      await walletService.debitWallet(tenantId.toString(), total, 'dedicated_server_purchase');
+    }
+
+    let doc: IDedicatedServerRequest;
+    try {
+      doc = await DedicatedServerRequestModel.create({
+        tenantId,
+        tenantUserId,
+        planId: plan._id,
+        planName: plan.name,
+        specs: {
+          cpu: plan.cpu,
+          ram: plan.ram,
+          disk: plan.disk,
+          location: plan.location,
+        },
+        monthlyPrice: sellMonthly,
+        setupFee: sellSetup > 0 ? sellSetup : null,
+        subtotal,
+        tax,
+        currency: plan.currency || 'INR',
+        notes: input.notes,
+        status: 'provisioning',
+        chargedAmount: total,
+        walletDebited: total > 0,
+      });
+    } catch (err) {
+      if (total > 0) {
+        await walletService
+          .creditWallet(tenantId.toString(), total, 'dedicated_server_purchase_refund')
+          .catch(() => undefined);
+      }
+      throw err;
+    }
+
+    await this.notifySuperAdmins(doc, tenantUser.email);
+    await this.notifyTenantRequester(
+      tenantId,
+      tenantUserId,
+      'Dedicated server request submitted',
+      `Your ${plan.name} request (₹${total} charged) is awaiting fulfillment.`,
+      { requestId: doc._id.toString(), event: 'submitted', planName: plan.name, total }
+    );
+
+    return this.toRequest(doc, { forAdmin: true });
+  }
+
+  async listForTenant(tenantId: mongoose.Types.ObjectId): Promise<DedicatedServerResponse[]> {
+    const docs = await DedicatedServerRequestModel.find({ tenantId }).sort({ createdAt: -1 });
+    return docs.map((d) => this.toRequest(d, { forAdmin: true }));
+  }
+
+  async getForTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<DedicatedServerResponse> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    return this.toRequest(doc, { forAdmin: true });
+  }
+
+  async openConsoleForTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId,
+    dimensions?: { width?: number; height?: number }
+  ): Promise<DedicatedConsoleSession> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    if (doc.status !== 'active') {
+      throw new ValidationError('Console is only available after the server is attached.');
+    }
+    if (!doc.ipAddress || !doc.password) {
+      throw new ValidationError('Missing IP or password for console access.');
+    }
+    const protocol = doc.protocol || 'ssh';
+    const username = doc.username || (protocol === 'rdp' ? 'Administrator' : 'root');
+    const password = decrypt(doc.password);
+    const port = protocol === 'rdp' ? 3389 : 22;
+    const session = await guacamoleClient.openConsole(
+      `dedicated-${doc._id.toString()}`,
+      protocol,
+      {
+        hostname: doc.ipAddress,
+        port,
+        username,
+        password,
+        ignoreCert: true,
+        securityMode: 'any',
+        width: dimensions?.width,
+        height: dimensions?.height,
+      }
+    );
+    return {
+      protocol,
+      clientUrl: session.clientUrl,
+      connectionId: session.connectionId,
+    };
   }
 }
 

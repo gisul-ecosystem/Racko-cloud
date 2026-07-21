@@ -5,8 +5,8 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { HardDrive, Loader2, Monitor, Plus } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
+import { useDedicatedServerPortal } from '@/context/DedicatedServerPortalContext';
 import {
-  fetchMyDedicatedServers,
   formatDedicatedStatus,
   type IDedicatedServer,
 } from '@/lib/dedicatedServerApi';
@@ -18,6 +18,7 @@ function formatInr(n: number) {
 
 export default function MyDedicatedServersPage() {
   const router = useRouter();
+  const { api, routes, isReady } = useDedicatedServerPortal();
   const [servers, setServers] = useState<IDedicatedServer[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,17 +28,17 @@ export default function MyDedicatedServersPage() {
     setLoading(true);
     setError(null);
     try {
-      setServers(await fetchMyDedicatedServers());
+      setServers(await api.fetchServers());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load servers.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (isReady) void load();
+  }, [load, isReady]);
 
   return (
     <div className="max-w-screen-xl">
@@ -47,7 +48,7 @@ export default function MyDedicatedServersPage() {
           <p className="mt-0.5 text-sm text-gray-500">Dedicated server requests for your account</p>
         </div>
         <Link
-          href="/console/dedicated-server/request"
+          href={routes.request}
           className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:bg-[#a01717]"
         >
           <Plus className="h-4 w-4" />
@@ -107,9 +108,7 @@ export default function MyDedicatedServersPage() {
                               <button
                                 type="button"
                                 onClick={() =>
-                                  router.push(
-                                    `/console/dedicated-server/my-servers/${s._id}/console`
-                                  )
+                                  router.push(routes.console(s._id))
                                 }
                                 className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white"
                               >

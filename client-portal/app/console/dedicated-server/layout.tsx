@@ -8,6 +8,8 @@ import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
 import { RequireAdminService } from '../../../components/console/RequireAdminService';
+import { DedicatedServerPortalProvider } from '../../../context/DedicatedServerPortalContext';
+import { adminDedicatedServerPortalConfig } from '../../../lib/dedicatedServerPortalConfig';
 
 export default function DedicatedServerLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -37,7 +39,11 @@ export default function DedicatedServerLayout({ children }: { children: React.Re
 
   return (
     <RequireAdminService serviceKey="dedicated-server">
-      <ServiceShellLayout
+      <DedicatedServerPortalProvider
+        config={adminDedicatedServerPortalConfig}
+        isReady={!isLoading && isAuthenticated}
+      >
+        <ServiceShellLayout
         sidebarOpen={sidebarOpen}
         sidebar={
           <DedicatedServerSidebar
@@ -56,6 +62,7 @@ export default function DedicatedServerLayout({ children }: { children: React.Re
       >
         {children}
       </ServiceShellLayout>
+      </DedicatedServerPortalProvider>
     </RequireAdminService>
   );
 }

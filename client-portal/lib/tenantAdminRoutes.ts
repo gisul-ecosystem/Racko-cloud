@@ -41,4 +41,13 @@ export const tenantConsole = {
   awsNew: `${TENANT_CONSOLE}/aws/requests/new`,
   gcp: `${TENANT_CONSOLE}/gcp`,
   docs: `${TENANT_CONSOLE}/docs`,
+  createVm: `${TENANT_CONSOLE}/create-vm`,
+  createVmCreate: `${TENANT_CONSOLE}/create-vm/create`,
+  createVmMyVms: `${TENANT_CONSOLE}/create-vm/my-vms`,
+  createVmConsole: (id: string) => `${TENANT_CONSOLE}/create-vm/my-vms/${id}/console`,
+  dedicatedServer: `${TENANT_CONSOLE}/dedicated-server`,
+  dedicatedServerRequest: `${TENANT_CONSOLE}/dedicated-server/request`,
+  dedicatedServerMyServers: `${TENANT_CONSOLE}/dedicated-server/my-servers`,
+  dedicatedServerConsole: (id: string) =>
+    `${TENANT_CONSOLE}/dedicated-server/my-servers/${id}/console`,
 } as const;
