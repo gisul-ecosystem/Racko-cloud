@@ -276,6 +276,8 @@ router.patch('/api/v1/vm-catalog/requests/:id/approve', authMiddleware, verifyMi
 router.patch('/api/v1/vm-catalog/requests/:id/fetch-details', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.patch('/api/v1/vm-catalog/requests/:id/attach', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.patch('/api/v1/vm-catalog/requests/:id/reject', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/vm-catalog/pricing/calculate', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/vm-catalog/pricing', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);

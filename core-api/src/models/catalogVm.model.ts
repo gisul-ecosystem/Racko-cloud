@@ -1,6 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
-export type VmCatalogProvider = 'webyne';
+export type VmCatalogProvider = 'webyne' | 'aws' | 'azure' | 'gcp' | 'oci';
 export type VmCatalogCategory = 'linux' | 'windows' | 'gpu';
 export type VmCatalogProtocol = 'rdp' | 'ssh';
 
@@ -14,7 +14,8 @@ export type VmCatalogStatus =
   | 'failed'
   | 'rejected'
   | 'cancelled'
-  | 'suspended';
+  | 'suspended'
+  | 'terminated';
 
 export interface VmCatalogSpecs {
   cpu?: string;
@@ -61,6 +62,16 @@ export interface ICatalogVm extends Document {
   externalRef?: string;
   fulfillError?: string;
   providerPurchased: boolean;
+  /** Provider-native region (e.g. ap-south-1). Super-admin only in API responses. */
+  region?: string;
+  /** Real cloud instance id. Super-admin only in API responses. */
+  providerInstanceId?: string;
+  /** Auto-teardown deadline for short-duration auto-provisioned VMs. */
+  expiresAt?: Date;
+  /** true = AWS/Azure auto path; false = manual Webyne fulfillment. */
+  autoProvisioned: boolean;
+  /** Internal margin tracking. Super-admin only in API responses. */
+  rawProviderCostPerHr?: number;
   attachedAt?: Date;
   rejectionReason?: string;
   reviewedBy?: mongoose.Types.ObjectId;
@@ -116,7 +127,7 @@ const catalogVmSchema = new Schema<ICatalogVm>(
     },
     provider: {
       type: String,
-      enum: ['webyne'],
+      enum: ['webyne', 'aws', 'azure', 'gcp', 'oci'],
       required: true,
       default: 'webyne',
     },
@@ -171,6 +182,7 @@ const catalogVmSchema = new Schema<ICatalogVm>(
         'rejected',
         'cancelled',
         'suspended',
+        'terminated',
       ],
       required: true,
       default: 'pending_approval',
@@ -186,6 +198,11 @@ const catalogVmSchema = new Schema<ICatalogVm>(
     externalRef: { type: String, trim: true },
     fulfillError: { type: String, trim: true },
     providerPurchased: { type: Boolean, default: false },
+    region: { type: String, trim: true },
+    providerInstanceId: { type: String, trim: true },
+    expiresAt: { type: Date, index: true },
+    autoProvisioned: { type: Boolean, default: false, index: true },
+    rawProviderCostPerHr: { type: Number, min: 0 },
     attachedAt: { type: Date },
     rejectionReason: { type: String, trim: true },
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
@@ -208,6 +225,7 @@ const catalogVmSchema = new Schema<ICatalogVm>(
 
 catalogVmSchema.index({ adminId: 1, createdAt: -1 });
 catalogVmSchema.index({ adminId: 1, status: 1 });
+catalogVmSchema.index({ autoProvisioned: 1, status: 1, expiresAt: 1 });
 catalogVmSchema.index({ tenantId: 1, createdAt: -1 });
 catalogVmSchema.index({ tenantId: 1, status: 1 });
 

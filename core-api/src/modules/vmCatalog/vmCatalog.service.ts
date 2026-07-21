@@ -17,6 +17,19 @@ import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
 import { callCatalogAgentPurchase, callCatalogAgentScrape } from './catalogAgentClient';
 import type { CatalogAgentError } from './catalogAgentClient';
+import {
+  selectProvider as resellerSelect,
+  provisionVm as resellerProvision,
+  terminateVm as resellerTerminate,
+} from './resellerClient';
+import {
+  stripProviderLeakFields,
+  resolveDurationDays,
+  specsToCanonicalSpec,
+  computeExpiresAt,
+  isAutoCloudProvider,
+  type CatalogVmCallerRole,
+} from './catalogVmSerializer';
 import { guacamoleClient } from '../../utils/guacamoleClient';
 import type {
   CatalogVmOverview,
@@ -64,14 +77,20 @@ class VmCatalogService {
 
   private toResponse(
     doc: ICatalogVm,
-    opts?: { adminEmail?: string; includeSecrets?: boolean; forAdmin?: boolean }
+    opts?: {
+      adminEmail?: string;
+      includeSecrets?: boolean;
+      forAdmin?: boolean;
+      role?: CatalogVmCallerRole;
+    }
   ): CatalogVmResponse {
     const includeSecrets = Boolean(opts?.includeSecrets);
     const forAdmin = Boolean(opts?.forAdmin);
     const status = forAdmin ? this.adminDisplayStatus(doc.status) : doc.status;
     const showConnection = includeSecrets || doc.status === 'active';
+    const role = opts?.role ?? (forAdmin ? 'admin' : 'super_admin');
 
-    return {
+    const base: CatalogVmResponse = {
       _id: doc._id.toString(),
       ...(doc.adminId ? { adminId: doc.adminId.toString() } : {}),
       ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
@@ -106,6 +125,13 @@ class VmCatalogService {
       ...(showConnection && doc.externalRef ? { externalRef: doc.externalRef } : {}),
       ...(!forAdmin && doc.fulfillError ? { fulfillError: doc.fulfillError } : {}),
       providerPurchased: Boolean(doc.providerPurchased),
+      ...(doc.region ? { region: doc.region } : {}),
+      ...(doc.providerInstanceId ? { providerInstanceId: doc.providerInstanceId } : {}),
+      ...(doc.expiresAt ? { expiresAt: doc.expiresAt.toISOString() } : {}),
+      autoProvisioned: Boolean(doc.autoProvisioned),
+      ...(doc.rawProviderCostPerHr != null
+        ? { rawProviderCostPerHr: doc.rawProviderCostPerHr }
+        : {}),
       ...(doc.attachedAt ? { attachedAt: doc.attachedAt.toISOString() } : {}),
       ...(doc.rejectionReason ? { rejectionReason: doc.rejectionReason } : {}),
       ...(doc.reviewedBy ? { reviewedBy: doc.reviewedBy.toString() } : {}),
@@ -113,6 +139,8 @@ class VmCatalogService {
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
+
+    return stripProviderLeakFields(base, role);
   }
 
   private async notifySuperAdminsOfRequest(
@@ -249,6 +277,37 @@ class VmCatalogService {
       throw new ValidationError('Invalid purchase total.');
     }
 
+    const durationDays = resolveDurationDays(dto.billing, dto.durationDays);
+    const canonicalSpec =
+      dto.canonicalSpec || specsToCanonicalSpec(dto.specs, dto.category);
+
+    let selection: Awaited<ReturnType<typeof resellerSelect>>;
+    try {
+      selection = await resellerSelect({
+        canonicalSpec,
+        category: dto.category,
+        durationDays,
+        specs: dto.specs,
+      });
+    } catch (err) {
+      logger.warn('[VmCatalog] Reseller select failed — falling back to webyne', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      selection = {
+        provider: 'webyne',
+        region: null,
+        category: dto.category,
+        canonicalSpec,
+        rawTotalPricePerHr: null,
+        autoProvisioned: false,
+        reason: 'select_error_fallback',
+      };
+    }
+
+    const autoProvisioned =
+      Boolean(selection.autoProvisioned) && isAutoCloudProvider(selection.provider);
+    const provider = autoProvisioned ? selection.provider : 'webyne';
+
     // Debit wallet first — fails with INSUFFICIENT_BALANCE if too low.
     await adminBillingService.debitWallet(
       adminId.toString(),
@@ -261,7 +320,7 @@ class VmCatalogService {
     try {
       doc = await CatalogVmModel.create({
         adminId,
-        provider: 'webyne',
+        provider,
         category: dto.category,
         planId: plan._id.toString(),
         planName: plan.name,
@@ -283,6 +342,12 @@ class VmCatalogService {
         status: 'provisioning',
         chargedAmount: total,
         walletDebited: true,
+        autoProvisioned,
+        ...(selection.region ? { region: selection.region } : {}),
+        ...(selection.rawTotalPricePerHr != null
+          ? { rawProviderCostPerHr: selection.rawTotalPricePerHr }
+          : {}),
+        ...(autoProvisioned ? { expiresAt: computeExpiresAt(durationDays) } : {}),
       });
     } catch (err) {
       await adminBillingService
@@ -299,6 +364,90 @@ class VmCatalogService {
 
     // Link debit txn to this request id
     await adminBillingService.patchLatestTransactionJobId(adminId.toString(), doc._id.toString());
+
+    if (autoProvisioned) {
+      try {
+        const provisioned = await resellerProvision({
+          provider: selection.provider,
+          region: selection.region,
+          category: dto.category,
+          canonicalSpec: selection.canonicalSpec || canonicalSpec,
+          catalogVmId: doc._id.toString(),
+        });
+
+        doc.status = 'active';
+        doc.providerInstanceId = provisioned.providerInstanceId;
+        doc.region = provisioned.region || selection.region || undefined;
+        doc.hostname = provisioned.hostname || provisioned.ip || undefined;
+        doc.ipAddress = provisioned.ip || undefined;
+        doc.username = provisioned.username;
+        doc.password = encrypt(provisioned.password);
+        doc.protocol = provisioned.protocol;
+        doc.providerPurchased = true;
+        doc.attachedAt = new Date();
+        doc.updatedAt = new Date();
+        await doc.save();
+
+        await this.notifyRequester(
+          adminId,
+          'Cloud VM is ready',
+          `Your ${doc.quantity}× ${doc.planName} purchase (₹${total}) is active.`,
+          {
+            requestId: doc._id.toString(),
+            event: 'active',
+            planName: doc.planName,
+            total,
+          }
+        );
+
+        logger.info('[VmCatalog] Auto-provisioned catalog VM', {
+          requestId: doc._id.toString(),
+          provider: doc.provider,
+          region: doc.region,
+        });
+
+        return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        doc.status = 'failed';
+        doc.fulfillError = message;
+        doc.updatedAt = new Date();
+        await doc.save();
+
+        await adminBillingService
+          .refundCloudRequestCharge(adminId.toString(), total, doc._id.toString())
+          .catch((refundErr: unknown) => {
+            logger.error('[VmCatalog] Refund after auto-provision failure failed', {
+              requestId: doc._id.toString(),
+              error: refundErr instanceof Error ? refundErr.message : String(refundErr),
+            });
+          });
+
+        if (doc.walletDebited) {
+          doc.walletDebited = false;
+          await doc.save().catch(() => undefined);
+        }
+
+        await this.notifyRequester(
+          adminId,
+          'Cloud VM provisioning failed',
+          `Your ${doc.planName} purchase failed and was refunded. ${message}`,
+          {
+            requestId: doc._id.toString(),
+            event: 'failed',
+            planName: doc.planName,
+            total,
+          }
+        );
+
+        logger.error('[VmCatalog] Auto-provision failed', {
+          requestId: doc._id.toString(),
+          error: message,
+        });
+
+        return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
+      }
+    }
 
     await this.notifySuperAdminsOfRequest(doc, admin.email);
     await this.notifyRequester(
@@ -318,14 +467,16 @@ class VmCatalogService {
       adminId: adminId.toString(),
       planName: doc.planName,
       chargedAmount: total,
+      provider: doc.provider,
+      autoProvisioned: false,
     });
 
-    return this.toResponse(doc, { adminEmail: admin.email });
+    return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
   }
 
   async listForAdmin(adminId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({ adminId }).sort({ createdAt: -1 });
-    return docs.map((doc) => this.toResponse(doc, { forAdmin: true }));
+    return docs.map((doc) => this.toResponse(doc, { forAdmin: true, role: 'admin' }));
   }
 
   /** Admin: single owned VM (for console toolbar name, etc.). */
@@ -492,7 +643,7 @@ class VmCatalogService {
         windows: statsRow?.windows ?? 0,
         gpu: statsRow?.gpu ?? 0,
       },
-      recent: recentDocs.map((doc) => this.toResponse(doc, { forAdmin: true })),
+      recent: recentDocs.map((doc) => this.toResponse(doc, { forAdmin: true, role: 'admin' })),
     };
   }
 
@@ -654,6 +805,7 @@ class VmCatalogService {
       this.toResponse(doc, {
         adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
         includeSecrets: true,
+        role: 'super_admin',
       })
     );
   }
@@ -668,6 +820,11 @@ class VmCatalogService {
   ): Promise<CatalogVmResponse> {
     const doc = await CatalogVmModel.findById(id);
     if (!doc) throw new NotFoundError('Catalog VM request not found.');
+    if (doc.autoProvisioned) {
+      throw new ValidationError(
+        'Auto-provisioned catalog VMs do not use the manual Webyne approve flow.'
+      );
+    }
     if (
       doc.status !== 'pending_approval' &&
       doc.status !== 'provisioning' &&
@@ -687,7 +844,7 @@ class VmCatalogService {
 
     void this.runFulfillment(doc._id);
 
-    return this.toResponse(doc, { includeSecrets: true });
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
   }
 
   private async runFulfillment(id: mongoose.Types.ObjectId): Promise<void> {
@@ -776,7 +933,7 @@ class VmCatalogService {
 
     void this.runScrapeOnly(doc._id);
 
-    return this.toResponse(doc, { includeSecrets: true });
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
   }
 
   private async runScrapeOnly(id: mongoose.Types.ObjectId): Promise<void> {
@@ -861,7 +1018,7 @@ class VmCatalogService {
       }
     );
 
-    return this.toResponse(doc, { includeSecrets: true });
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
   }
 
   async rejectRequest(
@@ -908,7 +1065,52 @@ class VmCatalogService {
       }
     );
 
-    return this.toResponse(doc, { includeSecrets: true });
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  /**
+   * Terminate an expired auto-provisioned catalog VM via the reseller service.
+   */
+  async terminateExpiredCatalogVm(doc: ICatalogVm): Promise<void> {
+    if (!doc.autoProvisioned || doc.status !== 'active') {
+      return;
+    }
+    if (!doc.providerInstanceId || !isAutoCloudProvider(doc.provider)) {
+      doc.status = 'terminated';
+      doc.updatedAt = new Date();
+      await doc.save();
+      return;
+    }
+
+    try {
+      await resellerTerminate({
+        provider: doc.provider,
+        region: doc.region,
+        providerInstanceId: doc.providerInstanceId,
+      });
+    } catch (err) {
+      logger.error('[VmCatalog] Reseller terminate failed', {
+        requestId: doc._id.toString(),
+        provider: doc.provider,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // Still mark terminated locally so we do not loop forever; ops can clean up.
+    }
+
+    doc.status = 'terminated';
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    await this.notifyRequester(
+      doc.adminId,
+      'Cloud VM expired',
+      `Your ${doc.planName} VM reached its expiry and was terminated.`,
+      {
+        requestId: doc._id.toString(),
+        event: 'expired',
+        planName: doc.planName,
+      }
+    );
   }
 
   // ─── Tenant portal (white-label) ─────────────────────────────────────────

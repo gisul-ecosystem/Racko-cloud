@@ -14,11 +14,15 @@ services:
       JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
       TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
       CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
+      RESELLER_SERVICE_URL: http://cloud-automation-reseller:3005
     volumes:
       - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
     ports:
       - "${CORE_API_PORT:-8001}:8001"
+    depends_on:
+      - create-vm-catalog-agent
+      - cloud-automation-reseller
  
   cloud-automation:
     image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-dev}
@@ -53,6 +57,16 @@ services:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
     ports:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
+
+  cloud-automation-reseller:
+    image: gisuldocker/racko-cloud-automation-reseller:${IMAGE_TAG:-dev}
+    env_file:
+      - cloud_automation_reseller/.env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_RESELLER_PORT:-3005}
+      NODE_ENV: production
+    ports:
+      - "${CLOUD_AUTOMATION_RESELLER_PORT:-3005}:3005"
  
   cloud-gateway:
     build:
