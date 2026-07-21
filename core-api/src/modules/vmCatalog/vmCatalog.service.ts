@@ -1101,8 +1101,8 @@ class VmCatalogService {
     doc.updatedAt = new Date();
     await doc.save();
 
-    await this.notifyRequester(
-      doc.adminId,
+    await this.notifyOwner(
+      doc,
       'Cloud VM expired',
       `Your ${doc.planName} VM reached its expiry and was terminated.`,
       {
