@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { fetchVmCatalogVms, type ICatalogVm } from '../lib/vmCatalogApi';
+import { useVmCatalogPortal } from '../context/VmCatalogPortalContext';
+import type { ICatalogVm } from '../lib/vmCatalogApi';
 import { ApiError } from '../lib/apiClient';
 
 interface UseVmCatalogVmsResult {
@@ -11,7 +12,8 @@ interface UseVmCatalogVmsResult {
   refetch: () => void;
 }
 
-export function useVmCatalogVms(isAuthenticated: boolean): UseVmCatalogVmsResult {
+export function useVmCatalogVms(enabled = true): UseVmCatalogVmsResult {
+  const { api, isReady } = useVmCatalogPortal();
   const [vms, setVms] = useState<ICatalogVm[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export function useVmCatalogVms(isAuthenticated: boolean): UseVmCatalogVmsResult
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchVmCatalogVms();
+      const result = await api.fetchVms();
       setVms(result);
     } catch (err) {
       setVms([]);
@@ -34,11 +36,11 @@ export function useVmCatalogVms(isAuthenticated: boolean): UseVmCatalogVmsResult
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
-    if (isAuthenticated) void load();
-  }, [load, isAuthenticated]);
+    if (enabled && isReady) void load();
+  }, [load, enabled, isReady]);
 
   return { vms, loading, error, refetch: load };
 }

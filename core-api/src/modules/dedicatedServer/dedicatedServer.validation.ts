@@ -13,7 +13,9 @@ export const createDedicatedPlanSchema = z.object({
     ram: z.string().min(1).max(100).trim(),
     disk: z.string().min(1).max(100).trim(),
     location: z.string().max(200).trim().optional(),
+    features: z.array(z.string().max(200).trim()).optional().default([]),
     monthlyPrice: z.coerce.number().min(0),
+    setupFee: z.coerce.number().min(0).nullable().optional(),
     currency: z.string().min(1).max(8).trim().default('INR'),
     isActive: z.boolean().optional().default(true),
     sortOrder: z.coerce.number().int().optional().default(0),
@@ -29,7 +31,9 @@ export const updateDedicatedPlanSchema = z.object({
     ram: z.string().min(1).max(100).trim().optional(),
     disk: z.string().min(1).max(100).trim().optional(),
     location: z.string().max(200).trim().optional().nullable(),
+    features: z.array(z.string().max(200).trim()).optional(),
     monthlyPrice: z.coerce.number().min(0).optional(),
+    setupFee: z.coerce.number().min(0).nullable().optional(),
     currency: z.string().min(1).max(8).trim().optional(),
     isActive: z.boolean().optional(),
     sortOrder: z.coerce.number().int().optional(),
@@ -72,6 +76,12 @@ export const listDedicatedRequestsQuerySchema = z.object({
       .optional()
       .default('provisioning'),
     adminId: mongoObjectId.optional(),
+  }),
+});
+
+export const updateDedicatedPricingSettingsSchema = z.object({
+  body: z.object({
+    sellMultiplier: z.coerce.number().positive().max(1000),
   }),
 });
 

@@ -3,17 +3,61 @@ import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { vmCatalogController } from './vmCatalog.controller';
+import { vmCatalogPlanController } from './vmCatalogPlan.controller';
 import {
   catalogVmRequestIdParamSchema,
   createCatalogVmRequestSchema,
   listCatalogVmRequestsQuerySchema,
   rejectCatalogVmRequestSchema,
+  calculateVmPricingSchema,
+  listVmPricingQuerySchema,
 } from './vmCatalog.validation';
+import {
+  createVmCatalogPlanSchema,
+  updateVmCatalogPlanSchema,
+  vmCatalogPlanIdParamSchema,
+} from './vmCatalogPlan.validation';
 
 const router = Router();
 
 // VM catalog routes (admin + super_admin)
 router.use(requireAuth);
+
+/** Catalog plans (DB-backed; not live scrape) */
+router.get('/plans', requireRole('admin', 'super_admin'), (req, res, next) => {
+  vmCatalogPlanController.listPlans(req, res, next);
+});
+
+router.post(
+  '/plans',
+  requireRole('super_admin'),
+  validateRequest(createVmCatalogPlanSchema),
+  (req, res, next) => {
+    vmCatalogPlanController.createPlan(req, res, next);
+  }
+);
+
+router.post('/plans/seed', requireRole('super_admin'), (req, res, next) => {
+  vmCatalogPlanController.seedPlans(req, res, next);
+});
+
+router.patch(
+  '/plans/:id',
+  requireRole('super_admin'),
+  validateRequest(updateVmCatalogPlanSchema),
+  (req, res, next) => {
+    vmCatalogPlanController.updatePlan(req, res, next);
+  }
+);
+
+router.delete(
+  '/plans/:id',
+  requireRole('super_admin'),
+  validateRequest(vmCatalogPlanIdParamSchema),
+  (req, res, next) => {
+    vmCatalogPlanController.deletePlan(req, res, next);
+  }
+);
 
 /** Admin: overview + my VMs */
 router.get('/overview', requireRole('admin', 'super_admin'), (req, res, next) => {
@@ -99,6 +143,25 @@ router.patch(
   validateRequest(rejectCatalogVmRequestSchema),
   (req, res, next) => {
     vmCatalogController.reject(req, res, next);
+  }
+);
+
+/** Super-admin: multi-cloud VM pricing calculator */
+router.post(
+  '/pricing/calculate',
+  requireRole('super_admin'),
+  validateRequest(calculateVmPricingSchema),
+  (req, res, next) => {
+    vmCatalogController.calculatePricing(req, res, next);
+  }
+);
+
+router.get(
+  '/pricing',
+  requireRole('super_admin'),
+  validateRequest(listVmPricingQuerySchema),
+  (req, res, next) => {
+    vmCatalogController.listPricing(req, res, next);
   }
 );
 

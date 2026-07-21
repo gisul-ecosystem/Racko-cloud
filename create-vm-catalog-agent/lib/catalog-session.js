@@ -53,6 +53,59 @@ const PRICING_URLS = {
   gpu: 'https://cloud.webyne.com/admin/gpu/pricing',
 };
 
+/** Racko catalog plans that live on Webyne Linux pricing (not user-selected OS). */
+const LINUX_PRICING_PLANS = [
+  'PG LARGE',
+  'GISUL 8VCPU 32GB RAM 500GB',
+  'Package 4-10 CORE 20 GB RAM 500 GB DISK',
+  'Gold Cloud 2',
+  'Gold Cloud 3',
+  'Gold Cloud 5',
+  'Gold Cloud 6',
+  'Gold Cloud 7',
+];
+
+function normalizePlanName(name) {
+  return String(name || '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/** Pick Webyne pricing page from catalog plan name. All others use Windows pricing. */
+function resolvePricingCategory(planName) {
+  const target = normalizePlanName(planName);
+  if (!target) return 'linux';
+  const onLinux = LINUX_PRICING_PLANS.some((plan) => normalizePlanName(plan) === target);
+  return onLinux ? 'linux' : 'windows';
+}
+
+function toWebyneBilling(billing) {
+  const key = String(billing || 'monthly').toLowerCase();
+  const map = {
+    hourly: 'Hourly',
+    monthly: 'Monthly',
+    quarterly: 'Quarterly',
+    yearly: 'Yearly',
+  };
+  return map[key] || String(billing || 'Monthly');
+}
+
+async function resolveWebynePlanId(pricingCategory, planName) {
+  const data = await fetchPricingCategory(pricingCategory);
+  const target = normalizePlanName(planName);
+  const match = data.plans.find((row) => normalizePlanName(row.plan) === target);
+  if (!match?.planId) {
+    throw Object.assign(
+      new Error(
+        `Plan "${planName}" was not found on Webyne ${pricingCategory} pricing (${data.source})`
+      ),
+      { status: 404, code: 'WEBYNE_PLAN_NOT_FOUND' }
+    );
+  }
+  return match.planId;
+}
+
 /** Webyne Buy Now POST targets (preview only — never called from this app). */
 const CHECKOUT_URLS = {
   linux: 'https://cloud.webyne.com/admin/linux/saveplinux',
@@ -773,17 +826,31 @@ async function purchaseAndScrape(category, {
   quantity = 1,
   scrapeOnly = false,
 } = {}) {
-  const key = String(category || '').toLowerCase();
+  const requestedOs = String(category || 'linux').toLowerCase();
+  const pricingCategory = planName ? resolvePricingCategory(planName) : requestedOs;
+  const key = pricingCategory;
   const endpoint = CHECKOUT_URLS[key];
   if (!endpoint) {
-    throw Object.assign(new Error(`Unknown category: ${category}`), { status: 400 });
+    throw Object.assign(new Error(`Unknown pricing category: ${pricingCategory}`), { status: 400 });
   }
+
+  let webynePlanId = planId;
+  if (planName) {
+    webynePlanId = await resolveWebynePlanId(pricingCategory, planName);
+    console.log(
+      `[webyne] Plan "${planName}" → ${pricingCategory} pricing (Webyne plan id ${webynePlanId})`
+    );
+  } else if (!Number.isFinite(Number(planId))) {
+    throw Object.assign(new Error('planName or numeric planId is required'), { status: 400 });
+  }
+
+  const webyneBilling = toWebyneBilling(billing);
 
   const p = await ensureBrowser();
   let purchase = null;
 
   if (!scrapeOnly) {
-    // Fresh CSRF from an authenticated admin page
+    // Fresh CSRF from the pricing page where this plan actually lives
     await robustGoto(p, PRICING_URLS[key] || PRICING_URLS.linux, {
       waitUntil: 'domcontentloaded',
       timeout: 120000,
@@ -807,8 +874,8 @@ async function purchaseAndScrape(category, {
     console.log(`[webyne] Submitting checkout → ${endpoint}`);
     const res = await context.request.post(endpoint, {
       multipart: {
-        id: String(planId),
-        billing: String(billing),
+        id: String(webynePlanId),
+        billing: String(webyneBilling),
         template: String(template || ''),
         quantity: String(Math.max(1, Number(quantity) || 1)),
         addons_cpu: '',
@@ -861,11 +928,13 @@ async function purchaseAndScrape(category, {
   }
 
   const protocol =
-    key === 'windows' ? 'rdp' : server.protocol || 'ssh';
+    requestedOs === 'windows' ? 'rdp' : server.protocol || 'ssh';
 
   return {
     purchased: !scrapeOnly,
     purchase,
+    pricingCategory,
+    webynePlanId,
     server: {
       hostname: server.hostname || null,
       ipAddress: server.ipAddress || null,
@@ -1457,6 +1526,8 @@ module.exports = {
   PRICING_URLS,
   CHECKOUT_URLS,
   BILLING_TEMPLATE_CODE,
+  LINUX_PRICING_PLANS,
+  resolvePricingCategory,
   fetchPricingCategory,
   fetchAllPricing,
   fetchCartDetails,

@@ -5,6 +5,7 @@ import Link from 'next/link';
 import {
   Cloud,
   ClipboardList,
+  Calculator,
   IndianRupee,
   Monitor,
   MonitorCheck,
@@ -22,6 +23,13 @@ const services = [
     href: '/super-admin-console/vm-management',
     icon: MonitorCheck,
     description: 'Monitor cluster, manage VMs, alerts, software and templates',
+  },
+  {
+    id: 'vm-pricing-calculator',
+    name: 'VM Pricing Calculator',
+    href: '/super-admin-console/vm-pricing-calculator',
+    icon: Calculator,
+    description: 'Compare live AWS, Azure, OCI and GCP list prices for a VM size',
   },
   {
     id: 'external-vm-pricing',

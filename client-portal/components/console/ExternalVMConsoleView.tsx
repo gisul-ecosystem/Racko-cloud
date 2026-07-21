@@ -170,8 +170,16 @@ export function ExternalVMConsoleView({
 
   useEffect(() => {
     const ctrl = new AbortController();
-    void fetchSession(ctrl.signal);
-    return () => ctrl.abort();
+    // Small delay to allow TenantAuthContext to read the _s URL param (a
+    // console opened via window.open() into a new tab) and persist the
+    // session into sessionStorage before we make the first API call.
+    const timer = setTimeout(() => {
+      void fetchSession(ctrl.signal);
+    }, 300);
+    return () => {
+      clearTimeout(timer);
+      ctrl.abort();
+    };
   }, [fetchSession]);
 
   useEffect(() => {
@@ -295,7 +303,14 @@ export function ExternalVMConsoleView({
   }, []);
 
   const handleFullscreen = () => {
-    const el = iframeRef.current;
+    // Fullscreen the wrapping container, not the <iframe> itself. Some page
+    // shells (e.g. dashboard layouts with a persistent header) put the iframe
+    // inside a box that's already smaller than the true viewport (room
+    // reserved for our own toolbar above it). Requesting fullscreen on the
+    // iframe alone can end up bounded by that layout, leaving a gap top/bottom.
+    // The container is a plain <div> with no reserved header space, so making
+    // IT the fullscreen element gives Guacamole the full screen to resize into.
+    const el = containerRef.current;
     if (!el || typeof el.requestFullscreen !== 'function') return;
     el.requestFullscreen()
       .then(() => setTimeout(() => iframeRef.current?.focus(), 300))

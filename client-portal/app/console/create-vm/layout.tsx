@@ -8,6 +8,8 @@ import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
 import { RequireAdminService } from '../../../components/console/RequireAdminService';
+import { VmCatalogPortalProvider } from '../../../context/VmCatalogPortalContext';
+import { adminVmCatalogPortalConfig } from '../../../lib/vmCatalogPortalConfig';
 
 export default function CreateVmCatalogLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -37,7 +39,11 @@ export default function CreateVmCatalogLayout({ children }: { children: React.Re
 
   return (
     <RequireAdminService serviceKey="create-vm">
-      <ServiceShellLayout
+      <VmCatalogPortalProvider
+        config={adminVmCatalogPortalConfig}
+        isReady={!isLoading && isAuthenticated}
+      >
+        <ServiceShellLayout
         sidebarOpen={sidebarOpen}
         sidebar={
           <CreateVmCatalogSidebar
@@ -56,6 +62,7 @@ export default function CreateVmCatalogLayout({ children }: { children: React.Re
       >
         {children}
       </ServiceShellLayout>
+      </VmCatalogPortalProvider>
     </RequireAdminService>
   );
 }

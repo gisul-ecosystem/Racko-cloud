@@ -17,7 +17,9 @@ export interface IDedicatedPlan {
   ram: string;
   disk: string;
   location?: string;
+  features: string[];
   monthlyPrice: number;
+  setupFee: number | null;
   currency: string;
   isActive: boolean;
   sortOrder: number;
@@ -25,14 +27,24 @@ export interface IDedicatedPlan {
   updatedAt: string;
 }
 
+export interface DedicatedPricingSettings {
+  sellMultiplier: number;
+  updatedAt: string | null;
+}
+
 export interface IDedicatedServer {
   _id: string;
-  adminId: string;
+  adminId?: string;
+  tenantId?: string;
+  tenantUserId?: string;
   adminEmail?: string;
   planId: string;
   planName: string;
   specs: { cpu: string; ram: string; disk: string; location?: string };
   monthlyPrice: number;
+  setupFee?: number | null;
+  subtotal?: number;
+  tax?: number;
   currency: string;
   notes?: string;
   status: DedicatedServerStatus;
@@ -99,6 +111,31 @@ export async function updateDedicatedPlan(
 
 export async function deleteDedicatedPlan(id: string): Promise<void> {
   await apiRequest(`/api/v1/dedicated-servers/plans/${id}`, { method: 'DELETE' });
+}
+
+export async function seedDedicatedPlans(): Promise<{ inserted: number; total: number }> {
+  const res = await apiRequest<ApiResponse<{ inserted: number; total: number }>>(
+    '/api/v1/dedicated-servers/plans/seed',
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
+export async function fetchDedicatedPricingSettings(): Promise<DedicatedPricingSettings> {
+  const res = await apiRequest<ApiResponse<DedicatedPricingSettings>>(
+    '/api/v1/dedicated-servers/pricing-settings'
+  );
+  return res.data;
+}
+
+export async function saveDedicatedPricingSettings(
+  sellMultiplier: number
+): Promise<DedicatedPricingSettings> {
+  const res = await apiRequest<ApiResponse<DedicatedPricingSettings>>(
+    '/api/v1/dedicated-servers/pricing-settings',
+    { method: 'PUT', body: JSON.stringify({ sellMultiplier }) }
+  );
+  return res.data;
 }
 
 export async function submitDedicatedServerRequest(opts: {
