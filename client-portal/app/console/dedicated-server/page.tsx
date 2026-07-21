@@ -14,9 +14,8 @@ import {
   XCircle,
 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
+import { useDedicatedServerPortal } from '@/context/DedicatedServerPortalContext';
 import {
-  fetchDedicatedPlans,
-  fetchMyDedicatedServers,
   formatDedicatedStatus,
   type IDedicatedServer,
 } from '@/lib/dedicatedServerApi';
@@ -87,6 +86,7 @@ function StatusBadge({ status }: { status: IDedicatedServer['status'] }) {
 }
 
 export default function DedicatedServerOverviewPage() {
+  const { api, routes, isReady } = useDedicatedServerPortal();
   const [servers, setServers] = useState<IDedicatedServer[]>([]);
   const [planCount, setPlanCount] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -97,8 +97,8 @@ export default function DedicatedServerOverviewPage() {
     setError(null);
     try {
       const [serverList, plans] = await Promise.all([
-        fetchMyDedicatedServers(),
-        fetchDedicatedPlans(),
+        api.fetchServers(),
+        api.fetchPlans(),
       ]);
       setServers(serverList);
       setPlanCount(plans.length);
@@ -107,11 +107,11 @@ export default function DedicatedServerOverviewPage() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (isReady) void load();
+  }, [load, isReady]);
 
   const stats = useMemo(() => {
     const active = servers.filter((s) => s.status === 'active').length;
@@ -142,7 +142,7 @@ export default function DedicatedServerOverviewPage() {
           </p>
         </div>
         <Link
-          href="/console/dedicated-server/request"
+          href={routes.request}
           className="inline-flex items-center gap-2 rounded-xl bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-[#a01717]"
         >
           <Plus className="h-4 w-4" />
@@ -191,7 +191,7 @@ export default function DedicatedServerOverviewPage() {
                 <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
                   <h2 className="text-base font-semibold text-gray-900">Recent requests</h2>
                   <Link
-                    href="/console/dedicated-server/my-servers"
+                    href={routes.myServers}
                     className="inline-flex items-center gap-1 text-xs font-medium text-[#B91C1C] hover:text-[#DC2626]"
                   >
                     View all
@@ -209,7 +209,7 @@ export default function DedicatedServerOverviewPage() {
                       Pick a plan from the catalog and submit your first request.
                     </p>
                     <Link
-                      href="/console/dedicated-server/request"
+                      href={routes.request}
                       className="mt-4 inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white"
                     >
                       <Plus className="h-4 w-4" />
@@ -273,7 +273,7 @@ export default function DedicatedServerOverviewPage() {
                             <td className="px-4 py-3.5 text-right">
                               {s.status === 'active' ? (
                                 <Link
-                                  href={`/console/dedicated-server/my-servers/${s._id}/console`}
+                                  href={routes.console(s._id)}
                                   className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white"
                                 >
                                   <Monitor className="h-3.5 w-3.5" />
@@ -297,7 +297,7 @@ export default function DedicatedServerOverviewPage() {
                 </div>
                 <div className="grid gap-px bg-gray-100 sm:grid-cols-2">
                   <Link
-                    href="/console/dedicated-server/request"
+                    href={routes.request}
                     className="flex items-start gap-4 bg-white px-6 py-5 transition hover:bg-gray-50"
                   >
                     <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
@@ -312,7 +312,7 @@ export default function DedicatedServerOverviewPage() {
                     </div>
                   </Link>
                   <Link
-                    href="/console/dedicated-server/my-servers"
+                    href={routes.myServers}
                     className="flex items-start gap-4 bg-white px-6 py-5 transition hover:bg-gray-50"
                   >
                     <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">

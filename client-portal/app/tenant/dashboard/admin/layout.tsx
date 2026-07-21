@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { TenantVpsAdminShell } from '@/components/tenant/TenantVpsAdminShell';
+import { TenantBillingShell } from '@/components/tenant/TenantBillingShell';
 import { RequireTenantService } from '@/components/tenant/RequireTenantService';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { isTenantEndUserResourcesPath } from '@/lib/tenantPortalRoutes';
@@ -13,9 +14,13 @@ export default function TenantAdminLayout({ children }: { children: React.ReactN
   const isEndUserResources =
     tenantUser?.role === 'tenant_user' && isTenantEndUserResourcesPath(pathname);
 
+  if (isBilling) {
+    return <TenantBillingShell>{children}</TenantBillingShell>;
+  }
+
   const shell = <TenantVpsAdminShell>{children}</TenantVpsAdminShell>;
 
-  if (isBilling || isEndUserResources) {
+  if (isEndUserResources) {
     return shell;
   }
 

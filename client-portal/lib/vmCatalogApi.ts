@@ -15,7 +15,9 @@ export type VmCatalogStatus =
 
 export interface ICatalogVm {
   _id: string;
-  adminId: string;
+  adminId?: string;
+  tenantId?: string;
+  tenantUserId?: string;
   adminEmail?: string;
   provider: 'webyne';
   category: VmCatalogCategory;

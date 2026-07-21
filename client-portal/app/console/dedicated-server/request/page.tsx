@@ -14,11 +14,8 @@ import {
   X,
 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
-import {
-  fetchDedicatedPlans,
-  submitDedicatedServerRequest,
-  type IDedicatedPlan,
-} from '@/lib/dedicatedServerApi';
+import { useDedicatedServerPortal } from '@/context/DedicatedServerPortalContext';
+import { type IDedicatedPlan } from '@/lib/dedicatedServerApi';
 import { dedicatedPlanCheckoutTotals } from '@/lib/dedicatedServerSellPrice';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 
@@ -41,6 +38,7 @@ function SpecPill({ icon: Icon, label, value }: { icon: typeof Cpu; label: strin
 
 export default function DedicatedRequestPage() {
   const router = useRouter();
+  const { api, routes, isReady } = useDedicatedServerPortal();
   const [plans, setPlans] = useState<IDedicatedPlan[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -53,18 +51,18 @@ export default function DedicatedRequestPage() {
     setLoading(true);
     setError(null);
     try {
-      const planList = await fetchDedicatedPlans();
+      const planList = await api.fetchPlans();
       setPlans(planList);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load plans.');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (isReady) void load();
+  }, [load, isReady]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -94,11 +92,11 @@ export default function DedicatedRequestPage() {
     setSubmitting(true);
     setError(null);
     try {
-      await submitDedicatedServerRequest({
+      await api.submitRequest({
         planId: selected._id,
         notes: notes.trim() || undefined,
       });
-      router.push('/console/dedicated-server/my-servers');
+      router.push(routes.myServers);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Request failed.');
     } finally {

@@ -34,7 +34,9 @@ export interface DedicatedPricingSettings {
 
 export interface IDedicatedServer {
   _id: string;
-  adminId: string;
+  adminId?: string;
+  tenantId?: string;
+  tenantUserId?: string;
   adminEmail?: string;
   planId: string;
   planName: string;

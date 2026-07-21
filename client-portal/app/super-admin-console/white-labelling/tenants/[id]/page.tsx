@@ -11,6 +11,7 @@ import {
   CheckCircle2,
   Cloud,
   Globe,
+  HardDrive,
   Loader2,
   Monitor,
   MonitorCheck,
@@ -18,6 +19,7 @@ import {
   Pause,
   Play,
   Plus,
+  PlusCircle,
   RefreshCw,
   Server,
   Settings,
@@ -424,6 +426,10 @@ export default function TenantDetailPage() {
     switch (key) {
       case 'vm-management':
         return MonitorCheck;
+      case 'create-vm':
+        return PlusCircle;
+      case 'dedicated-server':
+        return HardDrive;
       case 'elastic-servers':
         return Globe;
       case 'azure':

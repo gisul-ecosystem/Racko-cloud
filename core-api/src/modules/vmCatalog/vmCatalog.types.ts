@@ -10,7 +10,9 @@ import type {
 
 export interface CatalogVmResponse {
   _id: string;
-  adminId: string;
+  adminId?: string;
+  tenantId?: string;
+  tenantUserId?: string;
   adminEmail?: string;
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
