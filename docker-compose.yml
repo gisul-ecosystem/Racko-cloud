@@ -59,9 +59,6 @@ services:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
 
   cloud-automation-reseller:
-    build:
-      context: ./cloud_automation_reseller
-      dockerfile: Dockerfile
     image: gisuldocker/racko-cloud-automation-reseller:${IMAGE_TAG:-dev}
     env_file:
       - cloud_automation_reseller/.env

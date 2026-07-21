@@ -2,8 +2,8 @@ FROM node:20-alpine AS deps
 
 WORKDIR /app
 
-COPY package.json package-lock.json* ./
-RUN npm install --omit=dev
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev
 
 FROM node:20-alpine AS runner
 
@@ -16,7 +16,7 @@ RUN addgroup --system --gid 1001 nodejs \
   && adduser --system --uid 1001 --ingroup nodejs reseller
 
 COPY --from=deps /app/node_modules ./node_modules
-COPY package.json app.js ./
+COPY package.json package-lock.json app.js ./
 COPY src ./src
 
 USER reseller
