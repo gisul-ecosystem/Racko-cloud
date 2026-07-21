@@ -5,7 +5,7 @@ services:
     build:
       context: .
       dockerfile: core-api/Dockerfile
-    image: gisuldocker/racko-core-api:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-core-api:dev
     env_file:
       - core-api/.env
     environment:
@@ -25,7 +25,7 @@ services:
       - cloud-automation-reseller
  
   cloud-automation:
-    image: gisuldocker/racko-cloud-automation:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-cloud-automation:dev
     env_file:
       - cloud-automation/.env
     environment:
@@ -50,7 +50,7 @@ services:
       - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
  
   cloud-automation-aws:
-    image: gisuldocker/racko-cloud-automation-aws:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-cloud-automation-aws:dev
     env_file:
       - cloud-automation-aws/.env
     environment:
@@ -59,7 +59,7 @@ services:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
 
   cloud-automation-reseller:
-    image: gisuldocker/racko-cloud-automation-reseller:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-cloud-automation-reseller:dev
     env_file:
       - cloud_automation_reseller/.env
     environment:
@@ -72,7 +72,7 @@ services:
     build:
       context: .
       dockerfile: cloud-gateway/Dockerfile
-    image: gisuldocker/racko-cloud-gateway:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-cloud-gateway:dev
     env_file:
       - cloud-gateway/.env
     environment:
@@ -89,7 +89,7 @@ services:
     build:
       context: .
       dockerfile: client-portal/Dockerfile
-    image: gisuldocker/racko-client-portal:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-client-portal:dev
     env_file:
       - client-portal/.env
     environment:
@@ -107,7 +107,7 @@ services:
     build:
       context: .
       dockerfile: create-vm-catalog-agent/Dockerfile
-    image: gisuldocker/racko-create-vm-catalog-agent:${IMAGE_TAG:-dev}
+    image: gisuldocker/racko-create-vm-catalog-agent:dev
     env_file:
       - create-vm-catalog-agent/.env
     environment:
