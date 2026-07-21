@@ -36,7 +36,7 @@ See `.env` / comments in repo.
 - **Azure provision:** resource group / VNet / subnet  
 - **OCI pricing:** public list API (no auth)  
 - **OCI provision:** tenancy/user/fingerprint/private key + compartment + subnet OCIDs  
-- **GCP pricing:** Cloud Billing Catalog (`GCP_API_KEY` or service account); falls back to approximate list rates  
+- **GCP pricing:** Cloud Billing Catalog only (requires `GCP_API_KEY` or service account; no fallback rates)  
 - **GCP provision:** `GCP_PROJECT_ID` + service account key + zone (network/subnet optional)  
 
 ## Dynamic specs
@@ -58,7 +58,7 @@ Unknown `canonicalSpec` values (e.g. `16vcpu-64gb-400gbssd`) are resolved on `/a
 
 - Machine types: E2 ladder (`e2-micro` … `e2-standard-*`); GPU → `n1-standard-*` + NVIDIA T4  
 - Compute cost ≈ vCPU × core$/hr + RAM × GB$/hr (+ GPU if any)  
-- Catalog: `https://cloudbilling.googleapis.com/v1/services/6F81-5844-456A/skus`  
+- Catalog: `https://cloudbilling.googleapis.com/v1/services/6F81-5844-456A/skus` (auth required; no dummy fallbacks)  
 - `providerInstanceId` format: `{zone}/{instanceName}`  
 
 Static entries in `src/config/specMap.js` are only a fast path for common sizes — not a hard limit.

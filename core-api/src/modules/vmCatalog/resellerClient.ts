@@ -104,10 +104,86 @@ async function postReseller<T>(
   }
 }
 
+async function getReseller<T>(
+  path: string,
+  logLabel: string,
+  timeoutMs = 30_000
+): Promise<T> {
+  const url = `${resellerBaseUrl()}${path}`;
+  logger.info(`[Reseller] ${logLabel}`, { url });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: {
+        Accept: 'application/json',
+        'X-Internal-Secret': config.INTERNAL_SERVICE_SECRET,
+      },
+      signal: controller.signal,
+    });
+
+    const data = (await res.json().catch(() => ({}))) as {
+      success?: boolean;
+      data?: T;
+      message?: string;
+      error?: string;
+    };
+
+    if (!res.ok || data.success === false) {
+      const err: ResellerClientError = new Error(
+        data.message || data.error || `Reseller ${logLabel} failed (HTTP ${res.status})`
+      );
+      err.status = res.status;
+      throw err;
+    }
+
+    return (data.data ?? data) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function selectProvider(
   input: ResellerSelectInput
 ): Promise<ResellerSelectResult> {
-  return postReseller<ResellerSelectResult>('/api/select', input, 'select', 30_000);
+  return postReseller<ResellerSelectResult>('/api/select', input, 'select', 60_000);
+}
+
+export interface ResellerPricingRow {
+  provider: string;
+  region: string;
+  category: string;
+  canonicalSpec: string;
+  rawComputePricePerHr?: number;
+  rawStoragePricePerHr?: number;
+  rawIpPricePerHr?: number;
+  rawTotalPricePerHr: number;
+  instanceType?: string;
+  currency?: string;
+  fetchedAt?: string;
+}
+
+export async function listPricing(params: {
+  providers?: string;
+  provider?: string;
+  category?: string;
+  canonicalSpec?: string;
+  limit?: number;
+}): Promise<{ rows: ResellerPricingRow[]; total: number }> {
+  const qs = new URLSearchParams();
+  if (params.providers) qs.set('providers', params.providers);
+  if (params.provider) qs.set('provider', params.provider);
+  if (params.category) qs.set('category', params.category);
+  if (params.canonicalSpec) qs.set('canonicalSpec', params.canonicalSpec);
+  if (params.limit != null) qs.set('limit', String(params.limit));
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return getReseller<{ rows: ResellerPricingRow[]; total: number }>(
+    `/api/pricing${suffix}`,
+    'pricing'
+  );
 }
 
 export async function provisionVm(

@@ -402,7 +402,7 @@ Example response:
         "written": 48,
         "errors": [],
         "errorCount": 0,
-        "ratesSource": "api+fallback"
+        "ratesSource": "api"
       }
     ]
   }

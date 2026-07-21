@@ -5,18 +5,6 @@ import { gcpConfig, getGcpAccessToken, GCP_REGION_BILLING_NAMES } from '../confi
 /** Compute Engine service id in Cloud Billing Catalog. */
 const COMPUTE_SERVICE = '6F81-5844-456A';
 
-/** Approximate PAYG USD rates if catalog lookup fails (E2-class, global-ish). */
-const FALLBACK_RATES = {
-  e2CorePerHr: 0.021811,
-  e2RamGbPerHr: 0.002923,
-  n1CorePerHr: 0.031611,
-  n1RamGbPerHr: 0.004237,
-  pdBalancedGbPerMonth: 0.1,
-  publicIpPerHr: 0.004,
-  windowsCorePerHr: 0.046,
-  t4GpuPerHr: 0.35,
-};
-
 const MACHINE_RESOURCES = {
   'e2-micro': { vcpu: 0.25, ramGb: 1, family: 'e2' },
   'e2-small': { vcpu: 0.5, ramGb: 2, family: 'e2' },
@@ -35,6 +23,14 @@ let skuCache = null;
 let skuCacheAt = 0;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
+function requireGcpAuth() {
+  if (!gcpConfig.apiKey && !gcpConfig.keyFilename && !gcpConfig.credentials) {
+    throw new Error(
+      'GCP pricing requires GCP_API_KEY or GCP_SERVICE_ACCOUNT_KEY_PATH / GCP_SERVICE_ACCOUNT_KEY (Cloud Billing API enabled)'
+    );
+  }
+}
+
 function unitPriceUsd(sku) {
   const expr = sku?.pricingInfo?.[0]?.pricingExpression;
   const tier = expr?.tieredRates?.[0];
@@ -45,6 +41,8 @@ function unitPriceUsd(sku) {
 }
 
 async function fetchCatalogPage(pageToken) {
+  requireGcpAuth();
+
   const buildUrl = (includeApiKey) => {
     const url = new URL(
       `https://cloudbilling.googleapis.com/v1/services/${COMPUTE_SERVICE}/skus`
@@ -63,25 +61,27 @@ async function fetchCatalogPage(pageToken) {
   if (token) {
     attempts.push({ label: 'oauth', url: buildUrl(false), token });
   }
+
   if (attempts.length === 0) {
-    attempts.push({ label: 'anonymous', url: buildUrl(false) });
+    throw new Error(
+      'GCP pricing auth failed — set GCP_API_KEY or a valid service account for Cloud Billing Catalog'
+    );
   }
 
   let lastStatus = 0;
+  let lastBody = '';
   for (const attempt of attempts) {
     const headers = { Accept: 'application/json' };
     if (attempt.token) headers.Authorization = `Bearer ${attempt.token}`;
     const res = await fetch(attempt.url, { headers });
     lastStatus = res.status;
     if (res.ok) return res.json();
-    if (attempt.label === 'anonymous' && res.status === 403) {
-      console.warn(
-        '[gcpPricing] Billing Catalog requires GCP_API_KEY or GCP_SERVICE_ACCOUNT_KEY_PATH (Cloud Billing API enabled)'
-      );
-    }
+    lastBody = await res.text().catch(() => '');
   }
 
-  throw new Error(`GCP Billing Catalog HTTP ${lastStatus}`);
+  throw new Error(
+    `GCP Billing Catalog HTTP ${lastStatus}${lastBody ? `: ${lastBody.slice(0, 200)}` : ''}`
+  );
 }
 
 async function loadComputeSkus() {
@@ -95,9 +95,12 @@ async function loadComputeSkus() {
     skus.push(...(data.skus || []));
     pageToken = data.nextPageToken || '';
     pages += 1;
-    // Cap pages so sync stays responsive (~100 SKUs/page).
     if (pages >= 40) break;
   } while (pageToken);
+
+  if (skus.length === 0) {
+    throw new Error('GCP Billing Catalog returned no Compute Engine SKUs');
+  }
 
   skuCache = skus;
   skuCacheAt = Date.now();
@@ -113,63 +116,84 @@ function findRate(skus, predicates) {
   return null;
 }
 
+function requireRate(name, value) {
+  if (value == null || !Number.isFinite(value)) {
+    throw new Error(`GCP catalog missing live rate for ${name}`);
+  }
+  return value;
+}
+
 /**
- * Resolve E2/N1 core+RAM unit rates from catalog for a region (uses Mumbai/Iowa etc. name).
+ * Resolve E2/N1 core+RAM unit rates from live Cloud Billing Catalog for a region.
+ * Throws if auth is missing or required rates cannot be resolved — no fallbacks.
  */
 export async function getGcpUnitRates(region = 'asia-south1') {
   const place = GCP_REGION_BILLING_NAMES[region] || region;
-  try {
-    const skus = await loadComputeSkus();
-    const e2Core = findRate(skus, [
-      (s) =>
-        /E2 Instance Core/i.test(s.description || '') &&
-        new RegExp(place, 'i').test(s.description || '') &&
-        !/Spot|Preemptible/i.test(s.description || ''),
-    ]);
-    const e2Ram = findRate(skus, [
-      (s) =>
-        /E2 Instance Ram/i.test(s.description || '') &&
-        new RegExp(place, 'i').test(s.description || '') &&
-        !/Spot|Preemptible/i.test(s.description || ''),
-    ]);
-    const n1Core = findRate(skus, [
-      (s) =>
-        /N1 Predefined Instance Core/i.test(s.description || '') &&
-        new RegExp(place, 'i').test(s.description || '') &&
-        !/Spot|Preemptible/i.test(s.description || ''),
-    ]);
-    const n1Ram = findRate(skus, [
-      (s) =>
-        /N1 Predefined Instance Ram/i.test(s.description || '') &&
-        new RegExp(place, 'i').test(s.description || '') &&
-        !/Spot|Preemptible/i.test(s.description || ''),
-    ]);
-    const pd = findRate(skus, [
-      (s) =>
-        /Balanced PD Capacity/i.test(s.description || '') &&
-        new RegExp(place, 'i').test(s.description || ''),
-      (s) => /Storage PD Capacity/i.test(s.description || '') && /SSD/i.test(s.description || ''),
-    ]);
-    const ip = findRate(skus, [
-      (s) => /Static Ip Charge/i.test(s.description || '') && /In Use/i.test(s.description || ''),
-      (s) => /External IP Charge.*In Use/i.test(s.description || ''),
-    ]);
+  const skus = await loadComputeSkus();
 
-    return {
-      e2CorePerHr: e2Core ?? FALLBACK_RATES.e2CorePerHr,
-      e2RamGbPerHr: e2Ram ?? FALLBACK_RATES.e2RamGbPerHr,
-      n1CorePerHr: n1Core ?? FALLBACK_RATES.n1CorePerHr,
-      n1RamGbPerHr: n1Ram ?? FALLBACK_RATES.n1RamGbPerHr,
-      pdBalancedGbPerMonth: pd ?? FALLBACK_RATES.pdBalancedGbPerMonth,
-      publicIpPerHr: ip ?? FALLBACK_RATES.publicIpPerHr,
-      windowsCorePerHr: FALLBACK_RATES.windowsCorePerHr,
-      t4GpuPerHr: FALLBACK_RATES.t4GpuPerHr,
-      source: e2Core && e2Ram ? 'api' : 'api+fallback',
-    };
-  } catch (err) {
-    console.warn('[gcpPricing] catalog failed, using fallback rates:', err.message);
-    return { ...FALLBACK_RATES, source: 'fallback' };
-  }
+  const e2Core = findRate(skus, [
+    (s) =>
+      /E2 Instance Core/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || '') &&
+      !/Spot|Preemptible/i.test(s.description || ''),
+  ]);
+  const e2Ram = findRate(skus, [
+    (s) =>
+      /E2 Instance Ram/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || '') &&
+      !/Spot|Preemptible/i.test(s.description || ''),
+  ]);
+  const n1Core = findRate(skus, [
+    (s) =>
+      /N1 Predefined Instance Core/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || '') &&
+      !/Spot|Preemptible/i.test(s.description || ''),
+  ]);
+  const n1Ram = findRate(skus, [
+    (s) =>
+      /N1 Predefined Instance Ram/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || '') &&
+      !/Spot|Preemptible/i.test(s.description || ''),
+  ]);
+  const pd = findRate(skus, [
+    (s) =>
+      /Balanced PD Capacity/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || ''),
+    (s) => /Balanced PD Capacity/i.test(s.description || ''),
+  ]);
+  const ip = findRate(skus, [
+    (s) => /Static Ip Charge/i.test(s.description || '') && /In Use/i.test(s.description || ''),
+    (s) => /External IP Charge.*In Use/i.test(s.description || ''),
+  ]);
+  const windows = findRate(skus, [
+    (s) =>
+      /Windows Server/i.test(s.description || '') &&
+      /Core/i.test(s.description || '') &&
+      !/Spot|Preemptible/i.test(s.description || ''),
+    (s) => /Licensing Fee for Windows Server/i.test(s.description || ''),
+  ]);
+  const t4Gpu = findRate(skus, [
+    (s) =>
+      /Nvidia Tesla T4/i.test(s.description || '') &&
+      /GPU/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || '') &&
+      !/Spot|Preemptible/i.test(s.description || ''),
+    (s) =>
+      /Nvidia Tesla T4 Gpu/i.test(s.description || '') &&
+      !/Spot|Preemptible/i.test(s.description || ''),
+  ]);
+
+  return {
+    e2CorePerHr: requireRate(`E2 core (${place})`, e2Core),
+    e2RamGbPerHr: requireRate(`E2 RAM (${place})`, e2Ram),
+    n1CorePerHr: requireRate(`N1 core (${place})`, n1Core),
+    n1RamGbPerHr: requireRate(`N1 RAM (${place})`, n1Ram),
+    pdBalancedGbPerMonth: requireRate(`Balanced PD (${place})`, pd),
+    publicIpPerHr: requireRate('Public IP in-use', ip),
+    windowsCorePerHr: windows,
+    t4GpuPerHr: t4Gpu,
+    source: 'api',
+  };
 }
 
 export function machineResources(machineType) {
@@ -191,20 +215,29 @@ export function computeGcpHourly({
   acceleratorCount = 0,
   rates,
 } = {}) {
-  const r = rates || FALLBACK_RATES;
+  if (!rates || rates.source === 'fallback') {
+    throw new Error('GCP hourly compute requires live catalog rates (no fallback)');
+  }
+
   const res = machineResources(machineType);
-  const coreRate = res.family === 'n1' || res.family === 'g2' ? r.n1CorePerHr : r.e2CorePerHr;
-  const ramRate = res.family === 'n1' || res.family === 'g2' ? r.n1RamGbPerHr : r.e2RamGbPerHr;
+  const coreRate = res.family === 'n1' || res.family === 'g2' ? rates.n1CorePerHr : rates.e2CorePerHr;
+  const ramRate = res.family === 'n1' || res.family === 'g2' ? rates.n1RamGbPerHr : rates.e2RamGbPerHr;
 
   let compute = Number(res.vcpu) * coreRate + Number(res.ramGb) * ramRate;
   if (category === 'windows') {
-    compute += Number(res.vcpu) * (r.windowsCorePerHr || 0);
+    if (rates.windowsCorePerHr == null) {
+      throw new Error('GCP catalog missing Windows Server core license rate');
+    }
+    compute += Number(res.vcpu) * rates.windowsCorePerHr;
   }
   if (acceleratorCount > 0) {
-    compute += Number(acceleratorCount) * (r.t4GpuPerHr || 0);
+    if (rates.t4GpuPerHr == null) {
+      throw new Error('GCP catalog missing NVIDIA T4 GPU rate');
+    }
+    compute += Number(acceleratorCount) * rates.t4GpuPerHr;
   }
-  const storage = (Number(diskGb) || 0) * ((r.pdBalancedGbPerMonth || 0) / 730);
-  const ip = r.publicIpPerHr || 0;
+  const storage = (Number(diskGb) || 0) * (rates.pdBalancedGbPerMonth / 730);
+  const ip = rates.publicIpPerHr;
   return {
     rawComputePricePerHr: compute,
     rawStoragePricePerHr: storage,
@@ -218,7 +251,7 @@ function categoryForSpec(canonicalSpec) {
 }
 
 /**
- * Sync GCP Compute prices into CloudRegionPricing for known specs.
+ * Sync GCP Compute prices into CloudRegionPricing for known specs (live catalog only).
  */
 export async function syncGcpPricing() {
   const now = new Date();
@@ -226,8 +259,26 @@ export async function syncGcpPricing() {
   const errors = [];
   const ratesByRegion = {};
 
+  try {
+    requireGcpAuth();
+  } catch (err) {
+    return {
+      provider: 'gcp',
+      written: 0,
+      errors: [err instanceof Error ? err.message : String(err)],
+      errorCount: 1,
+      ratesSource: 'skipped',
+    };
+  }
+
   for (const region of GCP_PRICING_REGIONS) {
-    ratesByRegion[region] = await getGcpUnitRates(region);
+    try {
+      ratesByRegion[region] = await getGcpUnitRates(region);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`${region}: ${msg}`);
+      ratesByRegion[region] = null;
+    }
   }
 
   for (const [canonicalSpec, mapping] of Object.entries(gcpSpecMap)) {
@@ -235,6 +286,9 @@ export async function syncGcpPricing() {
     const categories = category === 'gpu' ? ['gpu'] : ['linux', 'windows'];
 
     for (const region of GCP_PRICING_REGIONS) {
+      const rates = ratesByRegion[region];
+      if (!rates) continue;
+
       for (const cat of categories) {
         try {
           const priced = computeGcpHourly({
@@ -242,7 +296,7 @@ export async function syncGcpPricing() {
             diskGb: mapping.diskGb,
             category: cat,
             acceleratorCount: mapping.acceleratorCount || 0,
-            rates: ratesByRegion[region],
+            rates,
           });
 
           await CloudRegionPricing.findOneAndUpdate(
@@ -275,12 +329,19 @@ export async function syncGcpPricing() {
     }
   }
 
-  const sources = [...new Set(Object.values(ratesByRegion).map((r) => r.source))];
+  const sources = [
+    ...new Set(
+      Object.values(ratesByRegion)
+        .filter(Boolean)
+        .map((r) => r.source)
+    ),
+  ];
+
   return {
     provider: 'gcp',
     written,
     errors: errors.slice(0, 20),
     errorCount: errors.length,
-    ratesSource: sources.join(','),
+    ratesSource: sources.length ? sources.join(',') : 'skipped',
   };
 }
