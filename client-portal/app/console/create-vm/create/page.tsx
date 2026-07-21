@@ -4,9 +4,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Loader2, ShoppingCart, X } from 'lucide-react';
 import Link from 'next/link';
 import { ApiError } from '../../../../lib/apiClient';
+import { useVmCatalogPortal } from '../../../../context/VmCatalogPortalContext';
 import {
-  fetchVmCatalogPlans,
-  submitCatalogVmRequest,
   type IVmCatalogPlan,
   type VmCatalogCategory,
 } from '../../../../lib/vmCatalogApi';
@@ -53,6 +52,7 @@ function availableBillings(plan: IVmCatalogPlan, category?: VmCatalogCategory): 
 }
 
 export default function CreateVmPage() {
+  const { api, routes, isReady } = useVmCatalogPortal();
   const [plans, setPlans] = useState<IVmCatalogPlan[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -70,18 +70,18 @@ export default function CreateVmPage() {
     setLoading(true);
     setError(null);
     try {
-      setPlans(await fetchVmCatalogPlans());
+      setPlans(await api.fetchPlans());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load plans.');
       setPlans([]);
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
-    void load();
-  }, [load]);
+    if (isReady) void load();
+  }, [load, isReady]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -138,7 +138,7 @@ export default function CreateVmPage() {
     setBuyError(null);
     setSubmittedRequestId(null);
     try {
-      const request = await submitCatalogVmRequest({
+      const request = await api.submitRequest({
         category: os,
         planId: selected._id,
         planName: selected.name,
@@ -351,7 +351,7 @@ export default function CreateVmPage() {
               {submittedRequestId ? (
                 <p className="text-sm text-green-700">
                   Request submitted. Track under{' '}
-                  <Link href="/console/create-vm/my-vms" className="underline">
+                  <Link href={routes.myVms} className="underline">
                     My VM
                   </Link>
                   .

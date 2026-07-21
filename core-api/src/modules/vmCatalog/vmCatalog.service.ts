@@ -6,8 +6,11 @@ import {
 } from '../../models/catalogVm.model';
 import { VmCatalogPlan } from '../../models/vmCatalogPlan.model';
 import { User } from '../../models/user.model';
+import { TenantUser } from '../../models/tenantUser.model';
+import { TenantNotification } from '../../models/tenantNotification.model';
 import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
+import { walletService } from '../wallet/wallet.service';
 import { externalVmPricingService } from '../externalVmPricing/externalVmPricing.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
@@ -70,7 +73,9 @@ class VmCatalogService {
 
     return {
       _id: doc._id.toString(),
-      adminId: doc.adminId.toString(),
+      ...(doc.adminId ? { adminId: doc.adminId.toString() } : {}),
+      ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
+      ...(doc.tenantUserId ? { tenantUserId: doc.tenantUserId.toString() } : {}),
       ...(opts?.adminEmail ? { adminEmail: opts.adminEmail } : {}),
       provider: doc.provider,
       category: doc.category,
@@ -110,7 +115,11 @@ class VmCatalogService {
     };
   }
 
-  private async notifySuperAdminsOfRequest(doc: ICatalogVm, adminEmail: string): Promise<void> {
+  private async notifySuperAdminsOfRequest(
+    doc: ICatalogVm,
+    requesterEmail: string,
+    opts?: { tenantId?: string }
+  ): Promise<void> {
     const superAdmins = await User.find({ role: 'super_admin', isActive: true })
       .select('_id')
       .lean();
@@ -123,8 +132,11 @@ class VmCatalogService {
     }
 
     const title = 'Webyne VM request — provisioning';
-    const message = `${adminEmail} paid ₹${doc.pricingSnapshot.total} for ${doc.quantity}× ${doc.planName} (${doc.billing}). Status: provisioning.`;
+    const message = `${requesterEmail} paid ₹${doc.pricingSnapshot.total} for ${doc.quantity}× ${doc.planName} (${doc.billing}). Status: provisioning.`;
     const requestId = doc._id.toString();
+    const actionUrl = opts?.tenantId
+      ? `/super-admin-console/webyne-vm-requests`
+      : `/super-admin-console/webyne-vm-requests/${doc.adminId?.toString() ?? ''}`;
 
     const results = await Promise.allSettled(
       superAdmins.map((admin) =>
@@ -135,12 +147,12 @@ class VmCatalogService {
           message,
           severity: 'info',
           read: false,
-          actionUrl: `/super-admin-console/webyne-vm-requests/${doc.adminId.toString()}`,
+          actionUrl,
           metadata: {
-            // Unique index: { userId, metadata.jobId, metadata.event } — must be unique per request
             jobId: requestId,
             requestId,
-            adminId: doc.adminId.toString(),
+            ...(doc.adminId ? { adminId: doc.adminId.toString() } : {}),
+            ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
             event: 'catalog_provisioning',
             planName: doc.planName,
             quantity: doc.quantity,
@@ -391,10 +403,44 @@ class VmCatalogService {
   ): Promise<ICatalogVm> {
     const doc = await CatalogVmModel.findById(id);
     if (!doc) throw new NotFoundError('Catalog VM not found.');
-    if (doc.adminId.toString() !== adminId.toString()) {
+    if (!doc.adminId || doc.adminId.toString() !== adminId.toString()) {
       throw new ForbiddenError('You do not have permission to access this catalog VM.');
     }
     return doc;
+  }
+
+  private async notifyOwner(
+    doc: ICatalogVm,
+    title: string,
+    message: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    if (doc.adminId) {
+      await this.notifyRequester(doc.adminId, title, message, metadata);
+      return;
+    }
+    if (doc.tenantId && doc.tenantUserId) {
+      await this.notifyTenantRequester(doc.tenantId, doc.tenantUserId, title, message, metadata);
+    }
+  }
+
+  private async refundOwner(doc: ICatalogVm, amount: number): Promise<void> {
+    if (doc.adminId) {
+      await adminBillingService.refundCloudRequestCharge(
+        doc.adminId.toString(),
+        amount,
+        doc._id.toString()
+      );
+      return;
+    }
+    if (doc.tenantId) {
+      await walletService.creditWallet(
+        doc.tenantId.toString(),
+        amount,
+        'catalog_vm_purchase_refund',
+        { relatedVmId: doc._id.toString() }
+      );
+    }
   }
 
   async getOverview(adminId: mongoose.Types.ObjectId): Promise<CatalogVmOverview> {
@@ -469,7 +515,13 @@ class VmCatalogService {
         .lean();
       if (superAdmins.length === 0) return;
 
-      const adminIds = [...new Set(openDocs.map((d) => d.adminId.toString()))];
+      const adminIds = [
+        ...new Set(
+          openDocs
+            .map((d) => d.adminId?.toString())
+            .filter((id): id is string => Boolean(id))
+        ),
+      ];
       const admins = await User.find({
         _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
       })
@@ -479,6 +531,12 @@ class VmCatalogService {
 
       for (const doc of openDocs) {
         const requestId = doc._id.toString();
+        const requesterLabel = doc.adminId
+          ? emailById.get(doc.adminId.toString()) ?? 'Admin'
+          : 'Tenant';
+        const actionUrl = doc.adminId
+          ? `/super-admin-console/webyne-vm-requests/${doc.adminId.toString()}`
+          : '/super-admin-console/webyne-vm-requests';
         for (const sa of superAdmins) {
           const exists = await Notification.exists({
             userId: sa._id,
@@ -487,19 +545,19 @@ class VmCatalogService {
           });
           if (exists) continue;
 
-          const adminEmail = emailById.get(doc.adminId.toString()) ?? 'Admin';
           await Notification.create({
             userId: sa._id,
             type: 'catalog_vm_request',
             title: 'Webyne VM request — provisioning',
-            message: `${adminEmail} paid ₹${doc.pricingSnapshot.total} for ${doc.quantity}× ${doc.planName} (${doc.billing}). Status: ${doc.status}.`,
+            message: `${requesterLabel} paid ₹${doc.pricingSnapshot.total} for ${doc.quantity}× ${doc.planName} (${doc.billing}). Status: ${doc.status}.`,
             severity: 'info',
             read: false,
-            actionUrl: `/super-admin-console/webyne-vm-requests/${doc.adminId.toString()}`,
+            actionUrl,
             metadata: {
               jobId: requestId,
               requestId,
-              adminId: doc.adminId.toString(),
+              ...(doc.adminId ? { adminId: doc.adminId.toString() } : {}),
+              ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
               event: 'catalog_provisioning',
               planName: doc.planName,
               quantity: doc.quantity,
@@ -532,6 +590,7 @@ class VmCatalogService {
       totalCount: number;
       lastRequestedAt: Date | null;
     }>([
+      { $match: { adminId: { $exists: true, $ne: null } } },
       {
         $group: {
           _id: '$adminId',
@@ -579,7 +638,11 @@ class VmCatalogService {
     if (opts.status && opts.status !== 'all') filter.status = opts.status;
 
     const docs = await CatalogVmModel.find(filter).sort({ createdAt: -1 });
-    const adminIds = [...new Set(docs.map((d) => d.adminId.toString()))];
+    const adminIds = [
+      ...new Set(
+        docs.map((d) => d.adminId?.toString()).filter((id): id is string => Boolean(id))
+      ),
+    ];
     const admins = await User.find({
       _id: { $in: adminIds.map((id) => new mongoose.Types.ObjectId(id)) },
     })
@@ -589,7 +652,7 @@ class VmCatalogService {
 
     return docs.map((doc) =>
       this.toResponse(doc, {
-        adminEmail: emailById.get(doc.adminId.toString()),
+        adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
         includeSecrets: true,
       })
     );
@@ -788,8 +851,8 @@ class VmCatalogService {
     doc.updatedAt = new Date();
     await doc.save();
 
-    await this.notifyRequester(
-      doc.adminId,
+    await this.notifyOwner(
+      doc,
       'Webyne VM is ready',
       `Your ${doc.quantity}× ${doc.planName} VM is now available in My VM.`,
       {
@@ -828,15 +891,11 @@ class VmCatalogService {
     await doc.save();
 
     if (shouldRefund) {
-      await adminBillingService.refundCloudRequestCharge(
-        doc.adminId.toString(),
-        refundAmount,
-        doc._id.toString()
-      );
+      await this.refundOwner(doc, refundAmount);
     }
 
-    await this.notifyRequester(
-      doc.adminId,
+    await this.notifyOwner(
+      doc,
       'Webyne VM request rejected',
       shouldRefund
         ? `Your request for ${doc.quantity}× ${doc.planName} was rejected and ₹${refundAmount} was refunded: ${reason}`
@@ -850,6 +909,238 @@ class VmCatalogService {
     );
 
     return this.toResponse(doc, { includeSecrets: true });
+  }
+
+  // ─── Tenant portal (white-label) ─────────────────────────────────────────
+
+  private async findOwnedByTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<ICatalogVm> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM not found.');
+    if (!doc.tenantId || doc.tenantId.toString() !== tenantId.toString()) {
+      throw new ForbiddenError('You do not have permission to access this catalog VM.');
+    }
+    return doc;
+  }
+
+  private async notifyTenantRequester(
+    tenantId: mongoose.Types.ObjectId,
+    tenantUserId: mongoose.Types.ObjectId,
+    title: string,
+    message: string,
+    metadata: Record<string, unknown>
+  ): Promise<void> {
+    try {
+      await TenantNotification.create({
+        tenantId,
+        tenantUserId,
+        type: 'catalog_vm_request',
+        title,
+        message,
+        severity: metadata['event'] === 'rejected' ? 'warning' : 'info',
+        read: false,
+        metadata,
+      });
+    } catch (err: unknown) {
+      logger.error('[VmCatalog] Failed to notify tenant requester', {
+        tenantId: tenantId.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  async createRequestForTenant(
+    dto: CreateCatalogVmRequestDto,
+    tenantId: mongoose.Types.ObjectId,
+    tenantUserId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    const tenantUser = await TenantUser.findById(tenantUserId).select('email role isActive tenantId').lean();
+    if (
+      !tenantUser ||
+      tenantUser.role !== 'tenant_admin' ||
+      !tenantUser.isActive ||
+      tenantUser.tenantId.toString() !== tenantId.toString()
+    ) {
+      throw new ForbiddenError('Only active tenant admins can submit catalog VM requests.');
+    }
+
+    const plan = await VmCatalogPlan.findById(dto.planId).lean();
+    if (!plan || !plan.isActive) {
+      throw new ValidationError('Selected template is not available.');
+    }
+
+    const billing = String(dto.billing || '').toLowerCase();
+    if (!BILLING_PERIODS.includes(billing as (typeof BILLING_PERIODS)[number])) {
+      throw new ValidationError('Invalid billing cycle.');
+    }
+
+    const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
+    if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
+      throw new ValidationError('Selected billing cycle is not priced for this template.');
+    }
+
+    const pricingCfg = await externalVmPricingService.getByProvider('webyne');
+    const multiplierRaw = Number(pricingCfg.categories[dto.category]?.multiplier);
+    const multiplier =
+      Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
+
+    const quantity = Math.max(1, Math.floor(Number(dto.quantity) || 1));
+    const unitPrice = roundMoney(baseUnit * multiplier);
+    const subtotal = roundMoney(unitPrice * quantity);
+    const tax = roundMoney(subtotal * GST_RATE);
+    const total = roundMoney(subtotal + tax);
+
+    if (!Number.isFinite(total) || total <= 0) {
+      throw new ValidationError('Invalid purchase total.');
+    }
+
+    await walletService.debitWallet(tenantId.toString(), total, 'catalog_vm_purchase');
+
+    let doc: ICatalogVm;
+    try {
+      doc = await CatalogVmModel.create({
+        tenantId,
+        tenantUserId,
+        provider: 'webyne',
+        category: dto.category,
+        planId: plan._id.toString(),
+        planName: plan.name,
+        specs: {
+          cpu: `${plan.vcpu} vCPU`,
+          ram: `${plan.ramGb} GB`,
+          disk: `${plan.ssdGb} GB SSD`,
+        },
+        billing,
+        quantity,
+        template: dto.template,
+        pricingSnapshot: {
+          currency: plan.currency || dto.pricingSnapshot.currency || 'INR',
+          subtotal,
+          tax,
+          total,
+          billingLabel: 'GST 18%',
+        },
+        status: 'provisioning',
+        chargedAmount: total,
+        walletDebited: true,
+      });
+    } catch (err) {
+      await walletService
+        .creditWallet(tenantId.toString(), total, 'catalog_vm_purchase_refund')
+        .catch(() => undefined);
+      throw err;
+    }
+
+    await this.notifySuperAdminsOfRequest(doc, tenantUser.email, {
+      tenantId: tenantId.toString(),
+    });
+    await this.notifyTenantRequester(
+      tenantId,
+      tenantUserId,
+      'Webyne VM is provisioning',
+      `Your ${doc.quantity}× ${doc.planName} purchase (₹${total}) was charged. It will be available soon.`,
+      { requestId: doc._id.toString(), event: 'submitted', planName: doc.planName, total }
+    );
+
+    return this.toResponse(doc, { forAdmin: true });
+  }
+
+  async listForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
+    const docs = await CatalogVmModel.find({ tenantId }).sort({ createdAt: -1 });
+    return docs.map((doc) => this.toResponse(doc, { forAdmin: true }));
+  }
+
+  async getOverviewForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmOverview> {
+    const [recentDocs, statsAgg] = await Promise.all([
+      CatalogVmModel.find({ tenantId }).sort({ createdAt: -1 }).limit(5),
+      CatalogVmModel.aggregate<{
+        total: number;
+        active: number;
+        pending: number;
+        linux: number;
+        windows: number;
+        gpu: number;
+      }>([
+        { $match: { tenantId } },
+        {
+          $group: {
+            _id: null,
+            total: { $sum: 1 },
+            active: { $sum: { $cond: [{ $eq: ['$status', 'active'] }, 1, 0] } },
+            pending: {
+              $sum: { $cond: [{ $in: ['$status', PENDING_STATUSES] }, 1, 0] },
+            },
+            linux: { $sum: { $cond: [{ $eq: ['$category', 'linux'] }, 1, 0] } },
+            windows: { $sum: { $cond: [{ $eq: ['$category', 'windows'] }, 1, 0] } },
+            gpu: { $sum: { $cond: [{ $eq: ['$category', 'gpu'] }, 1, 0] } },
+          },
+        },
+      ]),
+    ]);
+
+    const stats = statsAgg[0] ?? {
+      total: 0,
+      active: 0,
+      pending: 0,
+      linux: 0,
+      windows: 0,
+      gpu: 0,
+    };
+
+    return {
+      stats,
+      recent: recentDocs.map((doc) => this.toResponse(doc, { forAdmin: true })),
+    };
+  }
+
+  async getForTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    return this.toResponse(doc, { forAdmin: true });
+  }
+
+  async openConsoleForTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId,
+    dimensions?: { width?: number; height?: number }
+  ): Promise<CatalogVmConsoleSession> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    if (doc.status !== 'active') {
+      throw new ValidationError('Console is only available after the VM is attached (active).');
+    }
+    if (!doc.ipAddress || !doc.password) {
+      throw new ValidationError('This VM has no connection details for console access.');
+    }
+
+    const protocol = doc.protocol || (doc.category === 'windows' ? 'rdp' : 'ssh');
+    const username = doc.username || (protocol === 'rdp' ? 'Administrator' : 'root');
+    const password = decrypt(doc.password);
+    const port = protocol === 'rdp' ? 3389 : 22;
+
+    const session = await guacamoleClient.openConsole(
+      `catalogvm-${doc._id.toString()}`,
+      protocol,
+      {
+        hostname: doc.ipAddress,
+        port,
+        username,
+        password,
+        ignoreCert: true,
+        securityMode: 'any',
+        width: dimensions?.width,
+        height: dimensions?.height,
+      }
+    );
+
+    return {
+      protocol,
+      clientUrl: session.clientUrl,
+      connectionId: session.connectionId,
+    };
   }
 }
 

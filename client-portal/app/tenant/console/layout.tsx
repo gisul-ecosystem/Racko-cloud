@@ -20,6 +20,8 @@ function TenantConsoleAuthGate({ children }: { children: React.ReactNode }) {
 
   const usesOwnShell =
     pathname.startsWith('/tenant/console/elastic-servers') ||
+    pathname.startsWith('/tenant/console/create-vm') ||
+    pathname.startsWith('/tenant/console/dedicated-server') ||
     pathname.startsWith('/tenant/console/azure') ||
     pathname.startsWith('/tenant/console/aws') ||
     pathname.startsWith('/tenant/console/gcp') ||

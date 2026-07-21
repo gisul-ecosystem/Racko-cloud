@@ -2,6 +2,7 @@
 
 import { ServiceNavSidebar } from './ServiceNavSidebar';
 import { HardDrive, LayoutGrid, Server } from 'lucide-react';
+import { useDedicatedServerPortal } from '@/context/DedicatedServerPortalContext';
 
 export function DedicatedServerSidebar({
   sidebarOpen,
@@ -10,28 +11,30 @@ export function DedicatedServerSidebar({
   sidebarOpen: boolean;
   onCloseSidebar: () => void;
 }) {
+  const { routes } = useDedicatedServerPortal();
+
   return (
     <ServiceNavSidebar
       title="Dedicated Server"
       subtitle="Request & manage servers"
-      footerHref="/console"
+      footerHref={routes.hub}
       footerLabel="All services"
       sidebarOpen={sidebarOpen}
       onCloseSidebar={onCloseSidebar}
       links={[
         {
-          href: '/console/dedicated-server',
+          href: routes.overview,
           label: 'Overview',
           icon: <LayoutGrid className="h-4 w-4" />,
           exact: true,
         },
         {
-          href: '/console/dedicated-server/request',
+          href: routes.request,
           label: 'Request Server',
           icon: <HardDrive className="h-4 w-4" />,
         },
         {
-          href: '/console/dedicated-server/my-servers',
+          href: routes.myServers,
           label: 'My Servers',
           icon: <Server className="h-4 w-4" />,
         },
