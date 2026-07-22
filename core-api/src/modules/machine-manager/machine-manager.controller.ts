@@ -307,8 +307,9 @@ export class MachineManagerController {
       const path = await import('path');
       const fs = await import('fs');
 
-      // Resolve relative to repo root (process.cwd() = /app in Docker, repo root locally)
-      const scriptPath = path.resolve(process.cwd(), '..', 'agent', 'scripts', 'reset.ps1');
+      // In Docker: process.cwd() = /app, scripts are at /app/scripts/reset.ps1
+      // Locally: process.cwd() = core-api/, scripts are at core-api/scripts/reset.ps1
+      const scriptPath = path.resolve(process.cwd(), 'scripts', 'reset.ps1');
 
       if (!fs.existsSync(scriptPath)) {
         res.status(404).json({
