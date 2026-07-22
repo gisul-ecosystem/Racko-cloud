@@ -79,20 +79,26 @@ function isIpAllowed(clientIp: string, allowedIps: string[]): boolean {
 /**
  * Resolve the real client IP from the request.
  *
- * Express sets `req.ip` automatically when `trust proxy` is configured.
- * We also check `X-Forwarded-For` as a fallback for environments where
- * the proxy config may not be in place yet.
+ * In this deployment the gateway sits behind Nginx inside Docker, so
+ * `req.ip` is always the Docker bridge IP (172.18.0.1), not the real
+ * client. Nginx sets X-Forwarded-For to the actual client IP, so we
+ * always prefer that header. The first entry in X-Forwarded-For is the
+ * original client — subsequent entries are intermediate proxies added
+ * by each hop, so we take index [0] only.
+ *
+ * Fall back to req.socket.remoteAddress (which equals req.ip) only when
+ * the header is absent entirely (e.g. direct connections in testing).
  */
 function resolveClientIp(req: GatewayRequest): string | null {
-  // req.ip is set by Express trust-proxy config — prefer it
-  if (req.ip) return req.ip;
-
-  // Fallback: parse X-Forwarded-For (first hop = real client)
+  // Always prefer X-Forwarded-For — set by Nginx with the real client IP
   const xff = req.headers['x-forwarded-for'];
   if (xff) {
     const first = (Array.isArray(xff) ? xff[0] : xff).split(',')[0]?.trim();
     if (first) return first;
   }
+
+  // Fallback: direct connection (no proxy in front)
+  if (req.ip) return req.ip;
 
   return null;
 }
