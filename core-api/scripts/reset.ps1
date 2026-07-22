@@ -70,7 +70,10 @@ function Invoke-UninstallEntry {
         $uninst = if ($app.UninstallString)      { $app.UninstallString.Trim()      } else { '' }
 
         if ($quiet -ne '') {
-            Invoke-UninstallerWithTimeout -FilePath 'cmd.exe' -Arguments "/c $quiet" -TimeoutSeconds 120
+            # Call the exe directly from QuietUninstallString — do NOT wrap in cmd.exe
+            # cmd.exe wrapper causes $args variable conflicts and drops arguments
+            $qcmd = Split-UninstallCommand $quiet
+            Invoke-UninstallerWithTimeout -FilePath $qcmd.Exe -Arguments $qcmd.Args -TimeoutSeconds 120
         } elseif ($uninst -match 'msedgewebview|EdgeWebView') {
             $cmd = Split-UninstallCommand $uninst
             Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '--uninstall --msedgewebview --system-level --force-uninstall' -TimeoutSeconds 90
@@ -535,7 +538,7 @@ Write-Host "`n=== PHASE 7: USER DATA FOLDERS CLEANUP ===" -ForegroundColor Cyan
 foreach ($userDir in (Get-UserProfiles)) {
     $userProfile = $userDir.FullName
     if (-not $userProfile) { continue }
-    foreach ($folderName in @('Desktop','Documents','Pictures','Videos')) {
+    foreach ($folderName in @('Desktop','Documents','Pictures','Videos','OneDrive','Dropbox','Box','Google Drive')) {
         $target = Join-Path $userProfile $folderName
         if (-not (Test-Path $target)) { continue }
         foreach ($item in (Get-ChildItem $target -ErrorAction SilentlyContinue)) {
