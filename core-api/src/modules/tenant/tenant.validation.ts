@@ -28,6 +28,21 @@ const brandingSchema = z
 
 const tenantStatusSchema = z.enum(['pending', 'active', 'suspended', 'cancelled']);
 
+// Validates a single IPv4, IPv6, or CIDR notation entry.
+// Intentionally permissive — exact range matching happens in the gateway middleware.
+const ipOrCidrSchema = z
+  .string()
+  .min(1)
+  .max(50)
+  .refine(
+    (value) => {
+      const ipv4 = /^(\d{1,3}\.){3}\d{1,3}(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
+      const ipv6 = /^[0-9a-fA-F:]+(::[0-9a-fA-F:]*)?(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8]))?$/;
+      return ipv4.test(value) || ipv6.test(value);
+    },
+    { message: 'Each entry must be a valid IPv4, IPv6, or CIDR notation' }
+  );
+
 export const createTenantSchema = z.object({
   body: z.object({
     name: z.string().min(1, 'Name is required').max(200, 'Name too long').trim(),
@@ -72,11 +87,33 @@ export const updateTenantSchema = z.object({
     }),
 });
 
+export const updateTenantIpAccessSchema = z.object({
+  params: z.object({
+    id: z.string().min(1, 'Tenant id is required'),
+  }),
+  body: z.object({
+    ipAccessMode: z.enum(['all', 'restricted']),
+    allowedIps: z
+      .array(ipOrCidrSchema)
+      .max(500, 'Cannot exceed 500 IP/CIDR entries')
+      .default([]),
+  }),
+});
+
 export const listTenantVmsSchema = z.object({
   params: tenantIdRouteParamSchema.shape.params,
   query: z.object({
     status: z
-      .enum(['creating', 'running', 'stopped', 'paused', 'suspended', 'error', 'deleting', 'delete_failed'])
+      .enum([
+        'creating',
+        'running',
+        'stopped',
+        'paused',
+        'suspended',
+        'error',
+        'deleting',
+        'delete_failed',
+      ])
       .optional(),
     node: z
       .string()
@@ -105,3 +142,4 @@ export const createTenantAdminSchema = z.object({
 export type CreateTenantInput = z.infer<typeof createTenantSchema>['body'];
 export type UpdateTenantInput = z.infer<typeof updateTenantSchema>['body'];
 export type CreateTenantAdminInput = z.infer<typeof createTenantAdminSchema>['body'];
+export type UpdateTenantIpAccessInput = z.infer<typeof updateTenantIpAccessSchema>['body'];

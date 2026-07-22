@@ -13,6 +13,7 @@ import {
   listTenantVmsSchema,
   tenantIdParamSchema,
   updateTenantSchema,
+  updateTenantIpAccessSchema,
 } from './tenant.validation';
 import {
   assignServiceRequestSchema,
@@ -115,6 +116,10 @@ router.get('/:id', validateRequest(tenantIdParamSchema), (req, res, next) => {
 
 router.patch('/:id', validateRequest(updateTenantSchema), (req, res, next) => {
   tenantController.update(req, res, next);
+});
+
+router.patch('/:id/ip-access', validateRequest(updateTenantIpAccessSchema), (req, res, next) => {
+  tenantController.updateIpAccess(req, res, next);
 });
 
 router.post(

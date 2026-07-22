@@ -6,7 +6,7 @@ import {
   resolveBrandingAssetType,
 } from './tenantBrandingAsset.service';
 import type { AuthenticatedRequest } from '../../types';
-import type { CreateTenantInput, CreateTenantAdminInput, UpdateTenantInput } from './tenant.validation';
+import type { CreateTenantInput, CreateTenantAdminInput, UpdateTenantInput, UpdateTenantIpAccessInput } from './tenant.validation';
 import type { TenantStatus } from '../../models/tenant.model';
 import { ValidationError } from '../../utils/errors';
  
@@ -146,6 +146,19 @@ export class TenantController {
       const tenant = await tenantService.getTenantById(id);
 
       success(res, 'Branding asset removed.', { assetType, tenant });
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateIpAccess(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params as { id: string };
+      const tenant = await tenantService.updateTenantIpAccess(
+        id,
+        req.body as UpdateTenantIpAccessInput
+      );
+      success(res, 'IP access settings updated.', { tenant });
     } catch (error) {
       next(error);
     }
