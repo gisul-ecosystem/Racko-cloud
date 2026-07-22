@@ -498,6 +498,35 @@ foreach ($base in @(
     }
 }
 
+# ── Clean stale HKEY_USERS entries for all logged-in users ─────────────────
+# HKCU:\  under LocalSystem only covers LocalSystem's hive.
+# Logged-in users' hives are mounted at HKEY_USERS\<SID> — readable by LocalSystem.
+# Remove any entry whose uninstaller exe no longer exists on disk.
+if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+    New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
+}
+Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
+    $_.PSChildName -match 'S-1-5-21' -and $_.PSChildName -notmatch '_Classes'
+} | ForEach-Object {
+    $sid = $_.PSChildName
+    foreach ($base in @("HKU:\$sid\Software\Microsoft\Windows\CurrentVersion\Uninstall", "HKU:\$sid\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")) {
+        if (-not (Test-Path $base)) { continue }
+        foreach ($key in (Get-ChildItem $base -ErrorAction SilentlyContinue)) {
+            $props  = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
+            if (-not $props.DisplayName) { continue }
+            $quiet  = if ($props.QuietUninstallString) { $props.QuietUninstallString.Trim() } else { '' }
+            $uninst = if ($props.UninstallString)      { $props.UninstallString.Trim()      } else { '' }
+            $raw    = if ($quiet -ne '') { $quiet } else { $uninst }
+            if ($raw -eq '') { continue }
+            $exe = if ($raw -match '^"([^"]+)"') { $matches[1] } elseif ($raw -match '^(\S+)') { $matches[1] } else { '' }
+            if ($exe -ne '' -and -not (Test-Path $exe)) {
+                Write-Host "Removing stale HKCU entry: $($props.DisplayName)" -ForegroundColor DarkGray
+                Remove-Item $key.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 # ============================================================
 # PHASE 7 — Desktop / Documents / Pictures / Videos cleanup
 # ============================================================
