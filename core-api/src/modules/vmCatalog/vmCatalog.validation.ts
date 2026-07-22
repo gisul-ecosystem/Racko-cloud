@@ -95,6 +95,7 @@ export const calculateVmPricingSchema = z.object({
       provider: z
         .union([z.array(cloudProviderEnum).min(1), cloudProviderEnum, z.string().min(1)])
         .optional(),
+      nestedVirtualization: z.boolean().optional().default(false),
     })
     .refine((b) => Boolean(b.canonicalSpec) || Boolean(b.specs), {
       message: 'canonicalSpec or specs is required',
@@ -108,6 +109,14 @@ export const listVmPricingQuerySchema = z.object({
     category: z.enum(['linux', 'windows', 'gpu']).optional(),
     canonicalSpec: z.string().min(1).max(100).optional(),
     limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+    nestedVirtualization: z
+      .union([z.literal('true'), z.literal('false'), z.boolean()])
+      .optional()
+      .transform((v) => {
+        if (v === undefined) return undefined;
+        if (typeof v === 'boolean') return v;
+        return v === 'true';
+      }),
   }),
 });
 

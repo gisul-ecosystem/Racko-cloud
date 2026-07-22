@@ -10,6 +10,8 @@ export interface ResellerSelectInput {
   providers?: string[] | string;
   /** Backward-compatible alias for providers. */
   provider?: string[] | string;
+  /** When true, select/price only nested-virt-capable SKUs. */
+  nestedVirtualization?: boolean;
 }
 
 export interface ResellerSelectResult {
@@ -17,10 +19,17 @@ export interface ResellerSelectResult {
   region: string | null;
   category: string;
   canonicalSpec: string;
+  pricingMode?: 'normal' | 'nested';
+  nestedVirtualization?: boolean;
   rawTotalPricePerHr: number | null;
   rawComputePricePerHr?: number;
   rawStoragePricePerHr?: number;
+  /** @deprecated Prefer rawPublicIpPricePerHr */
   rawIpPricePerHr?: number;
+  rawPublicIpPricePerHr?: number;
+  rawPrivateIpPricePerHr?: number;
+  rawTotalWithPublicIpPerHr?: number;
+  rawTotalWithPrivateIpPerHr?: number;
   instanceType?: string;
   currency?: string;
   autoProvisioned: boolean;
@@ -172,6 +181,7 @@ export async function listPricing(params: {
   category?: string;
   canonicalSpec?: string;
   limit?: number;
+  nestedVirtualization?: boolean;
 }): Promise<{ rows: ResellerPricingRow[]; total: number }> {
   const qs = new URLSearchParams();
   if (params.providers) qs.set('providers', params.providers);
@@ -179,6 +189,9 @@ export async function listPricing(params: {
   if (params.category) qs.set('category', params.category);
   if (params.canonicalSpec) qs.set('canonicalSpec', params.canonicalSpec);
   if (params.limit != null) qs.set('limit', String(params.limit));
+  if (params.nestedVirtualization != null) {
+    qs.set('nestedVirtualization', params.nestedVirtualization ? 'true' : 'false');
+  }
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   return getReseller<{ rows: ResellerPricingRow[]; total: number }>(
     `/api/pricing${suffix}`,

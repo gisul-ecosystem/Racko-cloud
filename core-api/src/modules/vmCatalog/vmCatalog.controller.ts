@@ -187,6 +187,7 @@ async function calculatePricing(req: Request, res: Response, next: NextFunction)
           }
         : undefined,
       canonicalSpec: body.canonicalSpec,
+      nestedVirtualization: body.nestedVirtualization === true,
       ...(providers !== undefined ? { providers } : {}),
     });
 
@@ -204,7 +205,17 @@ async function calculatePricing(req: Request, res: Response, next: NextFunction)
       rawComputePricePerHrInr: convertUsdAmount(data.rawComputePricePerHr, fx.usdToInr),
       rawStoragePricePerHrInr: convertUsdAmount(data.rawStoragePricePerHr, fx.usdToInr),
       rawIpPricePerHrInr: convertUsdAmount(data.rawIpPricePerHr, fx.usdToInr),
+      rawPublicIpPricePerHrInr: convertUsdAmount(data.rawPublicIpPricePerHr, fx.usdToInr),
+      rawPrivateIpPricePerHrInr: convertUsdAmount(data.rawPrivateIpPricePerHr, fx.usdToInr),
       rawTotalPricePerHrInr: convertUsdAmount(data.rawTotalPricePerHr, fx.usdToInr),
+      rawTotalWithPublicIpPerHrInr: convertUsdAmount(
+        data.rawTotalWithPublicIpPerHr ?? data.rawTotalPricePerHr,
+        fx.usdToInr
+      ),
+      rawTotalWithPrivateIpPerHrInr: convertUsdAmount(
+        data.rawTotalWithPrivateIpPerHr,
+        fx.usdToInr
+      ),
     });
   } catch (err) {
     next(err);
@@ -220,6 +231,7 @@ async function listPricing(req: Request, res: Response, next: NextFunction): Pro
       category: query.category,
       canonicalSpec: query.canonicalSpec,
       limit: query.limit,
+      nestedVirtualization: query.nestedVirtualization,
     });
 
     const fx = await getUsdToInrRate();

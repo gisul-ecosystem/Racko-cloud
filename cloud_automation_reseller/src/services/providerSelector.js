@@ -1,18 +1,45 @@
-import CloudRegionPricing from '../models/CloudRegionPricing.js';
+import CloudRegionPricing, {
+  toPricingMode,
+  pricingModeQuery,
+} from '../models/CloudRegionPricing.js';
 import { resolveSpecParts } from '../config/specMap.js';
 import { normalizeProviders } from '../config/cloudProviders.js';
 import { ensureSpecPricing } from './ensureSpecPricing.js';
 
-function toSelectResult(row, reason, providersUsed) {
+/** Round USD/hr to 8 decimal places (avoids IEEE float noise in API responses). */
+function roundUsdHr(n) {
+  return Math.round((Number(n) || 0) * 1e8) / 1e8;
+}
+
+/** Map a CloudRegionPricing row into the /api/select payload (incl. public vs private IP). */
+export function toSelectResult(row, reason, providersUsed) {
+  const compute = Number(row.rawComputePricePerHr) || 0;
+  const storage = Number(row.rawStoragePricePerHr) || 0;
+  const publicIp = roundUsdHr(row.rawIpPricePerHr);
+  const privateIp = 0; // private NIC/IP is included; not billed separately
+  const withPublicIp = roundUsdHr(
+    Number(row.rawTotalPricePerHr) || compute + storage + publicIp
+  );
+  const withPrivateIp = roundUsdHr(compute + storage + privateIp);
+
   return {
     provider: row.provider,
     region: row.region,
     category: row.category,
     canonicalSpec: row.canonicalSpec,
+    pricingMode: row.pricingMode || 'normal',
+    nestedVirtualization: (row.pricingMode || 'normal') === 'nested',
     rawComputePricePerHr: row.rawComputePricePerHr,
     rawStoragePricePerHr: row.rawStoragePricePerHr,
-    rawIpPricePerHr: row.rawIpPricePerHr,
-    rawTotalPricePerHr: row.rawTotalPricePerHr,
+    /** @deprecated Prefer rawPublicIpPricePerHr — same value (public IP hourly). */
+    rawIpPricePerHr: publicIp,
+    rawPublicIpPricePerHr: publicIp,
+    rawPrivateIpPricePerHr: privateIp,
+    /** Total with public IP (compute + storage + public IP). */
+    rawTotalPricePerHr: withPublicIp,
+    rawTotalWithPublicIpPerHr: withPublicIp,
+    /** Total with private IP only (compute + storage; private IP = $0). */
+    rawTotalWithPrivateIpPerHr: withPrivateIp,
     instanceType: row.instanceType,
     currency: row.currency || 'USD',
     autoProvisioned: true,
@@ -46,6 +73,7 @@ function buildResolvedSkus(mappings, providersUsed) {
  * Select provider/region for a catalog purchase.
  * durationDays >= 30 → webyne (manual fulfillment).
  * else → cheapest among requested providers (default: all).
+ * nestedVirtualization=true → only nested-virt-capable SKUs.
  */
 export async function selectProvider({
   canonicalSpec,
@@ -53,10 +81,12 @@ export async function selectProvider({
   durationDays,
   specs,
   providers,
+  nestedVirtualization = false,
 } = {}) {
   const providersUsed = normalizeProviders(providers);
   const days = Number(durationDays) || 0;
   const cat = category || 'linux';
+  const pricingMode = toPricingMode(nestedVirtualization);
   const parts = resolveSpecParts(canonicalSpec, specs || {}, cat);
   const spec = parts.canonicalSpec;
 
@@ -66,6 +96,8 @@ export async function selectProvider({
       region: null,
       category: cat,
       canonicalSpec: spec,
+      pricingMode,
+      nestedVirtualization: pricingMode === 'nested',
       rawTotalPricePerHr: null,
       autoProvisioned: false,
       reason: 'duration_gte_30_days',
@@ -73,34 +105,28 @@ export async function selectProvider({
     };
   }
 
-  let row = await CloudRegionPricing.findOne({
+  const modeFilter = pricingModeQuery(pricingMode);
+
+  // Always run ensure first so stale/legacy-hardcoded cache rows are refreshed.
+  const dynamicMeta = await ensureSpecPricing({
+    canonicalSpec: spec,
+    category: cat,
+    vcpu: parts.vcpu,
+    ramGb: parts.ramGb,
+    diskGb: parts.diskGb,
+    gpu: parts.gpu,
+    providers: providersUsed,
+    nestedVirtualization: pricingMode === 'nested',
+  });
+
+  const row = await CloudRegionPricing.findOne({
     canonicalSpec: spec,
     category: cat,
     provider: { $in: providersUsed },
+    ...modeFilter,
   })
     .sort({ rawTotalPricePerHr: 1 })
     .lean();
-
-  let dynamicMeta = null;
-  if (!row) {
-    dynamicMeta = await ensureSpecPricing({
-      canonicalSpec: spec,
-      category: cat,
-      vcpu: parts.vcpu,
-      ramGb: parts.ramGb,
-      diskGb: parts.diskGb,
-      gpu: parts.gpu,
-      providers: providersUsed,
-    });
-
-    row = await CloudRegionPricing.findOne({
-      canonicalSpec: spec,
-      category: cat,
-      provider: { $in: providersUsed },
-    })
-      .sort({ rawTotalPricePerHr: 1 })
-      .lean();
-  }
 
   if (!row) {
     return {
@@ -108,6 +134,8 @@ export async function selectProvider({
       region: null,
       category: cat,
       canonicalSpec: spec,
+      pricingMode,
+      nestedVirtualization: pricingMode === 'nested',
       rawTotalPricePerHr: null,
       autoProvisioned: false,
       reason: 'no_cloud_pricing_for_spec',
@@ -121,7 +149,13 @@ export async function selectProvider({
   return {
     ...toSelectResult(
       row,
-      dynamicMeta && !dynamicMeta.cached ? 'cheapest_cloud_dynamic' : 'cheapest_cloud',
+      dynamicMeta && !dynamicMeta.cached
+        ? pricingMode === 'nested'
+          ? 'cheapest_cloud_nested_dynamic'
+          : 'cheapest_cloud_dynamic'
+        : pricingMode === 'nested'
+          ? 'cheapest_cloud_nested'
+          : 'cheapest_cloud',
       providersUsed
     ),
     ...(resolvedSkus ? { resolvedSkus } : {}),

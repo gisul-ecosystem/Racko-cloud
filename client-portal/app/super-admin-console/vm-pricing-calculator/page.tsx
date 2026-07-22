@@ -1,15 +1,14 @@
 'use client';
 
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Calculator, Loader2 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   calculateVmPricing,
-  listVmPricing,
   type CloudProvider,
   type PricingCategory,
-  type VmPricingRow,
+  type PricingPeriod,
   type VmPricingSelectResult,
 } from '@/lib/vmPricingCalculatorApi';
 
@@ -37,16 +36,45 @@ function formatInr(value: number | null | undefined, digits = 2): string {
   })}`;
 }
 
+function periodFromHourly(hr: number | null | undefined): PricingPeriod {
+  if (hr == null || !Number.isFinite(hr)) {
+    return { hr: null, monthly: null, quarterly: null, yearly: null };
+  }
+  const monthly = hr * 730;
+  return {
+    hr,
+    monthly,
+    quarterly: monthly * 3,
+    yearly: monthly * 12,
+  };
+}
+
+function scalePeriod(period: PricingPeriod, rate: number | undefined): PricingPeriod {
+  if (rate == null || !Number.isFinite(rate)) {
+    return { hr: null, monthly: null, quarterly: null, yearly: null };
+  }
+  return {
+    hr: period.hr == null ? null : period.hr * rate,
+    monthly: period.monthly == null ? null : period.monthly * rate,
+    quarterly: period.quarterly == null ? null : period.quarterly * rate,
+    yearly: period.yearly == null ? null : period.yearly * rate,
+  };
+}
+
+function dualMoney(usd: number | null | undefined, inr: number | null | undefined): string {
+  return `${formatUsd(usd)} · ${formatInr(inr)}`;
+}
+
 export default function VmPricingCalculatorPage() {
   const [category, setCategory] = useState<PricingCategory>('linux');
   const [cpu, setCpu] = useState('4');
   const [ram, setRam] = useState('8');
   const [disk, setDisk] = useState('100');
   const [providerFilter, setProviderFilter] = useState<ProviderFilter>('all');
+  const [nestedVirtualization, setNestedVirtualization] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<VmPricingSelectResult | null>(null);
-  const [rows, setRows] = useState<VmPricingRow[]>([]);
   const [fxMeta, setFxMeta] = useState<{ rate?: number; source?: string }>({});
 
   const selectedProviders: CloudProvider[] =
@@ -61,36 +89,60 @@ export default function VmPricingCalculatorPage() {
         durationDays: 1,
         specs: { cpu, ram, disk },
         providers: selectedProviders,
+        nestedVirtualization,
       };
       const selection = await calculateVmPricing(payload);
       setResult(selection);
       setFxMeta({ rate: selection.usdToInr, source: selection.fxSource });
-
-      if (selection.canonicalSpec) {
-        const listed = await listVmPricing({
-          canonicalSpec: selection.canonicalSpec,
-          category,
-          providers: selectedProviders.join(','),
-          limit: 100,
-        });
-        setRows(listed.rows);
-        if (listed.usdToInr != null) {
-          setFxMeta({ rate: listed.usdToInr, source: listed.fxSource });
-        }
-      } else {
-        setRows([]);
-      }
     } catch (err) {
       setResult(null);
-      setRows([]);
       setError(err instanceof ApiError ? err.message : 'Failed to calculate pricing.');
     } finally {
       setLoading(false);
     }
   }
 
-  const usd = result?.pricingUsd;
-  const inr = result?.pricingInr;
+  const publicHourly =
+    result?.rawTotalWithPublicIpPerHr ?? result?.rawTotalPricePerHr ?? null;
+  const privateHourly =
+    result?.rawTotalWithPrivateIpPerHr ??
+    (result?.rawComputePricePerHr != null && result?.rawStoragePricePerHr != null
+      ? result.rawComputePricePerHr + result.rawStoragePricePerHr
+      : null);
+
+  // Prefer explicit public/private IP fields; do not show a combined raw IP total.
+  const publicIp =
+    result?.rawPublicIpPricePerHr ??
+    (typeof result?.rawIpPricePerHr === 'number' ? result.rawIpPricePerHr : 0);
+  const privateIp = result?.rawPrivateIpPricePerHr ?? 0;
+
+  const fx = result?.usdToInr ?? fxMeta.rate;
+
+  const publicUsd = useMemo(() => periodFromHourly(publicHourly), [publicHourly]);
+  const privateUsd = useMemo(() => periodFromHourly(privateHourly), [privateHourly]);
+  const publicInr = useMemo(() => scalePeriod(publicUsd, fx), [publicUsd, fx]);
+  const privateInr = useMemo(() => scalePeriod(privateUsd, fx), [privateUsd, fx]);
+
+  const publicIpInr =
+    result?.rawPublicIpPricePerHrInr ??
+    (publicIp != null && fx != null ? publicIp * fx : null);
+  const privateIpInr =
+    result?.rawPrivateIpPricePerHrInr ??
+    (fx != null ? privateIp * fx : null);
+  const computeInr =
+    result?.rawComputePricePerHrInr ??
+    (result?.rawComputePricePerHr != null && fx != null
+      ? result.rawComputePricePerHr * fx
+      : null);
+  const storageInr =
+    result?.rawStoragePricePerHrInr ??
+    (result?.rawStoragePricePerHr != null && fx != null
+      ? result.rawStoragePricePerHr * fx
+      : null);
+
+  const resolvedSkuEntries = result?.resolvedSkus
+    ? (Object.entries(result.resolvedSkus) as [CloudProvider, string | null][])
+    : [];
 
   return (
     <div className="mx-auto max-w-5xl space-y-6">
@@ -104,12 +156,12 @@ export default function VmPricingCalculatorPage() {
         </Link>
         <h1 className="text-2xl font-bold text-gray-900">VM Pricing Calculator</h1>
         <p className="mt-1 text-sm text-gray-500">
-          Compare live AWS / Azure / OCI / GCP list prices (USD + INR).
+          Compare live AWS / Azure / OCI / GCP list prices (USD + INR), with public vs private IP.
         </p>
       </div>
 
       <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
           <label className="block text-sm">
             <span className="mb-1.5 block font-medium text-gray-700">OS / Category</span>
             <select
@@ -119,7 +171,18 @@ export default function VmPricingCalculatorPage() {
             >
               <option value="linux">Linux</option>
               <option value="windows">Windows</option>
-              <option value="gpu">GPU</option>
+            </select>
+          </label>
+
+          <label className="block text-sm">
+            <span className="mb-1.5 block font-medium text-gray-700">Pricing mode</span>
+            <select
+              value={nestedVirtualization ? 'nested' : 'normal'}
+              onChange={(e) => setNestedVirtualization(e.target.value === 'nested')}
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+            >
+              <option value="normal">Normal</option>
+              <option value="nested">Nested virtualization</option>
             </select>
           </label>
 
@@ -172,6 +235,13 @@ export default function VmPricingCalculatorPage() {
           </label>
         </div>
 
+        {nestedVirtualization ? (
+          <p className="mt-3 text-xs text-gray-500">
+            Nested mode resolves SKUs that can run Docker/KVM guests (e.g. AWS m7i/c7i, Azure
+            D/E_v3, GCP n2, OCI Standard3.Flex), then fetches live list prices for those types.
+          </p>
+        ) : null}
+
         <div className="mt-5 flex flex-wrap items-center gap-3">
           <button
             type="button"
@@ -205,92 +275,98 @@ export default function VmPricingCalculatorPage() {
             Compared: {(result.providersUsed ?? selectedProviders).join(', ')}
           </p>
 
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <Stat label="Provider" value={result.provider.toUpperCase()} />
             <Stat label="Region" value={result.region || '—'} />
             <Stat label="Instance" value={result.instanceType || '—'} />
+            <Stat
+              label="Mode"
+              value={
+                result.pricingMode === 'nested' || result.nestedVirtualization
+                  ? 'Nested virt'
+                  : 'Normal'
+              }
+            />
             <Stat label="Reason" value={result.reason || '—'} />
           </div>
 
           <div className="mt-5">
-            <h3 className="mb-2 text-sm font-semibold text-gray-800">USD</h3>
+            <h3 className="mb-2 text-sm font-semibold text-gray-800">Hourly breakdown</h3>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="Hourly" value={formatUsd(usd?.hr)} accent />
-              <Stat label="Monthly (×730)" value={formatUsdMoney(usd?.monthly)} />
-              <Stat label="Quarterly" value={formatUsdMoney(usd?.quarterly)} />
-              <Stat label="Yearly" value={formatUsdMoney(usd?.yearly)} />
+              <Stat
+                label="Compute"
+                value={dualMoney(result.rawComputePricePerHr, computeInr)}
+              />
+              <Stat
+                label="Storage"
+                value={dualMoney(result.rawStoragePricePerHr, storageInr)}
+              />
+              <Stat
+                label="Public IP"
+                value={dualMoney(publicIp, publicIpInr ?? (fx != null ? 0 : null))}
+                accent
+              />
+              <Stat
+                label="Private IP"
+                value={dualMoney(privateIp, privateIpInr ?? (fx != null ? 0 : null))}
+              />
+            </div>
+            <p className="mt-2 text-xs text-gray-500">
+              Private IP is not billed separately ($0). Internet RDP/SSH needs a public IP (or
+              VPN/bastion).
+            </p>
+          </div>
+
+          <div className="mt-5">
+            <h3 className="mb-2 text-sm font-semibold text-gray-800">
+              Total with public IP
+            </h3>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Stat label="Hourly USD" value={formatUsd(publicUsd.hr)} accent />
+              <Stat label="Monthly USD" value={formatUsdMoney(publicUsd.monthly)} />
+              <Stat label="Hourly INR" value={formatInr(publicInr.hr)} accent />
+              <Stat label="Monthly INR" value={formatInr(publicInr.monthly)} />
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Stat label="Quarterly USD" value={formatUsdMoney(publicUsd.quarterly)} />
+              <Stat label="Yearly USD" value={formatUsdMoney(publicUsd.yearly)} />
+              <Stat label="Quarterly INR" value={formatInr(publicInr.quarterly)} />
+              <Stat label="Yearly INR" value={formatInr(publicInr.yearly)} />
             </div>
           </div>
 
-          <div className="mt-4">
-            <h3 className="mb-2 text-sm font-semibold text-gray-800">INR</h3>
+          <div className="mt-5">
+            <h3 className="mb-2 text-sm font-semibold text-gray-800">
+              Total with private IP only
+            </h3>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              <Stat label="Hourly" value={formatInr(inr?.hr)} accent />
-              <Stat label="Monthly (×730)" value={formatInr(inr?.monthly)} />
-              <Stat label="Quarterly" value={formatInr(inr?.quarterly)} />
-              <Stat label="Yearly" value={formatInr(inr?.yearly)} />
+              <Stat label="Hourly USD" value={formatUsd(privateUsd.hr)} accent />
+              <Stat label="Monthly USD" value={formatUsdMoney(privateUsd.monthly)} />
+              <Stat label="Hourly INR" value={formatInr(privateInr.hr)} accent />
+              <Stat label="Monthly INR" value={formatInr(privateInr.monthly)} />
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Stat label="Quarterly USD" value={formatUsdMoney(privateUsd.quarterly)} />
+              <Stat label="Yearly USD" value={formatUsdMoney(privateUsd.yearly)} />
+              <Stat label="Quarterly INR" value={formatInr(privateInr.quarterly)} />
+              <Stat label="Yearly INR" value={formatInr(privateInr.yearly)} />
             </div>
           </div>
-        </section>
-      ) : null}
 
-      {rows.length > 0 ? (
-        <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="border-b border-gray-100 px-5 py-3">
-            <h2 className="text-lg font-semibold text-gray-900">All matching prices</h2>
-            <p className="text-xs text-gray-500">Sorted by hourly cost (lowest first) · USD + INR</p>
-          </div>
-          <div className="overflow-x-auto">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
-                <tr>
-                  <th className="px-4 py-3 font-semibold">Provider</th>
-                  <th className="px-4 py-3 font-semibold">Region</th>
-                  <th className="px-4 py-3 font-semibold">Instance</th>
-                  <th className="px-4 py-3 font-semibold">Hr USD</th>
-                  <th className="px-4 py-3 font-semibold">Hr INR</th>
-                  <th className="px-4 py-3 font-semibold">Mon USD</th>
-                  <th className="px-4 py-3 font-semibold">Mon INR</th>
-                  <th className="px-4 py-3 font-semibold">Year USD</th>
-                  <th className="px-4 py-3 font-semibold">Year INR</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => (
-                  <tr
-                    key={`${row.provider}-${row.region}-${row.category}`}
-                    className="border-t border-gray-100"
-                  >
-                    <td className="px-4 py-2.5 font-medium uppercase text-gray-900">
-                      {row.provider}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-700">{row.region}</td>
-                    <td className="px-4 py-2.5 font-mono text-xs text-gray-600">
-                      {row.instanceType || '—'}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-900">
-                      {formatUsd(row.pricingUsd?.hr)}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-900">
-                      {formatInr(row.pricingInr?.hr)}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-900">
-                      {formatUsdMoney(row.pricingUsd?.monthly)}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-900">
-                      {formatInr(row.pricingInr?.monthly)}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-900">
-                      {formatUsdMoney(row.pricingUsd?.yearly)}
-                    </td>
-                    <td className="px-4 py-2.5 text-gray-900">
-                      {formatInr(row.pricingInr?.yearly)}
-                    </td>
-                  </tr>
+          {resolvedSkuEntries.length > 0 ? (
+            <div className="mt-5">
+              <h3 className="mb-2 text-sm font-semibold text-gray-800">Resolved SKUs</h3>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                {resolvedSkuEntries.map(([provider, sku]) => (
+                  <Stat
+                    key={provider}
+                    label={provider.toUpperCase()}
+                    value={sku || '—'}
+                  />
                 ))}
-              </tbody>
-            </table>
-          </div>
+              </div>
+            </div>
+          ) : null}
         </section>
       ) : null}
     </div>
