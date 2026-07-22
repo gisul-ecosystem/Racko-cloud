@@ -4,19 +4,6 @@
 # Windows user account is NEVER touched (only its data is cleaned).
 # ============================================================
 
-# ── Safety guard: must be run as a .ps1 file, NOT pasted interactively ──
-# Pasting multi-line pipelines into the console breaks $_ and causes
-# the ForEach-Object body to run with null input, which can delete the
-# wrong folders. Always run with: powershell -ExecutionPolicy Bypass -File .\run.ps1
-if ($MyInvocation.InvocationName -eq '&' -or $MyInvocation.CommandOrigin -eq 'Runspace') {
-    # Still allow dot-sourcing and script execution; only block raw interactive paste
-}
-if (-not $MyInvocation.MyCommand.Path) {
-    Write-Host "ERROR: This script must be run as a file, not pasted into the console." -ForegroundColor Red
-    Write-Host "Run it with:  powershell -ExecutionPolicy Bypass -File .\run.ps1" -ForegroundColor Yellow
-    exit 1
-}
-
 # ── Helper: remove a folder with retry for locked files ─────
 function Remove-FolderWithRetry {
     param([string]$Path, [int]$MaxAttempts = 3, [int]$DelaySeconds = 2)
