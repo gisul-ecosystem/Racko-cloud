@@ -42,7 +42,7 @@ function Split-UninstallCommand {
 function Invoke-UninstallerWithTimeout {
     param(
         [string]$FilePath,
-        [string]$Arguments = '',
+        [string[]]$Arguments = @(),
         [int]$TimeoutSeconds = 120
     )
     try {
@@ -50,7 +50,13 @@ function Invoke-UninstallerWithTimeout {
             Write-Host "  SKIP: exe not found -> $FilePath" -ForegroundColor DarkYellow
             return
         }
-        $p = Start-Process -FilePath $FilePath -ArgumentList $Arguments -PassThru -NoNewWindow -ErrorAction Stop
+        # Filter out empty strings to avoid ArgumentList null errors
+        $argList = $Arguments | Where-Object { $_ -and $_.Trim() -ne '' }
+        $p = if ($argList) {
+            Start-Process -FilePath $FilePath -ArgumentList $argList -PassThru -NoNewWindow -ErrorAction Stop
+        } else {
+            Start-Process -FilePath $FilePath -PassThru -NoNewWindow -ErrorAction Stop
+        }
         if (-not $p.WaitForExit($TimeoutSeconds * 1000)) {
             Write-Host "  TIMEOUT after ${TimeoutSeconds}s -- killing $FilePath" -ForegroundColor Red
             Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
@@ -70,37 +76,46 @@ function Invoke-UninstallEntry {
         $uninst = if ($app.UninstallString)      { $app.UninstallString.Trim()      } else { '' }
 
         if ($quiet -ne '') {
-            Invoke-UninstallerWithTimeout -FilePath 'cmd.exe' -Arguments "/c $quiet" -TimeoutSeconds 120
+            # Split QuietUninstallString into exe + args array — handles double spaces correctly
+            $qcmd = Split-UninstallCommand $quiet
+            $qargs = $qcmd.Args -split '\s+' | Where-Object { $_ -ne '' }
+            Invoke-UninstallerWithTimeout -FilePath $qcmd.Exe -Arguments $qargs -TimeoutSeconds 120
         } elseif ($uninst -match 'msedgewebview|EdgeWebView') {
             $cmd = Split-UninstallCommand $uninst
-            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '--uninstall --msedgewebview --system-level --force-uninstall' -TimeoutSeconds 90
+            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('--uninstall','--msedgewebview','--system-level','--force-uninstall') -TimeoutSeconds 90
         } elseif ($uninst -match 'MsiExec') {
             $guid = [regex]::Match($uninst, '\{[A-F0-9\-]+\}', 'IgnoreCase').Value
             if ($guid) {
-                Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments "/X$guid /quiet /norestart" -TimeoutSeconds 180
+                Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid",'/quiet','/norestart') -TimeoutSeconds 180
             }
         } elseif ($uninst -match 'Docker Desktop Installer') {
             $cmd = Split-UninstallCommand $uninst
-            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments 'uninstall --quiet' -TimeoutSeconds 180
+            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('uninstall','--quiet') -TimeoutSeconds 180
         } elseif ($uninst -match 'setup\.exe') {
             $cmd = Split-UninstallCommand $uninst
-            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '--uninstall --force-uninstall --system-level' -TimeoutSeconds 120
+            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('--uninstall','--force-uninstall','--system-level') -TimeoutSeconds 120
         } elseif ($uninst -match 'Update\.exe') {
             # Squirrel-based installers (Slack, Discord, VS Code, etc.)
             $cmd = Split-UninstallCommand $uninst
-            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '--uninstall -s' -TimeoutSeconds 120
+            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('--uninstall','-s') -TimeoutSeconds 120
         } elseif ($uninst -match '-burn\.exe' -or $uninst -match 'Bundle') {
             # WiX Burn bundle installers (Microsoft/Adobe/enterprise)
             $cmd = Split-UninstallCommand $uninst
-            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '/uninstall /quiet /norestart' -TimeoutSeconds 180
+            Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('/uninstall','/quiet','/norestart') -TimeoutSeconds 180
         } else {
             $cmd = Split-UninstallCommand $uninst
             if ($cmd.Exe -match 'unins\d+\.exe') {
-                Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART' -TimeoutSeconds 120
+                Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART') -TimeoutSeconds 120
             } elseif ($cmd.Exe -match '[\\\/]uninstall\.exe$') {
-                Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '-q' -TimeoutSeconds 120
+                Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('-q') -TimeoutSeconds 120
             } else {
-                Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments '/S' -TimeoutSeconds 120
+                # Generic fallback — split any args from UninstallString
+                $uargs = $cmd.Args -split '\s+' | Where-Object { $_ -ne '' }
+                if ($uargs) {
+                    Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments $uargs -TimeoutSeconds 120
+                } else {
+                    Invoke-UninstallerWithTimeout -FilePath $cmd.Exe -Arguments @('/S') -TimeoutSeconds 120
+                }
             }
         }
 
@@ -248,7 +263,9 @@ foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
     if ($skip) { continue }
 
     Write-Host "  Killing: $($proc.Name) (PID $($proc.Id))" -ForegroundColor DarkYellow
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    # Use taskkill instead of Stop-Process — works cross-session (Session 0 → Session 2+)
+    # /F = force, /T = kill process tree (children too), /PID = target by PID
+    taskkill /F /T /PID $proc.Id 2>$null | Out-Null
     $killed++
 }
 
@@ -498,6 +515,35 @@ foreach ($base in @(
     }
 }
 
+# ── Clean stale HKEY_USERS entries for all logged-in users ─────────────────
+# HKCU:\  under LocalSystem only covers LocalSystem's hive.
+# Logged-in users' hives are mounted at HKEY_USERS\<SID> — readable by LocalSystem.
+# Remove any entry whose uninstaller exe no longer exists on disk.
+if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+    New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
+}
+Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
+    $_.PSChildName -match 'S-1-5-21' -and $_.PSChildName -notmatch '_Classes'
+} | ForEach-Object {
+    $sid = $_.PSChildName
+    foreach ($base in @("HKU:\$sid\Software\Microsoft\Windows\CurrentVersion\Uninstall", "HKU:\$sid\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall")) {
+        if (-not (Test-Path $base)) { continue }
+        foreach ($key in (Get-ChildItem $base -ErrorAction SilentlyContinue)) {
+            $props  = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
+            if (-not $props.DisplayName) { continue }
+            $quiet  = if ($props.QuietUninstallString) { $props.QuietUninstallString.Trim() } else { '' }
+            $uninst = if ($props.UninstallString)      { $props.UninstallString.Trim()      } else { '' }
+            $raw    = if ($quiet -ne '') { $quiet } else { $uninst }
+            if ($raw -eq '') { continue }
+            $exe = if ($raw -match '^"([^"]+)"') { $matches[1] } elseif ($raw -match '^(\S+)') { $matches[1] } else { '' }
+            if ($exe -ne '' -and -not (Test-Path $exe)) {
+                Write-Host "Removing stale HKCU entry: $($props.DisplayName)" -ForegroundColor DarkGray
+                Remove-Item $key.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
 # ============================================================
 # PHASE 7 — Desktop / Documents / Pictures / Videos cleanup
 # ============================================================
@@ -506,7 +552,7 @@ Write-Host "`n=== PHASE 7: USER DATA FOLDERS CLEANUP ===" -ForegroundColor Cyan
 foreach ($userDir in (Get-UserProfiles)) {
     $userProfile = $userDir.FullName
     if (-not $userProfile) { continue }
-    foreach ($folderName in @('Desktop','Documents','Pictures','Videos')) {
+    foreach ($folderName in @('Desktop','Documents','Pictures','Videos','OneDrive','Dropbox','Box','Google Drive')) {
         $target = Join-Path $userProfile $folderName
         if (-not (Test-Path $target)) { continue }
         foreach ($item in (Get-ChildItem $target -ErrorAction SilentlyContinue)) {
