@@ -307,11 +307,16 @@ class WSManager {
           success?: boolean;
           error?: string;
         };
+        // payload.machineId from agent is the agentId (UUID), not the MongoDB _id.
+        // Resolve it to the actual machine _id so the UI comparison works correctly.
+        const machine = await MachineModel.findOne({ agentId: payload.machineId }).lean();
+        const resolvedMachineId = machine ? machine._id.toString() : payload.machineId;
+
         const { emitResetEvent } = await import('../reset.events');
         emitResetEvent(payload.sessionId, {
           type: msg.type as 'reset_progress' | 'reset_complete',
-          machineId: payload.machineId,
-          machineName: payload.machineName,
+          machineId: resolvedMachineId,
+          machineName: payload.machineName ?? machine?.name,
           phase: payload.phase,
           message: payload.message,
           success: payload.success,
