@@ -51,6 +51,8 @@ export function OrgAdminPortal() {
     updateRoles,
     deleteUser,
     deleteRequest,
+    extendExpiration,
+    sendPurchaseConfirmationMail,
     forceLogout,
     reviewAccess,
     fetchUserMonitoring,
@@ -101,6 +103,7 @@ export function OrgAdminPortal() {
           request.customerEmail.toLowerCase().includes(query) ||
           String(request.id).includes(query) ||
           (request.region || '').toLowerCase().includes(query) ||
+          (request.projectName || '').toLowerCase().includes(query) ||
           (request.requestName || '').toLowerCase().includes(query);
 
         return matchStatus && matchRegion && matchSearch;
@@ -303,12 +306,18 @@ export function OrgAdminPortal() {
                       : 'border-gray-200'
                   }`}
                 >
-                  <div className="min-w-[180px]">
-                    <div className="text-sm font-bold text-gray-900">#{request.id}</div>
+                  <div className="min-w-[220px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-sm font-bold text-gray-900">
+                        {request.projectName?.trim() || `Project ${request.id}`}
+                      </div>
+                      {request.idMode === 'test_ids' ? (
+                        <span className="inline-flex shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">
+                          Test ID
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="text-sm text-gray-500">{request.customerEmail}</div>
-                    {request.requestName && (
-                      <div className="mt-0.5 truncate text-xs text-gray-400">{request.requestName}</div>
-                    )}
                   </div>
 
                   <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -363,6 +372,8 @@ export function OrgAdminPortal() {
                     onUnblock={unblockUser}
                     onDeleteUser={deleteUser}
                     onDeleteRequest={deleteRequest}
+                    onExtendExpiration={extendExpiration}
+                    onSendPurchaseConfirmationMail={sendPurchaseConfirmationMail}
                     onReprovisionRoles={reprovisionRoles}
                     lastUpdatedAt={lastUpdatedAt}
                     isRefreshing={isRefreshing}

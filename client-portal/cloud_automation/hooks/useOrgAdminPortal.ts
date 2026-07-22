@@ -5,6 +5,7 @@ import {
   OrgAdminError,
   deleteOrgAdminUser,
   deleteOrgAdminRequest,
+  extendOrgAdminRequestExpiration,
   forceOrgAdminLogout,
   getOrgMonitoringLogs,
   getOrgResourceGroupDetail,
@@ -16,6 +17,7 @@ import {
   renewOrgAdminUserBudget,
   reviewOrgAccessRequest,
   reprovisionOrgAdminRoles,
+  sendOrgAdminPurchaseConfirmationMail,
   triggerOrgAdminCleanup,
   triggerOrgRequestCleanup,
   unblockOrgAdminUser,
@@ -55,6 +57,8 @@ interface UseOrgAdminPortalResult {
   updateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   deleteUser: (userId: number) => Promise<boolean>;
   deleteRequest: () => Promise<boolean>;
+  extendExpiration: (expiresAt: string) => Promise<boolean>;
+  sendPurchaseConfirmationMail: () => Promise<boolean>;
   forceLogout: (userId: number) => Promise<boolean>;
   reviewAccess: (
     id: number,
@@ -355,6 +359,56 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       setSaving(false);
     }
   }, [selectedRequestId, refreshOverview, handleApiError]);
+
+  const extendExpiration = useCallback(
+    async (expiresAt: string) => {
+      if (selectedRequestId == null) return false;
+
+      setSaving(true);
+      setActionError(null);
+      setActionSuccess(null);
+
+      try {
+        const result = await extendOrgAdminRequestExpiration(selectedRequestId, expiresAt);
+        setActionSuccess(
+          result.message ||
+            result.data?.message ||
+            `Request #${selectedRequestId} expiration extended.`
+        );
+        await refreshOverview();
+        await refreshDetail();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to extend expiration.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, refreshOverview, refreshDetail, handleApiError]
+  );
+
+  const sendPurchaseConfirmationMail = useCallback(async () => {
+    if (selectedRequestId == null) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await sendOrgAdminPurchaseConfirmationMail(selectedRequestId);
+      setActionSuccess(
+        result.message ||
+          `Confirmation mail sent${result.recipientEmail ? ` to ${result.recipientEmail}` : ''}.`
+      );
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to send confirmation mail.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, handleApiError]);
 
   const forceLogout = useCallback(
     async (userId: number) => {
@@ -661,6 +715,8 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     updateRoles,
     deleteUser,
     deleteRequest,
+    extendExpiration,
+    sendPurchaseConfirmationMail,
     forceLogout,
     reviewAccess,
     fetchUserMonitoring,

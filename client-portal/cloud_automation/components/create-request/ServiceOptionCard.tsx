@@ -1,6 +1,6 @@
 'use client';
 
-import { Check, Layers, Shield } from 'lucide-react';
+import { Check, Layers } from 'lucide-react';
 import type { CatalogService } from '../../types/catalog';
 import { formatCatalogServicePrice } from '../../utils/formatters';
 
@@ -8,9 +8,15 @@ interface ServiceOptionCardProps {
   service: CatalogService;
   checked: boolean;
   onToggle: () => void;
+  disabled?: boolean;
 }
 
-export function ServiceOptionCard({ service, checked, onToggle }: ServiceOptionCardProps) {
+export function ServiceOptionCard({
+  service,
+  checked,
+  onToggle,
+  disabled = false,
+}: ServiceOptionCardProps) {
   const servicePrice = formatCatalogServicePrice(service);
   const displayName = service.service_name || service.name;
   const description =
@@ -21,57 +27,48 @@ export function ServiceOptionCard({ service, checked, onToggle }: ServiceOptionC
 
   return (
     <label
-      className={`group flex h-full cursor-pointer flex-col rounded-xl border p-4 transition ${
+      title={description}
+      className={`flex cursor-pointer items-center gap-3 rounded-lg border px-3 py-2.5 transition ${
+        disabled ? 'cursor-not-allowed opacity-80' : ''
+      } ${
         checked
-          ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] ring-2 ring-[var(--cloud-accent,#B91C1C)]/25 shadow-sm'
-          : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
+          ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)]'
+          : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
       }`}
     >
-      <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          checked={checked}
-          onChange={onToggle}
-          className="mt-1 h-4 w-4 shrink-0 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
-        />
-        <div className="min-w-0 flex-1">
-          <div className="flex items-start justify-between gap-2">
-            <span className="text-sm font-semibold leading-snug text-gray-900">{displayName}</span>
-            {checked ? (
-              <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[var(--cloud-accent,#B91C1C)] text-white">
-                <Check className="h-3 w-3" />
-              </span>
-            ) : null}
-          </div>
+      <input
+        type="checkbox"
+        checked={checked}
+        disabled={disabled}
+        onChange={onToggle}
+        className="h-4 w-4 shrink-0 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)] disabled:cursor-not-allowed"
+      />
 
-          {service.category ? (
-            <span className="mt-1.5 inline-block rounded-full bg-gray-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-gray-500">
-              {service.category}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="truncate text-sm font-medium text-gray-900">{displayName}</span>
+          {service.supports_instances ? (
+            <span
+              title="Instance tiers available"
+              className="inline-flex shrink-0 items-center text-blue-600"
+            >
+              <Layers className="h-3.5 w-3.5" />
             </span>
           ) : null}
-
-          <p className="mt-2 text-xs leading-relaxed text-gray-500">{description}</p>
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            {servicePrice ? (
-              <span className="rounded-md bg-gray-900 px-2 py-1 text-[11px] font-semibold text-white">
-                {servicePrice}
-              </span>
-            ) : null}
-            {service.supports_instances ? (
-              <span className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2 py-0.5 text-[10px] font-medium text-blue-700">
-                <Layers className="h-3 w-3" />
-                Instance tiers
-              </span>
-            ) : null}
-            {service.role_required !== false && (service.default_role || service.azure_role) ? (
-              <span className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-0.5 text-[10px] font-medium text-gray-600">
-                <Shield className="h-3 w-3" />
-                {service.default_role || service.azure_role}
-              </span>
-            ) : null}
-          </div>
         </div>
+      </div>
+
+      <div className="flex shrink-0 items-center gap-2">
+        {servicePrice ? (
+          <span className="rounded-md bg-gray-900 px-1.5 py-0.5 text-[10px] font-semibold text-white">
+            {servicePrice}
+          </span>
+        ) : null}
+        {checked ? (
+          <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[var(--cloud-accent,#B91C1C)] text-white">
+            <Check className="h-3 w-3" />
+          </span>
+        ) : null}
       </div>
     </label>
   );

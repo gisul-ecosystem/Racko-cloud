@@ -13,6 +13,7 @@ import cloudAutomationRoutes from './routes/cloudAutomation.routes';
 import cloudAutomationAwsRoutes from './routes/cloudAutomationAws.routes';
 import cloudAutomationGcpRoutes from './routes/cloudAutomationGcp.routes';
 import managePortalRoutes from './routes/managePortal.routes';
+import purchaseIntentRoutes from './routes/purchaseIntent.routes';
 import orgAdminPortalRoutes from './routes/orgAdminPortal.routes';
 import tenantCloudRoutes from './routes/tenantCloud.routes';
 import proxyRoutes from './routes/proxy.routes';
@@ -49,6 +50,7 @@ const RATE_LIMIT_SKIP_PREFIXES = [
   '/api/v1/tenant-cloud',
   '/api/org-admin',
   '/api/manage',
+  '/api/purchase-intent',
 ];
 
 function isRateLimitExemptPath(path: string): boolean {
@@ -78,6 +80,8 @@ app.get('/health', (_req, res) => {
 // ─── PROXY ROUTES ─────────────────────────────────────────────────────────────
 // Manage-users portal (public; session auth enforced by cloud_automation)
 app.use(managePortalRoutes);
+// Purchase-intent email links (public; token auth enforced by cloud_automation)
+app.use(purchaseIntentRoutes);
 // Organization admin APIs (JWT super_admin; enforced by cloud_automation)
 app.use(orgAdminPortalRoutes);
 // Tenant cloud automation (tenant JWT + assigned service → azure/aws services)
