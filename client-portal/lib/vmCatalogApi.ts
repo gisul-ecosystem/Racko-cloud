@@ -150,6 +150,8 @@ export interface IVmCatalogPlan {
       yearly: number | null;
     }
   >;
+  /** From plan list when sell pricing is applied — whether hourly is offered. */
+  hourlyEnabled?: boolean;
 }
 
 export type CreateVmCatalogPlanDto = {

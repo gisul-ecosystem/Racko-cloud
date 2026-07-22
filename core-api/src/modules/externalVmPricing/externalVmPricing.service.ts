@@ -11,6 +11,8 @@ export interface ExternalVmPricingPublic {
   provider: ExternalVmPricingProvider;
   updatedAt: string | null;
   updatedBy: string | null;
+  /** When false, admin/tenant Create VM hides hourly billing. */
+  hourlyEnabled: boolean;
   categories: Record<ExternalVmPricingCategory, CategoryPricingOverride>;
 }
 
@@ -61,6 +63,7 @@ function normalizeCategory(input: CategoryPricingOverride | undefined): Category
 
 function toPublic(doc: {
   provider: ExternalVmPricingProvider;
+  hourlyEnabled?: boolean;
   categories?: {
     linux?: CategoryPricingOverride;
     windows?: CategoryPricingOverride;
@@ -73,6 +76,7 @@ function toPublic(doc: {
     provider: doc.provider,
     updatedAt: doc.updatedAt ? doc.updatedAt.toISOString() : null,
     updatedBy: doc.updatedBy ? String(doc.updatedBy) : null,
+    hourlyEnabled: Boolean(doc.hourlyEnabled),
     categories: {
       linux: normalizeCategory(doc.categories?.linux),
       windows: normalizeCategory(doc.categories?.windows),
@@ -89,6 +93,7 @@ export class ExternalVmPricingService {
         provider,
         updatedAt: null,
         updatedBy: null,
+        hourlyEnabled: false,
         categories: {
           linux: emptyCategory(),
           windows: emptyCategory(),
@@ -102,7 +107,8 @@ export class ExternalVmPricingService {
   async saveByProvider(
     provider: ExternalVmPricingProvider,
     categories: Record<ExternalVmPricingCategory, CategoryPricingOverride>,
-    updatedBy: string
+    updatedBy: string,
+    opts?: { hourlyEnabled?: boolean }
   ): Promise<ExternalVmPricingPublic> {
     const normalized = {
       linux: normalizeCategory(categories.linux),
@@ -120,19 +126,35 @@ export class ExternalVmPricingService {
       };
     }
 
+    const $set: Record<string, unknown> = {
+      categories: categoriesForDb,
+      updatedBy: new mongoose.Types.ObjectId(updatedBy),
+    };
+    if (opts?.hourlyEnabled !== undefined) {
+      $set.hourlyEnabled = Boolean(opts.hourlyEnabled);
+    }
+
     const doc = await ExternalVmPricingConfig.findOneAndUpdate(
       { provider },
       {
-        $set: {
-          categories: categoriesForDb,
-          updatedBy: new mongoose.Types.ObjectId(updatedBy),
-        },
+        $set,
         $setOnInsert: { provider },
       },
       { upsert: true, new: true, runValidators: true }
     ).lean();
 
     return toPublic(doc!);
+  }
+
+  async setHourlyEnabled(
+    provider: ExternalVmPricingProvider,
+    hourlyEnabled: boolean,
+    updatedBy: string
+  ): Promise<ExternalVmPricingPublic> {
+    const existing = await this.getByProvider(provider);
+    return this.saveByProvider(provider, existing.categories, updatedBy, {
+      hourlyEnabled,
+    });
   }
 }
 

@@ -97,6 +97,8 @@ export default function CreateVmPage() {
     );
   }, [plans, search]);
 
+  const showHourly = plans.some((p) => p.hourlyEnabled === true);
+
   function openPlan(plan: IVmCatalogPlan) {
     const cycles = availableBillings(plan, 'ubuntu');
     setSelected(plan);
@@ -227,7 +229,7 @@ export default function CreateVmPage() {
                 <th className="px-4 py-3">vCPU</th>
                 <th className="px-4 py-3">RAM</th>
                 <th className="px-4 py-3">SSD</th>
-                <th className="px-4 py-3">Hr</th>
+                {showHourly ? <th className="px-4 py-3">Hr</th> : null}
                 <th className="px-4 py-3">Mon</th>
                 <th className="px-4 py-3">QTr</th>
                 <th className="px-4 py-3">Year</th>
@@ -242,7 +244,9 @@ export default function CreateVmPage() {
                   <td className="px-4 py-3">{p.vcpu}</td>
                   <td className="px-4 py-3">{p.ramGb}</td>
                   <td className="px-4 py-3">{p.ssdGb}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{inr(priceForPeriod(p, 'hourly'))}</td>
+                  {showHourly ? (
+                    <td className="px-4 py-3 font-mono text-xs">{inr(priceForPeriod(p, 'hourly'))}</td>
+                  ) : null}
                   <td className="px-4 py-3 font-mono text-xs">{inr(priceForPeriod(p, 'monthly'))}</td>
                   <td className="px-4 py-3 font-mono text-xs">
                     {inr(priceForPeriod(p, 'quarterly'))}

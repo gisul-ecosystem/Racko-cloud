@@ -35,6 +35,7 @@ export const saveExternalVmPricingSchema = z.object({
           gpu: categorySchema,
         })
         .strict(),
+      hourlyEnabled: z.boolean().optional(),
     })
     .strict(),
 });

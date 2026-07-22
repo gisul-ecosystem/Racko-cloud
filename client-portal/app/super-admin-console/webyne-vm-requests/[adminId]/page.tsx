@@ -181,6 +181,8 @@ export default function WebyneVmRequestsByAdminPage() {
     try {
       await attachCatalogVmRequest(id);
       setSuccessMsg('VM attached — now visible to the admin under My VM.');
+      setExpandedId(id);
+      setStatusFilter('active');
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Attach failed.');
@@ -437,19 +439,21 @@ export default function WebyneVmRequestsByAdminPage() {
                                 Fetching…
                               </span>
                             )}
+                            {(req.status === 'ready_to_attach' || req.status === 'active') && (
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setExpandedId((prev) =>
+                                    prev === req._id ? null : req._id
+                                  )
+                                }
+                                className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                              >
+                                {expandedId === req._id ? 'Hide details' : 'View details'}
+                              </button>
+                            )}
                             {req.status === 'ready_to_attach' && (
                               <>
-                                <button
-                                  type="button"
-                                  onClick={() =>
-                                    setExpandedId((prev) =>
-                                      prev === req._id ? null : req._id
-                                    )
-                                  }
-                                  className="rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-gray-700 hover:bg-gray-50"
-                                >
-                                  {expandedId === req._id ? 'Hide details' : 'View details'}
-                                </button>
                                 {req.needsOsChange && !req.osTemplateChanged ? (
                                   <button
                                     type="button"
@@ -508,11 +512,14 @@ export default function WebyneVmRequestsByAdminPage() {
                           </div>
                         </td>
                       </tr>
-                      {expandedId === req._id && req.status === 'ready_to_attach' && (
+                      {expandedId === req._id &&
+                        (req.status === 'ready_to_attach' || req.status === 'active') && (
                         <tr className="border-b border-amber-100 bg-amber-50/40">
                           <td colSpan={6} className="px-5 py-4">
                             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-amber-800">
-                              Fetched from Webyne (admin cannot see this until Attach)
+                              {req.status === 'active'
+                                ? 'VM details (attached — visible to admin)'
+                                : 'Fetched from Webyne (admin cannot see this until Attach)'}
                             </p>
                             <div className="grid gap-2 text-sm text-gray-800 sm:grid-cols-2 lg:grid-cols-3">
                               <div>

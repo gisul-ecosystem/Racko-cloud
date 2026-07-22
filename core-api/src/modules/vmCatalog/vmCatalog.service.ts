@@ -328,12 +328,17 @@ class VmCatalogService {
       throw new ValidationError('Invalid billing cycle.');
     }
 
+    const pricingCfgEarly = await externalVmPricingService.getByProvider('webyne');
+    if (billing === 'hourly' && !pricingCfgEarly.hourlyEnabled) {
+      throw new ValidationError('Hourly billing is not available.');
+    }
+
     const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
     if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
       throw new ValidationError('Selected billing cycle is not priced for this template.');
     }
 
-    const pricingCfg = await externalVmPricingService.getByProvider('webyne');
+    const pricingCfg = pricingCfgEarly;
     const priceBucket = catalogPricingBucket(dto.category);
     const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
     const multiplier =
@@ -1406,12 +1411,17 @@ class VmCatalogService {
       throw new ValidationError('Invalid billing cycle.');
     }
 
+    const pricingCfgEarly = await externalVmPricingService.getByProvider('webyne');
+    if (billing === 'hourly' && !pricingCfgEarly.hourlyEnabled) {
+      throw new ValidationError('Hourly billing is not available.');
+    }
+
     const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
     if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
       throw new ValidationError('Selected billing cycle is not priced for this template.');
     }
 
-    const pricingCfg = await externalVmPricingService.getByProvider('webyne');
+    const pricingCfg = pricingCfgEarly;
     const priceBucket = catalogPricingBucket(dto.category);
     const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
     const multiplier =

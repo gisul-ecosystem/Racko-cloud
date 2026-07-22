@@ -16,6 +16,8 @@ export interface CategoryPricingOverride {
 export interface IExternalVmPricingConfig extends Document {
   _id: mongoose.Types.ObjectId;
   provider: ExternalVmPricingProvider;
+  /** When false, admin/tenant Create VM hides hourly billing. */
+  hourlyEnabled: boolean;
   categories: {
     linux: CategoryPricingOverride;
     windows: CategoryPricingOverride;
@@ -56,6 +58,10 @@ const externalVmPricingConfigSchema = new Schema<IExternalVmPricingConfig>(
       enum: ['webyne'],
       unique: true,
       index: true,
+    },
+    hourlyEnabled: {
+      type: Boolean,
+      default: false,
     },
     categories: {
       linux: { type: categoryOverrideSchema, default: () => ({ multiplier: 1, plans: {} }) },

@@ -37,6 +37,8 @@ export interface VmCatalogPlanPublic {
   updatedAt: string;
   /** Admin listings only — sell prices per OS category (multiplier applied server-side). */
   sellPricesByCategory?: Record<ExternalVmPricingCategory, VmCatalogPeriodPrices>;
+  /** Present on admin/tenant plan lists — whether hourly billing is offered. */
+  hourlyEnabled?: boolean;
 }
 
 /** Customer-facing label for admin/tenant UIs (super-admin keeps provider `name`). */
@@ -86,10 +88,11 @@ function applySellMultiplier(
 
 function sellPricesForPlan(
   plan: VmCatalogPlanPublic,
-  multiplier: number
+  multiplier: number,
+  hourlyEnabled: boolean
 ): VmCatalogPeriodPrices {
   return {
-    hourly: applySellMultiplier(plan.hourly, multiplier),
+    hourly: hourlyEnabled ? applySellMultiplier(plan.hourly, multiplier) : null,
     monthly: applySellMultiplier(plan.monthly, multiplier),
     quarterly: applySellMultiplier(plan.quarterly, multiplier),
     yearly: applySellMultiplier(plan.yearly, multiplier),
@@ -138,6 +141,7 @@ class VmCatalogPlanService {
     if (!opts?.applySellPrice) return plans;
 
     const pricingCfg = await externalVmPricingService.getByProvider('webyne');
+    const hourlyEnabled = Boolean(pricingCfg.hourlyEnabled);
     return plans.map((plan) => {
       const sellPricesByCategory = {} as Record<
         ExternalVmPricingCategory,
@@ -147,7 +151,11 @@ class VmCatalogPlanService {
         const multiplierRaw = Number(pricingCfg.categories[category]?.multiplier);
         const multiplier =
           Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
-        sellPricesByCategory[category] = sellPricesForPlan(plan, multiplier);
+        sellPricesByCategory[category] = sellPricesForPlan(
+          plan,
+          multiplier,
+          hourlyEnabled
+        );
       }
       const display = sellPricesByCategory.linux;
       return {
@@ -157,6 +165,7 @@ class VmCatalogPlanService {
         quarterly: display.quarterly,
         yearly: display.yearly,
         sellPricesByCategory,
+        hourlyEnabled,
       };
     });
   }
