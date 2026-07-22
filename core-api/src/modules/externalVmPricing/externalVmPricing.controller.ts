@@ -23,13 +23,15 @@ export class ExternalVmPricingController {
     try {
       const authReq = req as AuthenticatedRequest;
       const { provider } = req.params as { provider: ExternalVmPricingProvider };
-      const { categories } = req.body as {
+      const { categories, hourlyEnabled } = req.body as {
         categories: Record<ExternalVmPricingCategory, CategoryPricingOverride>;
+        hourlyEnabled?: boolean;
       };
       const data = await externalVmPricingService.saveByProvider(
         provider,
         categories,
-        authReq.user.userId
+        authReq.user.userId,
+        hourlyEnabled !== undefined ? { hourlyEnabled } : undefined
       );
       success(res, 'External VM pricing config saved.', data);
     } catch (err) {
