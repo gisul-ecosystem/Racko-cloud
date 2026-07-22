@@ -16,6 +16,8 @@ export interface ITenantLimits {
   maxManagedUsers?: number;
 }
 
+export type TenantIpAccessMode = 'all' | 'restricted';
+
 export interface ITenant extends Document {
   _id: mongoose.Types.ObjectId;
   slug: string;
@@ -25,6 +27,8 @@ export interface ITenant extends Document {
   branding: ITenantBranding;
   enabledServices: string[];
   limits: ITenantLimits;
+  ipAccessMode: TenantIpAccessMode;
+  allowedIps: string[];
   createdBy?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
@@ -92,6 +96,16 @@ const tenantSchema = new Schema<ITenant>(
     limits: {
       type: limitsSchema,
       default: () => ({}),
+    },
+    ipAccessMode: {
+      type: String,
+      enum: ['all', 'restricted'],
+      default: 'all',
+      required: true,
+    },
+    allowedIps: {
+      type: [String],
+      default: [],
     },
     createdBy: {
       type: Schema.Types.ObjectId,

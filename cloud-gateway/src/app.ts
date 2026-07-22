@@ -3,6 +3,7 @@ import cors from 'cors';
 import { helmetMiddleware } from './middleware/helmet.middleware';
 import { requestIdMiddleware } from './middleware/requestId.middleware';
 import { tenantResolver } from './middleware/tenant.middleware';
+import { ipAccessGuard } from './middleware/ipAccessGuard.middleware';
 import { loggerMiddleware } from './middleware/logger.middleware';
 import { userRateLimiter } from './middleware/rateLimit.middleware';
 import { corsOptions } from './config/cors';
@@ -33,6 +34,9 @@ app.use(cors(corsOptions));
 
 // 3b. Tenant host resolution (non-blocking; sets req.tenantContext)
 app.use(tenantResolver);
+
+// 3c. IP access guard — enforces per-tenant IP allowlist when mode is 'restricted'
+app.use(ipAccessGuard);
 
 // 4. Morgan/logger — request logging
 app.use(loggerMiddleware);

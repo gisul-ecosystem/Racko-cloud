@@ -22,6 +22,7 @@ import type {
   TemplateItemPricing,
   UpdateServiceConfigInput,
   UpdateTenantInput,
+  UpdateTenantIpAccessInput,
   VmManagementPlatformTemplates,
   VmManagementPricing,
 } from './tenantTypes';
@@ -68,6 +69,19 @@ export async function createTenant(input: CreateTenantInput): Promise<Tenant> {
 export async function updateTenant(id: string, input: UpdateTenantInput): Promise<Tenant> {
   const data = await unwrap(
     apiRequest<ApiEnvelope<{ tenant: Tenant }>>(`/api/v1/tenants/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    })
+  );
+  return data.tenant;
+}
+
+export async function updateTenantIpAccess(
+  id: string,
+  input: UpdateTenantIpAccessInput
+): Promise<Tenant> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ tenant: Tenant }>>(`/api/v1/tenants/${id}/ip-access`, {
       method: 'PATCH',
       body: JSON.stringify(input),
     })

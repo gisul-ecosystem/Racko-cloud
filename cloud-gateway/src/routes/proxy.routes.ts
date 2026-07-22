@@ -383,5 +383,4 @@ router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedica
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
 router.use('/api/v1', authMiddleware, verifyMiddleware, coreApiCatchAllProxy);
-
 export default router;

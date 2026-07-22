@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import mongoose from 'mongoose';
-import { Tenant, type ITenant, type TenantStatus } from '../../models/tenant.model';
+import { Tenant, type ITenant, type TenantStatus, type TenantIpAccessMode } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { hashPassword } from '../../utils/argon2';
 import {
@@ -12,6 +12,7 @@ import type {
   CreateTenantAdminInput,
   CreateTenantInput,
   UpdateTenantInput,
+  UpdateTenantIpAccessInput,
 } from './tenant.validation';
 
 function isMongoDuplicateKeyError(error: unknown): boolean {
@@ -62,6 +63,8 @@ export interface TenantPublic {
   branding: ITenant['branding'];
   enabledServices: string[];
   limits: ITenant['limits'];
+  ipAccessMode: TenantIpAccessMode;
+  allowedIps: string[];
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
@@ -85,6 +88,8 @@ function toTenantPublic(tenant: ITenant): TenantPublic {
     branding: tenant.branding ?? {},
     enabledServices: tenant.enabledServices ?? [],
     limits: tenant.limits ?? {},
+    ipAccessMode: tenant.ipAccessMode ?? 'all',
+    allowedIps: tenant.allowedIps ?? [],
     createdBy: tenant.createdBy ? tenant.createdBy.toString() : null,
     createdAt: tenant.createdAt,
     updatedAt: tenant.updatedAt,
@@ -240,6 +245,26 @@ export class TenantService {
       tenantId: tenant._id.toString(),
       createdAt: tenantAdmin.createdAt,
     };
+  }
+
+  async updateTenantIpAccess(id: string, dto: UpdateTenantIpAccessInput): Promise<TenantPublic> {
+    if (!isValidObjectId(id)) {
+      throw new ValidationError('Invalid tenant id format.');
+    }
+
+    const tenant = await Tenant.findById(id);
+    if (!tenant) {
+      throw new NotFoundError('Tenant not found.');
+    }
+
+    // Deduplicate entries before saving
+    const uniqueIps = [...new Set(dto.allowedIps.map((ip) => ip.trim()).filter(Boolean))];
+
+    tenant.ipAccessMode = dto.ipAccessMode;
+    tenant.allowedIps = uniqueIps;
+
+    await tenant.save();
+    return toTenantPublic(tenant);
   }
 }
 
