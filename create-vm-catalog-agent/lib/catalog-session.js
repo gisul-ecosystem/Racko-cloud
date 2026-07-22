@@ -846,6 +846,37 @@ async function purchaseAndScrape(category, {
 
   const webyneBilling = toWebyneBilling(billing);
 
+  // Racko sends OS labels (ubuntu/rocky/debian/windows/linux/gpu).
+  // Linux-priced plans need a real Webyne image id at checkout.
+  // Windows on a Linux-priced plan: deploy Ubuntu first, then SA changes OS.
+  const DEFAULT_LINUX_DEPLOY_TEMPLATE =
+    process.env.WEBYNE_LINUX_OS_TEMPLATE || 'ubuntu_20_64bit';
+  const ROCKY_TEMPLATE =
+    process.env.WEBYNE_ROCKY_OS_TEMPLATE || 'rocky_9_64bit';
+  const DEBIAN_TEMPLATE =
+    process.env.WEBYNE_DEBIAN_OS_TEMPLATE || 'debian_10_64bit';
+  let checkoutTemplate = String(template || '').trim();
+  if (pricingCategory === 'linux') {
+    const isOsLabel =
+      !checkoutTemplate ||
+      /^(linux|windows|gpu|ubuntu|rocky|debian)$/i.test(checkoutTemplate);
+    if (isOsLabel) {
+      if (requestedOs === 'windows' || requestedOs === 'gpu') {
+        checkoutTemplate = DEFAULT_LINUX_DEPLOY_TEMPLATE;
+      } else if (requestedOs === 'rocky') {
+        checkoutTemplate = ROCKY_TEMPLATE;
+      } else if (requestedOs === 'debian') {
+        checkoutTemplate = DEBIAN_TEMPLATE;
+      } else {
+        // ubuntu, linux, or empty
+        checkoutTemplate = DEFAULT_LINUX_DEPLOY_TEMPLATE;
+      }
+      console.log(
+        `[webyne] Using Linux deploy template "${checkoutTemplate}" (requested OS: ${requestedOs})`
+      );
+    }
+  }
+
   const p = await ensureBrowser();
   let purchase = null;
 
@@ -876,7 +907,7 @@ async function purchaseAndScrape(category, {
       multipart: {
         id: String(webynePlanId),
         billing: String(webyneBilling),
-        template: String(template || ''),
+        template: String(checkoutTemplate || ''),
         quantity: String(Math.max(1, Number(quantity) || 1)),
         addons_cpu: '',
         addons_ram: '',
@@ -935,6 +966,7 @@ async function purchaseAndScrape(category, {
     purchase,
     pricingCategory,
     webynePlanId,
+    checkoutTemplate,
     server: {
       hostname: server.hostname || null,
       ipAddress: server.ipAddress || null,
@@ -1104,11 +1136,19 @@ async function scrapeLatestServer({
 
       await p
         .waitForFunction(
-          () => /IPV4|Password|Username|Login/i.test(document.body?.innerText || ''),
+          () => /IPV4|Password|Username|Login|SETUP/i.test(document.body?.innerText || ''),
           { timeout: 15_000 }
         )
         .catch(() => {});
       await p.waitForTimeout(1000);
+
+      // After provision, machineshow shows SETUP:(PENDING) for ~30s — wait it out
+      if (/machineshow/i.test(p.url())) {
+        const setup = await readMachineshowSetupStatus(p);
+        if (!setup || setup.pending) {
+          await waitForMachineshowSetupReady(p, { maxWaitMs: 60_000, pollMs: 6_000 });
+        }
+      }
 
       // Reveal hidden password UI if present
       const reveal = p.locator(
@@ -1522,6 +1562,560 @@ async function extractServerRows(p, planName) {
   );
 }
 
+/**
+ * Read SETUP status from machineshow header (e.g. "SETUP : (PENDING)").
+ * Returns { pending, label, raw } or null if SETUP not found.
+ */
+async function readMachineshowSetupStatus(page) {
+  return page.evaluate(() => {
+    const text = (document.body?.innerText || '').replace(/\s+/g, ' ').trim();
+    // "SETUP : (PENDING)" or "SETUP:(COMPLETED)" etc.
+    const m = text.match(/SETUP\s*[:.]?\s*\(?\s*([A-Za-z_]+)\s*\)?/i);
+    if (!m) {
+      // Also check nearby DOM nodes that might isolate SETUP
+      const nodes = Array.from(document.querySelectorAll('div, span, p, td, th, h1, h2, h3, h4'));
+      for (const el of nodes) {
+        const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        if (!/^SETUP\b/i.test(t) || t.length > 60) continue;
+        const mm = t.match(/SETUP\s*[:.]?\s*\(?\s*([A-Za-z_]+)\s*\)?/i);
+        if (mm) {
+          const label = String(mm[1] || '').toUpperCase();
+          return { pending: label === 'PENDING', label, raw: t };
+        }
+      }
+      return null;
+    }
+    const label = String(m[1] || '').toUpperCase();
+    return { pending: label === 'PENDING', label, raw: m[0] };
+  });
+}
+
+/**
+ * Poll machineshow until SETUP is no longer PENDING (typically ~30s after provision/OS change).
+ */
+async function waitForMachineshowSetupReady(page, opts = {}) {
+  const maxWaitMs = Number(opts.maxWaitMs) > 0 ? Number(opts.maxWaitMs) : 60_000;
+  const pollMs = Number(opts.pollMs) > 0 ? Number(opts.pollMs) : 6_000;
+  const started = Date.now();
+  let last = null;
+
+  while (Date.now() - started < maxWaitMs) {
+    last = await readMachineshowSetupStatus(page);
+    if (!last) {
+      console.log('[webyne] SETUP status not visible yet — waiting…');
+    } else if (last.pending) {
+      console.log(`[webyne] SETUP still PENDING (${last.raw}) — waiting…`);
+    } else {
+      console.log(`[webyne] SETUP ready: ${last.label}`);
+      return last;
+    }
+    await page.waitForTimeout(pollMs);
+    // Refresh so Webyne updates HOSTNAME / SETUP / credentials
+    await page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 }).catch(() => {});
+    await page.waitForTimeout(800);
+  }
+
+  console.warn(
+    `[webyne] SETUP still pending after ${maxWaitMs}ms (last=${last ? last.label : 'unknown'}) — continuing`
+  );
+  return last;
+}
+
+/**
+ * Open Webyne machineshow for a machine id via /admin/server row click,
+ * falling back to /admin/machineshow/{id}.
+ */
+async function openMachineshowByRef(p, ref) {
+  console.log(`[webyne] Opening machineshow (id=${ref})`);
+  await robustGoto(p, 'https://cloud.webyne.com/admin/server', {
+    waitUntil: 'domcontentloaded',
+    timeout: 120000,
+  });
+  if (p.url().includes('/login')) {
+    ready = false;
+    await ensureBrowser();
+    await robustGoto(p, 'https://cloud.webyne.com/admin/server', {
+      waitUntil: 'domcontentloaded',
+      timeout: 120000,
+    });
+  }
+  await p.waitForTimeout(2000);
+
+  const openedFromList = await p.evaluate((id) => {
+    const rows = Array.from(document.querySelectorAll('table tbody tr, table tr'));
+    for (const tr of rows) {
+      const t = tr.innerText || '';
+      if (!t.includes(String(id))) continue;
+      const a = Array.from(tr.querySelectorAll('a')).find((el) =>
+        /click here to view/i.test(el.textContent || '')
+      );
+      if (a) {
+        a.click();
+        return true;
+      }
+    }
+    return false;
+  }, ref);
+
+  if (openedFromList) {
+    await p.waitForURL(/machineshow|server|machine/i, { timeout: 45000 }).catch(() => {});
+    await p.waitForTimeout(2500);
+    console.log(`[webyne] Opened machineshow via server list → ${p.url()}`);
+  } else {
+    const machineUrl = `https://cloud.webyne.com/admin/machineshow/${encodeURIComponent(ref)}`;
+    console.warn(`[webyne] Row not found on server list — falling back to ${machineUrl}`);
+    await robustGoto(p, machineUrl, { waitUntil: 'domcontentloaded', timeout: 120000 });
+    await p.waitForTimeout(2500);
+  }
+
+  if (p.url().includes('/login')) {
+    throw Object.assign(new Error('Webyne login required before machineshow action'), {
+      status: 401,
+      code: 'WEBYNE_LOGIN_REQUIRED',
+    });
+  }
+}
+
+/**
+ * Change OS/template on an existing Webyne machine (machineshow page).
+ * Used after Linux-first deploy when admin requested Windows.
+ *
+ * Known Linux templates (from Webyne UI):
+ *   ubuntu → ubuntu_20_64bit
+ *   rocky  → first Rocky option
+ *   debian → default
+ * Windows template: WEBYNE_WINDOWS_OS_TEMPLATE env (required until product confirms the id).
+ */
+async function changeMachineOs({
+  externalRef,
+  targetOs = 'windows',
+  template,
+} = {}) {
+  const ref = String(externalRef || '').trim();
+  if (!ref) {
+    throw Object.assign(new Error('externalRef (Webyne machine id) is required'), {
+      status: 400,
+      code: 'MISSING_EXTERNAL_REF',
+    });
+  }
+
+  const osKey = String(targetOs || 'windows').toLowerCase();
+
+  let templateId = String(template || '').trim();
+  if (!templateId) {
+    if (osKey === 'windows') {
+      // Webyne: "windows_2022_64bit (Rs 0 / Core)"
+      templateId =
+        String(process.env.WEBYNE_WINDOWS_OS_TEMPLATE || '').trim() ||
+        'windows_2022_64bit';
+    } else if (osKey === 'ubuntu' || osKey === 'linux') {
+      templateId =
+        String(process.env.WEBYNE_LINUX_OS_TEMPLATE || '').trim() ||
+        'ubuntu_20_64bit';
+    } else if (osKey === 'rocky') {
+      // Webyne: "rocky_9_64bit (Rs 0)"
+      templateId =
+        String(process.env.WEBYNE_ROCKY_OS_TEMPLATE || '').trim() ||
+        'rocky_9_64bit';
+    } else if (osKey === 'debian') {
+      // Webyne: "debian_10_64bit (Rs 0)"
+      templateId =
+        String(process.env.WEBYNE_DEBIAN_OS_TEMPLATE || '').trim() ||
+        'debian_10_64bit';
+    }
+  }
+
+  const p = await ensureBrowser();
+  console.log(`[webyne] Opening machineshow for OS change (id=${ref}, target=${osKey})`);
+  await openMachineshowByRef(p, ref);
+
+  // Click the OS family card (Ubuntu / Windows / Rocky Linux / Debian).
+  // Cards are often logo+label; prefer shortest matching clickable node / image.
+  const clickedOs = await p.evaluate((osKey) => {
+    const want = String(osKey || '').toLowerCase();
+    const patterns = {
+      windows: [/^\s*windows\s*$/i, /\bwindows\b/i],
+      ubuntu: [/^\s*ubuntu\s*$/i, /\bubuntu\b/i],
+      rocky: [/^\s*rocky(\s+linux)?\s*$/i, /\brocky\b/i],
+      debian: [/^\s*debian\s*$/i, /\bdebian\b/i],
+      linux: [/^\s*ubuntu\s*$/i, /\bubuntu\b/i],
+    };
+    const regs = patterns[want] || [new RegExp(`\\b${want}\\b`, 'i')];
+
+    const clickable = (el) => {
+      if (!el) return null;
+      const tag = (el.tagName || '').toLowerCase();
+      if (['a', 'button', 'label', 'img', 'input'].includes(tag)) return el;
+      if (el.getAttribute?.('role') === 'button') return el;
+      if (el.onclick || el.getAttribute?.('onclick')) return el;
+      // Prefer a nearby clickable ancestor (card)
+      let cur = el;
+      for (let i = 0; i < 5 && cur; i += 1) {
+        const t = (cur.tagName || '').toLowerCase();
+        if (['a', 'button', 'label'].includes(t)) return cur;
+        if (cur.getAttribute?.('role') === 'button') return cur;
+        if (/\b(card|os|template|choose|select)\b/i.test(cur.className || '')) return cur;
+        cur = cur.parentElement;
+      }
+      return el;
+    };
+
+    // 1) Images by alt/src/title
+    for (const img of Array.from(document.querySelectorAll('img'))) {
+      const meta = `${img.alt || ''} ${img.title || ''} ${img.src || ''}`.toLowerCase();
+      if (!regs.some((re) => re.test(meta))) continue;
+      const target = clickable(img) || img;
+      target.click();
+      return img.alt || img.title || want;
+    }
+
+    // 2) Shortest text match among candidates
+    const nodes = Array.from(
+      document.querySelectorAll(
+        'a, button, label, [role="button"], .card, .os, li, div, span, h1, h2, h3, h4, h5, p'
+      )
+    );
+    const candidates = [];
+    for (const el of nodes) {
+      const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+      if (!t || t.length > 48) continue;
+      const score = regs.findIndex((re) => re.test(t));
+      if (score < 0) continue;
+      candidates.push({ el, t, score, len: t.length });
+    }
+    candidates.sort((a, b) => a.score - b.score || a.len - b.len);
+    if (candidates[0]) {
+      const target = clickable(candidates[0].el) || candidates[0].el;
+      target.click();
+      return candidates[0].t;
+    }
+
+    return null;
+  }, osKey);
+
+  if (!clickedOs) {
+    // Debug: capture visible OS-ish labels so logs show why matching failed
+    const hint = await p
+      .evaluate(() => {
+        const text = (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 500);
+        const imgs = Array.from(document.querySelectorAll('img'))
+          .map((i) => i.alt || i.src || '')
+          .filter((s) => /ubuntu|windows|rocky|debian|os/i.test(s))
+          .slice(0, 8);
+        return { text, imgs, url: location.href };
+      })
+      .catch(() => null);
+    console.warn('[webyne] OS option not found', hint);
+    throw Object.assign(
+      new Error(
+        `Could not find OS option matching "${osKey}" on machineshow${
+          hint?.url ? ` (${hint.url})` : ''
+        }`
+      ),
+      { status: 502, code: 'OS_OPTION_NOT_FOUND' }
+    );
+  }
+  console.log(`[webyne] Selected OS family: ${clickedOs}`);
+  await p.waitForTimeout(1500);
+
+  // Pick template from <select> if present
+  const select = p.locator('select').first();
+  const selectCount = await p.locator('select').count().catch(() => 0);
+  if (selectCount > 0) {
+    const options = await select.evaluate((el) =>
+      Array.from(el.options || []).map((o) => ({
+        value: o.value,
+        text: (o.textContent || '').trim(),
+      }))
+    );
+    console.log(
+      '[webyne] Template options:',
+      options.map((o) => o.text || o.value).slice(0, 12).join(' | ')
+    );
+
+    // Exact template id only (avoid gisuloracle_windows_2022_64bit matching windows_2022_64bit).
+    const wantId = String(templateId || '')
+      .trim()
+      .toLowerCase();
+    const optionId = (o) => {
+      const raw = String(o.value || o.text || '').trim();
+      const m = raw.match(/^([a-z0-9_]+)/i);
+      return (m ? m[1] : raw).toLowerCase();
+    };
+    let matched =
+      options.find((o) => optionId(o) === wantId) ||
+      options.find((o) => String(o.value || '').trim().toLowerCase() === wantId) ||
+      options.find((o) =>
+        new RegExp(`^${wantId.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(
+          String(o.text || '').trim()
+        )
+      ) ||
+      null;
+
+    if (!matched) {
+      throw Object.assign(
+        new Error(
+          `Template "${templateId}" not found in machineshow select. Options: ${options
+            .map((o) => o.text || o.value)
+            .join(', ')}`
+        ),
+        { status: 502, code: 'TEMPLATE_OPTION_NOT_FOUND' }
+      );
+    }
+
+    await select.selectOption({ value: matched.value }).catch(async () => {
+      await select.selectOption({ label: matched.text });
+    });
+    templateId = matched.value || matched.text;
+    console.log(`[webyne] Selected template: ${matched.text || matched.value}`);
+    await p.waitForTimeout(500);
+  } else if (templateId) {
+    // Some UIs use radios / cards for template
+    const clickedTpl = await p.evaluate((tid) => {
+      const nodes = Array.from(document.querySelectorAll('button, a, label, option, div, span'));
+      const hit = nodes.find((el) => {
+        const t = (el.textContent || '').replace(/\s+/g, ' ').trim();
+        return new RegExp(tid, 'i').test(t) && t.length < 80;
+      });
+      if (hit) {
+        hit.click();
+        return true;
+      }
+      return false;
+    }, templateId);
+    if (!clickedTpl) {
+      console.warn('[webyne] No <select> and could not click template text — continuing to Setup');
+    }
+  }
+
+  // Click Setup (the orange action under the template picker — not the SETUP status label)
+  const setupBtn = p.locator(
+    'button:has-text("Setup"), a:has-text("Setup"), input[type="submit"][value*="Setup" i]'
+  ).filter({ hasNotText: /PENDING|COMPLETED|ACTIVE/i });
+  if ((await setupBtn.count().catch(() => 0)) === 0) {
+    throw Object.assign(new Error('Setup button not found on machineshow'), {
+      status: 502,
+      code: 'SETUP_BUTTON_NOT_FOUND',
+    });
+  }
+  await setupBtn.first().click({ timeout: 10000 });
+  console.log('[webyne] Clicked Setup — waiting for SETUP to leave PENDING…');
+  await p.waitForTimeout(3_000);
+  await waitForMachineshowSetupReady(p, { maxWaitMs: 60_000, pollMs: 6_000 });
+
+  // Keep machineUrl for later re-open if scrape returns a different row
+  const machineUrl = p.url().includes('machineshow')
+    ? p.url()
+    : `https://cloud.webyne.com/admin/machineshow/${encodeURIComponent(ref)}`;
+
+  // Re-scrape credentials from machineshow / server list
+  const server = await scrapeLatestServer({
+    planName: '',
+    initialWaitMs: 2_000,
+    maxAttempts: 6,
+    retryWaitMs: 5_000,
+  });
+
+  // Prefer matching externalRef if scrape returned a different row
+  let detail = server;
+  if (server && server.externalRef && String(server.externalRef) !== ref) {
+    // Force open this machine's machineshow and parse LOGIN fields
+    await robustGoto(p, machineUrl, { waitUntil: 'domcontentloaded', timeout: 120000 });
+    await p.waitForTimeout(2000);
+    const parsed = await p.evaluate(() => {
+      const BAD =
+        /^(virtualizer|password|username|login|network|ipv4|show|hide|copy|active|dashboard)$/i;
+      const inputs = Array.from(document.querySelectorAll('input'));
+      let username = null;
+      let password = null;
+      for (const inp of inputs) {
+        const v = (inp.value || '').trim();
+        if (!v || BAD.test(v)) continue;
+        const near = (inp.getAttribute('name') || inp.getAttribute('placeholder') || '').toLowerCase();
+        const label = (inp.closest('div,label,td')?.innerText || '').toLowerCase();
+        if (/user|login/.test(near + label) && /^(root|administrator|[a-z][a-z0-9._-]{1,31})$/i.test(v)) {
+          username = v;
+        } else if (/pass/.test(near + label) && v.length >= 6) {
+          password = v;
+        }
+      }
+      const text = document.body?.innerText || '';
+      const ipRe =
+        /\b(?:(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d?\d)\b/;
+      const ip = (text.match(ipRe) || [])[0] || null;
+      return { username, password, ipAddress: ip };
+    });
+    detail = {
+      ...(server || {}),
+      externalRef: ref,
+      username: parsed.username || server?.username || null,
+      password: parsed.password || server?.password || null,
+      ipAddress: parsed.ipAddress || server?.ipAddress || null,
+      protocol: osKey === 'windows' ? 'rdp' : 'ssh',
+    };
+  }
+
+  if (!detail || (!detail.password && !detail.ipAddress)) {
+    throw Object.assign(
+      new Error('OS change may have started but credentials were not found yet. Retry Fetch details.'),
+      { status: 502, code: 'OS_CHANGE_DETAILS_NOT_FOUND' }
+    );
+  }
+
+  return {
+    changed: true,
+    targetOs: osKey,
+    template: templateId,
+    externalRef: ref,
+    server: {
+      hostname: detail.hostname || null,
+      ipAddress: detail.ipAddress || null,
+      username:
+        detail.username || (osKey === 'windows' ? 'Administrator' : 'root'),
+      password: detail.password || null,
+      protocol: osKey === 'windows' ? 'rdp' : detail.protocol || 'ssh',
+      externalRef: ref,
+      rawLabel: detail.rawLabel || null,
+    },
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
+/**
+ * Click Virtualizor / Start / Stop / Reboot on Webyne machineshow.
+ *
+ * Webyne wiring (machineshow):
+ *   Virtualizor → modal #virtual-notification → start_virtualizor()
+ *                 → GET machinevirtualizorstart/{id}  (enable nested virt)
+ *   Start       → modal #start-notification → start_mac()  → GET machinestart/{id}
+ *   Stop        → modal #stop-notification  → stop_mac()   → GET machinestop/{id}
+ *   Reboot      → modal #reboot-notification → reboot_mac() → GET machinereboot/{id}
+ */
+async function machinePowerControl({ externalRef, action } = {}) {
+  const ref = String(externalRef || '').trim();
+  const act = String(action || '').toLowerCase().trim();
+  if (!ref) {
+    throw Object.assign(new Error('externalRef (Webyne machine id) is required'), {
+      status: 400,
+      code: 'MISSING_EXTERNAL_REF',
+    });
+  }
+  if (!['virtualizor', 'start', 'stop', 'reboot'].includes(act)) {
+    throw Object.assign(
+      new Error('action must be virtualizor | start | stop | reboot'),
+      { status: 400, code: 'INVALID_POWER_ACTION' }
+    );
+  }
+
+  const p = await ensureBrowser();
+  console.log(`[webyne] machineshow power action "${act}" (id=${ref})`);
+  await openMachineshowByRef(p, ref);
+
+  const machineSlug = await p.evaluate(() => {
+    const parts = String(location.pathname || '').split('machineshow/');
+    return parts[1] ? parts[1].split(/[/?#]/)[0] : null;
+  });
+  if (!machineSlug) {
+    throw Object.assign(new Error('Could not parse machineshow id from URL'), {
+      status: 502,
+      code: 'MACHINESHOW_ID_MISSING',
+    });
+  }
+
+  const endpointByAction = {
+    virtualizor: `machinevirtualizorstart/${machineSlug}`,
+    start: `machinestart/${machineSlug}`,
+    stop: `machinestop/${machineSlug}`,
+    reboot: `machinereboot/${machineSlug}`,
+  };
+  const endpoint = endpointByAction[act];
+  console.log(`[webyne] Calling ${endpoint}`);
+
+  const ajaxResult = await p.evaluate(async (path) => {
+    const abs = new URL(path, window.location.href).toString();
+    const csrf =
+      document.querySelector('meta[name="csrf-token"]')?.getAttribute('content') ||
+      '';
+    const res = await fetch(abs, {
+      method: 'GET',
+      credentials: 'include',
+      headers: {
+        Accept: 'application/json, text/javascript, */*; q=0.01',
+        'X-Requested-With': 'XMLHttpRequest',
+        ...(csrf ? { 'X-CSRF-TOKEN': csrf } : {}),
+      },
+    });
+    const text = await res.text();
+    let json = null;
+    try {
+      json = JSON.parse(text);
+    } catch {
+      json = null;
+    }
+    return {
+      httpStatus: res.status,
+      ok: res.ok,
+      body: json,
+      raw: text.slice(0, 500),
+    };
+  }, endpoint);
+
+  console.log(`[webyne] power ajax →`, JSON.stringify(ajaxResult.body || ajaxResult.raw));
+
+  const body = ajaxResult.body || {};
+  const status = body.status;
+
+  if (status === 203 || status === '203') {
+    throw Object.assign(
+      new Error(
+        act === 'virtualizor'
+          ? 'Virtualizor already in queue on Webyne'
+          : `Webyne reports ${act} already in queue`
+      ),
+      { status: 409, code: 'WEBYNE_ACTION_QUEUED' }
+    );
+  }
+
+  if (act === 'virtualizor') {
+    if (status !== 'success' && status !== true && status !== 200) {
+      // Some responses omit status on soft failure
+      if (!ajaxResult.ok) {
+        throw Object.assign(
+          new Error(body.message || body.text || 'Virtualizor not enabled on Webyne'),
+          { status: 502, code: 'VIRTUALIZOR_ENABLE_FAILED' }
+        );
+      }
+    }
+    return {
+      ok: true,
+      action: act,
+      externalRef: ref,
+      machineSlug,
+      message: 'Virtualizor enabled successfully on Webyne',
+      webyneStatus: status ?? null,
+      fetchedAt: new Date().toISOString(),
+    };
+  }
+
+  // start / stop / reboot — Webyne often returns non-203 for success and refreshes UI
+  if (!ajaxResult.ok && status === undefined) {
+    throw Object.assign(
+      new Error(`Webyne ${act} request failed (HTTP ${ajaxResult.httpStatus})`),
+      { status: 502, code: 'POWER_ACTION_FAILED' }
+    );
+  }
+
+  return {
+    ok: true,
+    action: act,
+    externalRef: ref,
+    machineSlug,
+    message: `Webyne ${act} requested`,
+    webyneStatus: status ?? null,
+    fetchedAt: new Date().toISOString(),
+  };
+}
+
 module.exports = {
   PRICING_URLS,
   CHECKOUT_URLS,
@@ -1537,6 +2131,8 @@ module.exports = {
   fetchPlanDetails,
   purchaseAndScrape,
   scrapeLatestServer,
+  changeMachineOs,
+  machinePowerControl,
   ensureBrowser,
   shutdown,
 };

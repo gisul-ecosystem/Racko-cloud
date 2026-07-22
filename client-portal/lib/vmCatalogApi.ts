@@ -1,6 +1,22 @@
 import { apiRequest } from './apiClient';
 
-export type VmCatalogCategory = 'linux' | 'windows' | 'gpu';
+export type VmCatalogCategory =
+  | 'ubuntu'
+  | 'rocky'
+  | 'debian'
+  | 'windows'
+  | 'linux'
+  | 'gpu';
+
+/** Sell-price / multiplier bucket for a catalog OS choice. */
+export function catalogPricingBucket(
+  category: VmCatalogCategory | string
+): 'linux' | 'windows' | 'gpu' {
+  const c = String(category || '').toLowerCase();
+  if (c === 'windows') return 'windows';
+  if (c === 'gpu') return 'gpu';
+  return 'linux';
+}
 export type VmCatalogStatus =
   | 'pending_approval'
   | 'approved'
@@ -50,6 +66,9 @@ export interface ICatalogVm {
   externalRef?: string;
   fulfillError?: string;
   providerPurchased?: boolean;
+  needsOsChange?: boolean;
+  osTemplateChanged?: boolean;
+  osTemplateChangedAt?: string;
   attachedAt?: string;
   rejectionReason?: string;
   reviewedBy?: string;
@@ -108,6 +127,8 @@ export interface IVmCatalogPlan {
   _id: string;
   sno?: number;
   name: string;
+  /** Present on admin/tenant plan lists when `name` is the Cloud VPS display label. */
+  providerName?: string;
   vcpu: number;
   ramGb: number;
   ssdGb: number;
@@ -121,7 +142,7 @@ export interface IVmCatalogPlan {
   createdAt: string;
   updatedAt: string;
   sellPricesByCategory?: Record<
-    VmCatalogCategory,
+    'linux' | 'windows' | 'gpu',
     {
       hourly: number | null;
       monthly: number | null;
@@ -288,6 +309,35 @@ export async function attachCatalogVmRequest(id: string): Promise<ICatalogVm> {
     { method: 'PATCH' }
   );
   return res.data.request;
+}
+
+export async function changeCatalogVmTemplateToWindows(
+  id: string,
+  opts?: { template?: string }
+): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
+    `/api/v1/vm-catalog/requests/${id}/change-template`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(opts?.template ? { template: opts.template } : {}),
+    }
+  );
+  return res.data.request;
+}
+
+export type CatalogVmPowerAction = 'virtualizor' | 'start' | 'stop' | 'reboot';
+
+export async function catalogVmPowerAction(
+  id: string,
+  action: CatalogVmPowerAction
+): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }> {
+  const res = await apiRequest<
+    ApiResponse<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }>
+  >(`/api/v1/vm-catalog/requests/${id}/power`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+  return res.data;
 }
 
 export async function rejectCatalogVmRequest(

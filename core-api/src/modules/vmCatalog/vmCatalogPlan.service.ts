@@ -21,6 +21,8 @@ export interface VmCatalogPlanPublic {
   _id: string;
   sno?: number;
   name: string;
+  /** Real Webyne/provider name when `name` was remapped for admin/tenant display. */
+  providerName?: string;
   vcpu: number;
   ramGb: number;
   ssdGb: number;
@@ -35,6 +37,20 @@ export interface VmCatalogPlanPublic {
   updatedAt: string;
   /** Admin listings only — sell prices per OS category (multiplier applied server-side). */
   sellPricesByCategory?: Record<ExternalVmPricingCategory, VmCatalogPeriodPrices>;
+}
+
+/** Customer-facing label for admin/tenant UIs (super-admin keeps provider `name`). */
+export function customerDisplayName(
+  sno?: number | null,
+  fallbackIndex?: number
+): string {
+  const n =
+    sno != null && Number.isFinite(Number(sno))
+      ? Number(sno)
+      : fallbackIndex != null && Number.isFinite(fallbackIndex)
+        ? fallbackIndex + 1
+        : 1;
+  return `Cloud VPS - ${n}`;
 }
 
 /** Seed rows from the Webyne template sheet (admin-managed; not live scrape). */
@@ -104,10 +120,21 @@ class VmCatalogPlanService {
   async list(opts?: {
     activeOnly?: boolean;
     applySellPrice?: boolean;
+    /** When true, `name` becomes Cloud VPS - {sno}; real name is in `providerName`. */
+    forCustomer?: boolean;
   }): Promise<VmCatalogPlanPublic[]> {
     const filter = opts?.activeOnly ? { isActive: true } : {};
     const docs = await VmCatalogPlan.find(filter).sort({ sortOrder: 1, createdAt: 1 });
-    const plans = docs.map(toPublic);
+    let plans = docs.map(toPublic);
+
+    if (opts?.forCustomer) {
+      plans = plans.map((plan, i) => ({
+        ...plan,
+        providerName: plan.name,
+        name: customerDisplayName(plan.sno, i),
+      }));
+    }
+
     if (!opts?.applySellPrice) return plans;
 
     const pricingCfg = await externalVmPricingService.getByProvider('webyne');

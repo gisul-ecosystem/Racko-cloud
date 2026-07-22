@@ -15,8 +15,13 @@ import { externalVmPricingService } from '../externalVmPricing/externalVmPricing
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
-import { callCatalogAgentPurchase, callCatalogAgentScrape } from './catalogAgentClient';
-import type { CatalogAgentError } from './catalogAgentClient';
+import {
+  callCatalogAgentPurchase,
+  callCatalogAgentScrape,
+  callCatalogAgentChangeOs,
+  callCatalogAgentPower,
+} from './catalogAgentClient';
+import type { CatalogAgentError, CatalogPowerAction } from './catalogAgentClient';
 import {
   selectProvider as resellerSelect,
   provisionVm as resellerProvision,
@@ -37,6 +42,8 @@ import type {
   CatalogVmResponse,
   CreateCatalogVmRequestDto,
 } from './vmCatalog.types';
+import { customerDisplayName } from './vmCatalogPlan.service';
+import { catalogPricingBucket, needsOsTemplateChange } from './webynePlanRouting';
 
 const GST_RATE = 0.18;
 const BILLING_PERIODS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
@@ -81,6 +88,8 @@ class VmCatalogService {
       adminEmail?: string;
       includeSecrets?: boolean;
       forAdmin?: boolean;
+      /** Customer-facing plan label (Cloud VPS - N); overrides stored Webyne planName. */
+      displayPlanName?: string;
       role?: CatalogVmCallerRole;
     }
   ): CatalogVmResponse {
@@ -88,6 +97,8 @@ class VmCatalogService {
     const forAdmin = Boolean(opts?.forAdmin);
     const status = forAdmin ? this.adminDisplayStatus(doc.status) : doc.status;
     const showConnection = includeSecrets || doc.status === 'active';
+    const planName =
+      forAdmin && opts?.displayPlanName ? opts.displayPlanName : doc.planName;
     const role = opts?.role ?? (forAdmin ? 'admin' : 'super_admin');
 
     const base: CatalogVmResponse = {
@@ -99,7 +110,7 @@ class VmCatalogService {
       provider: doc.provider,
       category: doc.category,
       planId: doc.planId,
-      planName: doc.planName,
+      planName,
       specs: doc.specs ?? {},
       billing: doc.billing,
       quantity: doc.quantity,
@@ -125,6 +136,13 @@ class VmCatalogService {
       ...(showConnection && doc.externalRef ? { externalRef: doc.externalRef } : {}),
       ...(!forAdmin && doc.fulfillError ? { fulfillError: doc.fulfillError } : {}),
       providerPurchased: Boolean(doc.providerPurchased),
+      needsOsChange: Boolean(
+        doc.needsOsChange ?? needsOsTemplateChange(doc.planName, doc.category)
+      ),
+      osTemplateChanged: Boolean(doc.osTemplateChanged),
+      ...(doc.osTemplateChangedAt
+        ? { osTemplateChangedAt: doc.osTemplateChangedAt.toISOString() }
+        : {}),
       ...(doc.region ? { region: doc.region } : {}),
       ...(doc.providerInstanceId ? { providerInstanceId: doc.providerInstanceId } : {}),
       ...(doc.expiresAt ? { expiresAt: doc.expiresAt.toISOString() } : {}),
@@ -141,6 +159,59 @@ class VmCatalogService {
     };
 
     return stripProviderLeakFields(base, role);
+  }
+
+  /** Map planId → Cloud VPS - {sno} for admin/tenant responses. */
+  private async resolveCustomerPlanNames(
+    docs: Array<{ planId: string }>
+  ): Promise<Map<string, string>> {
+    const ids = [
+      ...new Set(
+        docs
+          .map((d) => d.planId)
+          .filter((id) => id && mongoose.Types.ObjectId.isValid(id))
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+
+    const plans = await VmCatalogPlan.find({
+      _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select('sno')
+      .lean();
+
+    const map = new Map<string, string>();
+    for (const plan of plans) {
+      map.set(plan._id.toString(), customerDisplayName(plan.sno));
+    }
+    return map;
+  }
+
+  private async toCustomerResponses(
+    docs: ICatalogVm[],
+    opts?: { adminEmail?: string; includeSecrets?: boolean }
+  ): Promise<CatalogVmResponse[]> {
+    const names = await this.resolveCustomerPlanNames(docs);
+    return docs.map((doc) =>
+      this.toResponse(doc, {
+        ...opts,
+        forAdmin: true,
+        role: 'admin',
+        displayPlanName: names.get(doc.planId),
+      })
+    );
+  }
+
+  private async toCustomerResponse(
+    doc: ICatalogVm,
+    opts?: { adminEmail?: string; includeSecrets?: boolean }
+  ): Promise<CatalogVmResponse> {
+    const [response] = await this.toCustomerResponses([doc], opts);
+    return response!;
+  }
+
+  private displayNameForPlan(plan: { sno?: number | null; name: string }): string {
+    return customerDisplayName(plan.sno);
   }
 
   private async notifySuperAdminsOfRequest(
@@ -263,7 +334,8 @@ class VmCatalogService {
     }
 
     const pricingCfg = await externalVmPricingService.getByProvider('webyne');
-    const multiplierRaw = Number(pricingCfg.categories[dto.category]?.multiplier);
+    const priceBucket = catalogPricingBucket(dto.category);
+    const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
     const multiplier =
       Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
 
@@ -342,6 +414,9 @@ class VmCatalogService {
         status: 'provisioning',
         chargedAmount: total,
         walletDebited: true,
+        needsOsChange:
+          !autoProvisioned && needsOsTemplateChange(plan.name, dto.category),
+        osTemplateChanged: false,
         autoProvisioned,
         ...(selection.region ? { region: selection.region } : {}),
         ...(selection.rawTotalPricePerHr != null
@@ -450,14 +525,15 @@ class VmCatalogService {
     }
 
     await this.notifySuperAdminsOfRequest(doc, admin.email);
+    const customerPlanName = this.displayNameForPlan(plan);
     await this.notifyRequester(
       adminId,
       'Webyne VM is provisioning',
-      `Your ${doc.quantity}× ${doc.planName} purchase (₹${total}) was charged. It will be available soon.`,
+      `Your ${doc.quantity}× ${customerPlanName} purchase (₹${total}) was charged. It will be available soon.`,
       {
         requestId: doc._id.toString(),
         event: 'submitted',
-        planName: doc.planName,
+        planName: customerPlanName,
         total,
       }
     );
@@ -471,12 +547,12 @@ class VmCatalogService {
       autoProvisioned: false,
     });
 
-    return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
+    return this.toCustomerResponse(doc, { adminEmail: admin.email });
   }
 
   async listForAdmin(adminId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({ adminId }).sort({ createdAt: -1 });
-    return docs.map((doc) => this.toResponse(doc, { forAdmin: true, role: 'admin' }));
+    return this.toCustomerResponses(docs);
   }
 
   /** Admin: single owned VM (for console toolbar name, etc.). */
@@ -485,7 +561,7 @@ class VmCatalogService {
     adminId: mongoose.Types.ObjectId
   ): Promise<CatalogVmResponse> {
     const doc = await this.findOwnedByAdmin(id, adminId);
-    return this.toResponse(doc, { forAdmin: true });
+    return this.toCustomerResponse(doc);
   }
 
   /**
@@ -619,7 +695,18 @@ class VmCatalogService {
               },
             },
             linux: {
-              $sum: { $cond: [{ $eq: ['$category', 'linux'] }, 1, 0] },
+              $sum: {
+                $cond: [
+                  {
+                    $in: [
+                      '$category',
+                      ['linux', 'ubuntu', 'rocky', 'debian'],
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
             },
             windows: {
               $sum: { $cond: [{ $eq: ['$category', 'windows'] }, 1, 0] },
@@ -643,7 +730,7 @@ class VmCatalogService {
         windows: statsRow?.windows ?? 0,
         gpu: statsRow?.gpu ?? 0,
       },
-      recent: recentDocs.map((doc) => this.toResponse(doc, { forAdmin: true, role: 'admin' })),
+      recent: await this.toCustomerResponses(recentDocs),
     };
   }
 
@@ -997,6 +1084,13 @@ class VmCatalogService {
         'Only requests with fetched provider details can be attached to the admin.'
       );
     }
+    const needsChange =
+      Boolean(doc.needsOsChange) || needsOsTemplateChange(doc.planName, doc.category);
+    if (needsChange && !doc.osTemplateChanged) {
+      throw new ValidationError(
+        'Change template to Windows before attaching this VM (it was deployed as Linux first).'
+      );
+    }
     if (!doc.ipAddress && !doc.hostname) {
       throw new ValidationError('Cannot attach without hostname or IP from Webyne.');
     }
@@ -1008,10 +1102,13 @@ class VmCatalogService {
     doc.updatedAt = new Date();
     await doc.save();
 
+    const customerNames = await this.resolveCustomerPlanNames([doc]);
+    const customerPlanName = customerNames.get(doc.planId) ?? doc.planName;
+
     await this.notifyOwner(
       doc,
       'Webyne VM is ready',
-      `Your ${doc.quantity}× ${doc.planName} VM is now available in My VM.`,
+      `Your ${doc.quantity}× ${customerPlanName} VM is now available in My VM.`,
       {
         requestId: doc._id.toString(),
         event: 'attached',
@@ -1019,6 +1116,134 @@ class VmCatalogService {
     );
 
     return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  /**
+   * Super-admin: after Linux-first deploy for a Windows request, change OS on
+   * Webyne machineshow to Windows (template via agent env / body).
+   */
+  async changeTemplateToWindows(
+    id: mongoose.Types.ObjectId,
+    reviewerId: mongoose.Types.ObjectId,
+    opts?: { template?: string }
+  ): Promise<CatalogVmResponse> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM request not found.');
+
+    const needsChange =
+      Boolean(doc.needsOsChange) || needsOsTemplateChange(doc.planName, doc.category);
+    if (!needsChange) {
+      throw new ValidationError(
+        'This request does not need an OS template change (not a Windows request on a Linux-priced plan).'
+      );
+    }
+    if (doc.osTemplateChanged) {
+      throw new ValidationError('OS template has already been changed to Windows for this request.');
+    }
+    if (doc.status !== 'ready_to_attach' && doc.status !== 'failed') {
+      throw new ValidationError(
+        'Change template to Windows is only available after the Linux VM is provisioned (ready to attach).'
+      );
+    }
+    if (!doc.externalRef) {
+      throw new ValidationError(
+        'Missing Webyne machine id (externalRef). Use Fetch details first, then retry Change template.'
+      );
+    }
+    if (!doc.providerPurchased && doc.status === 'failed') {
+      throw new ValidationError('Provider purchase did not complete; Approve the request first.');
+    }
+
+    doc.status = 'fulfilling';
+    doc.fulfillError = undefined;
+    doc.reviewedBy = reviewerId;
+    doc.reviewedAt = new Date();
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    try {
+      const result = await callCatalogAgentChangeOs({
+        externalRef: doc.externalRef,
+        targetOs: 'windows',
+        ...(opts?.template ? { template: opts.template } : {}),
+      });
+
+      const server = result.server;
+      if (server.hostname) doc.hostname = server.hostname;
+      if (server.ipAddress) doc.ipAddress = server.ipAddress;
+      if (server.username) doc.username = server.username;
+      if (server.password) doc.password = encrypt(server.password);
+      doc.protocol = server.protocol || 'rdp';
+      doc.osTemplateChanged = true;
+      doc.osTemplateChangedAt = new Date();
+      doc.needsOsChange = true;
+      doc.fulfillError = undefined;
+      doc.status = 'ready_to_attach';
+      doc.updatedAt = new Date();
+      await doc.save();
+
+      logger.info('[VmCatalog] OS template changed to Windows', {
+        requestId: id.toString(),
+        externalRef: doc.externalRef,
+        template: result.template,
+      });
+
+      return this.toResponse(doc, { includeSecrets: true });
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.error('[VmCatalog] Change template to Windows failed', {
+        requestId: id.toString(),
+        error: message,
+      });
+      doc.status = 'ready_to_attach';
+      doc.fulfillError = message.slice(0, 500);
+      doc.updatedAt = new Date();
+      await doc.save().catch(() => undefined);
+      throw err instanceof Error ? err : new ValidationError(message);
+    }
+  }
+
+  /**
+   * Super-admin: Virtualizor / Start / Stop / Reboot on Webyne machineshow.
+   */
+  async powerAction(
+    id: mongoose.Types.ObjectId,
+    action: CatalogPowerAction
+  ): Promise<{
+    action: CatalogPowerAction;
+    panelUrl?: string;
+    request: CatalogVmResponse;
+  }> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM request not found.');
+
+    if (!['ready_to_attach', 'active', 'failed'].includes(doc.status)) {
+      throw new ValidationError(
+        'Power controls are available after the VM has been provisioned on Webyne.'
+      );
+    }
+    if (!doc.externalRef) {
+      throw new ValidationError(
+        'Missing Webyne machine id (externalRef). Use Fetch details first.'
+      );
+    }
+
+    const result = await callCatalogAgentPower({
+      externalRef: doc.externalRef,
+      action,
+    });
+
+    logger.info('[VmCatalog] Webyne power action completed', {
+      requestId: id.toString(),
+      action,
+      panelUrl: result.panelUrl,
+    });
+
+    return {
+      action,
+      ...(result.panelUrl ? { panelUrl: result.panelUrl } : {}),
+      request: await this.toResponse(doc, { includeSecrets: true }),
+    };
   }
 
   async rejectRequest(
@@ -1051,12 +1276,15 @@ class VmCatalogService {
       await this.refundOwner(doc, refundAmount);
     }
 
+    const customerNames = await this.resolveCustomerPlanNames([doc]);
+    const customerPlanName = customerNames.get(doc.planId) ?? doc.planName;
+
     await this.notifyOwner(
       doc,
       'Webyne VM request rejected',
       shouldRefund
-        ? `Your request for ${doc.quantity}× ${doc.planName} was rejected and ₹${refundAmount} was refunded: ${reason}`
-        : `Your request for ${doc.quantity}× ${doc.planName} was rejected: ${reason}`,
+        ? `Your request for ${doc.quantity}× ${customerPlanName} was rejected and ₹${refundAmount} was refunded: ${reason}`
+        : `Your request for ${doc.quantity}× ${customerPlanName} was rejected: ${reason}`,
       {
         requestId: doc._id.toString(),
         event: 'rejected',
@@ -1184,7 +1412,8 @@ class VmCatalogService {
     }
 
     const pricingCfg = await externalVmPricingService.getByProvider('webyne');
-    const multiplierRaw = Number(pricingCfg.categories[dto.category]?.multiplier);
+    const priceBucket = catalogPricingBucket(dto.category);
+    const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
     const multiplier =
       Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
 
@@ -1227,6 +1456,8 @@ class VmCatalogService {
         status: 'provisioning',
         chargedAmount: total,
         walletDebited: true,
+        needsOsChange: needsOsTemplateChange(plan.name, dto.category),
+        osTemplateChanged: false,
       });
     } catch (err) {
       await walletService
@@ -1238,20 +1469,21 @@ class VmCatalogService {
     await this.notifySuperAdminsOfRequest(doc, tenantUser.email, {
       tenantId: tenantId.toString(),
     });
+    const customerPlanName = this.displayNameForPlan(plan);
     await this.notifyTenantRequester(
       tenantId,
       tenantUserId,
       'Webyne VM is provisioning',
-      `Your ${doc.quantity}× ${doc.planName} purchase (₹${total}) was charged. It will be available soon.`,
-      { requestId: doc._id.toString(), event: 'submitted', planName: doc.planName, total }
+      `Your ${doc.quantity}× ${customerPlanName} purchase (₹${total}) was charged. It will be available soon.`,
+      { requestId: doc._id.toString(), event: 'submitted', planName: customerPlanName, total }
     );
 
-    return this.toResponse(doc, { forAdmin: true });
+    return this.toCustomerResponse(doc);
   }
 
   async listForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({ tenantId }).sort({ createdAt: -1 });
-    return docs.map((doc) => this.toResponse(doc, { forAdmin: true }));
+    return this.toCustomerResponses(docs);
   }
 
   async getOverviewForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmOverview> {
@@ -1274,7 +1506,20 @@ class VmCatalogService {
             pending: {
               $sum: { $cond: [{ $in: ['$status', PENDING_STATUSES] }, 1, 0] },
             },
-            linux: { $sum: { $cond: [{ $eq: ['$category', 'linux'] }, 1, 0] } },
+            linux: {
+              $sum: {
+                $cond: [
+                  {
+                    $in: [
+                      '$category',
+                      ['linux', 'ubuntu', 'rocky', 'debian'],
+                    ],
+                  },
+                  1,
+                  0,
+                ],
+              },
+            },
             windows: { $sum: { $cond: [{ $eq: ['$category', 'windows'] }, 1, 0] } },
             gpu: { $sum: { $cond: [{ $eq: ['$category', 'gpu'] }, 1, 0] } },
           },
@@ -1293,7 +1538,7 @@ class VmCatalogService {
 
     return {
       stats,
-      recent: recentDocs.map((doc) => this.toResponse(doc, { forAdmin: true })),
+      recent: await this.toCustomerResponses(recentDocs),
     };
   }
 
@@ -1302,7 +1547,7 @@ class VmCatalogService {
     tenantId: mongoose.Types.ObjectId
   ): Promise<CatalogVmResponse> {
     const doc = await this.findOwnedByTenant(id, tenantId);
-    return this.toResponse(doc, { forAdmin: true });
+    return this.toCustomerResponse(doc);
   }
 
   async openConsoleForTenant(
