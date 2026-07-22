@@ -1,5 +1,5 @@
 import type { IVmCatalogPlan } from './vmCatalogApi';
-import type { VmCatalogCategory } from './vmCatalogApi';
+import { catalogPricingBucket, type VmCatalogCategory } from './vmCatalogApi';
 import type { ExternalVmPricingConfig } from './externalVmPricingApi';
 
 export type BillingPeriod = 'hourly' | 'monthly' | 'quarterly' | 'yearly';
@@ -22,7 +22,8 @@ export function getCategorySellMultiplier(
   category: VmCatalogCategory
 ): number {
   if (!config) return 1;
-  const n = Number(config.categories[category]?.multiplier);
+  const bucket = catalogPricingBucket(category);
+  const n = Number(config.categories[bucket]?.multiplier);
   return Number.isFinite(n) && n > 0 ? n : 1;
 }
 

@@ -8,19 +8,25 @@ import {
   CheckCircle2,
   Link2,
   Loader2,
+  MonitorSmartphone,
+  Power,
   RefreshCw,
+  ToggleLeft,
   XCircle,
 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   approveCatalogVmRequest,
   attachCatalogVmRequest,
+  catalogVmPowerAction,
   catalogVmStatusNote,
   catalogVmStatusTone,
+  changeCatalogVmTemplateToWindows,
   fetchCatalogVmDetails,
   fetchCatalogVmRequests,
   formatCatalogVmStatus,
   rejectCatalogVmRequest,
+  type CatalogVmPowerAction,
   type ICatalogVm,
   type VmCatalogCategory,
   type VmCatalogStatus,
@@ -48,14 +54,17 @@ function formatDate(iso: string): string {
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
-  const styles: Record<VmCatalogCategory, string> = {
+  const styles: Record<string, string> = {
+    ubuntu: 'bg-orange-50 text-orange-700 border-orange-200',
+    rocky: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    debian: 'bg-pink-50 text-pink-700 border-pink-200',
     linux: 'bg-green-50 text-green-700 border-green-200',
     windows: 'bg-blue-50 text-blue-700 border-blue-200',
     gpu: 'bg-purple-50 text-purple-700 border-purple-200',
   };
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category]}`}
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category] || styles.linux}`}
     >
       {category}
     </span>
@@ -98,6 +107,8 @@ export default function WebyneVmRequestsByAdminPage() {
   const [rejectReason, setRejectReason] = useState('');
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [powerActionId, setPowerActionId] = useState<string | null>(null);
+  const [powerBusy, setPowerBusy] = useState<CatalogVmPowerAction | null>(null);
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!adminId) return;
@@ -178,6 +189,56 @@ export default function WebyneVmRequestsByAdminPage() {
     }
   }
 
+  async function handleChangeTemplateToWindows(id: string) {
+    setActionId(id);
+    setSuccessMsg(null);
+    setError(null);
+    try {
+      await changeCatalogVmTemplateToWindows(id);
+      setSuccessMsg(
+        'OS template changed to Windows on Webyne. Review details, then Attach.'
+      );
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : 'Change template to Windows failed.'
+      );
+    } finally {
+      setActionId(null);
+    }
+  }
+
+  async function handlePower(id: string, action: CatalogVmPowerAction) {
+    setPowerActionId(id);
+    setPowerBusy(action);
+    setSuccessMsg(null);
+    setError(null);
+    try {
+      const result = await catalogVmPowerAction(id, action);
+      if (action === 'virtualizor') {
+        if (result.panelUrl) {
+          window.open(result.panelUrl, '_blank', 'noopener,noreferrer');
+          setSuccessMsg('Opened Virtualizor panel.');
+        } else {
+          setSuccessMsg('Virtualizor enable requested on Webyne.');
+        }
+      } else if (action === 'start') {
+        setSuccessMsg('Start requested on Webyne.');
+      } else if (action === 'stop') {
+        setSuccessMsg('Stop requested on Webyne.');
+      } else if (action === 'reboot') {
+        setSuccessMsg('Reboot requested on Webyne.');
+      } else {
+        setSuccessMsg(`Webyne ${action} completed.`);
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : `${action} failed.`);
+    } finally {
+      setPowerActionId(null);
+      setPowerBusy(null);
+    }
+  }
+
   async function handleReject(e: React.FormEvent) {
     e.preventDefault();
     if (!rejectId || !rejectReason.trim()) return;
@@ -209,7 +270,9 @@ export default function WebyneVmRequestsByAdminPage() {
         <p className="mt-0.5 text-sm text-gray-500">
           From <span className="font-medium text-gray-700">{adminEmail}</span>
           {' · '}
-          Approve to fulfill on Webyne, then Attach to release to admin.
+          Approve to fulfill on Webyne, then Attach to release to admin. Windows
+          requests on Linux-priced plans deploy as Linux first — use Change template
+          to Windows before Attach.
         </p>
       </div>
 
@@ -387,11 +450,35 @@ export default function WebyneVmRequestsByAdminPage() {
                                 >
                                   {expandedId === req._id ? 'Hide details' : 'View details'}
                                 </button>
+                                {req.needsOsChange && !req.osTemplateChanged ? (
+                                  <button
+                                    type="button"
+                                    disabled={actionId === req._id}
+                                    onClick={() => void handleChangeTemplateToWindows(req._id)}
+                                    className="inline-flex items-center gap-1 rounded-md border border-indigo-300 bg-indigo-50 px-2.5 py-1.5 text-xs font-semibold text-indigo-900 hover:bg-indigo-100 disabled:opacity-60"
+                                    title="Linux was deployed first — change OS to Windows on Webyne machineshow"
+                                  >
+                                    {actionId === req._id ? (
+                                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                    ) : (
+                                      <MonitorSmartphone className="h-3.5 w-3.5" />
+                                    )}
+                                    Change template to Windows
+                                  </button>
+                                ) : null}
                                 <button
                                   type="button"
-                                  disabled={actionId === req._id}
+                                  disabled={
+                                    actionId === req._id ||
+                                    Boolean(req.needsOsChange && !req.osTemplateChanged)
+                                  }
                                   onClick={() => void handleAttach(req._id)}
                                   className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
+                                  title={
+                                    req.needsOsChange && !req.osTemplateChanged
+                                      ? 'Change template to Windows first'
+                                      : undefined
+                                  }
                                 >
                                   {actionId === req._id ? (
                                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -452,6 +539,79 @@ export default function WebyneVmRequestsByAdminPage() {
                                 <span className="text-xs text-gray-500">Webyne ref</span>
                                 <p className="font-mono text-xs">{req.externalRef || '—'}</p>
                               </div>
+                            </div>
+
+                            <div className="mt-4 border-t border-amber-100 pt-4">
+                              <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-amber-800">
+                                Webyne controls
+                              </p>
+                              <div className="flex flex-wrap items-start gap-4">
+                                {(
+                                  [
+                                    {
+                                      action: 'virtualizor' as const,
+                                      label: 'Virtualizor',
+                                      tone: 'bg-slate-600 hover:bg-slate-700',
+                                      icon: <ToggleLeft className="h-5 w-5" />,
+                                    },
+                                    {
+                                      action: 'start' as const,
+                                      label: 'Start',
+                                      tone: 'bg-emerald-500 hover:bg-emerald-600',
+                                      icon: <Power className="h-5 w-5" />,
+                                    },
+                                    {
+                                      action: 'stop' as const,
+                                      label: 'Stop',
+                                      tone: 'bg-red-500 hover:bg-red-600',
+                                      icon: <Power className="h-5 w-5" />,
+                                    },
+                                    {
+                                      action: 'reboot' as const,
+                                      label: 'Reboot',
+                                      tone: 'bg-blue-500 hover:bg-blue-600',
+                                      icon: <RefreshCw className="h-5 w-5" />,
+                                    },
+                                  ] as const
+                                ).map((btn) => {
+                                  const busy =
+                                    powerActionId === req._id && powerBusy === btn.action;
+                                  const disabled =
+                                    !req.externalRef ||
+                                    Boolean(powerActionId) ||
+                                    actionId === req._id;
+                                  return (
+                                    <button
+                                      key={btn.action}
+                                      type="button"
+                                      disabled={disabled}
+                                      onClick={() => void handlePower(req._id, btn.action)}
+                                      className="flex w-[4.75rem] flex-col items-center gap-1.5 disabled:cursor-not-allowed disabled:opacity-50"
+                                      title={
+                                        !req.externalRef
+                                          ? 'Missing Webyne machine id — Fetch details first'
+                                          : btn.label
+                                      }
+                                    >
+                                      <span
+                                        className={`flex h-12 w-12 items-center justify-center rounded-xl text-white shadow-sm transition ${btn.tone}`}
+                                      >
+                                        {busy ? (
+                                          <Loader2 className="h-5 w-5 animate-spin" />
+                                        ) : (
+                                          btn.icon
+                                        )}
+                                      </span>
+                                      <span className="text-[11px] font-medium text-slate-700">
+                                        {btn.label}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                              <p className="mt-2 text-xs text-amber-700/80">
+                                Runs on Webyne machineshow for this VM (via catalog agent).
+                              </p>
                             </div>
                           </td>
                         </tr>

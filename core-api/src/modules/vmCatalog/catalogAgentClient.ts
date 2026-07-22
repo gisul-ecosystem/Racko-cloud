@@ -96,3 +96,116 @@ export async function callCatalogAgentScrape(
 ): Promise<CatalogAgentPurchaseResult> {
   return postAgent('/api/scrape', { ...input, scrapeOnly: true }, 'scrape');
 }
+
+export interface CatalogAgentChangeOsInput {
+  externalRef: string;
+  targetOs?: string;
+  template?: string;
+}
+
+export interface CatalogAgentChangeOsResult {
+  changed: boolean;
+  targetOs: string;
+  template: string;
+  externalRef: string;
+  server: CatalogAgentServerDetails;
+  fetchedAt: string;
+}
+
+export async function callCatalogAgentChangeOs(
+  input: CatalogAgentChangeOsInput
+): Promise<CatalogAgentChangeOsResult> {
+  const url = `${agentBaseUrl()}/api/change-os`;
+  logger.info('[VmCatalog] Calling catalog agent change-os', {
+    url,
+    externalRef: input.externalRef,
+    targetOs: input.targetOs || 'windows',
+  });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 300_000);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(input),
+      signal: controller.signal,
+    });
+
+    const data = (await res.json().catch(() => ({}))) as CatalogAgentChangeOsResult & {
+      error?: string;
+      code?: string;
+    };
+
+    if (!res.ok) {
+      const err: CatalogAgentError = new Error(
+        data.error || `Catalog agent change-os failed (HTTP ${res.status})`
+      );
+      err.status = res.status;
+      err.code = data.code;
+      throw err;
+    }
+
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export type CatalogPowerAction = 'virtualizor' | 'start' | 'stop' | 'reboot';
+
+export interface CatalogAgentPowerInput {
+  externalRef: string;
+  action: CatalogPowerAction;
+}
+
+export interface CatalogAgentPowerResult {
+  ok: boolean;
+  action: CatalogPowerAction;
+  externalRef: string;
+  panelUrl?: string;
+  machineshowUrl?: string;
+  fetchedAt: string;
+}
+
+export async function callCatalogAgentPower(
+  input: CatalogAgentPowerInput
+): Promise<CatalogAgentPowerResult> {
+  const url = `${agentBaseUrl()}/api/power`;
+  logger.info('[VmCatalog] Calling catalog agent power', {
+    url,
+    externalRef: input.externalRef,
+    action: input.action,
+  });
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 180_000);
+
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(input),
+      signal: controller.signal,
+    });
+
+    const data = (await res.json().catch(() => ({}))) as CatalogAgentPowerResult & {
+      error?: string;
+      code?: string;
+    };
+
+    if (!res.ok) {
+      const err: CatalogAgentError = new Error(
+        data.error || `Catalog agent power failed (HTTP ${res.status})`
+      );
+      err.status = res.status;
+      err.code = data.code;
+      throw err;
+    }
+
+    return data;
+  } finally {
+    clearTimeout(timer);
+  }
+}

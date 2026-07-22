@@ -7,7 +7,7 @@ const mongoObjectId = z
 
 export const createCatalogVmRequestSchema = z.object({
   body: z.object({
-    category: z.enum(['linux', 'windows', 'gpu']),
+    category: z.enum(['ubuntu', 'rocky', 'debian', 'windows', 'linux', 'gpu']),
     planId: z.string().min(1).max(64).trim(),
     planName: z.string().min(1).max(200).trim(),
     specs: z
@@ -46,6 +46,23 @@ export const rejectCatalogVmRequestSchema = z.object({
   params: z.object({ id: mongoObjectId }),
   body: z.object({
     reason: z.string().min(1).max(500).trim(),
+  }),
+});
+
+export const changeCatalogVmTemplateSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z
+    .object({
+      template: z.string().min(1).max(200).trim().optional(),
+    })
+    .optional()
+    .default({}),
+});
+
+export const catalogVmPowerActionSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z.object({
+    action: z.enum(['virtualizor', 'start', 'stop', 'reboot']),
   }),
 });
 

@@ -9,6 +9,8 @@ import {
   createCatalogVmRequestSchema,
   listCatalogVmRequestsQuerySchema,
   rejectCatalogVmRequestSchema,
+  changeCatalogVmTemplateSchema,
+  catalogVmPowerActionSchema,
 } from './vmCatalog.validation';
 import {
   createVmCatalogPlanSchema,
@@ -132,6 +134,24 @@ router.patch(
   validateRequest(catalogVmRequestIdParamSchema),
   (req, res, next) => {
     vmCatalogController.attach(req, res, next);
+  }
+);
+
+router.patch(
+  '/requests/:id/change-template',
+  requireRole('super_admin'),
+  validateRequest(changeCatalogVmTemplateSchema),
+  (req, res, next) => {
+    vmCatalogController.changeTemplate(req, res, next);
+  }
+);
+
+router.post(
+  '/requests/:id/power',
+  requireRole('super_admin'),
+  validateRequest(catalogVmPowerActionSchema),
+  (req, res, next) => {
+    vmCatalogController.powerAction(req, res, next);
   }
 );
 

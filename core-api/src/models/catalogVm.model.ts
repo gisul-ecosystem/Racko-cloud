@@ -1,7 +1,13 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export type VmCatalogProvider = 'webyne';
-export type VmCatalogCategory = 'linux' | 'windows' | 'gpu';
+export type VmCatalogCategory =
+  | 'ubuntu'
+  | 'rocky'
+  | 'debian'
+  | 'windows'
+  | 'linux'
+  | 'gpu';
 export type VmCatalogProtocol = 'rdp' | 'ssh';
 
 export type VmCatalogStatus =
@@ -61,6 +67,14 @@ export interface ICatalogVm extends Document {
   externalRef?: string;
   fulfillError?: string;
   providerPurchased: boolean;
+  /**
+   * Requested Windows on a Linux-priced Webyne plan — deploy Linux first,
+   * then SA runs Change template to Windows on machineshow.
+   */
+  needsOsChange?: boolean;
+  /** Set after machineshow OS/template change to Windows succeeds. */
+  osTemplateChanged?: boolean;
+  osTemplateChangedAt?: Date;
   attachedAt?: Date;
   rejectionReason?: string;
   reviewedBy?: mongoose.Types.ObjectId;
@@ -122,7 +136,7 @@ const catalogVmSchema = new Schema<ICatalogVm>(
     },
     category: {
       type: String,
-      enum: ['linux', 'windows', 'gpu'],
+      enum: ['ubuntu', 'rocky', 'debian', 'windows', 'linux', 'gpu'],
       required: true,
     },
     planId: {
@@ -186,6 +200,9 @@ const catalogVmSchema = new Schema<ICatalogVm>(
     externalRef: { type: String, trim: true },
     fulfillError: { type: String, trim: true },
     providerPurchased: { type: Boolean, default: false },
+    needsOsChange: { type: Boolean, default: false },
+    osTemplateChanged: { type: Boolean, default: false },
+    osTemplateChangedAt: { type: Date },
     attachedAt: { type: Date },
     rejectionReason: { type: String, trim: true },
     reviewedBy: { type: Schema.Types.ObjectId, ref: 'User' },
