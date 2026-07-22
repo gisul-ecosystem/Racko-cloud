@@ -3,7 +3,21 @@ import mongoose from 'mongoose';
 import type { AuthenticatedRequest } from '../../types';
 import { vmCatalogService } from './vmCatalog.service';
 import type { CreateCatalogVmRequestInput } from './vmCatalog.validation';
+import type {
+  CalculateVmPricingInput,
+  ListVmPricingQuery,
+} from './vmCatalog.validation';
 import type { VmCatalogStatus } from '../../models/catalogVm.model';
+import {
+  selectProvider,
+  listPricing as listResellerPricing,
+} from './resellerClient';
+import {
+  getUsdToInrRate,
+  periodFromHourlyUsd,
+  usdToInrPeriod,
+  convertUsdAmount,
+} from '../../utils/usdToInr';
 
 function success<T>(res: Response, message: string, data: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, data });
@@ -184,6 +198,83 @@ async function powerAction(req: Request, res: Response, next: NextFunction): Pro
   }
 }
 
+async function calculatePricing(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const body = req.body as CalculateVmPricingInput;
+    const providers = body.providers ?? body.provider;
+    const data = await selectProvider({
+      category: body.category,
+      durationDays: body.durationDays,
+      specs: body.specs
+        ? {
+            cpu: body.specs.cpu != null ? String(body.specs.cpu) : undefined,
+            ram: body.specs.ram != null ? String(body.specs.ram) : undefined,
+            disk: body.specs.disk != null ? String(body.specs.disk) : undefined,
+          }
+        : undefined,
+      canonicalSpec: body.canonicalSpec,
+      ...(providers !== undefined ? { providers } : {}),
+    });
+
+    const fx = await getUsdToInrRate();
+    const usd = periodFromHourlyUsd(data.rawTotalPricePerHr);
+    const inr = usdToInrPeriod(usd, fx.usdToInr);
+
+    success(res, 'VM pricing calculated.', {
+      ...data,
+      currency: data.currency || 'USD',
+      usdToInr: fx.usdToInr,
+      fxSource: fx.source,
+      pricingUsd: usd,
+      pricingInr: inr,
+      rawComputePricePerHrInr: convertUsdAmount(data.rawComputePricePerHr, fx.usdToInr),
+      rawStoragePricePerHrInr: convertUsdAmount(data.rawStoragePricePerHr, fx.usdToInr),
+      rawIpPricePerHrInr: convertUsdAmount(data.rawIpPricePerHr, fx.usdToInr),
+      rawTotalPricePerHrInr: convertUsdAmount(data.rawTotalPricePerHr, fx.usdToInr),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listPricing(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const query = req.query as unknown as ListVmPricingQuery;
+    const data = await listResellerPricing({
+      providers: query.providers,
+      provider: query.provider,
+      category: query.category,
+      canonicalSpec: query.canonicalSpec,
+      limit: query.limit,
+    });
+
+    const fx = await getUsdToInrRate();
+    const rows = (data.rows || []).map((row) => {
+      const usd = periodFromHourlyUsd(row.rawTotalPricePerHr);
+      const inr = usdToInrPeriod(usd, fx.usdToInr);
+      return {
+        ...row,
+        currency: row.currency || 'USD',
+        pricingUsd: usd,
+        pricingInr: inr,
+        rawTotalPricePerHrInr: convertUsdAmount(row.rawTotalPricePerHr, fx.usdToInr),
+        rawComputePricePerHrInr: convertUsdAmount(row.rawComputePricePerHr, fx.usdToInr),
+        rawStoragePricePerHrInr: convertUsdAmount(row.rawStoragePricePerHr, fx.usdToInr),
+        rawIpPricePerHrInr: convertUsdAmount(row.rawIpPricePerHr, fx.usdToInr),
+      };
+    });
+
+    success(res, 'VM pricing rows retrieved.', {
+      ...data,
+      rows,
+      usdToInr: fx.usdToInr,
+      fxSource: fx.source,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export const vmCatalogController = {
   overview,
   list,
@@ -198,4 +289,6 @@ export const vmCatalogController = {
   changeTemplate,
   powerAction,
   reject,
+  calculatePricing,
+  listPricing,
 };

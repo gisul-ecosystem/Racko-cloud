@@ -277,3 +277,34 @@ export function buildPublicDownloadUrl(downloadToken: string): string {
 export function getEnrollmentAgentDownloadUrl(os: MachineOS): string {
   return `${getGatewayBaseUrl()}/api/v1/agent/download-enrollment?os=${os}`;
 }
+
+// ─── Reset API ────────────────────────────────────────────────────────────────
+
+export async function resetMachines(
+  machineIds: string[],
+  sessionId: string
+): Promise<{ accepted: string[]; offline: string[]; sessionId: string }> {
+  const res = await apiRequest<ApiResponse<{ accepted: string[]; offline: string[]; sessionId: string }>>(
+    '/api/v1/machines/reset',
+    { method: 'POST', body: JSON.stringify({ machineIds, sessionId }) }
+  );
+  return res.data;
+}
+
+export async function issueResetStreamTicket(
+  sessionId: string
+): Promise<{ streamToken: string; expiresIn: number }> {
+  const res = await apiRequest<ApiResponse<{ streamToken: string; expiresIn: number }>>(
+    '/api/v1/machines/reset-stream-ticket',
+    { method: 'POST', body: JSON.stringify({ sessionId }) }
+  );
+  return res.data;
+}
+
+export function openResetStatusStream(
+  sessionId: string,
+  streamToken: string
+): EventSource {
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+  return new EventSource(url, { withCredentials: true });
+}

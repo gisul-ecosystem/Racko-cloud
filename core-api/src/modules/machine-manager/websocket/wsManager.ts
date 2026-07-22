@@ -96,6 +96,31 @@ class WSManager {
   }
 
   /**
+   * Send a reset command to a connected agent over the existing WebSocket.
+   * Agent receives { type: "reset", payload: { sessionId } } and runs the full
+   * reset PowerShell script in a background goroutine, sending back progress events.
+   * Returns true if delivered, false if agent is offline.
+   */
+  sendReset(agentId: string, sessionId: string): boolean {
+    const conn = this.connections.get(agentId);
+    if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+      logger.warn('[WSManager] Cannot send reset — agent not connected', { agentId });
+      return false;
+    }
+    try {
+      conn.ws.send(JSON.stringify({ type: 'reset', payload: { sessionId } }));
+      logger.info('[WSManager] Sent reset command to agent', { agentId, sessionId });
+      return true;
+    } catch (err) {
+      logger.error('[WSManager] Failed to send reset command', {
+        agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
    * Send an uninstall command to a connected agent over the existing WebSocket.
    * Agent receives { type: "uninstall" } and immediately runs the cleanup script.
    * Returns true if delivered, false if agent is offline (403 fallback will handle it).
@@ -270,6 +295,40 @@ class WSManager {
           pending.resolve(result);
           logger.info('[WSManager] Exec result received', { agentId, commandId: result.commandId, exitCode: result.exitCode });
         }
+      }
+
+      if (msg.type === 'reset_progress' || msg.type === 'reset_complete') {
+        const payload = msg.payload as {
+          sessionId: string;
+          machineId: string;
+          machineName?: string;
+          phase?: number;
+          message?: string;
+          success?: boolean;
+          error?: string;
+        };
+        // payload.machineId from agent is the agentId (UUID), not the MongoDB _id.
+        // Resolve it to the actual machine _id so the UI comparison works correctly.
+        const machine = await MachineModel.findOne({ agentId: payload.machineId }).lean();
+        const resolvedMachineId = machine ? machine._id.toString() : payload.machineId;
+
+        const { emitResetEvent } = await import('../reset.events');
+        emitResetEvent(payload.sessionId, {
+          type: msg.type as 'reset_progress' | 'reset_complete',
+          machineId: resolvedMachineId,
+          machineName: payload.machineName ?? machine?.name,
+          phase: payload.phase,
+          message: payload.message,
+          success: payload.success,
+          error: payload.error,
+        });
+        logger.info('[WSManager] Reset event forwarded to SSE', {
+          agentId,
+          type: msg.type,
+          sessionId: payload.sessionId,
+          phase: payload.phase,
+          success: payload.success,
+        });
       }
     } catch {
       logger.warn('[WSManager] Malformed message from agent', { agentId });

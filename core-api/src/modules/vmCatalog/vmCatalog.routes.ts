@@ -11,6 +11,8 @@ import {
   rejectCatalogVmRequestSchema,
   changeCatalogVmTemplateSchema,
   catalogVmPowerActionSchema,
+  calculateVmPricingSchema,
+  listVmPricingQuerySchema,
 } from './vmCatalog.validation';
 import {
   createVmCatalogPlanSchema,
@@ -161,6 +163,25 @@ router.patch(
   validateRequest(rejectCatalogVmRequestSchema),
   (req, res, next) => {
     vmCatalogController.reject(req, res, next);
+  }
+);
+
+/** Super-admin: multi-cloud VM pricing calculator */
+router.post(
+  '/pricing/calculate',
+  requireRole('super_admin'),
+  validateRequest(calculateVmPricingSchema),
+  (req, res, next) => {
+    vmCatalogController.calculatePricing(req, res, next);
+  }
+);
+
+router.get(
+  '/pricing',
+  requireRole('super_admin'),
+  validateRequest(listVmPricingQuerySchema),
+  (req, res, next) => {
+    vmCatalogController.listPricing(req, res, next);
   }
 );
 

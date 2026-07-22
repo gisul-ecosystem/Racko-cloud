@@ -278,6 +278,8 @@ router.patch('/api/v1/vm-catalog/requests/:id/attach', authMiddleware, verifyMid
 router.patch('/api/v1/vm-catalog/requests/:id/change-template', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.post('/api/v1/vm-catalog/requests/:id/power', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.patch('/api/v1/vm-catalog/requests/:id/reject', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/vm-catalog/pricing/calculate', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/vm-catalog/pricing', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
@@ -315,6 +317,11 @@ router.post('/api/v1/machines/push-agent', authMiddleware, verifyMiddleware, req
 router.post('/api/v1/machines/push-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 // SSE stream for push status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
 router.get('/api/v1/machines/push-stream/:sessionId', sseProxy);
+// Reset routes — must come before /:id
+router.post('/api/v1/machines/reset', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/reset-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// SSE stream for reset status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
+router.get('/api/v1/machines/reset-stream/:sessionId', sseProxy);
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -332,7 +339,6 @@ router.get('/api/v1/machines/:id/download-agent', authMiddleware, verifyMiddlewa
 router.post('/api/v1/machines/:id/exec', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
-
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -344,6 +350,7 @@ router.post('/api/v1/agent/register', coreApiProxy);
 router.post('/api/v1/agent/enroll', coreApiProxy);
 router.get('/api/v1/agent/binary/:os', coreApiProxy);
 router.get('/api/v1/agent/install/linux', coreApiProxy);
+router.get('/api/v1/agent/reset-script', coreApiProxy); // public — no auth, agent uses this at reset time
 router.get('/api/v1/agent/connect', coreApiProxy); // WebSocket upgrade — handled via server.on('upgrade') in server.ts
 router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);

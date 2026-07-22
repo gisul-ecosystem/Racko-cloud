@@ -31,6 +31,8 @@ export const createCatalogVmRequestSchema = z.object({
       total: z.coerce.number().min(0),
       billingLabel: z.string().max(100).trim().optional(),
     }),
+    durationDays: z.coerce.number().int().min(1).max(3650).optional(),
+    canonicalSpec: z.string().min(1).max(100).trim().optional(),
   }),
 });
 
@@ -80,6 +82,7 @@ export const listCatalogVmRequestsQuerySchema = z.object({
         'rejected',
         'cancelled',
         'suspended',
+        'terminated',
         'all',
       ])
       .optional()
@@ -88,4 +91,43 @@ export const listCatalogVmRequestsQuerySchema = z.object({
   }),
 });
 
+const cloudProviderEnum = z.enum(['aws', 'azure', 'oci', 'gcp']);
+
+export const calculateVmPricingSchema = z.object({
+  body: z
+    .object({
+      category: z.enum(['linux', 'windows', 'gpu']).default('linux'),
+      durationDays: z.coerce.number().int().min(1).max(3650).default(1),
+      specs: z
+        .object({
+          cpu: z.union([z.string(), z.number()]).optional(),
+          ram: z.union([z.string(), z.number()]).optional(),
+          disk: z.union([z.string(), z.number()]).optional(),
+        })
+        .optional(),
+      canonicalSpec: z.string().min(1).max(100).trim().optional(),
+      providers: z
+        .union([z.array(cloudProviderEnum).min(1), cloudProviderEnum, z.string().min(1)])
+        .optional(),
+      provider: z
+        .union([z.array(cloudProviderEnum).min(1), cloudProviderEnum, z.string().min(1)])
+        .optional(),
+    })
+    .refine((b) => Boolean(b.canonicalSpec) || Boolean(b.specs), {
+      message: 'canonicalSpec or specs is required',
+    }),
+});
+
+export const listVmPricingQuerySchema = z.object({
+  query: z.object({
+    providers: z.string().optional(),
+    provider: z.string().optional(),
+    category: z.enum(['linux', 'windows', 'gpu']).optional(),
+    canonicalSpec: z.string().min(1).max(100).optional(),
+    limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+  }),
+});
+
 export type CreateCatalogVmRequestInput = z.infer<typeof createCatalogVmRequestSchema>['body'];
+export type CalculateVmPricingInput = z.infer<typeof calculateVmPricingSchema>['body'];
+export type ListVmPricingQuery = z.infer<typeof listVmPricingQuerySchema>['query'];
