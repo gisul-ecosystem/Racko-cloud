@@ -274,6 +274,27 @@ $toUninstall = $all | Where-Object { Test-ShouldUninstall $_ } | Sort-Object Dis
 Write-Host "Found $($toUninstall.Count) apps to uninstall (current session hive)" -ForegroundColor Yellow
 foreach ($app in $toUninstall) { Invoke-UninstallEntry $app }
 
+# ── Scan HKEY_USERS for all currently logged-in users ─────────────────────────
+# When running as LocalSystem, HKCU:\  only covers LocalSystem's own hive.
+# Logged-in users' hives are already mounted under HKEY_USERS\<SID> and
+# readable by LocalSystem — no NTUSER.DAT load needed, no file locking issues.
+if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+    New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
+}
+Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
+    $_.PSChildName -match 'S-1-5-21' -and $_.PSChildName -notmatch '_Classes'
+} | ForEach-Object {
+    $sid = $_.PSChildName
+    $userApps = @()
+    $userApps += Get-ItemProperty "HKU:\$sid\Software\Microsoft\Windows\CurrentVersion\Uninstall\*"            -ErrorAction SilentlyContinue
+    $userApps += Get-ItemProperty "HKU:\$sid\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*" -ErrorAction SilentlyContinue
+    $userToUninstall = $userApps | Where-Object { Test-ShouldUninstall $_ } | Sort-Object DisplayName -Unique
+    if ($userToUninstall.Count -gt 0) {
+        Write-Host "Found $($userToUninstall.Count) apps for SID $sid (logged-in user)" -ForegroundColor Yellow
+        foreach ($app in $userToUninstall) { Invoke-UninstallEntry $app }
+    }
+}
+
 # ── Scan every OTHER local user's registry hive for per-user installs ──
 if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
     New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
