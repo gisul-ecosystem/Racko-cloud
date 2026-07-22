@@ -19,6 +19,16 @@ router.delete(
   requireSuperAdmin,
   orgAdminController.deleteRequest
 );
+router.patch(
+  '/resource-groups/:requestId/expiry',
+  requireSuperAdmin,
+  orgAdminController.extendRequestExpiration
+);
+router.post(
+  '/resource-groups/:requestId/send-purchase-confirmation',
+  requireSuperAdmin,
+  orgAdminController.sendPurchaseConfirmationMail
+);
 router.get(
   '/resource-groups/:requestId/monitoring',
   requireSuperAdmin,

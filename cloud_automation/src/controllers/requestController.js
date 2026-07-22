@@ -51,7 +51,27 @@ const createRequest = async (req, res, next) => {
           : undefined,
       resourceCleanupAction:
         req.body.resourceCleanupAction === 'pause' ? 'pause' : 'delete',
-      usageWindows: Array.isArray(req.body.usageWindows) ? req.body.usageWindows : undefined
+      usageWindows: Array.isArray(req.body.usageWindows) ? req.body.usageWindows : undefined,
+      projectName:
+        typeof req.body.projectName === 'string' ? req.body.projectName.trim() : undefined,
+      idMode:
+        req.body.idMode === 'test_ids' || req.body.idMode === 'azure_ids'
+          ? req.body.idMode
+          : undefined,
+      microsoftLicenseSkuId:
+        typeof req.body.microsoftLicenseSkuId === 'string'
+          ? req.body.microsoftLicenseSkuId.trim()
+          : undefined,
+      microsoftLicenseSkuPartNumber:
+        typeof req.body.microsoftLicenseSkuPartNumber === 'string'
+          ? req.body.microsoftLicenseSkuPartNumber.trim()
+          : undefined,
+      convertedFromRequestId:
+        req.body.convertedFromRequestId !== undefined && req.body.convertedFromRequestId !== null
+          ? Number(req.body.convertedFromRequestId)
+          : undefined,
+      purchaseToken:
+        typeof req.body.purchaseToken === 'string' ? req.body.purchaseToken.trim() : undefined
     };
 
     const result = await requestService.createRequest({

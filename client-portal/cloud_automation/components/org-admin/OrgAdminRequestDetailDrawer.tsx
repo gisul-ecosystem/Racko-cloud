@@ -109,9 +109,14 @@ export function OrgAdminRequestDetailDrawer({
       >
         <div className="flex shrink-0 items-center justify-between border-b border-gray-200 bg-white px-5 py-4">
           <div>
-            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Provisioned request</p>
-            <h2 id="org-admin-request-title" className="text-lg font-bold text-gray-900">
-              Request #{requestId}
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Provisioned project</p>
+            <h2 id="org-admin-request-title" className="flex flex-wrap items-center gap-2 text-lg font-bold text-gray-900">
+              <span>{request?.projectName?.trim() || `Project ${requestId}`}</span>
+              {request?.idMode === 'test_ids' ? (
+                <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">
+                  Test ID
+                </span>
+              ) : null}
             </h2>
           </div>
           <button

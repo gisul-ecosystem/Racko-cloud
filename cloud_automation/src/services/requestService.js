@@ -28,6 +28,12 @@ async function createRequest({
   resourceCleanupIntervalHours,
   resourceCleanupAction,
   usageWindows,
+  projectName,
+  idMode,
+  microsoftLicenseSkuId,
+  microsoftLicenseSkuPartNumber,
+  convertedFromRequestId,
+  purchaseToken,
   rackoUserId
 }) {
 
@@ -306,6 +312,27 @@ async function createRequest({
         : null;
     const resolvedResourceCleanupAction =
       resourceCleanupAction === 'pause' ? 'pause' : 'delete';
+    const resolvedProjectName =
+      typeof projectName === 'string' && projectName.trim() ? projectName.trim() : null;
+    const resolvedIdMode =
+      idMode === 'test_ids' || idMode === 'azure_ids' ? idMode : null;
+    const resolvedMicrosoftLicenseSkuId =
+      typeof microsoftLicenseSkuId === 'string' && microsoftLicenseSkuId.trim()
+        ? microsoftLicenseSkuId.trim()
+        : null;
+    const resolvedMicrosoftLicenseSkuPartNumber =
+      typeof microsoftLicenseSkuPartNumber === 'string' && microsoftLicenseSkuPartNumber.trim()
+        ? microsoftLicenseSkuPartNumber.trim()
+        : null;
+    const { getPurchaseIntentDelayMs } = require('./purchaseIntentService');
+    const resolvedPurchaseIntentDueAt =
+      resolvedIdMode === 'test_ids'
+        ? new Date(Date.now() + getPurchaseIntentDelayMs()).toISOString()
+        : null;
+    const resolvedConvertedFromRequestId =
+      Number.isInteger(Number(convertedFromRequestId)) && Number(convertedFromRequestId) > 0
+        ? Number(convertedFromRequestId)
+        : null;
 
     const request =
       await client.query(
@@ -348,7 +375,19 @@ async function createRequest({
 
           resource_cleanup_next_run_at,
 
-          resource_cleanup_action
+          resource_cleanup_action,
+
+          project_name,
+
+          id_mode,
+
+          microsoft_license_sku_id,
+
+          microsoft_license_sku_part_number,
+
+          purchase_intent_due_at,
+
+          converted_from_request_id
 
         )
 
@@ -372,7 +411,13 @@ async function createRequest({
           $16,
           $17,
           $18,
-          $19
+          $19,
+          $20,
+          $21,
+          $22,
+          $23,
+          $24,
+          $25
 
         )
 
@@ -419,7 +464,19 @@ async function createRequest({
 
           resolvedResourceCleanupNextRunAt,
 
-          resolvedResourceCleanupAction
+          resolvedResourceCleanupAction,
+
+          resolvedProjectName,
+
+          resolvedIdMode,
+
+          resolvedMicrosoftLicenseSkuId,
+
+          resolvedMicrosoftLicenseSkuPartNumber,
+
+          resolvedPurchaseIntentDueAt,
+
+          resolvedConvertedFromRequestId
 
         ]
       );
@@ -694,7 +751,27 @@ async function createRequest({
       );
     }
 
-
+    if (resolvedConvertedFromRequestId) {
+      try {
+        const purchaseIntentService = require('./purchaseIntentService');
+        await purchaseIntentService.markRequestConverted(
+          resolvedConvertedFromRequestId,
+          requestId
+        );
+      } catch (convertError) {
+        console.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            service: 'request-service',
+            level: 'error',
+            event: 'purchase_convert_mark_failed',
+            sourceRequestId: resolvedConvertedFromRequestId,
+            requestId,
+            message: convertError?.message
+          })
+        );
+      }
+    }
 
     return {
 
