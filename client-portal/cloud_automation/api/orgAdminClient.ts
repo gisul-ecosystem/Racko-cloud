@@ -122,6 +122,35 @@ export async function deleteOrgAdminRequest(
   );
 }
 
+export async function extendOrgAdminRequestExpiration(
+  requestId: number,
+  expiresAt: string
+): Promise<{
+  success: boolean;
+  message?: string;
+  data?: {
+    requestId: number;
+    expiryDate: string;
+    expiresAt: string;
+    previousExpiresAt?: string | null;
+    message?: string;
+  };
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/expiry`, {
+    method: 'PATCH',
+    body: JSON.stringify({ expiresAt }),
+  });
+}
+
+export async function sendOrgAdminPurchaseConfirmationMail(
+  requestId: number
+): Promise<{ success: boolean; message?: string; recipientEmail?: string; requestId?: number }> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/send-purchase-confirmation`,
+    { method: 'POST' }
+  );
+}
+
 export async function updateOrgAdminUserRoles(
   requestId: number,
   userId: number,

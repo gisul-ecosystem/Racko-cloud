@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useAuth } from '../../../../context/AuthContext';
 import { useMachines } from '../../../../hooks/useMachines';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
@@ -8,12 +8,15 @@ import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
-  deleteMachine, fetchJobs,
+  deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStream,
   type IMachine, type MachineStatus, type IJob, type JobStatus,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
 import { useJobStream } from '../../../../hooks/useJobStream';
-import { Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp } from 'lucide-react';
+import {
+  Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X,
+} from 'lucide-react';
 import Link from 'next/link';
 
 // ─── Status badge ──────────────────────────────────────────────────────────────
@@ -48,16 +51,13 @@ const jobLabel: Record<JobStatus, string> = {
   retrying:   'Retrying',
 };
 
-// ─── Live job wrapper — connects SSE for a single job ─────────────────────────
+// ─── Live job wrapper ─────────────────────────────────────────────────────────
 function LiveJobRow({ job, isAuthenticated, onUpdate }: {
-  job: IJob;
-  isAuthenticated: boolean;
-  onUpdate: (updated: IJob) => void;
+  job: IJob; isAuthenticated: boolean; onUpdate: (updated: IJob) => void;
 }) {
   const live = useJobStream(job, isAuthenticated);
-  // Propagate updates to parent so SoftwareProgress re-renders
   useEffect(() => { onUpdate(live); }, [live.status, live.logs]);
-  return null; // render nothing — just drives state
+  return null;
 }
 
 // ─── Software Progress cell ────────────────────────────────────────────────────
@@ -67,7 +67,6 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
   const [liveJobs, setLiveJobs] = useState<IJob[]>(jobs);
   const [expanded, setExpanded] = useState(false);
 
-  // Sync if parent jobs list changes (e.g. on full refresh)
   useEffect(() => { setLiveJobs(jobs); }, [jobs]);
 
   const updateJob = useCallback((updated: IJob) => {
@@ -88,11 +87,9 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
 
   return (
     <div className="min-w-[160px]">
-      {/* SSE drivers — invisible, one per non-terminal job */}
       {liveJobs.map((j) => (
         <LiveJobRow key={j._id} job={j} isAuthenticated={isAuthenticated} onUpdate={updateJob} />
       ))}
-      {/* Summary chips */}
       <div className="mb-1.5 flex flex-wrap gap-1">
         {counts.success > 0 && (
           <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-1.5 py-0.5 text-xs font-medium text-green-700">
@@ -115,8 +112,6 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
           </span>
         )}
       </div>
-
-      {/* Per-software list */}
       <div className="space-y-1">
         {visible.map((j) => (
           <div key={j._id} className="flex items-center gap-1.5">
@@ -135,8 +130,6 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
           </div>
         ))}
       </div>
-
-      {/* Expand / collapse toggle */}
       {hasMore && (
         <button
           onClick={() => setExpanded((p) => !p)}
@@ -152,6 +145,89 @@ function SoftwareProgress({ jobs, isAuthenticated }: { jobs: IJob[]; isAuthentic
   );
 }
 
+// ─── Reset status types ───────────────────────────────────────────────────────
+type ResetStatus = 'pending' | 'resetting' | 'success' | 'failed' | 'offline';
+
+interface ResetMachineState {
+  machineId: string;
+  machineName: string;
+  status: ResetStatus;
+  error?: string;
+}
+
+// ─── Reset Status Modal ───────────────────────────────────────────────────────
+function ResetStatusModal({
+  states,
+  onClose,
+}: {
+  states: ResetMachineState[];
+  onClose: () => void;
+}) {
+  const allDone = states.every((s) => s.status === 'success' || s.status === 'failed' || s.status === 'offline');
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-xl border border-gray-200 bg-white shadow-xl">
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Reset VM Status</p>
+            <p className="mt-0.5 text-xs text-gray-400">
+              {allDone ? 'All resets completed' : 'Reset in progress — this may take a few minutes'}
+            </p>
+          </div>
+          {allDone && (
+            <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100">
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+        <div className="max-h-96 overflow-y-auto p-5 space-y-3">
+          {states.map((s) => (
+            <div key={s.machineId} className="flex items-center gap-3 rounded-lg border border-gray-100 p-3">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gray-50">
+                {s.status === 'resetting' || s.status === 'pending' ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-blue-500" />
+                ) : s.status === 'success' ? (
+                  <CheckCircle2 className="h-4 w-4 text-green-500" />
+                ) : s.status === 'offline' ? (
+                  <XCircle className="h-4 w-4 text-gray-400" />
+                ) : (
+                  <XCircle className="h-4 w-4 text-red-500" />
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-gray-900 truncate">{s.machineName}</p>
+                <p className={`text-xs mt-0.5 ${
+                  s.status === 'success' ? 'text-green-600'
+                  : s.status === 'failed' ? 'text-red-500'
+                  : s.status === 'offline' ? 'text-gray-400'
+                  : 'text-blue-500'
+                }`}>
+                  {s.status === 'pending'   ? 'Queued...'
+                  : s.status === 'resetting' ? 'Resetting VM...'
+                  : s.status === 'success'   ? 'Reset complete'
+                  : s.status === 'offline'   ? 'Agent offline — reset skipped'
+                  : `Failed: ${s.error ?? 'Unknown error'}`}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+        {allDone && (
+          <div className="border-t border-gray-100 px-5 py-3 text-right">
+            <button
+              onClick={onClose}
+              className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#a01717]"
+            >
+              Done
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────────
 export default function MyMachinesPage() {
   const { isAuthenticated } = useAuth();
@@ -161,14 +237,22 @@ export default function MyMachinesPage() {
   const [pendingDelete, setPendingDelete] = useState<IMachine | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // Jobs keyed by machineId — fetched once, refreshed with machines
+  // Bulk selection (only online machines can be reset)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Reset confirm + status
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetStates, setResetStates] = useState<ResetMachineState[] | null>(null);
+  const sseRef = useRef<EventSource | null>(null);
+
+  // Jobs keyed by machineId
   const [jobsByMachine, setJobsByMachine] = useState<Record<string, IJob[]>>({});
 
   const loadJobs = useCallback(async () => {
     if (!isAuthenticated) return;
     try {
       const jobs = await fetchJobs();
-      // Group by machineId, keep most recent job per software (by createdAt desc)
       const grouped: Record<string, IJob[]> = {};
       for (const job of jobs) {
         if (!grouped[job.machineId]) grouped[job.machineId] = [];
@@ -178,14 +262,12 @@ export default function MyMachinesPage() {
     } catch { /* non-fatal */ }
   }, [isAuthenticated]);
 
-  useEffect(() => {
-    void loadJobs();
-  }, [loadJobs, machines]); // re-group whenever machines refresh
+  useEffect(() => { void loadJobs(); }, [loadJobs, machines]);
 
-  const handleRefresh = () => {
-    refetch();
-    void loadJobs();
-  };
+  // Cleanup SSE on unmount
+  useEffect(() => () => { sseRef.current?.close(); }, []);
+
+  const handleRefresh = () => { refetch(); void loadJobs(); };
 
   const handleDelete = async () => {
     if (!pendingDelete) return;
@@ -201,6 +283,96 @@ export default function MyMachinesPage() {
       setDeleteLoading(false);
     }
   };
+
+  const toggleSelect = (id: string, status: MachineStatus) => {
+    if (status !== 'online') return; // only online machines can be reset
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    const online = machines.filter((m) => m.status === 'online').map((m) => m._id);
+    const allSelected = online.every((id) => selectedIds.has(id));
+    if (allSelected) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(online));
+    }
+  };
+
+  const selectedMachines = machines.filter((m) => selectedIds.has(m._id));
+
+  const handleReset = async () => {
+    if (!selectedMachines.length) return;
+    setResetting(true);
+    setShowResetConfirm(false);
+
+    // Initialize status panel
+    const initial: ResetMachineState[] = selectedMachines.map((m) => ({
+      machineId: m._id,
+      machineName: m.name,
+      status: 'pending',
+    }));
+    setResetStates(initial);
+
+    try {
+      const sessionId = `reset-${Date.now()}`;
+      const result = await resetMachines(selectedMachines.map((m) => m._id), sessionId);
+
+      // Mark offline machines immediately
+      setResetStates((prev) =>
+        prev!.map((s) =>
+          result.offline.includes(s.machineId) ? { ...s, status: 'offline' } : { ...s, status: 'resetting' }
+        )
+      );
+
+      // Open SSE stream for accepted machines
+      if (result.accepted.length > 0) {
+        const ticket = await issueResetStreamTicket(sessionId);
+        const sse = openResetStatusStream(sessionId, ticket.streamToken);
+        sseRef.current = sse;
+
+        sse.onmessage = (e: MessageEvent) => {
+          const event = JSON.parse(e.data as string) as {
+            type: string;
+            machineId?: string;
+            success?: boolean;
+            error?: string;
+          };
+
+          if (event.type === 'reset_complete' && event.machineId) {
+            setResetStates((prev) =>
+              prev!.map((s) =>
+                s.machineId === event.machineId
+                  ? { ...s, status: event.success ? 'success' : 'failed', error: event.error }
+                  : s
+              )
+            );
+          }
+        };
+
+        sse.onerror = () => {
+          sse.close();
+          sseRef.current = null;
+        };
+      }
+
+      setSelectedIds(new Set());
+      // Refresh machines list after a delay so job history is cleared
+      setTimeout(() => { refetch(); void loadJobs(); }, 3000);
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to initiate reset.');
+      setResetStates(null);
+    } finally {
+      setResetting(false);
+    }
+  };
+
+  const onlineCount = machines.filter((m) => m.status === 'online').length;
+  const allOnlineSelected = onlineCount > 0 && machines.filter((m) => m.status === 'online').every((m) => selectedIds.has(m._id));
 
   return (
     <div className="max-w-screen-xl">
@@ -219,6 +391,30 @@ export default function MyMachinesPage() {
         />
       )}
 
+      {showResetConfirm && (
+        <ConfirmModal
+          open
+          title="Reset VM"
+          description={`This will uninstall all user-installed software from ${selectedMachines.length} machine${selectedMachines.length !== 1 ? 's' : ''}. This cannot be undone.`}
+          confirmLabel={`Reset ${selectedMachines.length} VM${selectedMachines.length !== 1 ? 's' : ''}`}
+          confirmVariant="danger"
+          loading={resetting}
+          onConfirm={() => void handleReset()}
+          onCancel={() => setShowResetConfirm(false)}
+        />
+      )}
+
+      {resetStates && (
+        <ResetStatusModal
+          states={resetStates}
+          onClose={() => {
+            sseRef.current?.close();
+            sseRef.current = null;
+            setResetStates(null);
+          }}
+        />
+      )}
+
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Machines</h1>
@@ -227,6 +423,16 @@ export default function MyMachinesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {selectedIds.size > 0 && (
+            <button
+              onClick={() => setShowResetConfirm(true)}
+              disabled={resetting}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 transition hover:bg-orange-100 disabled:opacity-50"
+            >
+              <RotateCcw className="h-3.5 w-3.5" />
+              Reset {selectedIds.size} VM{selectedIds.size !== 1 ? 's' : ''}
+            </button>
+          )}
           <button
             onClick={handleRefresh}
             disabled={loading}
@@ -250,7 +456,7 @@ export default function MyMachinesPage() {
       {!error && (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           {loading ? (
-            <TableSkeleton rows={5} cols={6} />
+            <TableSkeleton rows={5} cols={7} />
           ) : machines.length === 0 ? (
             <div className="p-16 text-center">
               <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
@@ -270,51 +476,79 @@ export default function MyMachinesPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
+                    <th className="px-4 py-3 text-left">
+                      {onlineCount > 0 && (
+                        <input
+                          type="checkbox"
+                          checked={allOnlineSelected}
+                          onChange={toggleSelectAll}
+                          title="Select all online machines"
+                          className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] cursor-pointer"
+                        />
+                      )}
+                    </th>
                     {['Name', 'IP Address', 'OS', 'Status', 'Software Progress', 'Last Seen', 'Actions'].map((h) => (
                       <th key={h} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
                     ))}
                   </tr>
                 </thead>
                 <tbody>
-                  {machines.map((m, i) => (
-                    <tr key={m._id} className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${i % 2 !== 0 ? 'bg-gray-50/40' : ''}`}>
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-3">
-                          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
-                            <Server className="h-4 w-4" />
-                          </span>
-                          <span className="font-medium text-gray-900">{m.name}</span>
-                        </div>
-                      </td>
-                      <td className="px-5 py-3 font-mono text-xs text-gray-600">{m.ipAddress}</td>
-                      <td className="px-5 py-3 capitalize text-gray-600">{m.os}</td>
-                      <td className="px-5 py-3"><MachineStatusBadge status={m.status} /></td>
-                      <td className="px-5 py-3">
-                        <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
-                      </td>
-                      <td className="px-5 py-3 text-xs text-gray-400">
-                        {m.lastSeen ? new Date(m.lastSeen).toLocaleString() : '—'}
-                      </td>
-                      <td className="px-5 py-3">
-                        <div className="flex items-center gap-2">
-                          <Link
-                            href={`/console/machine-manager/machines/${m._id}`}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-                          >
-                            <Eye className="h-3.5 w-3.5" />
-                            View
-                          </Link>
-                          <button
-                            onClick={() => setPendingDelete(m)}
-                            className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                            Remove Machine
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                  {machines.map((m, i) => {
+                    const isSelected = selectedIds.has(m._id);
+                    const isOnline = m.status === 'online';
+                    return (
+                      <tr
+                        key={m._id}
+                        className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${i % 2 !== 0 ? 'bg-gray-50/40' : ''} ${isSelected ? 'bg-orange-50/40' : ''}`}
+                      >
+                        <td className="px-4 py-3">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            disabled={!isOnline}
+                            onChange={() => toggleSelect(m._id, m.status)}
+                            title={isOnline ? 'Select for reset' : 'Only online machines can be reset'}
+                            className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+                          />
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-3">
+                            <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
+                              <Server className="h-4 w-4" />
+                            </span>
+                            <span className="font-medium text-gray-900">{m.name}</span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-3 font-mono text-xs text-gray-600">{m.ipAddress}</td>
+                        <td className="px-5 py-3 capitalize text-gray-600">{m.os}</td>
+                        <td className="px-5 py-3"><MachineStatusBadge status={m.status} /></td>
+                        <td className="px-5 py-3">
+                          <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
+                        </td>
+                        <td className="px-5 py-3 text-xs text-gray-400">
+                          {m.lastSeen ? new Date(m.lastSeen).toLocaleString() : '—'}
+                        </td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2">
+                            <Link
+                              href={`/console/machine-manager/machines/${m._id}`}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+                            >
+                              <Eye className="h-3.5 w-3.5" />
+                              View
+                            </Link>
+                            <button
+                              onClick={() => setPendingDelete(m)}
+                              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                              Remove
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

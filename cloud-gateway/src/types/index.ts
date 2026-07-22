@@ -12,6 +12,8 @@ export interface TenantContext {
   id: string;
   slug: string;
   status: string;
+  ipAccessMode: 'all' | 'restricted';
+  allowedIps: string[];
 }
 
 export interface GatewayRequest extends Request {
@@ -36,4 +38,6 @@ export interface TenantResolveResponse {
   id: string;
   slug: string;
   status: string;
+  ipAccessMode: 'all' | 'restricted';
+  allowedIps: string[];
 }

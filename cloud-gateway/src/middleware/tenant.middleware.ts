@@ -79,6 +79,8 @@ async function fetchTenantFromCoreApi(
       id: response.data.id,
       slug: response.data.slug,
       status: response.data.status,
+      ipAccessMode: response.data.ipAccessMode ?? 'all',
+      allowedIps: response.data.allowedIps ?? [],
     };
   } catch (error) {
     if (axios.isAxiosError(error) && error.response?.status === 404) {

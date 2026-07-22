@@ -3,6 +3,7 @@ import cors from 'cors';
 import { helmetMiddleware } from './middleware/helmet.middleware';
 import { requestIdMiddleware } from './middleware/requestId.middleware';
 import { tenantResolver } from './middleware/tenant.middleware';
+import { ipAccessGuard } from './middleware/ipAccessGuard.middleware';
 import { loggerMiddleware } from './middleware/logger.middleware';
 import { userRateLimiter } from './middleware/rateLimit.middleware';
 import { corsOptions } from './config/cors';
@@ -13,6 +14,7 @@ import cloudAutomationRoutes from './routes/cloudAutomation.routes';
 import cloudAutomationAwsRoutes from './routes/cloudAutomationAws.routes';
 import cloudAutomationGcpRoutes from './routes/cloudAutomationGcp.routes';
 import managePortalRoutes from './routes/managePortal.routes';
+import purchaseIntentRoutes from './routes/purchaseIntent.routes';
 import orgAdminPortalRoutes from './routes/orgAdminPortal.routes';
 import tenantCloudRoutes from './routes/tenantCloud.routes';
 import proxyRoutes from './routes/proxy.routes';
@@ -33,6 +35,9 @@ app.use(cors(corsOptions));
 // 3b. Tenant host resolution (non-blocking; sets req.tenantContext)
 app.use(tenantResolver);
 
+// 3c. IP access guard — enforces per-tenant IP allowlist when mode is 'restricted'
+app.use(ipAccessGuard);
+
 // 4. Morgan/logger — request logging
 app.use(loggerMiddleware);
 
@@ -49,6 +54,7 @@ const RATE_LIMIT_SKIP_PREFIXES = [
   '/api/v1/tenant-cloud',
   '/api/org-admin',
   '/api/manage',
+  '/api/purchase-intent',
 ];
 
 function isRateLimitExemptPath(path: string): boolean {
@@ -78,6 +84,8 @@ app.get('/health', (_req, res) => {
 // ─── PROXY ROUTES ─────────────────────────────────────────────────────────────
 // Manage-users portal (public; session auth enforced by cloud_automation)
 app.use(managePortalRoutes);
+// Purchase-intent email links (public; token auth enforced by cloud_automation)
+app.use(purchaseIntentRoutes);
 // Organization admin APIs (JWT super_admin; enforced by cloud_automation)
 app.use(orgAdminPortalRoutes);
 // Tenant cloud automation (tenant JWT + assigned service → azure/aws services)

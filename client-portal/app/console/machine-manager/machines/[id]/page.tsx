@@ -12,6 +12,9 @@ import {
   fetchJobs,
   deleteMachine,
   execCommand,
+  resetMachines,
+  issueResetStreamTicket,
+  openResetStatusStream,
   type IMachine,
   type MachineStatus,
   type IJob,
@@ -21,7 +24,7 @@ import { useJobStream } from '../../../../../hooks/useJobStream';
 import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
 import {
   Server, ArrowLeft, Cpu, HardDrive, MemoryStick,
-  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X, Trash2, Terminal, Play,
+  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X, Trash2, Terminal, Play, RotateCcw,
 } from 'lucide-react';
 
 const jobStatusCfg: Record<JobStatus, { label: string; dot: string; text: string }> = {
@@ -147,6 +150,13 @@ export default function MachineDetailPage() {
   const [removingAgent, setRemovingAgent] = useState(false);
   const [showRemoveConfirm, setShowRemoveConfirm] = useState(false);
 
+  // Reset state
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [resetStatus, setResetStatus] = useState<'idle' | 'resetting' | 'success' | 'failed'>('idle');
+  const [resetError, setResetError] = useState<string>('');
+  const sseRef = useRef<EventSource | null>(null);
+
   // Terminal tabs state — each tab is an independent terminal session
   interface TerminalEntry { command: string; output: string; exitCode: number; ts: string }
   interface TerminalTab { id: number; label: string; history: TerminalEntry[]; input: string; historyIndex: number; running: boolean }
@@ -223,6 +233,71 @@ export default function MachineDetailPage() {
     }
   };
 
+  // Cleanup SSE on unmount
+  useEffect(() => () => { sseRef.current?.close(); }, []);
+
+  const handleReset = async () => {
+    if (!machine) return;
+    setShowResetConfirm(false);
+    setResetting(true);
+    setResetStatus('resetting');
+    setResetError('');
+
+    try {
+      const sessionId = `reset-${Date.now()}`;
+      const result = await resetMachines([machine._id], sessionId);
+
+      if (result.offline.includes(machine._id)) {
+        setResetStatus('failed');
+        setResetError('Agent is offline. Cannot reset.');
+        setResetting(false);
+        return;
+      }
+
+      // Open SSE stream to track completion
+      const ticket = await issueResetStreamTicket(sessionId);
+      const sse = openResetStatusStream(sessionId, ticket.streamToken);
+      sseRef.current = sse;
+
+      sse.onmessage = (e: MessageEvent) => {
+        const event = JSON.parse(e.data as string) as {
+          type: string;
+          machineId?: string;
+          success?: boolean;
+          error?: string;
+        };
+        if (event.type === 'reset_complete') {
+          sse.close();
+          sseRef.current = null;
+          if (event.success) {
+            setResetStatus('success');
+            addToast('success', `"${machine.name}" reset successfully.`);
+            // Reload page data — jobs cleared, machine fresh
+            setTimeout(() => void load(), 1500);
+          } else {
+            setResetStatus('failed');
+            setResetError(event.error ?? 'Reset failed.');
+            addToast('error', `Reset failed: ${event.error ?? 'Unknown error'}`);
+          }
+          setResetting(false);
+        }
+      };
+
+      sse.onerror = () => {
+        sse.close();
+        sseRef.current = null;
+        setResetStatus('failed');
+        setResetError('Lost connection to agent.');
+        setResetting(false);
+      };
+    } catch (err) {
+      setResetStatus('failed');
+      setResetError(err instanceof ApiError ? err.message : 'Failed to initiate reset.');
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to initiate reset.');
+      setResetting(false);
+    }
+  };
+
   const handleExec = async () => {
     if (!activeTab.input.trim() || !machine || activeTab.running) return;
     const cmd = activeTab.input.trim();
@@ -282,6 +357,19 @@ export default function MachineDetailPage() {
         />
       )}
 
+      {showResetConfirm && machine && (
+        <ConfirmModal
+          open
+          title="Reset VM"
+          description={`This will uninstall all user-installed software from "${machine.name}". This cannot be undone.`}
+          confirmLabel="Reset VM"
+          confirmVariant="danger"
+          loading={resetting}
+          onConfirm={() => void handleReset()}
+          onCancel={() => setShowResetConfirm(false)}
+        />
+      )}
+
       {/* Back */}
       <Link href="/console/machine-manager/machines"
         className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
@@ -305,6 +393,17 @@ export default function MachineDetailPage() {
             <RefreshCw className="h-3.5 w-3.5" /> Refresh
           </button>
           <button
+            onClick={() => setShowResetConfirm(true)}
+            disabled={resetting || machine.status !== 'online'}
+            title={machine.status !== 'online' ? 'Agent must be online to reset' : 'Reset VM — removes all user-installed software'}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 transition hover:bg-orange-100 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            {resetting
+              ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Resetting…</>
+              : <><RotateCcw className="h-3.5 w-3.5" /> Reset VM</>
+            }
+          </button>
+          <button
             onClick={() => setShowRemoveConfirm(true)}
             className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100"
           >
@@ -312,6 +411,29 @@ export default function MachineDetailPage() {
           </button>
         </div>
       </div>
+
+      {/* Reset status banner */}
+      {resetStatus !== 'idle' && (
+        <div className={`mb-4 flex items-center gap-3 rounded-xl border px-4 py-3 text-sm ${
+          resetStatus === 'resetting' ? 'border-blue-200 bg-blue-50 text-blue-700'
+          : resetStatus === 'success' ? 'border-green-200 bg-green-50 text-green-700'
+          : 'border-red-200 bg-red-50 text-red-700'
+        }`}>
+          {resetStatus === 'resetting' && <Loader2 className="h-4 w-4 animate-spin shrink-0" />}
+          {resetStatus === 'success' && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+          {resetStatus === 'failed' && <X className="h-4 w-4 shrink-0" />}
+          <span>
+            {resetStatus === 'resetting' && 'Reset in progress — this may take a few minutes...'}
+            {resetStatus === 'success' && 'VM reset successfully. All user-installed software has been removed.'}
+            {resetStatus === 'failed' && `Reset failed: ${resetError}`}
+          </span>
+          {(resetStatus === 'success' || resetStatus === 'failed') && (
+            <button onClick={() => setResetStatus('idle')} className="ml-auto shrink-0 hover:opacity-70">
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Machine info */}
       <div className="mb-6 rounded-xl border border-gray-200 bg-white p-5">

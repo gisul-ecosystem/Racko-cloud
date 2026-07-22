@@ -5,6 +5,7 @@ const { enqueueEmail } = require('./emailQueueService');
 const { createNotification, NotificationType } = require('./notificationService');
 const {
   buildCredentialEmailHtml,
+  buildTestIdsCredentialEmailHtml,
 } = require('./email/credentialEmailService');
 const {
   buildCredentialSpreadsheetBuffer,
@@ -81,7 +82,9 @@ const getRequestById = async (client, requestId) => {
       account_count,
       status,
       expiry_date,
-      location
+      location,
+      id_mode,
+      project_name
     FROM requests
     WHERE id = $1
   `;
@@ -376,14 +379,27 @@ const sendCredentials = async (requestId) => {
   const users = credentials.users;
   const portalLink = portal.manageUrl;
   const adminCredentials = portal.adminCredentials;
+  const isTestIds = String(request.id_mode || '').toLowerCase() === 'test_ids';
 
-  const html = buildCredentialEmailHtml({
-    requestId,
-    users,
-    adminCredentials,
-    portalLink,
-    expiresAt: portal.expiresAt.toISOString()
-  });
+  const html = isTestIds
+    ? buildTestIdsCredentialEmailHtml({
+        requestId,
+        users,
+        adminCredentials,
+        portalLink,
+        projectName: request.project_name
+      })
+    : buildCredentialEmailHtml({
+        requestId,
+        users,
+        adminCredentials,
+        portalLink,
+        expiresAt: portal.expiresAt.toISOString()
+      });
+
+  const emailSubject = isTestIds
+    ? `Azure Test IDs Ready — Request #${requestId}`
+    : `Azure Credentials Ready — Request #${requestId}`;
 
   const deliveryMeta = {
     portalLink,
@@ -395,7 +411,8 @@ const sendCredentials = async (requestId) => {
   logCredentialEvent('info', 'credential_delivery_email_started', {
     requestId,
     recipientEmail: request.customer_email,
-    manageUrl: portalLink
+    manageUrl: portalLink,
+    idMode: request.id_mode || null
   });
 
   try {
@@ -409,7 +426,7 @@ const sendCredentials = async (requestId) => {
 
     await enqueueEmail({
       recipientEmail: request.customer_email,
-      subject: `Azure Credentials Ready — Request #${requestId}`,
+      subject: emailSubject,
       html,
       relatedType: 'credential_delivery',
       relatedId: String(requestId),
@@ -429,7 +446,7 @@ const sendCredentials = async (requestId) => {
 
         await createNotification({
           type: NotificationType.PROVISIONING_COMPLETE,
-          title: 'Lab provisioned successfully',
+          title: isTestIds ? 'Azure test IDs ready' : 'Lab provisioned successfully',
           message: `Lab #${requestId} provisioned for ${request.customer_email} — ${request.account_count} users in ${request.location}`,
           requestId: Number(requestId)
         });

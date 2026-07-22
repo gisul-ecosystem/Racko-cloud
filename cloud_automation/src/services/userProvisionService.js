@@ -18,6 +18,7 @@ const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroups, getPerUserResourceGroupProgress } = require('./userResourceGroupService');
 const { provisionBudgetsForRequest } = require('./budgetProvisionService');
+const { assignLicenseToUser } = require('./microsoftLicenseService');
 
 const STATUS_CREATED = 'Created';
 const DEFAULT_CONCURRENCY = getBulkProvisionConcurrency();
@@ -34,7 +35,8 @@ const getRequestByIdForUserProvisioning = async (client, requestId) => {
       daily_limit_minutes,
       usage_schedule,
       enforce_in_azure,
-      costing_mode
+      costing_mode,
+      microsoft_license_sku_id
     FROM requests
     WHERE id = $1
     FOR UPDATE
@@ -155,7 +157,8 @@ const provisionUsersForRequest = async (requestId) => {
         daily_limit_minutes,
         usage_schedule,
         enforce_in_azure,
-        costing_mode
+        costing_mode,
+        microsoft_license_sku_id
       FROM requests
       WHERE id = $1
     `,
@@ -288,6 +291,22 @@ const provisionUsersForRequest = async (requestId) => {
 
         if (adopted) {
           adoptedCount += 1;
+        }
+
+        const licenseSkuId = String(request.microsoft_license_sku_id || '').trim();
+        if (licenseSkuId) {
+          try {
+            await assignLicenseToUser(graphClient, createdUser.id, licenseSkuId);
+          } catch (licenseError) {
+            logAzureUserEvent('error', 'azure_user_license_assign_failed', {
+              requestId,
+              azureUserId: createdUser.id,
+              skuId: licenseSkuId,
+              message: licenseError?.message || null,
+              statusCode: licenseError?.statusCode || null
+            });
+            throw licenseError;
+          }
         }
 
         let resourceGroupName = null;

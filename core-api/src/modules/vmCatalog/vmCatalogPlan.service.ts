@@ -21,6 +21,8 @@ export interface VmCatalogPlanPublic {
   _id: string;
   sno?: number;
   name: string;
+  /** Real Webyne/provider name when `name` was remapped for admin/tenant display. */
+  providerName?: string;
   vcpu: number;
   ramGb: number;
   ssdGb: number;
@@ -35,6 +37,22 @@ export interface VmCatalogPlanPublic {
   updatedAt: string;
   /** Admin listings only — sell prices per OS category (multiplier applied server-side). */
   sellPricesByCategory?: Record<ExternalVmPricingCategory, VmCatalogPeriodPrices>;
+  /** Present on admin/tenant plan lists — whether hourly billing is offered. */
+  hourlyEnabled?: boolean;
+}
+
+/** Customer-facing label for admin/tenant UIs (super-admin keeps provider `name`). */
+export function customerDisplayName(
+  sno?: number | null,
+  fallbackIndex?: number
+): string {
+  const n =
+    sno != null && Number.isFinite(Number(sno))
+      ? Number(sno)
+      : fallbackIndex != null && Number.isFinite(fallbackIndex)
+        ? fallbackIndex + 1
+        : 1;
+  return `Cloud VPS - ${n}`;
 }
 
 /** Seed rows from the Webyne template sheet (admin-managed; not live scrape). */
@@ -70,10 +88,11 @@ function applySellMultiplier(
 
 function sellPricesForPlan(
   plan: VmCatalogPlanPublic,
-  multiplier: number
+  multiplier: number,
+  hourlyEnabled: boolean
 ): VmCatalogPeriodPrices {
   return {
-    hourly: applySellMultiplier(plan.hourly, multiplier),
+    hourly: hourlyEnabled ? applySellMultiplier(plan.hourly, multiplier) : null,
     monthly: applySellMultiplier(plan.monthly, multiplier),
     quarterly: applySellMultiplier(plan.quarterly, multiplier),
     yearly: applySellMultiplier(plan.yearly, multiplier),
@@ -104,13 +123,25 @@ class VmCatalogPlanService {
   async list(opts?: {
     activeOnly?: boolean;
     applySellPrice?: boolean;
+    /** When true, `name` becomes Cloud VPS - {sno}; real name is in `providerName`. */
+    forCustomer?: boolean;
   }): Promise<VmCatalogPlanPublic[]> {
     const filter = opts?.activeOnly ? { isActive: true } : {};
     const docs = await VmCatalogPlan.find(filter).sort({ sortOrder: 1, createdAt: 1 });
-    const plans = docs.map(toPublic);
+    let plans = docs.map(toPublic);
+
+    if (opts?.forCustomer) {
+      plans = plans.map((plan, i) => ({
+        ...plan,
+        providerName: plan.name,
+        name: customerDisplayName(plan.sno, i),
+      }));
+    }
+
     if (!opts?.applySellPrice) return plans;
 
     const pricingCfg = await externalVmPricingService.getByProvider('webyne');
+    const hourlyEnabled = Boolean(pricingCfg.hourlyEnabled);
     return plans.map((plan) => {
       const sellPricesByCategory = {} as Record<
         ExternalVmPricingCategory,
@@ -120,7 +151,11 @@ class VmCatalogPlanService {
         const multiplierRaw = Number(pricingCfg.categories[category]?.multiplier);
         const multiplier =
           Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
-        sellPricesByCategory[category] = sellPricesForPlan(plan, multiplier);
+        sellPricesByCategory[category] = sellPricesForPlan(
+          plan,
+          multiplier,
+          hourlyEnabled
+        );
       }
       const display = sellPricesByCategory.linux;
       return {
@@ -130,6 +165,7 @@ class VmCatalogPlanService {
         quarterly: display.quarterly,
         yearly: display.yearly,
         sellPricesByCategory,
+        hourlyEnabled,
       };
     });
   }

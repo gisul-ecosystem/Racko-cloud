@@ -77,10 +77,12 @@ export default function WebynePricingPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [savingMultiplier, setSavingMultiplier] = useState(false);
+  const [savingHourlyToggle, setSavingHourlyToggle] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [flash, setFlash] = useState<string | null>(null);
 
   const sellMultiplier = getGlobalSellMultiplier(pricingConfig);
+  const hourlyEnabled = Boolean(pricingConfig?.hourlyEnabled);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -128,11 +130,15 @@ export default function WebynePricingPage() {
     setFlash(null);
     try {
       const existing = pricingConfig ?? (await getExternalVmPricing('webyne'));
-      const saved = await saveExternalVmPricing('webyne', {
-        linux: { multiplier: m, plans: existing.categories.linux?.plans ?? {} },
-        windows: { multiplier: m, plans: existing.categories.windows?.plans ?? {} },
-        gpu: { multiplier: m, plans: existing.categories.gpu?.plans ?? {} },
-      });
+      const saved = await saveExternalVmPricing(
+        'webyne',
+        {
+          linux: { multiplier: m, plans: existing.categories.linux?.plans ?? {} },
+          windows: { multiplier: m, plans: existing.categories.windows?.plans ?? {} },
+          gpu: { multiplier: m, plans: existing.categories.gpu?.plans ?? {} },
+        },
+        { hourlyEnabled: Boolean(existing.hourlyEnabled) }
+      );
       setPricingConfig(saved);
       setMultiplierInput(String(m));
       setFlash(
@@ -144,6 +150,35 @@ export default function WebynePricingPage() {
       setError(err instanceof ApiError ? err.message : 'Failed to save multiplier.');
     } finally {
       setSavingMultiplier(false);
+    }
+  }
+
+  async function handleToggleHourly(next: boolean) {
+    setSavingHourlyToggle(true);
+    setError(null);
+    setFlash(null);
+    try {
+      const existing = pricingConfig ?? (await getExternalVmPricing('webyne'));
+      const m = getGlobalSellMultiplier(existing);
+      const saved = await saveExternalVmPricing(
+        'webyne',
+        {
+          linux: { multiplier: m, plans: existing.categories.linux?.plans ?? {} },
+          windows: { multiplier: m, plans: existing.categories.windows?.plans ?? {} },
+          gpu: { multiplier: m, plans: existing.categories.gpu?.plans ?? {} },
+        },
+        { hourlyEnabled: next }
+      );
+      setPricingConfig(saved);
+      setFlash(
+        next
+          ? 'Hourly pricing is ON — shown on admin and tenant Create VM.'
+          : 'Hourly pricing is OFF — admin and tenant see monthly, quarterly, yearly only.'
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update hourly toggle.');
+    } finally {
+      setSavingHourlyToggle(false);
     }
   }
 
@@ -305,6 +340,48 @@ export default function WebynePricingPage() {
             Save multiplier
           </button>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">Hourly pricing</h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              When on, hourly appears on admin and tenant Create VM. When off, only monthly,
+              quarterly, and yearly are offered.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={hourlyEnabled}
+            disabled={savingHourlyToggle || loading}
+            onClick={() => void handleToggleHourly(!hourlyEnabled)}
+            className={`relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition disabled:opacity-50 ${
+              hourlyEnabled ? 'bg-[#B91C1C]' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                hourlyEnabled ? 'translate-x-7' : 'translate-x-1'
+              }`}
+            />
+            <span className="sr-only">
+              {hourlyEnabled ? 'Disable hourly pricing' : 'Enable hourly pricing'}
+            </span>
+          </button>
+        </div>
+        <p className="mt-2 text-xs font-medium text-gray-700">
+          {savingHourlyToggle ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
+            </span>
+          ) : hourlyEnabled ? (
+            <span className="text-green-700">Hourly is ON</span>
+          ) : (
+            <span className="text-gray-500">Hourly is OFF</span>
+          )}
+        </p>
       </div>
 
       <form
