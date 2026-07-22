@@ -1,0 +1,63 @@
+# Postgres DB VM — auto-applies migrations + seeds on every compose up.
+#
+# First-time data load (one-time):
+#   restore supabase.dump manually, then:
+#   docker compose -f docker-compose.db.yml up -d
+#   (db-migrate baselines existing files; later NEW files apply automatically)
+#
+# After coding:
+#   1. Schema  → cloud_automation/src/db/migrations/*.sql
+#   2. Seed    → cloud_automation/src/db/seeds/*.sql
+#   3. Pull/copy repo onto DB VM
+#   4. docker compose -f docker-compose.db.yml up -d
+#   5. docker logs racko-db-migrate
+#
+# Usage on DB VM:
+#   docker compose -f docker-compose.db.yml up -d
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: racko-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: racko
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-RackoDb_ChangeMe_2026}
+      POSTGRES_DB: racko
+    ports:
+      - "5432:5432"
+    volumes:
+      - racko_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U racko -d racko"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      - postgres
+      - -c
+      - listen_addresses=*
+
+  db-migrate:
+    image: postgres:17
+    container_name: racko-db-migrate
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPORT: 5432
+      PGUSER: racko
+      PGPASSWORD: ${POSTGRES_PASSWORD:-RackoDb_ChangeMe_2026}
+      PGDATABASE: racko
+      MIGRATIONS_DIR: /migrations
+      SEEDS_DIR: /seeds
+    volumes:
+      - ./db/migrate.sh:/migrate.sh:ro
+      - ./cloud_automation/src/db/migrations:/migrations:ro
+      - ./cloud_automation/src/db/seeds:/seeds:ro
+    entrypoint: ["/bin/bash", "/migrate.sh"]
+    restart: "no"
+
+volumes:
+  racko_pgdata:

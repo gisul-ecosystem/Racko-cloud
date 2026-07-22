@@ -134,6 +134,7 @@ function validateForm(input: {
   resourceCleanupIntervalHours?: number;
   resourceCleanupAction?: 'delete' | 'pause';
   perUserBudgetUsd?: number;
+  costingMode?: CostingMode;
 }): string[] {
   const errors: string[] = [];
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -202,7 +203,7 @@ function validateForm(input: {
     }
   }
 
-  if (input.perUserBudgetUsd !== undefined) {
+  if (input.costingMode === 'per_user' && input.perUserBudgetUsd !== undefined) {
     if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
       errors.push('Budget per user must be a positive number.');
     }
@@ -224,7 +225,7 @@ export function RequestWorkspace() {
   const [location, setLocation] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
-  const costingMode: CostingMode = 'per_user';
+  const [costingMode, setCostingMode] = useState<CostingMode>('shared');
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
   const [usageWindows, setUsageWindows] = useState<UsageWindow[]>([]);
@@ -380,7 +381,9 @@ export function RequestWorkspace() {
       usageWindows,
       resourceCleanupEnabled,
       resourceCleanupIntervalHours,
+      resourceCleanupAction,
       perUserBudgetUsd,
+      costingMode,
     });
 
     setValidationErrors(errors);
@@ -440,7 +443,9 @@ export function RequestWorkspace() {
                   : {}),
               }
             : {}),
-          ...(perUserBudgetUsd !== undefined ? { perUserBudgetUsd } : {}),
+          ...(costingMode === 'per_user' && perUserBudgetUsd !== undefined
+            ? { perUserBudgetUsd }
+            : {}),
           ...(usageWindows.length > 0
             ? {
                 usageWindows: usageWindows.map((window) => ({
@@ -704,6 +709,13 @@ export function RequestWorkspace() {
               onCustomerEmailChange={setCustomerEmail}
               accountCount={accountCount}
               onAccountCountChange={setAccountCount}
+              costingMode={costingMode}
+              onCostingModeChange={(mode) => {
+                setCostingMode(mode);
+                if (mode === 'shared') {
+                  setPerUserBudgetUsd(undefined);
+                }
+              }}
               startDate={startDate}
               onStartDateChange={setStartDate}
               endDate={endDate}
