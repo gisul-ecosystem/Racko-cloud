@@ -41,8 +41,11 @@ import tenantNotificationRoutes from './modules/tenantNotification/tenantNotific
 import tenantUserRoutes from './modules/tenantUser/tenantUser.routes';
 import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
 import tenantExternalVmRoutes from './modules/tenantExternalVm/tenantExternalVm.routes';
+import tenantVmCatalogRoutes from './modules/tenantVmCatalog/tenantVmCatalog.routes';
+import tenantDedicatedServerRoutes from './modules/tenantDedicatedServer/tenantDedicatedServer.routes';
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
+import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
 import adminBillingRoutes from './modules/adminBilling/adminBilling.routes';
@@ -163,6 +166,8 @@ app.use('/api/v1/tenant-notifications', tenantNotificationRoutes);
 app.use('/api/v1/tenant-users', tenantUserRoutes);
 app.use('/api/v1/tenant-vms', tenantVmRoutes);
 app.use('/api/v1/tenant-external-vms', tenantExternalVmRoutes);
+app.use('/api/v1/tenant-vm-catalog', tenantVmCatalogRoutes);
+app.use('/api/v1/tenant-dedicated-servers', tenantDedicatedServerRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -191,6 +196,7 @@ startStorageReconcileSweeper();
 startVmAutomationScheduler();
 startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
+startCatalogVmExpiryScheduler();
 
 // 404 handler
 app.use(notFoundHandler);

@@ -14,14 +14,14 @@ router.use(requireAuth);
 
 /**
  * GET  /api/v1/external-vm-pricing/:provider
- * Readable by admin + super_admin so Create VM sell prices can be applied.
+ * Readable by super_admin only (sell pricing is applied server-side for admins).
  *
  * PUT  /api/v1/external-vm-pricing/:provider
  * Writable by super_admin only.
  */
 router.get(
   '/:provider',
-  requireRole('super_admin', 'admin'),
+  requireRole('super_admin'),
   validateRequest(providerParamSchema),
   (req, res, next) => {
     externalVmPricingController.getConfig(req, res, next);

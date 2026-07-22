@@ -18,7 +18,8 @@ async function listPlans(req: Request, res: Response, next: NextFunction): Promi
   try {
     const authReq = req as AuthenticatedRequest;
     const activeOnly = authReq.user.role === 'admin';
-    const plans = await dedicatedServerService.listPlans({ activeOnly });
+    const applySellPrice = authReq.user.role === 'admin';
+    const plans = await dedicatedServerService.listPlans({ activeOnly, applySellPrice });
     success(res, 'Dedicated server plans retrieved.', { plans, total: plans.length });
   } catch (err) {
     next(err);
@@ -55,6 +56,41 @@ async function deletePlan(req: Request, res: Response, next: NextFunction): Prom
     const id = new mongoose.Types.ObjectId(req.params['id'] as string);
     await dedicatedServerService.deletePlan(id);
     success(res, 'Dedicated server plan deleted.', {});
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function seedPlans(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const result = await dedicatedServerService.seedPlansIfEmpty(
+      new mongoose.Types.ObjectId(authReq.user.userId)
+    );
+    success(res, 'Dedicated server plans seed completed.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function getPricingSettings(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const settings = await dedicatedServerService.getPricingSettings();
+    success(res, 'Dedicated server pricing settings retrieved.', settings);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updatePricingSettings(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const { sellMultiplier } = req.body as { sellMultiplier: number };
+    const settings = await dedicatedServerService.updatePricingSettings(
+      sellMultiplier,
+      new mongoose.Types.ObjectId(authReq.user.userId)
+    );
+    success(res, 'Dedicated server pricing settings updated.', settings);
   } catch (err) {
     next(err);
   }
@@ -191,6 +227,9 @@ export const dedicatedServerController = {
   createPlan,
   updatePlan,
   deletePlan,
+  seedPlans,
+  getPricingSettings,
+  updatePricingSettings,
   createRequest,
   listMine,
   getOne,

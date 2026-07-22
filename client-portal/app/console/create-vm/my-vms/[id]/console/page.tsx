@@ -1,21 +1,20 @@
 'use client';
 
 import { ExternalVMConsoleView } from '../../../../../../components/console/ExternalVMConsoleView';
-import {
-  fetchCatalogVm,
-  getCatalogVmConsole,
-} from '../../../../../../lib/vmCatalogApi';
+import { useVmCatalogPortal } from '../../../../../../context/VmCatalogPortalContext';
 
 export default function CatalogVmConsolePage() {
+  const { routes, api } = useVmCatalogPortal();
+
   return (
     <ExternalVMConsoleView
-      backHref="/console/create-vm/my-vms"
-      disconnectHref="/console/create-vm/my-vms"
+      backHref={routes.myVms}
+      disconnectHref={routes.myVms}
       fetchVm={async (id) => {
-        const vm = await fetchCatalogVm(id);
+        const vm = await api.fetchVm(id);
         return { name: vm.planName };
       }}
-      openConsole={getCatalogVmConsole}
+      openConsole={api.getConsole}
     />
   );
 }

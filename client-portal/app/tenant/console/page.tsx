@@ -8,8 +8,10 @@ import {
   Boxes,
   Cloud,
   Globe,
+  HardDrive,
   Loader2,
   Monitor,
+  PlusCircle,
   Server,
   Wallet,
 } from 'lucide-react';
@@ -34,6 +36,20 @@ const SERVICE_TILES: Array<{
     href: tenantVps.overview,
     icon: Server,
     description: 'Provision and manage Racko cloud virtual machines',
+  },
+  {
+    serviceKey: 'create-vm',
+    name: 'VM Catalog',
+    href: tenantConsole.createVm,
+    icon: PlusCircle,
+    description: 'Browse Webyne VM plans and request catalog virtual machines',
+  },
+  {
+    serviceKey: 'dedicated-server',
+    name: 'Dedicated Server',
+    href: tenantConsole.dedicatedServer,
+    icon: HardDrive,
+    description: 'Request and manage dedicated bare-metal servers',
   },
   {
     serviceKey: 'billing',

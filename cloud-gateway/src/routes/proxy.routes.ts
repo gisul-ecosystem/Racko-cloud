@@ -117,6 +117,8 @@ const tenantNotificationsProxy = createMountedCoreApiProxy('/api/v1/tenant-notif
 const tenantUsersProxy = createMountedCoreApiProxy('/api/v1/tenant-users');
 const tenantVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-vms');
 const tenantExternalVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-external-vms');
+const tenantVmCatalogProxy = createMountedCoreApiProxy('/api/v1/tenant-vm-catalog');
+const tenantDedicatedServersProxy = createMountedCoreApiProxy('/api/v1/tenant-dedicated-servers');
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -253,8 +255,17 @@ router.get('/api/v1/external-vms/:id/console', authMiddleware, verifyMiddleware,
 router.get('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'user'), coreApiProxy);
 router.delete('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
+// ─── EXTERNAL VM PRICING (sell multipliers / overrides) ──────────────────────
+router.get('/api/v1/external-vm-pricing/:provider', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.put('/api/v1/external-vm-pricing/:provider', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+
 // ─── VM CATALOG ROUTES (admin + super_admin) ─────────────────────────────────
 router.get('/api/v1/vm-catalog/overview', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/vm-catalog/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/vm-catalog/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/vm-catalog/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.patch('/api/v1/vm-catalog/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.delete('/api/v1/vm-catalog/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/vm-catalog/vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vm-catalog/vms/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vm-catalog/vms/:id/console', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -265,9 +276,14 @@ router.patch('/api/v1/vm-catalog/requests/:id/approve', authMiddleware, verifyMi
 router.patch('/api/v1/vm-catalog/requests/:id/fetch-details', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.patch('/api/v1/vm-catalog/requests/:id/attach', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.patch('/api/v1/vm-catalog/requests/:id/reject', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/vm-catalog/pricing/calculate', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/vm-catalog/pricing', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.post('/api/v1/dedicated-servers/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.get('/api/v1/dedicated-servers/pricing-settings', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+router.put('/api/v1/dedicated-servers/pricing-settings', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.patch('/api/v1/dedicated-servers/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.delete('/api/v1/dedicated-servers/plans/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.get('/api/v1/dedicated-servers/servers', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -299,6 +315,11 @@ router.post('/api/v1/machines/push-agent', authMiddleware, verifyMiddleware, req
 router.post('/api/v1/machines/push-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 // SSE stream for push status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
 router.get('/api/v1/machines/push-stream/:sessionId', sseProxy);
+// Reset routes — must come before /:id
+router.post('/api/v1/machines/reset', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/reset-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// SSE stream for reset status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
+router.get('/api/v1/machines/reset-stream/:sessionId', sseProxy);
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -316,7 +337,6 @@ router.get('/api/v1/machines/:id/download-agent', authMiddleware, verifyMiddlewa
 router.post('/api/v1/machines/:id/exec', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
-
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -328,6 +348,7 @@ router.post('/api/v1/agent/register', coreApiProxy);
 router.post('/api/v1/agent/enroll', coreApiProxy);
 router.get('/api/v1/agent/binary/:os', coreApiProxy);
 router.get('/api/v1/agent/install/linux', coreApiProxy);
+router.get('/api/v1/agent/reset-script', coreApiProxy); // public — no auth, agent uses this at reset time
 router.get('/api/v1/agent/connect', coreApiProxy); // WebSocket upgrade — handled via server.on('upgrade') in server.ts
 router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
@@ -354,6 +375,8 @@ router.use('/api/v1/tenant-notifications', requireTenantBearer, tenantNotificati
 router.use('/api/v1/tenant-users', requireTenantBearer, tenantUsersProxy);
 router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
 router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVmsProxy);
+router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProxy);
+router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

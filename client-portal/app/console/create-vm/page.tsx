@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useAuth } from '../../../context/AuthContext';
 import { useVmCatalogOverview } from '../../../hooks/useVmCatalogOverview';
+import { useVmCatalogPortal } from '../../../context/VmCatalogPortalContext';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import {
@@ -99,8 +99,8 @@ function StatusBadge({ status }: { status: ICatalogVm['status'] }) {
 }
 
 export default function VmCatalogOverviewPage() {
-  const { isAuthenticated } = useAuth();
-  const { overview, loading, error, refetch } = useVmCatalogOverview(isAuthenticated);
+  const { routes } = useVmCatalogPortal();
+  const { overview, loading, error, refetch } = useVmCatalogOverview();
 
   const stats = overview?.stats ?? {
     total: 0,
@@ -122,7 +122,7 @@ export default function VmCatalogOverviewPage() {
           </p>
         </div>
         <Link
-          href="/console/create-vm/create"
+          href={routes.create}
           className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717]"
         >
           <Plus className="h-4 w-4" />
@@ -177,7 +177,7 @@ export default function VmCatalogOverviewPage() {
             <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">Recent VMs</h2>
               <Link
-                href="/console/create-vm/my-vms"
+                href={routes.myVms}
                 className="text-xs font-medium text-[#B91C1C] hover:text-[#DC2626]"
               >
                 View all
@@ -266,7 +266,7 @@ export default function VmCatalogOverviewPage() {
             </div>
             <div className="grid gap-px bg-gray-100 sm:grid-cols-2">
               <Link
-                href="/console/create-vm/create"
+                href={routes.create}
                 className="flex items-start gap-3 bg-white px-6 py-5 transition hover:bg-gray-50"
               >
                 <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
@@ -280,7 +280,7 @@ export default function VmCatalogOverviewPage() {
                 </div>
               </Link>
               <Link
-                href="/console/create-vm/my-vms"
+                href={routes.myVms}
                 className="flex items-start gap-3 bg-white px-6 py-5 transition hover:bg-gray-50"
               >
                 <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
