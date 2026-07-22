@@ -251,7 +251,9 @@ foreach ($proc in (Get-Process -ErrorAction SilentlyContinue)) {
     if ($skip) { continue }
 
     Write-Host "  Killing: $($proc.Name) (PID $($proc.Id))" -ForegroundColor DarkYellow
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+    # Use taskkill instead of Stop-Process — works cross-session (Session 0 → Session 2+)
+    # /F = force, /T = kill process tree (children too), /PID = target by PID
+    taskkill /F /T /PID $proc.Id 2>$null | Out-Null
     $killed++
 }
 
