@@ -3,8 +3,8 @@
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
-import { respondToPurchaseIntent } from '../../../../../cloud_automation/api/client';
-import { ApiError } from '../../../../../lib/apiClient';
+import { respondToPurchaseIntent } from '../../../../cloud_automation/api/client';
+import { ApiError } from '../../../../lib/apiClient';
 
 export default function PurchaseResponseInner() {
   const searchParams = useSearchParams();
