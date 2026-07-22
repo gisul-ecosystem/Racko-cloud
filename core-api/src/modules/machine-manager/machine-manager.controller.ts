@@ -298,6 +298,35 @@ export class MachineManagerController {
     }
   }
 
+  /** GET /api/v1/agent/reset-script — serves the VM reset PowerShell script (public, no auth)
+   * Agent downloads this at reset time and runs it with -File flag.
+   * No auth needed: the script contains no secrets and is only useful on Windows VMs.
+   */
+  async serveResetScript(_req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const path = await import('path');
+      const fs = await import('fs');
+
+      // Resolve relative to repo root (process.cwd() = /app in Docker, repo root locally)
+      const scriptPath = path.resolve(process.cwd(), '..', 'agent', 'scripts', 'reset.ps1');
+
+      if (!fs.existsSync(scriptPath)) {
+        res.status(404).json({
+          success: false,
+          message: 'Reset script not found. Ensure agent/scripts/reset.ps1 exists.',
+        });
+        return;
+      }
+
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Content-Disposition', 'attachment; filename="reset.ps1"');
+      res.setHeader('Cache-Control', 'no-store');
+      fs.createReadStream(scriptPath).pipe(res);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /**
    * GET /api/v1/agent/binary/:os — serves pre-built agent binary (public)
    * Called by the install script to download the generic agent binary.
@@ -560,9 +589,94 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
       jobStatusEmitter.removeListener(jobId, listener);
     });
   }
-  /** POST /api/v1/machines/:id/exec */
-  async execCommand(req: Request, res: Response, next: NextFunction): Promise<void> {
+  /**
+   * POST /api/v1/machines/reset
+   * Initiates a VM reset on one or more machines.
+   * Returns immediately — reset runs async on the agent.
+   * Use the SSE stream to receive live progress.
+   */
+  async resetMachines(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const { machineIds, sessionId } = req.body as { machineIds: string[]; sessionId?: string };
+
+      if (!machineIds?.length) {
+        res.status(400).json({ success: false, message: 'machineIds is required.' });
+        return;
+      }
+
+      const sid = sessionId ?? `reset-${Date.now()}`;
+      const result = await machineManagerService.resetMachines(machineIds, adminId, sid);
+      success(res, 'Reset initiated.', { ...result, sessionId: sid });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/v1/machines/reset-stream-ticket
+   * Issues a short-lived SSE stream ticket for a reset session.
+   */
+  async issueResetStreamTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = (req as AuthenticatedRequest).user.userId;
+      const { sessionId } = req.body as { sessionId: string };
+      if (!sessionId) {
+        res.status(400).json({ success: false, message: 'sessionId required.' });
+        return;
+      }
+      const { issueResetStreamTicket } = await import('./reset.streamTicket');
+      const ticket = issueResetStreamTicket(sessionId, userId);
+      success(res, 'Reset stream ticket issued.', ticket);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * GET /api/v1/machines/reset-stream/:sessionId?streamToken=xxx
+   * SSE stream for real-time reset status updates.
+   * Auth via short-lived streamToken (EventSource cannot set auth headers).
+   */
+  async streamResetStatus(req: Request, res: Response): Promise<void> {
+    const sessionId = req.params['sessionId'] as string;
+    const rawToken = req.query['streamToken'];
+    const streamToken = typeof rawToken === 'string' ? rawToken : '';
+
+    const { consumeResetStreamTicket } = await import('./reset.streamTicket');
+    const ticket = streamToken ? consumeResetStreamTicket(streamToken, sessionId) : null;
+    if (!ticket) {
+      res.status(401).json({ success: false, message: 'Unauthorized.' });
+      return;
+    }
+
+    logger.info('[ResetStream] SSE stream opened', { sessionId });
+
+    // SSE headers
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no');
+    res.flushHeaders();
+
+    const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+    // Confirm stream is alive
+    send({ type: 'ping', sessionId });
+
+    const { resetSessionEmitter } = await import('./reset.events');
+
+    const listener = (event: object) => send(event);
+    resetSessionEmitter.on(sessionId, listener);
+
+    req.on('close', () => {
+      resetSessionEmitter.removeListener(sessionId, listener);
+      machineManagerService.removeResetSession(sessionId);
+    });
+  }
+
+  /** POST /api/v1/machines/:id/exec */
+  async execCommand(req: Request, res: Response, next: NextFunction): Promise<void> {    try {
       const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
       const { command } = req.body as { command: string };

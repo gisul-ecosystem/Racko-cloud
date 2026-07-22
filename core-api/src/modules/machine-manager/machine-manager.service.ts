@@ -619,6 +619,54 @@ class MachineManagerService {
     }
   }
 
+  /**
+   * Reset one or more machines — sends { type: "reset", payload: { sessionId } } to each
+   * connected agent via WebSocket. Fire-and-forget: returns immediately, agent runs the
+   * full reset PowerShell script in a background goroutine and sends back SSE progress events.
+   * Also clears all job history for each machine so the machine appears fresh after reset.
+   */
+  async resetMachines(
+    machineIds: string[],
+    adminId: mongoose.Types.ObjectId,
+    sessionId: string
+  ): Promise<{ accepted: string[]; offline: string[] }> {
+    const { wsManager } = await import('./websocket/wsManager');
+    const accepted: string[] = [];
+    const offline: string[] = [];
+
+    await Promise.all(
+      machineIds.map(async (machineId) => {
+        const id = new mongoose.Types.ObjectId(machineId);
+        const doc = await this.findOwnedMachine(id, adminId);
+
+        if (!doc.agentId || !wsManager.isConnected(doc.agentId)) {
+          offline.push(machineId);
+          logger.warn('[MachineManager] Reset skipped — agent offline', { machineId, agentId: doc.agentId });
+          return;
+        }
+
+        // Send reset command — agent runs script in background goroutine
+        wsManager.sendReset(doc.agentId, sessionId);
+        accepted.push(machineId);
+
+        // Clear job history so machine appears fresh after reset
+        await JobModel.deleteMany({ machineId: new mongoose.Types.ObjectId(machineId) });
+
+        logger.info('[MachineManager] Reset initiated', {
+          machineId,
+          agentId: doc.agentId,
+          sessionId,
+        });
+      })
+    );
+
+    return { accepted, offline };
+  }
+
+  removeResetSession(sessionId: string): void {
+    logger.info('[MachineManager] Reset session removed', { sessionId });
+  }
+
   async execCommand(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,

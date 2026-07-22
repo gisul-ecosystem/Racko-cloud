@@ -3,8 +3,11 @@ package poller
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"sync"
 	"time"
@@ -168,6 +171,16 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 			} else if msg.Type == "uninstall" {
 				log.Printf("[ws-poller] Received uninstall command — running cleanup script")
 				go p.runUninstall()
+			} else if msg.Type == "reset" {
+				var resetMsg struct {
+					SessionID string `json:"sessionId"`
+				}
+				if err := json.Unmarshal(msg.Payload, &resetMsg); err != nil {
+					log.Printf("[ws-poller] Malformed reset payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received reset command — sessionId=%s", resetMsg.SessionID)
+				go p.runReset(resetMsg.SessionID, safeWrite)
 			} else if msg.Type == "exec" {
 				var execMsg struct {
 					CommandID string `json:"commandId"`
@@ -252,8 +265,106 @@ func (p *WSPoller) runExec(commandID, command string, safeWrite func(int, []byte
 	}
 }
 
-// ─── Uninstall ────────────────────────────────────────────────────────────────
+// ─── Reset ────────────────────────────────────────────────────────────────────
 
+// runReset downloads the reset PowerShell script from the platform server,
+// saves it to a temp file, runs it with -File (required by the script's safety guard),
+// then deletes the temp file. Sends reset_progress on start and reset_complete when done.
+func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error) {
+	sendEvent := func(eventType string, phase int, message string, success bool, errMsg string) {
+		payload := map[string]interface{}{
+			"sessionId": sessionID,
+			"machineId": p.agentID,
+		}
+		if eventType == "reset_progress" {
+			payload["phase"] = phase
+			payload["message"] = message
+		} else {
+			payload["success"] = success
+			if errMsg != "" {
+				payload["error"] = errMsg
+			}
+		}
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":    eventType,
+			"payload": payload,
+		})
+		if err := safeWrite(websocket.TextMessage, msg); err != nil {
+			log.Printf("[ws-poller] runReset: failed to send %s event: %v", eventType, err)
+		}
+	}
+
+	sendEvent("reset_progress", 0, "Downloading reset script from server...", false, "")
+
+	// ── Step 1: Download the reset script from the platform server ────────────
+	scriptURL := p.cfg.PlatformURL + "/api/v1/agent/reset-script"
+	log.Printf("[ws-poller] runReset: downloading script from %s", scriptURL)
+
+	httpClient := &http.Client{Timeout: 30 * time.Second}
+	resp, err := httpClient.Get(scriptURL)
+	if err != nil {
+		errMsg := fmt.Sprintf("Failed to download reset script: %v", err)
+		log.Printf("[ws-poller] runReset: %s", errMsg)
+		sendEvent("reset_complete", 0, "", false, errMsg)
+		return
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		errMsg := fmt.Sprintf("Server returned %d when fetching reset script", resp.StatusCode)
+		log.Printf("[ws-poller] runReset: %s", errMsg)
+		sendEvent("reset_complete", 0, "", false, errMsg)
+		return
+	}
+
+	scriptContent, err := io.ReadAll(resp.Body)
+	if err != nil {
+		errMsg := fmt.Sprintf("Failed to read reset script: %v", err)
+		log.Printf("[ws-poller] runReset: %s", errMsg)
+		sendEvent("reset_complete", 0, "", false, errMsg)
+		return
+	}
+
+	// ── Step 2: Write to temp file ─────────────────────────────────────────────
+	tmpPath := `C:\Windows\Temp\racko-reset.ps1`
+	if err := os.WriteFile(tmpPath, scriptContent, 0644); err != nil {
+		errMsg := fmt.Sprintf("Failed to write reset script to temp: %v", err)
+		log.Printf("[ws-poller] runReset: %s", errMsg)
+		sendEvent("reset_complete", 0, "", false, errMsg)
+		return
+	}
+	defer os.Remove(tmpPath) // always clean up temp file
+
+	sendEvent("reset_progress", 1, "Running reset script...", false, "")
+	log.Printf("[ws-poller] runReset: executing script, sessionId=%s", sessionID)
+
+	// ── Step 3: Run with -File flag (required by the script's safety guard) ───
+	cmd := exec.Command("powershell.exe",
+		"-NonInteractive",
+		"-ExecutionPolicy", "Bypass",
+		"-File", tmpPath,
+	)
+	out, err := cmd.CombinedOutput()
+
+	if err != nil {
+		errMsg := string(out)
+		if errMsg == "" {
+			errMsg = err.Error()
+		}
+		// Trim to 2KB to avoid oversized WS messages
+		if len(errMsg) > 2048 {
+			errMsg = errMsg[:2048] + "...(truncated)"
+		}
+		log.Printf("[ws-poller] runReset: script failed: %v", err)
+		sendEvent("reset_complete", 0, "", false, errMsg)
+		return
+	}
+
+	log.Printf("[ws-poller] runReset: script completed successfully, sessionId=%s", sessionID)
+	sendEvent("reset_complete", 0, "", true, "")
+}
+
+// ─── Uninstall ────────────────────────────────────────────────────────────────
 // runUninstall stops all agent goroutines first (heartbeat, poller) then
 // launches the cleanup script. Using cancel() ensures heartbeat stops
 // immediately so it cannot re-launch selfUninstall on the next tick.
