@@ -72,6 +72,8 @@ export interface TenantBranding {
   supportEmail?: string;
 }
 
+export type TenantIpAccessMode = 'all' | 'restricted';
+
 export interface Tenant {
   id: string;
   slug: string;
@@ -81,6 +83,8 @@ export interface Tenant {
   branding: TenantBranding;
   enabledServices: string[];
   limits: Record<string, unknown>;
+  ipAccessMode: TenantIpAccessMode;
+  allowedIps: string[];
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -163,6 +167,11 @@ export interface UpdateTenantInput {
   domain?: string;
   status?: TenantStatus;
   branding?: TenantBranding;
+}
+
+export interface UpdateTenantIpAccessInput {
+  ipAccessMode: TenantIpAccessMode;
+  allowedIps: string[];
 }
 
 export interface CreateTenantAdminInput {
