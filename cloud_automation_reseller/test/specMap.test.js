@@ -5,7 +5,8 @@ import {
   parseCanonicalSpec,
   resolveSpecParts,
 } from '../src/config/specMap.js';
-import { resolveGcpSku } from '../src/services/dynamicSkuResolver.js';
+import { resolveGcpSku, resolveOciSku, resolveAzureSku } from '../src/services/dynamicSkuResolver.js';
+import { toPricingMode, pricingModeQuery } from '../src/models/CloudRegionPricing.js';
 import { normalizeProviders, CLOUD_PROVIDERS } from '../src/config/cloudProviders.js';
 
 test('specsToCanonical builds linux spec', () => {
@@ -48,10 +49,54 @@ test('resolveGcpSku picks e2-standard-2 for 2vCPU/8GB', () => {
   assert.equal(sku.diskGb, 50);
 });
 
+test('resolveGcpSku nested mode uses n2 not e2', () => {
+  const sku = resolveGcpSku({
+    vcpu: 2,
+    ramGb: 8,
+    diskGb: 50,
+    nestedVirtualization: true,
+  });
+  assert.equal(sku.machineType, 'n2-standard-2');
+  assert.equal(sku.source, 'dynamic_nested');
+});
+
 test('resolveGcpSku adds T4 for gpu specs', () => {
   const sku = resolveGcpSku({ vcpu: 4, ramGb: 16, diskGb: 100, gpu: true });
   assert.equal(sku.machineType, 'n1-standard-4');
   assert.equal(sku.acceleratorType, 'nvidia-tesla-t4');
+});
+
+test('resolveOciSku nested mode prefers Intel Standard3.Flex', () => {
+  const normal = resolveOciSku({ vcpu: 4, ramGb: 16, diskGb: 100 });
+  const nested = resolveOciSku({
+    vcpu: 4,
+    ramGb: 16,
+    diskGb: 100,
+    nestedVirtualization: true,
+  });
+  assert.equal(normal.shape, 'VM.Standard.E4.Flex');
+  assert.equal(nested.shape, 'VM.Standard3.Flex');
+});
+
+test('resolveAzureSku nested mode fails closed without Azure credentials', async () => {
+  await assert.rejects(
+    () =>
+      resolveAzureSku({
+        vcpu: 2,
+        ramGb: 4,
+        diskGb: 50,
+        nestedVirtualization: true,
+      }),
+    /AZURE_SUBSCRIPTION_ID|Azure|credential|login|DefaultAzureCredential/i
+  );
+});
+
+test('toPricingMode and pricingModeQuery', () => {
+  assert.equal(toPricingMode(true), 'nested');
+  assert.equal(toPricingMode(false), 'normal');
+  assert.equal(toPricingMode('true'), 'nested');
+  assert.deepEqual(pricingModeQuery('nested'), { pricingMode: 'nested' });
+  assert.ok(pricingModeQuery('normal').$or);
 });
 
 test('normalizeProviders defaults to all cloud providers', () => {

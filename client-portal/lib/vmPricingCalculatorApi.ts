@@ -13,6 +13,8 @@ export interface VmPricingCalculateInput {
   };
   canonicalSpec?: string;
   providers?: CloudProvider[];
+  /** When true, price nested-virt-capable SKUs only (Docker/KVM guests). */
+  nestedVirtualization?: boolean;
 }
 
 export interface PricingPeriod {
@@ -27,14 +29,25 @@ export interface VmPricingSelectResult {
   region: string | null;
   category: PricingCategory;
   canonicalSpec: string;
+  pricingMode?: 'normal' | 'nested';
+  nestedVirtualization?: boolean;
   rawComputePricePerHr?: number;
   rawStoragePricePerHr?: number;
+  /** @deprecated Prefer rawPublicIpPricePerHr */
   rawIpPricePerHr?: number;
+  rawPublicIpPricePerHr?: number;
+  rawPrivateIpPricePerHr?: number;
   rawTotalPricePerHr: number | null;
+  rawTotalWithPublicIpPerHr?: number;
+  rawTotalWithPrivateIpPerHr?: number;
   rawComputePricePerHrInr?: number | null;
   rawStoragePricePerHrInr?: number | null;
   rawIpPricePerHrInr?: number | null;
+  rawPublicIpPricePerHrInr?: number | null;
+  rawPrivateIpPricePerHrInr?: number | null;
   rawTotalPricePerHrInr?: number | null;
+  rawTotalWithPublicIpPerHrInr?: number | null;
+  rawTotalWithPrivateIpPerHrInr?: number | null;
   instanceType?: string;
   currency?: string;
   autoProvisioned: boolean;
@@ -90,6 +103,7 @@ export async function listVmPricing(params: {
   category?: PricingCategory;
   canonicalSpec?: string;
   limit?: number;
+  nestedVirtualization?: boolean;
 }): Promise<{ rows: VmPricingRow[]; total: number; usdToInr?: number; fxSource?: string }> {
   const qs = new URLSearchParams();
   if (params.providers) qs.set('providers', params.providers);
@@ -97,6 +111,9 @@ export async function listVmPricing(params: {
   if (params.category) qs.set('category', params.category);
   if (params.canonicalSpec) qs.set('canonicalSpec', params.canonicalSpec);
   if (params.limit != null) qs.set('limit', String(params.limit));
+  if (params.nestedVirtualization != null) {
+    qs.set('nestedVirtualization', params.nestedVirtualization ? 'true' : 'false');
+  }
   const suffix = qs.toString() ? `?${qs.toString()}` : '';
   const res = await apiRequest<
     ApiResponse<{ rows: VmPricingRow[]; total: number; usdToInr?: number; fxSource?: string }>

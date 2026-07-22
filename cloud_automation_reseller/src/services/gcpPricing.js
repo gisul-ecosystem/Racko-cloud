@@ -155,6 +155,18 @@ export async function getGcpUnitRates(region = 'asia-south1') {
       new RegExp(place, 'i').test(s.description || '') &&
       !/Spot|Preemptible/i.test(s.description || ''),
   ]);
+  const n2Core = findRate(skus, [
+    (s) =>
+      /N2 (?:Predefined )?Instance Core/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || '') &&
+      !/Spot|Preemptible|N2D/i.test(s.description || ''),
+  ]);
+  const n2Ram = findRate(skus, [
+    (s) =>
+      /N2 (?:Predefined )?Instance Ram/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || '') &&
+      !/Spot|Preemptible|N2D/i.test(s.description || ''),
+  ]);
   const pd = findRate(skus, [
     (s) =>
       /Balanced PD Capacity/i.test(s.description || '') &&
@@ -188,6 +200,8 @@ export async function getGcpUnitRates(region = 'asia-south1') {
     e2RamGbPerHr: requireRate(`E2 RAM (${place})`, e2Ram),
     n1CorePerHr: requireRate(`N1 core (${place})`, n1Core),
     n1RamGbPerHr: requireRate(`N1 RAM (${place})`, n1Ram),
+    n2CorePerHr: n2Core,
+    n2RamGbPerHr: n2Ram,
     pdBalancedGbPerMonth: requireRate(`Balanced PD (${place})`, pd),
     publicIpPerHr: requireRate('Public IP in-use', ip),
     windowsCorePerHr: windows,
@@ -205,7 +219,7 @@ export function machineResources(machineType) {
     const ramPerVcpu = family === 'n1' ? 3.75 : 4;
     return { vcpu, ramGb: vcpu * ramPerVcpu, family };
   }
-  return { vcpu: 2, ramGb: 8, family: 'e2' };
+  throw new Error(`Unknown GCP machine type for pricing: ${machineType}`);
 }
 
 export function computeGcpHourly({
@@ -220,8 +234,21 @@ export function computeGcpHourly({
   }
 
   const res = machineResources(machineType);
-  const coreRate = res.family === 'n1' || res.family === 'g2' ? rates.n1CorePerHr : rates.e2CorePerHr;
-  const ramRate = res.family === 'n1' || res.family === 'g2' ? rates.n1RamGbPerHr : rates.e2RamGbPerHr;
+  let coreRate;
+  let ramRate;
+  if (res.family === 'n2') {
+    if (rates.n2CorePerHr == null || rates.n2RamGbPerHr == null) {
+      throw new Error('GCP catalog missing live N2 core/RAM rates');
+    }
+    coreRate = rates.n2CorePerHr;
+    ramRate = rates.n2RamGbPerHr;
+  } else if (res.family === 'n1' || res.family === 'g2') {
+    coreRate = rates.n1CorePerHr;
+    ramRate = rates.n1RamGbPerHr;
+  } else {
+    coreRate = rates.e2CorePerHr;
+    ramRate = rates.e2RamGbPerHr;
+  }
 
   let compute = Number(res.vcpu) * coreRate + Number(res.ramGb) * ramRate;
   if (category === 'windows') {
@@ -305,12 +332,14 @@ export async function syncGcpPricing() {
               region,
               category: cat,
               canonicalSpec,
+              pricingMode: 'normal',
             },
             {
               provider: 'gcp',
               region,
               category: cat,
               canonicalSpec,
+              pricingMode: 'normal',
               ...priced,
               currency: 'USD',
               instanceType: mapping.machineType,

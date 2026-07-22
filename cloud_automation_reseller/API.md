@@ -141,6 +141,7 @@ Fields:
 - `category`: `linux`, `windows`, or `gpu`.
 - `durationDays`: number of service days.
 - `providers`: optional. Limit comparison to specific clouds. Array or comma-separated string. Examples: `["azure"]`, `"aws,azure"`, `"oci"`. Omit for all providers (`aws`, `azure`, `oci`, `gcp`).
+- `nestedVirtualization`: optional boolean (default `false`). When `true`, resolves only nested-virt-capable SKUs (Docker/KVM guests) and prices those live. Cached separately via `pricingMode: "nested"`.
 
 Azure-only select request:
 
@@ -424,11 +425,12 @@ No request body. Supported query parameters:
 - `category`: `linux`, `windows`, or `gpu`.
 - `canonicalSpec`: exact canonical spec.
 - `limit`: defaults to 100; maximum 500.
+- `nestedVirtualization`: optional `true`/`false`. When `true`, only returns nested-virt-capable priced rows (`pricingMode: nested`).
 
 Example:
 
 ```text
-GET /api/pricing?canonicalSpec=2vcpu-8gb-50gbssd&category=linux&limit=20
+GET /api/pricing?canonicalSpec=2vcpu-8gb-50gbssd&category=linux&nestedVirtualization=true&limit=20
 ```
 
 Example response:
