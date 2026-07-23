@@ -1,26 +1,4 @@
-const nodemailer = require('nodemailer');
-const { validateSmtpEnv } = require('./smtpEnv');
-
-const MAX_ATTEMPTS = 3;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const createSmtpTransport = () => {
-  const smtpConfig = validateSmtpEnv();
-
-  return {
-    transporter: nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port,
-      secure: smtpConfig.secure,
-      auth: smtpConfig.auth,
-      connectionTimeout: 30_000,
-      greetingTimeout: 30_000,
-      socketTimeout: 60_000
-    }),
-    from: smtpConfig.from
-  };
-};
+const { sendMailWithRetry } = require('./mailSender');
 
 const escapeHtml = (value) =>
   String(value ?? '')
@@ -207,42 +185,8 @@ const buildAccessPortalEmailHtml = ({ requestId, manageUrl, expiresAt }) => `
   </html>
 `;
 
-const isRetryableEmailError = (error) => {
-  const statusCode = Number(error?.statusCode || error?.responseCode || error?.status);
-  const errorCode = String(error?.code || '').toUpperCase();
-
-  return (
-    [421, 450, 451, 452, 454, 455, 500, 502, 503, 504].includes(statusCode) ||
-    ['ETIMEDOUT', 'ECONNRESET', 'ESOCKET', 'EAUTH', 'ECONNECTION'].includes(errorCode)
-  );
-};
-
-const sendCredentialEmailWithRetry = async ({ to, subject, html, attachments = [] }) => {
-  const { transporter, from } = createSmtpTransport();
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await transporter.sendMail({
-        from,
-        to,
-        subject,
-        html,
-        attachments
-      });
-    } catch (error) {
-      lastError = error;
-
-      if (attempt === MAX_ATTEMPTS || !isRetryableEmailError(error)) {
-        throw error;
-      }
-
-      await sleep(500 * 2 ** (attempt - 1));
-    }
-  }
-
-  throw lastError;
-};
+const sendCredentialEmailWithRetry = async ({ to, subject, html, attachments = [] }) =>
+  sendMailWithRetry({ to, subject, html, attachments });
 
 module.exports = {
   buildCredentialEmailHtml,

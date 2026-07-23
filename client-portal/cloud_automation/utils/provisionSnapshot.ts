@@ -190,9 +190,17 @@ export function deriveStepStates(
       activeAssigned = true;
     }
 
+    const hasLicense = Boolean(
+      snapshot.request?.microsoft_license_sku_id
+        || snapshot.request?.microsoftLicenseSkuId
+    );
+
     return {
       key: step.key,
-      label: step.label,
+      label:
+        step.key === 'users' && hasLicense
+          ? 'Creating Users & Assigning License'
+          : step.label,
       status,
       error,
     };

@@ -207,6 +207,12 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         setUsers([]);
         setDetailError(null);
         await refreshOverview();
+        return;
+      }
+
+      // Surface permission errors; stop silent polling from hammering 403s.
+      if (err instanceof OrgAdminError && (err.status === 403 || err.status === 401)) {
+        setDetailError(err.message || 'Failed to load request detail.');
       }
     } finally {
       refreshInFlightRef.current = false;
@@ -249,6 +255,8 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
 
   useEffect(() => {
     if (selectedRequestId == null) return undefined;
+    // Don't keep polling when the session lacks Lab Management permission.
+    if (detailError && /insufficient permissions/i.test(detailError)) return undefined;
 
     // Always poll frequently so Offline → Online after login/stale-reopen appears quickly.
     // Slightly faster when someone is already active.
@@ -259,7 +267,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     }, refreshInterval);
 
     return () => window.clearInterval(intervalId);
-  }, [selectedRequestId, hasActiveUsers, refreshDetailSilent]);
+  }, [selectedRequestId, hasActiveUsers, refreshDetailSilent, detailError]);
 
   const selectRequest = useCallback((requestId: number | null) => {
     setSelectedRequestId(requestId);

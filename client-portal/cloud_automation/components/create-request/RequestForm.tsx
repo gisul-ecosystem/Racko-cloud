@@ -1289,11 +1289,17 @@ export function RequestForm({
             <SectionHeader
               step={step++}
               title="Microsoft license"
-              description="Optional — choose a Microsoft license from your Azure tenant to assign to lab users."
+              description="Optional — assign a Microsoft license from your tenant to every lab account created for this request."
             />
 
             {licensesError ? (
-              <p className="mt-4 text-sm text-red-600">{licensesError}</p>
+              <div className="mt-4 space-y-1">
+                <p className="text-sm text-red-600">{licensesError}</p>
+                <p className="text-xs text-red-500/90">
+                  Required Graph app permissions (admin consent): Directory.Read.All and
+                  User.ReadWrite.All or LicenseAssignment.ReadWrite.All.
+                </p>
+              </div>
             ) : null}
 
             <div className="relative mt-5">

@@ -11,8 +11,15 @@ const router = Router();
 function requireRole(...roles: string[]) {
   return (req: Request, _res: Response, next: NextFunction): void => {
     const authReq = req as AuthenticatedRequest;
-    if (!authReq.user || !roles.includes(authReq.user.role)) {
-      return next(new ForbiddenError('Insufficient permissions.'));
+    const role = authReq.user?.role;
+    if (!authReq.user || !role || !roles.includes(role)) {
+      return next(
+        new ForbiddenError(
+          role
+            ? `Insufficient permissions. Requires ${roles.join(' or ')}; current role is '${role}'.`
+            : 'Insufficient permissions.'
+        )
+      );
     }
     next();
   };

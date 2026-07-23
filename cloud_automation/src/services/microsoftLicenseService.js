@@ -1,8 +1,42 @@
 const { createGraphClient } = require('../config/azure');
 const AppError = require('../utils/AppError');
 const { resolveLicenseDisplayName } = require('../utils/microsoftLicenseNames');
+const {
+  DEFAULT_USAGE_LOCATION,
+  isValidUsageLocation,
+  resolveUsageLocation
+} = require('../utils/azureUsageLocation');
 
-const DEFAULT_USAGE_LOCATION = process.env.AZURE_LICENSE_USAGE_LOCATION || 'IN';
+/**
+ * Graph app permissions needed for create-request license assignment:
+ *   Directory.Read.All — list subscribedSkus
+ *   User.ReadWrite.All — set usageLocation / assignLicense (also works)
+ *   LicenseAssignment.ReadWrite.All — preferred for assignLicense / subscribedSkus
+ * Grant these on the Azure app registration and admin-consent them.
+ */
+const LICENSE_GRAPH_PERMISSIONS_HINT =
+  'Ensure the Azure app registration has Directory.Read.All and ' +
+  'User.ReadWrite.All or LicenseAssignment.ReadWrite.All (application permissions) with admin consent.';
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const isGraphPermissionError = (statusCode, message) => {
+  const code = Number(statusCode) || 0;
+  const text = String(message || '').toLowerCase();
+  return (
+    code === 401
+    || code === 403
+    || /authorization_requestdenied|insufficient privileges|access denied|forbidden/i.test(text)
+  );
+};
+
+const withPermissionHint = (message) => {
+  const base = String(message || '').trim() || 'Microsoft Graph license operation failed.';
+  if (/LicenseAssignment\.ReadWrite\.All|Directory\.Read\.All/i.test(base)) {
+    return base;
+  }
+  return `${base} ${LICENSE_GRAPH_PERMISSIONS_HINT}`;
+};
 
 const mapSku = (sku) => {
   const prepaid = Number(sku?.prepaidUnits?.enabled ?? 0);
@@ -52,22 +86,32 @@ const listTenantLicenses = async () => {
       .sort((a, b) => String(a.productName).localeCompare(String(b.productName)));
   } catch (error) {
     const statusCode = Number(error?.statusCode || error?.status) || 502;
-    throw new AppError(
+    const message =
       error?.body?.error?.message
-        || error?.message
-        || 'Unable to load Microsoft licenses from the tenant.',
+      || error?.message
+      || 'Unable to load Microsoft licenses from the tenant.';
+    throw new AppError(
+      isGraphPermissionError(statusCode, message) ? withPermissionHint(message) : message,
       statusCode >= 400 && statusCode <= 599 ? statusCode : 502
     );
   }
 };
 
 /**
- * Assign a Microsoft license SKU to a Graph user. Sets usageLocation when missing.
+ * Assign a Microsoft license SKU to a Graph user.
+ * Ensures usageLocation is a valid ISO country code before assignLicense.
  */
-const assignLicenseToUser = async (graphClient, azureUserId, skuId, usageLocation = DEFAULT_USAGE_LOCATION) => {
+const assignLicenseToUser = async (
+  graphClient,
+  azureUserId,
+  skuId,
+  usageLocationHint = DEFAULT_USAGE_LOCATION
+) => {
   if (!azureUserId || !skuId) {
     return { assigned: false, reason: 'missing_user_or_sku' };
   }
+
+  const desiredUsageLocation = resolveUsageLocation(usageLocationHint);
 
   try {
     const user = await graphClient
@@ -75,23 +119,49 @@ const assignLicenseToUser = async (graphClient, azureUserId, skuId, usageLocatio
       .select('id,usageLocation')
       .get();
 
-    if (!user?.usageLocation) {
+    const currentUsageLocation = String(user?.usageLocation || '').trim().toUpperCase();
+    const needsUsageLocationUpdate = !isValidUsageLocation(currentUsageLocation);
+
+    if (needsUsageLocationUpdate) {
       await graphClient.api(`/users/${encodeURIComponent(azureUserId)}`).patch({
-        usageLocation: usageLocation || DEFAULT_USAGE_LOCATION
+        usageLocation: desiredUsageLocation
       });
+      // Graph can briefly lag after patch; small delay avoids false "invalid usage location".
+      await sleep(750);
     }
 
-    await graphClient.api(`/users/${encodeURIComponent(azureUserId)}/assignLicense`).post({
-      addLicenses: [
-        {
-          skuId,
-          disabledPlans: []
-        }
-      ],
-      removeLicenses: []
-    });
+    const postAssign = async () =>
+      graphClient.api(`/users/${encodeURIComponent(azureUserId)}/assignLicense`).post({
+        addLicenses: [
+          {
+            skuId,
+            disabledPlans: []
+          }
+        ],
+        removeLicenses: []
+      });
 
-    return { assigned: true };
+    try {
+      await postAssign();
+    } catch (assignError) {
+      const assignMessage =
+        assignError?.body?.error?.message || assignError?.message || '';
+      // Retry once after forcing usageLocation again (adopted users / eventual consistency).
+      if (/usage location/i.test(String(assignMessage))) {
+        await graphClient.api(`/users/${encodeURIComponent(azureUserId)}`).patch({
+          usageLocation: desiredUsageLocation
+        });
+        await sleep(1000);
+        await postAssign();
+      } else {
+        throw assignError;
+      }
+    }
+
+    return {
+      assigned: true,
+      usageLocation: needsUsageLocationUpdate ? desiredUsageLocation : currentUsageLocation
+    };
   } catch (error) {
     const statusCode = Number(error?.statusCode || error?.status) || 500;
     const message =
@@ -107,12 +177,17 @@ const assignLicenseToUser = async (graphClient, azureUserId, skuId, usageLocatio
       return { assigned: true, reason: 'already_licensed_or_conflict' };
     }
 
-    throw new AppError(message, statusCode >= 400 && statusCode <= 599 ? statusCode : 500);
+    throw new AppError(
+      isGraphPermissionError(statusCode, message) ? withPermissionHint(message) : message,
+      statusCode >= 400 && statusCode <= 599 ? statusCode : 500
+    );
   }
 };
 
 module.exports = {
   listTenantLicenses,
   assignLicenseToUser,
-  DEFAULT_USAGE_LOCATION
+  DEFAULT_USAGE_LOCATION,
+  LICENSE_GRAPH_PERMISSIONS_HINT,
+  resolveUsageLocation
 };
