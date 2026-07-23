@@ -58,8 +58,9 @@ const SIGN_IN_LOOKBACK_MINUTES = Number(process.env.SIGNIN_MONITOR_LOOKBACK_MINU
  * Create Microsoft Graph client with app-only authentication.
  * Requires application permissions (with admin consent):
  *   AuditLog.Read.All — sign-in logs
- *   Directory.Read.All — user lookup
- *   User.ReadWrite.All — disable/enable accounts
+ *   Directory.Read.All — user lookup / subscribed SKUs
+ *   User.ReadWrite.All — disable/enable accounts, revoke sessions, assign licenses
+ *   LicenseAssignment.ReadWrite.All — preferred for assignLicense / subscribedSkus
  * Verify: GET https://graph.microsoft.com/v1.0/auditLogs/signIns?$top=1
  */
 const createGraphClient = () => {
@@ -813,7 +814,8 @@ async function detectActiveSignIns() {
     if (error.statusCode === 403) {
       console.error(
         '[SIGNIN_MONITOR] Permission denied. Ensure AuditLog.Read.All, Directory.Read.All, ' +
-          'and User.ReadWrite.All application permissions are granted with admin consent.'
+          'User.ReadWrite.All, and LicenseAssignment.ReadWrite.All application permissions ' +
+          'are granted with admin consent.'
       );
     } else if (error.statusCode === 401) {
       console.error(

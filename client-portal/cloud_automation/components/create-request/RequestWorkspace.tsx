@@ -260,6 +260,7 @@ export function RequestWorkspace() {
   const [resourceCleanupAction, setResourceCleanupAction] = useState<'delete' | 'pause'>('delete');
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
   const [selectedLicenseSkuId, setSelectedLicenseSkuId] = useState('');
+  const [selectedLicenseSkuPartNumber, setSelectedLicenseSkuPartNumber] = useState('');
   const [convertedFromRequestId, setConvertedFromRequestId] = useState<number | null>(null);
   const [cloneLoading, setCloneLoading] = useState(isPurchaseConvert);
   const [cloneError, setCloneError] = useState<string | null>(null);
@@ -349,6 +350,7 @@ export function RequestWorkspace() {
         setSelectedServiceIds(payload.serviceIds || []);
         setSelectedInstances(payload.selectedInstances || []);
         setSelectedLicenseSkuId(payload.microsoftLicenseSkuId || '');
+        setSelectedLicenseSkuPartNumber(payload.microsoftLicenseSkuPartNumber || '');
         const nextManual: Record<number, string[]> = {};
         for (const entry of payload.selectedRoles || []) {
           nextManual[entry.serviceId] = entry.roles;
@@ -532,6 +534,10 @@ export function RequestWorkspace() {
     if (!catalog) return;
 
     const selectedLicense = licenses.find((license) => license.skuId === selectedLicenseSkuId);
+    const licenseSkuId = (selectedLicense?.skuId || selectedLicenseSkuId || '').trim();
+    const licenseSkuPartNumber = (
+      selectedLicense?.skuPartNumber || selectedLicenseSkuPartNumber || ''
+    ).trim();
 
     const errors = validateForm({
       projectName,
@@ -609,10 +615,12 @@ export function RequestWorkspace() {
                 purchaseToken: purchaseToken || undefined,
               }
             : {}),
-          ...(selectedLicense
+          ...(licenseSkuId
             ? {
-                microsoftLicenseSkuId: selectedLicense.skuId,
-                microsoftLicenseSkuPartNumber: selectedLicense.skuPartNumber,
+                microsoftLicenseSkuId: licenseSkuId,
+                ...(licenseSkuPartNumber
+                  ? { microsoftLicenseSkuPartNumber: licenseSkuPartNumber }
+                  : {}),
               }
             : {}),
           resourceCleanupEnabled,
@@ -931,7 +939,11 @@ export function RequestWorkspace() {
               licensesLoading={licensesLoading}
               licensesError={licensesError}
               selectedLicenseSkuId={selectedLicenseSkuId}
-              onSelectedLicenseSkuIdChange={setSelectedLicenseSkuId}
+              onSelectedLicenseSkuIdChange={(skuId) => {
+                setSelectedLicenseSkuId(skuId);
+                const match = licenses.find((license) => license.skuId === skuId);
+                setSelectedLicenseSkuPartNumber(match?.skuPartNumber || '');
+              }}
               adminAccessOpen={adminAccessOpen}
               onAdminAccessOpenChange={setAdminAccessOpen}
               adminAccessServiceId={adminAccessServiceId}

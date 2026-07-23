@@ -159,24 +159,36 @@ const getRowField = (row, ...keys) => {
   return '';
 };
 
-const buildUserPayload = ({ requestId, userNumber, domain, accountEnabled = true }) => {
+const buildUserPayload = ({
+  requestId,
+  userNumber,
+  domain,
+  accountEnabled = true,
+  usageLocation = null
+}) => {
   const username = `cust-${requestId}-user-${userNumber}`;
   const temporaryPassword = generateTemporaryPassword();
+  const payload = {
+    accountEnabled: accountEnabled !== false,
+    displayName: `Customer ${requestId} User ${userNumber}`,
+    mailNickname: username,
+    userPrincipalName: `${username}@${domain}`,
+    passwordProfile: {
+      forceChangePasswordNextSignIn: true,
+      password: temporaryPassword
+    },
+    passwordPolicies: 'DisablePasswordExpiration'
+  };
+
+  // Graph requires a valid ISO country code before Microsoft license assignment.
+  if (usageLocation) {
+    payload.usageLocation = usageLocation;
+  }
 
   return {
     username,
     temporaryPassword,
-    payload: {
-      accountEnabled: accountEnabled !== false,
-      displayName: `Customer ${requestId} User ${userNumber}`,
-      mailNickname: username,
-      userPrincipalName: `${username}@${domain}`,
-      passwordProfile: {
-        forceChangePasswordNextSignIn: true,
-        password: temporaryPassword
-      },
-      passwordPolicies: 'DisablePasswordExpiration'
-    }
+    payload
   };
 };
 
@@ -292,15 +304,25 @@ const getGraphUserByUpn = async (graphClient, userPrincipalName) => {
   }
 };
 
-const syncAdoptedGraphUser = async (graphClient, azureUserId, { temporaryPassword, accountEnabled }) => {
-  await graphClient.api(`/users/${encodeURIComponent(azureUserId)}`).patch({
+const syncAdoptedGraphUser = async (
+  graphClient,
+  azureUserId,
+  { temporaryPassword, accountEnabled, usageLocation = null }
+) => {
+  const patch = {
     accountEnabled: accountEnabled !== false,
     passwordProfile: {
       forceChangePasswordNextSignIn: true,
       password: temporaryPassword
     },
     passwordPolicies: 'DisablePasswordExpiration'
-  });
+  };
+
+  if (usageLocation) {
+    patch.usageLocation = usageLocation;
+  }
+
+  await graphClient.api(`/users/${encodeURIComponent(azureUserId)}`).patch(patch);
 };
 
 const createGraphUserWithRetry = async (graphClient, userPayload, requestId) => {
@@ -364,7 +386,8 @@ const createOrAdoptGraphUser = async (graphClient, { payload, temporaryPassword 
 
     await syncAdoptedGraphUser(graphClient, existing.id, {
       temporaryPassword,
-      accountEnabled: payload.accountEnabled
+      accountEnabled: payload.accountEnabled,
+      usageLocation: payload.usageLocation || null
     });
 
     logAzureUserEvent('info', 'azure_user_provision_adopted_existing', {

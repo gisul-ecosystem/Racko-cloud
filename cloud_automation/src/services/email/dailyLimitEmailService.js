@@ -1,23 +1,4 @@
-const nodemailer = require('nodemailer');
-const { validateSmtpEnv } = require('./smtpEnv');
-
-const MAX_ATTEMPTS = 3;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const createSmtpTransport = () => {
-  const smtpConfig = validateSmtpEnv();
-
-  return {
-    transporter: nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port,
-      secure: smtpConfig.secure,
-      auth: smtpConfig.auth
-    }),
-    from: smtpConfig.from
-  };
-};
+const { sendMailWithRetry } = require('./mailSender');
 
 const escapeHtml = (value) =>
   String(value ?? '')
@@ -50,44 +31,11 @@ const buildDailyLimitReachedEmailHtml = ({ dailyLimitHours, hoursUsed }) => `
   </html>
 `;
 
-const isRetryableEmailError = (error) => {
-  const statusCode = Number(error?.statusCode || error?.responseCode || error?.status);
-  const errorCode = String(error?.code || '').toUpperCase();
-
-  return (
-    [421, 450, 451, 452, 454, 455, 500, 502, 503, 504].includes(statusCode) ||
-    ['ETIMEDOUT', 'ECONNRESET', 'ESOCKET', 'EAUTH', 'ECONNECTION'].includes(errorCode)
-  );
-};
-
 const sendDailyLimitReachedEmail = async ({ to, dailyLimitHours, consumedMinutes }) => {
   const hoursUsed = (consumedMinutes / 60).toFixed(1);
-  const { transporter, from } = createSmtpTransport();
   const subject = '[Racko] Daily usage limit reached — your lab access has been paused';
   const html = buildDailyLimitReachedEmailHtml({ dailyLimitHours, hoursUsed });
-
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await transporter.sendMail({
-        from,
-        to,
-        subject,
-        html
-      });
-    } catch (error) {
-      lastError = error;
-
-      if (attempt === MAX_ATTEMPTS || !isRetryableEmailError(error)) {
-        throw error;
-      }
-
-      await sleep(500 * 2 ** (attempt - 1));
-    }
-  }
-
-  throw lastError;
+  return sendMailWithRetry({ to, subject, html });
 };
 
 module.exports = {

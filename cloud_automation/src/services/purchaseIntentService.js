@@ -1,13 +1,9 @@
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
-const { validateSmtpEnv } = require('./email/smtpEnv');
+const { resolveFrontendBaseUrl } = require('../utils/frontendUrl');
+const { sendMailWithRetry } = require('./email/mailSender');
 const { resolveLicenseDisplayName } = require('../utils/microsoftLicenseNames');
-
-const MAX_ATTEMPTS = 3;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const escapeHtml = (value) =>
   String(value ?? '')
@@ -19,37 +15,10 @@ const escapeHtml = (value) =>
 
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
-const resolveFrontendBaseUrl = () => {
-  const baseUrl = String(
-    process.env.FRONTEND_URL || process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'
-  )
-    .trim()
-    .replace(/\/+$/, '');
-
-  if (!baseUrl) {
-    throw new AppError('FRONTEND_URL is not configured.', 500);
-  }
-
-  return baseUrl;
-};
-
 const getPurchaseIntentDelayMs = () => {
   const hours = Number(process.env.PURCHASE_INTENT_DELAY_HOURS);
   const resolvedHours = Number.isFinite(hours) && hours >= 0 ? hours : 24;
   return resolvedHours * 60 * 60 * 1000;
-};
-
-const createSmtpTransport = () => {
-  const smtpConfig = validateSmtpEnv();
-  return {
-    transporter: nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port,
-      secure: smtpConfig.secure,
-      auth: smtpConfig.auth
-    }),
-    from: smtpConfig.from
-  };
 };
 
 const buildPurchaseIntentEmailHtml = ({
@@ -105,23 +74,6 @@ const buildPurchaseIntentEmailHtml = ({
       </body>
     </html>
   `;
-};
-
-const sendMailWithRetry = async ({ to, subject, html }) => {
-  const { transporter, from } = createSmtpTransport();
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await transporter.sendMail({ from, to, subject, html });
-    } catch (error) {
-      lastError = error;
-      if (attempt === MAX_ATTEMPTS) break;
-      await sleep(500 * 2 ** (attempt - 1));
-    }
-  }
-
-  throw lastError;
 };
 
 const listDuePurchaseIntentRequests = async () => {
