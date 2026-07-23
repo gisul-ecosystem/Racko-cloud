@@ -45,6 +45,12 @@ machineRouter.get(
   (req, res) => void machineManagerController.streamPushStatus(req, res)
 );
 
+// GET /api/v1/machines/reset-stream/:sessionId — SSE stream for reset status (before requireAuth)
+machineRouter.get(
+  '/reset-stream/:sessionId',
+  (req, res) => void machineManagerController.streamResetStatus(req, res)
+);
+
 machineRouter.use(requireAuth);
 
 // POST /api/v1/machines/bulk — must come before /:id to avoid collision
@@ -68,6 +74,20 @@ machineRouter.post(
   '/push-stream-ticket',
   requireRole('admin', 'super_admin'),
   (req, res, next) => machineManagerController.issuePushStreamTicket(req, res, next)
+);
+
+// POST /api/v1/machines/reset — initiate VM reset on one or more machines (must come before /:id)
+machineRouter.post(
+  '/reset',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => machineManagerController.resetMachines(req, res, next)
+);
+
+// POST /api/v1/machines/reset-stream-ticket — issue SSE stream ticket for reset session
+machineRouter.post(
+  '/reset-stream-ticket',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => machineManagerController.issueResetStreamTicket(req, res, next)
 );
 
 // POST /api/v1/machines/jobs — must come before /:id
@@ -168,6 +188,14 @@ agentRouter.get(
 agentRouter.get(
   '/binary/:os',
   (req, res, next) => machineManagerController.serveBinary(req, res, next)
+);
+
+// GET /api/v1/agent/reset-script — serves the VM reset PowerShell script (public, no auth)
+// Agent downloads and runs this with -File flag at reset time.
+// Script lives in agent/scripts/reset.ps1 — update it without rebuilding the agent.
+agentRouter.get(
+  '/reset-script',
+  (req, res, next) => machineManagerController.serveResetScript(req, res, next)
 );
 
 // POST /api/v1/agent/enroll — VM Template enrollment (no JWT, uses enrollmentKey)

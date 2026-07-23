@@ -20,6 +20,7 @@ const { startBudgetScheduler } = require('./src/scheduler/budgetScheduler');
 const { startResourceCleanupScheduler } = require('./src/scheduler/resourceCleanupScheduler');
 const { startBudgetSpendSyncScheduler } = require('./src/scheduler/budgetSyncScheduler');
 const { startWindowEnforcementScheduler } = require('./src/scheduler/windowEnforcementScheduler');
+const { startPurchaseIntentScheduler } = require('./src/scheduler/purchaseIntentScheduler');
 const pricingRoutes = require('./src/routes/pricingRoutes');
 const servicePricingRoutes = require('./src/routes/servicePricingRoutes');
 const requestRoutes = require('./src/routes/requestRoutes');
@@ -29,11 +30,12 @@ const adminAccessRequestRoutes = require('./src/routes/adminAccessRequestRoutes'
 const serviceRoutes = require('./src/routes/serviceRoutes');
 const jobRoutes = require('./src/routes/jobRoutes');
 const notificationRoutes = require('./src/routes/notificationRoutes');
+const purchaseIntentRoutes = require('./src/routes/purchaseIntentRoutes');
 const AppError = require('./src/utils/AppError');
 const pool = require('./src/config/database');
 const { resumeOutboundEmailJobs } = require('./src/services/emailQueueService');
 const { resumeProvisioningJobs } = require('./src/services/provisioningJobService');
-const { getSmtpConfigStatus } = require('./src/services/email/smtpEnv');
+const { getResendConfigStatus } = require('./src/services/email/resendEnv');
 
 const app = express();
 
@@ -86,6 +88,7 @@ app.use('/api/services', serviceRoutes);
 app.use('/api/usage', usageRoutes);
 app.use('/api/jobs', jobRoutes);
 app.use('/api/org-admin', orgAdminRoutes);
+app.use('/api/purchase-intent', purchaseIntentRoutes);
 app.use('/api', notificationRoutes);
 
 app.all('*', (req, res, next) => {
@@ -129,6 +132,7 @@ const startServer = () => {
   startResourceCleanupScheduler();
   startBudgetSpendSyncScheduler();
   startWindowEnforcementScheduler();
+  startPurchaseIntentScheduler();
 
   if (process.env.USAGE_TRACKING_DEBUG === 'true') {
     setInterval(async () => {
@@ -156,12 +160,12 @@ const startServer = () => {
 
     console.log(`Service Catalog API listening on port ${port}`);
 
-    const smtpStatus = getSmtpConfigStatus();
-    if (smtpStatus.configured) {
-      console.log('SMTP email delivery is configured.');
+    const emailStatus = getResendConfigStatus();
+    if (emailStatus.configured) {
+      console.log('Resend email delivery is configured.');
     } else {
       console.warn(
-        `SMTP email delivery is NOT configured. Missing: ${smtpStatus.missingVars.join(', ')}`
+        `Resend email delivery is NOT configured. Missing: ${emailStatus.missingVars.join(', ')}`
       );
     }
 

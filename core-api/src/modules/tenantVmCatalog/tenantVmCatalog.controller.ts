@@ -12,7 +12,11 @@ function success<T>(res: Response, message: string, data: T, statusCode = 200): 
 export const tenantVmCatalogController = {
   async listPlans(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const plans = await vmCatalogPlanService.list({ activeOnly: true, applySellPrice: true });
+      const plans = await vmCatalogPlanService.list({
+        activeOnly: true,
+        applySellPrice: true,
+        forCustomer: true,
+      });
       success(res, 'VM catalog plans retrieved.', { plans, total: plans.length });
     } catch (err) {
       next(err);

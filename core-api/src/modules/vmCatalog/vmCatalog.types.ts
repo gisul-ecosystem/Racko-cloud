@@ -37,6 +37,9 @@ export interface CatalogVmResponse {
   externalRef?: string;
   fulfillError?: string;
   providerPurchased?: boolean;
+  needsOsChange?: boolean;
+  osTemplateChanged?: boolean;
+  osTemplateChangedAt?: string;
   attachedAt?: string;
   rejectionReason?: string;
   reviewedBy?: string;

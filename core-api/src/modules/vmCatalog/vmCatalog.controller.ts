@@ -172,6 +172,32 @@ async function reject(req: Request, res: Response, next: NextFunction): Promise<
   }
 }
 
+async function changeTemplate(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const reviewerId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = (req.body || {}) as { template?: string };
+    const request = await vmCatalogService.changeTemplateToWindows(id, reviewerId, {
+      ...(body.template ? { template: body.template } : {}),
+    });
+    success(res, 'OS template changed to Windows on Webyne. Ready to attach.', { request });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function powerAction(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as { action: 'virtualizor' | 'start' | 'stop' | 'reboot' };
+    const result = await vmCatalogService.powerAction(id, body.action);
+    success(res, `Webyne ${body.action} completed.`, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function calculatePricing(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const body = req.body as CalculateVmPricingInput;
@@ -187,6 +213,7 @@ async function calculatePricing(req: Request, res: Response, next: NextFunction)
           }
         : undefined,
       canonicalSpec: body.canonicalSpec,
+      nestedVirtualization: body.nestedVirtualization === true,
       ...(providers !== undefined ? { providers } : {}),
     });
 
@@ -204,7 +231,17 @@ async function calculatePricing(req: Request, res: Response, next: NextFunction)
       rawComputePricePerHrInr: convertUsdAmount(data.rawComputePricePerHr, fx.usdToInr),
       rawStoragePricePerHrInr: convertUsdAmount(data.rawStoragePricePerHr, fx.usdToInr),
       rawIpPricePerHrInr: convertUsdAmount(data.rawIpPricePerHr, fx.usdToInr),
+      rawPublicIpPricePerHrInr: convertUsdAmount(data.rawPublicIpPricePerHr, fx.usdToInr),
+      rawPrivateIpPricePerHrInr: convertUsdAmount(data.rawPrivateIpPricePerHr, fx.usdToInr),
       rawTotalPricePerHrInr: convertUsdAmount(data.rawTotalPricePerHr, fx.usdToInr),
+      rawTotalWithPublicIpPerHrInr: convertUsdAmount(
+        data.rawTotalWithPublicIpPerHr ?? data.rawTotalPricePerHr,
+        fx.usdToInr
+      ),
+      rawTotalWithPrivateIpPerHrInr: convertUsdAmount(
+        data.rawTotalWithPrivateIpPerHr,
+        fx.usdToInr
+      ),
     });
   } catch (err) {
     next(err);
@@ -220,6 +257,7 @@ async function listPricing(req: Request, res: Response, next: NextFunction): Pro
       category: query.category,
       canonicalSpec: query.canonicalSpec,
       limit: query.limit,
+      nestedVirtualization: query.nestedVirtualization,
     });
 
     const fx = await getUsdToInrRate();
@@ -260,6 +298,8 @@ export const vmCatalogController = {
   approve,
   fetchDetails,
   attach,
+  changeTemplate,
+  powerAction,
   reject,
   calculatePricing,
   listPricing,

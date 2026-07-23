@@ -125,6 +125,52 @@ const deleteRequest = async (req, res, next) => {
   }
 };
 
+const extendRequestExpiration = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.extendRequestExpiration({
+      requestId,
+      expiresAt: req.body?.expiresAt || req.body?.expiryDate
+    });
+
+    res.status(200).json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const sendPurchaseConfirmationMail = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const purchaseIntentService = require('../services/purchaseIntentService');
+    const result = await purchaseIntentService.sendPurchaseIntentEmailByRequestId(requestId, {
+      force: true
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Confirmation mail sent to ${result.recipientEmail}.`,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const updateUserRoles = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
@@ -592,6 +638,8 @@ module.exports = {
   getMonitoringLogs,
   deleteUser,
   deleteRequest,
+  extendRequestExpiration,
+  sendPurchaseConfirmationMail,
   updateUserRoles,
   forceLogoutUser,
   listAccessRequests,

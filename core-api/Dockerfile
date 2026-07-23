@@ -13,6 +13,8 @@ RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 apiuser \
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
+# Copy reset script — served at GET /api/v1/agent/reset-script
+COPY scripts ./scripts
 USER apiuser
 EXPOSE 5000
 CMD ["node", "dist/server.js"]

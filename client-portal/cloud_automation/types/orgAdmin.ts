@@ -46,7 +46,10 @@ export interface OrgAdminRequestSummary {
   userCount: number;
   startDate: string;
   expiryDate: string | null;
+  expiresAt?: string | null;
   requestName: string | null;
+  projectName?: string | null;
+  idMode?: 'test_ids' | 'azure_ids' | null;
   resourceGroupCount: number;
 }
 
@@ -190,6 +193,7 @@ export interface OrgAdminRequestDetail {
   location: string | null;
   status: string;
   expiryDate: string | null;
+  expiresAt?: string | null;
   enableDailyUsage: boolean;
   hasUsageWindows?: boolean;
   dailyLimitHours?: number | null;
@@ -205,6 +209,8 @@ export interface OrgAdminRequestDetail {
   cleanupEnabled?: boolean;
   cleanupIntervalHours?: number | null;
   createdAt: string;
+  projectName?: string | null;
+  idMode?: 'test_ids' | 'azure_ids' | null;
   liveSummary?: OrgAdminLiveSummary | null;
   liveResourcesSkipped?: boolean;
 }

@@ -9,8 +9,37 @@ import type { NextRequest } from 'next/server';
  * Protected: /dashboard/*
  * Auth routes: /login, /register (redirect to dashboard if session exists)
  */
+function getSafeInternalRedirect(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+
+  let value = raw;
+  try {
+    value = decodeURIComponent(raw);
+  } catch {
+    value = raw;
+  }
+
+  if (!value.startsWith('/') || value.startsWith('//') || value.includes('\\')) {
+    return null;
+  }
+
+  // Only allow known app areas (path + optional query/hash).
+  if (
+    !value.startsWith('/console') &&
+    !value.startsWith('/dashboard') &&
+    !value.startsWith('/super-admin-console') &&
+    !value.startsWith('/tenant') &&
+    value !== '/request' &&
+    !value.startsWith('/status/')
+  ) {
+    return null;
+  }
+
+  return value;
+}
+
 export function middleware(request: NextRequest) {
-  const { pathname } = request.nextUrl;
+  const { pathname, search } = request.nextUrl;
 
   // Check session via refreshToken cookie presence
   const hasSession = request.cookies.has('refreshToken');
@@ -24,7 +53,8 @@ export function middleware(request: NextRequest) {
   ) {
     if (!hasSession) {
       const loginUrl = new URL('/login', request.url);
-      loginUrl.searchParams.set('redirect', pathname);
+      // Keep query string (e.g. fromTestRequest + purchaseToken) across login.
+      loginUrl.searchParams.set('redirect', `${pathname}${search || ''}`);
       return NextResponse.redirect(loginUrl);
     }
 
@@ -36,7 +66,8 @@ export function middleware(request: NextRequest) {
 
   // Redirect authenticated users away from auth pages
   if ((pathname === '/login' || pathname === '/register') && hasSession) {
-    return NextResponse.redirect(new URL('/dashboard', request.url));
+    const redirect = getSafeInternalRedirect(request.nextUrl.searchParams.get('redirect'));
+    return NextResponse.redirect(new URL(redirect || '/dashboard', request.url));
   }
 
   return NextResponse.next();

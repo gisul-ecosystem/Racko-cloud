@@ -143,6 +143,19 @@ export interface PricingEstimateResponse {
 
 export type CostingMode = 'shared' | 'per_user';
 
+export type AzureIdMode = 'test_ids' | 'azure_ids';
+
+export interface MicrosoftLicense {
+  skuId: string;
+  skuPartNumber: string;
+  productName: string;
+  capabilityStatus: string;
+  prepaidUnits: number;
+  consumedUnits: number;
+  availableUnits: number;
+  appliesTo?: string | null;
+}
+
 export interface CreateRequestPayload {
   customerEmail: string;
   accountCount: number;
@@ -163,6 +176,12 @@ export interface CreateRequestPayload {
   resourceCleanupAction?: 'delete' | 'pause';
   usageWindows?: UsageWindow[];
   perUserBudgetUsd?: number;
+  projectName?: string;
+  idMode?: AzureIdMode;
+  microsoftLicenseSkuId?: string;
+  microsoftLicenseSkuPartNumber?: string;
+  convertedFromRequestId?: number;
+  purchaseToken?: string;
 }
 
 export interface CreateRequestResponse {
@@ -178,6 +197,28 @@ export interface AdminAccessRequestPayload {
   defaultRole: string;
   requestedAccess: string;
   accountCount: number;
+}
+
+export interface PurchaseClonePayload {
+  sourceRequestId: number;
+  projectName: string;
+  customerEmail: string;
+  accountCount: number;
+  location: string;
+  costingMode: CostingMode;
+  perUserBudgetUsd?: number;
+  resourceCleanupEnabled: boolean;
+  resourceCleanupIntervalHours?: number;
+  resourceCleanupAction: 'delete' | 'pause';
+  microsoftLicenseSkuId?: string | null;
+  microsoftLicenseSkuPartNumber?: string | null;
+  microsoftLicenseName?: string | null;
+  serviceIds: number[];
+  services: { id: number; name: string }[];
+  selectedInstances: SelectedInstance[];
+  selectedRoles: SelectedRole[];
+  usageWindows: UsageWindow[];
+  idMode: AzureIdMode;
 }
 
 export interface ServiceRole {

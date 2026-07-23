@@ -13,6 +13,8 @@ export interface ExternalVmPricingConfig {
   provider: 'webyne';
   updatedAt: string | null;
   updatedBy: string | null;
+  /** When false, admin/tenant Create VM hides hourly billing. */
+  hourlyEnabled: boolean;
   categories: Record<CatalogType, ExternalVmCategoryPricing>;
 }
 
@@ -39,14 +41,20 @@ export async function getExternalVmPricing(
 
 export async function saveExternalVmPricing(
   provider: 'webyne',
-  categories: ExternalVmPricingConfig['categories']
+  categories: ExternalVmPricingConfig['categories'],
+  opts?: { hourlyEnabled?: boolean }
 ): Promise<ExternalVmPricingConfig> {
   return unwrap(
     apiRequest<ApiEnvelope<ExternalVmPricingConfig>>(
       `/api/v1/external-vm-pricing/${provider}`,
       {
         method: 'PUT',
-        body: JSON.stringify({ categories }),
+        body: JSON.stringify({
+          categories,
+          ...(opts?.hourlyEnabled !== undefined
+            ? { hourlyEnabled: opts.hourlyEnabled }
+            : {}),
+        }),
       }
     )
   );

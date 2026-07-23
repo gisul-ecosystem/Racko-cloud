@@ -12,7 +12,7 @@ import {
   type ICatalogVm,
   type VmCatalogCategory,
 } from '../../../lib/vmCatalogApi';
-import { Clock, LayoutDashboard, Monitor, Plus, Server, Terminal } from 'lucide-react';
+import { Clock, Monitor, Plus, Server, Terminal } from 'lucide-react';
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('en-US', {
@@ -61,14 +61,17 @@ function StatCard({
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
-  const styles: Record<VmCatalogCategory, string> = {
+  const styles: Record<string, string> = {
+    ubuntu: 'bg-orange-50 text-orange-700 border-orange-200',
+    rocky: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    debian: 'bg-pink-50 text-pink-700 border-pink-200',
     linux: 'bg-green-50 text-green-700 border-green-200',
     windows: 'bg-blue-50 text-blue-700 border-blue-200',
     gpu: 'bg-purple-50 text-purple-700 border-purple-200',
   };
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category]}`}
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category] || styles.linux}`}
     >
       {category}
     </span>
@@ -164,12 +167,6 @@ export default function VmCatalogOverviewPage() {
               value={stats.windows}
               icon={<Monitor className="h-6 w-6" />}
               tone="blue"
-            />
-            <StatCard
-              label="GPU"
-              value={stats.gpu}
-              icon={<LayoutDashboard className="h-6 w-6" />}
-              tone="red"
             />
           </div>
 

@@ -11,9 +11,10 @@ import {
 } from '../../../../lib/vmCatalogApi';
 
 const OS_OPTIONS: { id: VmCatalogCategory; label: string }[] = [
-  { id: 'linux', label: 'Linux' },
+  { id: 'ubuntu', label: 'Ubuntu' },
+  { id: 'rocky', label: 'Rocky' },
+  { id: 'debian', label: 'Debian' },
   { id: 'windows', label: 'Windows' },
-  { id: 'gpu', label: 'GPU' },
 ];
 
 const BILLING_KEYS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
@@ -38,8 +39,10 @@ function priceForPeriod(
   period: BillingKey,
   category?: VmCatalogCategory
 ): number | null {
-  if (category && plan.sellPricesByCategory?.[category]) {
-    return plan.sellPricesByCategory[category][period];
+  const bucket =
+    category === 'windows' ? 'windows' : category === 'gpu' ? 'gpu' : 'linux';
+  if (plan.sellPricesByCategory?.[bucket]) {
+    return plan.sellPricesByCategory[bucket][period];
   }
   return plan[period];
 }
@@ -59,7 +62,7 @@ export default function CreateVmPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<IVmCatalogPlan | null>(null);
-  const [os, setOs] = useState<VmCatalogCategory>('linux');
+  const [os, setOs] = useState<VmCatalogCategory>('ubuntu');
   const [billing, setBilling] = useState<BillingKey>('monthly');
   const [quantity, setQuantity] = useState('1');
   const [buyLoading, setBuyLoading] = useState(false);
@@ -94,10 +97,12 @@ export default function CreateVmPage() {
     );
   }, [plans, search]);
 
+  const showHourly = plans.some((p) => p.hourlyEnabled === true);
+
   function openPlan(plan: IVmCatalogPlan) {
-    const cycles = availableBillings(plan, 'linux');
+    const cycles = availableBillings(plan, 'ubuntu');
     setSelected(plan);
-    setOs('linux');
+    setOs('ubuntu');
     setBilling(cycles.includes('monthly') ? 'monthly' : cycles[0] || 'monthly');
     setQuantity('1');
     setBuyError(null);
@@ -224,7 +229,7 @@ export default function CreateVmPage() {
                 <th className="px-4 py-3">vCPU</th>
                 <th className="px-4 py-3">RAM</th>
                 <th className="px-4 py-3">SSD</th>
-                <th className="px-4 py-3">Hr</th>
+                {showHourly ? <th className="px-4 py-3">Hr</th> : null}
                 <th className="px-4 py-3">Mon</th>
                 <th className="px-4 py-3">QTr</th>
                 <th className="px-4 py-3">Year</th>
@@ -239,7 +244,9 @@ export default function CreateVmPage() {
                   <td className="px-4 py-3">{p.vcpu}</td>
                   <td className="px-4 py-3">{p.ramGb}</td>
                   <td className="px-4 py-3">{p.ssdGb}</td>
-                  <td className="px-4 py-3 font-mono text-xs">{inr(priceForPeriod(p, 'hourly'))}</td>
+                  {showHourly ? (
+                    <td className="px-4 py-3 font-mono text-xs">{inr(priceForPeriod(p, 'hourly'))}</td>
+                  ) : null}
                   <td className="px-4 py-3 font-mono text-xs">{inr(priceForPeriod(p, 'monthly'))}</td>
                   <td className="px-4 py-3 font-mono text-xs">
                     {inr(priceForPeriod(p, 'quarterly'))}

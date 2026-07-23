@@ -20,6 +20,8 @@ const {
   fetchBuyNowPreview,
   fetchTemplates,
   purchaseAndScrape,
+  changeMachineOs,
+  machinePowerControl,
   ensureBrowser,
   shutdown,
   getRateLimitInfo,
@@ -150,6 +152,50 @@ app.post('/api/scrape', async (req, res) => {
     console.error('[api] /api/scrape failed:', err);
     res.status(err.status || 500).json({
       error: err.message || 'Scrape failed',
+      code: err.code || undefined,
+    });
+  }
+});
+
+/**
+ * POST /api/change-os
+ * Body: { externalRef, targetOs?: 'windows'|'ubuntu'|..., template? }
+ * Opens machineshow and runs OS/template Setup.
+ */
+app.post('/api/change-os', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const data = await changeMachineOs({
+      externalRef: body.externalRef,
+      targetOs: body.targetOs || 'windows',
+      template: body.template,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error('[api] /api/change-os failed:', err);
+    res.status(err.status || 500).json({
+      error: err.message || 'Change OS failed',
+      code: err.code || undefined,
+    });
+  }
+});
+
+/**
+ * POST /api/power
+ * Body: { externalRef, action: 'virtualizor'|'start'|'stop'|'reboot' }
+ */
+app.post('/api/power', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const data = await machinePowerControl({
+      externalRef: body.externalRef,
+      action: body.action,
+    });
+    res.json(data);
+  } catch (err) {
+    console.error('[api] /api/power failed:', err);
+    res.status(err.status || 500).json({
+      error: err.message || 'Power action failed',
       code: err.code || undefined,
     });
   }

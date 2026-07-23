@@ -19,7 +19,7 @@ const LIVE_RESOURCE_RG_CONCURRENCY = Math.max(
   1,
   Number(process.env.ORG_ADMIN_LIVE_RG_CONCURRENCY || 10)
 );
-const { isRequestExpired } = require('../utils/requestExpiry');
+const { isRequestExpired, DEFAULT_LAB_EXPIRY_TIMEZONE } = require('../utils/requestExpiry');
 const {
   getResourceGroupCosts,
   getCachedResourceGroupCosts,
@@ -705,6 +705,7 @@ const loadResourceGroupDetail = async (requestId) => {
       location: request.location,
       status: request.status,
       expiryDate: request.expiry_date,
+      expiresAt: request.expires_at || null,
       enableDailyUsage: hasUsageTracking,
       hasUsageWindows,
       dailyLimitHours: todayWindowConfig?.dailyLimitHours ?? null,
@@ -726,6 +727,11 @@ const loadResourceGroupDetail = async (requestId) => {
       cleanupIntervalHours:
         request.cleanup_interval_hours != null ? Number(request.cleanup_interval_hours) : null,
       createdAt: request.created_at,
+      projectName: request.project_name || null,
+      idMode:
+        request.id_mode === 'test_ids' || request.id_mode === 'azure_ids'
+          ? request.id_mode
+          : null,
       liveSummary: {
         ...liveSummary,
         activeSessions
@@ -965,6 +971,87 @@ const deleteRequest = async ({ adminEmail, requestId }) =>
     adminEmail,
     requestId
   });
+
+/**
+ * Extend (or set) a lab request's expiration datetime.
+ * Accepts ISO / local datetime; updates both expiry_date and expires_at.
+ */
+const extendRequestExpiration = async ({ requestId, expiresAt }) => {
+  const id = Number(requestId);
+  if (!Number.isInteger(id) || id <= 0) {
+    throw new AppError('Request id must be a positive integer.', 400);
+  }
+
+  const raw = String(expiresAt || '').trim();
+  if (!raw) {
+    throw new AppError('expiresAt is required.', 400);
+  }
+
+  let nextExpires = DateTime.fromISO(raw, { setZone: true });
+  if (!nextExpires.isValid) {
+    nextExpires = DateTime.fromISO(raw, { zone: DEFAULT_LAB_EXPIRY_TIMEZONE });
+  }
+  if (!nextExpires.isValid) {
+    throw new AppError('expiresAt must be a valid date and time.', 400);
+  }
+
+  const existing = await db.query(
+    `
+      SELECT id, expiry_date, expires_at
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [id]
+  );
+
+  const request = existing.rows[0];
+  if (!request) {
+    throw new AppError('Request not found.', 404);
+  }
+
+  const previousExpires = request.expires_at
+    ? DateTime.fromJSDate(new Date(request.expires_at))
+    : request.expiry_date
+      ? DateTime.fromISO(String(request.expiry_date).slice(0, 10), {
+          zone: DEFAULT_LAB_EXPIRY_TIMEZONE
+        }).endOf('day')
+      : null;
+
+  if (previousExpires?.isValid && nextExpires.toMillis() <= previousExpires.toMillis()) {
+    throw new AppError('New expiration must be after the current expiration.', 400);
+  }
+
+  if (nextExpires.toMillis() <= DateTime.now().toMillis()) {
+    throw new AppError('New expiration must be in the future.', 400);
+  }
+
+  const expiryDate = nextExpires.setZone(DEFAULT_LAB_EXPIRY_TIMEZONE).toISODate();
+  const expiresAtIso = nextExpires.toUTC().toISO();
+
+  const updated = await db.query(
+    `
+      UPDATE requests
+      SET
+        expiry_date = $2::date,
+        expires_at = $3::timestamptz
+      WHERE id = $1
+      RETURNING id, expiry_date, expires_at
+    `,
+    [id, expiryDate, expiresAtIso]
+  );
+
+  const row = updated.rows[0];
+  return {
+    requestId: Number(row.id),
+    expiryDate: row.expiry_date,
+    expiresAt: row.expires_at,
+    previousExpiresAt: request.expires_at || null,
+    message: `Expiration extended to ${nextExpires
+      .setZone(DEFAULT_LAB_EXPIRY_TIMEZONE)
+      .toFormat('yyyy-LL-dd HH:mm')} (${DEFAULT_LAB_EXPIRY_TIMEZONE}).`
+  };
+};
 
 const updateUserRoles = async ({ adminEmail, requestId, userId, roles }) =>
   managePortalService.updatePortalUserRolesByOrgAdmin({
@@ -1690,7 +1777,10 @@ const listRequests = async () => {
         r.location,
         r.created_at,
         r.expiry_date,
+        r.expires_at,
         r.azure_resource_group_name,
+        r.project_name,
+        r.id_mode,
         COUNT(DISTINCT au.id) FILTER (WHERE COALESCE(au.is_deleted, false) = false) AS user_count,
         COUNT(DISTINCT au.azure_resource_group_name) FILTER (
           WHERE au.azure_resource_group_name IS NOT NULL
@@ -1712,8 +1802,11 @@ const listRequests = async () => {
     costingMode: row.costing_mode,
     region: row.location,
     requestName: row.azure_resource_group_name,
+    projectName: row.project_name || null,
+    idMode: row.id_mode === 'test_ids' || row.id_mode === 'azure_ids' ? row.id_mode : null,
     startDate: row.created_at,
     expiryDate: row.expiry_date,
+    expiresAt: row.expires_at || null,
     userCount: Number(row.user_count || 0),
     resourceGroupCount: Number(row.resource_group_count || 0)
   }));
@@ -2366,6 +2459,7 @@ module.exports = {
   getMonitoringLogs,
   deleteUser,
   deleteRequest,
+  extendRequestExpiration,
   updateUserRoles,
   forceLogoutUser,
   listAccessRequests,

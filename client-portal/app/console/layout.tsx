@@ -43,12 +43,18 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
       router.replace('/login');
       return;
     }
-    if (user.role !== 'admin') {
+
+    const isAzureConsolePath = pathname?.startsWith('/console/azure') ?? false;
+    const roleAllowed =
+      user.role === 'admin' ||
+      (user.role === 'super_admin' && isAzureConsolePath);
+
+    if (!roleAllowed) {
       router.replace(
         user.role === 'super_admin' ? '/super-admin-console' : '/dashboard/user'
       );
     }
-  }, [isLoading, isAuthenticated, user, router]);
+  }, [isLoading, isAuthenticated, user, router, pathname]);
 
   if (isLoading) {
     return (
@@ -58,7 +64,13 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     );
   }
 
-  if (!isAuthenticated || !user || user.role !== 'admin') return null;
+  const isAzureConsolePath = pathname?.startsWith('/console/azure') ?? false;
+  const roleAllowed =
+    Boolean(user) &&
+    (user!.role === 'admin' ||
+      (user!.role === 'super_admin' && isAzureConsolePath));
+
+  if (!isAuthenticated || !user || !roleAllowed) return null;
 
   return (
     <AdminServicesProvider>

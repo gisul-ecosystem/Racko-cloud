@@ -7,7 +7,7 @@ const mongoObjectId = z
 
 export const createCatalogVmRequestSchema = z.object({
   body: z.object({
-    category: z.enum(['linux', 'windows', 'gpu']),
+    category: z.enum(['ubuntu', 'rocky', 'debian', 'windows', 'linux', 'gpu']),
     planId: z.string().min(1).max(64).trim(),
     planName: z.string().min(1).max(200).trim(),
     specs: z
@@ -48,6 +48,23 @@ export const rejectCatalogVmRequestSchema = z.object({
   params: z.object({ id: mongoObjectId }),
   body: z.object({
     reason: z.string().min(1).max(500).trim(),
+  }),
+});
+
+export const changeCatalogVmTemplateSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z
+    .object({
+      template: z.string().min(1).max(200).trim().optional(),
+    })
+    .optional()
+    .default({}),
+});
+
+export const catalogVmPowerActionSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z.object({
+    action: z.enum(['virtualizor', 'start', 'stop', 'reboot']),
   }),
 });
 
@@ -95,6 +112,7 @@ export const calculateVmPricingSchema = z.object({
       provider: z
         .union([z.array(cloudProviderEnum).min(1), cloudProviderEnum, z.string().min(1)])
         .optional(),
+      nestedVirtualization: z.boolean().optional().default(false),
     })
     .refine((b) => Boolean(b.canonicalSpec) || Boolean(b.specs), {
       message: 'canonicalSpec or specs is required',
@@ -108,6 +126,14 @@ export const listVmPricingQuerySchema = z.object({
     category: z.enum(['linux', 'windows', 'gpu']).optional(),
     canonicalSpec: z.string().min(1).max(100).optional(),
     limit: z.coerce.number().int().min(1).max(500).optional().default(100),
+    nestedVirtualization: z
+      .union([z.literal('true'), z.literal('false'), z.boolean()])
+      .optional()
+      .transform((v) => {
+        if (v === undefined) return undefined;
+        if (typeof v === 'boolean') return v;
+        return v === 'true';
+      }),
   }),
 });
 

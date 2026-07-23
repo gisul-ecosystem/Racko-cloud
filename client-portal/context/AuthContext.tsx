@@ -220,6 +220,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setState({ user, isLoading: false, isAuthenticated: true });
     scheduleTokenRefresh(accessToken);
 
+    // Honor ?redirect= from middleware (e.g. purchase Yes link → create request page).
+    let redirectTarget: string | null = null;
+    if (typeof window !== 'undefined') {
+      const raw = new URLSearchParams(window.location.search).get('redirect');
+      if (raw) {
+        try {
+          const decoded = decodeURIComponent(raw);
+          if (
+            decoded.startsWith('/') &&
+            !decoded.startsWith('//') &&
+            (decoded.startsWith('/console') ||
+              decoded.startsWith('/dashboard') ||
+              decoded.startsWith('/super-admin-console') ||
+              decoded.startsWith('/tenant') ||
+              decoded === '/request' ||
+              decoded.startsWith('/status/'))
+          ) {
+            redirectTarget = decoded;
+          }
+        } catch {
+          redirectTarget = null;
+        }
+      }
+    }
+
+    if (redirectTarget) {
+      router.push(redirectTarget);
+      return;
+    }
+
     // Redirect based on role
     if (user.role === 'super_admin') {
       router.push('/super-admin-console');
