@@ -15,8 +15,10 @@ import {
 } from '../../../lib/cloudRequestWallet';
 import {
   createAdminAccessRequest,
+  createPrivilegedRoleRequest,
   createRequestWithPricing,
   getPurchaseClonePayload,
+  listPrivilegedRoles,
 } from '../../api/client';
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../../lib/cloudAccent';
@@ -47,6 +49,8 @@ import {
   pickCheapestLocation,
   supportsPauseCleanup,
   TEST_IDS_DEFAULTS,
+  TEST_IDS_MAX_ACCOUNT_COUNT,
+  isValidCleanupTime,
 } from '../../utils/requestForm';
 import {
   convertUsdToInr,
@@ -143,7 +147,7 @@ function validateForm(input: {
   endDate: string;
   usageWindows: UsageWindow[];
   resourceCleanupEnabled: boolean;
-  resourceCleanupIntervalHours?: number;
+  resourceCleanupTime: string;
   resourceCleanupAction?: 'delete' | 'pause';
   perUserBudgetUsd?: number;
   costingMode?: CostingMode;
@@ -165,6 +169,8 @@ function validateForm(input: {
 
   if (!Number.isInteger(input.accountCount) || input.accountCount <= 0) {
     errors.push('Account count must be a positive integer.');
+  } else if (input.idMode === 'test_ids' && input.accountCount > TEST_IDS_MAX_ACCOUNT_COUNT) {
+    errors.push(`Azure test_ids supports a maximum of ${TEST_IDS_MAX_ACCOUNT_COUNT} accounts.`);
   }
 
   if (input.serviceIds.length === 0) {
@@ -214,12 +220,8 @@ function validateForm(input: {
   }
 
   if (input.resourceCleanupEnabled) {
-    if (
-      !Number.isInteger(input.resourceCleanupIntervalHours)
-      || (input.resourceCleanupIntervalHours ?? 0) < 1
-      || (input.resourceCleanupIntervalHours ?? 0) > 24
-    ) {
-      errors.push('Enter a resource cleanup interval between 1 and 24 hours when enabled.');
+    if (!isValidCleanupTime(input.resourceCleanupTime)) {
+      errors.push('Choose a daily cleanup time (HH:MM) when resource cleanup is enabled.');
     }
   }
 
@@ -257,9 +259,7 @@ export function RequestWorkspace() {
   const [usageWindows, setUsageWindows] = useState<UsageWindow[]>([]);
   const [usageWindowTimezone, setUsageWindowTimezone] = useState('Asia/Kolkata');
   const [resourceCleanupEnabled, setResourceCleanupEnabled] = useState(false);
-  const [resourceCleanupIntervalHours, setResourceCleanupIntervalHours] = useState<
-    number | undefined
-  >(undefined);
+  const [resourceCleanupTime, setResourceCleanupTime] = useState('');
   const [resourceCleanupAction, setResourceCleanupAction] = useState<'delete' | 'pause'>('delete');
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
   const [selectedLicenseSkuId, setSelectedLicenseSkuId] = useState('');
@@ -285,6 +285,19 @@ export function RequestWorkspace() {
   const [adminAccessSubmitting, setAdminAccessSubmitting] = useState(false);
   const [adminAccessMessage, setAdminAccessMessage] = useState<string | null>(null);
 
+  const [privilegedRoleOpen, setPrivilegedRoleOpen] = useState(false);
+  const [privilegedRoles, setPrivilegedRoles] = useState<{ name: string; definitionId: string }[]>(
+    []
+  );
+  const [privilegedRolesLoading, setPrivilegedRolesLoading] = useState(false);
+  const [selectedPrivilegedRole, setSelectedPrivilegedRole] = useState('');
+  const [privilegedRoleSubmitting, setPrivilegedRoleSubmitting] = useState(false);
+  const [privilegedRoleSubmitted, setPrivilegedRoleSubmitted] = useState(false);
+  const [privilegedRoleMessage, setPrivilegedRoleMessage] = useState<string | null>(null);
+  const [privilegedRoleMessageType, setPrivilegedRoleMessageType] = useState<
+    'success' | 'error' | null
+  >(null);
+
   const azureIdsSnapshotRef = useRef<{
     accountCount: number;
     costingMode: CostingMode;
@@ -292,7 +305,7 @@ export function RequestWorkspace() {
     endDate: string;
     usageWindows: UsageWindow[];
     resourceCleanupEnabled: boolean;
-    resourceCleanupIntervalHours?: number;
+    resourceCleanupTime: string;
     perUserBudgetUsd?: number;
   } | null>(null);
 
@@ -351,7 +364,10 @@ export function RequestWorkspace() {
           setUsageWindowTimezone(payload.usageWindows[0].timezone);
         }
         setResourceCleanupEnabled(Boolean(payload.resourceCleanupEnabled));
-        setResourceCleanupIntervalHours(payload.resourceCleanupIntervalHours);
+        setResourceCleanupTime(payload.resourceCleanupTime || '');
+        if (payload.resourceCleanupTimezone) {
+          setUsageWindowTimezone(payload.resourceCleanupTimezone);
+        }
         setResourceCleanupAction(payload.resourceCleanupAction || 'delete');
         setPerUserBudgetUsd(payload.perUserBudgetUsd);
         setSelectedServiceIds(payload.serviceIds || []);
@@ -496,7 +512,7 @@ export function RequestWorkspace() {
             endDate,
             usageWindows,
             resourceCleanupEnabled,
-            resourceCleanupIntervalHours,
+            resourceCleanupTime,
             perUserBudgetUsd,
           };
         }
@@ -508,7 +524,7 @@ export function RequestWorkspace() {
         setEndDate(defaultTestIdsEndDate());
         setUsageWindows([]);
         setResourceCleanupEnabled(true);
-        setResourceCleanupIntervalHours(TEST_IDS_DEFAULTS.resourceCleanupIntervalHours);
+        setResourceCleanupTime('');
         setPerUserBudgetUsd(TEST_IDS_DEFAULTS.perUserBudgetUsd);
         return;
       }
@@ -521,7 +537,7 @@ export function RequestWorkspace() {
       setEndDate(snapshot?.endDate ?? defaultEndDate());
       setUsageWindows(snapshot?.usageWindows ?? []);
       setResourceCleanupEnabled(snapshot?.resourceCleanupEnabled ?? false);
-      setResourceCleanupIntervalHours(snapshot?.resourceCleanupIntervalHours);
+      setResourceCleanupTime(snapshot?.resourceCleanupTime ?? '');
       setPerUserBudgetUsd(
         snapshot?.costingMode === 'per_user' ? snapshot.perUserBudgetUsd : undefined
       );
@@ -533,7 +549,7 @@ export function RequestWorkspace() {
       idMode,
       perUserBudgetUsd,
       resourceCleanupEnabled,
-      resourceCleanupIntervalHours,
+      resourceCleanupTime,
       startDate,
       usageWindows,
     ]
@@ -562,7 +578,7 @@ export function RequestWorkspace() {
       endDate,
       usageWindows: idMode === 'test_ids' ? [] : usageWindows,
       resourceCleanupEnabled,
-      resourceCleanupIntervalHours,
+      resourceCleanupTime,
       resourceCleanupAction,
       perUserBudgetUsd,
       costingMode,
@@ -633,9 +649,10 @@ export function RequestWorkspace() {
               }
             : {}),
           resourceCleanupEnabled,
-          ...(resourceCleanupEnabled && resourceCleanupIntervalHours
+          ...(resourceCleanupEnabled && isValidCleanupTime(resourceCleanupTime)
             ? {
-                resourceCleanupIntervalHours,
+                resourceCleanupTime: resourceCleanupTime.trim(),
+                resourceCleanupTimezone: usageWindowTimezone,
                 ...(pauseCleanupAvailable && resourceCleanupAction === 'pause'
                   ? { resourceCleanupAction: 'pause' as const }
                   : {}),
@@ -726,6 +743,82 @@ export function RequestWorkspace() {
     } finally {
       setAdminAccessSubmitting(false);
     }
+  };
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPrivilegedRoles() {
+      setPrivilegedRolesLoading(true);
+      try {
+        const roles = await listPrivilegedRoles();
+        if (!cancelled) {
+          setPrivilegedRoles(roles);
+          if (roles.length > 0) {
+            setSelectedPrivilegedRole((current) => current || roles[0].name);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setPrivilegedRoles([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setPrivilegedRolesLoading(false);
+        }
+      }
+    }
+
+    void loadPrivilegedRoles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSubmitPrivilegedRoleRequest = async () => {
+    if (!selectedPrivilegedRole) {
+      setPrivilegedRoleMessage('Select a privileged role.');
+      setPrivilegedRoleMessageType('error');
+      return;
+    }
+
+    if (!customerEmail.trim()) {
+      setPrivilegedRoleMessage('Enter a customer email first.');
+      setPrivilegedRoleMessageType('error');
+      return;
+    }
+
+    setPrivilegedRoleSubmitting(true);
+    setPrivilegedRoleMessage(null);
+    setPrivilegedRoleMessageType(null);
+    setPrivilegedRoleSubmitted(false);
+    try {
+      await createPrivilegedRoleRequest({
+        customerEmail: customerEmail.trim(),
+        azureRole: selectedPrivilegedRole,
+      });
+      setPrivilegedRoleSubmitted(true);
+      setPrivilegedRoleMessageType('success');
+      setPrivilegedRoleMessage(
+        `${selectedPrivilegedRole} was submitted for ${customerEmail.trim()}. An org admin will approve it in Lab Management.`
+      );
+    } catch (err) {
+      setPrivilegedRoleSubmitted(false);
+      setPrivilegedRoleMessageType('error');
+      setPrivilegedRoleMessage(
+        err instanceof ApiError ? err.message : 'Failed to submit privileged role request.'
+      );
+    } finally {
+      setPrivilegedRoleSubmitting(false);
+    }
+  };
+
+  const handlePrivilegedRoleChange = (value: string) => {
+    setSelectedPrivilegedRole(value);
+    setPrivilegedRoleSubmitted(false);
+    setPrivilegedRoleMessage(null);
+    setPrivilegedRoleMessageType(null);
   };
 
   const totalPrice = pricing?.totalPrice ?? pricing?.estimatedPrice ?? null;
@@ -945,8 +1038,8 @@ export function RequestWorkspace() {
               onUsageWindowTimezoneChange={setUsageWindowTimezone}
               resourceCleanupEnabled={resourceCleanupEnabled}
               onResourceCleanupEnabledChange={setResourceCleanupEnabled}
-              resourceCleanupIntervalHours={resourceCleanupIntervalHours}
-              onResourceCleanupIntervalHoursChange={setResourceCleanupIntervalHours}
+              resourceCleanupTime={resourceCleanupTime}
+              onResourceCleanupTimeChange={setResourceCleanupTime}
               resourceCleanupAction={resourceCleanupAction}
               onResourceCleanupActionChange={setResourceCleanupAction}
               perUserBudgetUsd={perUserBudgetUsd}
@@ -969,6 +1062,17 @@ export function RequestWorkspace() {
               onSubmitAdminAccess={handleSubmitAdminAccess}
               adminAccessSubmitting={adminAccessSubmitting}
               adminAccessMessage={adminAccessMessage}
+              privilegedRoleOpen={privilegedRoleOpen}
+              onPrivilegedRoleOpenChange={setPrivilegedRoleOpen}
+              privilegedRoles={privilegedRoles}
+              privilegedRolesLoading={privilegedRolesLoading}
+              selectedPrivilegedRole={selectedPrivilegedRole}
+              onSelectedPrivilegedRoleChange={handlePrivilegedRoleChange}
+              onSubmitPrivilegedRoleRequest={handleSubmitPrivilegedRoleRequest}
+              privilegedRoleSubmitting={privilegedRoleSubmitting}
+              privilegedRoleSubmitted={privilegedRoleSubmitted}
+              privilegedRoleMessage={privilegedRoleMessage}
+              privilegedRoleMessageType={privilegedRoleMessageType}
               validationErrors={validationErrors}
             />
 

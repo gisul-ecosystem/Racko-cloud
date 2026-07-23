@@ -5,8 +5,14 @@ const pricingService = require('./pricingService');
 const { assertProvisionableLocation, assertLocationAvailableForServices } = require('./azureLocationService');
 const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments, finalizeAiFoundryTierRoles } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
+const privilegedRoleRequestService = require('./privilegedRoleRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 const { buildExpiresAtFromParts } = require('../utils/requestExpiry');
+const {
+  computeNextDailyCleanupRunAt,
+  normalizeCleanupTime,
+  normalizeCleanupTimezone
+} = require('../utils/resourceCleanupSchedule');
 
 async function createRequest({
   customerEmail,
@@ -26,6 +32,8 @@ async function createRequest({
   perUserBudgetUsd,
   resourceCleanupEnabled,
   resourceCleanupIntervalHours,
+  resourceCleanupTime,
+  resourceCleanupTimezone,
   resourceCleanupAction,
   usageWindows,
   projectName,
@@ -302,14 +310,34 @@ async function createRequest({
         ? new Date(Date.now() + resolvedCleanupIntervalHours * 60 * 60 * 1000).toISOString()
         : null;
     const resolvedResourceCleanupEnabled = resourceCleanupEnabled === true;
+    const resolvedResourceCleanupTime =
+      resolvedResourceCleanupEnabled && resourceCleanupTime
+        ? normalizeCleanupTime(resourceCleanupTime)
+        : null;
+    const resolvedResourceCleanupTimezone = resolvedResourceCleanupTime
+      ? normalizeCleanupTimezone(
+          resourceCleanupTimezone
+            || usageWindows?.[0]?.timezone
+            || usageSchedule?.timezone
+            || 'Asia/Kolkata'
+        )
+      : null;
     const resolvedResourceCleanupIntervalHours =
-      resolvedResourceCleanupEnabled && Number.isInteger(resourceCleanupIntervalHours)
-        ? resourceCleanupIntervalHours
-        : null;
-    const resolvedResourceCleanupNextRunAt =
-      resolvedResourceCleanupEnabled && resolvedResourceCleanupIntervalHours
-        ? new Date(Date.now() + resolvedResourceCleanupIntervalHours * 60 * 60 * 1000).toISOString()
-        : null;
+      resolvedResourceCleanupEnabled && resolvedResourceCleanupTime
+        ? 24
+        : resolvedResourceCleanupEnabled && Number.isInteger(resourceCleanupIntervalHours)
+          ? resourceCleanupIntervalHours
+          : null;
+    const resolvedResourceCleanupNextRunAt = resolvedResourceCleanupEnabled
+      ? resolvedResourceCleanupTime
+        ? computeNextDailyCleanupRunAt({
+            timeHHMM: resolvedResourceCleanupTime,
+            timezone: resolvedResourceCleanupTimezone
+          })
+        : resolvedResourceCleanupIntervalHours
+          ? new Date(Date.now() + resolvedResourceCleanupIntervalHours * 60 * 60 * 1000).toISOString()
+          : null
+      : null;
     const resolvedResourceCleanupAction =
       resourceCleanupAction === 'pause' ? 'pause' : 'delete';
     const resolvedProjectName =
@@ -377,6 +405,10 @@ async function createRequest({
 
           resource_cleanup_action,
 
+          resource_cleanup_time,
+
+          resource_cleanup_timezone,
+
           project_name,
 
           id_mode,
@@ -417,7 +449,9 @@ async function createRequest({
           $22,
           $23,
           $24,
-          $25
+          $25,
+          $26,
+          $27
 
         )
 
@@ -465,6 +499,10 @@ async function createRequest({
           resolvedResourceCleanupNextRunAt,
 
           resolvedResourceCleanupAction,
+
+          resolvedResourceCleanupTime,
+
+          resolvedResourceCleanupTimezone,
 
           resolvedProjectName,
 
@@ -729,6 +767,12 @@ async function createRequest({
       client
     });
 
+    await privilegedRoleRequestService.linkPrivilegedRoleRequestsToRequest({
+      customerEmail,
+      requestId,
+      client
+    });
+
     await client.query(
       'COMMIT'
     );
@@ -745,6 +789,24 @@ async function createRequest({
           service: 'request-service',
           level: 'error',
           event: 'approved_access_fulfillment_failed',
+          requestId,
+          message: fulfillmentError?.message
+        })
+      );
+    }
+
+    try {
+      await privilegedRoleRequestService.fulfillLinkedApprovedPrivilegedRoleRequests({
+        customerEmail,
+        requestId
+      });
+    } catch (fulfillmentError) {
+      console.error(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          service: 'request-service',
+          level: 'error',
+          event: 'approved_privileged_role_fulfillment_failed',
           requestId,
           message: fulfillmentError?.message
         })

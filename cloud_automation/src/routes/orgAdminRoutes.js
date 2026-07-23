@@ -126,5 +126,20 @@ router.patch(
   requireSuperAdmin,
   orgAdminController.reviewAccessRequest
 );
+router.get(
+  '/privileged-role-requests',
+  requireSuperAdmin,
+  orgAdminController.listPrivilegedRoleRequests
+);
+router.patch(
+  '/privileged-role-requests/:id',
+  requireSuperAdmin,
+  orgAdminController.reviewPrivilegedRoleRequest
+);
+router.post(
+  '/resource-groups/:requestId/privileged-roles/assign-all',
+  requireSuperAdmin,
+  orgAdminController.assignPrivilegedRoleToAllUsers
+);
 
 module.exports = router;
