@@ -49,6 +49,14 @@ const createRequest = async (req, res, next) => {
         && req.body.resourceCleanupIntervalHours !== null
           ? Number(req.body.resourceCleanupIntervalHours)
           : undefined,
+      resourceCleanupTime:
+        typeof req.body.resourceCleanupTime === 'string'
+          ? req.body.resourceCleanupTime.trim()
+          : undefined,
+      resourceCleanupTimezone:
+        typeof req.body.resourceCleanupTimezone === 'string'
+          ? req.body.resourceCleanupTimezone.trim()
+          : undefined,
       resourceCleanupAction:
         req.body.resourceCleanupAction === 'pause' ? 'pause' : 'delete',
       usageWindows: Array.isArray(req.body.usageWindows) ? req.body.usageWindows : undefined,

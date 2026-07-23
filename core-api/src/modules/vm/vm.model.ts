@@ -1,5 +1,6 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import type { BillingPeriod } from '../../models/order.model';
+import type { WeeklyScheduleDay } from '../vmAccessSchedule/weeklySchedule';
 
 export type SoftwareInstallStatus = 'pending' | 'installing' | 'installed' | 'failed';
 
@@ -95,6 +96,18 @@ export interface IVM extends Document {
 
   // Restriction lock — prevents all power/delete actions until removed
   isRestricted: boolean;
+
+  // Per-resource user access schedule (whitelabel / assigned end-users)
+  accessStartDate?: Date | null;
+  accessEndDate?: Date | null;
+  /** Legacy daily start HH:MM (IST) */
+  accessStartTime?: string | null;
+  /** Legacy daily end HH:MM (IST) */
+  accessEndTime?: string | null;
+  accessOverride: boolean;
+  accessOverrideUntil?: Date | null;
+  weeklySchedule?: WeeklyScheduleDay[] | null;
+  weeklyScheduleTz: string;
 
   // Timestamps
   createdAt: Date;
@@ -304,6 +317,42 @@ const vmSchema = new Schema<IVM>(
       type: Boolean,
       default: false,
       index: true,
+    },
+    accessStartDate: {
+      type: Date,
+      default: null,
+    },
+    accessEndDate: {
+      type: Date,
+      default: null,
+    },
+    accessStartTime: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    accessEndTime: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    accessOverride: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    accessOverrideUntil: {
+      type: Date,
+      default: null,
+    },
+    weeklySchedule: {
+      type: Schema.Types.Mixed,
+      default: null,
+    },
+    weeklyScheduleTz: {
+      type: String,
+      default: 'Asia/Kolkata',
+      trim: true,
     },
     softwareInstalls: {
       type: [

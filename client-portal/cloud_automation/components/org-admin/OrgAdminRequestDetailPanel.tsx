@@ -8,6 +8,7 @@ import { OrgAdminCleanupTab } from './OrgAdminCleanupTab';
 import { OrgAdminUsersTable } from './OrgAdminUsersTable';
 import { OrgAdminHistoryTab } from './OrgAdminHistoryTab';
 import { RequestCustomConfigTab } from './RequestCustomConfigTab';
+import { OrgAdminPrivilegedRolesTab } from './OrgAdminPrivilegedRolesTab';
 import type {
   OrgAdminAzureRoleOption,
   OrgAdminMonitoringResponse,
@@ -18,7 +19,7 @@ import type {
   OrgAdminSharedAzureCostSummary,
 } from '../../types/orgAdmin';
 
-type DetailTab = 'users' | 'cleanup' | 'budget' | 'history' | 'custom-config';
+type DetailTab = 'users' | 'cleanup' | 'budget' | 'history' | 'custom-config' | 'privileged-roles';
 
 const EXTEND_PRESETS = [
   { label: '+24 hours', hours: 24 },
@@ -76,6 +77,7 @@ interface OrgAdminRequestDetailPanelProps {
   onExtendExpiration?: (expiresAt: string) => Promise<boolean>;
   onSendPurchaseConfirmationMail?: () => Promise<boolean>;
   onReprovisionRoles: () => Promise<boolean>;
+  onPrivilegedRolesChanged?: () => void;
   lastUpdatedAt?: Date | null;
   isRefreshing?: boolean;
   hasActiveUsers?: boolean;
@@ -105,6 +107,7 @@ export function OrgAdminRequestDetailPanel({
   onExtendExpiration,
   onSendPurchaseConfirmationMail,
   onReprovisionRoles,
+  onPrivilegedRolesChanged,
   lastUpdatedAt = null,
   isRefreshing = false,
   hasActiveUsers = false,
@@ -412,6 +415,7 @@ export function OrgAdminRequestDetailPanel({
               { id: 'cleanup' as const, label: 'Cleanup' },
               { id: 'budget' as const, label: 'Budget' },
               { id: 'custom-config' as const, label: 'Custom Roles & Services' },
+              { id: 'privileged-roles' as const, label: 'Privileged Roles' },
             ] as const
           ).map((tab) => (
             <button
@@ -495,6 +499,14 @@ export function OrgAdminRequestDetailPanel({
 
           {activeTab === 'custom-config' && (
             <RequestCustomConfigTab requestId={request.id} users={users} />
+          )}
+
+          {activeTab === 'privileged-roles' && (
+            <OrgAdminPrivilegedRolesTab
+              requestId={request.id}
+              users={users}
+              onAssigned={onPrivilegedRolesChanged}
+            />
           )}
         </>
       )}

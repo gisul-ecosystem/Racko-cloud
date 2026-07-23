@@ -11,6 +11,8 @@ import type {
   MicrosoftLicense,
   PricingEstimatePayload,
   PricingEstimateResponse,
+  PrivilegedRoleOption,
+  PrivilegedRoleRequestPayload,
   PurchaseClonePayload,
   ServiceCatalogResponse,
   ServiceRole,
@@ -175,6 +177,24 @@ export async function createAdminAccessRequest(
   payload: AdminAccessRequestPayload
 ): Promise<{ success: boolean; request: unknown }> {
   return azureRequest(cloudAutomationPath('/admin-access-requests'), {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** List assignable privileged Azure RBAC roles (Owner excluded). */
+export async function listPrivilegedRoles(): Promise<PrivilegedRoleOption[]> {
+  const response = await azureRequest<{ success: boolean; roles: PrivilegedRoleOption[] }>(
+    cloudAutomationPath('/privileged-role-requests/roles')
+  );
+  return response.roles ?? [];
+}
+
+/** Submit a privileged role request for org-admin approval. */
+export async function createPrivilegedRoleRequest(
+  payload: PrivilegedRoleRequestPayload
+): Promise<{ success: boolean; request: unknown }> {
+  return azureRequest(cloudAutomationPath('/privileged-role-requests'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });

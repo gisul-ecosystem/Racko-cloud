@@ -2,6 +2,7 @@ const db = require('../db/postgres');
 const { DateTime } = require('luxon');
 const { ResourceManagementClient } = require('@azure/arm-resources');
 const adminAccessRequestService = require('./adminAccessRequestService');
+const privilegedRoleRequestService = require('./privilegedRoleRequestService');
 const AppError = require('../utils/AppError');
 const managePortalService = require('./managePortalService');
 const usageService = require('./usageService');
@@ -358,6 +359,8 @@ const loadResourceGroupDetail = async (requestId) => {
         r.created_at,
         r.resource_cleanup_enabled,
         r.resource_cleanup_interval_hours,
+        r.resource_cleanup_time,
+        r.resource_cleanup_timezone,
         r.resource_cleanup_action,
         r.resource_cleanup_last_ran_at,
         r.resource_cleanup_next_run_at,
@@ -720,6 +723,8 @@ const loadResourceGroupDetail = async (requestId) => {
         request.resource_cleanup_interval_hours != null
           ? Number(request.resource_cleanup_interval_hours)
           : null,
+      resourceCleanupTime: request.resource_cleanup_time || null,
+      resourceCleanupTimezone: request.resource_cleanup_timezone || null,
       resourceCleanupAction: request.resource_cleanup_action === 'pause' ? 'pause' : 'delete',
       resourceCleanupLastRanAt: request.resource_cleanup_last_ran_at || null,
       resourceCleanupNextRunAt: request.resource_cleanup_next_run_at || null,
@@ -1076,6 +1081,24 @@ const reviewAccessRequest = async ({ id, status, reviewNotes, reviewedBy }) =>
     status,
     reviewNotes,
     reviewedBy
+  });
+
+const listPrivilegedRoleRequests = async ({ status, requestId } = {}) =>
+  privilegedRoleRequestService.listPrivilegedRoleRequests({ status, requestId });
+
+const reviewPrivilegedRoleRequest = async ({ id, status, reviewNotes, reviewedBy }) =>
+  privilegedRoleRequestService.reviewPrivilegedRoleRequest({
+    id,
+    status,
+    reviewNotes,
+    reviewedBy
+  });
+
+const assignPrivilegedRoleToAllUsers = async ({ adminEmail, requestId, azureRole }) =>
+  privilegedRoleRequestService.manuallyAssignPrivilegedRole({
+    adminEmail,
+    requestId,
+    azureRole
   });
 
 const AZURE_COST_FRESHNESS_NOTE =
@@ -2056,9 +2079,14 @@ const triggerUserCleanup = async (requestId, userId, { action } = {}) => {
 
 const triggerRequestCleanup = async (requestId, { action, triggeredBy = 'admin_manual' } = {}) => {
   const { runResourceCleanupForRequest } = require('./resourceCleanupService');
+  const { computeNextDailyCleanupRunAt } = require('../utils/resourceCleanupSchedule');
   const { rows: requestRows } = await db.query(
     `
-      SELECT resource_cleanup_action, resource_cleanup_interval_hours
+      SELECT
+        resource_cleanup_action,
+        resource_cleanup_interval_hours,
+        resource_cleanup_time,
+        resource_cleanup_timezone
       FROM requests
       WHERE id = $1
       LIMIT 1
@@ -2088,7 +2116,21 @@ const triggerRequestCleanup = async (requestId, { action, triggeredBy = 'admin_m
     [requestId, JSON.stringify(affected), triggeredBy, totalDeleted]
   );
 
-  if (request.resource_cleanup_interval_hours) {
+  if (request.resource_cleanup_time) {
+    const nextRun = computeNextDailyCleanupRunAt({
+      timeHHMM: request.resource_cleanup_time,
+      timezone: request.resource_cleanup_timezone || 'Asia/Kolkata'
+    });
+    await db.query(
+      `
+        UPDATE requests
+        SET resource_cleanup_next_run_at = $1,
+            resource_cleanup_last_ran_at = NOW()
+        WHERE id = $2
+      `,
+      [nextRun, requestId]
+    );
+  } else if (request.resource_cleanup_interval_hours) {
     const nextRun = new Date(
       Date.now() + Number(request.resource_cleanup_interval_hours) * 3600000
     );
@@ -2437,6 +2479,18 @@ const listAzureRoles = () => [
   { name: 'Owner', definitionId: '8e3af657-a8ff-443c-a75c-2fe8c4bcb635' },
   { name: 'Contributor', definitionId: 'b24988ac-6180-42a0-ab88-20f7382dd24c' },
   { name: 'Reader', definitionId: 'acdd72a7-3385-48ef-bd42-f606fba81ae7' },
+  {
+    name: 'User Access Administrator',
+    definitionId: '18d7d88d-d35e-4fb5-a5c3-7773c0df55f5'
+  },
+  {
+    name: 'Role Based Access Control Administrator',
+    definitionId: '62a82d94-763b-4b82-8ec9-3895558c557b'
+  },
+  {
+    name: 'Reservations Administrator',
+    definitionId: '749f88d5-cbae-401f-8a62-7073438777ec'
+  },
   { name: 'Virtual Machine Contributor', definitionId: '9980e02c-c2be-4d73-94e8-173b1dc7cf3c' },
   {
     name: 'Virtual Machine Administrator Login',
@@ -2464,6 +2518,9 @@ module.exports = {
   forceLogoutUser,
   listAccessRequests,
   reviewAccessRequest,
+  listPrivilegedRoleRequests,
+  reviewPrivilegedRoleRequest,
+  assignPrivilegedRoleToAllUsers,
   getUserAzureCost,
   getSharedAzureCostForRequest,
   getDailyUsageForRequest,

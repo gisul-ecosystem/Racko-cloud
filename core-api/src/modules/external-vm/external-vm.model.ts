@@ -1,4 +1,5 @@
 import mongoose, { Document, Schema } from 'mongoose';
+import type { WeeklyScheduleDay } from '../vmAccessSchedule/weeklySchedule';
 
 export type ExternalVMProtocol = 'rdp' | 'ssh';
 
@@ -24,6 +25,16 @@ export interface IExternalVM extends Document {
   assignedTo?: mongoose.Types.ObjectId;
   /** Tenant end-user this server is assigned to (tenant console). */
   assignedTenantUserId?: mongoose.Types.ObjectId;
+
+  // Per-resource access schedule (same contract as platform VMs)
+  accessStartDate?: Date | null;
+  accessEndDate?: Date | null;
+  accessStartTime?: string | null;
+  accessEndTime?: string | null;
+  accessOverride: boolean;
+  accessOverrideUntil?: Date | null;
+  weeklySchedule?: WeeklyScheduleDay[] | null;
+  weeklyScheduleTz: string;
 
   // Timestamps
   createdAt: Date;
@@ -90,6 +101,14 @@ const externalVMSchema = new Schema<IExternalVM>(
       index: true,
       default: null,
     },
+    accessStartDate: { type: Date, default: null },
+    accessEndDate: { type: Date, default: null },
+    accessStartTime: { type: String, default: null, trim: true },
+    accessEndTime: { type: String, default: null, trim: true },
+    accessOverride: { type: Boolean, default: false, index: true },
+    accessOverrideUntil: { type: Date, default: null },
+    weeklySchedule: { type: Schema.Types.Mixed, default: null },
+    weeklyScheduleTz: { type: String, default: 'Asia/Kolkata', trim: true },
     createdAt: {
       type: Date,
       default: Date.now,

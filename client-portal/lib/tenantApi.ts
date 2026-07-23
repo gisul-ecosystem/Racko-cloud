@@ -76,6 +76,10 @@ export async function updateTenant(id: string, input: UpdateTenantInput): Promis
   return data.tenant;
 }
 
+export async function deleteTenant(id: string): Promise<void> {
+  await apiRequest(`/api/v1/tenants/${id}`, { method: 'DELETE' });
+}
+
 export async function updateTenantIpAccess(
   id: string,
   input: UpdateTenantIpAccessInput
@@ -179,6 +183,15 @@ export async function setTenantAdminActive(
     )
   );
   return data.admin;
+}
+
+export async function deleteTenantAdmin(
+  tenantId: string,
+  tenantUserId: string
+): Promise<void> {
+  await apiRequest(`/api/v1/super-admin/tenants/${tenantId}/admins/${tenantUserId}`, {
+    method: 'DELETE',
+  });
 }
 
 export async function fetchVmManagementPlatformTemplates(

@@ -584,11 +584,44 @@ export async function fetchAssignedVMsForUser(userId: string): Promise<IVM[]> {
   return res.data.vms;
 }
 
-export async function assignVMs(userId: string, vmIds: string[]): Promise<{ assigned: number }> {
+export async function assignVMs(
+  userId: string,
+  vmIds: string[],
+  accessSchedule?: import('./accessSchedule').AccessScheduleInput
+): Promise<{ assigned: number }> {
   const res = await apiRequest<ApiResponse<{ assigned: number }>>(
     '/api/v1/vms/assign',
-    { method: 'POST', body: JSON.stringify({ userId, vmIds }) }
+    {
+      method: 'POST',
+      body: JSON.stringify({ userId, vmIds, ...(accessSchedule ? { accessSchedule } : {}) }),
+    }
   );
+  return res.data;
+}
+
+export async function updateVmAccessSchedule(
+  vmId: string,
+  accessSchedule: import('./accessSchedule').AccessScheduleInput
+): Promise<import('./accessSchedule').AccessSchedule> {
+  const res = await apiRequest<
+    ApiResponse<import('./accessSchedule').AccessSchedule>
+  >(`/api/v1/vms/${vmId}/schedule`, {
+    method: 'PATCH',
+    body: JSON.stringify(accessSchedule),
+  });
+  return res.data;
+}
+
+export async function updateVmAccessOverride(
+  vmId: string,
+  body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+): Promise<import('./accessSchedule').AccessSchedule> {
+  const res = await apiRequest<
+    ApiResponse<import('./accessSchedule').AccessSchedule>
+  >(`/api/v1/vms/${vmId}/override`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
   return res.data;
 }
 

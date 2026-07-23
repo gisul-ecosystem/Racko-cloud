@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
 import {
+  CalendarClock,
   Download,
   Play,
   Plus,
@@ -13,6 +14,8 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
+import { AccessScheduleBadge } from '@/components/access-schedule/AccessScheduleBadge';
+import { EditAccessScheduleModal } from '@/components/access-schedule/EditAccessScheduleModal';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { CloneTypeBadge, VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
@@ -21,9 +24,19 @@ import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { ApiError } from '@/lib/apiClient';
+import {
+  formatAccessScheduleDigest,
+  toAccessSchedule,
+  type AccessScheduleInput,
+} from '@/lib/accessSchedule';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
-import { fetchTenantVms, startTenantVm, stopTenantVm } from '@/lib/tenantVmApi';
+import {
+  fetchTenantVms,
+  startTenantVm,
+  stopTenantVm,
+  updateTenantVmSchedule,
+} from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
 import type { CloneType, VMStatus } from '@/lib/vmApi';
 
@@ -62,6 +75,7 @@ export function TenantVmListView() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkAction, setBulkAction] = useState<BulkAction | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
+  const [scheduleTarget, setScheduleTarget] = useState<TenantVmSummary | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -198,6 +212,13 @@ export function TenantVmListView() {
     },
   };
 
+  async function saveSchedule(payload: AccessScheduleInput) {
+    if (!scheduleTarget) return;
+    await updateTenantVmSchedule(scheduleTarget.id, payload);
+    addToast('success', 'Access schedule updated.');
+    await load();
+  }
+
   return (
     <div className="max-w-screen-xl">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
@@ -212,6 +233,16 @@ export function TenantVmListView() {
           loading={actionLoading}
           onConfirm={() => void executeBulkAction(bulkAction)}
           onCancel={() => setBulkAction(null)}
+        />
+      ) : null}
+
+      {scheduleTarget ? (
+        <EditAccessScheduleModal
+          open
+          vmName={scheduleTarget.name}
+          initialSchedule={toAccessSchedule(scheduleTarget.accessSchedule)}
+          onClose={() => setScheduleTarget(null)}
+          onSave={saveSchedule}
         />
       ) : null}
 
@@ -392,6 +423,9 @@ export function TenantVmListView() {
                       Status
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Access
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Type
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -412,11 +446,17 @@ export function TenantVmListView() {
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Created
                     </th>
+                    {isAdmin ? (
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Schedule
+                      </th>
+                    ) : null}
                   </tr>
                 </thead>
                 <tbody>
                   {vms.map((vm, i) => {
                     const isSelected = selected.has(vm.id);
+                    const schedule = toAccessSchedule(vm.accessSchedule);
                     return (
                       <tr
                         key={vm.id}
@@ -449,6 +489,15 @@ export function TenantVmListView() {
                           <VMStatusBadge status={vm.status as VMStatus} />
                         </td>
                         <td className="px-4 py-3.5">
+                          <AccessScheduleBadge schedule={schedule} />
+                          <p
+                            className="mt-1 max-w-[14rem] truncate text-[11px] text-gray-400"
+                            title={formatAccessScheduleDigest(schedule)}
+                          >
+                            {formatAccessScheduleDigest(schedule)}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3.5">
                           <CloneTypeBadge type={vm.cloneType as CloneType} />
                         </td>
                         <td className="px-4 py-3.5 text-xs text-gray-500">{vm.node}</td>
@@ -465,6 +514,19 @@ export function TenantVmListView() {
                         <td className="px-4 py-3.5 text-xs text-gray-400">
                           {new Date(vm.createdAt).toLocaleDateString()}
                         </td>
+                        {isAdmin ? (
+                          <td className="px-4 py-3.5 text-right">
+                            <button
+                              type="button"
+                              onClick={() => setScheduleTarget(vm)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                              title="Edit access schedule"
+                            >
+                              <CalendarClock className="h-3.5 w-3.5" />
+                              Edit
+                            </button>
+                          </td>
+                        ) : null}
                       </tr>
                     );
                   })}

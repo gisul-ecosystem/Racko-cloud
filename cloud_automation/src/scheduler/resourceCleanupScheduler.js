@@ -4,6 +4,7 @@ const { runScheduledJob } = require('../utils/schedulerCoordinator');
 const { executeCleanupForRequest } = require('../services/resourceCleanupService');
 const { sendResourceCleanupEmail } = require('../services/email/resourceCleanupEmailService');
 const { createNotification, NotificationType } = require('../services/notificationService');
+const { computeNextDailyCleanupRunAt } = require('../utils/resourceCleanupSchedule');
 
 let scheduledTask = null;
 
@@ -50,7 +51,13 @@ const isRequestEligibleForCleanupEmail = async (requestId) => {
 };
 
 async function processResourceCleanup(req) {
-  const { id, resource_cleanup_interval_hours, customer_email } = req;
+  const {
+    id,
+    resource_cleanup_interval_hours,
+    resource_cleanup_time,
+    resource_cleanup_timezone,
+    customer_email
+  } = req;
   const requestLabel = req.request_name || `Request #${id}`;
 
   const { rowCount } = await db.query(
@@ -80,7 +87,13 @@ async function processResourceCleanup(req) {
     const cleanupResult = await executeCleanupForRequest(id, 'scheduler');
     const { action, totalDeleted, affected } = cleanupResult;
     const now = new Date();
-    const nextRun = new Date(now.getTime() + resource_cleanup_interval_hours * 60 * 60 * 1000);
+    const nextRun = resource_cleanup_time
+      ? computeNextDailyCleanupRunAt({
+          timeHHMM: resource_cleanup_time,
+          timezone: resource_cleanup_timezone || 'Asia/Kolkata',
+          after: now
+        })
+      : new Date(now.getTime() + resource_cleanup_interval_hours * 60 * 60 * 1000);
 
     const finalizeResult = await db.query(
       `
@@ -93,7 +106,7 @@ async function processResourceCleanup(req) {
           AND COALESCE(cleanup_completed, FALSE) = FALSE
         RETURNING id
       `,
-      [now.toISOString(), nextRun.toISOString(), id]
+      [now.toISOString(), nextRun instanceof Date ? nextRun.toISOString() : nextRun, id]
     );
 
     if (!finalizeResult.rowCount) {
@@ -124,7 +137,8 @@ async function processResourceCleanup(req) {
         action,
         cleanedAt: now,
         nextCleanupAt: nextRun,
-        intervalHours: resource_cleanup_interval_hours
+        intervalHours: resource_cleanup_interval_hours,
+        cleanupTime: resource_cleanup_time || null
       });
     } else {
       logEvent('info', 'resource_cleanup_email_skipped', {
@@ -148,7 +162,7 @@ async function processResourceCleanup(req) {
       action,
       affectedCount: affected.length,
       deletedCount: totalDeleted,
-      nextRun: nextRun.toISOString()
+      nextRun: nextRun instanceof Date ? nextRun.toISOString() : nextRun
     });
   } catch (err) {
     await db.query(
@@ -191,6 +205,8 @@ function startResourceCleanupScheduler() {
           SELECT
             id,
             resource_cleanup_interval_hours,
+            resource_cleanup_time,
+            resource_cleanup_timezone,
             customer_email
           FROM requests
           WHERE status = 'Completed'

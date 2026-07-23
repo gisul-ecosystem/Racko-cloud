@@ -343,6 +343,7 @@ export interface SuperAdminTenantVm {
   planPeriodEnd?: string | null;
   billingPeriod?: BillingPeriod | null;
   assignment?: SuperAdminTenantVmAssignment | null;
+  accessSchedule?: import('./accessSchedule').AccessSchedule | null;
   createdAt: string;
   updatedAt: string;
 }

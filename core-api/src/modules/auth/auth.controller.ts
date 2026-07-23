@@ -125,6 +125,27 @@ export class AuthController {
       next(error);
     }
   }
+
+  /**
+   * GET /api/v1/auth/access-check — session poll (~60s) for end-users.
+   * 401 when blocked after schedule expiry without active override.
+   */
+  async accessCheck(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      if (authReq.user.role === 'user') {
+        const { assertUserSessionNotExpired } = await import('../vmAccessSchedule/scheduleManager');
+        const { UnauthorizedError } = await import('../../utils/errors');
+        const ok = await assertUserSessionNotExpired(authReq.user.userId);
+        if (!ok) {
+          throw new UnauthorizedError('Session expired: access window ended.');
+        }
+      }
+      success(res, 'Access ok.', { allowed: true });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export const authController = new AuthController();

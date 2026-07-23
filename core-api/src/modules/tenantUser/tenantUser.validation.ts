@@ -34,6 +34,15 @@ export const tenantUserIdParamSchema = z.object({
   }),
 });
 
+export const bulkDeleteTenantUsersSchema = z.object({
+  body: z.object({
+    ids: z
+      .array(z.string().min(1, 'user id is required'))
+      .min(1, 'At least one user must be specified')
+      .max(250, 'Cannot delete more than 250 users at once'),
+  }),
+});
+
 export const setTenantUserActiveSchema = z.object({
   params: z.object({
     userId: z.string().min(1, 'userId is required'),

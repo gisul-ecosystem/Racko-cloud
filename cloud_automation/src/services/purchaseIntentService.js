@@ -419,6 +419,8 @@ const buildClonePayloadFromRequest = async (requestId) => {
       request.resource_cleanup_interval_hours != null
         ? Number(request.resource_cleanup_interval_hours)
         : undefined,
+    resourceCleanupTime: request.resource_cleanup_time || undefined,
+    resourceCleanupTimezone: request.resource_cleanup_timezone || undefined,
     resourceCleanupAction: request.resource_cleanup_action === 'pause' ? 'pause' : 'delete',
     microsoftLicenseSkuId: request.microsoft_license_sku_id || null,
     microsoftLicenseSkuPartNumber: request.microsoft_license_sku_part_number || null,
