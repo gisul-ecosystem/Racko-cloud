@@ -199,6 +199,21 @@ export interface AdminAccessRequestPayload {
   accountCount: number;
 }
 
+export interface PurchaseCloneCustomRole {
+  id: number | null;
+  name: string;
+  description?: string | null;
+  permissions: string[];
+}
+
+export interface PurchaseCloneCustomService {
+  id: number;
+  name: string;
+  description?: string | null;
+  category?: string;
+  pricePerUser?: number;
+}
+
 export interface PurchaseClonePayload {
   sourceRequestId: number;
   projectName: string;
@@ -217,6 +232,8 @@ export interface PurchaseClonePayload {
   services: { id: number; name: string }[];
   selectedInstances: SelectedInstance[];
   selectedRoles: SelectedRole[];
+  customRoles?: PurchaseCloneCustomRole[];
+  customServices?: PurchaseCloneCustomService[];
   usageWindows: UsageWindow[];
   idMode: AzureIdMode;
 }

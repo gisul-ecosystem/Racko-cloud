@@ -174,7 +174,7 @@ const buildUserPayload = ({
     mailNickname: username,
     userPrincipalName: `${username}@${domain}`,
     passwordProfile: {
-      forceChangePasswordNextSignIn: true,
+      forceChangePasswordNextSignIn: false,
       password: temporaryPassword
     },
     passwordPolicies: 'DisablePasswordExpiration'
@@ -215,7 +215,7 @@ const buildBulkUserPayload = ({ row, index, domain, jobId }) => {
     mailNickname,
     userPrincipalName,
     passwordProfile: {
-      forceChangePasswordNextSignIn: true,
+      forceChangePasswordNextSignIn: false,
       password: temporaryPassword
     },
     passwordPolicies: 'DisablePasswordExpiration'
@@ -312,7 +312,7 @@ const syncAdoptedGraphUser = async (
   const patch = {
     accountEnabled: accountEnabled !== false,
     passwordProfile: {
-      forceChangePasswordNextSignIn: true,
+      forceChangePasswordNextSignIn: false,
       password: temporaryPassword
     },
     passwordPolicies: 'DisablePasswordExpiration'

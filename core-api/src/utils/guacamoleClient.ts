@@ -267,11 +267,11 @@ function buildPayload(
     parameters['server-layout'] = 'en-us-qwerty';
     parameters['cursor'] = 'local';
     parameters['color-depth'] = '32';
-    parameters['dpi'] = '120';
+    parameters['dpi'] = '96';
     parameters['enable-font-smoothing'] = 'true';
     parameters['enable-desktop-composition'] = 'true';
     parameters['disable-gfx'] = 'false';
-    parameters['enable-wallpaper'] = 'false';
+    parameters['enable-wallpaper'] = 'true';
     parameters['enable-theming'] = 'true';
     parameters['enable-full-window-drag'] = 'false';
     parameters['enable-menu-animations'] = 'false';
