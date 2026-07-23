@@ -35,11 +35,12 @@ const navLinks = [
     label: 'Jobs',
     icon: <Briefcase className="h-4 w-4" />,
   },
-  {
-    href: '/dashboard/admin/automation',
-    label: 'Automation',
-    icon: <Clock className="h-4 w-4" />,
-  },
+  // TODO: Automation feature is temporarily disabled — will be re-enabled once fixed
+  // {
+  //   href: '/dashboard/admin/automation',
+  //   label: 'Automation',
+  //   icon: <Clock className="h-4 w-4" />,
+  // },
   {
     href: '/dashboard/admin/templates',
     label: 'My Templates',
