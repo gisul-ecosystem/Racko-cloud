@@ -153,7 +153,7 @@ $pfSystemFolders = @(
     'Windows Media Player','Windows NT','Windows Photo Viewer','Windows Security',
     'Windows Sidebar','Windows Journal','Microsoft','Microsoft.NET',
     'Microsoft Analysis Services','Microsoft Office','Microsoft SQL Server',
-    'Uninstall Information','Cloudbase Solutions','Qemu-ga','Virtio-Win'
+    'Uninstall Information','Cloudbase Solutions','Qemu-ga','Virtio-Win','VMware'
 )
 
 # ── Windows-owned AppData folders (whitelist) ────────────────
@@ -169,7 +169,7 @@ $appDataSystemFolders = @(
 # ── Windows-owned ProgramData folders (whitelist) ────────────
 $pdSystemFolders = @(
     'Microsoft*','Windows*','Package Cache','Packages',
-    'USOPrivate','USOShared','regid*','ssh','chocolatey',
+    'USOPrivate','USOShared','regid*','ssh',
     'Cloudbase*','Virtio*','QEMU*','VMware*',
     'racko-agent','RackoAgent','SoftwareDistribution'
 )
@@ -342,6 +342,74 @@ foreach ($userDir in (Get-UserProfiles)) {
         [gc]::WaitForPendingFinalizers()
         Start-Sleep -Milliseconds 500
         reg unload "HKU\$tempHive" 2>&1 | Out-Null
+    }
+}
+
+# ============================================================
+# PHASE 1b — Python dedicated uninstall (MSI components)
+# Phase 1 generic handler often times out on Python's multi-component
+# MSI install. This pass targets Python 3.x specifically with a longer
+# timeout and also force-removes known Python install folders.
+# Python Launcher is intentionally skipped (protected by $skipPattern).
+# ============================================================
+Write-Host "`n=== PHASE 1b: PYTHON DEDICATED UNINSTALL ===" -ForegroundColor Cyan
+
+$pythonEntries = @()
+foreach ($regPath in @(
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*',
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\*'
+)) {
+    $pythonEntries += Get-ItemProperty $regPath -ErrorAction SilentlyContinue |
+        Where-Object { $_.DisplayName -match '^Python 3' -and $_.DisplayName -notmatch 'Python Launcher' }
+}
+
+$pythonEntries = $pythonEntries | Sort-Object DisplayName -Unique
+Write-Host "Found $($pythonEntries.Count) Python MSI components to uninstall" -ForegroundColor Yellow
+
+foreach ($entry in $pythonEntries) {
+    $name   = $entry.DisplayName
+    $uninst = if ($entry.UninstallString) { $entry.UninstallString.Trim() } else { '' }
+    $guid   = [regex]::Match($uninst, '\{[A-F0-9\-]+\}', 'IgnoreCase').Value
+    if (-not $guid) {
+        Write-Host "  SKIP (no GUID found): $name" -ForegroundColor DarkYellow
+        continue
+    }
+    Write-Host "Uninstalling Python component: $name ($guid)" -ForegroundColor Yellow
+    Invoke-UninstallerWithTimeout -FilePath 'msiexec.exe' -Arguments @("/X$guid", '/quiet', '/norestart') -TimeoutSeconds 300
+    Write-Host "Done: $name" -ForegroundColor Green
+}
+
+# Force-remove known Python install folder locations (catches partial uninstalls)
+$pythonFolders = @()
+$pythonFolders += Get-Item 'C:\Python3*' -ErrorAction SilentlyContinue
+$pythonFolders += Get-Item 'C:\Program Files\Python3*' -ErrorAction SilentlyContinue
+$pythonFolders += Get-Item 'C:\Program Files (x86)\Python3*' -ErrorAction SilentlyContinue
+foreach ($userDir in (Get-UserProfiles)) {
+    $perUserPython = Join-Path $userDir.FullName 'AppData\Local\Programs\Python'
+    if (Test-Path $perUserPython) { $pythonFolders += Get-Item $perUserPython }
+}
+foreach ($pf in $pythonFolders) {
+    if ($pf -and (Test-Path $pf.FullName)) {
+        Write-Host "Removing Python folder: $($pf.FullName)" -ForegroundColor Yellow
+        Remove-FolderWithRetry -Path $pf.FullName
+        if (-not (Test-Path $pf.FullName)) { Write-Host "Removed: $($pf.FullName)" -ForegroundColor Green }
+    }
+}
+
+# Clean up stale Python registry entries whose folders are now gone
+foreach ($regPath in @(
+    'HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall',
+    'HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall'
+)) {
+    if (-not (Test-Path $regPath)) { continue }
+    foreach ($key in (Get-ChildItem $regPath -ErrorAction SilentlyContinue)) {
+        $props = Get-ItemProperty $key.PSPath -ErrorAction SilentlyContinue
+        if ($props.DisplayName -match '^Python 3' -and $props.DisplayName -notmatch 'Python Launcher') {
+            Remove-Item $key.PSPath -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  Removed stale Python registry entry: $($props.DisplayName)" -ForegroundColor DarkGray
+        }
     }
 }
 
@@ -709,18 +777,45 @@ foreach ($task in $tasksToRemove) {
 # ============================================================
 Write-Host "`n=== PHASE 13: CHOCOLATEY PACKAGES CLEANUP ===" -ForegroundColor Cyan
 
-$chocoLib = 'C:\ProgramData\chocolatey\lib'
-if (Test-Path $chocoLib) {
-    foreach ($dir in (Get-ChildItem $chocoLib -Directory -ErrorAction SilentlyContinue)) {
-        Write-Host "Removing choco package: $($dir.Name)" -ForegroundColor Yellow
-        Remove-FolderWithRetry -Path $dir.FullName
-        if (-not (Test-Path $dir.FullName)) { Write-Host "Removed: $($dir.Name)" -ForegroundColor Green }
+$chocoRoot = 'C:\ProgramData\chocolatey'
+if (Test-Path $chocoRoot) {
+    # First run choco uninstall for all packages if choco.exe is available
+    $chocoExe = Join-Path $chocoRoot 'bin\choco.exe'
+    if (Test-Path $chocoExe) {
+        Write-Host "  Running choco uninstall for all packages..." -ForegroundColor Yellow
+        try {
+            $chocoList = & $chocoExe list --local-only --no-progress 2>$null |
+                Select-String '^\S' | ForEach-Object { ($_ -split ' ')[0] } |
+                Where-Object { $_ -and $_ -notmatch '^chocolatey$' }
+            foreach ($pkg in $chocoList) {
+                Write-Host "  Uninstalling choco package: $pkg" -ForegroundColor Yellow
+                & $chocoExe uninstall $pkg -y --force --no-progress 2>$null | Out-Null
+            }
+        } catch { }
     }
+
+    # Remove entire chocolatey root folder (bin, lib, config, extensions, etc.)
+    Write-Host "Removing chocolatey root: $chocoRoot" -ForegroundColor Yellow
+    Remove-FolderWithRetry -Path $chocoRoot
+    if (-not (Test-Path $chocoRoot)) {
+        Write-Host "Removed: $chocoRoot" -ForegroundColor Green
+    } else {
+        Write-Host "  WARNING: Could not fully remove $chocoRoot" -ForegroundColor DarkYellow
+    }
+} else {
+    Write-Host "  Chocolatey not found -- skipping" -ForegroundColor DarkGray
 }
-foreach ($chocoExtra in @('C:\ProgramData\chocolatey\cache', 'C:\ProgramData\chocolatey\logs')) {
-    if (Test-Path $chocoExtra) {
-        Remove-FolderWithRetry -Path $chocoExtra
-        Write-Host "Removed: $chocoExtra" -ForegroundColor Green
+
+# Remove chocolatey entries from System and User PATH
+# (Phase 11 runs before Phase 13 so this must be done explicitly here)
+foreach ($scope in @('Machine', 'User')) {
+    $currentPath = [Environment]::GetEnvironmentVariable('PATH', $scope)
+    if (-not $currentPath) { continue }
+    $entries    = $currentPath -split ';' | Where-Object { $_.Trim() -ne '' }
+    $cleanPath  = $entries | Where-Object { $_ -notmatch 'chocolatey' }
+    if ($cleanPath.Count -ne $entries.Count) {
+        [Environment]::SetEnvironmentVariable('PATH', ($cleanPath -join ';'), $scope)
+        Write-Host "  Removed chocolatey from $scope PATH" -ForegroundColor DarkGray
     }
 }
 
