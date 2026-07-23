@@ -360,6 +360,8 @@ router.get('/api/v1/agent/software-catalog/:id', coreApiProxy);
 router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/forgot-password', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/reset-password', injectTenantHeader, coreApiProxy);
+// access-check requires tenant Bearer token — injectTenantHeader sets x-tenant-id from host
+router.get('/api/v1/tenant-auth/access-check', injectTenantHeader, coreApiProxy);
 router.get('/api/v1/tenant-branding', injectTenantHeader, coreApiProxy);
 router.get('/api/v1/tenant-branding/asset', injectTenantHeader, coreApiProxy);
 
