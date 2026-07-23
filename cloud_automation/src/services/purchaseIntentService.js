@@ -289,7 +289,8 @@ const buildClonePayloadFromRequest = async (requestId) => {
     throw new AppError('Request not found.', 404);
   }
 
-  const [servicesResult, instancesResult, rolesResult, windowsResult] = await Promise.all([
+  const [servicesResult, instancesResult, rolesResult, windowsResult, customRolesResult, customServicesResult] =
+    await Promise.all([
     db.query(
       `
         SELECT s.id, s.name
@@ -329,6 +330,32 @@ const buildClonePayloadFromRequest = async (requestId) => {
         ORDER BY day_of_week
       `,
       [requestId]
+    ),
+    db.query(
+      `
+        SELECT DISTINCT ON (COALESCE(cra.custom_role_def_id, 0), cra.custom_role_name)
+          cra.custom_role_def_id,
+          COALESCE(crd.name, cra.custom_role_name) AS name,
+          crd.description,
+          COALESCE(crd.permissions, cra.permissions) AS permissions
+        FROM custom_role_assignments cra
+        LEFT JOIN custom_role_definitions crd ON crd.id = cra.custom_role_def_id
+        WHERE cra.request_id = $1
+          AND cra.status = 'active'
+        ORDER BY COALESCE(cra.custom_role_def_id, 0), cra.custom_role_name, cra.assigned_at DESC
+      `,
+      [requestId]
+    ),
+    db.query(
+      `
+        SELECT cs.id, cs.name, cs.description, cs.category, cs.price_per_user
+        FROM custom_services cs
+        JOIN request_custom_services rcs ON rcs.custom_service_id = cs.id
+        WHERE rcs.request_id = $1
+          AND cs.active = true
+        ORDER BY cs.name
+      `,
+      [requestId]
     )
   ]);
 
@@ -343,6 +370,39 @@ const buildClonePayloadFromRequest = async (requestId) => {
   const selectedRoles = [...rolesByService.entries()].map(([serviceId, roles]) => ({
     serviceId,
     roles
+  }));
+
+  const parsePermissions = (value) => {
+    if (Array.isArray(value)) {
+      return value.map((entry) => String(entry)).filter(Boolean);
+    }
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.map((entry) => String(entry)).filter(Boolean) : [];
+      } catch {
+        return value
+          .split(/[\n,]/)
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      }
+    }
+    return [];
+  };
+
+  const customRoles = customRolesResult.rows.map((row) => ({
+    id: row.custom_role_def_id != null ? Number(row.custom_role_def_id) : null,
+    name: row.name || 'Custom role',
+    description: row.description || null,
+    permissions: parsePermissions(row.permissions)
+  }));
+
+  const customServices = customServicesResult.rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    description: row.description || null,
+    category: row.category || 'Custom',
+    pricePerUser: row.price_per_user != null ? Number(row.price_per_user) : 0
   }));
 
   return {
@@ -375,6 +435,8 @@ const buildClonePayloadFromRequest = async (requestId) => {
       instanceOption: row.instance_option
     })),
     selectedRoles,
+    customRoles,
+    customServices,
     usageWindows: windowsResult.rows.map((row) => ({
       day_of_week: Number(row.day_of_week),
       window_start_time: String(row.window_start_time).slice(0, 5),
