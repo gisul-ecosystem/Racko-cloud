@@ -14,6 +14,12 @@ import {
 import { ApiError } from '@/lib/apiClient';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { WeeklyAccessHoursEditor } from '@/components/access-schedule/WeeklyAccessHoursEditor';
+import {
+  buildWeeklyAccessSchedule,
+  createDefaultWeeklyEditorValue,
+  type WeeklyAccessEditorValue,
+} from '@/lib/accessSchedule';
 import {
   fetchAvailableTenantVms,
   fetchTenantAssignCounts,
@@ -95,6 +101,10 @@ export function TenantOnboardPage() {
   const [emailMode, setEmailMode] = useState<EmailMode>('prefix');
   const [emailPrefix, setEmailPrefix] = useState('');
   const [explicitEmail, setExplicitEmail] = useState('');
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleValue, setScheduleValue] = useState<WeeklyAccessEditorValue>(() =>
+    createDefaultWeeklyEditorValue()
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -164,6 +174,9 @@ export function TenantOnboardPage() {
     setResult(null);
     try {
       const vmIds = selectedVms.map((vm) => vm.id);
+      const accessSchedule = scheduleEnabled
+        ? buildWeeklyAccessSchedule(scheduleValue)
+        : undefined;
       const dto =
         isSingleVm && emailMode === 'explicit'
           ? {
@@ -171,12 +184,14 @@ export function TenantOnboardPage() {
               email: explicitEmail.trim().toLowerCase(),
               passwordMode,
               ...(passwordMode === 'shared' ? { sharedPassword } : {}),
+              ...(accessSchedule ? { accessSchedule } : {}),
             }
           : {
               vmIds,
               emailPrefix: emailPrefix.trim().toLowerCase(),
               passwordMode,
               ...(passwordMode === 'shared' ? { sharedPassword } : {}),
+              ...(accessSchedule ? { accessSchedule } : {}),
             };
       const res = await onboardTenantVms(dto);
       setResult(res);
@@ -454,6 +469,35 @@ export function TenantOnboardPage() {
               {Object.keys(counts).length} tenant user(s) already have VM assignments.
             </p>
           ) : null}
+
+          <div>
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900">Access schedule</h2>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Optional weekly hours applied to every successfully assigned VM.
+                </p>
+              </div>
+              <label className="flex cursor-pointer items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={scheduleEnabled}
+                  onChange={(e) => setScheduleEnabled(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Set hours
+              </label>
+            </div>
+            {scheduleEnabled ? (
+              <div className="mt-4">
+                <WeeklyAccessHoursEditor
+                  value={scheduleValue}
+                  onChange={setScheduleValue}
+                  disabled={submitting}
+                />
+              </div>
+            ) : null}
+          </div>
 
           <button
             type="button"

@@ -1,5 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { tenantAuthService, TenantAuthError } from './tenantAuth.service';
+import type { TenantAuthenticatedRequest } from '../../middleware/requireTenantAuth.middleware';
+import { AccessWindowDeniedError } from '../../utils/errors';
 
 function getTenantIdFromHeader(req: Request): string | null {
   const raw = req.headers['x-tenant-id'];
@@ -31,10 +33,32 @@ export class TenantAuthController {
         tenantUser: result.tenantUser,
       });
     } catch (error) {
+      if (error instanceof AccessWindowDeniedError) {
+        res.status(error.statusCode).json({
+          success: false,
+          message: error.message,
+          code: error.code,
+          nextWindow: error.nextWindow,
+        });
+        return;
+      }
       if (error instanceof TenantAuthError) {
         res.status(error.statusCode).json({ success: false, message: error.message });
         return;
       }
+      next(error);
+    }
+  }
+
+  async accessCheck(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const data = await tenantAuthService.accessCheck(
+        authReq.tenantUser.id,
+        authReq.tenantUser.role
+      );
+      success(res, 'Access ok.', data);
+    } catch (error) {
       next(error);
     }
   }

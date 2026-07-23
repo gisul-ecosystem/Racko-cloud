@@ -35,6 +35,7 @@ import { ApiError } from '../../../../../lib/apiClient';
 import {
   assignTenantService,
   createTenantAdmin,
+  deleteTenantAdmin,
   fetchTenant,
   fetchTenantAdmins,
   fetchTenantServices,
@@ -61,8 +62,23 @@ import type {
 import { PLATFORM_SERVICE_CATALOG } from '../../../../../lib/tenantTypes';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
+import { AccessScheduleBadge } from '@/components/access-schedule/AccessScheduleBadge';
+import { EditAccessScheduleModal } from '@/components/access-schedule/EditAccessScheduleModal';
+import {
+  GrantAccessOverrideModal,
+  type AccessOverridePayload,
+} from '@/components/access-schedule/GrantAccessOverrideModal';
 import type { VMStatus } from '@/lib/vmApi';
-import { deleteVM } from '@/lib/vmApi';
+import {
+  deleteVM,
+  updateVmAccessOverride,
+  updateVmAccessSchedule,
+} from '@/lib/vmApi';
+import {
+  formatAccessScheduleDigest,
+  toAccessSchedule,
+  type AccessScheduleInput,
+} from '@/lib/accessSchedule';
 import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ErrorState } from '../../../../../components/dashboard/ErrorState';
 import { TenantStatusBadge } from '../../../../../components/super-admin-console/white-labelling/TenantStatusBadge';
@@ -136,6 +152,8 @@ export default function TenantDetailPage() {
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminForm, setAdminForm] = useState({ email: '', password: '' });
+  const [adminDeleteTarget, setAdminDeleteTarget] = useState<TenantAdmin | null>(null);
+  const [deletingAdminId, setDeletingAdminId] = useState<string | null>(null);
 
   const [tenantOrders, setTenantOrders] = useState<SuperAdminOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -146,6 +164,8 @@ export default function TenantDetailPage() {
   const [vmsError, setVmsError] = useState<string | null>(null);
   const [deletingVmId, setDeletingVmId] = useState<string | null>(null);
   const [vmDeleteTarget, setVmDeleteTarget] = useState<SuperAdminTenantVm | null>(null);
+  const [scheduleTarget, setScheduleTarget] = useState<SuperAdminTenantVm | null>(null);
+  const [overrideTarget, setOverrideTarget] = useState<SuperAdminTenantVm | null>(null);
 
   // ── IP Access tab state ──────────────────────────────────────────────────
   const [ipAccessMode, setIpAccessMode] = useState<TenantIpAccessMode>('all');
@@ -326,6 +346,21 @@ export default function TenantDetailPage() {
     }
   };
 
+  const handleDeleteAdmin = async () => {
+    if (!adminDeleteTarget) return;
+    setDeletingAdminId(adminDeleteTarget.id);
+    try {
+      await deleteTenantAdmin(tenantId, adminDeleteTarget.id);
+      setAdmins((prev) => prev.filter((a) => a.id !== adminDeleteTarget.id));
+      setAdminDeleteTarget(null);
+      flash('Tenant admin deleted.');
+    } catch (err) {
+      flashErr(err instanceof ApiError ? err.message : 'Failed to delete admin');
+    } finally {
+      setDeletingAdminId(null);
+    }
+  };
+
   const assignedKeys = new Set(services.map((s) => s.serviceKey));
   const availableServices: ServiceKey[] = PLATFORM_SERVICE_CATALOG.map((s) => s.key).filter(
     (k) => !assignedKeys.has(k)
@@ -434,6 +469,22 @@ export default function TenantDetailPage() {
       setDeletingVmId(null);
     }
   };
+
+  async function saveVmSchedule(payload: AccessScheduleInput) {
+    if (!scheduleTarget) return;
+    await updateVmAccessSchedule(scheduleTarget.id, payload);
+    flash('Access schedule updated.');
+    setScheduleTarget(null);
+    await loadTenantVms();
+  }
+
+  async function saveVmOverride(payload: AccessOverridePayload) {
+    if (!overrideTarget) return;
+    await updateVmAccessOverride(overrideTarget.id, payload);
+    flash(payload.accessOverride ? 'Override granted.' : 'Override revoked.');
+    setOverrideTarget(null);
+    await loadTenantVms();
+  }
 
   // ── IP Access handlers ───────────────────────────────────────────────────
 
@@ -1079,15 +1130,31 @@ export default function TenantDetailPage() {
                         {new Date(admin.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-5 py-3.5 text-right">
-                        {admin.isActive !== undefined && (
+                        <div className="flex items-center justify-end gap-3">
+                          {admin.isActive !== undefined && (
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleAdmin(admin)}
+                              className="text-xs font-medium text-[#B91C1C] hover:underline"
+                            >
+                              {admin.isActive ? 'Deactivate' : 'Activate'}
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => void handleToggleAdmin(admin)}
-                            className="text-xs font-medium text-[#B91C1C] hover:underline"
+                            onClick={() => setAdminDeleteTarget(admin)}
+                            disabled={admins.length <= 1 || deletingAdminId === admin.id}
+                            title={
+                              admins.length <= 1
+                                ? 'Create another admin before deleting the last one'
+                                : 'Delete admin'
+                            }
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:underline disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            {admin.isActive ? 'Deactivate' : 'Activate'}
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
                           </button>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1138,6 +1205,7 @@ export default function TenantDetailPage() {
                       <th className="px-4 py-3">Specs</th>
                       <th className="px-4 py-3">Plan</th>
                       <th className="px-4 py-3">Assigned to</th>
+                      <th className="px-4 py-3">Access</th>
                       <th className="px-4 py-3">IP</th>
                       <th className="px-4 py-3">Created</th>
                       <th className="px-4 py-3 text-right">Actions</th>
@@ -1210,6 +1278,17 @@ export default function TenantDetailPage() {
                             </span>
                           )}
                         </td>
+                        <td className="px-4 py-3 text-xs">
+                          <AccessScheduleBadge
+                            schedule={toAccessSchedule(vm.accessSchedule)}
+                          />
+                          <p
+                            className="mt-1 max-w-[12rem] truncate text-[11px] text-gray-400"
+                            title={formatAccessScheduleDigest(toAccessSchedule(vm.accessSchedule))}
+                          >
+                            {formatAccessScheduleDigest(toAccessSchedule(vm.accessSchedule))}
+                          </p>
+                        </td>
                         <td className="px-4 py-3 font-mono text-xs text-gray-600">
                           {vm.ipAddress ?? '—'}
                         </td>
@@ -1217,20 +1296,36 @@ export default function TenantDetailPage() {
                           {new Date(vm.createdAt).toLocaleString()}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setVmDeleteTarget(vm)}
-                            disabled={deletingVmId === vm.id || vm.status === 'deleting'}
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            title="Delete VM"
-                          >
-                            {deletingVmId === vm.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                            Delete
-                          </button>
+                          <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setScheduleTarget(vm)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+                            >
+                              Schedule
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setOverrideTarget(vm)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2.5 py-1.5 text-xs font-medium text-amber-800 transition hover:bg-amber-50"
+                            >
+                              Override
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setVmDeleteTarget(vm)}
+                              disabled={deletingVmId === vm.id || vm.status === 'deleting'}
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              title="Delete VM"
+                            >
+                              {deletingVmId === vm.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1655,6 +1750,73 @@ export default function TenantDetailPage() {
           </div>
         </div>
       )}
+
+      {adminDeleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <h2 className="text-base font-semibold text-gray-900">Delete tenant admin</h2>
+              <button
+                type="button"
+                onClick={() => setAdminDeleteTarget(null)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-gray-600">
+                Permanently delete admin{' '}
+                <span className="font-medium text-gray-900">{adminDeleteTarget.email}</span>?
+              </p>
+              <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-700">
+                This removes the account from the database. They will no longer be able to sign in.
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdminDeleteTarget(null)}
+                  disabled={deletingAdminId === adminDeleteTarget.id}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteAdmin()}
+                  disabled={deletingAdminId === adminDeleteTarget.id}
+                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deletingAdminId === adminDeleteTarget.id && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                  Delete admin
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {scheduleTarget ? (
+        <EditAccessScheduleModal
+          open
+          vmName={scheduleTarget.name}
+          initialSchedule={toAccessSchedule(scheduleTarget.accessSchedule)}
+          onClose={() => setScheduleTarget(null)}
+          onSave={saveVmSchedule}
+        />
+      ) : null}
+
+      {overrideTarget ? (
+        <GrantAccessOverrideModal
+          open
+          vmName={overrideTarget.name}
+          currentlyActive={Boolean(toAccessSchedule(overrideTarget.accessSchedule)?.override)}
+          onClose={() => setOverrideTarget(null)}
+          onSave={saveVmOverride}
+        />
+      ) : null}
     </div>
   );
 }

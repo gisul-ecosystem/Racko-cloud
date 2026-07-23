@@ -47,6 +47,19 @@ export class SuperAdminController {
     }
   }
 
+  async deleteTenantAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { tenantId, tenantUserId } = req.params as {
+        tenantId: string;
+        tenantUserId: string;
+      };
+      await superAdminService.deleteTenantAdmin(tenantId, tenantUserId);
+      success(res, 'Tenant admin deleted.', {});
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async getTenantWallet(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { tenantId } = req.params as { tenantId: string };

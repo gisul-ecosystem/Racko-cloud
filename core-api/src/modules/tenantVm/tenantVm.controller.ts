@@ -3,6 +3,7 @@ import mongoose from 'mongoose';
 import type { TenantAuthenticatedRequest } from '../../middleware/requireTenantAuth.middleware';
 import { tenantVmService } from './tenantVm.service';
 import type { TenantOnboardDto, TenantVmActor, TenantVmListFilters } from './tenantVm.types';
+import type { AccessScheduleInput } from '../vmAccessSchedule/accessScheduleParse';
 
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, ...(data !== undefined && { data }) });
@@ -193,6 +194,17 @@ export class TenantVmController {
       const { vmId } = req.params as { vmId: string };
       await tenantVmService.unassignVm(new mongoose.Types.ObjectId(vmId), tenantId);
       success(res, 'Tenant VM unassigned.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateVmSchedule(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { vmId } = req.params as { vmId: string };
+      const body = req.body as AccessScheduleInput;
+      const data = await tenantVmService.updateVmSchedule(actorFromRequest(req), vmId, body, req);
+      success(res, 'VM access schedule updated.', data);
     } catch (error) {
       next(error);
     }

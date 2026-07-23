@@ -65,6 +65,21 @@ export class TenantAuthService {
       throw new TenantAuthError('INVALID_CREDENTIALS', 401);
     }
 
+    // End-user access window gate (assigned tenant VMs with schedule)
+    if (tenantUser.role === 'tenant_user') {
+      const {
+        assertTenantUserAssignedVmsAccessible,
+      } = await import('../vmAccessSchedule/scheduleManager');
+      const { AccessWindowDeniedError } = await import('../../utils/errors');
+      const access = await assertTenantUserAssignedVmsAccessible(tenantUser._id.toString());
+      if (!access.allowed) {
+        throw new AccessWindowDeniedError(
+          access.error || 'Access denied: outside scheduled window.',
+          access.nextWindow ?? null
+        );
+      }
+    }
+
     const accessToken = signTenantAccessToken({
       sub: tenantUser._id.toString(),
       tenantId: tenantUser.tenantId.toString(),
@@ -118,6 +133,25 @@ export class TenantAuthService {
     tenantUser.resetTokenHash = null;
     tenantUser.resetTokenExpiresAt = null;
     await tenantUser.save();
+  }
+
+  async accessCheck(
+    tenantUserId: string,
+    role: 'tenant_admin' | 'tenant_user'
+  ): Promise<{ allowed: boolean }> {
+    if (role !== 'tenant_user') {
+      return { allowed: true };
+    }
+
+    const {
+      assertTenantUserAssignedVmsAccessible,
+    } = await import('../vmAccessSchedule/scheduleManager');
+    const { UnauthorizedError } = await import('../../utils/errors');
+    const access = await assertTenantUserAssignedVmsAccessible(tenantUserId);
+    if (!access.allowed) {
+      throw new UnauthorizedError('Session expired: access window ended.');
+    }
+    return { allowed: true };
   }
 }
 

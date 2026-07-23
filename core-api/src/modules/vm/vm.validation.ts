@@ -231,6 +231,16 @@ export const assignVMsSchema = z.object({
       .array(mongoObjectId)
       .min(1, 'At least one VM must be specified')
       .max(50, 'Cannot assign more than 50 VMs at once'),
+    accessSchedule: z
+      .object({
+        startDate: z.string().nullable().optional(),
+        endDate: z.string().nullable().optional(),
+        startTime: z.string().nullable().optional(),
+        endTime: z.string().nullable().optional(),
+        weeklySchedule: z.array(z.unknown()).nullable().optional(),
+        timezone: z.string().nullable().optional(),
+      })
+      .optional(),
   }),
 });
 
@@ -255,6 +265,16 @@ export const bulkAssignPairsSchema = z.object({
       passwordMode: z.enum(['auto', 'shared']).optional(),
       sharedPassword: assignPasswordRules.optional(),
       userIds: z.array(mongoObjectId).optional(),
+      accessSchedule: z
+        .object({
+          startDate: z.string().nullable().optional(),
+          endDate: z.string().nullable().optional(),
+          startTime: z.string().nullable().optional(),
+          endTime: z.string().nullable().optional(),
+          weeklySchedule: z.array(z.unknown()).nullable().optional(),
+          timezone: z.string().nullable().optional(),
+        })
+        .optional(),
     })
     .superRefine((data, ctx) => {
       if (data.mode === 'create') {
@@ -284,6 +304,37 @@ export const bulkAssignPairsSchema = z.object({
         }
       }
     }),
+});
+
+export const updateVmScheduleSchema = z.object({
+  params: z.object({ vmId: mongoObjectId }),
+  body: z.object({
+    startDate: z.string().nullable().optional(),
+    endDate: z.string().nullable().optional(),
+    startTime: z.string().nullable().optional(),
+    endTime: z.string().nullable().optional(),
+    weeklySchedule: z.array(z.unknown()).nullable().optional(),
+    timezone: z.string().nullable().optional(),
+  }),
+});
+
+export const updateVmOverrideSchema = z.object({
+  params: z.object({ vmId: mongoObjectId }),
+  body: z.object({
+    accessOverride: z.boolean(),
+    accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
+});
+
+export const bulkVmOverrideSchema = z.object({
+  body: z.object({
+    vmIds: z
+      .array(mongoObjectId)
+      .min(1, 'At least one VM must be specified')
+      .max(200, 'Cannot override more than 200 VMs at once'),
+    accessOverride: z.boolean(),
+    accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
 });
 
 // ─── User ID param ────────────────────────────────────────────────────────────

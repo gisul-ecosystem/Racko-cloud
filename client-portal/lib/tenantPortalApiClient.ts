@@ -124,7 +124,12 @@ export async function tenantPortalRequest<T>(
   });
 
   if (!res.ok) {
-    const errorData = (await res.json()) as { message?: string; code?: string };
+    const errorData = (await res.json()) as {
+      message?: string;
+      code?: string;
+      nextWindow?: string | null;
+      errors?: string[];
+    };
     const code = errorData.code ?? errorData.message;
 
     if (
@@ -140,7 +145,10 @@ export async function tenantPortalRequest<T>(
       throw new ApiError('Session expired. Please log in again.', 401, 'SESSION_EXPIRED');
     }
 
-    throw new ApiError(errorData.message ?? 'Request failed', res.status, code);
+    throw new ApiError(errorData.message ?? 'Request failed', res.status, code, {
+      nextWindow: errorData.nextWindow,
+      errors: errorData.errors,
+    });
   }
 
   return res.json() as Promise<T>;

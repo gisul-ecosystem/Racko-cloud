@@ -38,6 +38,13 @@ export async function tenantLogin(
   );
 }
 
+/** Session poll (~60s) for tenant end-users — 401 when access window ended. */
+export async function tenantAccessCheck(): Promise<{ allowed: boolean }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ allowed: boolean }>>('/api/v1/tenant-auth/access-check')
+  );
+}
+
 export async function tenantForgotPassword(email: string): Promise<void> {
   await tenantPortalRequest<ApiEnvelope<Record<string, never>>>(
     '/api/v1/tenant-auth/forgot-password',

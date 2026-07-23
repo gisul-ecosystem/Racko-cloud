@@ -335,6 +335,21 @@ export class AuthService {
     user.isLocked = false;
     user.lockedUntil = undefined;
 
+    // End-user access window gate (assigned VMs with schedule)
+    if (user.role === 'user') {
+      const {
+        assertUserAssignedVmsAccessible,
+      } = await import('../vmAccessSchedule/scheduleManager');
+      const { AccessWindowDeniedError } = await import('../../utils/errors');
+      const access = await assertUserAssignedVmsAccessible(user._id.toString());
+      if (!access.allowed) {
+        throw new AccessWindowDeniedError(
+          access.error || 'Access denied: outside scheduled window.',
+          access.nextWindow ?? null
+        );
+      }
+    }
+
     // Detect suspicious login (new IP or new device)
     const isNewIp = user.lastLoginIp && user.lastLoginIp !== ip;
     const isNewDevice = user.lastLoginDevice && user.lastLoginDevice !== fingerprint;
@@ -538,6 +553,17 @@ export class AuthService {
       });
       clearRefreshCookie(res);
       throw new UnauthorizedError('User not found or inactive.');
+    }
+
+    // Session poll: blocked users without active override lose the session
+    if (user.role === 'user') {
+      const { assertUserSessionNotExpired } = await import('../vmAccessSchedule/scheduleManager');
+      const ok = await assertUserSessionNotExpired(user._id.toString());
+      if (!ok) {
+        clearRefreshCookie(res);
+        await Token.updateMany({ userId: user._id, isRevoked: false }, { $set: { isRevoked: true } });
+        throw new UnauthorizedError('Session expired: access window ended.');
+      }
     }
 
     // Generate new tokens (rotation)

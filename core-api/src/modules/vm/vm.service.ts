@@ -41,15 +41,30 @@ import {
   type AutomationPowerInfo,
 } from '../vmAutomation/vmAutomationPowerGuard';
 import {
+  AccessWindowDeniedError,
+  ForbiddenError,
+  NotFoundError,
+  ValidationError,
   VMNotFoundError,
   VMOwnershipError,
   VMOperationError,
   TemplateNotFoundError,
   InsufficientResourcesError,
-  ForbiddenError,
-  NotFoundError,
-  ValidationError,
 } from '../../utils/errors';
+import {
+  parseAccessScheduleInput,
+  accessSchedulePublicView,
+  type AccessScheduleInput,
+} from '../vmAccessSchedule/accessScheduleParse';
+import {
+  assertVmAccessibleForUser,
+  cancelSchedule,
+  checkAccessWindow,
+  scheduleDisconnect,
+  unblockUserSession,
+  expirePortalSessions,
+  blockUserSession,
+} from '../vmAccessSchedule/scheduleManager';
 import { User } from '../../models/user.model';
 import type { ProxmoxVMRaw } from '../proxmox/proxmox.types';
 import { managedUsersService } from '../managedUsers/managedUsers.service';
@@ -2711,7 +2726,8 @@ export class VMService {
   async assignVMs(
     vmIds: mongoose.Types.ObjectId[],
     targetUserId: mongoose.Types.ObjectId,
-    adminId: mongoose.Types.ObjectId
+    adminId: mongoose.Types.ObjectId,
+    accessSchedule?: AccessScheduleInput
   ): Promise<{ assigned: number }> {
     if (vmIds.length === 0) throw new ValidationError('No VMs specified.');
     if (vmIds.length > 50) throw new ValidationError('Cannot assign more than 50 VMs at once.');
@@ -2737,15 +2753,27 @@ export class VMService {
       throw new ValidationError(`The following VMs are already assigned: ${names}`);
     }
 
+    const schedulePatch = parseAccessScheduleInput(accessSchedule);
     await VM.updateMany(
       { _id: { $in: vmIds }, adminId, assignedTo: null },
-      { $set: { assignedTo: targetUserId } }
+      { $set: { assignedTo: targetUserId, ...schedulePatch } }
     );
+
+    if (Object.keys(schedulePatch).length > 0) {
+      const updated = await VM.find({ _id: { $in: vmIds } });
+      for (const vm of updated) {
+        cancelSchedule(vm._id.toString());
+        if (vm.accessEndTime && !(Array.isArray(vm.weeklySchedule) && vm.weeklySchedule.length > 0)) {
+          scheduleDisconnect(vm);
+        }
+      }
+    }
 
     logger.info('VMs assigned to user', {
       adminId: adminId.toString(),
       targetUserId: targetUserId.toString(),
       vmIds: vmIds.map((id) => id.toString()),
+      hasAccessSchedule: Object.keys(schedulePatch).length > 0,
     });
 
     return { assigned: vmIds.length };
@@ -2835,9 +2863,10 @@ export class VMService {
         continue;
       }
 
+      const schedulePatch = parseAccessScheduleInput(dto.accessSchedule);
       const update = await VM.updateOne(
         { _id: vm._id, adminId, assignedTo: null },
-        { $set: { assignedTo: slot.userId } }
+        { $set: { assignedTo: slot.userId, ...schedulePatch } }
       );
 
       if (update.modifiedCount === 0) {
@@ -2852,6 +2881,19 @@ export class VMService {
         });
         failed++;
         continue;
+      }
+
+      if (Object.keys(schedulePatch).length > 0) {
+        const fresh = await VM.findById(vm._id);
+        if (fresh) {
+          cancelSchedule(fresh._id.toString());
+          if (
+            fresh.accessEndTime &&
+            !(Array.isArray(fresh.weeklySchedule) && fresh.weeklySchedule.length > 0)
+          ) {
+            scheduleDisconnect(fresh);
+          }
+        }
       }
 
       pairs.push({
@@ -2889,6 +2931,7 @@ export class VMService {
     if (vm.adminId.toString() !== adminId.toString()) throw new VMOwnershipError();
     if (!vm.assignedTo) throw new ValidationError('VM is not currently assigned.');
 
+    cancelSchedule(vm._id.toString());
     vm.assignedTo = undefined;
     await vm.save();
 
@@ -2896,6 +2939,137 @@ export class VMService {
       adminId: adminId.toString(),
       vmId: vmId.toString(),
     });
+  }
+
+  /**
+   * PATCH schedule fields on a VM (admin / super_admin).
+   * Empty weeklySchedule array clears weekly mode (stores null).
+   */
+  async updateVmSchedule(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    role: string,
+    body: AccessScheduleInput,
+    req: Request
+  ): Promise<ReturnType<typeof accessSchedulePublicView>> {
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError();
+    assertOwnership(vm, adminId.toString(), role);
+
+    const patch = parseAccessScheduleInput(body);
+    Object.assign(vm, patch);
+    await vm.save();
+
+    cancelSchedule(vm._id.toString());
+    const weeklyActive = Array.isArray(vm.weeklySchedule) && vm.weeklySchedule.length > 0;
+    if (vm.accessEndTime && !weeklyActive) {
+      scheduleDisconnect(vm);
+    }
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'RESOURCE_SCHEDULE_UPDATED',
+      status: 'success',
+      details: { action: 'resource.schedule_updated', ...accessSchedulePublicView(vm) },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'] ?? 'unknown',
+    });
+
+    logger.info('[accessSchedule] resource.schedule_updated', {
+      vmId: vm._id.toString(),
+      adminId: adminId.toString(),
+    });
+
+    return accessSchedulePublicView(vm);
+  }
+
+  /**
+   * Grant or revoke access override (super_admin only at route layer).
+   */
+  async updateVmOverride(
+    vmId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    body: { accessOverride: boolean; accessOverrideUntil?: string | null },
+    req: Request
+  ): Promise<ReturnType<typeof accessSchedulePublicView>> {
+    const vm = await VM.findById(vmId);
+    if (!vm) throw new VMNotFoundError();
+
+    if (body.accessOverride) {
+      vm.accessOverride = true;
+      vm.accessOverrideUntil = body.accessOverrideUntil
+        ? new Date(body.accessOverrideUntil)
+        : null;
+      cancelSchedule(vm._id.toString());
+      if (vm.assignedTo) {
+        unblockUserSession(vm.assignedTo.toString());
+      }
+    } else {
+      vm.accessOverride = false;
+      vm.accessOverrideUntil = null;
+      const check = checkAccessWindow(vm);
+      if (!check.allowed && vm.assignedTo) {
+        await expirePortalSessions(vm.assignedTo.toString());
+        blockUserSession(vm.assignedTo.toString());
+      } else if (vm.accessEndTime && !(Array.isArray(vm.weeklySchedule) && vm.weeklySchedule.length)) {
+        scheduleDisconnect(vm);
+      }
+    }
+
+    await vm.save();
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId,
+      event: 'RESOURCE_OVERRIDE_UPDATED',
+      status: 'success',
+      details: {
+        action: 'resource.override_updated',
+        accessOverride: vm.accessOverride,
+        accessOverrideUntil: vm.accessOverrideUntil,
+      },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'] ?? 'unknown',
+    });
+
+    logger.info('[accessSchedule] resource.override_updated', {
+      vmId: vm._id.toString(),
+      accessOverride: vm.accessOverride,
+    });
+
+    return accessSchedulePublicView(vm);
+  }
+
+  /**
+   * Grant/revoke override on many VMs in one click (super_admin).
+   */
+  async bulkUpdateVmOverride(
+    vmIds: mongoose.Types.ObjectId[],
+    adminId: mongoose.Types.ObjectId,
+    body: { accessOverride: boolean; accessOverrideUntil?: string | null },
+    req: Request
+  ): Promise<{ updated: number; results: Array<{ vmId: string; ok: boolean; error?: string }> }> {
+    const results: Array<{ vmId: string; ok: boolean; error?: string }> = [];
+    let updated = 0;
+
+    for (const vmId of vmIds) {
+      try {
+        await this.updateVmOverride(vmId, adminId, body, req);
+        results.push({ vmId: vmId.toString(), ok: true });
+        updated += 1;
+      } catch (err) {
+        results.push({
+          vmId: vmId.toString(),
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return { updated, results };
   }
 
   /**
@@ -2956,6 +3130,16 @@ export class VMService {
     const vm = await VM.findById(vmId);
     if (!vm) throw new VMNotFoundError(`VM ${vmId.toString()} not found.`);
     assertOwnership(vm, adminId.toString(), authReq.user.role);
+
+    if (authReq.user.role === 'user') {
+      const access = await assertVmAccessibleForUser(vm, authReq.user.userId, 'user');
+      if (!access.allowed) {
+        throw new AccessWindowDeniedError(
+          access.error || 'Access denied: outside scheduled window.',
+          access.nextWindow ?? null
+        );
+      }
+    }
 
     // Server-side state check — frontend already disables the button when
     // not running, but the API must enforce this too.

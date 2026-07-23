@@ -5,10 +5,12 @@ import { validateRequest } from '../../middleware/validate.middleware';
 import {
   createExternalVMSchema,
   bulkCreateExternalVMSchema,
+  bulkDeleteExternalVMSchema,
   externalVMIdParamSchema,
   userIdParamSchema,
   assignExternalVMsSchema,
   bulkAssignExternalPairsSchema,
+  updateExternalVmScheduleSchema,
 } from '../external-vm/external-vm.validation';
 import { tenantExternalVmController } from './tenantExternalVm.controller';
 
@@ -57,11 +59,25 @@ router.delete(
   (req, res, next) => tenantExternalVmController.unassign(req, res, next)
 );
 
+router.patch(
+  '/:id/schedule',
+  requireTenantRole('tenant_admin'),
+  validateRequest(updateExternalVmScheduleSchema),
+  (req, res, next) => tenantExternalVmController.updateSchedule(req, res, next)
+);
+
 router.post(
   '/bulk',
   requireTenantRole('tenant_admin'),
   validateRequest(bulkCreateExternalVMSchema),
   (req, res, next) => tenantExternalVmController.bulkCreate(req, res, next)
+);
+
+router.delete(
+  '/bulk',
+  requireTenantRole('tenant_admin'),
+  validateRequest(bulkDeleteExternalVMSchema),
+  (req, res, next) => tenantExternalVmController.bulkRemove(req, res, next)
 );
 
 router.post(

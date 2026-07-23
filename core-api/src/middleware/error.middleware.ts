@@ -27,11 +27,19 @@ export function globalErrorHandler(
   });
 
   if (err instanceof AppError && err.isOperational) {
-    res.status(err.statusCode).json({
+    const payload: Record<string, unknown> = {
       success: false,
       message: err.message,
       code: err.code,
-    });
+    };
+    if ('errors' in err && Array.isArray((err as { errors?: unknown }).errors)) {
+      payload.errors = (err as { errors: string[] }).errors;
+    }
+    if ('nextWindow' in err) {
+      payload.error = err.message;
+      payload.nextWindow = (err as { nextWindow: string | null }).nextWindow;
+    }
+    res.status(err.statusCode).json(payload);
     return;
   }
 

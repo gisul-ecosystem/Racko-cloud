@@ -15,7 +15,7 @@ import {
   TENANT_SESSION_EXPIRED_EVENT,
 } from '../lib/tenantPortalApiClient';
 import { getTenantDefaultDashboardPath } from '../lib/tenantPortalRoutes';
-import { tenantLogin as apiTenantLogin } from '../lib/tenantPortalApi';
+import { tenantLogin as apiTenantLogin, tenantAccessCheck } from '../lib/tenantPortalApi';
 import { ApiError } from '../lib/apiClient';
 import type { TenantPortalUser } from '../types/tenantPortal';
 
@@ -111,6 +111,25 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
     window.addEventListener(TENANT_SESSION_EXPIRED_EVENT, onExpired);
     return () => window.removeEventListener(TENANT_SESSION_EXPIRED_EVENT, onExpired);
   }, [logout]);
+
+  // Poll access-check ~60s so forced logout after schedule expiry is reflected
+  useEffect(() => {
+    if (!state.isAuthenticated || state.tenantUser?.role !== 'tenant_user') return;
+
+    const tick = async () => {
+      try {
+        await tenantAccessCheck();
+      } catch (err) {
+        if (err instanceof ApiError && (err.status === 401 || err.status === 403)) {
+          logout();
+        }
+      }
+    };
+
+    void tick();
+    const id = window.setInterval(() => void tick(), 60_000);
+    return () => window.clearInterval(id);
+  }, [state.isAuthenticated, state.tenantUser?.role, logout]);
 
   const login = useCallback(
     async (email: string, password: string) => {

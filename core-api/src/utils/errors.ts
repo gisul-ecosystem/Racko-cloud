@@ -19,6 +19,26 @@ export class ValidationError extends AppError {
   }
 }
 
+/** HTTP 422 — weekly schedule / access schedule contract failures. */
+export class UnprocessableEntityError extends AppError {
+  public readonly errors: string[];
+
+  constructor(errors: string[], message = 'Validation failed.') {
+    super(message, 422, 'UNPROCESSABLE_ENTITY');
+    this.errors = errors;
+  }
+}
+
+/** HTTP 403 — user outside VM access window (login / console). */
+export class AccessWindowDeniedError extends AppError {
+  public readonly nextWindow: string | null;
+
+  constructor(message: string, nextWindow: string | null = null) {
+    super(message, 403, 'ACCESS_WINDOW_DENIED');
+    this.nextWindow = nextWindow;
+  }
+}
+
 export class UnauthorizedError extends AppError {
   constructor(message = 'Unauthorized') {
     super(message, 401, 'UNAUTHORIZED');

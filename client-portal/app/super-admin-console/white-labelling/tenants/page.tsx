@@ -3,9 +3,19 @@
 import { Suspense, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { Building2, ChevronLeft, ChevronRight, Filter, Loader2, Plus, Search, X } from 'lucide-react';
+import {
+  Building2,
+  ChevronLeft,
+  ChevronRight,
+  Filter,
+  Loader2,
+  Plus,
+  Search,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { ApiError } from '../../../../lib/apiClient';
-import { createTenant, fetchTenants } from '../../../../lib/tenantApi';
+import { createTenant, deleteTenant, fetchTenants } from '../../../../lib/tenantApi';
 import type { Tenant, TenantStatus } from '../../../../lib/tenantTypes';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import { TenantStatusBadge } from '../../../../components/super-admin-console/white-labelling/TenantStatusBadge';
@@ -45,6 +55,7 @@ function TenantsListContent() {
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [flash, setFlash] = useState<string | null>(null);
 
   const [createOpen, setCreateOpen] = useState(showCreate);
   const [creating, setCreating] = useState(false);
@@ -56,6 +67,11 @@ function TenantsListContent() {
     primaryColor: '#1a73e8',
     supportEmail: '',
   });
+
+  const [deleteTarget, setDeleteTarget] = useState<Tenant | null>(null);
+  const [deleteConfirmName, setDeleteConfirmName] = useState('');
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,6 +135,43 @@ function TenantsListContent() {
     }
   };
 
+  const openDelete = (tenant: Tenant) => {
+    setDeleteTarget(tenant);
+    setDeleteConfirmName('');
+    setDeleteError(null);
+  };
+
+  const closeDelete = () => {
+    if (deletingId) return;
+    setDeleteTarget(null);
+    setDeleteConfirmName('');
+    setDeleteError(null);
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    if (deleteConfirmName.trim() !== deleteTarget.name) {
+      setDeleteError('Type the tenant name exactly to confirm.');
+      return;
+    }
+
+    setDeletingId(deleteTarget.id);
+    setDeleteError(null);
+    try {
+      await deleteTenant(deleteTarget.id);
+      setTenants((prev) => prev.filter((t) => t.id !== deleteTarget.id));
+      setTotal((t) => Math.max(0, t - 1));
+      setDeleteTarget(null);
+      setDeleteConfirmName('');
+      setFlash(`Tenant "${deleteTarget.name}" deleted.`);
+      setTimeout(() => setFlash(null), 4000);
+    } catch (err) {
+      setDeleteError(err instanceof ApiError ? err.message : 'Failed to delete tenant');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   return (
     <div className="mx-auto max-w-screen-xl space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-4">
@@ -138,6 +191,12 @@ function TenantsListContent() {
         </button>
       </div>
 
+      {flash && (
+        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+          {flash}
+        </div>
+      )}
+
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative min-w-[200px] flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
@@ -152,19 +211,19 @@ function TenantsListContent() {
         <div className="relative">
           <Filter className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
           <select
-          value={statusFilter}
-          onChange={(e) => {
-            setPage(1);
-            setStatusFilter(e.target.value as '' | TenantStatus);
-          }}
-          className="inline-flex appearance-none items-center gap-2 rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-8 text-sm shadow-sm focus:border-[#B91C1C] focus:outline-none"
-        >
-          {STATUS_OPTIONS.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label}
-            </option>
-          ))}
-        </select>
+            value={statusFilter}
+            onChange={(e) => {
+              setPage(1);
+              setStatusFilter(e.target.value as '' | TenantStatus);
+            }}
+            className="inline-flex appearance-none items-center gap-2 rounded-lg border border-gray-200 bg-white py-2 pl-9 pr-8 text-sm shadow-sm focus:border-[#B91C1C] focus:outline-none"
+          >
+            {STATUS_OPTIONS.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label}
+              </option>
+            ))}
+          </select>
         </div>
         <p className="w-full text-xs text-gray-400">
           Search filters the current page only. Server-side search is not available yet.
@@ -233,12 +292,23 @@ function TenantsListContent() {
                       <TenantStatusBadge status={tenant.status} />
                     </td>
                     <td className="px-5 py-3.5 text-right">
-                      <Link
-                        href={`/super-admin-console/white-labelling/tenants/${tenant.id}`}
-                        className="inline-flex items-center gap-1 text-xs font-medium text-[#B91C1C] hover:underline"
-                      >
-                        Manage <ChevronRight className="h-3 w-3" />
-                      </Link>
+                      <div className="flex items-center justify-end gap-3">
+                        <button
+                          type="button"
+                          onClick={() => openDelete(tenant)}
+                          disabled={deletingId === tenant.id}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:underline disabled:opacity-40"
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                          Delete
+                        </button>
+                        <Link
+                          href={`/super-admin-console/white-labelling/tenants/${tenant.id}`}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-[#B91C1C] hover:underline"
+                        >
+                          Manage <ChevronRight className="h-3 w-3" />
+                        </Link>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -364,6 +434,75 @@ function TenantsListContent() {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {deleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <h2 className="text-base font-semibold text-gray-900">Delete tenant</h2>
+              <button
+                type="button"
+                onClick={closeDelete}
+                disabled={Boolean(deletingId)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-gray-600">
+                Permanently delete{' '}
+                <span className="font-medium text-gray-900">{deleteTarget.name}</span> (
+                {deleteTarget.domain})?
+              </p>
+              <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-700">
+                This erases the tenant and all related data from the database: admins, users,
+                services, branding, wallet, orders, VMs, elastic servers, and notifications. This
+                cannot be undone.
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">
+                  Type <span className="font-semibold">{deleteTarget.name}</span> to confirm
+                </label>
+                <input
+                  value={deleteConfirmName}
+                  onChange={(e) => setDeleteConfirmName(e.target.value)}
+                  disabled={Boolean(deletingId)}
+                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-red-500 focus:outline-none disabled:opacity-50"
+                  placeholder={deleteTarget.name}
+                  autoComplete="off"
+                />
+              </div>
+              {deleteError && (
+                <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700">{deleteError}</p>
+              )}
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={closeDelete}
+                  disabled={Boolean(deletingId)}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDelete()}
+                  disabled={
+                    Boolean(deletingId) || deleteConfirmName.trim() !== deleteTarget.name
+                  }
+                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deletingId === deleteTarget.id && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                  Delete forever
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

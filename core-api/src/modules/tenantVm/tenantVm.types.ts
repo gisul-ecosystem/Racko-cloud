@@ -19,6 +19,31 @@ export interface TenantOnboardDto {
   sharedPassword?: string;
   /** Optional full email when onboarding exactly one VM (otherwise uses emailPrefix + index) */
   email?: string;
+  /** Optional access window applied to every successfully assigned VM */
+  accessSchedule?: {
+    startDate?: string | null;
+    endDate?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    weeklySchedule?: unknown[] | null;
+    timezone?: string | null;
+  };
+}
+
+/** Public access-schedule fields on tenant VM list/detail (includes override for status badges). */
+export interface TenantVmAccessScheduleView {
+  startDate: string | null;
+  endDate: string | null;
+  startTime: string | null;
+  endTime: string | null;
+  override: boolean;
+  overrideUntil: string | null;
+  timezone: string;
+  weeklySchedule: Array<{
+    day: string;
+    enabled: boolean;
+    windows: Array<{ start: string; end: string }>;
+  }> | null;
 }
 
 export interface TenantBulkAssignPairRow {
@@ -62,6 +87,7 @@ export interface TenantVmSummary {
   planPeriodEnd?: Date | null;
   billingPeriod?: 'monthly' | 'quarterly' | 'yearly' | null;
   assignment?: TenantVmAssignmentSummary | null;
+  accessSchedule?: TenantVmAccessScheduleView | null;
   createdAt: Date;
   updatedAt: Date;
 }
