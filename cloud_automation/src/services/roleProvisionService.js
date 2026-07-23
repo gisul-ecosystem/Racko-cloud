@@ -858,6 +858,21 @@ const provisionRolesForRequest = async (requestId) => {
 
     const permissionsComplete = resourcePermissionResult.permissionsComplete;
 
+    if (permissionsComplete && request.customer_email) {
+      try {
+        const privilegedRoleRequestService = require('./privilegedRoleRequestService');
+        await privilegedRoleRequestService.fulfillLinkedApprovedPrivilegedRoleRequests({
+          customerEmail: request.customer_email,
+          requestId
+        });
+      } catch (fulfillmentError) {
+        console.error(
+          `[roleProvision] Approved privileged role fulfillment failed for request ${requestId}:`,
+          fulfillmentError?.message
+        );
+      }
+    }
+
     return {
       success: permissionsComplete,
       complete: permissionsComplete,

@@ -1,9 +1,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { AlertCircle, ChevronDown, Search, Shield, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, Loader2, Search, Shield, X } from 'lucide-react';
 import { COMMON_TIMEZONES } from '../../constants';
-import { RACKO_BTN_SECONDARY } from '../cloudButtonStyles';
+import { RACKO_BTN_PRIMARY, RACKO_BTN_SECONDARY } from '../cloudButtonStyles';
 import type {
   AvailableLocation,
   AzureIdMode,
@@ -20,6 +20,7 @@ import type {
 } from '../../types/catalog';
 import {
   catalogInstancesForServices,
+  clampTestIdsAccountCount,
   formatLocationOptionLabel,
   getInstancePortalTips,
   getSelectedPauseCleanupServices,
@@ -28,6 +29,7 @@ import {
   normalizeServiceId,
   parseInstanceGuide,
   pickCheapestLocation,
+  TEST_IDS_MAX_ACCOUNT_COUNT,
   DELETE_CLEANUP_ACTION_LABELS,
   PAUSE_CLEANUP_ACTION_LABELS,
   supportsPauseCleanup,
@@ -128,8 +130,8 @@ interface RequestFormProps {
   onUsageWindowTimezoneChange: (value: string) => void;
   resourceCleanupEnabled: boolean;
   onResourceCleanupEnabledChange: (value: boolean) => void;
-  resourceCleanupIntervalHours?: number;
-  onResourceCleanupIntervalHoursChange: (value: number | undefined) => void;
+  resourceCleanupTime: string;
+  onResourceCleanupTimeChange: (value: string) => void;
   resourceCleanupAction: 'delete' | 'pause';
   onResourceCleanupActionChange: (value: 'delete' | 'pause') => void;
   perUserBudgetUsd?: number;
@@ -148,6 +150,17 @@ interface RequestFormProps {
   onSubmitAdminAccess: () => void;
   adminAccessSubmitting: boolean;
   adminAccessMessage: string | null;
+  privilegedRoleOpen: boolean;
+  onPrivilegedRoleOpenChange: (value: boolean) => void;
+  privilegedRoles: { name: string; definitionId: string }[];
+  privilegedRolesLoading: boolean;
+  selectedPrivilegedRole: string;
+  onSelectedPrivilegedRoleChange: (value: string) => void;
+  onSubmitPrivilegedRoleRequest: () => void;
+  privilegedRoleSubmitting: boolean;
+  privilegedRoleSubmitted: boolean;
+  privilegedRoleMessage: string | null;
+  privilegedRoleMessageType: 'success' | 'error' | null;
   validationErrors: string[];
 }
 
@@ -250,8 +263,8 @@ export function RequestForm({
   onUsageWindowTimezoneChange,
   resourceCleanupEnabled,
   onResourceCleanupEnabledChange,
-  resourceCleanupIntervalHours,
-  onResourceCleanupIntervalHoursChange,
+  resourceCleanupTime,
+  onResourceCleanupTimeChange,
   resourceCleanupAction,
   onResourceCleanupActionChange,
   perUserBudgetUsd,
@@ -270,6 +283,17 @@ export function RequestForm({
   onSubmitAdminAccess,
   adminAccessSubmitting,
   adminAccessMessage,
+  privilegedRoleOpen,
+  onPrivilegedRoleOpenChange,
+  privilegedRoles,
+  privilegedRolesLoading,
+  selectedPrivilegedRole,
+  onSelectedPrivilegedRoleChange,
+  onSubmitPrivilegedRoleRequest,
+  privilegedRoleSubmitting,
+  privilegedRoleSubmitted,
+  privilegedRoleMessage,
+  privilegedRoleMessageType,
   validationErrors,
 }: RequestFormProps) {
   const [serviceSearch, setServiceSearch] = useState('');
@@ -542,13 +566,22 @@ export function RequestForm({
                   id="accountCount"
                   type="number"
                   min={1}
-                  className={isTestIds && !purchaseConvertMode ? inputDisabledClass : inputClass}
+                  max={isTestIds && !purchaseConvertMode ? TEST_IDS_MAX_ACCOUNT_COUNT : undefined}
+                  className={inputClass}
                   value={accountCount}
-                  onChange={(event) => onAccountCountChange(Number(event.target.value))}
-                  disabled={isTestIds && !purchaseConvertMode}
+                  onChange={(event) => {
+                    const raw = Number(event.target.value);
+                    onAccountCountChange(
+                      isTestIds && !purchaseConvertMode
+                        ? clampTestIdsAccountCount(raw)
+                        : raw
+                    );
+                  }}
                 />
                 {isTestIds && !purchaseConvertMode ? (
-                  <p className="mt-1.5 text-xs text-gray-500">Fixed at 5 for Azure test_ids.</p>
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    Select 1–{TEST_IDS_MAX_ACCOUNT_COUNT} accounts for Azure test_ids.
+                  </p>
                 ) : null}
               </div>
             ) : null}
@@ -709,28 +742,23 @@ export function RequestForm({
             <SectionHeader
               step={step++}
               title="Resource cleanup"
-              description="Automatically clean up lab resources on a schedule."
+              description="Automatically clean up lab resources once per day at a time you choose."
             />
 
-            <label
-              className={`mt-5 flex items-center gap-3 ${
-                isTestIds ? 'cursor-not-allowed opacity-80' : 'cursor-pointer'
-              }`}
-            >
+            <label className="mt-5 flex cursor-pointer items-center gap-3">
               <input
                 type="checkbox"
                 checked={resourceCleanupEnabled}
-                disabled={isTestIds}
                 onChange={(event) => {
                   onResourceCleanupEnabledChange(event.target.checked);
                   if (!event.target.checked) {
-                    onResourceCleanupIntervalHoursChange(undefined);
+                    onResourceCleanupTimeChange('');
                   }
                 }}
                 className="h-4 w-4 rounded border-gray-300 text-[var(--cloud-accent,#B91C1C)] focus:ring-[var(--cloud-accent,#B91C1C)]"
               />
               <span className="text-sm font-medium text-gray-900">
-                Enable periodic resource cleanup
+                Enable daily resource cleanup
               </span>
             </label>
 
@@ -805,38 +833,60 @@ export function RequestForm({
                 )}
 
                 <div>
-                  <label className={labelClass} htmlFor="resourceCleanupIntervalHours">
+                  <label className={labelClass} htmlFor="resourceCleanupTime">
                     {effectiveCleanupAction === 'pause'
-                      ? 'Pause resources inside lab every (hours)'
-                      : 'Delete all resources inside lab every (hours)'}
+                      ? 'Pause resources inside lab daily at'
+                      : 'Delete all resources inside lab daily at'}
                   </label>
                   <input
-                    id="resourceCleanupIntervalHours"
-                    type="number"
-                    min={1}
-                    max={24}
-                    placeholder="e.g. 1"
-                    className={isTestIds ? inputDisabledClass : inputClass}
-                    value={resourceCleanupIntervalHours ?? ''}
-                    disabled={isTestIds}
-                    onChange={(event) => {
-                      const value = event.target.value;
-                      onResourceCleanupIntervalHoursChange(
-                        value ? Number.parseInt(value, 10) : undefined
-                      );
-                    }}
+                    id="resourceCleanupTime"
+                    type="time"
+                    className={inputClass}
+                    value={resourceCleanupTime}
+                    onChange={(event) => onResourceCleanupTimeChange(event.target.value)}
                   />
-                  {isTestIds ? (
-                    <p className="mt-2 text-xs text-gray-500">
-                      Fixed at 24 hours for Azure test_ids.
-                    </p>
-                  ) : (
-                    <p className="mt-2 text-xs text-gray-500">
-                      Every {resourceCleanupIntervalHours || '?'} hour(s), lab resources are cleaned
-                      up automatically.
-                    </p>
-                  )}
+                  <p className="mt-2 text-xs text-gray-500">
+                    {isTestIds
+                      ? 'Choose when lab resources are cleaned up each day.'
+                      : `Runs daily at this time in ${usageWindowTimezone.replace(/_/g, ' ')}.`}
+                  </p>
                 </div>
+
+                {isTestIds && (
+                  <div>
+                    <label className={labelClass} htmlFor="resourceCleanupTimezone">
+                      Cleanup timezone
+                    </label>
+                    <select
+                      id="resourceCleanupTimezone"
+                      className={inputClass}
+                      value={usageWindowTimezone}
+                      onChange={(event) => onUsageWindowTimezoneChange(event.target.value)}
+                    >
+                      <option value="Asia/Kolkata">IST — Asia/Kolkata</option>
+                      <option value="UTC">UTC</option>
+                      <option value="America/New_York">EST — America/New_York</option>
+                      <option value="America/Los_Angeles">PST — America/Los_Angeles</option>
+                      <option value="Europe/London">GMT — Europe/London</option>
+                      <option value="Asia/Dubai">GST — Asia/Dubai</option>
+                      {COMMON_TIMEZONES.filter(
+                        (tz) =>
+                          ![
+                            'Asia/Kolkata',
+                            'UTC',
+                            'America/New_York',
+                            'America/Los_Angeles',
+                            'Europe/London',
+                            'Asia/Dubai',
+                          ].includes(tz)
+                      ).map((tz) => (
+                        <option key={tz} value={tz}>
+                          {tz.replace(/_/g, ' ')}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -1616,6 +1666,130 @@ export function RequestForm({
                 {adminAccessMessage && (
                   <p className="text-sm text-gray-600">{adminAccessMessage}</p>
                 )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {detailsComplete && (
+        <section className={sectionClass}>
+          <div className="p-6">
+            <button
+              type="button"
+              onClick={() => onPrivilegedRoleOpenChange(!privilegedRoleOpen)}
+              className="flex w-full items-center justify-between gap-2 text-left"
+            >
+              <div className="flex items-center gap-3">
+                <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
+                  <Shield className="h-4 w-4" />
+                </div>
+                <div>
+                  <span className="block text-sm font-semibold text-gray-900">
+                    Request privileged roles
+                  </span>
+                  <span className="text-xs text-gray-500">
+                    Built-in Azure roles (Owner excluded) — sent to Lab Management for approval
+                  </span>
+                </div>
+              </div>
+              <ChevronDown
+                className={`h-4 w-4 text-gray-400 transition ${privilegedRoleOpen ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {privilegedRoleOpen && (
+              <div className="mt-4 border-t border-gray-100 pt-4">
+                <div className="space-y-4 rounded-xl border border-violet-200/80 bg-violet-50/40 p-5">
+                  <div>
+                    <label className={labelClass} htmlFor="privilegedRoleSelect">
+                      Privileged role
+                    </label>
+                    <select
+                      id="privilegedRoleSelect"
+                      className={inputClass}
+                      value={selectedPrivilegedRole}
+                      onChange={(event) => onSelectedPrivilegedRoleChange(event.target.value)}
+                      disabled={privilegedRolesLoading}
+                    >
+                      <option value="">
+                        {privilegedRolesLoading ? 'Loading roles…' : 'Select a role'}
+                      </option>
+                      {privilegedRoles.map((role) => (
+                        <option key={role.definitionId} value={role.name}>
+                          {role.name}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1.5 text-xs text-gray-600">
+                      Owner is excluded. Org admin must approve before the role is assigned to all
+                      lab users.
+                    </p>
+                  </div>
+
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                    {privilegedRoleSubmitted ? (
+                      <button
+                        type="button"
+                        disabled
+                        className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-green-300 bg-green-600 px-4 py-2.5 text-sm font-semibold text-white sm:w-auto"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        Request sent
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={onSubmitPrivilegedRoleRequest}
+                        disabled={privilegedRoleSubmitting || !selectedPrivilegedRole}
+                        className={`${RACKO_BTN_PRIMARY} w-full sm:w-auto sm:min-w-[148px]`}
+                      >
+                        {privilegedRoleSubmitting ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Submitting…
+                          </>
+                        ) : (
+                          'Submit request'
+                        )}
+                      </button>
+                    )}
+
+                    {privilegedRoleSubmitted ? (
+                      <span className="text-xs font-medium text-green-700">
+                        Pending org-admin approval
+                      </span>
+                    ) : (
+                      <span className="text-xs text-gray-500">
+                        Sent to Lab Management for approval
+                      </span>
+                    )}
+                  </div>
+
+                  {privilegedRoleSubmitted && privilegedRoleMessage ? (
+                    <div className="flex items-start gap-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3">
+                      <CheckCircle2 className="mt-0.5 h-5 w-5 shrink-0 text-green-600" />
+                      <div>
+                        <p className="text-sm font-semibold text-green-900">
+                          Privileged role request submitted
+                        </p>
+                        <p className="mt-1 text-sm text-green-800">{privilegedRoleMessage}</p>
+                        <p className="mt-2 text-xs text-green-700">
+                          Change the role above to submit another request.
+                        </p>
+                      </div>
+                    </div>
+                  ) : null}
+
+                  {!privilegedRoleSubmitted &&
+                  privilegedRoleMessage &&
+                  privilegedRoleMessageType === 'error' ? (
+                    <div className="flex items-start gap-3 rounded-lg border border-red-200 bg-red-50 px-4 py-3">
+                      <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
+                      <p className="text-sm text-red-800">{privilegedRoleMessage}</p>
+                    </div>
+                  ) : null}
+                </div>
               </div>
             )}
           </div>

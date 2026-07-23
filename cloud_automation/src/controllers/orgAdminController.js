@@ -268,6 +268,77 @@ const reviewAccessRequest = async (req, res, next) => {
   }
 };
 
+const listPrivilegedRoleRequests = async (req, res, next) => {
+  try {
+    const status = req.query.status ? String(req.query.status).trim() : undefined;
+    const requestId = req.query.requestId ? Number(req.query.requestId) : undefined;
+
+    const requests = await orgAdminService.listPrivilegedRoleRequests({ status, requestId });
+
+    res.status(200).json({
+      success: true,
+      requests,
+      count: requests.length
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reviewPrivilegedRoleRequest = async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const status = req.body?.status;
+    const reviewNotes = req.body?.reviewNotes;
+
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new AppError('Privileged role request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.reviewPrivilegedRoleRequest({
+      id,
+      status,
+      reviewNotes,
+      reviewedBy: getSuperAdminActor(req)
+    });
+
+    res.status(200).json({
+      success: true,
+      request: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const assignPrivilegedRoleToAllUsers = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const azureRole = req.body?.azureRole;
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.assignPrivilegedRoleToAllUsers({
+      adminEmail: getSuperAdminActor(req),
+      requestId,
+      azureRole
+    });
+
+    res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    if (error.message && !error.statusCode) {
+      next(new AppError(error.message, 400));
+      return;
+    }
+    next(error);
+  }
+};
+
 const getUserAzureCost = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
@@ -644,6 +715,9 @@ module.exports = {
   forceLogoutUser,
   listAccessRequests,
   reviewAccessRequest,
+  listPrivilegedRoleRequests,
+  reviewPrivilegedRoleRequest,
+  assignPrivilegedRoleToAllUsers,
   getUserAzureCost,
   getSharedAzureCost,
   getDailyUsage,

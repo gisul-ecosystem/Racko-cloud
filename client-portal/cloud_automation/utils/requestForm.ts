@@ -116,8 +116,35 @@ export function addHoursToDateTimeLocal(value: string, hours: number): string {
 export const TEST_IDS_DEFAULTS = {
   accountCount: 5,
   perUserBudgetUsd: 10,
-  resourceCleanupIntervalHours: 24,
 } as const;
+
+export const CLEANUP_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+export function isValidCleanupTime(value: string | undefined): boolean {
+  return Boolean(value && CLEANUP_TIME_PATTERN.test(value.trim()));
+}
+
+export function formatCleanupTimeLabel(timeHHMM: string): string {
+  const [hourStr, minuteStr] = timeHHMM.trim().split(':');
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return timeHHMM;
+  }
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+export const TEST_IDS_MAX_ACCOUNT_COUNT = 5;
+
+export function clampTestIdsAccountCount(value: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.min(TEST_IDS_MAX_ACCOUNT_COUNT, Math.max(1, Math.trunc(parsed)));
+}
 
 export function createDefaultUsageSchedule() {
   const days: Record<string, { enabled: boolean; limitMinutes: number; slots: { start: string; end: string }[] }> =
@@ -191,6 +218,12 @@ export function isProjectDetailsComplete(input: {
   if (!String(input.projectName || '').trim()) return false;
   if (!input.idMode) return false;
   if (!Number.isInteger(input.accountCount) || input.accountCount <= 0) return false;
+  if (
+    input.idMode === 'test_ids' &&
+    input.accountCount > TEST_IDS_MAX_ACCOUNT_COUNT
+  ) {
+    return false;
+  }
   if (!input.startDate || !input.endDate) return false;
   return new Date(input.endDate) >= new Date(input.startDate);
 }

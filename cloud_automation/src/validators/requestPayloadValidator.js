@@ -25,6 +25,8 @@ const allowedRequestFields = new Set([
   'perUserBudgetUsd',
   'resourceCleanupEnabled',
   'resourceCleanupIntervalHours',
+  'resourceCleanupTime',
+  'resourceCleanupTimezone',
   'resourceCleanupAction',
   'usageWindows',
   'projectName',
@@ -58,6 +60,8 @@ const validateRequestPayload = (body) => {
     perUserBudgetUsd,
     resourceCleanupEnabled,
     resourceCleanupIntervalHours,
+    resourceCleanupTime,
+    resourceCleanupTimezone,
     resourceCleanupAction,
     usageWindows,
     projectName,
@@ -124,6 +128,10 @@ const validateRequestPayload = (body) => {
 
   if (!Number.isInteger(accountCount) || accountCount <= 0) {
     throw new AppError('accountCount must be a positive integer.', 400);
+  }
+
+  if (idMode === 'test_ids' && accountCount > 5) {
+    throw new AppError('accountCount must be between 1 and 5 for Azure test_ids.', 400);
   }
 
   if (typeof location !== 'string' || location.trim().length === 0) {
@@ -216,9 +224,25 @@ const validateRequestPayload = (body) => {
     }
   }
 
-  if (resolvedResourceCleanupEnabled && resourceCleanupIntervalHours === undefined) {
+  if (resourceCleanupTime !== undefined && resourceCleanupTime !== null) {
+    if (typeof resourceCleanupTime !== 'string' || !timePattern.test(resourceCleanupTime.trim())) {
+      throw new AppError('resourceCleanupTime must be in HH:MM format when provided.', 400);
+    }
+  }
+
+  if (resourceCleanupTimezone !== undefined && resourceCleanupTimezone !== null) {
+    if (typeof resourceCleanupTimezone !== 'string' || !resourceCleanupTimezone.trim()) {
+      throw new AppError('resourceCleanupTimezone must be a non-empty string when provided.', 400);
+    }
+  }
+
+  if (
+    resolvedResourceCleanupEnabled
+    && resourceCleanupIntervalHours === undefined
+    && (resourceCleanupTime === undefined || resourceCleanupTime === null)
+  ) {
     throw new AppError(
-      'Cleanup interval is required when resource cleanup is enabled.',
+      'resourceCleanupTime is required when resource cleanup is enabled.',
       400
     );
   }

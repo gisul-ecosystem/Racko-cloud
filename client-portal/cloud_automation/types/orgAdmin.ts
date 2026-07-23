@@ -203,6 +203,8 @@ export interface OrgAdminRequestDetail {
   enforceInAzure: boolean;
   resourceCleanupEnabled?: boolean;
   resourceCleanupIntervalHours?: number | null;
+  resourceCleanupTime?: string | null;
+  resourceCleanupTimezone?: string | null;
   resourceCleanupAction?: 'delete' | 'pause';
   resourceCleanupLastRanAt?: string | null;
   resourceCleanupNextRunAt?: string | null;
@@ -376,6 +378,21 @@ export interface OrgAdminAccessRequest {
   defaultRole: string | null;
   requestedAccess: string;
   accountCount: number | null;
+  status: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNotes: string | null;
+  createdAt: string;
+  resourceGroup: string | null;
+  requestLocation: string | null;
+  requestStatus: string | null;
+}
+
+export interface OrgAdminPrivilegedRoleRequest {
+  id: number;
+  requestId: number | null;
+  customerEmail: string;
+  azureRole: string;
   status: string;
   reviewedBy: string | null;
   reviewedAt: string | null;

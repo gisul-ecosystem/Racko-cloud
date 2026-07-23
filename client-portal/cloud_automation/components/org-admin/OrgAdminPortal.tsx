@@ -13,6 +13,7 @@ import {
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { useOrgAdminPortal } from '../../hooks/useOrgAdminPortal';
 import { OrgAdminAccessRequests } from './OrgAdminAccessRequests';
+import { OrgAdminPrivilegedRoleRequests } from './OrgAdminPrivilegedRoleRequests';
 import { OrgAdminLabStatusBadge } from './OrgAdminLabStatusBadge';
 import { OrgAdminRequestDetailPanel } from './OrgAdminRequestDetailPanel';
 import { OrgAdminStatCard } from './OrgAdminStatCard';
@@ -36,9 +37,11 @@ export function OrgAdminPortal() {
     users,
     availableRoles,
     accessRequests,
+    privilegedRoleRequests,
     overviewLoading,
     detailLoading,
     accessLoading,
+    privilegedRoleLoading,
     saving,
     overviewError,
     detailError,
@@ -48,6 +51,7 @@ export function OrgAdminPortal() {
     refreshOverview,
     refreshDetail,
     refreshAccessRequests,
+    refreshPrivilegedRoleRequests,
     updateRoles,
     deleteUser,
     deleteRequest,
@@ -55,6 +59,7 @@ export function OrgAdminPortal() {
     sendPurchaseConfirmationMail,
     forceLogout,
     reviewAccess,
+    reviewPrivilegedRole,
     fetchUserMonitoring,
     fetchUserAzureCost,
     fetchSharedAzureCost,
@@ -123,10 +128,11 @@ export function OrgAdminPortal() {
     clearActionFeedback();
     void refreshOverview();
     void refreshAccessRequests();
+    void refreshPrivilegedRoleRequests();
     if (selectedRequestId != null) {
       void refreshDetail();
     }
-  }, [clearActionFeedback, refreshOverview, refreshAccessRequests, refreshDetail, selectedRequestId]);
+  }, [clearActionFeedback, refreshOverview, refreshAccessRequests, refreshPrivilegedRoleRequests, refreshDetail, selectedRequestId]);
 
   const handleToggleCleanup = useCallback(
     (userId: number, disabled: boolean) => updateCleanupSettings(userId, { cleanupDisabled: disabled }),
@@ -189,6 +195,13 @@ export function OrgAdminPortal() {
         loading={accessLoading}
         saving={saving}
         onReview={reviewAccess}
+      />
+
+      <OrgAdminPrivilegedRoleRequests
+        requests={privilegedRoleRequests}
+        loading={privilegedRoleLoading}
+        saving={saving}
+        onReview={reviewPrivilegedRole}
       />
 
       {(actionError || actionSuccess) && (
@@ -375,6 +388,7 @@ export function OrgAdminPortal() {
                     onExtendExpiration={extendExpiration}
                     onSendPurchaseConfirmationMail={sendPurchaseConfirmationMail}
                     onReprovisionRoles={reprovisionRoles}
+                    onPrivilegedRolesChanged={() => void refreshDetail()}
                     lastUpdatedAt={lastUpdatedAt}
                     isRefreshing={isRefreshing}
                     hasActiveUsers={hasActiveUsers}
