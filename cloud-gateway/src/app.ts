@@ -79,6 +79,91 @@ app.get('/health', (_req, res) => {
   res.status(200).json({ status: 'ok', service: 'cloud-gateway' });
 });
 
+// ─── NGINX AUTH_REQUEST ENDPOINT ──────────────────────────────────────────────
+// Called by Nginx before serving any page on tenant domains.
+// Uses the tenant context already resolved by tenantResolver (cached 30s).
+// Returns 200 = allow, 403 = block. No body needed — Nginx only reads the status.
+// Fails open (200) when there is no tenant context so the main platform domain
+// is never affected.
+app.get('/internal/ip-check', (req, res) => {
+  const gatewayReq = req as import('./types').GatewayRequest;
+  const ctx = gatewayReq.tenantContext;
+
+  // No tenant context = main platform domain or unresolved host → allow
+  if (!ctx) {
+    res.status(200).end();
+    return;
+  }
+
+  // Mode 'all' → public access
+  if (ctx.ipAccessMode !== 'restricted') {
+    res.status(200).end();
+    return;
+  }
+
+  // Dev mode → always allow
+  if (config.NODE_ENV === 'development') {
+    res.status(200).end();
+    return;
+  }
+
+  // Resolve client IP from X-Forwarded-For (set by Nginx) — same logic as ipAccessGuard
+  const xff = req.headers['x-forwarded-for'];
+  let clientIp: string | null = null;
+  if (xff) {
+    const first = (Array.isArray(xff) ? xff[0] : xff).split(',')[0]?.trim();
+    if (first) clientIp = first;
+  }
+  if (!clientIp) clientIp = req.ip ?? null;
+
+  if (!clientIp) {
+    res.status(403).end();
+    return;
+  }
+
+  // Re-use the isIpAllowed logic from ipAccessGuard via a lightweight inline check
+  // (avoids importing the private function — same logic duplicated intentionally small)
+  const { allowedIps } = ctx;
+
+  if (allowedIps.length === 0) {
+    res.status(403).end();
+    return;
+  }
+
+  // Normalise ::ffff: mapped IPv4
+  const ip = clientIp.toLowerCase().startsWith('::ffff:')
+    ? clientIp.slice(7)
+    : clientIp.split('%')[0] ?? clientIp;
+
+  const allowed = allowedIps.some((entry) => {
+    const e = entry.trim();
+    if (!e) return false;
+    // Exact match
+    if (ip.toLowerCase() === e.toLowerCase()) return true;
+    // IPv4 CIDR
+    if (e.includes('/') && !e.includes(':')) {
+      const [network, prefixStr] = e.split('/');
+      if (!network || !prefixStr) return false;
+      const prefix = parseInt(prefixStr, 10);
+      if (isNaN(prefix) || prefix < 0 || prefix > 32) return false;
+      const toInt = (s: string) => {
+        const p = s.split('.');
+        if (p.length !== 4) return null;
+        let r = 0;
+        for (const x of p) { const n = parseInt(x, 10); if (isNaN(n) || n < 0 || n > 255) return null; r = (r << 8) | n; }
+        return r >>> 0;
+      };
+      const ipInt = toInt(ip); const netInt = toInt(network);
+      if (ipInt === null || netInt === null) return false;
+      const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+      return (ipInt & mask) >>> 0 === (netInt & mask) >>> 0;
+    }
+    return false;
+  });
+
+  res.status(allowed ? 200 : 403).end();
+});
+
 // ─── PROXY ROUTES ─────────────────────────────────────────────────────────────
 // Manage-users portal (public; session auth enforced by cloud_automation)
 app.use(managePortalRoutes);
