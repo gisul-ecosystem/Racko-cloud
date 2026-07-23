@@ -401,6 +401,9 @@ export interface OrgAdminPrivilegedRoleRequest {
   resourceGroup: string | null;
   requestLocation: string | null;
   requestStatus: string | null;
+  rolesAssigned?: number;
+  usersProcessed?: number;
+  accessApplied?: boolean;
 }
 
 export type OrgAdminErrorKind = 'invalid_credentials' | 'session_expired' | 'network' | 'unknown';
