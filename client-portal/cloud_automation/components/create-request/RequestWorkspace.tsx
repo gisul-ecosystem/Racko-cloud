@@ -33,12 +33,15 @@ import type {
   UsageWindow,
   CostingMode,
   AzureIdMode,
+  PurchaseCloneCustomRole,
+  PurchaseCloneCustomService,
 } from '../../types/catalog';
 import {
   defaultEndDate,
   defaultStartDate,
   defaultTestIdsEndDate,
   defaultTestIdsStartDate,
+  addHoursToDateTimeLocal,
   isProjectDetailsComplete,
   normalizeServiceId,
   pickCheapestLocation,
@@ -261,6 +264,10 @@ export function RequestWorkspace() {
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
   const [selectedLicenseSkuId, setSelectedLicenseSkuId] = useState('');
   const [selectedLicenseSkuPartNumber, setSelectedLicenseSkuPartNumber] = useState('');
+  const [orgAdminCustomRoles, setOrgAdminCustomRoles] = useState<PurchaseCloneCustomRole[]>([]);
+  const [orgAdminCustomServices, setOrgAdminCustomServices] = useState<PurchaseCloneCustomService[]>(
+    []
+  );
   const [convertedFromRequestId, setConvertedFromRequestId] = useState<number | null>(null);
   const [cloneLoading, setCloneLoading] = useState(isPurchaseConvert);
   const [cloneError, setCloneError] = useState<string | null>(null);
@@ -351,6 +358,8 @@ export function RequestWorkspace() {
         setSelectedInstances(payload.selectedInstances || []);
         setSelectedLicenseSkuId(payload.microsoftLicenseSkuId || '');
         setSelectedLicenseSkuPartNumber(payload.microsoftLicenseSkuPartNumber || '');
+        setOrgAdminCustomRoles(payload.customRoles || []);
+        setOrgAdminCustomServices(payload.customServices || []);
         const nextManual: Record<number, string[]> = {};
         for (const entry of payload.selectedRoles || []) {
           nextManual[entry.serviceId] = entry.roles;
@@ -902,6 +911,8 @@ export function RequestWorkspace() {
               onRoleChange={handleRoleChange}
               tierAutomatedServices={tierAutomatedServices}
               resolvedRoles={selectedRoles}
+              orgAdminCustomRoles={orgAdminCustomRoles}
+              orgAdminCustomServices={orgAdminCustomServices}
               projectName={projectName}
               onProjectNameChange={setProjectName}
               idMode={idMode}
@@ -920,7 +931,12 @@ export function RequestWorkspace() {
                 }
               }}
               startDate={startDate}
-              onStartDateChange={setStartDate}
+              onStartDateChange={(value) => {
+                setStartDate(value);
+                if (idMode === 'test_ids') {
+                  setEndDate(addHoursToDateTimeLocal(value, 24));
+                }
+              }}
               endDate={endDate}
               onEndDateChange={setEndDate}
               usageWindows={usageWindows}
