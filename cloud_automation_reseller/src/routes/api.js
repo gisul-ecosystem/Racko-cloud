@@ -4,7 +4,10 @@ import { selectProvider } from '../services/providerSelector.js';
 import { provisionVm, terminateVm } from '../services/provisionOrchestrator.js';
 import { syncAllPricing } from '../services/pricingSync.js';
 import { normalizeProviders } from '../config/cloudProviders.js';
-import CloudRegionPricing from '../models/CloudRegionPricing.js';
+import CloudRegionPricing, {
+  toPricingMode,
+  pricingModeQuery,
+} from '../models/CloudRegionPricing.js';
 
 const router = Router();
 
@@ -71,7 +74,14 @@ router.post('/pricing/sync', async (req, res, next) => {
 
 router.get('/pricing', async (req, res, next) => {
   try {
-    const filter = {};
+    const mode =
+      req.query.pricingMode === 'nested' || req.query.pricingMode === 'normal'
+        ? req.query.pricingMode
+        : toPricingMode(req.query.nestedVirtualization);
+
+    const filter = {
+      ...pricingModeQuery(mode),
+    };
     if (req.query.providers) {
       filter.provider = { $in: normalizeProviders(String(req.query.providers)) };
     } else if (req.query.provider) {

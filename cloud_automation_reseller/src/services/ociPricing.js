@@ -7,17 +7,12 @@ let productCache = null;
 let productCacheAt = 0;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 
-/** Fallback PAYG USD rates if product list lookup fails (approximate list prices). */
-const FALLBACK_RATES = {
-  ocpuPerHr: 0.025,
-  memoryGbPerHr: 0.0015,
-  blockVolumeGbPerMonth: 0.0255,
-  publicIpPerHr: 0.0005,
-  windowsOcpuPerHr: 0.046,
-};
-
 function paygUsd(item) {
-  const currencyBlock = (item.prices || []).find((p) => p.currencyCode === 'USD') || item.prices?.[0];
+  const localizations =
+    item.currencyCodeLocalizations ||
+    (item.prices ? [{ currencyCode: 'USD', prices: item.prices }] : []);
+  const currencyBlock =
+    localizations.find((p) => p.currencyCode === 'USD') || localizations[0];
   const payg = (currencyBlock?.prices || []).find((p) => p.model === 'PAY_AS_YOU_GO');
   const value = parseFloat(payg?.value ?? 'NaN');
   return Number.isFinite(value) ? value : null;
@@ -45,61 +40,126 @@ function findRate(items, predicates) {
   return null;
 }
 
+function requireRate(name, hit) {
+  if (!hit || hit.rate == null || !Number.isFinite(hit.rate)) {
+    throw new Error(`OCI products API missing live rate for ${name}`);
+  }
+  return hit.rate;
+}
+
 /**
- * Resolve OCI compute/storage/IP hourly components from public list prices.
+ * Map Flex shape → list-price family.
+ * VM.Standard3.Flex meters as Compute - Standard - X9.
+ * VM.Standard.E4.Flex meters as Compute - Standard - E4.
  */
-export async function getOciUnitRates() {
-  try {
-    const items = await loadProducts();
-    const ocpu = findRate(items, [
+export function ociShapeFamily(shape) {
+  const s = String(shape || '');
+  if (/Standard3|Standard\.X9|X9/i.test(s)) return 'x9';
+  if (/E4/i.test(s)) return 'e4';
+  if (/E5/i.test(s)) return 'e5';
+  return 'e4';
+}
+
+function ocpuMemoryPredicates(family) {
+  if (family === 'x9') {
+    return {
+      label: 'Standard X9 (Standard3.Flex)',
+      ocpu: [
+        (i) =>
+          /Compute\s*-\s*Standard\s*-\s*X9\s*-\s*OCPU/i.test(i.displayName || '') &&
+          /OCPU/i.test(i.metricName || ''),
+        (i) =>
+          /Standard\s*-\s*X9/i.test(i.displayName || '') &&
+          /OCPU Per Hour/i.test(i.metricName || '') &&
+          !/Optimized|Dense/i.test(i.displayName || ''),
+      ],
+      memory: [
+        (i) =>
+          /Compute\s*-\s*Standard\s*-\s*X9\s*-\s*Memory/i.test(i.displayName || '') &&
+          /Gigabyte/i.test(i.metricName || ''),
+        (i) =>
+          /Standard\s*-\s*X9/i.test(i.displayName || '') &&
+          /Memory/i.test(i.displayName || '') &&
+          /Gigabyte/i.test(i.metricName || '') &&
+          !/Optimized|Dense/i.test(i.displayName || ''),
+      ],
+    };
+  }
+
+  // Default / E4
+  return {
+    label: 'Standard E4',
+    ocpu: [
       (i) =>
         /Compute\s*-\s*Standard\s*-\s*E4\s*-\s*OCPU/i.test(i.displayName || '') &&
         /OCPU/i.test(i.metricName || ''),
       (i) =>
         /E4/i.test(i.displayName || '') &&
         /OCPU Per Hour/i.test(i.metricName || '') &&
-        /Standard/i.test(i.displayName || ''),
-    ]);
-    const memory = findRate(items, [
+        /Standard/i.test(i.displayName || '') &&
+        !/Dense|GPU|VMware/i.test(i.displayName || ''),
+    ],
+    memory: [
       (i) =>
-        /Compute\s*-\s*Standard\s*-\s*E4\s*-\s*Memory/i.test(i.displayName || '') &&
+        /Compute\s*-\s*Standard\s*-\s*E4\s*-+\s*Memory/i.test(i.displayName || '') &&
         /Gigabyte/i.test(i.metricName || ''),
       (i) =>
         /E4/i.test(i.displayName || '') &&
         /Memory/i.test(i.displayName || '') &&
-        /Gigabyte/i.test(i.metricName || ''),
-    ]);
-    const block = findRate(items, [
-      (i) =>
-        /Block Volume/i.test(i.displayName || '') &&
-        /Storage/i.test(i.displayName || '') &&
-        /Gigabyte Storage Capacity Per Month/i.test(i.metricName || ''),
-      (i) => /Block Volume - Storage/i.test(i.displayName || ''),
-    ]);
-    const publicIp = findRate(items, [
-      (i) => /Public IP/i.test(i.displayName || '') && /Hour/i.test(i.metricName || ''),
-      (i) => /Reserved Public IP/i.test(i.displayName || ''),
-    ]);
-    const windows = findRate(items, [
-      (i) =>
-        /Windows/i.test(i.displayName || '') &&
-        /OCPU/i.test(i.metricName || '') &&
-        /License/i.test(i.displayName || ''),
-      (i) => /Microsoft Windows/i.test(i.displayName || '') && /OCPU/i.test(i.metricName || ''),
-    ]);
+        /Gigabyte/i.test(i.metricName || '') &&
+        /Standard/i.test(i.displayName || '') &&
+        !/Dense|GPU|VMware/i.test(i.displayName || ''),
+    ],
+  };
+}
 
-    return {
-      ocpuPerHr: ocpu?.rate ?? FALLBACK_RATES.ocpuPerHr,
-      memoryGbPerHr: memory?.rate ?? FALLBACK_RATES.memoryGbPerHr,
-      blockVolumeGbPerMonth: block?.rate ?? FALLBACK_RATES.blockVolumeGbPerMonth,
-      publicIpPerHr: publicIp?.rate ?? FALLBACK_RATES.publicIpPerHr,
-      windowsOcpuPerHr: windows?.rate ?? FALLBACK_RATES.windowsOcpuPerHr,
-      source: ocpu && memory ? 'api' : 'api+fallback',
-    };
-  } catch (err) {
-    console.warn('[ociPricing] product list failed, using fallback rates:', err.message);
-    return { ...FALLBACK_RATES, source: 'fallback' };
-  }
+/**
+ * Resolve OCI compute/storage/IP unit rates from public list prices only.
+ * @param {{ shape?: string }} [opts]
+ * @throws if required rates cannot be resolved from the products API
+ */
+export async function getOciUnitRates({ shape } = {}) {
+  const family = ociShapeFamily(shape);
+  const preds = ocpuMemoryPredicates(family);
+  const items = await loadProducts();
+
+  const ocpu = findRate(items, preds.ocpu);
+  const memory = findRate(items, preds.memory);
+  const block = findRate(items, [
+    (i) =>
+      /^Storage\s*-\s*Block Volume\s*-\s*Storage$/i.test(i.displayName || '') &&
+      /Gigabyte Storage Capacity Per Month/i.test(i.metricName || ''),
+    (i) =>
+      /Block Volume\s*-\s*Storage/i.test(i.displayName || '') &&
+      /Gigabyte Storage Capacity Per Month/i.test(i.metricName || '') &&
+      !/Free|Performance Units|Cloud@Customer/i.test(i.displayName || ''),
+  ]);
+  const publicIp = findRate(items, [
+    (i) => /Public IP/i.test(i.displayName || '') && /Hour/i.test(i.metricName || ''),
+    (i) => /Reserved Public IP/i.test(i.displayName || ''),
+    (i) => /IPv4/i.test(i.displayName || '') && /Address/i.test(i.displayName || ''),
+  ]);
+  const windows = findRate(items, [
+    (i) =>
+      /Compute\s*-\s*Windows OS/i.test(i.displayName || '') && /OCPU/i.test(i.metricName || ''),
+    (i) =>
+      /Windows/i.test(i.displayName || '') &&
+      /OCPU/i.test(i.metricName || '') &&
+      /License|OS/i.test(i.displayName || ''),
+  ]);
+
+  return {
+    family,
+    shape: shape || null,
+    ocpuPerHr: requireRate(`${preds.label} OCPU`, ocpu),
+    memoryGbPerHr: requireRate(`${preds.label} Memory`, memory),
+    blockVolumeGbPerMonth: requireRate('Block Volume Storage', block),
+    // Public IP is often absent from the public products feed — do not invent a rate.
+    publicIpPerHr: publicIp?.rate ?? 0,
+    windowsOcpuPerHr: windows?.rate ?? null,
+    source: 'api',
+    publicIpSource: publicIp ? 'api' : 'absent_from_catalog',
+  };
 }
 
 export function computeOciHourly({
@@ -109,13 +169,19 @@ export function computeOciHourly({
   category = 'linux',
   rates,
 }) {
-  const r = rates || FALLBACK_RATES;
-  let compute = Number(ocpus) * r.ocpuPerHr + Number(memoryInGBs) * r.memoryGbPerHr;
-  if (category === 'windows') {
-    compute += Number(ocpus) * (r.windowsOcpuPerHr || 0);
+  if (!rates || rates.source !== 'api') {
+    throw new Error('OCI hourly compute requires live products API rates (no fallback)');
   }
-  const storage = (Number(bootVolumeGb) || 0) * ((r.blockVolumeGbPerMonth || 0) / 730);
-  const ip = r.publicIpPerHr || 0;
+
+  let compute = Number(ocpus) * rates.ocpuPerHr + Number(memoryInGBs) * rates.memoryGbPerHr;
+  if (category === 'windows') {
+    if (rates.windowsOcpuPerHr == null) {
+      throw new Error('OCI products API missing Windows OS OCPU license rate');
+    }
+    compute += Number(ocpus) * rates.windowsOcpuPerHr;
+  }
+  const storage = (Number(bootVolumeGb) || 0) * (rates.blockVolumeGbPerMonth / 730);
+  const ip = rates.publicIpPerHr || 0;
   return {
     rawComputePricePerHr: compute,
     rawStoragePricePerHr: storage,
@@ -132,14 +198,32 @@ function categoryForSpec(canonicalSpec) {
  * Sync OCI Flex shape prices into CloudRegionPricing for known specs.
  */
 export async function syncOciPricing() {
-  const rates = await getOciUnitRates();
-  const now = new Date();
+  const now = Date.now();
   let written = 0;
   const errors = [];
+  const ratesByFamily = {};
+
+  async function ratesForShape(shape) {
+    const family = ociShapeFamily(shape);
+    if (!ratesByFamily[family]) {
+      ratesByFamily[family] = await getOciUnitRates({ shape });
+    }
+    return ratesByFamily[family];
+  }
 
   for (const [canonicalSpec, mapping] of Object.entries(ociSpecMap)) {
     const category = categoryForSpec(canonicalSpec);
     const categories = category === 'gpu' ? ['gpu'] : ['linux', 'windows'];
+
+    let rates;
+    try {
+      rates = await ratesForShape(mapping.shape);
+    } catch (err) {
+      errors.push(
+        `${canonicalSpec} rates: ${err instanceof Error ? err.message : String(err)}`
+      );
+      continue;
+    }
 
     for (const region of OCI_PRICING_REGIONS) {
       for (const cat of categories) {
@@ -158,16 +242,18 @@ export async function syncOciPricing() {
               region,
               category: cat,
               canonicalSpec,
+              pricingMode: 'normal',
             },
             {
               provider: 'oci',
               region,
               category: cat,
               canonicalSpec,
+              pricingMode: 'normal',
               ...priced,
               currency: 'USD',
               instanceType: `${mapping.shape}/${mapping.ocpus}ocpu/${mapping.memoryInGBs}gb`,
-              fetchedAt: now,
+              fetchedAt: new Date(now),
               source: 'api',
             },
             { upsert: true, new: true }
@@ -182,12 +268,13 @@ export async function syncOciPricing() {
     }
   }
 
+  const sample = Object.values(ratesByFamily)[0];
   return {
     provider: 'oci',
     written,
     errors: errors.slice(0, 20),
     errorCount: errors.length,
-    ratesSource: rates.source,
+    ratesSource: sample?.source || 'api',
   };
 }
 

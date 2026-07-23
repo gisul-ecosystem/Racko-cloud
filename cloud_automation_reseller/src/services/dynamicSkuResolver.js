@@ -28,6 +28,29 @@ const PREFERRED_AWS_FAMILIES = [
   'g5',
 ];
 
+/** Intel families that support EC2 nested virtualization (Docker/KVM guests). */
+const NESTED_AWS_FAMILIES = [
+  'm7i',
+  'm7i-flex',
+  'm8i',
+  'm8i-flex',
+  'c7i',
+  'c7i-flex',
+  'c8i',
+  'c8i-flex',
+  'r7i',
+  'r7i-flex',
+  'r8i',
+  'r8i-flex',
+  'm6i',
+  'c6i',
+  'r6i',
+];
+
+/** Azure series known to support nested virtualization (exclude B-series). */
+const NESTED_AZURE_NAME_RE =
+  /^Standard_(D\d+s?_v3|D\d+as_v4|D\d+ads_v5|E\d+s?_v3|E\d+as_v4|E\d+ads_v5|F\d+s_v2|F\d+)$/i;
+
 let azureSkuCache = null;
 let azureSkuCacheAt = 0;
 const AZURE_SKU_TTL_MS = 6 * 60 * 60 * 1000;
@@ -36,25 +59,47 @@ let awsTypeCache = null;
 let awsTypeCacheAt = 0;
 const AWS_TYPE_TTL_MS = 6 * 60 * 60 * 1000;
 
-function familyRank(instanceType) {
-  const family = String(instanceType).split('.')[0];
-  const idx = PREFERRED_AWS_FAMILIES.indexOf(family);
+function awsFamily(instanceType) {
+  return String(instanceType).split('.')[0];
+}
+
+function familyRank(instanceType, nested = false) {
+  const family = awsFamily(instanceType);
+  const list = nested ? NESTED_AWS_FAMILIES : PREFERRED_AWS_FAMILIES;
+  const idx = list.indexOf(family);
   return idx === -1 ? 100 : idx;
+}
+
+function isNestedAwsFamily(instanceType) {
+  return NESTED_AWS_FAMILIES.includes(awsFamily(instanceType));
+}
+
+function isNestedAzureSize(name) {
+  return NESTED_AZURE_NAME_RE.test(String(name || ''));
 }
 
 /**
  * Pick smallest current-gen instance that meets vCPU + RAM, preferring common families.
+ * When nestedVirtualization=true, only nested-virt-capable Intel families are considered.
  */
-export async function resolveAwsSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
+export async function resolveAwsSku({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+} = {}) {
   const needVcpu = Math.max(1, Number(vcpu) || 1);
   const needRam = Math.max(1, Number(ramGb) || 1);
   const disk = Math.max(8, Number(diskGb) || 50);
+  const nested = Boolean(nestedVirtualization);
 
   const client = ec2ClientForRegion(awsConfig.defaultRegion || 'us-east-1');
   const types = await listAwsInstanceTypes(client);
 
   const candidates = types.filter((t) => {
     if (!t.currentGeneration) return false;
+    if (nested && !isNestedAwsFamily(t.instanceType)) return false;
     if (gpu) {
       if (!t.gpuCount || t.gpuCount < 1) return false;
     } else if (t.gpuCount > 0) {
@@ -71,7 +116,7 @@ export async function resolveAwsSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
     const overA = a.vcpu - needVcpu + (a.memoryGiB - needRam);
     const overB = b.vcpu - needVcpu + (b.memoryGiB - needRam);
     if (overA !== overB) return overA - overB;
-    return familyRank(a.instanceType) - familyRank(b.instanceType);
+    return familyRank(a.instanceType, nested) - familyRank(b.instanceType, nested);
   });
 
   const best = candidates[0];
@@ -80,7 +125,7 @@ export async function resolveAwsSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
     ebsGb: disk,
     vcpu: best.vcpu,
     ramGb: best.memoryGiB,
-    source: 'dynamic',
+    source: nested ? 'dynamic_nested' : 'dynamic',
   };
 }
 
@@ -119,12 +164,21 @@ async function listAwsInstanceTypes(client) {
 }
 
 /**
- * Azure: use Resource SKUs when credentials work; else D/E-series ladder heuristic.
+ * Azure: use Resource SKUs API only.
+ * Nested mode excludes B-series and only allows nested-capable series.
+ * No hardcoded size ladder — returns null when the live SKU list cannot resolve a match.
  */
-export async function resolveAzureSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
+export async function resolveAzureSku({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+} = {}) {
   const needVcpu = Math.max(1, Number(vcpu) || 1);
   const needRam = Math.max(1, Number(ramGb) || 1);
   const disk = Math.max(8, Number(diskGb) || 50);
+  const nested = Boolean(nestedVirtualization);
 
   if (gpu) {
     return {
@@ -134,29 +188,27 @@ export async function resolveAzureSku({ vcpu, ramGb, diskGb, gpu = false } = {})
     };
   }
 
-  try {
-    const skus = await listAzureVmSkus();
-    const candidates = skus.filter(
-      (s) => s.vcpu >= needVcpu && s.memoryGb >= needRam && !s.gpu
-    );
-    if (candidates.length > 0) {
-      candidates.sort((a, b) => {
-        const overA = a.vcpu - needVcpu + (a.memoryGb - needRam);
-        const overB = b.vcpu - needVcpu + (b.memoryGb - needRam);
-        if (overA !== overB) return overA - overB;
-        return a.name.localeCompare(b.name);
-      });
-      const best = candidates[0];
-      return { vmSize: best.name, diskGb: disk, source: 'dynamic' };
-    }
-  } catch (err) {
-    console.warn(
-      '[dynamicSku] Azure Resource SKUs failed, using size ladder:',
-      err instanceof Error ? err.message : err
-    );
+  const skus = await listAzureVmSkus();
+  const candidates = skus.filter((s) => {
+    if (s.vcpu < needVcpu || s.memoryGb < needRam || s.gpu) return false;
+    if (nested) return isNestedAzureSize(s.name);
+    return true;
+  });
+  if (candidates.length === 0) {
+    return null;
   }
-
-  return { vmSize: azureSizeLadder(needVcpu, needRam), diskGb: disk, source: 'ladder' };
+  candidates.sort((a, b) => {
+    const overA = a.vcpu - needVcpu + (a.memoryGb - needRam);
+    const overB = b.vcpu - needVcpu + (b.memoryGb - needRam);
+    if (overA !== overB) return overA - overB;
+    return a.name.localeCompare(b.name);
+  });
+  const best = candidates[0];
+  return {
+    vmSize: best.name,
+    diskGb: disk,
+    source: nested ? 'dynamic_nested' : 'dynamic',
+  };
 }
 
 async function listAzureVmSkus() {
@@ -180,7 +232,6 @@ async function listAzureVmSkus() {
     const memoryGb = Number(caps.MemoryGB || 0);
     const gpu = Number(caps.GPUs || 0) > 0;
     if (!vcpu || !memoryGb) continue;
-    // Prefer standard SSD-capable sizes
     if (!String(sku.name || '').startsWith('Standard_')) continue;
 
     out.push({ name: sku.name, vcpu, memoryGb, gpu });
@@ -191,46 +242,25 @@ async function listAzureVmSkus() {
   return out;
 }
 
-/** Fallback when Azure SKU list unavailable. */
-function azureSizeLadder(vcpu, ramGb) {
-  const ratio = ramGb / Math.max(vcpu, 1);
-  // Memory-optimized E-series when RAM/vCPU is high
-  if (ratio >= 7) {
-    const e = [
-      { v: 2, r: 16, name: 'Standard_E2s_v3' },
-      { v: 4, r: 32, name: 'Standard_E4s_v3' },
-      { v: 8, r: 64, name: 'Standard_E8s_v3' },
-      { v: 16, r: 128, name: 'Standard_E16s_v3' },
-      { v: 32, r: 256, name: 'Standard_E32s_v3' },
-      { v: 64, r: 432, name: 'Standard_E64s_v3' },
-    ];
-    const hit = e.find((x) => x.v >= vcpu && x.r >= ramGb);
-    return hit?.name || 'Standard_E16s_v3';
-  }
-
-  const d = [
-    { v: 1, r: 1, name: 'Standard_B1s' },
-    { v: 1, r: 2, name: 'Standard_B1ms' },
-    { v: 2, r: 4, name: 'Standard_B2s' },
-    { v: 2, r: 8, name: 'Standard_D2s_v3' },
-    { v: 4, r: 16, name: 'Standard_D4s_v3' },
-    { v: 8, r: 32, name: 'Standard_D8s_v3' },
-    { v: 16, r: 64, name: 'Standard_D16s_v3' },
-    { v: 32, r: 128, name: 'Standard_D32s_v3' },
-    { v: 64, r: 256, name: 'Standard_D64s_v3' },
-  ];
-  const hit = d.find((x) => x.v >= vcpu && x.r >= ramGb);
-  return hit?.name || 'Standard_D16s_v3';
-}
+/** Azure SKUs come from Resource SKUs API only — no hardcoded size ladder. */
 
 /**
  * OCI Flex shape for arbitrary vCPU/RAM (1 OCPU ≈ 2 vCPUs on x86).
+ * Nested mode prefers Intel Standard3.Flex over AMD E4.Flex.
+ * Shape name is a capability selection; unit rates are fetched live for that shape family.
  */
-export function resolveOciSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
+export function resolveOciSku({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+} = {}) {
   const needVcpu = Math.max(1, Number(vcpu) || 1);
   const needRam = Math.max(1, Number(ramGb) || 1);
   const disk = Math.max(50, Number(diskGb) || 50);
   const ocpus = vcpuToOcpus(needVcpu);
+  const nested = Boolean(nestedVirtualization);
 
   if (gpu) {
     return {
@@ -243,22 +273,30 @@ export function resolveOciSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
   }
 
   return {
-    shape: 'VM.Standard.E4.Flex',
+    shape: nested ? 'VM.Standard3.Flex' : 'VM.Standard.E4.Flex',
     ocpus,
-    // Flex minimum memory is typically 1 GB per OCPU; honor requested RAM.
     memoryInGBs: Math.max(needRam, ocpus),
     bootVolumeGb: disk,
-    source: 'dynamic',
+    source: nested ? 'dynamic_nested' : 'dynamic',
   };
 }
 
 /**
- * GCP size ladder (E2 standard / shared-core).
+ * GCP machine-type selection by vCPU/RAM.
+ * Nested mode uses N2 (Haswell+); E2 does not support nested virt.
+ * Names follow GCP's published standard machine types; prices come from Billing Catalog.
  */
-export function resolveGcpSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
+export function resolveGcpSku({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+} = {}) {
   const needVcpu = Math.max(1, Number(vcpu) || 1);
   const needRam = Math.max(1, Number(ramGb) || 1);
   const disk = Math.max(10, Number(diskGb) || 50);
+  const nested = Boolean(nestedVirtualization);
 
   if (gpu) {
     return {
@@ -270,7 +308,28 @@ export function resolveGcpSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
     };
   }
 
-  const ladder = [
+  const pick = (types) => {
+    const hit = types.find((x) => x.v >= needVcpu && x.r >= needRam);
+    if (!hit) return null;
+    return hit.name;
+  };
+
+  if (nested) {
+    const machineType = pick([
+      { v: 2, r: 8, name: 'n2-standard-2' },
+      { v: 4, r: 16, name: 'n2-standard-4' },
+      { v: 8, r: 32, name: 'n2-standard-8' },
+      { v: 16, r: 64, name: 'n2-standard-16' },
+      { v: 32, r: 128, name: 'n2-standard-32' },
+      { v: 48, r: 192, name: 'n2-standard-48' },
+      { v: 64, r: 256, name: 'n2-standard-64' },
+      { v: 80, r: 320, name: 'n2-standard-80' },
+    ]);
+    if (!machineType) return null;
+    return { machineType, diskGb: disk, source: 'dynamic_nested' };
+  }
+
+  const machineType = pick([
     { v: 1, r: 1, name: 'e2-micro' },
     { v: 1, r: 2, name: 'e2-small' },
     { v: 2, r: 4, name: 'e2-medium' },
@@ -279,74 +338,104 @@ export function resolveGcpSku({ vcpu, ramGb, diskGb, gpu = false } = {}) {
     { v: 8, r: 32, name: 'e2-standard-8' },
     { v: 16, r: 64, name: 'e2-standard-16' },
     { v: 32, r: 128, name: 'e2-standard-32' },
-  ];
-  const hit = ladder.find((x) => x.v >= needVcpu && x.r >= needRam);
-  return {
-    machineType: hit?.name || 'e2-standard-16',
-    diskGb: disk,
-    source: 'ladder',
-  };
+  ]);
+  if (!machineType) return null;
+  return { machineType, diskGb: disk, source: 'dynamic' };
 }
 
 /**
  * Resolve + register AWS/Azure/OCI/GCP mappings for a canonical spec.
- * Uses static map when present; otherwise discovers dynamically.
+ * Uses static map when present (normal mode only); otherwise discovers dynamically.
+ * Nested mode always resolves dynamically and does not pollute shared static maps.
  */
 export async function ensureSkuMappings(parts) {
-  const { canonicalSpec, vcpu, ramGb, diskGb, gpu } = parts;
+  const { canonicalSpec, vcpu, ramGb, diskGb, gpu, nestedVirtualization = false } = parts;
+  const nested = Boolean(nestedVirtualization);
   const result = { aws: null, azure: null, oci: null, gcp: null, errors: [] };
 
-  if (awsSpecMap[canonicalSpec]?.instanceType) {
+  if (!nested && awsSpecMap[canonicalSpec]?.instanceType) {
     result.aws = awsSpecMap[canonicalSpec];
   } else {
     try {
-      const aws = await resolveAwsSku({ vcpu, ramGb, diskGb, gpu });
+      const aws = await resolveAwsSku({ vcpu, ramGb, diskGb, gpu, nestedVirtualization: nested });
       if (aws) {
-        registerAwsSpec(canonicalSpec, aws);
-        result.aws = awsSpecMap[canonicalSpec];
+        if (!nested) {
+          registerAwsSpec(canonicalSpec, aws);
+          result.aws = awsSpecMap[canonicalSpec];
+        } else {
+          result.aws = aws;
+        }
       } else {
-        result.errors.push('aws: no matching instance type');
+        result.errors.push(
+          nested ? 'aws: no nested-virt matching instance type' : 'aws: no matching instance type'
+        );
       }
     } catch (err) {
       result.errors.push(`aws: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  if (azureSpecMap[canonicalSpec]?.vmSize) {
+  if (!nested && azureSpecMap[canonicalSpec]?.vmSize) {
     result.azure = azureSpecMap[canonicalSpec];
   } else {
     try {
-      const azure = await resolveAzureSku({ vcpu, ramGb, diskGb, gpu });
+      const azure = await resolveAzureSku({
+        vcpu,
+        ramGb,
+        diskGb,
+        gpu,
+        nestedVirtualization: nested,
+      });
       if (azure) {
-        registerAzureSpec(canonicalSpec, azure);
-        result.azure = azureSpecMap[canonicalSpec];
+        if (!nested) {
+          registerAzureSpec(canonicalSpec, azure);
+          result.azure = azureSpecMap[canonicalSpec];
+        } else {
+          result.azure = azure;
+        }
       } else {
-        result.errors.push('azure: no matching vm size');
+        result.errors.push(
+          nested ? 'azure: no nested-virt matching vm size' : 'azure: no matching vm size'
+        );
       }
     } catch (err) {
       result.errors.push(`azure: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  if (ociSpecMap[canonicalSpec]?.shape) {
+  if (!nested && ociSpecMap[canonicalSpec]?.shape) {
     result.oci = ociSpecMap[canonicalSpec];
   } else {
     try {
-      const oci = resolveOciSku({ vcpu, ramGb, diskGb, gpu });
-      registerOciSpec(canonicalSpec, oci);
-      result.oci = ociSpecMap[canonicalSpec];
+      const oci = resolveOciSku({ vcpu, ramGb, diskGb, gpu, nestedVirtualization: nested });
+      if (!nested) {
+        registerOciSpec(canonicalSpec, oci);
+        result.oci = ociSpecMap[canonicalSpec];
+      } else {
+        result.oci = oci;
+      }
     } catch (err) {
       result.errors.push(`oci: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
 
-  if (gcpSpecMap[canonicalSpec]?.machineType) {
+  if (!nested && gcpSpecMap[canonicalSpec]?.machineType) {
     result.gcp = gcpSpecMap[canonicalSpec];
   } else {
     try {
-      const gcp = resolveGcpSku({ vcpu, ramGb, diskGb, gpu });
-      registerGcpSpec(canonicalSpec, gcp);
-      result.gcp = gcpSpecMap[canonicalSpec];
+      const gcp = resolveGcpSku({ vcpu, ramGb, diskGb, gpu, nestedVirtualization: nested });
+      if (gcp) {
+        if (!nested) {
+          registerGcpSpec(canonicalSpec, gcp);
+          result.gcp = gcpSpecMap[canonicalSpec];
+        } else {
+          result.gcp = gcp;
+        }
+      } else {
+        result.errors.push(
+          nested ? 'gcp: no nested-virt matching machine type' : 'gcp: no matching machine type'
+        );
+      }
     } catch (err) {
       result.errors.push(`gcp: ${err instanceof Error ? err.message : String(err)}`);
     }

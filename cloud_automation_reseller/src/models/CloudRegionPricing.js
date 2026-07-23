@@ -16,6 +16,14 @@ const cloudRegionPricingSchema = new mongoose.Schema(
       index: true,
     },
     canonicalSpec: { type: String, required: true, trim: true, index: true },
+    /** Separates normal cheapest SKUs from nested-virt-capable SKUs in the cache. */
+    pricingMode: {
+      type: String,
+      enum: ['normal', 'nested'],
+      required: true,
+      default: 'normal',
+      index: true,
+    },
     rawComputePricePerHr: { type: Number, required: true, min: 0 },
     rawStoragePricePerHr: { type: Number, default: 0, min: 0 },
     rawIpPricePerHr: { type: Number, default: 0, min: 0 },
@@ -36,14 +44,34 @@ const cloudRegionPricingSchema = new mongoose.Schema(
 );
 
 cloudRegionPricingSchema.index(
-  { canonicalSpec: 1, category: 1, rawTotalPricePerHr: 1 },
-  { name: 'spec_category_price' }
+  { canonicalSpec: 1, category: 1, pricingMode: 1, rawTotalPricePerHr: 1 },
+  { name: 'spec_category_mode_price' }
 );
 
 cloudRegionPricingSchema.index(
-  { provider: 1, region: 1, category: 1, canonicalSpec: 1 },
-  { unique: true, name: 'provider_region_spec_unique' }
+  { provider: 1, region: 1, category: 1, canonicalSpec: 1, pricingMode: 1 },
+  { unique: true, name: 'provider_region_spec_mode_unique' }
 );
+
+/** Normalize nestedVirtualization flag → storage pricingMode. */
+export function toPricingMode(nestedVirtualization) {
+  return nestedVirtualization === true || nestedVirtualization === 'true' || nestedVirtualization === '1'
+    ? 'nested'
+    : 'normal';
+}
+
+/**
+ * Query filter for pricingMode that stays compatible with legacy rows
+ * (missing pricingMode treated as normal).
+ */
+export function pricingModeQuery(pricingMode) {
+  if (pricingMode === 'nested') {
+    return { pricingMode: 'nested' };
+  }
+  return {
+    $or: [{ pricingMode: 'normal' }, { pricingMode: { $exists: false } }],
+  };
+}
 
 const CloudRegionPricing = mongoose.model('CloudRegionPricing', cloudRegionPricingSchema);
 
