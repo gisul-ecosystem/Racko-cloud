@@ -1,13 +1,9 @@
 const crypto = require('crypto');
-const nodemailer = require('nodemailer');
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
-const { validateSmtpEnv } = require('./email/smtpEnv');
+const { resolveFrontendBaseUrl } = require('../utils/frontendUrl');
+const { sendMailWithRetry } = require('./email/mailSender');
 const { resolveLicenseDisplayName } = require('../utils/microsoftLicenseNames');
-
-const MAX_ATTEMPTS = 3;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const escapeHtml = (value) =>
   String(value ?? '')
@@ -19,37 +15,10 @@ const escapeHtml = (value) =>
 
 const hashToken = (token) => crypto.createHash('sha256').update(String(token)).digest('hex');
 
-const resolveFrontendBaseUrl = () => {
-  const baseUrl = String(
-    process.env.FRONTEND_URL || process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'
-  )
-    .trim()
-    .replace(/\/+$/, '');
-
-  if (!baseUrl) {
-    throw new AppError('FRONTEND_URL is not configured.', 500);
-  }
-
-  return baseUrl;
-};
-
 const getPurchaseIntentDelayMs = () => {
   const hours = Number(process.env.PURCHASE_INTENT_DELAY_HOURS);
   const resolvedHours = Number.isFinite(hours) && hours >= 0 ? hours : 24;
   return resolvedHours * 60 * 60 * 1000;
-};
-
-const createSmtpTransport = () => {
-  const smtpConfig = validateSmtpEnv();
-  return {
-    transporter: nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port,
-      secure: smtpConfig.secure,
-      auth: smtpConfig.auth
-    }),
-    from: smtpConfig.from
-  };
 };
 
 const buildPurchaseIntentEmailHtml = ({
@@ -105,23 +74,6 @@ const buildPurchaseIntentEmailHtml = ({
       </body>
     </html>
   `;
-};
-
-const sendMailWithRetry = async ({ to, subject, html }) => {
-  const { transporter, from } = createSmtpTransport();
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await transporter.sendMail({ from, to, subject, html });
-    } catch (error) {
-      lastError = error;
-      if (attempt === MAX_ATTEMPTS) break;
-      await sleep(500 * 2 ** (attempt - 1));
-    }
-  }
-
-  throw lastError;
 };
 
 const listDuePurchaseIntentRequests = async () => {
@@ -337,7 +289,8 @@ const buildClonePayloadFromRequest = async (requestId) => {
     throw new AppError('Request not found.', 404);
   }
 
-  const [servicesResult, instancesResult, rolesResult, windowsResult] = await Promise.all([
+  const [servicesResult, instancesResult, rolesResult, windowsResult, customRolesResult, customServicesResult] =
+    await Promise.all([
     db.query(
       `
         SELECT s.id, s.name
@@ -377,6 +330,32 @@ const buildClonePayloadFromRequest = async (requestId) => {
         ORDER BY day_of_week
       `,
       [requestId]
+    ),
+    db.query(
+      `
+        SELECT DISTINCT ON (COALESCE(cra.custom_role_def_id, 0), cra.custom_role_name)
+          cra.custom_role_def_id,
+          COALESCE(crd.name, cra.custom_role_name) AS name,
+          crd.description,
+          COALESCE(crd.permissions, cra.permissions) AS permissions
+        FROM custom_role_assignments cra
+        LEFT JOIN custom_role_definitions crd ON crd.id = cra.custom_role_def_id
+        WHERE cra.request_id = $1
+          AND cra.status = 'active'
+        ORDER BY COALESCE(cra.custom_role_def_id, 0), cra.custom_role_name, cra.assigned_at DESC
+      `,
+      [requestId]
+    ),
+    db.query(
+      `
+        SELECT cs.id, cs.name, cs.description, cs.category, cs.price_per_user
+        FROM custom_services cs
+        JOIN request_custom_services rcs ON rcs.custom_service_id = cs.id
+        WHERE rcs.request_id = $1
+          AND cs.active = true
+        ORDER BY cs.name
+      `,
+      [requestId]
     )
   ]);
 
@@ -391,6 +370,39 @@ const buildClonePayloadFromRequest = async (requestId) => {
   const selectedRoles = [...rolesByService.entries()].map(([serviceId, roles]) => ({
     serviceId,
     roles
+  }));
+
+  const parsePermissions = (value) => {
+    if (Array.isArray(value)) {
+      return value.map((entry) => String(entry)).filter(Boolean);
+    }
+    if (typeof value === 'string') {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed.map((entry) => String(entry)).filter(Boolean) : [];
+      } catch {
+        return value
+          .split(/[\n,]/)
+          .map((entry) => entry.trim())
+          .filter(Boolean);
+      }
+    }
+    return [];
+  };
+
+  const customRoles = customRolesResult.rows.map((row) => ({
+    id: row.custom_role_def_id != null ? Number(row.custom_role_def_id) : null,
+    name: row.name || 'Custom role',
+    description: row.description || null,
+    permissions: parsePermissions(row.permissions)
+  }));
+
+  const customServices = customServicesResult.rows.map((row) => ({
+    id: Number(row.id),
+    name: row.name,
+    description: row.description || null,
+    category: row.category || 'Custom',
+    pricePerUser: row.price_per_user != null ? Number(row.price_per_user) : 0
   }));
 
   return {
@@ -423,6 +435,8 @@ const buildClonePayloadFromRequest = async (requestId) => {
       instanceOption: row.instance_option
     })),
     selectedRoles,
+    customRoles,
+    customServices,
     usageWindows: windowsResult.rows.map((row) => ({
       day_of_week: Number(row.day_of_week),
       window_start_time: String(row.window_start_time).slice(0, 5),

@@ -35,7 +35,7 @@ const AppError = require('./src/utils/AppError');
 const pool = require('./src/config/database');
 const { resumeOutboundEmailJobs } = require('./src/services/emailQueueService');
 const { resumeProvisioningJobs } = require('./src/services/provisioningJobService');
-const { getSmtpConfigStatus } = require('./src/services/email/smtpEnv');
+const { getResendConfigStatus } = require('./src/services/email/resendEnv');
 
 const app = express();
 
@@ -160,12 +160,12 @@ const startServer = () => {
 
     console.log(`Service Catalog API listening on port ${port}`);
 
-    const smtpStatus = getSmtpConfigStatus();
-    if (smtpStatus.configured) {
-      console.log('SMTP email delivery is configured.');
+    const emailStatus = getResendConfigStatus();
+    if (emailStatus.configured) {
+      console.log('Resend email delivery is configured.');
     } else {
       console.warn(
-        `SMTP email delivery is NOT configured. Missing: ${smtpStatus.missingVars.join(', ')}`
+        `Resend email delivery is NOT configured. Missing: ${emailStatus.missingVars.join(', ')}`
       );
     }
 

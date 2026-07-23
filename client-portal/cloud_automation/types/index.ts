@@ -48,6 +48,10 @@ export interface ProvisioningRequest {
   resourceCleanupLastRanAt?: string | null;
   resource_cleanup_next_run_at?: string | null;
   resourceCleanupNextRunAt?: string | null;
+  microsoft_license_sku_id?: string | null;
+  microsoftLicenseSkuId?: string | null;
+  microsoft_license_sku_part_number?: string | null;
+  microsoftLicenseSkuPartNumber?: string | null;
   usage_windows?: UsageWindow[];
   usageWindows?: UsageWindow[];
 }

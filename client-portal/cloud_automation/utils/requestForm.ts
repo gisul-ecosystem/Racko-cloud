@@ -98,8 +98,18 @@ export function defaultTestIdsStartDate(): string {
 }
 
 export function defaultTestIdsEndDate(): string {
-  const date = new Date();
-  date.setHours(date.getHours() + 24);
+  return addHoursToDateTimeLocal(defaultTestIdsStartDate(), 24);
+}
+
+/** Add hours to a datetime-local string; falls back to now+hours if invalid. */
+export function addHoursToDateTimeLocal(value: string, hours: number): string {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    const fallback = new Date();
+    fallback.setHours(fallback.getHours() + hours);
+    return toDateTimeLocalValue(fallback);
+  }
+  date.setHours(date.getHours() + hours);
   return toDateTimeLocalValue(date);
 }
 

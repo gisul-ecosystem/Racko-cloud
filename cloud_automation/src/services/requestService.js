@@ -771,6 +771,31 @@ async function createRequest({
           })
         );
       }
+
+      try {
+        await db.query(
+          `
+            INSERT INTO request_custom_services (request_id, custom_service_id, added_by)
+            SELECT $1, custom_service_id, COALESCE(added_by, 'purchase-convert')
+            FROM request_custom_services
+            WHERE request_id = $2
+            ON CONFLICT (request_id, custom_service_id) DO NOTHING
+          `,
+          [requestId, resolvedConvertedFromRequestId]
+        );
+      } catch (customServiceCopyError) {
+        console.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            service: 'request-service',
+            level: 'error',
+            event: 'purchase_convert_custom_services_copy_failed',
+            sourceRequestId: resolvedConvertedFromRequestId,
+            requestId,
+            message: customServiceCopyError?.message
+          })
+        );
+      }
     }
 
     return {

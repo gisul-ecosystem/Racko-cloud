@@ -352,7 +352,7 @@ const buildRowSpec = (row, jobId, verifiedDomain, rowNumber) => {
     mailNickname,
     userPrincipalName,
     passwordProfile: {
-      forceChangePasswordNextSignIn: true,
+      forceChangePasswordNextSignIn: false,
       password: temporaryPassword
     },
     passwordPolicies: 'DisablePasswordExpiration'

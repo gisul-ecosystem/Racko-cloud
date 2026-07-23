@@ -29,15 +29,17 @@ const brandingSchema = z
 const tenantStatusSchema = z.enum(['pending', 'active', 'suspended', 'cancelled']);
 
 // Validates a single IPv4, IPv6, or CIDR notation entry.
-// Intentionally permissive — exact range matching happens in the gateway middleware.
 const ipOrCidrSchema = z
   .string()
   .min(1)
   .max(50)
   .refine(
     (value) => {
+      // IPv4: four octets, optional /0-32 prefix
       const ipv4 = /^(\d{1,3}\.){3}\d{1,3}(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
-      const ipv6 = /^[0-9a-fA-F:]+(::[0-9a-fA-F:]*)?(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8]))?$/;
+      // IPv6: full or compressed colon-hex notation, optional /0-128 prefix
+      // Covers: ::1, 2001:db8::1, 2401:4900:1cb9:405e:3d5e:5842:4e29:4239, etc.
+      const ipv6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]+|::(ffff(:0{1,4})?:)?((25[0-5]|(2[0-4]|1?\d)?\d)\.){3}(25[0-5]|(2[0-4]|1?\d)?\d)|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1?\d)?\d)\.){3}(25[0-5]|(2[0-4]|1?\d)?\d))(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8]))?$/;
       return ipv4.test(value) || ipv6.test(value);
     },
     { message: 'Each entry must be a valid IPv4, IPv6, or CIDR notation' }

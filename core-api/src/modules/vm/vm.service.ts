@@ -160,7 +160,7 @@ async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
       command: 'powershell.exe',
       args: [
         '-Command',
-        "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0",
+        "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0; $nlm = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'{DCB00C01-570F-4A9B-8D69-199FDBA5723B}')); $nlm.GetNetworkConnections() | ForEach-Object { $_.GetNetwork().SetCategory(1) };",
       ],
     });
     logger.info('[VMConsolePoll] Windows RDP access fixup executed', { node, vmid });

@@ -1,23 +1,4 @@
-const nodemailer = require('nodemailer');
-const { validateSmtpEnv } = require('./smtpEnv');
-
-const MAX_ATTEMPTS = 3;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const createSmtpTransport = () => {
-  const smtpConfig = validateSmtpEnv();
-
-  return {
-    transporter: nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port,
-      secure: smtpConfig.secure,
-      auth: smtpConfig.auth
-    }),
-    from: smtpConfig.from
-  };
-};
+const { sendMailWithRetry } = require('./mailSender');
 
 const escapeHtml = (value) =>
   String(value ?? '')
@@ -49,41 +30,15 @@ const buildLabExpiryWarningEmailHtml = ({ requestLabel, location, expiresAt }) =
   </html>
 `;
 
-const isRetryableEmailError = (error) => {
-  const statusCode = Number(error?.statusCode || error?.responseCode || error?.status);
-  const errorCode = String(error?.code || '').toUpperCase();
-
-  return (
-    [421, 450, 451, 452, 454, 455, 500, 502, 503, 504].includes(statusCode) ||
-    ['ETIMEDOUT', 'ECONNRESET', 'ESOCKET', 'EAUTH', 'ECONNECTION'].includes(errorCode)
-  );
-};
-
 const sendLabExpiryWarningEmail = async ({ to, requestLabel, location, expiresAt }) => {
   if (!to) {
     return { sent: false, mode: 'skipped' };
   }
 
-  const { transporter, from } = createSmtpTransport();
   const html = buildLabExpiryWarningEmailHtml({ requestLabel, location, expiresAt });
   const subject = `[Racko] Azure lab expires in 24 hours — ${requestLabel}`;
-
-  let lastError = null;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      await transporter.sendMail({ from, to, subject, html });
-      return { sent: true, mode: 'smtp', attempt };
-    } catch (error) {
-      lastError = error;
-      if (!isRetryableEmailError(error) || attempt === MAX_ATTEMPTS) {
-        throw error;
-      }
-      await sleep(attempt * 1000);
-    }
-  }
-
-  throw lastError;
+  const result = await sendMailWithRetry({ to, subject, html });
+  return { sent: true, mode: 'resend', attempt: result.attempt };
 };
 
 module.exports = {

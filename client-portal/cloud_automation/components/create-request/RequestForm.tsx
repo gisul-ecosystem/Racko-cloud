@@ -11,6 +11,8 @@ import type {
   CatalogService,
   CostingMode,
   MicrosoftLicense,
+  PurchaseCloneCustomRole,
+  PurchaseCloneCustomService,
   SelectedRole,
   ServiceCatalogResponse,
   SelectedInstance,
@@ -103,6 +105,8 @@ interface RequestFormProps {
   onRoleChange: (serviceId: number, roles: string[]) => void;
   tierAutomatedServices: Set<number>;
   resolvedRoles: SelectedRole[];
+  orgAdminCustomRoles?: PurchaseCloneCustomRole[];
+  orgAdminCustomServices?: PurchaseCloneCustomService[];
   projectName: string;
   onProjectNameChange: (value: string) => void;
   idMode: AzureIdMode | null;
@@ -223,6 +227,8 @@ export function RequestForm({
   onRoleChange,
   tierAutomatedServices,
   resolvedRoles,
+  orgAdminCustomRoles = [],
+  orgAdminCustomServices = [],
   projectName,
   onProjectNameChange,
   idMode,
@@ -503,10 +509,9 @@ export function RequestForm({
               <input
                 id="startDate"
                 type="datetime-local"
-                className={isTestIds && !purchaseConvertMode ? inputDisabledClass : inputClass}
+                className={inputClass}
                 value={startDate}
                 onChange={(event) => onStartDateChange(event.target.value)}
-                disabled={isTestIds && !purchaseConvertMode}
               />
             </div>
             <div>
@@ -524,7 +529,7 @@ export function RequestForm({
             </div>
             {isTestIds && !purchaseConvertMode ? (
               <p className="sm:col-span-2 text-xs text-gray-500">
-                Test IDs lock the service window to 24 hours from now.
+                Choose when the test lab starts. End date is fixed at 24 hours after the start.
               </p>
             ) : null}
 
@@ -1193,11 +1198,18 @@ export function RequestForm({
             <SectionHeader
               step={step++}
               title="Permissions"
-              description="Roles are assigned automatically from catalog rules and instance tiers."
+              description={
+                orgAdminCustomRoles.length > 0 || orgAdminCustomServices.length > 0
+                  ? 'Catalog roles plus custom roles and services assigned in Lab Management (org-admin).'
+                  : 'Roles are assigned automatically from catalog rules and instance tiers.'
+              }
             />
 
             {resolvedRoles.length > 0 && (
               <div className="mt-5 space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  Catalog service roles
+                </p>
                 {resolvedRoles.map((entry) => {
                   const service = catalog.services.find((svc) => svc.id === entry.serviceId);
                   const isAutomated = tierAutomatedServices.has(entry.serviceId);
@@ -1225,6 +1237,59 @@ export function RequestForm({
                 })}
               </div>
             )}
+
+            {orgAdminCustomRoles.length > 0 ? (
+              <div className="mt-5 space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  Custom roles (Lab Management)
+                </p>
+                {orgAdminCustomRoles.map((role, index) => (
+                  <div
+                    key={`${role.id ?? role.name}-${index}`}
+                    className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2"
+                  >
+                    <p className="text-sm font-medium text-gray-900">{role.name}</p>
+                    {role.description ? (
+                      <p className="mt-0.5 text-xs text-gray-500">{role.description}</p>
+                    ) : null}
+                    {role.permissions.length > 0 ? (
+                      <div className="mt-1.5 flex flex-wrap gap-2">
+                        {role.permissions.map((permission) => (
+                          <span
+                            key={permission}
+                            className="rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-medium text-amber-800"
+                          >
+                            {permission}
+                          </span>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="mt-1 text-xs text-gray-400">Assigned on the source test lab</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+
+            {orgAdminCustomServices.length > 0 ? (
+              <div className="mt-5 space-y-3">
+                <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
+                  Custom services (Lab Management)
+                </p>
+                {orgAdminCustomServices.map((service) => (
+                  <div
+                    key={service.id}
+                    className="rounded-lg border border-gray-100 bg-gray-50/50 px-3 py-2"
+                  >
+                    <p className="text-sm font-medium text-gray-900">{service.name}</p>
+                    <p className="mt-0.5 text-xs text-gray-500">
+                      {[service.category, service.description].filter(Boolean).join(' · ') ||
+                        'Custom service from Lab Management'}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : null}
 
             {selectedServices.some(
               (service) =>
@@ -1289,11 +1354,17 @@ export function RequestForm({
             <SectionHeader
               step={step++}
               title="Microsoft license"
-              description="Optional — choose a Microsoft license from your Azure tenant to assign to lab users."
+              description="Optional — assign a Microsoft license from your tenant to every lab account created for this request."
             />
 
             {licensesError ? (
-              <p className="mt-4 text-sm text-red-600">{licensesError}</p>
+              <div className="mt-4 space-y-1">
+                <p className="text-sm text-red-600">{licensesError}</p>
+                <p className="text-xs text-red-500/90">
+                  Required Graph app permissions (admin consent): Directory.Read.All and
+                  User.ReadWrite.All or LicenseAssignment.ReadWrite.All.
+                </p>
+              </div>
             ) : null}
 
             <div className="relative mt-5">

@@ -694,7 +694,8 @@ export class AuthService {
     return {
       valid: true,
       userId: payload.userId,
-      role: payload.role as UserRole,
+      // Prefer live DB role so promotions/demotions apply without forcing re-login.
+      role: (user.role || payload.role) as UserRole,
       sessionId: payload.sessionId,
     };
   }
