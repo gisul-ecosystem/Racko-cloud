@@ -363,6 +363,14 @@ export interface BulkAssignPairsDto {
   passwordMode?: 'auto' | 'shared';
   sharedPassword?: string;
   userIds?: string[];
+  accessSchedule?: {
+    startDate?: string | null;
+    endDate?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    weeklySchedule?: unknown[] | null;
+    timezone?: string | null;
+  };
 }
 
 export interface BulkAssignPairRow {

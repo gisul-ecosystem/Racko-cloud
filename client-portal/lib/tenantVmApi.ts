@@ -12,6 +12,8 @@ import type {
   TenantVmLiveStatus,
   TenantVmOperationResult,
   TenantVmsResult,
+  AccessSchedule,
+  AccessScheduleInput,
 } from '../types/tenantPortal';
 
 async function unwrap<T>(promise: Promise<ApiEnvelope<T>>): Promise<T> {
@@ -136,6 +138,18 @@ export async function unassignTenantVm(vmId: string): Promise<void> {
   );
 }
 
+export async function updateTenantVmSchedule(
+  vmId: string,
+  accessSchedule: AccessScheduleInput
+): Promise<AccessSchedule> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<AccessSchedule>>(
+      `/api/v1/tenant-vms/${vmId}/schedule`,
+      { method: 'PATCH', body: JSON.stringify(accessSchedule) }
+    )
+  );
+}
+
 export async function fetchTenantUsers(): Promise<TenantUsersResult> {
   return unwrap(tenantPortalRequest<ApiEnvelope<TenantUsersResult>>('/api/v1/tenant-users'));
 }
@@ -186,4 +200,13 @@ export async function deleteTenantUser(userId: string): Promise<void> {
   await tenantPortalRequest<ApiEnvelope<Record<string, never>>>(`/api/v1/tenant-users/${userId}`, {
     method: 'DELETE',
   });
+}
+
+export async function bulkDeleteTenantUsers(ids: string[]): Promise<{ deleted: number }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ deleted: number }>>('/api/v1/tenant-users/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids }),
+    })
+  );
 }

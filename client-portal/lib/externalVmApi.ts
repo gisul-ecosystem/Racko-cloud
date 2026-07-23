@@ -1,4 +1,5 @@
 import { apiRequest } from './apiClient';
+import type { AccessSchedule, AccessScheduleInput } from './accessSchedule';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ export interface IExternalVM {
   tenantId?: string;
   assignedTo?: string | null;
   assignedTenantUserId?: string | null;
+  accessSchedule?: AccessSchedule | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -168,6 +170,7 @@ export interface BulkAssignExternalPairsDto {
   passwordMode?: 'auto' | 'shared';
   sharedPassword?: string;
   userIds?: string[];
+  accessSchedule?: AccessScheduleInput;
 }
 
 export async function bulkAssignExternalOneToOne(

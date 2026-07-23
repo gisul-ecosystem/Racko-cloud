@@ -52,6 +52,10 @@ router.get('/me', requireAuth, (req, res, next) => {
   authController.getCurrentUser(req, res, next);
 });
 
+router.get('/access-check', requireAuth, (req, res, next) => {
+  authController.accessCheck(req, res, next);
+});
+
 // Internal route — gateway only
 router.post('/validate', requireInternalSecret, (req, res, next) => {
   authController.validateTokenForGateway(req, res, next);

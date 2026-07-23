@@ -6,6 +6,7 @@ import { tenantUserController } from './tenantUser.controller';
 import {
   createBulkTenantUsersSchema,
   createSingleTenantUserSchema,
+  bulkDeleteTenantUsersSchema,
   setTenantUserActiveSchema,
   tenantUserIdParamSchema,
 } from './tenantUser.validation';
@@ -29,6 +30,12 @@ router.post(
 );
 
 router.get('/', (req, res, next) => tenantUserController.listMyUsers(req, res, next));
+
+router.delete(
+  '/bulk',
+  validateRequest(bulkDeleteTenantUsersSchema),
+  (req, res, next) => tenantUserController.bulkDeleteUsers(req, res, next)
+);
 
 router.patch(
   '/:userId/active',

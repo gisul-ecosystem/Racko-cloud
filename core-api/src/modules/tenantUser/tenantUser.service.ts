@@ -267,6 +267,57 @@ export class TenantUserService {
       externalVmsUnassigned: externalUnassignResult.modifiedCount,
     });
   }
+
+  /**
+   * Hard-delete tenant_users owned by this admin, and clear VM / external-VM assignments.
+   */
+  async bulkDeleteUsers(
+    targetUserIds: string[],
+    tenantId: mongoose.Types.ObjectId,
+    createdBy: mongoose.Types.ObjectId
+  ): Promise<{ deleted: number }> {
+    const objectIds = targetUserIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const users = await TenantUser.find({
+      _id: { $in: objectIds },
+      tenantId,
+      role: 'tenant_user',
+      createdBy,
+    }).select('_id');
+
+    const deletableIds = users.map((u) => u._id);
+    if (deletableIds.length === 0) {
+      return { deleted: 0 };
+    }
+
+    await Promise.all([
+      VM.updateMany(
+        { tenantId, assignedTenantUserId: { $in: deletableIds } },
+        { $unset: { assignedTenantUserId: 1 } }
+      ),
+      ExternalVMModel.updateMany(
+        { tenantId, assignedTenantUserId: { $in: deletableIds } },
+        { $unset: { assignedTenantUserId: 1 } }
+      ),
+    ]);
+
+    const result = await TenantUser.deleteMany({
+      _id: { $in: deletableIds },
+      tenantId,
+      role: 'tenant_user',
+      createdBy,
+    });
+
+    logger.info('Tenant users bulk deleted', {
+      tenantId: tenantId.toString(),
+      requested: targetUserIds.length,
+      deleted: result.deletedCount,
+    });
+
+    return { deleted: result.deletedCount ?? 0 };
+  }
 }
 
 export const tenantUserService = new TenantUserService();

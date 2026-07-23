@@ -102,12 +102,17 @@ export class TenantExternalVmController {
   async assign(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { tenantId, tenantUserId } = tenantIds(req);
-      const { userId, externalVmIds } = req.body as { userId: string; externalVmIds: string[] };
+      const { userId, externalVmIds, accessSchedule } = req.body as {
+        userId: string;
+        externalVmIds: string[];
+        accessSchedule?: import('../vmAccessSchedule/accessScheduleParse').AccessScheduleInput;
+      };
       const result = await externalVMService.assignTenantExternalVMs(
         externalVmIds.map((id) => new mongoose.Types.ObjectId(id)),
         new mongoose.Types.ObjectId(userId),
         tenantId,
-        tenantUserId
+        tenantUserId,
+        accessSchedule
       );
       success(res, `${result.assigned} server(s) assigned successfully.`, result);
     } catch (err) {
@@ -144,6 +149,20 @@ export class TenantExternalVmController {
     }
   }
 
+  async updateSchedule(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const data = await externalVMService.updateTenantExternalVmSchedule(
+        id,
+        tenantActor(req),
+        req.body
+      );
+      success(res, 'Server access schedule updated.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   async getOne(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
@@ -160,6 +179,20 @@ export class TenantExternalVmController {
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
       await externalVMService.deleteTenantExternalVM(id, tenantId);
       success(res, 'External VM deleted.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async bulkRemove(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { tenantId } = tenantIds(req);
+      const { ids } = req.body as { ids: string[] };
+      const result = await externalVMService.bulkDeleteTenantExternalVMs(
+        ids.map((id) => new mongoose.Types.ObjectId(id)),
+        tenantId
+      );
+      success(res, `${result.deleted} server(s) deleted.`, result);
     } catch (err) {
       next(err);
     }

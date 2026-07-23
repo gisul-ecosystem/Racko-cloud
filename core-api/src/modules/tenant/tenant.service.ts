@@ -2,12 +2,24 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { Tenant, type ITenant, type TenantStatus, type TenantIpAccessMode } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
+import { TenantServiceConfig } from '../../models/tenantServiceConfig.model';
+import { TenantBrandingAsset } from '../../models/tenantBrandingAsset.model';
+import { TenantNotification } from '../../models/tenantNotification.model';
+import { Wallet } from '../../models/wallet.model';
+import { WalletTransaction } from '../../models/walletTransaction.model';
+import { ManualWalletCredit } from '../../models/manualWalletCredit.model';
+import { Order } from '../../models/order.model';
+import { DedicatedServerRequestModel } from '../../models/dedicatedServerRequest.model';
+import { CatalogVmModel } from '../../models/catalogVm.model';
+import { VM } from '../vm/vm.model';
+import { ExternalVMModel } from '../external-vm/external-vm.model';
 import { hashPassword } from '../../utils/argon2';
 import {
   ConflictError,
   NotFoundError,
   ValidationError,
 } from '../../utils/errors';
+import { logger } from '../../utils/logger';
 import type {
   CreateTenantAdminInput,
   CreateTenantInput,
@@ -265,6 +277,80 @@ export class TenantService {
 
     await tenant.save();
     return toTenantPublic(tenant);
+  }
+
+  /**
+   * Hard-delete a tenant and all tenant-scoped documents from MongoDB.
+   * Does not purge Proxmox/infra resources — DB wipe only.
+   */
+  async deleteTenant(id: string): Promise<{ deleted: Record<string, number> }> {
+    if (!isValidObjectId(id)) {
+      throw new ValidationError('Invalid tenant id format.');
+    }
+
+    const tenantObjectId = new mongoose.Types.ObjectId(id);
+    const tenant = await Tenant.findById(tenantObjectId);
+    if (!tenant) {
+      throw new NotFoundError('Tenant not found.');
+    }
+
+    const filter = { tenantId: tenantObjectId };
+
+    const [
+      notifications,
+      manualCredits,
+      walletTxs,
+      orders,
+      dedicatedRequests,
+      serviceConfigs,
+      brandingAssets,
+      externalVms,
+      catalogVms,
+      vms,
+      tenantUsers,
+      wallets,
+    ] = await Promise.all([
+      TenantNotification.deleteMany(filter),
+      ManualWalletCredit.deleteMany(filter),
+      WalletTransaction.deleteMany(filter),
+      Order.deleteMany(filter),
+      DedicatedServerRequestModel.deleteMany(filter),
+      TenantServiceConfig.deleteMany(filter),
+      TenantBrandingAsset.deleteMany(filter),
+      ExternalVMModel.deleteMany(filter),
+      CatalogVmModel.deleteMany(filter),
+      // Bypass soft-delete find middleware — hard-remove all tenant VMs from DB
+      VM.collection.deleteMany(filter),
+      TenantUser.deleteMany(filter),
+      Wallet.deleteMany(filter),
+    ]);
+
+    await tenant.deleteOne();
+
+    const deleted: Record<string, number> = {
+      tenant: 1,
+      notifications: notifications.deletedCount ?? 0,
+      manualCredits: manualCredits.deletedCount ?? 0,
+      walletTransactions: walletTxs.deletedCount ?? 0,
+      orders: orders.deletedCount ?? 0,
+      dedicatedServerRequests: dedicatedRequests.deletedCount ?? 0,
+      serviceConfigs: serviceConfigs.deletedCount ?? 0,
+      brandingAssets: brandingAssets.deletedCount ?? 0,
+      externalVms: externalVms.deletedCount ?? 0,
+      catalogVms: catalogVms.deletedCount ?? 0,
+      vms: vms.deletedCount ?? 0,
+      tenantUsers: tenantUsers.deletedCount ?? 0,
+      wallets: wallets.deletedCount ?? 0,
+    };
+
+    logger.info('[Tenant] Tenant hard-deleted with cascade', {
+      tenantId: id,
+      name: tenant.name,
+      domain: tenant.domain,
+      deleted,
+    });
+
+    return { deleted };
   }
 }
 

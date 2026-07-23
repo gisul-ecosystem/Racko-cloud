@@ -72,6 +72,17 @@ export async function deleteTenantExternalVM(id: string): Promise<void> {
   await tenantPortalRequest(`/api/v1/tenant-external-vms/${id}`, { method: 'DELETE' });
 }
 
+export async function bulkDeleteTenantExternalVMs(
+  ids: string[]
+): Promise<{ deleted: number }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ deleted: number }>>('/api/v1/tenant-external-vms/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids }),
+    })
+  );
+}
+
 export async function getTenantExternalVMConsole(
   id: string,
   dimensions?: { width?: number; height?: number }
@@ -117,12 +128,17 @@ export async function fetchAssignedTenantExternalVMsForUser(userId: string): Pro
 
 export async function assignTenantExternalVMs(
   userId: string,
-  externalVmIds: string[]
+  externalVmIds: string[],
+  accessSchedule?: import('./accessSchedule').AccessScheduleInput
 ): Promise<{ assigned: number }> {
   const data = await unwrap(
     tenantPortalRequest<ApiEnvelope<{ assigned: number }>>('/api/v1/tenant-external-vms/assign', {
       method: 'POST',
-      body: JSON.stringify({ userId, externalVmIds }),
+      body: JSON.stringify({
+        userId,
+        externalVmIds,
+        ...(accessSchedule ? { accessSchedule } : {}),
+      }),
     })
   );
   return data;
@@ -149,4 +165,16 @@ export async function bulkAssignTenantExternalOneToOne(
 
 export async function unassignTenantExternalVM(id: string): Promise<void> {
   await tenantPortalRequest(`/api/v1/tenant-external-vms/assign/${id}`, { method: 'DELETE' });
+}
+
+export async function updateTenantExternalVmSchedule(
+  id: string,
+  accessSchedule: import('./accessSchedule').AccessScheduleInput
+): Promise<import('./accessSchedule').AccessSchedule> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<import('./accessSchedule').AccessSchedule>>(
+      `/api/v1/tenant-external-vms/${id}/schedule`,
+      { method: 'PATCH', body: JSON.stringify(accessSchedule) }
+    )
+  );
 }

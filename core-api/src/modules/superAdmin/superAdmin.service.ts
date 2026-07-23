@@ -2,7 +2,8 @@ import mongoose from 'mongoose';
 import { Tenant } from '../../models/tenant.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { isValidObjectId } from '../tenant/tenant.service';
-import { NotFoundError } from '../../utils/errors';
+import { ForbiddenError, NotFoundError } from '../../utils/errors';
+import { logger } from '../../utils/logger';
 import type { TenantStatus } from '../../models/tenant.model';
 
 export interface SuperAdminOverview {
@@ -119,6 +120,44 @@ export class SuperAdminService {
     await tenantUser.save();
 
     return toTenantAdminPublic(tenantUser);
+  }
+
+  async deleteTenantAdmin(tenantId: string, tenantUserId: string): Promise<void> {
+    if (!isValidObjectId(tenantId) || !isValidObjectId(tenantUserId)) {
+      throw new NotFoundError('TENANT_ADMIN_NOT_FOUND');
+    }
+
+    const tenantObjectId = new mongoose.Types.ObjectId(tenantId);
+    const tenant = await Tenant.findById(tenantObjectId);
+    if (!tenant) {
+      throw new NotFoundError('Tenant not found.');
+    }
+
+    const admin = await TenantUser.findOne({
+      _id: new mongoose.Types.ObjectId(tenantUserId),
+      tenantId: tenantObjectId,
+      role: 'tenant_admin',
+    });
+
+    if (!admin) {
+      throw new NotFoundError('TENANT_ADMIN_NOT_FOUND');
+    }
+
+    const adminCount = await TenantUser.countDocuments({
+      tenantId: tenantObjectId,
+      role: 'tenant_admin',
+    });
+    if (adminCount <= 1) {
+      throw new ForbiddenError('Cannot delete the last tenant admin. Create another admin first.');
+    }
+
+    await admin.deleteOne();
+
+    logger.info('[SuperAdmin] Tenant admin deleted', {
+      tenantId,
+      tenantUserId,
+      email: admin.email,
+    });
   }
 }
 
