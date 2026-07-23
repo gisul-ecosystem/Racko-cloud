@@ -21,6 +21,20 @@ export interface ExternalVMResponse {
   tenantId?: string;
   assignedTo?: string | null;
   assignedTenantUserId?: string | null;
+  accessSchedule?: {
+    startDate: string | null;
+    endDate: string | null;
+    startTime: string | null;
+    endTime: string | null;
+    override: boolean;
+    overrideUntil: string | null;
+    timezone: string;
+    weeklySchedule: Array<{
+      day: string;
+      enabled: boolean;
+      windows: Array<{ start: string; end: string }>;
+    }> | null;
+  } | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -32,6 +46,14 @@ export interface BulkAssignExternalPairsDto {
   passwordMode?: 'auto' | 'shared';
   sharedPassword?: string;
   userIds?: string[];
+  accessSchedule?: {
+    startDate?: string | null;
+    endDate?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    weeklySchedule?: unknown[] | null;
+    timezone?: string | null;
+  };
 }
 
 export interface BulkAssignExternalPairRow {
@@ -57,6 +79,14 @@ export interface TenantBulkAssignExternalPairsDto {
   passwordMode?: 'auto' | 'shared';
   sharedPassword?: string;
   userIds?: string[];
+  accessSchedule?: {
+    startDate?: string | null;
+    endDate?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    weeklySchedule?: unknown[] | null;
+    timezone?: string | null;
+  };
 }
 
 /** Guacamole console session for an external VM (mirrors the VPS console shape). */

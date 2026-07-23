@@ -163,6 +163,16 @@ export class TenantController {
       next(error);
     }
   }
+
+  async deleteTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { id } = req.params as { id: string };
+      const result = await tenantService.deleteTenant(id);
+      success(res, 'Tenant deleted.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
  
 export const tenantController = new TenantController();

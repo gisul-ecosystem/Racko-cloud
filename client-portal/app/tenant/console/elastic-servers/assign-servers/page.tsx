@@ -13,11 +13,23 @@ import {
   fetchAvailableTenantExternalVMs,
   fetchTenantExternalVMAssignCounts,
   unassignTenantExternalVM,
+  updateTenantExternalVmSchedule,
   type IExternalVM,
 } from '@/lib/tenantExternalVmApi';
+import { AccessScheduleBadge } from '@/components/access-schedule/AccessScheduleBadge';
+import { EditAccessScheduleModal } from '@/components/access-schedule/EditAccessScheduleModal';
+import { WeeklyAccessHoursEditor } from '@/components/access-schedule/WeeklyAccessHoursEditor';
 import { ApiError } from '@/lib/apiClient';
+import {
+  buildWeeklyAccessSchedule,
+  createDefaultWeeklyEditorValue,
+  formatAccessScheduleDigest,
+  toAccessSchedule,
+  type AccessScheduleInput,
+  type WeeklyAccessEditorValue,
+} from '@/lib/accessSchedule';
 import type { TenantUserProfile } from '@/types/tenantPortal';
-import { UserCheck, X, Server, CheckSquare, Square, AlertCircle, Loader2, ChevronRight } from 'lucide-react';
+import { UserCheck, X, Server, CheckSquare, Square, AlertCircle, Loader2, ChevronRight, CalendarClock } from 'lucide-react';
 
 function ServerCard({
   vm,
@@ -96,6 +108,11 @@ function AssignDrawer({
   const [error, setError] = useState<string | null>(null);
   const [assigning, setAssigning] = useState(false);
   const [unassigningId, setUnassigningId] = useState<string | null>(null);
+  const [scheduleEnabled, setScheduleEnabled] = useState(false);
+  const [scheduleValue, setScheduleValue] = useState<WeeklyAccessEditorValue>(() =>
+    createDefaultWeeklyEditorValue()
+  );
+  const [scheduleTarget, setScheduleTarget] = useState<IExternalVM | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -119,7 +136,7 @@ function AssignDrawer({
   return (
     <>
       <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
-      <div className="fixed right-0 top-0 h-full w-[480px] bg-white shadow-2xl z-50 flex flex-col">
+      <div className="fixed right-0 top-0 h-full w-[520px] bg-white shadow-2xl z-50 flex flex-col">
         <div className="flex items-center justify-between px-6 py-5 border-b">
           <div>
             <h2 className="text-base font-semibold">Manage Servers</h2>
@@ -136,22 +153,42 @@ function AssignDrawer({
               <section>
                 <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3">Assigned ({assigned.length})</h3>
                 <div className="space-y-2">
-                  {assigned.map((vm) => (
-                    <ServerCard
-                      key={vm._id}
-                      vm={vm}
-                      accentColor={accentColor}
-                      action={async () => {
-                        setUnassigningId(vm._id);
-                        await unassignTenantExternalVM(vm._id);
-                        onChanged();
-                        await load();
-                        setUnassigningId(null);
-                      }}
-                      actionLabel="Unassign"
-                      actionLoading={unassigningId === vm._id}
-                    />
-                  ))}
+                  {assigned.map((vm) => {
+                    const schedule = toAccessSchedule(vm.accessSchedule);
+                    return (
+                      <div key={vm._id} className="space-y-1">
+                        <ServerCard
+                          vm={vm}
+                          accentColor={accentColor}
+                          action={async () => {
+                            setUnassigningId(vm._id);
+                            await unassignTenantExternalVM(vm._id);
+                            onChanged();
+                            await load();
+                            setUnassigningId(null);
+                          }}
+                          actionLabel="Unassign"
+                          actionLoading={unassigningId === vm._id}
+                        />
+                        <div className="flex items-center justify-between gap-2 px-1">
+                          <div className="min-w-0">
+                            <AccessScheduleBadge schedule={schedule} />
+                            <p className="mt-0.5 truncate text-[11px] text-gray-400" title={formatAccessScheduleDigest(schedule)}>
+                              {formatAccessScheduleDigest(schedule)}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setScheduleTarget(vm)}
+                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50"
+                          >
+                            <CalendarClock className="h-3 w-3" />
+                            Edit
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </section>
               <section>
@@ -175,6 +212,31 @@ function AssignDrawer({
                   ))}
                 </div>
               </section>
+              {available.length > 0 ? (
+                <section className="space-y-3">
+                  <label className="flex cursor-pointer items-center justify-between gap-3 text-sm text-gray-700">
+                    <span>
+                      <span className="font-medium text-gray-900">Access schedule</span>
+                      <span className="mt-0.5 block text-xs text-gray-500">
+                        Optional weekly hours applied when assigning selected servers
+                      </span>
+                    </span>
+                    <input
+                      type="checkbox"
+                      checked={scheduleEnabled}
+                      onChange={(e) => setScheduleEnabled(e.target.checked)}
+                      className="rounded border-gray-300"
+                    />
+                  </label>
+                  {scheduleEnabled ? (
+                    <WeeklyAccessHoursEditor
+                      value={scheduleValue}
+                      onChange={setScheduleValue}
+                      disabled={assigning}
+                    />
+                  ) : null}
+                </section>
+              ) : null}
             </>
           )}
         </div>
@@ -185,11 +247,21 @@ function AssignDrawer({
               disabled={selected.size === 0 || assigning}
               onClick={async () => {
                 setAssigning(true);
-                await assignTenantExternalVMs(userId, Array.from(selected));
-                setSelected(new Set());
-                onChanged();
-                await load();
-                setAssigning(false);
+                try {
+                  const accessSchedule = scheduleEnabled
+                    ? buildWeeklyAccessSchedule(scheduleValue)
+                    : undefined;
+                  await assignTenantExternalVMs(
+                    userId,
+                    Array.from(selected),
+                    accessSchedule
+                  );
+                  setSelected(new Set());
+                  onChanged();
+                  await load();
+                } finally {
+                  setAssigning(false);
+                }
               }}
               className="px-4 py-2 text-sm text-white rounded-lg disabled:opacity-50"
               style={tenantAccentButton(accentColor)}
@@ -199,6 +271,21 @@ function AssignDrawer({
           </div>
         )}
       </div>
+
+      {scheduleTarget ? (
+        <EditAccessScheduleModal
+          open
+          vmName={scheduleTarget.name}
+          initialSchedule={toAccessSchedule(scheduleTarget.accessSchedule)}
+          onClose={() => setScheduleTarget(null)}
+          onSave={async (payload: AccessScheduleInput) => {
+            await updateTenantExternalVmSchedule(scheduleTarget._id, payload);
+            setScheduleTarget(null);
+            onChanged();
+            await load();
+          }}
+        />
+      ) : null}
     </>
   );
 }

@@ -12,11 +12,17 @@ import type {
 } from './external-vm.types';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { guacamoleClient } from '../../utils/guacamoleClient';
-import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
+import { AccessWindowDeniedError, NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { managedUsersService } from '../managedUsers/managedUsers.service';
 import { tenantUserService } from '../tenantUser/tenantUser.service';
 import type { TenantUserRole } from '../../middleware/requireTenantAuth.middleware';
+import {
+  accessSchedulePublicView,
+  parseAccessScheduleInput,
+  type AccessScheduleInput,
+} from '../vmAccessSchedule/accessScheduleParse';
+import { checkAccessWindow } from '../vmAccessSchedule/scheduleManager';
 
 type PlatformActorRole = 'admin' | 'super_admin' | 'user';
 
@@ -24,6 +30,26 @@ interface TenantExternalVmActor {
   id: string;
   tenantId: string;
   role: TenantUserRole;
+}
+
+function toAccessScheduleView(doc: IExternalVM): NonNullable<ExternalVMResponse['accessSchedule']> {
+  const raw = accessSchedulePublicView(doc);
+  return {
+    startDate: raw.accessStartDate
+      ? new Date(raw.accessStartDate).toISOString().slice(0, 10)
+      : null,
+    endDate: raw.accessEndDate
+      ? new Date(raw.accessEndDate).toISOString().slice(0, 10)
+      : null,
+    startTime: raw.accessStartTime ?? null,
+    endTime: raw.accessEndTime ?? null,
+    override: Boolean(raw.accessOverride),
+    overrideUntil: raw.accessOverrideUntil
+      ? new Date(raw.accessOverrideUntil).toISOString()
+      : null,
+    timezone: raw.weeklyScheduleTz || 'Asia/Kolkata',
+    weeklySchedule: raw.weeklySchedule ?? null,
+  };
 }
 
 /**
@@ -49,6 +75,7 @@ class ExternalVMService {
       ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
       assignedTo: doc.assignedTo?.toString() ?? null,
       assignedTenantUserId: doc.assignedTenantUserId?.toString() ?? null,
+      accessSchedule: toAccessScheduleView(doc),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
@@ -226,7 +253,7 @@ class ExternalVMService {
     adminId: mongoose.Types.ObjectId
   ): Promise<{ assigned: number }> {
     if (externalVmIds.length === 0) throw new ValidationError('No servers specified.');
-    if (externalVmIds.length > 50) throw new ValidationError('Cannot assign more than 50 servers at once.');
+    if (externalVmIds.length > 250) throw new ValidationError('Cannot assign more than 250 servers at once.');
 
     const user = await User.findById(targetUserId);
     if (!user) throw new NotFoundError('User not found.');
@@ -471,6 +498,28 @@ class ExternalVMService {
     });
   }
 
+  /**
+   * Hard-delete tenant-owned elastic servers from MongoDB (tenant_admin).
+   * Only deletes documents matching both the given ids and tenantId.
+   */
+  async bulkDeleteTenantExternalVMs(
+    ids: mongoose.Types.ObjectId[],
+    tenantId: mongoose.Types.ObjectId
+  ): Promise<{ deleted: number }> {
+    const result = await ExternalVMModel.deleteMany({
+      _id: { $in: ids },
+      tenantId,
+    });
+
+    logger.info('[ExternalVM] Bulk deleted tenant external VMs', {
+      requested: ids.length,
+      deleted: result.deletedCount,
+      tenantId: tenantId.toString(),
+    });
+
+    return { deleted: result.deletedCount ?? 0 };
+  }
+
   async getTenantConsoleSession(
     id: mongoose.Types.ObjectId,
     actor: TenantExternalVmActor,
@@ -478,6 +527,15 @@ class ExternalVMService {
   ): Promise<ExternalVMConsoleSession> {
     const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
     this.assertTenantAccess(doc, actor);
+    if (actor.role === 'tenant_user') {
+      const access = checkAccessWindow(doc);
+      if (!access.allowed) {
+        throw new AccessWindowDeniedError(
+          access.error || 'Access denied: outside scheduled window.',
+          access.nextWindow ?? null
+        );
+      }
+    }
     return this.openGuacamole(
       doc,
       { tenantId: actor.tenantId, tenantUserId: actor.id },
@@ -522,10 +580,11 @@ class ExternalVMService {
     externalVmIds: mongoose.Types.ObjectId[],
     targetUserId: mongoose.Types.ObjectId,
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
+    createdBy: mongoose.Types.ObjectId,
+    accessSchedule?: AccessScheduleInput
   ): Promise<{ assigned: number }> {
     if (externalVmIds.length === 0) throw new ValidationError('No servers specified.');
-    if (externalVmIds.length > 50) throw new ValidationError('Cannot assign more than 50 servers at once.');
+    if (externalVmIds.length > 250) throw new ValidationError('Cannot assign more than 250 servers at once.');
 
     const user = await TenantUser.findOne({ _id: targetUserId, tenantId, role: 'tenant_user' });
     if (!user) throw new NotFoundError('Tenant user not found.');
@@ -544,9 +603,11 @@ class ExternalVMService {
       throw new ValidationError(`The following servers are already assigned: ${names}`);
     }
 
+    const schedulePatch = parseAccessScheduleInput(accessSchedule);
+
     await ExternalVMModel.updateMany(
       { _id: { $in: externalVmIds }, tenantId, assignedTenantUserId: null },
-      { $set: { assignedTenantUserId: targetUserId } }
+      { $set: { assignedTenantUserId: targetUserId, ...schedulePatch } }
     );
 
     return { assigned: externalVmIds.length };
@@ -557,6 +618,7 @@ class ExternalVMService {
     tenantId: mongoose.Types.ObjectId,
     createdBy: mongoose.Types.ObjectId
   ): Promise<BulkAssignExternalPairsResult> {
+    const schedulePatch = parseAccessScheduleInput(dto.accessSchedule);
     const externalVmObjectIds = dto.externalVmIds.map((id) => new mongoose.Types.ObjectId(id));
     const pairs: BulkAssignExternalPairsResult['pairs'] = [];
 
@@ -644,7 +706,7 @@ class ExternalVMService {
 
       const update = await ExternalVMModel.updateOne(
         { _id: doc._id, tenantId, assignedTenantUserId: null },
-        { $set: { assignedTenantUserId: slot.userId } }
+        { $set: { assignedTenantUserId: slot.userId, ...schedulePatch } }
       );
 
       if (update.modifiedCount === 0) {
@@ -684,6 +746,32 @@ class ExternalVMService {
 
     doc.assignedTenantUserId = undefined;
     await doc.save();
+  }
+
+  /**
+   * PATCH access schedule for a tenant-owned elastic server (tenant_admin).
+   * Does not touch override fields.
+   */
+  async updateTenantExternalVmSchedule(
+    id: mongoose.Types.ObjectId,
+    actor: TenantExternalVmActor,
+    body: AccessScheduleInput
+  ): Promise<NonNullable<ExternalVMResponse['accessSchedule']>> {
+    if (actor.role !== 'tenant_admin') {
+      throw new ForbiddenError('Only tenant admins can update access schedules.');
+    }
+    const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
+    const patch = parseAccessScheduleInput(body);
+    Object.assign(doc, patch);
+    await doc.save();
+
+    logger.info('[ExternalVM] Access schedule updated', {
+      externalVmId: doc._id.toString(),
+      tenantId: actor.tenantId,
+      actorId: actor.id,
+    });
+
+    return toAccessScheduleView(doc);
   }
 
   private async openGuacamole(

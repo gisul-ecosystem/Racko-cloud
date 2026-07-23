@@ -58,6 +58,12 @@ export default function TenantLoginPage() {
           setError('Tenant not found');
         } else if (err.message === 'INVALID_CREDENTIALS' || err.code === 'INVALID_CREDENTIALS') {
           setError('Incorrect email or password.');
+        } else if (err.code === 'ACCESS_WINDOW_DENIED' || err.status === 403) {
+          const next =
+            err.nextWindow != null
+              ? ` Next available window: ${new Date(err.nextWindow).toLocaleString()}.`
+              : '';
+          setError(`${err.message}${next}`);
         } else {
           setError(err.message);
         }

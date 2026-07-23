@@ -13,11 +13,43 @@ import type {
   TenantBulkAssignPairsResult,
   TenantOnboardDto,
   TenantVmAssignmentSummary,
+  TenantVmAccessScheduleView,
   TenantVmDetails,
   TenantVmListFilters,
   TenantVmSummary,
   SuperAdminTenantVmSummary,
 } from './tenantVm.types';
+import {
+  accessSchedulePublicView,
+  parseAccessScheduleInput,
+  type AccessScheduleInput,
+} from '../vmAccessSchedule/accessScheduleParse';
+import {
+  cancelSchedule,
+  scheduleDisconnect,
+} from '../vmAccessSchedule/scheduleManager';
+import { VMEvent } from '../vm/vmEvent.model';
+import { getClientIp } from '../../utils/deviceFingerprint';
+
+function toAccessScheduleView(vm: IVM): TenantVmAccessScheduleView {
+  const raw = accessSchedulePublicView(vm);
+  return {
+    startDate: raw.accessStartDate
+      ? new Date(raw.accessStartDate).toISOString().slice(0, 10)
+      : null,
+    endDate: raw.accessEndDate
+      ? new Date(raw.accessEndDate).toISOString().slice(0, 10)
+      : null,
+    startTime: raw.accessStartTime ?? null,
+    endTime: raw.accessEndTime ?? null,
+    override: Boolean(raw.accessOverride),
+    overrideUntil: raw.accessOverrideUntil
+      ? new Date(raw.accessOverrideUntil).toISOString()
+      : null,
+    timezone: raw.weeklyScheduleTz || 'Asia/Kolkata',
+    weeklySchedule: raw.weeklySchedule ?? null,
+  };
+}
 
 function buildPlatformVmRequest(req: Request, adminId: mongoose.Types.ObjectId): Request {
   return {
@@ -108,6 +140,7 @@ export class TenantVmService {
       planPeriodEnd: vm.planPeriodEnd ?? null,
       billingPeriod: vm.billingPeriod ?? null,
       assignment: actor.role === 'tenant_admin' ? assignment : null,
+      accessSchedule: toAccessScheduleView(vm),
       createdAt: vm.createdAt,
       updatedAt: vm.updatedAt,
     };
@@ -315,6 +348,7 @@ export class TenantVmService {
     tenantId: mongoose.Types.ObjectId,
     createdBy: mongoose.Types.ObjectId
   ): Promise<TenantBulkAssignPairsResult> {
+    const schedulePatch = parseAccessScheduleInput(dto.accessSchedule);
     const vmObjectIds = dto.vmIds.map((id) => new mongoose.Types.ObjectId(id));
     const vms = await VM.find({
       _id: { $in: vmObjectIds },
@@ -418,7 +452,7 @@ export class TenantVmService {
 
       const update = await VM.updateOne(
         { _id: vm._id, tenantId, assignedTenantUserId: null },
-        { $set: { assignedTenantUserId: slot.userId } }
+        { $set: { assignedTenantUserId: slot.userId, ...schedulePatch } }
       );
 
       if (update.modifiedCount === 0) {
@@ -433,6 +467,17 @@ export class TenantVmService {
         });
         failed++;
         continue;
+      }
+
+      if (Object.keys(schedulePatch).length > 0) {
+        const fresh = await VM.findById(vm._id);
+        if (fresh) {
+          cancelSchedule(fresh._id.toString());
+          const weeklyActive = Array.isArray(fresh.weeklySchedule) && fresh.weeklySchedule.length > 0;
+          if (fresh.accessEndTime && !weeklyActive) {
+            scheduleDisconnect(fresh);
+          }
+        }
       }
 
       pairs.push({
@@ -469,6 +514,51 @@ export class TenantVmService {
       tenantId: tenantId.toString(),
       vmId: vmId.toString(),
     });
+  }
+
+  /**
+   * PATCH access schedule for a tenant-owned VM (tenant_admin).
+   * Does not touch override fields — those are superadmin-only via platform routes.
+   */
+  async updateVmSchedule(
+    actor: TenantVmActor,
+    vmId: string,
+    body: AccessScheduleInput,
+    req: Request
+  ): Promise<TenantVmAccessScheduleView> {
+    const vm = await this.loadTenantVmForActor(actor, vmId);
+    const patch = parseAccessScheduleInput(body);
+    Object.assign(vm, patch);
+    await vm.save();
+
+    cancelSchedule(vm._id.toString());
+    const weeklyActive = Array.isArray(vm.weeklySchedule) && vm.weeklySchedule.length > 0;
+    if (vm.accessEndTime && !weeklyActive) {
+      scheduleDisconnect(vm);
+    }
+
+    await VMEvent.create({
+      vmId: vm._id,
+      vmid: vm.vmid,
+      adminId: vm.adminId,
+      event: 'RESOURCE_SCHEDULE_UPDATED',
+      status: 'success',
+      details: {
+        action: 'resource.schedule_updated',
+        tenantUserId: actor.id,
+        ...accessSchedulePublicView(vm),
+      },
+      ipAddress: getClientIp(req),
+      userAgent: req.headers['user-agent'] ?? 'unknown',
+    });
+
+    logger.info('Tenant VM access schedule updated', {
+      tenantId: actor.tenantId,
+      vmId: vm._id.toString(),
+      actorId: actor.id,
+    });
+
+    return toAccessScheduleView(vm);
   }
 }
 

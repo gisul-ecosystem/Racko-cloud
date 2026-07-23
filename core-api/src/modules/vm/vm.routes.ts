@@ -18,6 +18,9 @@ import {
   userIdParamSchema,
   vmConsoleSchema,
   cloneVMSchema,
+  updateVmScheduleSchema,
+  updateVmOverrideSchema,
+  bulkVmOverrideSchema,
 } from './vm.validation';
 
 const router = Router();
@@ -107,6 +110,14 @@ router.post(
   requireRole('admin', 'super_admin'),
   validateRequest(bulkAssignPairsSchema),
   (req, res, next) => vmController.bulkAssignOneToOne(req, res, next)
+);
+
+// PATCH /api/v1/vms/override/bulk — grant/revoke override for many VMs (super_admin)
+router.patch(
+  '/override/bulk',
+  requireRole('super_admin'),
+  validateRequest(bulkVmOverrideSchema),
+  (req, res, next) => vmController.bulkUpdateVmOverride(req, res, next)
 );
 
 // DELETE /api/v1/vms/assign/:vmId — unassign a VM
@@ -354,6 +365,22 @@ router.patch(
   requireRole('admin', 'super_admin'),
   validateRequest(vmIdParamSchema),
   (req, res, next) => vmController.unrestrictVM(req, res, next)
+);
+
+// PATCH /api/v1/vms/:vmId/schedule — access window (admin + super_admin)
+router.patch(
+  '/:vmId/schedule',
+  requireRole('admin', 'super_admin'),
+  validateRequest(updateVmScheduleSchema),
+  (req, res, next) => vmController.updateVmSchedule(req, res, next)
+);
+
+// PATCH /api/v1/vms/:vmId/override — grant/revoke override (super_admin only)
+router.patch(
+  '/:vmId/override',
+  requireRole('super_admin'),
+  validateRequest(updateVmOverrideSchema),
+  (req, res, next) => vmController.updateVmOverride(req, res, next)
 );
 
 export default router;

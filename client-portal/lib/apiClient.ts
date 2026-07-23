@@ -228,8 +228,16 @@ export async function apiRequest<T>(
 
 async function parseApiErrorResponse(res: Response): Promise<ApiError> {
   try {
-    const errorData = (await res.json()) as { message?: string; code?: string };
-    return new ApiError(errorData.message ?? 'Request failed', res.status, errorData.code);
+    const errorData = (await res.json()) as {
+      message?: string;
+      code?: string;
+      nextWindow?: string | null;
+      errors?: string[];
+    };
+    return new ApiError(errorData.message ?? 'Request failed', res.status, errorData.code, {
+      nextWindow: errorData.nextWindow,
+      errors: errorData.errors,
+    });
   } catch {
     const timedOut = res.status === 502 || res.status === 504;
     return new ApiError(
@@ -253,10 +261,19 @@ async function parseApiSuccessResponse<T>(res: Response): Promise<T> {
 export class ApiError extends Error {
   public readonly status: number;
   public readonly code?: string;
+  public readonly nextWindow?: string | null;
+  public readonly errors?: string[];
 
-  constructor(message: string, status: number, code?: string) {
+  constructor(
+    message: string,
+    status: number,
+    code?: string,
+    extras?: { nextWindow?: string | null; errors?: string[] }
+  ) {
     super(message);
     this.status = status;
     this.code = code;
+    this.nextWindow = extras?.nextWindow;
+    this.errors = extras?.errors;
   }
 }

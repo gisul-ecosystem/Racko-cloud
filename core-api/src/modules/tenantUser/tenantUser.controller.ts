@@ -85,6 +85,20 @@ export class TenantUserController {
       next(error);
     }
   }
+
+  async bulkDeleteUsers(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
+      const createdBy = new mongoose.Types.ObjectId(authReq.tenantUser.id);
+      const { ids } = req.body as { ids: string[] };
+
+      const result = await tenantUserService.bulkDeleteUsers(ids, tenantId, createdBy);
+      success(res, `${result.deleted} user(s) deleted.`, result);
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 export const tenantUserController = new TenantUserController();
