@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { externalVMService } from './external-vm.service';
+import { bulkAssignJobService } from '../bulkAssignJob/bulkAssignJob.service';
 import type { AuthenticatedRequest } from '../../types';
 import type {
   BulkAssignExternalPairsDto,
@@ -115,20 +116,67 @@ export class ExternalVMController {
     }
   }
 
-  /** POST /api/v1/external-vms/assign/bulk */
+  /** POST /api/v1/external-vms/assign/bulk — async job */
   async bulkAssignOneToOne(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as AuthenticatedRequest;
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
-      const result = await externalVMService.bulkAssignOneToOne(
-        req.body as BulkAssignExternalPairsDto,
-        adminId
+      const body = req.body as BulkAssignExternalPairsDto;
+      const { jobId } = await bulkAssignJobService.startJob(
+        {
+          kind: 'platform_external_vm',
+          total: body.externalVmIds.length,
+          request: body as unknown as Record<string, unknown>,
+          adminId,
+        },
+        async () => {
+          const result = await externalVMService.bulkAssignOneToOne(body, adminId);
+          return {
+            assigned: result.assigned,
+            failed: result.failed,
+            pairs: result.pairs.map((p) => ({
+              resourceId: p.externalVmId,
+              resourceName: p.externalVmName,
+              userId: p.userId,
+              userEmail: p.userEmail,
+              password: p.password,
+              status: p.status,
+              error: p.error,
+            })),
+          };
+        }
       );
-      success(
-        res,
-        `${result.assigned} server(s) assigned successfully${result.failed > 0 ? `, ${result.failed} failed` : ''}.`,
-        result
+      success(res, 'Bulk assign job started.', { jobId }, 202);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** GET /api/v1/external-vms/assign/jobs/:jobId */
+  async getBulkAssignJobStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const jobId = req.params['jobId'] as string;
+      const { job, pairs } = await bulkAssignJobService.getJobForAdmin(
+        jobId,
+        adminId,
+        'platform_external_vm'
       );
+      success(res, 'Bulk assign job retrieved.', {
+        job,
+        pairs: pairs.map((p) => ({
+          externalVmId: p.resourceId,
+          externalVmName: p.resourceName,
+          userId: p.userId,
+          userEmail: p.userEmail,
+          password: p.password,
+          status: p.status,
+          error: p.error,
+        })),
+        assigned: job.completed,
+        failed: job.failed,
+      });
     } catch (err) {
       next(err);
     }

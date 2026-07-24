@@ -153,14 +153,42 @@ export type {
 export async function bulkAssignTenantExternalOneToOne(
   dto: import('./externalVmApi').BulkAssignExternalPairsDto
 ): Promise<import('./externalVmApi').BulkAssignExternalPairsResult> {
-  return unwrap(
-    tenantPortalRequest<
-      ApiEnvelope<import('./externalVmApi').BulkAssignExternalPairsResult>
-    >('/api/v1/tenant-external-vms/assign/bulk', {
-      method: 'POST',
-      body: JSON.stringify(dto),
-    })
+  const start = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ jobId: string }>>(
+      '/api/v1/tenant-external-vms/assign/bulk',
+      {
+        method: 'POST',
+        body: JSON.stringify(dto),
+      }
+    )
   );
+  const { pollBulkAssignJob } = await import('./pollBulkAssignJob');
+  type Pair = import('./externalVmApi').BulkAssignExternalPairRow;
+  const done = await pollBulkAssignJob<Pair>(async () =>
+    unwrap(
+      tenantPortalRequest<
+        ApiEnvelope<{
+          job: {
+            id: string;
+            status: string;
+            total: number;
+            completed: number;
+            failed: number;
+            pending: number;
+            errorMessage?: string;
+          };
+          assigned: number;
+          failed: number;
+          pairs: Pair[];
+        }>
+      >(`/api/v1/tenant-external-vms/assign/jobs/${start.jobId}`)
+    )
+  );
+  return {
+    assigned: done.assigned,
+    failed: done.failed,
+    pairs: done.pairs,
+  };
 }
 
 export async function unassignTenantExternalVM(id: string): Promise<void> {

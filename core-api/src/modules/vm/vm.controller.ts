@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { vmService } from './vm.service';
+import { bulkAssignJobService } from '../bulkAssignJob/bulkAssignJob.service';
 import { logger } from '../../utils/logger';
 import type { AuthenticatedRequest } from '../../types';
 import type { CreateVMDto, VMFilters } from './vm.types';
@@ -717,18 +718,70 @@ export class VMController {
         userIds?: string[];
       };
 
-      logger.info('Bulk 1:1 VM assignment requested', {
+      logger.info('Bulk 1:1 VM assignment job requested', {
         adminId: adminId.toString(),
         mode: body.mode,
         vmCount: body.vmIds.length,
       });
 
-      const result = await vmService.bulkAssignOneToOne(body, adminId);
-      success(
-        res,
-        `${result.assigned} VM(s) assigned successfully${result.failed > 0 ? `, ${result.failed} failed` : ''}.`,
-        result
+      const { jobId } = await bulkAssignJobService.startJob(
+        {
+          kind: 'platform_vm',
+          total: body.vmIds.length,
+          request: body as unknown as Record<string, unknown>,
+          adminId,
+        },
+        async () => {
+          const result = await vmService.bulkAssignOneToOne(body, adminId);
+          return {
+            assigned: result.assigned,
+            failed: result.failed,
+            pairs: result.pairs.map((p) => ({
+              resourceId: p.vmId,
+              resourceName: p.vmName,
+              userId: p.userId,
+              userEmail: p.userEmail,
+              password: p.password,
+              status: p.status,
+              error: p.error,
+            })),
+          };
+        }
       );
+
+      success(res, 'Bulk assign job started.', { jobId }, 202);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/assign/jobs/:jobId — poll bulk assign job
+   */
+  async getBulkAssignJobStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const jobId = req.params['jobId'] as string;
+      const { job, pairs } = await bulkAssignJobService.getJobForAdmin(
+        jobId,
+        adminId,
+        'platform_vm'
+      );
+      success(res, 'Bulk assign job retrieved.', {
+        job,
+        pairs: pairs.map((p) => ({
+          vmId: p.resourceId,
+          vmName: p.resourceName,
+          userId: p.userId,
+          userEmail: p.userEmail,
+          password: p.password,
+          status: p.status,
+          error: p.error,
+        })),
+        assigned: job.completed,
+        failed: job.failed,
+      });
     } catch (error) {
       next(error);
     }
