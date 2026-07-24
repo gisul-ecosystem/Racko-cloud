@@ -330,29 +330,83 @@ func saveBaseline(b *Baseline) error {
 }
 
 func uploadBaseline(b *Baseline, agentID string, cfg *config.Config) error {
-	body, err := json.Marshal(b)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
+	// Split the baseline into chunks to avoid nginx body size limits.
+	// The files array can have thousands of entries (4000+ on a typical VM).
+	// We send the metadata first, then the file list in pages of 500.
+	// Each chunk is identified by chunkIndex + totalChunks so the server
+	// can assemble them in order.
+
+	const filePageSize = 500
+
+	// Build the base payload without files (always fits under 1MB)
+	base := *b
+	base.Files = nil
+
+	totalFileChunks := (len(b.Files) + filePageSize - 1) / filePageSize
+	if totalFileChunks == 0 {
+		totalFileChunks = 1
 	}
 
-	url := cfg.PlatformURL + "/api/v1/agent/baseline"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return err
+	type chunkPayload struct {
+		Baseline    *Baseline `json:"baseline"`
+		ChunkIndex  int       `json:"chunkIndex"`  // 0-based
+		TotalChunks int       `json:"totalChunks"`
+		FileChunk   []FileEntry `json:"fileChunk,omitempty"`
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Agent-ID", agentID)
 
 	client := &http.Client{Timeout: 120 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("http: %w", err)
-	}
-	defer resp.Body.Close()
+	url := cfg.PlatformURL + "/api/v1/agent/baseline"
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned %d: %s", resp.StatusCode, string(body))
+	// Chunk 0: full metadata + first file page
+	for i := 0; i < totalFileChunks; i++ {
+		start := i * filePageSize
+		end := start + filePageSize
+		if end > len(b.Files) {
+			end = len(b.Files)
+		}
+
+		var chunk chunkPayload
+		if i == 0 {
+			// First chunk carries all metadata
+			chunk = chunkPayload{
+				Baseline:    &base,
+				ChunkIndex:  0,
+				TotalChunks: totalFileChunks,
+				FileChunk:   b.Files[start:end],
+			}
+		} else {
+			// Subsequent chunks carry only the file page
+			chunk = chunkPayload{
+				Baseline:    nil,
+				ChunkIndex:  i,
+				TotalChunks: totalFileChunks,
+				FileChunk:   b.Files[start:end],
+			}
+		}
+
+		body, err := json.Marshal(chunk)
+		if err != nil {
+			return fmt.Errorf("marshal chunk %d: %w", i, err)
+		}
+
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Agent-ID", agentID)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return fmt.Errorf("http chunk %d: %w", i, err)
+		}
+		body2, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+			return fmt.Errorf("server returned %d on chunk %d: %s", resp.StatusCode, i, string(body2))
+		}
+		log.Printf("[tracker/baseline] Uploaded chunk %d/%d (%d files)", i+1, totalFileChunks, end-start)
 	}
 	return nil
 }

@@ -22,7 +22,9 @@ import { logger } from '../../utils/logger';
 
 /**
  * Store or replace the baseline snapshot for a machine.
- * Called once when the agent first registers on a fresh VM.
+ * Supports chunked uploads: agent sends the file list in pages of 500.
+ * Chunk 0 carries the full metadata + first file page.
+ * Subsequent chunks carry only fileChunk + chunkIndex + totalChunks.
  */
 export async function saveBaseline(
   agentId: string,
@@ -33,29 +35,44 @@ export async function saveBaseline(
     throw new NotFoundError(`Agent not found: ${agentId}`);
   }
 
-  await MachineBaselineModel.findOneAndUpdate(
-    { machineId: machine._id },
-    {
-      machineId:          machine._id,
-      agentId,
-      capturedAt:         payload['capturedAt'] ?? new Date(),
-      installedApps:      payload['installedApps'] ?? [],
-      files:              payload['files'] ?? [],
-      systemEnvVars:      payload['systemEnvVars'] ?? [],
-      userEnvVars:        payload['userEnvVars'] ?? [],
-      scheduledTasks:     payload['scheduledTasks'] ?? [],
-      services:           payload['services'] ?? [],
-      programFolders:     payload['programFolders'] ?? [],
-      programDataFolders: payload['programDataFolders'] ?? [],
-    },
-    { upsert: true, new: true }
-  );
+  const chunkIndex  = (payload['chunkIndex']  as number) ?? 0;
+  const totalChunks = (payload['totalChunks'] as number) ?? 1;
+  const fileChunk   = (payload['fileChunk']   as unknown[]) ?? [];
+  const baseline    = payload['baseline']     as Record<string, unknown> | null | undefined;
 
-  logger.info('[Tracker] Baseline saved', {
-    machineId: machine._id.toString(),
+  if (chunkIndex === 0 && baseline) {
+    // First chunk — create or replace the baseline document with metadata + first file page
+    await MachineBaselineModel.findOneAndUpdate(
+      { machineId: machine._id },
+      {
+        machineId:          machine._id,
+        agentId,
+        capturedAt:         baseline['capturedAt'] ?? new Date(),
+        installedApps:      baseline['installedApps'] ?? [],
+        files:              fileChunk,
+        systemEnvVars:      baseline['systemEnvVars'] ?? [],
+        userEnvVars:        baseline['userEnvVars'] ?? [],
+        scheduledTasks:     baseline['scheduledTasks'] ?? [],
+        services:           baseline['services'] ?? [],
+        programFolders:     baseline['programFolders'] ?? [],
+        programDataFolders: baseline['programDataFolders'] ?? [],
+      },
+      { upsert: true, new: true }
+    );
+  } else if (chunkIndex > 0 && fileChunk.length > 0) {
+    // Subsequent chunks — append file entries to the existing baseline
+    await MachineBaselineModel.findOneAndUpdate(
+      { machineId: machine._id },
+      { $push: { files: { $each: fileChunk } } }
+    );
+  }
+
+  logger.info('[Tracker] Baseline chunk saved', {
+    machineId:   machine._id.toString(),
     agentId,
-    appCount:  (payload['installedApps'] as unknown[])?.length ?? 0,
-    fileCount: (payload['files'] as unknown[])?.length ?? 0,
+    chunkIndex,
+    totalChunks,
+    fileCount:   fileChunk.length,
   });
 }
 
