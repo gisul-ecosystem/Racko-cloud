@@ -56,9 +56,12 @@ export function AdminServicesProvider({ children }: { children: React.ReactNode 
   }, [refresh]);
 
   const hasActiveService = useCallback(
-    (serviceKey: AdminServiceKey) =>
-      services.some((s) => s.serviceKey === serviceKey && s.status === 'active'),
-    [services]
+    (serviceKey: AdminServiceKey) => {
+      // Super admins can open Azure (and other) console routes e.g. purchase convert links.
+      if (user?.role === 'super_admin') return true;
+      return services.some((s) => s.serviceKey === serviceKey && s.status === 'active');
+    },
+    [services, user?.role]
   );
 
   const value = useMemo(

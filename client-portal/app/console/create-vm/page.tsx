@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useAuth } from '../../../context/AuthContext';
 import { useVmCatalogOverview } from '../../../hooks/useVmCatalogOverview';
+import { useVmCatalogPortal } from '../../../context/VmCatalogPortalContext';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import {
@@ -12,7 +12,7 @@ import {
   type ICatalogVm,
   type VmCatalogCategory,
 } from '../../../lib/vmCatalogApi';
-import { Clock, LayoutDashboard, Monitor, Plus, Server, Terminal } from 'lucide-react';
+import { Clock, Monitor, Plus, Server, Terminal } from 'lucide-react';
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('en-US', {
@@ -61,14 +61,17 @@ function StatCard({
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
-  const styles: Record<VmCatalogCategory, string> = {
+  const styles: Record<string, string> = {
+    ubuntu: 'bg-orange-50 text-orange-700 border-orange-200',
+    rocky: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    debian: 'bg-pink-50 text-pink-700 border-pink-200',
     linux: 'bg-green-50 text-green-700 border-green-200',
     windows: 'bg-blue-50 text-blue-700 border-blue-200',
     gpu: 'bg-purple-50 text-purple-700 border-purple-200',
   };
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category]}`}
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category] || styles.linux}`}
     >
       {category}
     </span>
@@ -99,8 +102,8 @@ function StatusBadge({ status }: { status: ICatalogVm['status'] }) {
 }
 
 export default function VmCatalogOverviewPage() {
-  const { isAuthenticated } = useAuth();
-  const { overview, loading, error, refetch } = useVmCatalogOverview(isAuthenticated);
+  const { routes } = useVmCatalogPortal();
+  const { overview, loading, error, refetch } = useVmCatalogOverview();
 
   const stats = overview?.stats ?? {
     total: 0,
@@ -122,7 +125,7 @@ export default function VmCatalogOverviewPage() {
           </p>
         </div>
         <Link
-          href="/console/create-vm/create"
+          href={routes.create}
           className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717]"
         >
           <Plus className="h-4 w-4" />
@@ -165,19 +168,13 @@ export default function VmCatalogOverviewPage() {
               icon={<Monitor className="h-6 w-6" />}
               tone="blue"
             />
-            <StatCard
-              label="GPU"
-              value={stats.gpu}
-              icon={<LayoutDashboard className="h-6 w-6" />}
-              tone="red"
-            />
           </div>
 
           <div className="mt-8 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
               <h2 className="text-base font-semibold text-gray-900">Recent VMs</h2>
               <Link
-                href="/console/create-vm/my-vms"
+                href={routes.myVms}
                 className="text-xs font-medium text-[#B91C1C] hover:text-[#DC2626]"
               >
                 View all
@@ -266,7 +263,7 @@ export default function VmCatalogOverviewPage() {
             </div>
             <div className="grid gap-px bg-gray-100 sm:grid-cols-2">
               <Link
-                href="/console/create-vm/create"
+                href={routes.create}
                 className="flex items-start gap-3 bg-white px-6 py-5 transition hover:bg-gray-50"
               >
                 <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
@@ -280,7 +277,7 @@ export default function VmCatalogOverviewPage() {
                 </div>
               </Link>
               <Link
-                href="/console/create-vm/my-vms"
+                href={routes.myVms}
                 className="flex items-start gap-3 bg-white px-6 py-5 transition hover:bg-gray-50"
               >
                 <span className="mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">

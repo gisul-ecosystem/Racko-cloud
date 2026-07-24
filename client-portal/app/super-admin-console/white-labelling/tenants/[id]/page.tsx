@@ -11,13 +11,16 @@ import {
   CheckCircle2,
   Cloud,
   Globe,
+  HardDrive,
   Loader2,
+  Lock,
   Monitor,
   MonitorCheck,
   Palette,
   Pause,
   Play,
   Plus,
+  PlusCircle,
   RefreshCw,
   Server,
   Settings,
@@ -32,6 +35,7 @@ import { ApiError } from '../../../../../lib/apiClient';
 import {
   assignTenantService,
   createTenantAdmin,
+  deleteTenantAdmin,
   fetchTenant,
   fetchTenantAdmins,
   fetchTenantServices,
@@ -41,6 +45,7 @@ import {
   setTenantAdminActive,
   updateTenant,
   updateTenantService,
+  updateTenantIpAccess,
 } from '../../../../../lib/tenantApi';
 import type {
   ServiceKey,
@@ -48,6 +53,7 @@ import type {
   TenantAdmin,
   TenantServiceConfig,
   TenantStatus,
+  TenantIpAccessMode,
   VmManagementLimits,
   VmManagementPricing,
   SuperAdminOrder,
@@ -56,8 +62,23 @@ import type {
 import { PLATFORM_SERVICE_CATALOG } from '../../../../../lib/tenantTypes';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
+import { AccessScheduleBadge } from '@/components/access-schedule/AccessScheduleBadge';
+import { EditAccessScheduleModal } from '@/components/access-schedule/EditAccessScheduleModal';
+import {
+  GrantAccessOverrideModal,
+  type AccessOverridePayload,
+} from '@/components/access-schedule/GrantAccessOverrideModal';
 import type { VMStatus } from '@/lib/vmApi';
-import { deleteVM } from '@/lib/vmApi';
+import {
+  deleteVM,
+  updateVmAccessOverride,
+  updateVmAccessSchedule,
+} from '@/lib/vmApi';
+import {
+  formatAccessScheduleDigest,
+  toAccessSchedule,
+  type AccessScheduleInput,
+} from '@/lib/accessSchedule';
 import { formatBillingPeriod } from '@/lib/tenantPlanUtils';
 import { ErrorState } from '../../../../../components/dashboard/ErrorState';
 import { TenantStatusBadge } from '../../../../../components/super-admin-console/white-labelling/TenantStatusBadge';
@@ -67,7 +88,7 @@ import { ServiceConfigSummary } from '../../../../../components/super-admin-cons
 import { BrandingUploadSection } from '../../../../../components/super-admin-console/white-labelling/BrandingUploadSection';
 import { TenantWalletPanel } from '../../../../../components/super-admin-console/white-labelling/TenantWalletPanel';
 
-type Tab = 'general' | 'services' | 'wallet' | 'orders' | 'admins' | 'vms';
+type Tab = 'general' | 'services' | 'wallet' | 'orders' | 'admins' | 'vms' | 'ip-access';
 
 const VM_STATUS_VALUES: VMStatus[] = [
   'running',
@@ -131,6 +152,8 @@ export default function TenantDetailPage() {
 
   const [adminOpen, setAdminOpen] = useState(false);
   const [adminForm, setAdminForm] = useState({ email: '', password: '' });
+  const [adminDeleteTarget, setAdminDeleteTarget] = useState<TenantAdmin | null>(null);
+  const [deletingAdminId, setDeletingAdminId] = useState<string | null>(null);
 
   const [tenantOrders, setTenantOrders] = useState<SuperAdminOrder[]>([]);
   const [ordersLoading, setOrdersLoading] = useState(false);
@@ -141,6 +164,15 @@ export default function TenantDetailPage() {
   const [vmsError, setVmsError] = useState<string | null>(null);
   const [deletingVmId, setDeletingVmId] = useState<string | null>(null);
   const [vmDeleteTarget, setVmDeleteTarget] = useState<SuperAdminTenantVm | null>(null);
+  const [scheduleTarget, setScheduleTarget] = useState<SuperAdminTenantVm | null>(null);
+  const [overrideTarget, setOverrideTarget] = useState<SuperAdminTenantVm | null>(null);
+
+  // ── IP Access tab state ──────────────────────────────────────────────────
+  const [ipAccessMode, setIpAccessMode] = useState<TenantIpAccessMode>('all');
+  const [allowedIps, setAllowedIps] = useState<string[]>([]);
+  const [ipInput, setIpInput] = useState('');
+  const [ipInputError, setIpInputError] = useState<string | null>(null);
+  const [ipSaving, setIpSaving] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -162,6 +194,9 @@ export default function TenantDetailPage() {
         primaryColor: tenantData.branding?.primaryColor ?? '#1a73e8',
         supportEmail: tenantData.branding?.supportEmail ?? '',
       });
+      // Seed IP access state from loaded tenant
+      setIpAccessMode(tenantData.ipAccessMode ?? 'all');
+      setAllowedIps(tenantData.allowedIps ?? []);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load tenant');
     } finally {
@@ -311,6 +346,21 @@ export default function TenantDetailPage() {
     }
   };
 
+  const handleDeleteAdmin = async () => {
+    if (!adminDeleteTarget) return;
+    setDeletingAdminId(adminDeleteTarget.id);
+    try {
+      await deleteTenantAdmin(tenantId, adminDeleteTarget.id);
+      setAdmins((prev) => prev.filter((a) => a.id !== adminDeleteTarget.id));
+      setAdminDeleteTarget(null);
+      flash('Tenant admin deleted.');
+    } catch (err) {
+      flashErr(err instanceof ApiError ? err.message : 'Failed to delete admin');
+    } finally {
+      setDeletingAdminId(null);
+    }
+  };
+
   const assignedKeys = new Set(services.map((s) => s.serviceKey));
   const availableServices: ServiceKey[] = PLATFORM_SERVICE_CATALOG.map((s) => s.key).filter(
     (k) => !assignedKeys.has(k)
@@ -420,10 +470,82 @@ export default function TenantDetailPage() {
     }
   };
 
+  async function saveVmSchedule(payload: AccessScheduleInput) {
+    if (!scheduleTarget) return;
+    await updateVmAccessSchedule(scheduleTarget.id, payload);
+    flash('Access schedule updated.');
+    setScheduleTarget(null);
+    await loadTenantVms();
+  }
+
+  async function saveVmOverride(payload: AccessOverridePayload) {
+    if (!overrideTarget) return;
+    await updateVmAccessOverride(overrideTarget.id, payload);
+    flash(payload.accessOverride ? 'Override granted.' : 'Override revoked.');
+    setOverrideTarget(null);
+    await loadTenantVms();
+  }
+
+  // ── IP Access handlers ───────────────────────────────────────────────────
+
+  /** Validate a single IPv4, IPv6, or CIDR entry client-side. */
+  function validateIpEntry(value: string): string | null {
+    const v = value.trim();
+    if (!v) return 'IP address cannot be empty.';
+    const ipv4 = /^(\d{1,3}\.){3}\d{1,3}(\/([0-9]|[1-2][0-9]|3[0-2]))?$/;
+    const ipv6 = /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:)|fe80:(:[0-9a-fA-F]{0,4}){0,4}%[0-9a-zA-Z]+|::(ffff(:0{1,4})?:)?((25[0-5]|(2[0-4]|1?\d)?\d)\.){3}(25[0-5]|(2[0-4]|1?\d)?\d)|([0-9a-fA-F]{1,4}:){1,4}:((25[0-5]|(2[0-4]|1?\d)?\d)\.){3}(25[0-5]|(2[0-4]|1?\d)?\d))(\/([0-9]|[1-9][0-9]|1[0-1][0-9]|12[0-8]))?$/;
+    if (!ipv4.test(v) && !ipv6.test(v)) {
+      return 'Enter a valid IPv4, IPv6, or CIDR (e.g. 1.2.3.4, 10.0.0.0/24, 2401:4900::/32).';
+    }
+    return null;
+  }
+
+  function handleAddIp() {
+    const value = ipInput.trim();
+    const err = validateIpEntry(value);
+    if (err) {
+      setIpInputError(err);
+      return;
+    }
+    if (allowedIps.includes(value)) {
+      setIpInputError('This IP is already in the list.');
+      return;
+    }
+    setAllowedIps((prev) => [...prev, value]);
+    setIpInput('');
+    setIpInputError(null);
+  }
+
+  function handleRemoveIp(ip: string) {
+    setAllowedIps((prev) => prev.filter((x) => x !== ip));
+  }
+
+  const handleSaveIpAccess = async () => {
+    setIpSaving(true);
+    try {
+      const updated = await updateTenantIpAccess(tenantId, {
+        ipAccessMode,
+        allowedIps,
+      });
+      setTenant(updated);
+      setIpAccessMode(updated.ipAccessMode ?? 'all');
+      setAllowedIps(updated.allowedIps ?? []);
+      flash('IP access settings saved.');
+    } catch (err) {
+      flashErr(err instanceof ApiError ? err.message : 'Failed to save IP access settings.');
+    } finally {
+      setIpSaving(false);
+    }
+  };
+
   const serviceIcon = (key: ServiceKey) => {
     switch (key) {
       case 'vm-management':
         return MonitorCheck;
+      case 'create-vm':
+        return PlusCircle;
+      case 'dedicated-server':
+        return HardDrive;
       case 'elastic-servers':
         return Globe;
       case 'azure':
@@ -460,6 +582,7 @@ export default function TenantDetailPage() {
     { id: 'orders', label: 'Orders', icon: MonitorCheck },
     { id: 'admins', label: 'Tenant Admins', icon: Users },
     { id: 'vms', label: 'Assigned VMs', icon: Server },
+    { id: 'ip-access', label: 'IP Access List', icon: Lock },
   ];
 
   return (
@@ -1007,15 +1130,31 @@ export default function TenantDetailPage() {
                         {new Date(admin.createdAt).toLocaleDateString()}
                       </td>
                       <td className="px-5 py-3.5 text-right">
-                        {admin.isActive !== undefined && (
+                        <div className="flex items-center justify-end gap-3">
+                          {admin.isActive !== undefined && (
+                            <button
+                              type="button"
+                              onClick={() => void handleToggleAdmin(admin)}
+                              className="text-xs font-medium text-[#B91C1C] hover:underline"
+                            >
+                              {admin.isActive ? 'Deactivate' : 'Activate'}
+                            </button>
+                          )}
                           <button
                             type="button"
-                            onClick={() => void handleToggleAdmin(admin)}
-                            className="text-xs font-medium text-[#B91C1C] hover:underline"
+                            onClick={() => setAdminDeleteTarget(admin)}
+                            disabled={admins.length <= 1 || deletingAdminId === admin.id}
+                            title={
+                              admins.length <= 1
+                                ? 'Create another admin before deleting the last one'
+                                : 'Delete admin'
+                            }
+                            className="inline-flex items-center gap-1 text-xs font-medium text-red-700 hover:underline disabled:cursor-not-allowed disabled:opacity-40"
                           >
-                            {admin.isActive ? 'Deactivate' : 'Activate'}
+                            <Trash2 className="h-3.5 w-3.5" />
+                            Delete
                           </button>
-                        )}
+                        </div>
                       </td>
                     </tr>
                   ))
@@ -1066,6 +1205,7 @@ export default function TenantDetailPage() {
                       <th className="px-4 py-3">Specs</th>
                       <th className="px-4 py-3">Plan</th>
                       <th className="px-4 py-3">Assigned to</th>
+                      <th className="px-4 py-3">Access</th>
                       <th className="px-4 py-3">IP</th>
                       <th className="px-4 py-3">Created</th>
                       <th className="px-4 py-3 text-right">Actions</th>
@@ -1138,6 +1278,17 @@ export default function TenantDetailPage() {
                             </span>
                           )}
                         </td>
+                        <td className="px-4 py-3 text-xs">
+                          <AccessScheduleBadge
+                            schedule={toAccessSchedule(vm.accessSchedule)}
+                          />
+                          <p
+                            className="mt-1 max-w-[12rem] truncate text-[11px] text-gray-400"
+                            title={formatAccessScheduleDigest(toAccessSchedule(vm.accessSchedule))}
+                          >
+                            {formatAccessScheduleDigest(toAccessSchedule(vm.accessSchedule))}
+                          </p>
+                        </td>
                         <td className="px-4 py-3 font-mono text-xs text-gray-600">
                           {vm.ipAddress ?? '—'}
                         </td>
@@ -1145,20 +1296,36 @@ export default function TenantDetailPage() {
                           {new Date(vm.createdAt).toLocaleString()}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          <button
-                            type="button"
-                            onClick={() => setVmDeleteTarget(vm)}
-                            disabled={deletingVmId === vm.id || vm.status === 'deleting'}
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
-                            title="Delete VM"
-                          >
-                            {deletingVmId === vm.id ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Trash2 className="h-3.5 w-3.5" />
-                            )}
-                            Delete
-                          </button>
+                          <div className="inline-flex flex-wrap items-center justify-end gap-1.5">
+                            <button
+                              type="button"
+                              onClick={() => setScheduleTarget(vm)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
+                            >
+                              Schedule
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setOverrideTarget(vm)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-200 px-2.5 py-1.5 text-xs font-medium text-amber-800 transition hover:bg-amber-50"
+                            >
+                              Override
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setVmDeleteTarget(vm)}
+                              disabled={deletingVmId === vm.id || vm.status === 'deleting'}
+                              className="inline-flex items-center gap-1 rounded-lg border border-red-200 px-2.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-50 disabled:cursor-not-allowed disabled:opacity-50"
+                              title="Delete VM"
+                            >
+                              {deletingVmId === vm.id ? (
+                                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                              ) : (
+                                <Trash2 className="h-3.5 w-3.5" />
+                              )}
+                              Delete
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -1167,6 +1334,178 @@ export default function TenantDetailPage() {
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {tab === 'ip-access' && (
+        <div className="space-y-6">
+          {/* Mode selector */}
+          <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4">
+            <div className="flex items-center gap-2">
+              <Lock className="h-4 w-4 text-[#B91C1C]" />
+              <h2 className="text-sm font-semibold text-gray-900">Access mode</h2>
+            </div>
+            <p className="text-sm text-gray-500">
+              Control who can access this tenant&apos;s white-label portal. Restrictions are
+              enforced at the gateway — blocked visitors receive a 403 response.
+            </p>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              {/* All (public) */}
+              <label
+                className={`flex cursor-pointer items-start gap-3 rounded-xl border-2 p-4 transition ${
+                  ipAccessMode === 'all'
+                    ? 'border-[#B91C1C] bg-red-50'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="ipAccessMode"
+                  value="all"
+                  checked={ipAccessMode === 'all'}
+                  onChange={() => setIpAccessMode('all')}
+                  className="mt-0.5 accent-[#B91C1C]"
+                />
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <Globe className="h-4 w-4 text-gray-600" />
+                    <span className="text-sm font-semibold text-gray-900">All (public)</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Anyone can access this tenant&apos;s portal — no IP restrictions.
+                  </p>
+                </div>
+              </label>
+
+              {/* Restricted */}
+              <label
+                className={`flex cursor-pointer items-start gap-3 rounded-xl border-2 p-4 transition ${
+                  ipAccessMode === 'restricted'
+                    ? 'border-[#B91C1C] bg-red-50'
+                    : 'border-gray-200 bg-white hover:border-gray-300'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="ipAccessMode"
+                  value="restricted"
+                  checked={ipAccessMode === 'restricted'}
+                  onChange={() => setIpAccessMode('restricted')}
+                  className="mt-0.5 accent-[#B91C1C]"
+                />
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <Lock className="h-4 w-4 text-gray-600" />
+                    <span className="text-sm font-semibold text-gray-900">Restricted</span>
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Only IPs in the allowlist below can access the portal.
+                  </p>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          {/* IP Allowlist (shown when restricted) */}
+          {ipAccessMode === 'restricted' && (
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-[#B91C1C]" />
+                  <h2 className="text-sm font-semibold text-gray-900">IP allowlist</h2>
+                  <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-medium text-gray-600">
+                    {allowedIps.length} {allowedIps.length === 1 ? 'entry' : 'entries'}
+                  </span>
+                </div>
+              </div>
+
+              {/* Empty-allowlist warning */}
+              {allowedIps.length === 0 && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                  <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <span>
+                    The allowlist is empty. With restricted mode active, <strong>everyone will be blocked</strong> until you add at least one IP or CIDR.
+                  </span>
+                </div>
+              )}
+
+              {/* Add IP input */}
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <input
+                    type="text"
+                    value={ipInput}
+                    onChange={(e) => {
+                      setIpInput(e.target.value);
+                      setIpInputError(null);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        handleAddIp();
+                      }
+                    }}
+                    placeholder="e.g. 1.2.3.4 or 10.0.0.0/24 or ::1"
+                    className={`w-full rounded-lg border px-3 py-2 text-sm font-mono focus:outline-none ${
+                      ipInputError
+                        ? 'border-red-400 focus:border-red-500'
+                        : 'border-gray-200 focus:border-[#B91C1C]'
+                    }`}
+                  />
+                  {ipInputError && (
+                    <p className="mt-1 text-xs text-red-600">{ipInputError}</p>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={handleAddIp}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:bg-[#991B1B]"
+                >
+                  <Plus className="h-4 w-4" />
+                  Add
+                </button>
+              </div>
+
+              {/* IP list */}
+              {allowedIps.length > 0 && (
+                <div className="divide-y divide-gray-100 rounded-lg border border-gray-200 overflow-hidden">
+                  {allowedIps.map((ip) => (
+                    <div
+                      key={ip}
+                      className="flex items-center justify-between px-4 py-2.5 bg-white hover:bg-gray-50 transition"
+                    >
+                      <span className="font-mono text-sm text-gray-800">{ip}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveIp(ip)}
+                        className="rounded p-1 text-gray-400 transition hover:bg-red-50 hover:text-red-600"
+                        title="Remove"
+                      >
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Save button */}
+          <div className="flex items-center justify-between rounded-xl border border-gray-200 bg-white px-6 py-4 shadow-sm">
+            <p className="text-xs text-gray-500">
+              Changes take effect within 30 seconds (gateway cache TTL).
+            </p>
+            <button
+              type="button"
+              onClick={() => void handleSaveIpAccess()}
+              disabled={ipSaving}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:bg-[#991B1B] disabled:opacity-50"
+            >
+              {ipSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+              Save IP settings
+            </button>
+          </div>
         </div>
       )}
 
@@ -1411,6 +1750,73 @@ export default function TenantDetailPage() {
           </div>
         </div>
       )}
+
+      {adminDeleteTarget && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <h2 className="text-base font-semibold text-gray-900">Delete tenant admin</h2>
+              <button
+                type="button"
+                onClick={() => setAdminDeleteTarget(null)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-gray-600">
+                Permanently delete admin{' '}
+                <span className="font-medium text-gray-900">{adminDeleteTarget.email}</span>?
+              </p>
+              <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-700">
+                This removes the account from the database. They will no longer be able to sign in.
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setAdminDeleteTarget(null)}
+                  disabled={deletingAdminId === adminDeleteTarget.id}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleDeleteAdmin()}
+                  disabled={deletingAdminId === adminDeleteTarget.id}
+                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deletingAdminId === adminDeleteTarget.id && (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  )}
+                  Delete admin
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {scheduleTarget ? (
+        <EditAccessScheduleModal
+          open
+          vmName={scheduleTarget.name}
+          initialSchedule={toAccessSchedule(scheduleTarget.accessSchedule)}
+          onClose={() => setScheduleTarget(null)}
+          onSave={saveVmSchedule}
+        />
+      ) : null}
+
+      {overrideTarget ? (
+        <GrantAccessOverrideModal
+          open
+          vmName={overrideTarget.name}
+          currentlyActive={Boolean(toAccessSchedule(overrideTarget.accessSchedule)?.override)}
+          onClose={() => setOverrideTarget(null)}
+          onSave={saveVmOverride}
+        />
+      ) : null}
     </div>
   );
 }

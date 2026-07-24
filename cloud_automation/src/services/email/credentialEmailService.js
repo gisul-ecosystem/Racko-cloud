@@ -1,26 +1,4 @@
-const nodemailer = require('nodemailer');
-const { validateSmtpEnv } = require('./smtpEnv');
-
-const MAX_ATTEMPTS = 3;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-const createSmtpTransport = () => {
-  const smtpConfig = validateSmtpEnv();
-
-  return {
-    transporter: nodemailer.createTransport({
-      host: smtpConfig.host,
-      port: smtpConfig.port,
-      secure: smtpConfig.secure,
-      auth: smtpConfig.auth,
-      connectionTimeout: 30_000,
-      greetingTimeout: 30_000,
-      socketTimeout: 60_000
-    }),
-    from: smtpConfig.from
-  };
-};
+const { sendMailWithRetry } = require('./mailSender');
 
 const escapeHtml = (value) =>
   String(value ?? '')
@@ -105,6 +83,89 @@ const buildCredentialEmailHtml = ({ requestId, users, adminCredentials, portalLi
   `;
 };
 
+const buildTestIdsCredentialEmailHtml = ({
+  requestId,
+  users,
+  adminCredentials,
+  portalLink,
+  projectName
+}) => {
+  const rowsHtml = users
+    .map(
+      (user, index) => `
+        <tr>
+          <td style="border-bottom: 1px solid #fde68a; padding: 12px 10px;">${index + 1}</td>
+          <td style="border-bottom: 1px solid #fde68a; padding: 12px 10px; font-family: Consolas, monospace;">${escapeHtml(user.username)}</td>
+          <td style="border-bottom: 1px solid #fde68a; padding: 12px 10px; font-family: Consolas, monospace;">${escapeHtml(user.temporary_password)}</td>
+          <td style="border-bottom: 1px solid #fde68a; padding: 12px 10px;">${escapeHtml(user.status || 'Created')}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  const projectLabel = projectName ? escapeHtml(projectName) : `Request #${escapeHtml(requestId)}`;
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="font-family: Arial, Helvetica, sans-serif; color: #111827; background: #fffbeb; margin: 0; padding: 24px;">
+        <div style="max-width: 760px; margin: 0 auto; background: #ffffff; border: 1px solid #f59e0b; border-radius: 16px; padding: 28px;">
+          <p style="margin: 0 0 8px; font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: #b45309;">
+            Azure test IDs
+          </p>
+          <h1 style="margin: 0 0 8px; font-size: 26px; line-height: 1.2; color: #92400e;">
+            Your Azure Test Lab is Ready
+          </h1>
+          <p style="margin: 0 0 20px; font-size: 16px; color: #78350f;">
+            Short-lived test IDs for <strong>${projectLabel}</strong> (request <strong>#${escapeHtml(requestId)}</strong>) are provisioned.
+            Sign in to the manage portal below to access Azure with the same credentials.
+          </p>
+          <div style="overflow-x: auto;">
+          <table style="border-collapse: collapse; width: 100%; min-width: 640px; border: 1px solid #fde68a; border-radius: 12px;">
+            <thead>
+              <tr>
+                <th style="border-bottom: 1px solid #f59e0b; text-align: left; padding: 12px 10px; background: #fffbeb; font-size: 12px; text-transform: uppercase; color: #92400e;">#</th>
+                <th style="border-bottom: 1px solid #f59e0b; text-align: left; padding: 12px 10px; background: #fffbeb; font-size: 12px; text-transform: uppercase; color: #92400e;">Username</th>
+                <th style="border-bottom: 1px solid #f59e0b; text-align: left; padding: 12px 10px; background: #fffbeb; font-size: 12px; text-transform: uppercase; color: #92400e;">Temporary Password</th>
+                <th style="border-bottom: 1px solid #f59e0b; text-align: left; padding: 12px 10px; background: #fffbeb; font-size: 12px; text-transform: uppercase; color: #92400e;">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rowsHtml}
+            </tbody>
+          </table>
+          </div>
+          <div style="margin-top: 24px; padding: 20px; border: 1px solid #f59e0b; border-radius: 14px; background: #fffbeb;">
+            <p style="margin: 0 0 12px; font-size: 14px; font-weight: 700; color: #92400e;">Manage Portal Login</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 0 0 16px;">
+              <tr>
+                <td style="padding: 8px 0; color: #a16207; width: 150px;">Username</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(adminCredentials?.username || '')}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #a16207;">Temporary Password</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(adminCredentials?.temporaryPassword || '')}</td>
+              </tr>
+            </table>
+            <a
+              href="${escapeHtml(portalLink)}"
+              style="display: inline-block; background: #b45309; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 700;"
+            >
+              Open Manage Portal
+            </a>
+            <p style="margin: 14px 0 0; font-size: 14px; word-break: break-all;">
+              <a href="${escapeHtml(portalLink)}" style="color: #b45309;">${escapeHtml(portalLink)}</a>
+            </p>
+          </div>
+          <p style="margin: 18px 0 0; font-size: 13px; color: #92400e;">
+            This is a 24-hour test lab. We will email you shortly about continuing with a full purchase.
+          </p>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 const buildAccessPortalEmailHtml = ({ requestId, manageUrl, expiresAt }) => `
   <!doctype html>
   <html>
@@ -124,45 +185,12 @@ const buildAccessPortalEmailHtml = ({ requestId, manageUrl, expiresAt }) => `
   </html>
 `;
 
-const isRetryableEmailError = (error) => {
-  const statusCode = Number(error?.statusCode || error?.responseCode || error?.status);
-  const errorCode = String(error?.code || '').toUpperCase();
-
-  return (
-    [421, 450, 451, 452, 454, 455, 500, 502, 503, 504].includes(statusCode) ||
-    ['ETIMEDOUT', 'ECONNRESET', 'ESOCKET', 'EAUTH', 'ECONNECTION'].includes(errorCode)
-  );
-};
-
-const sendCredentialEmailWithRetry = async ({ to, subject, html, attachments = [] }) => {
-  const { transporter, from } = createSmtpTransport();
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
-    try {
-      return await transporter.sendMail({
-        from,
-        to,
-        subject,
-        html,
-        attachments
-      });
-    } catch (error) {
-      lastError = error;
-
-      if (attempt === MAX_ATTEMPTS || !isRetryableEmailError(error)) {
-        throw error;
-      }
-
-      await sleep(500 * 2 ** (attempt - 1));
-    }
-  }
-
-  throw lastError;
-};
+const sendCredentialEmailWithRetry = async ({ to, subject, html, attachments = [] }) =>
+  sendMailWithRetry({ to, subject, html, attachments });
 
 module.exports = {
   buildCredentialEmailHtml,
+  buildTestIdsCredentialEmailHtml,
   buildAccessPortalEmailHtml,
   sendCredentialEmailWithRetry
 };

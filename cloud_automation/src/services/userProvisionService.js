@@ -18,6 +18,8 @@ const { evaluateUsageAccess } = require('./usageAccessEvaluator');
 const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroups, getPerUserResourceGroupProgress } = require('./userResourceGroupService');
 const { provisionBudgetsForRequest } = require('./budgetProvisionService');
+const { assignLicenseToUser } = require('./microsoftLicenseService');
+const { resolveUsageLocation } = require('../utils/azureUsageLocation');
 
 const STATUS_CREATED = 'Created';
 const DEFAULT_CONCURRENCY = getBulkProvisionConcurrency();
@@ -34,7 +36,9 @@ const getRequestByIdForUserProvisioning = async (client, requestId) => {
       daily_limit_minutes,
       usage_schedule,
       enforce_in_azure,
-      costing_mode
+      costing_mode,
+      location,
+      microsoft_license_sku_id
     FROM requests
     WHERE id = $1
     FOR UPDATE
@@ -155,7 +159,9 @@ const provisionUsersForRequest = async (requestId) => {
         daily_limit_minutes,
         usage_schedule,
         enforce_in_azure,
-        costing_mode
+        costing_mode,
+        location,
+        microsoft_license_sku_id
       FROM requests
       WHERE id = $1
     `,
@@ -198,7 +204,16 @@ const provisionUsersForRequest = async (requestId) => {
     });
 
     try {
-      await provisionBudgetsForRequest(requestId);
+      const budgetResult = await provisionBudgetsForRequest(requestId);
+      if (budgetResult && budgetResult.complete === false) {
+        return {
+          usersCreated: existingUsers.length,
+          accountCount,
+          complete: false,
+          remaining: Math.max(1, Number(budgetResult.remaining) || 0),
+          budgetsRemaining: budgetResult.remaining
+        };
+      }
     } catch (budgetError) {
       logAzureUserEvent('error', 'azure_user_budget_provision_failed', {
         requestId,
@@ -226,6 +241,7 @@ const provisionUsersForRequest = async (requestId) => {
   const { graphClient, subscriptionId } = createGraphClient();
   const verifiedDomain = await getVerifiedDomain(graphClient);
   const initialAccess = getInitialScheduleAccess(request);
+  const usageLocation = resolveUsageLocation(request.location);
 
   const stagingResourceGroupByUserNumber = new Map();
   if (isPerUserCosting(request.costing_mode)) {
@@ -242,6 +258,7 @@ const provisionUsersForRequest = async (requestId) => {
     existingUsers: existingUsers.length,
     pendingUsers: pendingUserNumbers.length,
     verifiedDomain,
+    usageLocation,
     scheduleAccessAllowed: initialAccess.allowed,
     scheduleAccessReason: initialAccess.reason,
     azureAccountDisabledAtCreation: initialAccess.disableAzureAccount
@@ -268,7 +285,8 @@ const provisionUsersForRequest = async (requestId) => {
           requestId,
           userNumber,
           domain: verifiedDomain,
-          accountEnabled: !initialAccess.disableAzureAccount
+          accountEnabled: !initialAccess.disableAzureAccount,
+          usageLocation
         });
 
         const { user: createdUser, adopted } = await createOrAdoptGraphUser(
@@ -279,6 +297,31 @@ const provisionUsersForRequest = async (requestId) => {
 
         if (adopted) {
           adoptedCount += 1;
+        }
+
+        const licenseSkuId = String(request.microsoft_license_sku_id || '').trim();
+        if (licenseSkuId) {
+          try {
+            await assignLicenseToUser(graphClient, createdUser.id, licenseSkuId, usageLocation);
+            logAzureUserEvent('info', 'azure_user_license_assigned', {
+              requestId,
+              azureUserId: createdUser.id,
+              username,
+              skuId: licenseSkuId,
+              usageLocation
+            });
+          } catch (licenseError) {
+            logAzureUserEvent('error', 'azure_user_license_assign_failed', {
+              requestId,
+              azureUserId: createdUser.id,
+              username,
+              skuId: licenseSkuId,
+              usageLocation,
+              message: licenseError?.message || null,
+              statusCode: licenseError?.statusCode || licenseError?.status || null
+            });
+            throw licenseError;
+          }
         }
 
         let resourceGroupName = null;
@@ -356,7 +399,16 @@ const provisionUsersForRequest = async (requestId) => {
 
   if (complete) {
     try {
-      await provisionBudgetsForRequest(requestId);
+      const budgetResult = await provisionBudgetsForRequest(requestId);
+      if (budgetResult && budgetResult.complete === false) {
+        return {
+          usersCreated: totalUsers,
+          accountCount,
+          complete: false,
+          remaining: Math.max(1, Number(budgetResult.remaining) || 0),
+          budgetsRemaining: budgetResult.remaining
+        };
+      }
     } catch (budgetError) {
       logAzureUserEvent('error', 'azure_user_budget_provision_failed', {
         requestId,

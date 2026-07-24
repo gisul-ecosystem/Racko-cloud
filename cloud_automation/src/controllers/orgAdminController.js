@@ -125,6 +125,52 @@ const deleteRequest = async (req, res, next) => {
   }
 };
 
+const extendRequestExpiration = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.extendRequestExpiration({
+      requestId,
+      expiresAt: req.body?.expiresAt || req.body?.expiryDate
+    });
+
+    res.status(200).json({
+      success: true,
+      data: result,
+      message: result.message
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const sendPurchaseConfirmationMail = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const purchaseIntentService = require('../services/purchaseIntentService');
+    const result = await purchaseIntentService.sendPurchaseIntentEmailByRequestId(requestId, {
+      force: true
+    });
+
+    res.status(200).json({
+      success: true,
+      message: `Confirmation mail sent to ${result.recipientEmail}.`,
+      ...result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const updateUserRoles = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
@@ -218,6 +264,77 @@ const reviewAccessRequest = async (req, res, next) => {
       request: result
     });
   } catch (error) {
+    next(error);
+  }
+};
+
+const listPrivilegedRoleRequests = async (req, res, next) => {
+  try {
+    const status = req.query.status ? String(req.query.status).trim() : undefined;
+    const requestId = req.query.requestId ? Number(req.query.requestId) : undefined;
+
+    const requests = await orgAdminService.listPrivilegedRoleRequests({ status, requestId });
+
+    res.status(200).json({
+      success: true,
+      requests,
+      count: requests.length
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const reviewPrivilegedRoleRequest = async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const status = req.body?.status;
+    const reviewNotes = req.body?.reviewNotes;
+
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new AppError('Privileged role request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.reviewPrivilegedRoleRequest({
+      id,
+      status,
+      reviewNotes,
+      reviewedBy: getSuperAdminActor(req)
+    });
+
+    res.status(200).json({
+      success: true,
+      request: result
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const assignPrivilegedRoleToAllUsers = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const azureRole = req.body?.azureRole;
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.assignPrivilegedRoleToAllUsers({
+      adminEmail: getSuperAdminActor(req),
+      requestId,
+      azureRole
+    });
+
+    res.status(200).json({
+      success: true,
+      ...result
+    });
+  } catch (error) {
+    if (error.message && !error.statusCode) {
+      next(new AppError(error.message, 400));
+      return;
+    }
     next(error);
   }
 };
@@ -592,10 +709,15 @@ module.exports = {
   getMonitoringLogs,
   deleteUser,
   deleteRequest,
+  extendRequestExpiration,
+  sendPurchaseConfirmationMail,
   updateUserRoles,
   forceLogoutUser,
   listAccessRequests,
   reviewAccessRequest,
+  listPrivilegedRoleRequests,
+  reviewPrivilegedRoleRequest,
+  assignPrivilegedRoleToAllUsers,
   getUserAzureCost,
   getSharedAzureCost,
   getDailyUsage,

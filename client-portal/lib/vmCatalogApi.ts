@@ -1,6 +1,22 @@
 import { apiRequest } from './apiClient';
 
-export type VmCatalogCategory = 'linux' | 'windows' | 'gpu';
+export type VmCatalogCategory =
+  | 'ubuntu'
+  | 'rocky'
+  | 'debian'
+  | 'windows'
+  | 'linux'
+  | 'gpu';
+
+/** Sell-price / multiplier bucket for a catalog OS choice. */
+export function catalogPricingBucket(
+  category: VmCatalogCategory | string
+): 'linux' | 'windows' | 'gpu' {
+  const c = String(category || '').toLowerCase();
+  if (c === 'windows') return 'windows';
+  if (c === 'gpu') return 'gpu';
+  return 'linux';
+}
 export type VmCatalogStatus =
   | 'pending_approval'
   | 'approved'
@@ -15,7 +31,9 @@ export type VmCatalogStatus =
 
 export interface ICatalogVm {
   _id: string;
-  adminId: string;
+  adminId?: string;
+  tenantId?: string;
+  tenantUserId?: string;
   adminEmail?: string;
   provider: 'webyne';
   category: VmCatalogCategory;
@@ -48,6 +66,9 @@ export interface ICatalogVm {
   externalRef?: string;
   fulfillError?: string;
   providerPurchased?: boolean;
+  needsOsChange?: boolean;
+  osTemplateChanged?: boolean;
+  osTemplateChangedAt?: string;
   attachedAt?: string;
   rejectionReason?: string;
   reviewedBy?: string;
@@ -102,10 +123,96 @@ export interface CreateCatalogVmRequestDto {
   };
 }
 
+export interface IVmCatalogPlan {
+  _id: string;
+  sno?: number;
+  name: string;
+  /** Present on admin/tenant plan lists when `name` is the Cloud VPS display label. */
+  providerName?: string;
+  vcpu: number;
+  ramGb: number;
+  ssdGb: number;
+  hourly: number | null;
+  monthly: number | null;
+  quarterly: number | null;
+  yearly: number | null;
+  currency: string;
+  isActive: boolean;
+  sortOrder: number;
+  createdAt: string;
+  updatedAt: string;
+  sellPricesByCategory?: Record<
+    'linux' | 'windows' | 'gpu',
+    {
+      hourly: number | null;
+      monthly: number | null;
+      quarterly: number | null;
+      yearly: number | null;
+    }
+  >;
+  /** From plan list when sell pricing is applied — whether hourly is offered. */
+  hourlyEnabled?: boolean;
+}
+
+export type CreateVmCatalogPlanDto = {
+  sno?: number;
+  name: string;
+  vcpu: number;
+  ramGb: number;
+  ssdGb: number;
+  hourly?: number | null;
+  monthly?: number | null;
+  quarterly?: number | null;
+  yearly?: number | null;
+  currency?: string;
+  isActive?: boolean;
+  sortOrder?: number;
+};
+
 interface ApiResponse<T> {
   success: boolean;
   message: string;
   data: T;
+}
+
+export async function fetchVmCatalogPlans(): Promise<IVmCatalogPlan[]> {
+  const res = await apiRequest<ApiResponse<{ plans: IVmCatalogPlan[]; total: number }>>(
+    '/api/v1/vm-catalog/plans'
+  );
+  return res.data.plans;
+}
+
+export async function createVmCatalogPlan(
+  body: CreateVmCatalogPlanDto
+): Promise<IVmCatalogPlan> {
+  const res = await apiRequest<ApiResponse<{ plan: IVmCatalogPlan }>>(
+    '/api/v1/vm-catalog/plans',
+    { method: 'POST', body: JSON.stringify(body) }
+  );
+  return res.data.plan;
+}
+
+export async function updateVmCatalogPlan(
+  id: string,
+  body: Partial<CreateVmCatalogPlanDto>
+): Promise<IVmCatalogPlan> {
+  const res = await apiRequest<ApiResponse<{ plan: IVmCatalogPlan }>>(
+    `/api/v1/vm-catalog/plans/${id}`,
+    { method: 'PATCH', body: JSON.stringify(body) }
+  );
+  return res.data.plan;
+}
+
+export async function deleteVmCatalogPlan(id: string): Promise<void> {
+  await apiRequest(`/api/v1/vm-catalog/plans/${id}`, { method: 'DELETE' });
+}
+
+export async function seedVmCatalogPlans(): Promise<{ inserted: number; total: number }> {
+  const res = await apiRequest<ApiResponse<{ inserted: number; total: number }>>(
+    '/api/v1/vm-catalog/plans/seed',
+    { method: 'POST' }
+  );
+  return res.data;
 }
 
 export async function fetchVmCatalogOverview(): Promise<CatalogVmOverview> {
@@ -204,6 +311,35 @@ export async function attachCatalogVmRequest(id: string): Promise<ICatalogVm> {
     { method: 'PATCH' }
   );
   return res.data.request;
+}
+
+export async function changeCatalogVmTemplateToWindows(
+  id: string,
+  opts?: { template?: string }
+): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
+    `/api/v1/vm-catalog/requests/${id}/change-template`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(opts?.template ? { template: opts.template } : {}),
+    }
+  );
+  return res.data.request;
+}
+
+export type CatalogVmPowerAction = 'virtualizor' | 'start' | 'stop' | 'reboot';
+
+export async function catalogVmPowerAction(
+  id: string,
+  action: CatalogVmPowerAction
+): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }> {
+  const res = await apiRequest<
+    ApiResponse<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }>
+  >(`/api/v1/vm-catalog/requests/${id}/power`, {
+    method: 'POST',
+    body: JSON.stringify({ action }),
+  });
+  return res.data;
 }
 
 export async function rejectCatalogVmRequest(

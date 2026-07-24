@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, Cloud, LayoutGrid, Monitor, Server, Wallet } from 'lucide-react';
+import { Boxes, Cloud, HardDrive, LayoutGrid, Monitor, PlusCircle, Server, Wallet } from 'lucide-react';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
@@ -33,6 +33,18 @@ const SHORTCUTS: Array<{
     label: 'VPS Hosting',
     href: tenantVps.overview,
     icon: <Server className="h-4 w-4 shrink-0" />,
+  },
+  {
+    serviceKey: 'create-vm',
+    label: 'VM Catalog',
+    href: tenantConsole.createVm,
+    icon: <PlusCircle className="h-4 w-4 shrink-0" />,
+  },
+  {
+    serviceKey: 'dedicated-server',
+    label: 'Dedicated Server',
+    href: tenantConsole.dedicatedServer,
+    icon: <HardDrive className="h-4 w-4 shrink-0" />,
   },
   {
     serviceKey: 'billing',

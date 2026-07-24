@@ -20,6 +20,7 @@ import {
   RefreshCw,
   Send,
   Users,
+  KeyRound,
 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
@@ -114,6 +115,21 @@ function formatAccessLinkStatus(status: string | null | undefined): string {
   const normalized = String(status || 'pending').trim().toLowerCase();
   if (!normalized) return 'Pending';
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+}
+
+function getSelectedLicenseLabel(
+  request: ProvisionSnapshot['request']
+): string | null {
+  if (!request) return null;
+  const skuId = request.microsoftLicenseSkuId || request.microsoft_license_sku_id;
+  if (!skuId) return null;
+  const partNumber =
+    request.microsoftLicenseSkuPartNumber || request.microsoft_license_sku_part_number;
+  if (!partNumber) return 'Selected for lab accounts';
+  return String(partNumber)
+    .replace(/_/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function parseResourceGroupNames(value: string | null | undefined): string[] {
@@ -224,6 +240,7 @@ export function RequestStatusView({
   const regionLabel = formatAzureRegion(request?.location);
   const customerEmail = request ? getCustomerEmail(request) : '—';
   const createdAt = request ? getCreatedAt(request) : null;
+  const licenseLabel = getSelectedLicenseLabel(request);
   const spreadsheetAvailable = Boolean(snapshot?.credentials?.spreadsheetAvailable);
 
   const handleDownloadSpreadsheet = async () => {
@@ -483,7 +500,11 @@ export function RequestStatusView({
                             <p className="mt-1 text-xs text-red-600">{step.error}</p>
                           ) : null}
                           {step.status === 'active' && !step.error ? (
-                            <p className="mt-1 text-xs text-gray-400">In progress…</p>
+                            <p className="mt-1 text-xs text-gray-400">
+                              {step.key === 'users' && licenseLabel
+                                ? `Creating accounts and assigning ${licenseLabel}…`
+                                : 'In progress…'}
+                            </p>
                           ) : null}
                         </div>
                       </li>
@@ -539,6 +560,14 @@ export function RequestStatusView({
                     <span className="break-all">{customerEmail}</span>
                   </DetailRow>
                   <DetailRow label="Lab region">{regionLabel}</DetailRow>
+                  {licenseLabel ? (
+                    <DetailRow label="Microsoft license">
+                      <span className="inline-flex items-center gap-1.5">
+                        <KeyRound className="h-3.5 w-3.5 text-gray-400" />
+                        {licenseLabel}
+                      </span>
+                    </DetailRow>
+                  ) : null}
                   <DetailRow label="Resource groups">
                     <ResourceGroupChips value={summary?.resourceGroup} />
                   </DetailRow>

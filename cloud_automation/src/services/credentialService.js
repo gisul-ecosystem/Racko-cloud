@@ -5,6 +5,7 @@ const { enqueueEmail } = require('./emailQueueService');
 const { createNotification, NotificationType } = require('./notificationService');
 const {
   buildCredentialEmailHtml,
+  buildTestIdsCredentialEmailHtml,
 } = require('./email/credentialEmailService');
 const {
   buildCredentialSpreadsheetBuffer,
@@ -81,7 +82,12 @@ const getRequestById = async (client, requestId) => {
       account_count,
       status,
       expiry_date,
-      location
+      expires_at,
+      location,
+      id_mode,
+      project_name,
+      costing_mode,
+      azure_resource_group_name
     FROM requests
     WHERE id = $1
   `;
@@ -93,14 +99,29 @@ const getRequestById = async (client, requestId) => {
 const getProvisionedUsersByRequestId = async (client, requestId) => {
   const query = `
     SELECT
-      azure_user_id,
-      username,
-      temporary_password,
-      status
-    FROM azure_users
-    WHERE request_id = $1
-      AND COALESCE(is_deleted, FALSE) = FALSE
-    ORDER BY username ASC
+      au.azure_user_id,
+      au.username,
+      au.temporary_password,
+      au.status,
+      COALESCE(
+        NULLIF(TRIM(au.azure_resource_group_name), ''),
+        NULLIF(TRIM(r.azure_resource_group_name), ''),
+        rurg.azure_resource_group_name
+      ) AS resource_group_name
+    FROM azure_users au
+    JOIN requests r ON r.id = au.request_id
+    LEFT JOIN request_user_resource_groups rurg
+      ON rurg.request_id = au.request_id
+     AND rurg.user_number = (
+       CASE
+         WHEN au.username ~ '-user-[0-9]+$'
+         THEN (regexp_match(au.username, '-user-([0-9]+)$'))[1]::int
+         ELSE NULL
+       END
+     )
+    WHERE au.request_id = $1
+      AND COALESCE(au.is_deleted, FALSE) = FALSE
+    ORDER BY au.username ASC
   `;
 
   const result = await client.query(query, [requestId]);
@@ -307,6 +328,12 @@ const buildCredentialSpreadsheetForRequest = async (requestId) => {
     requestId,
     customerEmail: credentials.request.customer_email,
     location: credentials.request.location,
+    projectName: credentials.request.project_name,
+    idMode: credentials.request.id_mode,
+    costingMode: credentials.request.costing_mode,
+    expiryDate: credentials.request.expiry_date,
+    expiresAt: credentials.request.expires_at,
+    sharedResourceGroup: credentials.request.azure_resource_group_name,
     portalLink: delivery.portalLink || '',
     portalExpiresAt: delivery.portalExpiresAt,
     adminCredentials: {
@@ -376,14 +403,27 @@ const sendCredentials = async (requestId) => {
   const users = credentials.users;
   const portalLink = portal.manageUrl;
   const adminCredentials = portal.adminCredentials;
+  const isTestIds = String(request.id_mode || '').toLowerCase() === 'test_ids';
 
-  const html = buildCredentialEmailHtml({
-    requestId,
-    users,
-    adminCredentials,
-    portalLink,
-    expiresAt: portal.expiresAt.toISOString()
-  });
+  const html = isTestIds
+    ? buildTestIdsCredentialEmailHtml({
+        requestId,
+        users,
+        adminCredentials,
+        portalLink,
+        projectName: request.project_name
+      })
+    : buildCredentialEmailHtml({
+        requestId,
+        users,
+        adminCredentials,
+        portalLink,
+        expiresAt: portal.expiresAt.toISOString()
+      });
+
+  const emailSubject = isTestIds
+    ? `Azure Test IDs Ready — Request #${requestId}`
+    : `Azure Credentials Ready — Request #${requestId}`;
 
   const deliveryMeta = {
     portalLink,
@@ -395,7 +435,8 @@ const sendCredentials = async (requestId) => {
   logCredentialEvent('info', 'credential_delivery_email_started', {
     requestId,
     recipientEmail: request.customer_email,
-    manageUrl: portalLink
+    manageUrl: portalLink,
+    idMode: request.id_mode || null
   });
 
   try {
@@ -409,7 +450,7 @@ const sendCredentials = async (requestId) => {
 
     await enqueueEmail({
       recipientEmail: request.customer_email,
-      subject: `Azure Credentials Ready — Request #${requestId}`,
+      subject: emailSubject,
       html,
       relatedType: 'credential_delivery',
       relatedId: String(requestId),
@@ -429,7 +470,7 @@ const sendCredentials = async (requestId) => {
 
         await createNotification({
           type: NotificationType.PROVISIONING_COMPLETE,
-          title: 'Lab provisioned successfully',
+          title: isTestIds ? 'Azure test IDs ready' : 'Lab provisioned successfully',
           message: `Lab #${requestId} provisioned for ${request.customer_email} — ${request.account_count} users in ${request.location}`,
           requestId: Number(requestId)
         });

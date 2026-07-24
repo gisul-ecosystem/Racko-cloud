@@ -13,6 +13,7 @@ import {
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { useOrgAdminPortal } from '../../hooks/useOrgAdminPortal';
 import { OrgAdminAccessRequests } from './OrgAdminAccessRequests';
+import { OrgAdminPrivilegedRoleRequests } from './OrgAdminPrivilegedRoleRequests';
 import { OrgAdminLabStatusBadge } from './OrgAdminLabStatusBadge';
 import { OrgAdminRequestDetailPanel } from './OrgAdminRequestDetailPanel';
 import { OrgAdminStatCard } from './OrgAdminStatCard';
@@ -36,9 +37,11 @@ export function OrgAdminPortal() {
     users,
     availableRoles,
     accessRequests,
+    privilegedRoleRequests,
     overviewLoading,
     detailLoading,
     accessLoading,
+    privilegedRoleLoading,
     saving,
     overviewError,
     detailError,
@@ -48,11 +51,15 @@ export function OrgAdminPortal() {
     refreshOverview,
     refreshDetail,
     refreshAccessRequests,
+    refreshPrivilegedRoleRequests,
     updateRoles,
     deleteUser,
     deleteRequest,
+    extendExpiration,
+    sendPurchaseConfirmationMail,
     forceLogout,
     reviewAccess,
+    reviewPrivilegedRole,
     fetchUserMonitoring,
     fetchUserAzureCost,
     fetchSharedAzureCost,
@@ -101,6 +108,7 @@ export function OrgAdminPortal() {
           request.customerEmail.toLowerCase().includes(query) ||
           String(request.id).includes(query) ||
           (request.region || '').toLowerCase().includes(query) ||
+          (request.projectName || '').toLowerCase().includes(query) ||
           (request.requestName || '').toLowerCase().includes(query);
 
         return matchStatus && matchRegion && matchSearch;
@@ -120,10 +128,11 @@ export function OrgAdminPortal() {
     clearActionFeedback();
     void refreshOverview();
     void refreshAccessRequests();
+    void refreshPrivilegedRoleRequests();
     if (selectedRequestId != null) {
       void refreshDetail();
     }
-  }, [clearActionFeedback, refreshOverview, refreshAccessRequests, refreshDetail, selectedRequestId]);
+  }, [clearActionFeedback, refreshOverview, refreshAccessRequests, refreshPrivilegedRoleRequests, refreshDetail, selectedRequestId]);
 
   const handleToggleCleanup = useCallback(
     (userId: number, disabled: boolean) => updateCleanupSettings(userId, { cleanupDisabled: disabled }),
@@ -186,6 +195,13 @@ export function OrgAdminPortal() {
         loading={accessLoading}
         saving={saving}
         onReview={reviewAccess}
+      />
+
+      <OrgAdminPrivilegedRoleRequests
+        requests={privilegedRoleRequests}
+        loading={privilegedRoleLoading}
+        saving={saving}
+        onReview={reviewPrivilegedRole}
       />
 
       {(actionError || actionSuccess) && (
@@ -303,12 +319,18 @@ export function OrgAdminPortal() {
                       : 'border-gray-200'
                   }`}
                 >
-                  <div className="min-w-[180px]">
-                    <div className="text-sm font-bold text-gray-900">#{request.id}</div>
+                  <div className="min-w-[220px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-sm font-bold text-gray-900">
+                        {request.projectName?.trim() || `Project ${request.id}`}
+                      </div>
+                      {request.idMode === 'test_ids' ? (
+                        <span className="inline-flex shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">
+                          Test ID
+                        </span>
+                      ) : null}
+                    </div>
                     <div className="text-sm text-gray-500">{request.customerEmail}</div>
-                    {request.requestName && (
-                      <div className="mt-0.5 truncate text-xs text-gray-400">{request.requestName}</div>
-                    )}
                   </div>
 
                   <div className="flex flex-1 flex-wrap items-center gap-2">
@@ -363,7 +385,10 @@ export function OrgAdminPortal() {
                     onUnblock={unblockUser}
                     onDeleteUser={deleteUser}
                     onDeleteRequest={deleteRequest}
+                    onExtendExpiration={extendExpiration}
+                    onSendPurchaseConfirmationMail={sendPurchaseConfirmationMail}
                     onReprovisionRoles={reprovisionRoles}
+                    onPrivilegedRolesChanged={() => void refreshDetail()}
                     lastUpdatedAt={lastUpdatedAt}
                     isRefreshing={isRefreshing}
                     hasActiveUsers={hasActiveUsers}

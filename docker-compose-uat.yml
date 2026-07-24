@@ -11,11 +11,15 @@ services:
       JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
       TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
       CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
+      RESELLER_SERVICE_URL: http://cloud-automation-reseller:3005
     volumes:
       - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
     ports:
       - "${CORE_API_PORT:-8001}:8001"
+    depends_on:
+      - create-vm-catalog-agent
+      - cloud-automation-reseller
     networks:
       - racko-network
     restart: unless-stopped
@@ -27,12 +31,15 @@ services:
     environment:
       PORT: ${CLOUD_AUTOMATION_PORT:-3002}
       # Large-lab defaults (override in cloud-automation/.env). One batch per HTTP request
-      # when PROVISION_STEP_TIME_BUDGET_MS=0 so nginx/CDN do not kill 100-user role assign.
-      BULK_PROVISION_CONCURRENCY: ${BULK_PROVISION_CONCURRENCY:-30}
-      DELETE_AZURE_CONCURRENCY: ${DELETE_AZURE_CONCURRENCY:-30}
-      RESOURCE_GROUP_BATCH_SIZE: ${RESOURCE_GROUP_BATCH_SIZE:-25}
-      USER_PROVISION_BATCH_SIZE: ${USER_PROVISION_BATCH_SIZE:-25}
-      ROLE_PROVISION_BATCH_SIZE: ${ROLE_PROVISION_BATCH_SIZE:-25}
+      # when PROVISION_STEP_TIME_BUDGET_MS=0 so nginx/CDN do not kill large multi-service labs.
+      BULK_PROVISION_CONCURRENCY: ${BULK_PROVISION_CONCURRENCY:-40}
+      DELETE_AZURE_CONCURRENCY: ${DELETE_AZURE_CONCURRENCY:-40}
+      RESOURCE_GROUP_BATCH_SIZE: ${RESOURCE_GROUP_BATCH_SIZE:-50}
+      USER_PROVISION_BATCH_SIZE: ${USER_PROVISION_BATCH_SIZE:-50}
+      ROLE_PROVISION_BATCH_SIZE: ${ROLE_PROVISION_BATCH_SIZE:-50}
+      SERVICE_POLICY_BATCH_SIZE: ${SERVICE_POLICY_BATCH_SIZE:-50}
+      BUDGET_PROVISION_BATCH_SIZE: ${BUDGET_PROVISION_BATCH_SIZE:-50}
+      RESOURCE_SCOPED_USER_BATCH_SIZE: ${RESOURCE_SCOPED_USER_BATCH_SIZE:-50}
       MAX_PROVISION_ACCOUNT_COUNT: ${MAX_PROVISION_ACCOUNT_COUNT:-1000}
       PROVISION_STEP_TIME_BUDGET_MS: ${PROVISION_STEP_TIME_BUDGET_MS:-0}
       SUPABASE_DB_STATEMENT_TIMEOUT_MS: ${SUPABASE_DB_STATEMENT_TIMEOUT_MS:-0}
@@ -53,6 +60,19 @@ services:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
     ports:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
+    networks:
+      - racko-network
+    restart: unless-stopped
+
+  cloud-automation-reseller:
+    image: gisuldocker/racko-cloud-automation-reseller:uat
+    env_file:
+      - cloud_automation_reseller/.env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_RESELLER_PORT:-3005}
+      NODE_ENV: production
+    ports:
+      - "${CLOUD_AUTOMATION_RESELLER_PORT:-3005}:3005"
     networks:
       - racko-network
     restart: unless-stopped

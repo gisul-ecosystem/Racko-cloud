@@ -93,6 +93,59 @@ export function defaultEndDate(): string {
   return toDateTimeLocalValue(date);
 }
 
+export function defaultTestIdsStartDate(): string {
+  return toDateTimeLocalValue(new Date());
+}
+
+export function defaultTestIdsEndDate(): string {
+  return addHoursToDateTimeLocal(defaultTestIdsStartDate(), 24);
+}
+
+/** Add hours to a datetime-local string; falls back to now+hours if invalid. */
+export function addHoursToDateTimeLocal(value: string, hours: number): string {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    const fallback = new Date();
+    fallback.setHours(fallback.getHours() + hours);
+    return toDateTimeLocalValue(fallback);
+  }
+  date.setHours(date.getHours() + hours);
+  return toDateTimeLocalValue(date);
+}
+
+export const TEST_IDS_DEFAULTS = {
+  accountCount: 5,
+  perUserBudgetUsd: 10,
+} as const;
+
+export const CLEANUP_TIME_PATTERN = /^([01]\d|2[0-3]):([0-5]\d)$/;
+
+export function isValidCleanupTime(value: string | undefined): boolean {
+  return Boolean(value && CLEANUP_TIME_PATTERN.test(value.trim()));
+}
+
+export function formatCleanupTimeLabel(timeHHMM: string): string {
+  const [hourStr, minuteStr] = timeHHMM.trim().split(':');
+  const hour = Number(hourStr);
+  const minute = Number(minuteStr);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) {
+    return timeHHMM;
+  }
+  const suffix = hour >= 12 ? 'PM' : 'AM';
+  const hour12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${hour12}:${String(minute).padStart(2, '0')} ${suffix}`;
+}
+
+export const TEST_IDS_MAX_ACCOUNT_COUNT = 5;
+
+export function clampTestIdsAccountCount(value: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) {
+    return 1;
+  }
+  return Math.min(TEST_IDS_MAX_ACCOUNT_COUNT, Math.max(1, Math.trunc(parsed)));
+}
+
 export function createDefaultUsageSchedule() {
   const days: Record<string, { enabled: boolean; limitMinutes: number; slots: { start: string; end: string }[] }> =
     {};
@@ -151,6 +204,26 @@ export function isCustomerDetailsComplete(input: {
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!emailPattern.test(input.customerEmail.trim())) return false;
   if (!Number.isInteger(input.accountCount) || input.accountCount <= 0) return false;
+  if (!input.startDate || !input.endDate) return false;
+  return new Date(input.endDate) >= new Date(input.startDate);
+}
+
+export function isProjectDetailsComplete(input: {
+  projectName: string;
+  accountCount: number;
+  startDate: string;
+  endDate: string;
+  idMode: string | null | undefined;
+}): boolean {
+  if (!String(input.projectName || '').trim()) return false;
+  if (!input.idMode) return false;
+  if (!Number.isInteger(input.accountCount) || input.accountCount <= 0) return false;
+  if (
+    input.idMode === 'test_ids' &&
+    input.accountCount > TEST_IDS_MAX_ACCOUNT_COUNT
+  ) {
+    return false;
+  }
   if (!input.startDate || !input.endDate) return false;
   return new Date(input.endDate) >= new Date(input.startDate);
 }
@@ -264,4 +337,31 @@ export function formatLocationOptionLabel(entry: {
   const priceSuffix =
     entry.basePrice != null ? ` — from $${Number(entry.basePrice).toFixed(3)}/hr` : '';
   return `${entry.display_location} (${entry.arm_region_name})${priceSuffix}`;
+}
+
+/** Prefer the lowest basePrice region; fall back to the first listed location. */
+export function pickCheapestLocation(
+  locations: Array<{ arm_region_name: string; basePrice?: number | null }>
+): string {
+  if (!locations.length) return '';
+
+  const priced = locations
+    .map((entry) => ({
+      arm_region_name: entry.arm_region_name,
+      basePrice:
+        entry.basePrice != null && Number.isFinite(Number(entry.basePrice))
+          ? Number(entry.basePrice)
+          : null,
+    }))
+    .filter((entry) => entry.basePrice != null) as Array<{
+    arm_region_name: string;
+    basePrice: number;
+  }>;
+
+  if (priced.length > 0) {
+    priced.sort((a, b) => a.basePrice - b.basePrice);
+    return priced[0].arm_region_name;
+  }
+
+  return locations[0].arm_region_name;
 }

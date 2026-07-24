@@ -72,11 +72,12 @@ export function TenantVpsAdminSidebar({
         icon: <Briefcase className="h-4 w-4" />,
         isActive: (p) => p === tenantVps.jobs || p.startsWith(`${tenantVps.jobs}/`),
       },
-      {
-        href: tenantVps.automation,
-        label: 'Automation',
-        icon: <Clock className="h-4 w-4" />,
-      },
+      // TODO: Automation feature is temporarily disabled — will be re-enabled once fixed
+      // {
+      //   href: tenantVps.automation,
+      //   label: 'Automation',
+      //   icon: <Clock className="h-4 w-4" />,
+      // },
       {
         href: tenantVps.templates,
         label: 'My Templates',

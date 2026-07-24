@@ -1,603 +1,647 @@
 'use client';
 
-import { useCallback, useEffect, useState, Fragment } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, RefreshCw, Save } from 'lucide-react';
+import { ArrowLeft, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
+import { ApiError } from '@/lib/apiClient';
 import {
-  getPricing,
-  type CatalogPlan,
-  type CatalogType,
-} from '@/lib/createVmCatalogApi';
+  createVmCatalogPlan,
+  deleteVmCatalogPlan,
+  fetchVmCatalogPlans,
+  seedVmCatalogPlans,
+  updateVmCatalogPlan,
+  type IVmCatalogPlan,
+} from '@/lib/vmCatalogApi';
 import {
   getExternalVmPricing,
   saveExternalVmPricing,
   type ExternalVmPricingConfig,
 } from '@/lib/externalVmPricingApi';
-import { reconcilePlansAgainstCatalog } from '@/lib/catalogPricingMerge';
+import {
+  applySellMultiplier,
+  getGlobalSellMultiplier,
+} from '@/lib/vmCatalogSellPrice';
+import { ErrorState } from '@/components/dashboard/ErrorState';
 
-const TABS: { id: CatalogType; label: string }[] = [
-  { id: 'linux', label: 'Linux' },
-  { id: 'windows', label: 'Windows' },
-  { id: 'gpu', label: 'GPU' },
-];
-
-const PERIODS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
-const PERIOD_LABELS: Record<(typeof PERIODS)[number], string> = {
-  hourly: 'Hourly',
-  monthly: 'Monthly',
-  quarterly: 'Quarterly',
-  yearly: 'Yearly',
+const emptyForm = {
+  sno: '',
+  name: '',
+  vcpu: '',
+  ramGb: '',
+  ssdGb: '',
+  hourly: '',
+  monthly: '',
+  quarterly: '',
+  yearly: '',
+  isActive: true,
 };
-type PeriodKey = (typeof PERIODS)[number];
-type OverrideRow = Partial<Record<PeriodKey, string>>;
 
-function parseScrapedAmount(raw: string | null | undefined): number | null {
-  if (raw == null || raw === '') return null;
-  const n = Number(String(raw).replace(/[^\d.]/g, ''));
-  return Number.isFinite(n) ? n : null;
+type PlanForm = typeof emptyForm;
+
+const MULTIPLIER_PRESETS = [1, 1.5, 2, 2.5, 3, 4, 5];
+
+function parseOptionalNumber(raw: string): number | null | undefined {
+  const t = raw.trim();
+  if (t === '') return null;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : undefined;
 }
 
-function displayPrice(value: string | null | undefined) {
-  if (value == null || String(value).trim() === '') return '—';
-  return String(value).trim();
-}
-
-function formatAmount(n: number): string {
-  return Number.isInteger(n) ? String(n) : n.toFixed(2);
-}
-
-function emptyCategories(): ExternalVmPricingConfig['categories'] {
+function planToForm(plan: IVmCatalogPlan): PlanForm {
   return {
-    linux: { multiplier: 1, plans: {} },
-    windows: { multiplier: 1, plans: {} },
-    gpu: { multiplier: 1, plans: {} },
+    sno: plan.sno != null ? String(plan.sno) : '',
+    name: plan.name,
+    vcpu: String(plan.vcpu),
+    ramGb: String(plan.ramGb),
+    ssdGb: String(plan.ssdGb),
+    hourly: plan.hourly != null ? String(plan.hourly) : '',
+    monthly: plan.monthly != null ? String(plan.monthly) : '',
+    quarterly: plan.quarterly != null ? String(plan.quarterly) : '',
+    yearly: plan.yearly != null ? String(plan.yearly) : '',
+    isActive: plan.isActive,
   };
 }
 
+function fmtInr(n: number | null | undefined): string {
+  if (n == null || Number.isNaN(Number(n))) return '—';
+  return Number(n).toLocaleString('en-IN', { maximumFractionDigits: 2 });
+}
+
 export default function WebynePricingPage() {
-  const [activeType, setActiveType] = useState<CatalogType>('linux');
-  const [plans, setPlans] = useState<CatalogPlan[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [plans, setPlans] = useState<IVmCatalogPlan[]>([]);
+  const [pricingConfig, setPricingConfig] = useState<ExternalVmPricingConfig | null>(null);
+  const [multiplierInput, setMultiplierInput] = useState('1');
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [fetchedAt, setFetchedAt] = useState<string | null>(null);
-  const [savedAt, setSavedAt] = useState<string | null>(null);
-  /** Draft overrides keyed by `${category}:${planId}` */
-  const [overrides, setOverrides] = useState<Record<string, OverrideRow>>({});
-  const [multipliers, setMultipliers] = useState<Record<CatalogType, string>>({
-    linux: '1',
-    windows: '1',
-    gpu: '1',
-  });
-  const [storeLoaded, setStoreLoaded] = useState(false);
+  const [form, setForm] = useState<PlanForm>(emptyForm);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [savingMultiplier, setSavingMultiplier] = useState(false);
+  const [savingHourlyToggle, setSavingHourlyToggle] = useState(false);
+  const [seeding, setSeeding] = useState(false);
+  const [flash, setFlash] = useState<string | null>(null);
 
-  const globalMultiplier = multipliers[activeType];
+  const sellMultiplier = getGlobalSellMultiplier(pricingConfig);
+  const hourlyEnabled = Boolean(pricingConfig?.hourlyEnabled);
 
-  const hydrateFromStore = useCallback((state: ExternalVmPricingConfig) => {
-    setSavedAt(state.updatedAt);
-    const nextMultipliers: Record<CatalogType, string> = {
-      linux: String(state.categories.linux?.multiplier ?? 1),
-      windows: String(state.categories.windows?.multiplier ?? 1),
-      gpu: String(state.categories.gpu?.multiplier ?? 1),
-    };
-    setMultipliers(nextMultipliers);
-
-    const nextOverrides: Record<string, OverrideRow> = {};
-    (['linux', 'windows', 'gpu'] as CatalogType[]).forEach((cat) => {
-      const plansMap = state.categories[cat]?.plans ?? {};
-      for (const [planId, row] of Object.entries(plansMap)) {
-        nextOverrides[`${cat}:${planId}`] = { ...row };
-      }
-    });
-    setOverrides(nextOverrides);
-  }, []);
-
-  const loadStore = useCallback(async () => {
-    try {
-      const state = await getExternalVmPricing('webyne');
-      hydrateFromStore(state);
-    } catch (err) {
-      setError(
-        err instanceof Error
-          ? err.message
-          : 'Failed to load pricing config from database.'
-      );
-    } finally {
-      setStoreLoaded(true);
-    }
-  }, [hydrateFromStore]);
-
-  const loadPlans = useCallback(async (type: CatalogType) => {
-    setActiveType(type);
+  const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      // Always show raw scraped values in admin columns.
-      const data = await getPricing(type, { raw: true });
-      const live = data.plans || [];
-      setPlans(live);
-      setFetchedAt(data.fetchedAt || null);
-
-      // Drop draft overrides for removed plans / blank periods on this tab.
-      setOverrides((prev) => {
-        const next = { ...prev };
-        const liveIds = new Set(
-          live.filter((p) => p.planId != null).map((p) => String(p.planId))
-        );
-        for (const key of Object.keys(next)) {
-          if (!key.startsWith(`${type}:`)) continue;
-          const planId = key.slice(type.length + 1);
-          if (!liveIds.has(planId)) {
-            delete next[key];
-            continue;
-          }
-          const livePlan = live.find((p) => String(p.planId) === planId);
-          if (!livePlan) {
-            delete next[key];
-            continue;
-          }
-          const row = { ...next[key] };
-          for (const period of PERIODS) {
-            if (livePlan[period] == null || String(livePlan[period]).trim() === '') {
-              delete row[period];
-            }
-          }
-          if (Object.keys(row).length === 0) delete next[key];
-          else next[key] = row;
-        }
-        return next;
-      });
+      const [planList, pricing] = await Promise.all([
+        fetchVmCatalogPlans(),
+        getExternalVmPricing('webyne'),
+      ]);
+      setPlans(planList);
+      setPricingConfig(pricing);
+      setMultiplierInput(String(getGlobalSellMultiplier(pricing)));
     } catch (err) {
-      setPlans([]);
-      setFetchedAt(null);
-      setError(err instanceof Error ? err.message : 'Failed to load catalog plans.');
+      setError(err instanceof ApiError ? err.message : 'Failed to load plans.');
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    void loadStore();
-    void loadPlans('linux');
-  }, [loadStore, loadPlans]);
+    void load();
+  }, [load]);
 
-  function hasScrapedPeriod(plan: CatalogPlan, period: PeriodKey): boolean {
-    return plan[period] != null && String(plan[period]).trim() !== '';
+  function startEdit(plan: IVmCatalogPlan) {
+    setEditingId(plan._id);
+    setForm(planToForm(plan));
+    setFlash(null);
+    setError(null);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  function overrideKey(planId: string | number | null | undefined) {
-    return `${activeType}:${planId ?? ''}`;
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(emptyForm);
   }
 
-  function setOverrideField(
-    planId: string | number | null | undefined,
-    field: PeriodKey,
-    value: string,
-    plan: CatalogPlan
-  ) {
-    if (planId == null) return;
-    if (!hasScrapedPeriod(plan, field)) return;
-    const key = overrideKey(planId);
-    setOverrides((prev) => ({
-      ...prev,
-      [key]: { ...prev[key], [field]: value },
-    }));
-  }
-
-  function applyGlobalMultiplierToList() {
-    const factor = Number(globalMultiplier);
-    if (!Number.isFinite(factor) || factor <= 0) {
-      setError('Enter a valid multiplier (e.g. 2 or 3).');
+  async function handleSaveMultiplier() {
+    const m = Number(multiplierInput);
+    if (!Number.isFinite(m) || m <= 0 || m > 1000) {
+      setError('Multiplier must be a number between 0.01 and 1000.');
       return;
     }
-    const next: Record<string, OverrideRow> = { ...overrides };
-
-    for (const p of plans) {
-      if (p.planId == null) continue;
-      const key = overrideKey(p.planId);
-      const row: OverrideRow = {};
-      for (const period of PERIODS) {
-        if (!hasScrapedPeriod(p, period)) continue;
-        const base = parseScrapedAmount(p[period]);
-        if (base == null) continue;
-        row[period] = formatAmount(base * factor);
-      }
-      if (Object.keys(row).length) next[key] = row;
-      else delete next[key];
-    }
-
-    setOverrides(next);
+    setSavingMultiplier(true);
     setError(null);
-    setSuccess(null);
-  }
-
-  function clearListOverrides() {
-    setOverrides((prev) => {
-      const next = { ...prev };
-      for (const p of plans) {
-        if (p.planId == null) continue;
-        delete next[overrideKey(p.planId)];
-      }
-      return next;
-    });
-    setMultipliers((prev) => ({ ...prev, [activeType]: '1' }));
-  }
-
-  async function handleSave() {
-    setSaving(true);
-    setError(null);
-    setSuccess(null);
+    setFlash(null);
     try {
-      let existing = emptyCategories();
-      try {
-        const current = await getExternalVmPricing('webyne');
-        existing = {
-          linux: current.categories.linux ?? emptyCategories().linux,
-          windows: current.categories.windows ?? emptyCategories().windows,
-          gpu: current.categories.gpu ?? emptyCategories().gpu,
-        };
-      } catch {
-        /* first save */
-      }
-
-      // Live scrape all categories so removed plans/periods are purged from Mongo.
-      const liveByCategory = await Promise.all(
-        (['linux', 'windows', 'gpu'] as CatalogType[]).map(async (cat) => {
-          try {
-            const data = await getPricing(cat, { raw: true });
-            return [cat, data.plans || []] as const;
-          } catch {
-            return [cat, [] as CatalogPlan[]] as const;
-          }
-        })
+      const existing = pricingConfig ?? (await getExternalVmPricing('webyne'));
+      const saved = await saveExternalVmPricing(
+        'webyne',
+        {
+          linux: { multiplier: m, plans: existing.categories.linux?.plans ?? {} },
+          windows: { multiplier: m, plans: existing.categories.windows?.plans ?? {} },
+          gpu: { multiplier: m, plans: existing.categories.gpu?.plans ?? {} },
+        },
+        { hourlyEnabled: Boolean(existing.hourlyEnabled) }
       );
-
-      const categories = emptyCategories();
-      let prunedPlans = 0;
-      let prunedPeriods = 0;
-
-      for (const [cat, livePlans] of liveByCategory) {
-        const fromDraft: Record<string, OverrideRow> = {};
-        for (const [key, row] of Object.entries(overrides)) {
-          if (!key.startsWith(`${cat}:`)) continue;
-          const planId = key.slice(cat.length + 1);
-          const cleaned: OverrideRow = {};
-          for (const period of PERIODS) {
-            const v = row?.[period];
-            if (v != null && String(v).trim() !== '') cleaned[period] = String(v).trim();
-          }
-          if (Object.keys(cleaned).length) fromDraft[planId] = cleaned;
-        }
-
-        // Prefer draft rows for active category; merge with existing for others.
-        const sourcePlans =
-          cat === activeType
-            ? fromDraft
-            : { ...(existing[cat]?.plans ?? {}), ...fromDraft };
-
-        const beforePlanCount = Object.keys(sourcePlans).length;
-        const beforePeriodCount = Object.values(sourcePlans).reduce(
-          (n, row) => n + Object.keys(row || {}).length,
-          0
-        );
-
-        const reconciled = reconcilePlansAgainstCatalog(
-          sourcePlans,
-          livePlans as unknown as Array<Record<string, unknown>>
-        );
-
-        prunedPlans += Math.max(0, beforePlanCount - Object.keys(reconciled).length);
-        const afterPeriodCount = Object.values(reconciled).reduce(
-          (n, row) => n + Object.keys(row || {}).length,
-          0
-        );
-        prunedPeriods += Math.max(0, beforePeriodCount - afterPeriodCount);
-
-        categories[cat] = {
-          multiplier: Number(multipliers[cat]) || 1,
-          plans: reconciled,
-        };
-      }
-
-      // Active tab: if live scrape is loaded in UI, force reconcile draft-only (no stale merge).
-      if (plans.length > 0) {
-        const fromDraft: Record<string, OverrideRow> = {};
-        for (const [key, row] of Object.entries(overrides)) {
-          if (!key.startsWith(`${activeType}:`)) continue;
-          const planId = key.slice(activeType.length + 1);
-          const cleaned: OverrideRow = {};
-          for (const period of PERIODS) {
-            const v = row?.[period];
-            if (v != null && String(v).trim() !== '') cleaned[period] = String(v).trim();
-          }
-          if (Object.keys(cleaned).length) fromDraft[planId] = cleaned;
-        }
-        categories[activeType] = {
-          multiplier: Number(multipliers[activeType]) || 1,
-          plans: reconcilePlansAgainstCatalog(
-            fromDraft,
-            plans as unknown as Array<Record<string, unknown>>
-          ),
-        };
-      }
-
-      const saved = await saveExternalVmPricing('webyne', categories);
-      hydrateFromStore(saved);
-
-      const cleanupNote =
-        prunedPlans > 0 || prunedPeriods > 0
-          ? ` Cleaned ${prunedPlans} removed plan(s) and ${prunedPeriods} missing period override(s).`
-          : '';
-      setSuccess(
-        `Pricing overrides saved to the database.${cleanupNote} Create VM will use these sell prices.`
+      setPricingConfig(saved);
+      setMultiplierInput(String(m));
+      setFlash(
+        m === 1
+          ? 'Global sell multiplier set to 1× (base prices).'
+          : `Global sell multiplier set to ${m}× — Create VM charges base × ${m}.`
       );
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save overrides.');
+      setError(err instanceof ApiError ? err.message : 'Failed to save multiplier.');
+    } finally {
+      setSavingMultiplier(false);
+    }
+  }
+
+  async function handleToggleHourly(next: boolean) {
+    setSavingHourlyToggle(true);
+    setError(null);
+    setFlash(null);
+    try {
+      const existing = pricingConfig ?? (await getExternalVmPricing('webyne'));
+      const m = getGlobalSellMultiplier(existing);
+      const saved = await saveExternalVmPricing(
+        'webyne',
+        {
+          linux: { multiplier: m, plans: existing.categories.linux?.plans ?? {} },
+          windows: { multiplier: m, plans: existing.categories.windows?.plans ?? {} },
+          gpu: { multiplier: m, plans: existing.categories.gpu?.plans ?? {} },
+        },
+        { hourlyEnabled: next }
+      );
+      setPricingConfig(saved);
+      setFlash(
+        next
+          ? 'Hourly pricing is ON — shown on admin and tenant Create VM.'
+          : 'Hourly pricing is OFF — admin and tenant see monthly, quarterly, yearly only.'
+      );
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to update hourly toggle.');
+    } finally {
+      setSavingHourlyToggle(false);
+    }
+  }
+
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    setSaving(true);
+    setError(null);
+    setFlash(null);
+
+    const payload = {
+      sno: form.sno.trim() ? Number(form.sno) : undefined,
+      name: form.name.trim(),
+      vcpu: Number(form.vcpu),
+      ramGb: Number(form.ramGb),
+      ssdGb: Number(form.ssdGb),
+      hourly: parseOptionalNumber(form.hourly),
+      monthly: parseOptionalNumber(form.monthly),
+      quarterly: parseOptionalNumber(form.quarterly),
+      yearly: parseOptionalNumber(form.yearly),
+      currency: 'INR' as const,
+      isActive: form.isActive,
+    };
+
+    try {
+      if (editingId) {
+        await updateVmCatalogPlan(editingId, payload);
+        setFlash('Template base prices updated.');
+        cancelEdit();
+      } else {
+        await createVmCatalogPlan({
+          ...payload,
+          sortOrder: plans.length,
+        });
+        setForm(emptyForm);
+        setFlash('Plan added.');
+      }
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Save failed.');
     } finally {
       setSaving(false);
     }
   }
 
+  async function handleSeed() {
+    setSeeding(true);
+    setError(null);
+    setFlash(null);
+    try {
+      const result = await seedVmCatalogPlans();
+      setFlash(
+        result.inserted > 0
+          ? `Seeded ${result.inserted} templates from the Webyne sheet.`
+          : `Already has ${result.total} plans — seed skipped.`
+      );
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Seed failed.');
+    } finally {
+      setSeeding(false);
+    }
+  }
+
+  async function toggleActive(plan: IVmCatalogPlan) {
+    try {
+      await updateVmCatalogPlan(plan._id, { isActive: !plan.isActive });
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Update failed.');
+    }
+  }
+
+  async function remove(id: string) {
+    if (!confirm('Delete this template?')) return;
+    try {
+      if (editingId === id) cancelEdit();
+      await deleteVmCatalogPlan(id);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Delete failed.');
+    }
+  }
+
   return (
-    <div className="mx-auto max-w-screen-xl space-y-6">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <Link
-            href="/super-admin-console/external-vm-pricing"
-            className="mb-2 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+    <div className="mx-auto max-w-screen-xl space-y-6 p-6 lg:p-8">
+      <div>
+        <Link
+          href="/super-admin-console/external-vm-pricing"
+          className="mb-2 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[#B91C1C]"
+        >
+          <ArrowLeft className="h-4 w-4" />
+          External VM Pricing
+        </Link>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-900">Webyne Templates</h1>
+            <p className="mt-0.5 text-sm text-gray-500">
+              Base prices live on each template. Global multiplier (2×, 3×, …) sets sell price for Create
+              VM.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleSeed()}
+            disabled={seeding}
+            className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
           >
-            <ArrowLeft className="h-4 w-4" />
-            External VM Pricing
-          </Link>
-          <h1 className="text-2xl font-bold text-gray-900">Webyne Pricing</h1>
-          <p className="mt-0.5 text-sm text-gray-500">
-            Set a multiplier (×2, ×3, …) or per-plan overrides, then save so Create VM shows them.
+            {seeding ? 'Seeding…' : 'Seed sheet defaults'}
+          </button>
+        </div>
+      </div>
+
+      {flash ? <p className="text-sm text-green-700">{flash}</p> : null}
+      {error ? <ErrorState message={error} onRetry={load} /> : null}
+
+      <div className="rounded-xl border border-amber-200 bg-amber-50/60 p-5 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">Global sell multiplier</h2>
+            <p className="mt-0.5 text-xs text-gray-600">
+              Sell price = template base × multiplier. Applies to all templates on Create VM.
+              Currently{' '}
+              <span className="font-semibold text-[#B91C1C]">{sellMultiplier}×</span>.
+            </p>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {MULTIPLIER_PRESETS.map((preset) => (
+            <button
+              key={preset}
+              type="button"
+              onClick={() => setMultiplierInput(String(preset))}
+              className={`rounded-lg border px-3 py-1.5 text-sm font-semibold ${
+                Number(multiplierInput) === preset
+                  ? 'border-[#B91C1C] bg-white text-[#B91C1C]'
+                  : 'border-amber-200 bg-white/80 text-gray-700 hover:bg-white'
+              }`}
+            >
+              {preset}×
+            </button>
+          ))}
+          <input
+            type="number"
+            min={0.01}
+            max={1000}
+            step="0.01"
+            value={multiplierInput}
+            onChange={(e) => setMultiplierInput(e.target.value)}
+            className="w-24 rounded-lg border border-amber-200 bg-white px-3 py-1.5 text-sm"
+            aria-label="Custom multiplier"
+          />
+          <button
+            type="button"
+            disabled={savingMultiplier}
+            onClick={() => void handleSaveMultiplier()}
+            className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
+          >
+            {savingMultiplier ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+            Save multiplier
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900">Hourly pricing</h2>
+            <p className="mt-0.5 text-xs text-gray-500">
+              When on, hourly appears on admin and tenant Create VM. When off, only monthly,
+              quarterly, and yearly are offered.
+            </p>
+          </div>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={hourlyEnabled}
+            disabled={savingHourlyToggle || loading}
+            onClick={() => void handleToggleHourly(!hourlyEnabled)}
+            className={`relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition disabled:opacity-50 ${
+              hourlyEnabled ? 'bg-[#B91C1C]' : 'bg-gray-300'
+            }`}
+          >
+            <span
+              className={`inline-block h-6 w-6 transform rounded-full bg-white shadow transition ${
+                hourlyEnabled ? 'translate-x-7' : 'translate-x-1'
+              }`}
+            />
+            <span className="sr-only">
+              {hourlyEnabled ? 'Disable hourly pricing' : 'Enable hourly pricing'}
+            </span>
+          </button>
+        </div>
+        <p className="mt-2 text-xs font-medium text-gray-700">
+          {savingHourlyToggle ? (
+            <span className="inline-flex items-center gap-1.5">
+              <Loader2 className="h-3.5 w-3.5 animate-spin" /> Saving…
+            </span>
+          ) : hourlyEnabled ? (
+            <span className="text-green-700">Hourly is ON</span>
+          ) : (
+            <span className="text-gray-500">Hourly is OFF</span>
+          )}
+        </p>
+      </div>
+
+      <form
+        onSubmit={(e) => void handleSubmit(e)}
+        className="grid gap-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm sm:grid-cols-2 lg:grid-cols-4"
+      >
+        <div className="sm:col-span-2 lg:col-span-4">
+          <p className="text-sm font-semibold text-gray-900">
+            {editingId ? 'Edit template base prices' : 'Add template'}
+          </p>
+          <p className="mt-0.5 text-xs text-gray-500">
+            These are base amounts. Create VM shows and charges base × {sellMultiplier}.
           </p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <input
+          placeholder="S.No"
+          value={form.sno}
+          onChange={(e) => setForm((f) => ({ ...f, sno: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          required
+          placeholder="Template name"
+          value={form.name}
+          onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm sm:col-span-2"
+        />
+        <input
+          required
+          type="number"
+          min={1}
+          placeholder="vCPU"
+          value={form.vcpu}
+          onChange={(e) => setForm((f) => ({ ...f, vcpu: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          required
+          type="number"
+          min={1}
+          placeholder="RAM (GB)"
+          value={form.ramGb}
+          onChange={(e) => setForm((f) => ({ ...f, ramGb: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          required
+          type="number"
+          min={1}
+          placeholder="SSD (GB)"
+          value={form.ssdGb}
+          onChange={(e) => setForm((f) => ({ ...f, ssdGb: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          placeholder="Hourly (base)"
+          value={form.hourly}
+          onChange={(e) => setForm((f) => ({ ...f, hourly: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          placeholder="Monthly (base)"
+          value={form.monthly}
+          onChange={(e) => setForm((f) => ({ ...f, monthly: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          placeholder="Quarterly (base)"
+          value={form.quarterly}
+          onChange={(e) => setForm((f) => ({ ...f, quarterly: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <input
+          type="number"
+          min={0}
+          step="0.01"
+          placeholder="Yearly (base)"
+          value={form.yearly}
+          onChange={(e) => setForm((f) => ({ ...f, yearly: e.target.value }))}
+          className="rounded-lg border px-3 py-2 text-sm"
+        />
+        <div className="flex flex-wrap gap-2 sm:col-span-2 lg:col-span-4">
           <button
-            type="button"
-            onClick={() => void loadPlans(activeType)}
-            disabled={loading}
-            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-wait disabled:opacity-60"
-          >
-            <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
-            Refresh catalog
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleSave()}
-            disabled={saving || !storeLoaded}
-            className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#a01717] disabled:cursor-wait disabled:opacity-60"
+            type="submit"
+            disabled={saving}
+            className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
           >
             {saving ? (
               <Loader2 className="h-4 w-4 animate-spin" />
+            ) : editingId ? (
+              <Pencil className="h-4 w-4" />
             ) : (
-              <Save className="h-4 w-4" />
+              <Plus className="h-4 w-4" />
             )}
-            Save overrides
+            {editingId ? 'Save base prices' : 'Add template'}
           </button>
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
-        <div className="flex flex-wrap items-end gap-3">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
-              Global multiplier (all plans in this list)
-            </span>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-semibold text-gray-600">×</span>
-              <input
-                type="number"
-                min="0.1"
-                step="0.1"
-                value={globalMultiplier}
-                onChange={(e) =>
-                  setMultipliers((prev) => ({ ...prev, [activeType]: e.target.value }))
-                }
-                className="w-28 rounded-lg border border-gray-200 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/40"
-                placeholder="2"
-              />
-              <div className="flex gap-1">
-                {['2', '3', '4'].map((preset) => (
-                  <button
-                    key={preset}
-                    type="button"
-                    onClick={() =>
-                      setMultipliers((prev) => ({ ...prev, [activeType]: preset }))
-                    }
-                    className={`rounded-md border px-2.5 py-1.5 text-xs font-semibold transition ${
-                      globalMultiplier === preset
-                        ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
-                        : 'border-gray-200 text-gray-600 hover:bg-gray-50'
-                    }`}
-                  >
-                    ×{preset}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </label>
-          <button
-            type="button"
-            onClick={applyGlobalMultiplierToList}
-            disabled={loading || plans.length === 0}
-            className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#a01717] disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            Fill row overrides
-          </button>
-          <button
-            type="button"
-            onClick={clearListOverrides}
-            disabled={plans.length === 0}
-            className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-50"
-          >
-            Clear list overrides
-          </button>
-          <p className="basis-full text-xs text-gray-400 sm:basis-auto sm:ml-1">
-            Empty scraped periods show N/A (column missing on Webyne). Save reconciles Mongo
-            against the live catalog and drops removed plans/periods.
-          </p>
-        </div>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        {TABS.map((tab) => {
-          const on = tab.id === activeType;
-          return (
+          {editingId ? (
             <button
-              key={tab.id}
               type="button"
-              onClick={() => void loadPlans(tab.id)}
-              className={`rounded-full border px-4 py-2 text-sm font-semibold transition ${
-                on
-                  ? 'border-red-200 bg-red-50 text-[#B91C1C]'
-                  : 'border-transparent text-gray-500 hover:bg-gray-100 hover:text-gray-800'
-              }`}
+              onClick={cancelEdit}
+              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
             >
-              {tab.label}
+              <X className="h-4 w-4" />
+              Cancel
             </button>
-          );
-        })}
-      </div>
-
-      <div className="flex flex-wrap gap-x-6 gap-y-1 text-sm text-gray-500">
-        <div>
-          <span className="mr-1.5 font-mono text-[0.72rem] uppercase tracking-wider text-gray-400">
-            Fetched
-          </span>
-          {fetchedAt ? new Date(fetchedAt).toLocaleString() : '—'}
+          ) : null}
         </div>
-        <div>
-          <span className="mr-1.5 font-mono text-[0.72rem] uppercase tracking-wider text-gray-400">
-            Plans
-          </span>
-          <strong className="text-gray-800">{plans.length}</strong>
-        </div>
-        <div>
-          <span className="mr-1.5 font-mono text-[0.72rem] uppercase tracking-wider text-gray-400">
-            Saved
-          </span>
-          {savedAt ? new Date(savedAt).toLocaleString() : 'Not saved yet'}
-        </div>
-      </div>
-
-      {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-      {success && (
-        <div className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-700">
-          {success}
-        </div>
-      )}
+      </form>
 
       <div className="overflow-x-auto rounded-xl border border-gray-200 bg-white shadow-sm">
-        <table className="w-full min-w-[1200px] border-collapse text-left text-sm">
-          <thead>
-            <tr className="bg-gray-50 text-[0.74rem] font-semibold uppercase tracking-wider text-gray-500">
-              <th className="px-3 py-3" rowSpan={2}>
-                Plan
-              </th>
-              <th className="px-3 py-3" rowSpan={2}>
-                Specs
-              </th>
-              {PERIODS.map((period) => (
-                <th
-                  key={`h-${period}`}
-                  className="border-l border-gray-200 px-3 py-2 text-center"
-                  colSpan={2}
-                >
-                  {PERIOD_LABELS[period]}
+        {loading ? (
+          <div className="flex justify-center p-12">
+            <Loader2 className="h-8 w-8 animate-spin text-[#B91C1C]" />
+          </div>
+        ) : plans.length === 0 ? (
+          <p className="p-10 text-center text-sm text-gray-500">
+            No templates yet. Use “Seed sheet defaults” or add one above.
+          </p>
+        ) : (
+          <table className="w-full min-w-[1100px] border-collapse text-sm">
+            <thead>
+              <tr className="border-b border-gray-200 bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <th rowSpan={2} className="border-r border-gray-100 px-3 py-2.5 text-left align-bottom">
+                  #
                 </th>
-              ))}
-            </tr>
-            <tr className="bg-gray-50 text-[0.7rem] font-semibold uppercase tracking-wider text-gray-400">
-              {PERIODS.map((period) => (
-                <Fragment key={`sub-${period}`}>
-                  <th className="border-l border-gray-200 px-3 py-2 font-medium">Scraped</th>
-                  <th className="px-3 py-2 font-medium">Override</th>
-                </Fragment>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {loading && (
-              <tr>
-                <td colSpan={10} className="px-3 py-12 text-center text-gray-500">
-                  <span className="inline-flex items-center gap-2">
-                    <Loader2 className="h-4 w-4 animate-spin text-[#B91C1C]" />
-                    Loading {activeType} plans…
-                  </span>
-                </td>
+                <th rowSpan={2} className="border-r border-gray-100 px-3 py-2.5 text-left align-bottom">
+                  Template
+                </th>
+                <th
+                  colSpan={3}
+                  className="border-b border-r border-gray-100 px-3 py-2 text-center text-gray-600"
+                >
+                  Specs
+                </th>
+                <th
+                  colSpan={4}
+                  className="border-b border-r border-gray-100 bg-slate-50 px-3 py-2 text-center text-slate-600"
+                >
+                  Base (₹)
+                </th>
+                <th
+                  colSpan={4}
+                  className="border-b border-r border-gray-100 bg-red-50/70 px-3 py-2 text-center text-[#B91C1C]"
+                >
+                  Sell {sellMultiplier}× (₹)
+                </th>
+                <th rowSpan={2} className="border-r border-gray-100 px-3 py-2.5 text-left align-bottom">
+                  Status
+                </th>
+                <th rowSpan={2} className="px-3 py-2.5 text-right align-bottom">
+                  Actions
+                </th>
               </tr>
-            )}
-            {!loading && plans.length === 0 && !error && (
-              <tr>
-                <td colSpan={10} className="px-3 py-12 text-center text-gray-500">
-                  No plans available.
-                </td>
+              <tr className="border-b border-gray-200 bg-gray-50 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                <th className="border-r border-gray-100 px-2 py-2 text-right">vCPU</th>
+                <th className="border-r border-gray-100 px-2 py-2 text-right">RAM</th>
+                <th className="border-r border-gray-100 px-2 py-2 text-right">SSD</th>
+                <th className="border-r border-gray-100 bg-slate-50 px-2 py-2 text-right">Hr</th>
+                <th className="border-r border-gray-100 bg-slate-50 px-2 py-2 text-right">Mon</th>
+                <th className="border-r border-gray-100 bg-slate-50 px-2 py-2 text-right">QTr</th>
+                <th className="border-r border-gray-100 bg-slate-50 px-2 py-2 text-right">Year</th>
+                <th className="border-r border-gray-100 bg-red-50/70 px-2 py-2 text-right">Hr</th>
+                <th className="border-r border-gray-100 bg-red-50/70 px-2 py-2 text-right">Mon</th>
+                <th className="border-r border-gray-100 bg-red-50/70 px-2 py-2 text-right">QTr</th>
+                <th className="border-r border-gray-100 bg-red-50/70 px-2 py-2 text-right">Year</th>
               </tr>
-            )}
-            {!loading &&
-              plans.map((p, idx) => {
-                const key = overrideKey(p.planId);
-                const row = overrides[key] ?? {};
-                return (
-                  <tr
-                    key={`${p.planId ?? p.plan}-${idx}`}
-                    className="border-t border-gray-100 align-top hover:bg-red-50/30"
-                  >
-                    <td className="px-3 py-3">
-                      <div className="font-semibold text-gray-900">{p.plan}</div>
-                      <div className="mt-0.5 font-mono text-xs text-gray-400">
-                        ID {p.planId ?? '—'}
-                      </div>
-                    </td>
-                    <td className="px-3 py-3 text-gray-600">
-                      <div>{p.cpu || '—'}</div>
-                      <div>{p.ram || '—'}</div>
-                      <div>{p.disk || '—'}</div>
-                    </td>
-                    {PERIODS.map((field) => (
-                      <Fragment key={field}>
-                        <td className="border-l border-gray-100 px-3 py-3 font-mono text-gray-700">
-                          {displayPrice(p[field])}
-                        </td>
-                        <td className="px-3 py-3">
-                          {hasScrapedPeriod(p, field) ? (
-                            <input
-                              type="text"
-                              inputMode="decimal"
-                              placeholder="Keep"
-                              value={row[field] ?? ''}
-                              disabled={p.planId == null}
-                              onChange={(e) =>
-                                setOverrideField(p.planId, field, e.target.value, p)
-                              }
-                              className="w-24 rounded-lg border border-gray-200 px-2.5 py-1.5 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/40 disabled:bg-gray-50"
-                            />
-                          ) : (
-                            <span className="text-xs text-gray-300">N/A</span>
-                          )}
-                        </td>
-                      </Fragment>
-                    ))}
-                  </tr>
-                );
-              })}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {plans.map((p) => (
+                <tr
+                  key={p._id}
+                  className={`border-b border-gray-100 ${
+                    editingId === p._id ? 'bg-red-50/40' : 'hover:bg-gray-50/60'
+                  }`}
+                >
+                  <td className="border-r border-gray-50 px-3 py-2.5 text-gray-500">{p.sno ?? '—'}</td>
+                  <td className="border-r border-gray-50 px-3 py-2.5 font-medium text-gray-900">
+                    {p.name}
+                  </td>
+                  <td className="border-r border-gray-50 px-2 py-2.5 text-right tabular-nums text-gray-700">
+                    {p.vcpu}
+                  </td>
+                  <td className="border-r border-gray-50 px-2 py-2.5 text-right tabular-nums text-gray-700">
+                    {p.ramGb}
+                  </td>
+                  <td className="border-r border-gray-50 px-2 py-2.5 text-right tabular-nums text-gray-700">
+                    {p.ssdGb}
+                  </td>
+                  <td className="border-r border-gray-50 bg-slate-50/40 px-2 py-2.5 text-right tabular-nums text-gray-600">
+                    {fmtInr(p.hourly)}
+                  </td>
+                  <td className="border-r border-gray-50 bg-slate-50/40 px-2 py-2.5 text-right tabular-nums text-gray-600">
+                    {fmtInr(p.monthly)}
+                  </td>
+                  <td className="border-r border-gray-50 bg-slate-50/40 px-2 py-2.5 text-right tabular-nums text-gray-600">
+                    {fmtInr(p.quarterly)}
+                  </td>
+                  <td className="border-r border-gray-50 bg-slate-50/40 px-2 py-2.5 text-right tabular-nums text-gray-600">
+                    {fmtInr(p.yearly)}
+                  </td>
+                  <td className="border-r border-gray-50 bg-red-50/30 px-2 py-2.5 text-right tabular-nums font-medium text-gray-900">
+                    {fmtInr(applySellMultiplier(p.hourly, sellMultiplier))}
+                  </td>
+                  <td className="border-r border-gray-50 bg-red-50/30 px-2 py-2.5 text-right tabular-nums font-medium text-gray-900">
+                    {fmtInr(applySellMultiplier(p.monthly, sellMultiplier))}
+                  </td>
+                  <td className="border-r border-gray-50 bg-red-50/30 px-2 py-2.5 text-right tabular-nums font-medium text-gray-900">
+                    {fmtInr(applySellMultiplier(p.quarterly, sellMultiplier))}
+                  </td>
+                  <td className="border-r border-gray-50 bg-red-50/30 px-2 py-2.5 text-right tabular-nums font-medium text-gray-900">
+                    {fmtInr(applySellMultiplier(p.yearly, sellMultiplier))}
+                  </td>
+                  <td className="border-r border-gray-50 px-3 py-2.5">
+                    <button
+                      type="button"
+                      onClick={() => void toggleActive(p)}
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                        p.isActive
+                          ? 'bg-green-50 text-green-700'
+                          : 'bg-gray-100 text-gray-500'
+                      }`}
+                    >
+                      {p.isActive ? 'Active' : 'Inactive'}
+                    </button>
+                  </td>
+                  <td className="px-3 py-2.5 text-right">
+                    <div className="inline-flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => startEdit(p)}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C]"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void remove(p._id)}
+                        className="inline-flex items-center gap-1 text-xs font-semibold text-red-600"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        Delete
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
-
-      <p className="text-xs text-gray-400">
-        Overrides are stored in MongoDB. Save reconciles against the live Webyne catalog
-        (drops removed plans and blank periods). Create VM never resurrects a missing column
-        via a sticky override.
-      </p>
     </div>
   );
 }

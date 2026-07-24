@@ -1,11 +1,13 @@
 import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { vmService } from './vm.service';
+import { bulkAssignJobService } from '../bulkAssignJob/bulkAssignJob.service';
 import { logger } from '../../utils/logger';
 import type { AuthenticatedRequest } from '../../types';
 import type { CreateVMDto, VMFilters } from './vm.types';
 import type { GuacamoleProtocol } from '../../utils/guacamoleClient';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
+import type { AccessScheduleInput } from '../vmAccessSchedule/accessScheduleParse';
 
 // Consistent response shape — matches all other modules
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
@@ -679,7 +681,11 @@ export class VMController {
     try {
       const authReq = req as AuthenticatedRequest;
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
-      const { userId, vmIds } = req.body as { userId: string; vmIds: string[] };
+      const { userId, vmIds, accessSchedule } = req.body as {
+        userId: string;
+        vmIds: string[];
+        accessSchedule?: AccessScheduleInput;
+      };
       const targetUserId = new mongoose.Types.ObjectId(userId);
       const vmObjectIds = vmIds.map((id: string) => new mongoose.Types.ObjectId(id));
 
@@ -689,7 +695,7 @@ export class VMController {
         count: vmIds.length,
       });
 
-      const result = await vmService.assignVMs(vmObjectIds, targetUserId, adminId);
+      const result = await vmService.assignVMs(vmObjectIds, targetUserId, adminId, accessSchedule);
       success(res, `${result.assigned} VM(s) assigned successfully.`, result);
     } catch (error) {
       next(error);
@@ -712,18 +718,70 @@ export class VMController {
         userIds?: string[];
       };
 
-      logger.info('Bulk 1:1 VM assignment requested', {
+      logger.info('Bulk 1:1 VM assignment job requested', {
         adminId: adminId.toString(),
         mode: body.mode,
         vmCount: body.vmIds.length,
       });
 
-      const result = await vmService.bulkAssignOneToOne(body, adminId);
-      success(
-        res,
-        `${result.assigned} VM(s) assigned successfully${result.failed > 0 ? `, ${result.failed} failed` : ''}.`,
-        result
+      const { jobId } = await bulkAssignJobService.startJob(
+        {
+          kind: 'platform_vm',
+          total: body.vmIds.length,
+          request: body as unknown as Record<string, unknown>,
+          adminId,
+        },
+        async () => {
+          const result = await vmService.bulkAssignOneToOne(body, adminId);
+          return {
+            assigned: result.assigned,
+            failed: result.failed,
+            pairs: result.pairs.map((p) => ({
+              resourceId: p.vmId,
+              resourceName: p.vmName,
+              userId: p.userId,
+              userEmail: p.userEmail,
+              password: p.password,
+              status: p.status,
+              error: p.error,
+            })),
+          };
+        }
       );
+
+      success(res, 'Bulk assign job started.', { jobId }, 202);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * GET /api/v1/vms/assign/jobs/:jobId — poll bulk assign job
+   */
+  async getBulkAssignJobStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const jobId = req.params['jobId'] as string;
+      const { job, pairs } = await bulkAssignJobService.getJobForAdmin(
+        jobId,
+        adminId,
+        'platform_vm'
+      );
+      success(res, 'Bulk assign job retrieved.', {
+        job,
+        pairs: pairs.map((p) => ({
+          vmId: p.resourceId,
+          vmName: p.resourceName,
+          userId: p.userId,
+          userEmail: p.userEmail,
+          password: p.password,
+          status: p.status,
+          error: p.error,
+        })),
+        assigned: job.completed,
+        failed: job.failed,
+      });
     } catch (error) {
       next(error);
     }
@@ -793,6 +851,75 @@ export class VMController {
       logger.info('[VMRestrict] Unrestrict requested', { userId: authReq.user.userId, vmId: vmId.toString() });
       await vmService.unrestrictVM(vmId, adminId, req);
       success(res, 'VM unrestricted successfully.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/vms/:vmId/schedule
+   */
+  async updateVmSchedule(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const data = await vmService.updateVmSchedule(
+        vmId,
+        adminId,
+        authReq.user.role,
+        req.body as AccessScheduleInput,
+        req
+      );
+      success(res, 'VM access schedule updated.', data);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/vms/:vmId/override — super_admin
+   */
+  async updateVmOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const vmId = new mongoose.Types.ObjectId(req.params['vmId'] as string);
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const data = await vmService.updateVmOverride(
+        vmId,
+        adminId,
+        req.body as { accessOverride: boolean; accessOverrideUntil?: string | null },
+        req
+      );
+      success(res, 'VM access override updated.', data);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  /**
+   * PATCH /api/v1/vms/override/bulk — grant/revoke override for many VMs (1-click)
+   */
+  async bulkUpdateVmOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+      const body = req.body as {
+        vmIds: string[];
+        accessOverride: boolean;
+        accessOverrideUntil?: string | null;
+      };
+      const vmIds = body.vmIds.map((id) => new mongoose.Types.ObjectId(id));
+      const data = await vmService.bulkUpdateVmOverride(
+        vmIds,
+        adminId,
+        {
+          accessOverride: body.accessOverride,
+          accessOverrideUntil: body.accessOverrideUntil,
+        },
+        req
+      );
+      success(res, `Override applied to ${data.updated} VM(s).`, data);
     } catch (error) {
       next(error);
     }

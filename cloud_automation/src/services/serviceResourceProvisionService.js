@@ -4,7 +4,16 @@ const { provisionServiceResource } = require('../provisioners/azure/serviceResou
 const { isPerUserCosting } = require('../utils/costingMode');
 const { getStagingResourceGroups, getPerUserResourceGroupProgress } = require('./userResourceGroupService');
 const { runWithConcurrency } = require('../utils/concurrency');
-const { getServiceProvisionConcurrency, getProvisionStepTimeBudgetMs } = require('../utils/provisionConcurrency');
+const {
+  getServiceProvisionConcurrency,
+  getProvisionStepTimeBudgetMs,
+  getServicePolicyBatchSize
+} = require('../utils/provisionConcurrency');
+
+const TERMINAL_STATUSES = new Set(['policy_configured', 'provisioned', 'skipped']);
+const RG_OFFSET_PREFIX = 'rg_offset:';
+
+const isNoOpPolicyService = (instance) => /ai foundry/i.test(String(instance?.service_name || ''));
 
 const logEvent = (event, details = {}) => {
   console.log(
@@ -15,57 +24,6 @@ const logEvent = (event, details = {}) => {
       ...details
     })
   );
-};
-
-const getRequestContext = async (client, requestId) => {
-  const result = await client.query(
-    `
-      SELECT
-        id,
-        location,
-        costing_mode,
-        azure_resource_group_name,
-        status
-      FROM requests
-      WHERE id = $1
-      FOR UPDATE
-    `,
-    [requestId]
-  );
-
-  return result.rows[0] || null;
-};
-
-const getInstancesForRequest = async (client, requestId) => {
-  const result = await client.query(
-    `
-      SELECT
-        rsi.service_id,
-        rsi.instance_option,
-        s.name AS service_name
-      FROM request_service_instances rsi
-      INNER JOIN services s ON s.id = rsi.service_id
-      WHERE rsi.request_id = $1
-      ORDER BY s.name
-    `,
-    [requestId]
-  );
-
-  return result.rows;
-};
-
-const getProvisionedCount = async (client, requestId) => {
-  const result = await client.query(
-    `
-      SELECT COUNT(*)::int AS count
-      FROM provisioned_service_resources
-      WHERE request_id = $1
-        AND status IN ('policy_configured', 'provisioned', 'skipped')
-    `,
-    [requestId]
-  );
-
-  return Number(result.rows[0]?.count || 0);
 };
 
 const upsertProvisionedResource = async (client, data) => {
@@ -106,13 +64,50 @@ const upsertProvisionedResource = async (client, data) => {
   );
 };
 
+const parseRgOffset = (row) => {
+  if (!row) {
+    return 0;
+  }
+
+  if (TERMINAL_STATUSES.has(String(row.status || ''))) {
+    return Number.POSITIVE_INFINITY;
+  }
+
+  const message = String(row.error_message || '');
+  if (message.startsWith(RG_OFFSET_PREFIX)) {
+    const parsed = Number(message.slice(RG_OFFSET_PREFIX.length));
+    return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : 0;
+  }
+
+  return 0;
+};
+
+const getExistingServiceRows = async (requestId) => {
+  const result = await db.query(
+    `
+      SELECT
+        service_id,
+        instance_option,
+        resource_type,
+        resource_name,
+        azure_resource_id,
+        status,
+        error_message
+      FROM provisioned_service_resources
+      WHERE request_id = $1
+    `,
+    [requestId]
+  );
+
+  return new Map(result.rows.map((row) => [Number(row.service_id), row]));
+};
+
 const provisionPoliciesAcrossResourceGroups = async ({
   requestId,
   instance,
   resourceGroupNames,
   location
 }) => {
-  const serviceId = Number(instance.service_id);
   const results = new Array(resourceGroupNames.length);
 
   await runWithConcurrency(
@@ -121,7 +116,7 @@ const provisionPoliciesAcrossResourceGroups = async ({
     async (resourceGroupName, index) => {
       results[index] = await provisionServiceResource({
         requestId,
-        serviceId,
+        serviceId: Number(instance.service_id),
         serviceName: instance.service_name,
         resourceGroupName,
         location,
@@ -131,6 +126,178 @@ const provisionPoliciesAcrossResourceGroups = async ({
   );
 
   return results[0];
+};
+
+const persistServiceProgress = async ({
+  requestId,
+  instance,
+  result,
+  status,
+  errorMessage
+}) => {
+  const client = await db.connect();
+
+  try {
+    await client.query('BEGIN');
+    await upsertProvisionedResource(client, {
+      requestId,
+      serviceId: Number(instance.service_id),
+      instanceOption: instance.instance_option,
+      resourceType: result?.resourceType || 'Microsoft.Authorization/policyAssignments',
+      resourceName: result?.resourceName || `instance-policy-${instance.service_id}`,
+      azureResourceId: result?.azureResourceId || '',
+      status,
+      errorMessage
+    });
+    await client.query('COMMIT');
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+};
+
+/**
+ * Per-user labs: apply policies across RGs in bounded batches so nginx/proxy
+ * timeouts do not kill multi-service × N-user fan-out in a single HTTP call.
+ * Multiple incomplete services are interleaved in the same batch for parallelism.
+ */
+const provisionPerUserServicePoliciesInBatches = async ({
+  requestId,
+  instances,
+  resourceGroupNames,
+  location,
+  existingByServiceId
+}) => {
+  const batchSizeBase = getServicePolicyBatchSize();
+  const startedAt = Date.now();
+  const timeBudgetMs = getProvisionStepTimeBudgetMs();
+
+  const serviceState = instances.map((instance) => {
+    const serviceId = Number(instance.service_id);
+    const existing = existingByServiceId.get(serviceId);
+    const offset = parseRgOffset(existing);
+    return {
+      instance,
+      serviceId,
+      offset: Number.isFinite(offset) ? offset : resourceGroupNames.length,
+      done: offset >= resourceGroupNames.length
+    };
+  });
+
+  let processedBatch = false;
+  let lastResultByService = new Map();
+
+  while (
+    serviceState.some((state) => !state.done) &&
+    (timeBudgetMs === 0 ? !processedBatch : Date.now() - startedAt < timeBudgetMs)
+  ) {
+    const pendingStates = serviceState.filter((state) => !state.done);
+    const allNoOp =
+      pendingStates.length > 0 && pendingStates.every((state) => isNoOpPolicyService(state.instance));
+    // AI Foundry policies are metadata-only — finish all RGs in one request.
+    const batchSize = allNoOp
+      ? Math.max(batchSizeBase, resourceGroupNames.length * pendingStates.length)
+      : batchSizeBase;
+
+    const tasks = [];
+    const plannedOffsets = new Map();
+
+    while (tasks.length < batchSize) {
+      let added = false;
+
+      for (const state of serviceState) {
+        if (state.done || tasks.length >= batchSize) {
+          continue;
+        }
+
+        const nextOffset = plannedOffsets.has(state.serviceId)
+          ? plannedOffsets.get(state.serviceId)
+          : state.offset;
+
+        if (nextOffset >= resourceGroupNames.length) {
+          state.done = true;
+          continue;
+        }
+
+        tasks.push({
+          state,
+          resourceGroupName: resourceGroupNames[nextOffset],
+          nextOffset: nextOffset + 1
+        });
+        plannedOffsets.set(state.serviceId, nextOffset + 1);
+        added = true;
+      }
+
+      if (!added) {
+        break;
+      }
+    }
+
+    if (tasks.length === 0) {
+      break;
+    }
+
+    await runWithConcurrency(tasks, getServiceProvisionConcurrency(), async (task) => {
+      const result = await provisionServiceResource({
+        requestId,
+        serviceId: task.state.serviceId,
+        serviceName: task.state.instance.service_name,
+        resourceGroupName: task.resourceGroupName,
+        location,
+        instanceOption: task.state.instance.instance_option
+      });
+      lastResultByService.set(task.state.serviceId, result);
+    });
+
+    const offsetsAfterBatch = new Map(plannedOffsets);
+    for (const state of serviceState) {
+      if (!offsetsAfterBatch.has(state.serviceId)) {
+        continue;
+      }
+
+      const newOffset = offsetsAfterBatch.get(state.serviceId);
+      state.offset = newOffset;
+      state.done = newOffset >= resourceGroupNames.length;
+
+      const result = lastResultByService.get(state.serviceId);
+      if (state.done) {
+        await persistServiceProgress({
+          requestId,
+          instance: state.instance,
+          result,
+          status: result?.status || 'policy_configured',
+          errorMessage: result?.errorMessage || null
+        });
+      } else {
+        await persistServiceProgress({
+          requestId,
+          instance: state.instance,
+          result,
+          status: 'in_progress',
+          errorMessage: `${RG_OFFSET_PREFIX}${newOffset}`
+        });
+      }
+    }
+
+    processedBatch = true;
+  }
+
+  const remainingRgWork = serviceState.reduce(
+    (sum, state) => sum + Math.max(0, resourceGroupNames.length - state.offset),
+    0
+  );
+  const configuredCount = serviceState.filter((state) => state.done).length;
+
+  return {
+    resourcesProvisioned: configuredCount,
+    resourcesSkipped: 0,
+    complete: remainingRgWork === 0,
+    remaining: remainingRgWork,
+    resourceGroupCount: resourceGroupNames.length,
+    servicesTotal: instances.length
+  };
 };
 
 const provisionServiceResourcesForRequest = async (requestId) => {
@@ -203,20 +370,31 @@ const provisionServiceResourcesForRequest = async (requestId) => {
     };
   }
 
-  const existingCountResult = await db.query(
-    `
-      SELECT COUNT(*)::int AS count
-      FROM provisioned_service_resources
-      WHERE request_id = $1
-        AND status IN ('policy_configured', 'provisioned', 'skipped')
-    `,
-    [requestId]
-  );
-
-  const existingCount = Number(existingCountResult.rows[0]?.count || 0);
+  const existingByServiceId = await getExistingServiceRows(requestId);
   const perUserCosting = isPerUserCosting(request.costing_mode);
 
-  if (existingCount >= instances.length && !perUserCosting) {
+  if (perUserCosting) {
+    const batchResult = await provisionPerUserServicePoliciesInBatches({
+      requestId,
+      instances,
+      resourceGroupNames,
+      location: request.location,
+      existingByServiceId
+    });
+
+    logEvent('service_resources_provision_batch', {
+      requestId,
+      ...batchResult
+    });
+
+    return batchResult;
+  }
+
+  const existingCount = [...existingByServiceId.values()].filter((row) =>
+    TERMINAL_STATUSES.has(String(row.status || ''))
+  ).length;
+
+  if (existingCount >= instances.length) {
     logEvent('service_resources_reused_existing', { requestId, count: existingCount });
     return {
       resourcesProvisioned: existingCount,
@@ -237,21 +415,11 @@ const provisionServiceResourcesForRequest = async (requestId) => {
     }
 
     const serviceId = Number(instance.service_id);
-    const existing = await db.query(
-      `
-        SELECT status
-        FROM provisioned_service_resources
-        WHERE request_id = $1 AND service_id = $2
-      `,
-      [requestId, serviceId]
-    );
+    const existing = existingByServiceId.get(serviceId);
+    const alreadyConfigured = TERMINAL_STATUSES.has(String(existing?.status || ''));
 
-    const alreadyConfigured = ['policy_configured', 'provisioned', 'skipped'].includes(
-      existing.rows[0]?.status
-    );
-
-    if (alreadyConfigured && !perUserCosting) {
-      if (existing.rows[0].status === 'skipped') {
+    if (alreadyConfigured) {
+      if (existing.status === 'skipped') {
         skipped += 1;
       } else {
         provisioned += 1;
@@ -266,42 +434,22 @@ const provisionServiceResourcesForRequest = async (requestId) => {
       location: request.location
     });
 
-    const client = await db.connect();
-
-    try {
-      await client.query('BEGIN');
-      await upsertProvisionedResource(client, {
-        requestId,
-        serviceId,
-        instanceOption: instance.instance_option,
-        resourceType: result.resourceType,
-        resourceName: result.resourceName,
-        azureResourceId: result.azureResourceId,
-        status: result.status,
-        errorMessage: result.errorMessage
-      });
-      await client.query('COMMIT');
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
-    }
+    await persistServiceProgress({
+      requestId,
+      instance,
+      result,
+      status: result.status,
+      errorMessage: result.errorMessage
+    });
 
     if (result.status === 'skipped') {
       skipped += 1;
     } else if (result.status === 'policy_configured' || result.status === 'provisioned') {
       provisioned += 1;
-    } else if (alreadyConfigured) {
-      if (existing.rows[0].status === 'skipped') {
-        skipped += 1;
-      } else {
-        provisioned += 1;
-      }
     }
   }
 
-  const complete = perUserProgress.ready && provisioned + skipped >= instances.length;
+  const complete = provisioned + skipped >= instances.length;
 
   logEvent('service_resources_provision_completed', {
     requestId,
@@ -344,7 +492,7 @@ const getServiceProvisionStatus = async (requestId) => {
 
   const resources = resourcesResult.rows;
 
-  const [instancesResult, perUserProgress] = await Promise.all([
+    const [instancesResult, perUserProgress] = await Promise.all([
     db.query(
       `
         SELECT COUNT(*)::int AS count
@@ -358,10 +506,33 @@ const getServiceProvisionStatus = async (requestId) => {
 
   const expectedInstances = Number(instancesResult.rows[0]?.count || 0);
   const configuredCount = resources.filter((row) =>
-    ['policy_configured', 'provisioned', 'skipped'].includes(String(row.status || ''))
+    TERMINAL_STATUSES.has(String(row.status || ''))
   ).length;
 
   const resourceGroupsReady = !perUserProgress.required || perUserProgress.ready;
+
+  if (perUserProgress.required && resourceGroupsReady && expectedInstances > 0) {
+    const rgCount = Number(perUserProgress.accountCount || 0);
+    let remainingRgWork = 0;
+
+    for (const row of resources) {
+      const offset = parseRgOffset(row);
+      if (Number.isFinite(offset)) {
+        remainingRgWork += Math.max(0, rgCount - offset);
+      }
+    }
+
+    const missingServices = Math.max(0, expectedInstances - resources.length);
+    remainingRgWork += missingServices * rgCount;
+
+    return {
+      resources,
+      count: resources.length,
+      complete: remainingRgWork === 0 && configuredCount >= expectedInstances,
+      remaining: remainingRgWork
+    };
+  }
+
   const complete =
     resourceGroupsReady &&
     (expectedInstances === 0 ? true : configuredCount >= expectedInstances);
@@ -424,7 +595,6 @@ const repairInstancePoliciesForRequest = async (requestId) => {
     return { repaired: 0, resourceGroups: resourceGroupNames };
   }
 
-  let repaired = 0;
   const repairTasks = [];
 
   for (const instance of instances.rows) {
@@ -447,17 +617,15 @@ const repairInstancePoliciesForRequest = async (requestId) => {
     });
   });
 
-  repaired = repairTasks.length;
-
   logEvent('instance_policies_repaired', {
     requestId,
-    repaired,
+    repaired: repairTasks.length,
     resourceGroupCount: resourceGroupNames.length,
     instanceCount: instances.rows.length
   });
 
   return {
-    repaired,
+    repaired: repairTasks.length,
     resourceGroups: resourceGroupNames,
     location: request.location
   };

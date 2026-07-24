@@ -129,8 +129,10 @@ const ensureAzureManagementAccess = async () => {
  *
  * Required Microsoft Graph API permissions (application permissions, admin consent):
  *   AuditLog.Read.All — read sign-in logs (/auditLogs/signIns)
- *   Directory.Read.All — read user info
- *   User.ReadWrite.All — disable/enable accounts, revoke sessions
+ *   Directory.Read.All — read user info / subscribed SKUs
+ *   Organization.Read.All — optional for organization metadata
+ *   User.ReadWrite.All — disable/enable accounts, revoke sessions, assign licenses
+ *   LicenseAssignment.ReadWrite.All — preferred for assignLicense / subscribedSkus
  *
  * Verify in Azure Portal → App registrations → API permissions.
  * Smoke test: GET https://graph.microsoft.com/v1.0/auditLogs/signIns?$top=1

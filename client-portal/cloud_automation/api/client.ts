@@ -1,5 +1,5 @@
 import { cloudAutomationRequest, getAzureCloudApiPrefix } from '../../lib/cloudAutomationRequest';
-import { getAccessToken } from '../../lib/apiClient';
+import { ApiError, getAccessToken } from '../../lib/apiClient';
 import { getTenantAccessToken } from '../../lib/tenantPortalApiClient';
 import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
 import type {
@@ -8,8 +8,12 @@ import type {
   AvailableLocation,
   CreateRequestPayload,
   CreateRequestResponse,
+  MicrosoftLicense,
   PricingEstimatePayload,
   PricingEstimateResponse,
+  PrivilegedRoleOption,
+  PrivilegedRoleRequestPayload,
+  PurchaseClonePayload,
   ServiceCatalogResponse,
   ServiceRole,
 } from '../types/catalog';
@@ -136,11 +140,61 @@ export async function createRequestWithPricing(
   });
 }
 
+/** List Microsoft licenses available in the configured Azure tenant. */
+export async function getMicrosoftLicenses(): Promise<MicrosoftLicense[]> {
+  const response = await azureRequest<{
+    success: boolean;
+    licenses: MicrosoftLicense[];
+  }>(cloudAutomationPath('/azure/licenses'));
+  return response.licenses ?? [];
+}
+
+/** Load prefilled purchase form data from a test_ids purchase email token. */
+export async function getPurchaseClonePayload(token: string): Promise<PurchaseClonePayload> {
+  const params = new URLSearchParams({ token });
+  const response = await azureRequest<{ success: boolean; data: PurchaseClonePayload; message?: string }>(
+    `${cloudAutomationPath('/purchase-intent/clone')}?${params.toString()}`
+  );
+  if (!response?.data) {
+    throw new ApiError(response?.message || 'Unable to load purchase details from this link.', 404);
+  }
+  return response.data;
+}
+
+/** Record Yes/No response from the purchase intent email. */
+export async function respondToPurchaseIntent(
+  token: string,
+  responseValue: 'yes' | 'no'
+): Promise<{ requestId: number; response: string; alreadyHandled?: boolean }> {
+  return azureRequest(cloudAutomationPath('/purchase-intent/respond'), {
+    method: 'POST',
+    body: JSON.stringify({ token, response: responseValue }),
+  });
+}
+
 /** Request elevated permissions for a service. */
 export async function createAdminAccessRequest(
   payload: AdminAccessRequestPayload
 ): Promise<{ success: boolean; request: unknown }> {
   return azureRequest(cloudAutomationPath('/admin-access-requests'), {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+/** List assignable privileged Azure RBAC roles (Owner excluded). */
+export async function listPrivilegedRoles(): Promise<PrivilegedRoleOption[]> {
+  const response = await azureRequest<{ success: boolean; roles: PrivilegedRoleOption[] }>(
+    cloudAutomationPath('/privileged-role-requests/roles')
+  );
+  return response.roles ?? [];
+}
+
+/** Submit a privileged role request for org-admin approval. */
+export async function createPrivilegedRoleRequest(
+  payload: PrivilegedRoleRequestPayload
+): Promise<{ success: boolean; request: unknown }> {
+  return azureRequest(cloudAutomationPath('/privileged-role-requests'), {
     method: 'POST',
     body: JSON.stringify(payload),
   });

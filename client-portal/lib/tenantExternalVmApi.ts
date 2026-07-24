@@ -72,6 +72,17 @@ export async function deleteTenantExternalVM(id: string): Promise<void> {
   await tenantPortalRequest(`/api/v1/tenant-external-vms/${id}`, { method: 'DELETE' });
 }
 
+export async function bulkDeleteTenantExternalVMs(
+  ids: string[]
+): Promise<{ deleted: number }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ deleted: number }>>('/api/v1/tenant-external-vms/bulk', {
+      method: 'DELETE',
+      body: JSON.stringify({ ids }),
+    })
+  );
+}
+
 export async function getTenantExternalVMConsole(
   id: string,
   dimensions?: { width?: number; height?: number }
@@ -117,12 +128,17 @@ export async function fetchAssignedTenantExternalVMsForUser(userId: string): Pro
 
 export async function assignTenantExternalVMs(
   userId: string,
-  externalVmIds: string[]
+  externalVmIds: string[],
+  accessSchedule?: import('./accessSchedule').AccessScheduleInput
 ): Promise<{ assigned: number }> {
   const data = await unwrap(
     tenantPortalRequest<ApiEnvelope<{ assigned: number }>>('/api/v1/tenant-external-vms/assign', {
       method: 'POST',
-      body: JSON.stringify({ userId, externalVmIds }),
+      body: JSON.stringify({
+        userId,
+        externalVmIds,
+        ...(accessSchedule ? { accessSchedule } : {}),
+      }),
     })
   );
   return data;
@@ -137,16 +153,56 @@ export type {
 export async function bulkAssignTenantExternalOneToOne(
   dto: import('./externalVmApi').BulkAssignExternalPairsDto
 ): Promise<import('./externalVmApi').BulkAssignExternalPairsResult> {
-  return unwrap(
-    tenantPortalRequest<
-      ApiEnvelope<import('./externalVmApi').BulkAssignExternalPairsResult>
-    >('/api/v1/tenant-external-vms/assign/bulk', {
-      method: 'POST',
-      body: JSON.stringify(dto),
-    })
+  const start = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ jobId: string }>>(
+      '/api/v1/tenant-external-vms/assign/bulk',
+      {
+        method: 'POST',
+        body: JSON.stringify(dto),
+      }
+    )
   );
+  const { pollBulkAssignJob } = await import('./pollBulkAssignJob');
+  type Pair = import('./externalVmApi').BulkAssignExternalPairRow;
+  const done = await pollBulkAssignJob<Pair>(async () =>
+    unwrap(
+      tenantPortalRequest<
+        ApiEnvelope<{
+          job: {
+            id: string;
+            status: string;
+            total: number;
+            completed: number;
+            failed: number;
+            pending: number;
+            errorMessage?: string;
+          };
+          assigned: number;
+          failed: number;
+          pairs: Pair[];
+        }>
+      >(`/api/v1/tenant-external-vms/assign/jobs/${start.jobId}`)
+    )
+  );
+  return {
+    assigned: done.assigned,
+    failed: done.failed,
+    pairs: done.pairs,
+  };
 }
 
 export async function unassignTenantExternalVM(id: string): Promise<void> {
   await tenantPortalRequest(`/api/v1/tenant-external-vms/assign/${id}`, { method: 'DELETE' });
+}
+
+export async function updateTenantExternalVmSchedule(
+  id: string,
+  accessSchedule: import('./accessSchedule').AccessScheduleInput
+): Promise<import('./accessSchedule').AccessSchedule> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<import('./accessSchedule').AccessSchedule>>(
+      `/api/v1/tenant-external-vms/${id}/schedule`,
+      { method: 'PATCH', body: JSON.stringify(accessSchedule) }
+    )
+  );
 }

@@ -46,7 +46,10 @@ export interface OrgAdminRequestSummary {
   userCount: number;
   startDate: string;
   expiryDate: string | null;
+  expiresAt?: string | null;
   requestName: string | null;
+  projectName?: string | null;
+  idMode?: 'test_ids' | 'azure_ids' | null;
   resourceGroupCount: number;
 }
 
@@ -190,6 +193,7 @@ export interface OrgAdminRequestDetail {
   location: string | null;
   status: string;
   expiryDate: string | null;
+  expiresAt?: string | null;
   enableDailyUsage: boolean;
   hasUsageWindows?: boolean;
   dailyLimitHours?: number | null;
@@ -199,12 +203,16 @@ export interface OrgAdminRequestDetail {
   enforceInAzure: boolean;
   resourceCleanupEnabled?: boolean;
   resourceCleanupIntervalHours?: number | null;
+  resourceCleanupTime?: string | null;
+  resourceCleanupTimezone?: string | null;
   resourceCleanupAction?: 'delete' | 'pause';
   resourceCleanupLastRanAt?: string | null;
   resourceCleanupNextRunAt?: string | null;
   cleanupEnabled?: boolean;
   cleanupIntervalHours?: number | null;
   createdAt: string;
+  projectName?: string | null;
+  idMode?: 'test_ids' | 'azure_ids' | null;
   liveSummary?: OrgAdminLiveSummary | null;
   liveResourcesSkipped?: boolean;
 }
@@ -378,6 +386,24 @@ export interface OrgAdminAccessRequest {
   resourceGroup: string | null;
   requestLocation: string | null;
   requestStatus: string | null;
+}
+
+export interface OrgAdminPrivilegedRoleRequest {
+  id: number;
+  requestId: number | null;
+  customerEmail: string;
+  azureRole: string;
+  status: string;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  reviewNotes: string | null;
+  createdAt: string;
+  resourceGroup: string | null;
+  requestLocation: string | null;
+  requestStatus: string | null;
+  rolesAssigned?: number;
+  usersProcessed?: number;
+  accessApplied?: boolean;
 }
 
 export type OrgAdminErrorKind = 'invalid_credentials' | 'session_expired' | 'network' | 'unknown';

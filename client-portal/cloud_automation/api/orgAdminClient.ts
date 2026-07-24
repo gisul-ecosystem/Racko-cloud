@@ -3,6 +3,7 @@ import { directGatewayRequest } from '../../lib/directGatewayRequest';
 import { ORG_ADMIN_API_PREFIX } from '../constants';
 import type {
   OrgAdminAccessRequest,
+  OrgAdminPrivilegedRoleRequest,
   OrgAdminAzureRoleOption,
   OrgAdminDeleteRequestResult,
   OrgAdminAzureRolesResponse,
@@ -122,6 +123,35 @@ export async function deleteOrgAdminRequest(
   );
 }
 
+export async function extendOrgAdminRequestExpiration(
+  requestId: number,
+  expiresAt: string
+): Promise<{
+  success: boolean;
+  message?: string;
+  data?: {
+    requestId: number;
+    expiryDate: string;
+    expiresAt: string;
+    previousExpiresAt?: string | null;
+    message?: string;
+  };
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/expiry`, {
+    method: 'PATCH',
+    body: JSON.stringify({ expiresAt }),
+  });
+}
+
+export async function sendOrgAdminPurchaseConfirmationMail(
+  requestId: number
+): Promise<{ success: boolean; message?: string; recipientEmail?: string; requestId?: number }> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/send-purchase-confirmation`,
+    { method: 'POST' }
+  );
+}
+
 export async function updateOrgAdminUserRoles(
   requestId: number,
   userId: number,
@@ -210,6 +240,44 @@ export async function reviewOrgAccessRequest(
     method: 'PATCH',
     body: JSON.stringify(payload),
   });
+}
+
+export async function listOrgPrivilegedRoleRequests(
+  params: { status?: string; requestId?: number } = {}
+): Promise<OrgAdminPrivilegedRoleRequest[]> {
+  const search = new URLSearchParams();
+  if (params.status) search.set('status', params.status);
+  if (params.requestId != null) search.set('requestId', String(params.requestId));
+  const query = search.toString();
+
+  const response = await orgAdminRequest<{
+    success: boolean;
+    requests: OrgAdminPrivilegedRoleRequest[];
+  }>(`/privileged-role-requests${query ? `?${query}` : ''}`);
+  return response.requests ?? [];
+}
+
+export async function reviewOrgPrivilegedRoleRequest(
+  id: number,
+  payload: { status: 'approved' | 'rejected'; reviewNotes?: string }
+): Promise<{ success: boolean; request: OrgAdminPrivilegedRoleRequest }> {
+  return orgAdminRequest(`/privileged-role-requests/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function assignOrgPrivilegedRoleToAllUsers(
+  requestId: number,
+  azureRole: string
+): Promise<{ success: boolean; message?: string; rolesAssigned?: number; usersProcessed?: number }> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/privileged-roles/assign-all`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ azureRole }),
+    }
+  );
 }
 
 export async function renewOrgAdminUserBudget(

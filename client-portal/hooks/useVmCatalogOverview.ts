@@ -1,7 +1,8 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { fetchVmCatalogOverview, type CatalogVmOverview } from '../lib/vmCatalogApi';
+import { useVmCatalogPortal } from '../context/VmCatalogPortalContext';
+import type { CatalogVmOverview } from '../lib/vmCatalogApi';
 import { ApiError } from '../lib/apiClient';
 
 interface UseVmCatalogOverviewResult {
@@ -11,7 +12,8 @@ interface UseVmCatalogOverviewResult {
   refetch: () => void;
 }
 
-export function useVmCatalogOverview(isAuthenticated: boolean): UseVmCatalogOverviewResult {
+export function useVmCatalogOverview(enabled = true): UseVmCatalogOverviewResult {
+  const { api, isReady } = useVmCatalogPortal();
   const [overview, setOverview] = useState<CatalogVmOverview | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -20,7 +22,7 @@ export function useVmCatalogOverview(isAuthenticated: boolean): UseVmCatalogOver
     setLoading(true);
     setError(null);
     try {
-      const result = await fetchVmCatalogOverview();
+      const result = await api.fetchOverview();
       setOverview(result);
     } catch (err) {
       setOverview(null);
@@ -34,11 +36,11 @@ export function useVmCatalogOverview(isAuthenticated: boolean): UseVmCatalogOver
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [api]);
 
   useEffect(() => {
-    if (isAuthenticated) void load();
-  }, [load, isAuthenticated]);
+    if (enabled && isReady) void load();
+  }, [load, enabled, isReady]);
 
   return { overview, loading, error, refetch: load };
 }

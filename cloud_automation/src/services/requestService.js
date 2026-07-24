@@ -5,8 +5,14 @@ const pricingService = require('./pricingService');
 const { assertProvisionableLocation, assertLocationAvailableForServices } = require('./azureLocationService');
 const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments, finalizeAiFoundryTierRoles } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
+const privilegedRoleRequestService = require('./privilegedRoleRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 const { buildExpiresAtFromParts } = require('../utils/requestExpiry');
+const {
+  computeNextDailyCleanupRunAt,
+  normalizeCleanupTime,
+  normalizeCleanupTimezone
+} = require('../utils/resourceCleanupSchedule');
 
 async function createRequest({
   customerEmail,
@@ -26,8 +32,16 @@ async function createRequest({
   perUserBudgetUsd,
   resourceCleanupEnabled,
   resourceCleanupIntervalHours,
+  resourceCleanupTime,
+  resourceCleanupTimezone,
   resourceCleanupAction,
   usageWindows,
+  projectName,
+  idMode,
+  microsoftLicenseSkuId,
+  microsoftLicenseSkuPartNumber,
+  convertedFromRequestId,
+  purchaseToken,
   rackoUserId
 }) {
 
@@ -296,16 +310,57 @@ async function createRequest({
         ? new Date(Date.now() + resolvedCleanupIntervalHours * 60 * 60 * 1000).toISOString()
         : null;
     const resolvedResourceCleanupEnabled = resourceCleanupEnabled === true;
+    const resolvedResourceCleanupTime =
+      resolvedResourceCleanupEnabled && resourceCleanupTime
+        ? normalizeCleanupTime(resourceCleanupTime)
+        : null;
+    const resolvedResourceCleanupTimezone = resolvedResourceCleanupTime
+      ? normalizeCleanupTimezone(
+          resourceCleanupTimezone
+            || usageWindows?.[0]?.timezone
+            || usageSchedule?.timezone
+            || 'Asia/Kolkata'
+        )
+      : null;
     const resolvedResourceCleanupIntervalHours =
-      resolvedResourceCleanupEnabled && Number.isInteger(resourceCleanupIntervalHours)
-        ? resourceCleanupIntervalHours
-        : null;
-    const resolvedResourceCleanupNextRunAt =
-      resolvedResourceCleanupEnabled && resolvedResourceCleanupIntervalHours
-        ? new Date(Date.now() + resolvedResourceCleanupIntervalHours * 60 * 60 * 1000).toISOString()
-        : null;
+      resolvedResourceCleanupEnabled && resolvedResourceCleanupTime
+        ? 24
+        : resolvedResourceCleanupEnabled && Number.isInteger(resourceCleanupIntervalHours)
+          ? resourceCleanupIntervalHours
+          : null;
+    const resolvedResourceCleanupNextRunAt = resolvedResourceCleanupEnabled
+      ? resolvedResourceCleanupTime
+        ? computeNextDailyCleanupRunAt({
+            timeHHMM: resolvedResourceCleanupTime,
+            timezone: resolvedResourceCleanupTimezone
+          })
+        : resolvedResourceCleanupIntervalHours
+          ? new Date(Date.now() + resolvedResourceCleanupIntervalHours * 60 * 60 * 1000).toISOString()
+          : null
+      : null;
     const resolvedResourceCleanupAction =
       resourceCleanupAction === 'pause' ? 'pause' : 'delete';
+    const resolvedProjectName =
+      typeof projectName === 'string' && projectName.trim() ? projectName.trim() : null;
+    const resolvedIdMode =
+      idMode === 'test_ids' || idMode === 'azure_ids' ? idMode : null;
+    const resolvedMicrosoftLicenseSkuId =
+      typeof microsoftLicenseSkuId === 'string' && microsoftLicenseSkuId.trim()
+        ? microsoftLicenseSkuId.trim()
+        : null;
+    const resolvedMicrosoftLicenseSkuPartNumber =
+      typeof microsoftLicenseSkuPartNumber === 'string' && microsoftLicenseSkuPartNumber.trim()
+        ? microsoftLicenseSkuPartNumber.trim()
+        : null;
+    const { getPurchaseIntentDelayMs } = require('./purchaseIntentService');
+    const resolvedPurchaseIntentDueAt =
+      resolvedIdMode === 'test_ids'
+        ? new Date(Date.now() + getPurchaseIntentDelayMs()).toISOString()
+        : null;
+    const resolvedConvertedFromRequestId =
+      Number.isInteger(Number(convertedFromRequestId)) && Number(convertedFromRequestId) > 0
+        ? Number(convertedFromRequestId)
+        : null;
 
     const request =
       await client.query(
@@ -348,7 +403,23 @@ async function createRequest({
 
           resource_cleanup_next_run_at,
 
-          resource_cleanup_action
+          resource_cleanup_action,
+
+          resource_cleanup_time,
+
+          resource_cleanup_timezone,
+
+          project_name,
+
+          id_mode,
+
+          microsoft_license_sku_id,
+
+          microsoft_license_sku_part_number,
+
+          purchase_intent_due_at,
+
+          converted_from_request_id
 
         )
 
@@ -372,7 +443,15 @@ async function createRequest({
           $16,
           $17,
           $18,
-          $19
+          $19,
+          $20,
+          $21,
+          $22,
+          $23,
+          $24,
+          $25,
+          $26,
+          $27
 
         )
 
@@ -419,7 +498,23 @@ async function createRequest({
 
           resolvedResourceCleanupNextRunAt,
 
-          resolvedResourceCleanupAction
+          resolvedResourceCleanupAction,
+
+          resolvedResourceCleanupTime,
+
+          resolvedResourceCleanupTimezone,
+
+          resolvedProjectName,
+
+          resolvedIdMode,
+
+          resolvedMicrosoftLicenseSkuId,
+
+          resolvedMicrosoftLicenseSkuPartNumber,
+
+          resolvedPurchaseIntentDueAt,
+
+          resolvedConvertedFromRequestId
 
         ]
       );
@@ -672,6 +767,12 @@ async function createRequest({
       client
     });
 
+    await privilegedRoleRequestService.linkPrivilegedRoleRequestsToRequest({
+      customerEmail,
+      requestId,
+      client
+    });
+
     await client.query(
       'COMMIT'
     );
@@ -694,7 +795,70 @@ async function createRequest({
       );
     }
 
+    try {
+      await privilegedRoleRequestService.fulfillLinkedApprovedPrivilegedRoleRequests({
+        customerEmail,
+        requestId
+      });
+    } catch (fulfillmentError) {
+      console.error(
+        JSON.stringify({
+          timestamp: new Date().toISOString(),
+          service: 'request-service',
+          level: 'error',
+          event: 'approved_privileged_role_fulfillment_failed',
+          requestId,
+          message: fulfillmentError?.message
+        })
+      );
+    }
 
+    if (resolvedConvertedFromRequestId) {
+      try {
+        const purchaseIntentService = require('./purchaseIntentService');
+        await purchaseIntentService.markRequestConverted(
+          resolvedConvertedFromRequestId,
+          requestId
+        );
+      } catch (convertError) {
+        console.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            service: 'request-service',
+            level: 'error',
+            event: 'purchase_convert_mark_failed',
+            sourceRequestId: resolvedConvertedFromRequestId,
+            requestId,
+            message: convertError?.message
+          })
+        );
+      }
+
+      try {
+        await db.query(
+          `
+            INSERT INTO request_custom_services (request_id, custom_service_id, added_by)
+            SELECT $1, custom_service_id, COALESCE(added_by, 'purchase-convert')
+            FROM request_custom_services
+            WHERE request_id = $2
+            ON CONFLICT (request_id, custom_service_id) DO NOTHING
+          `,
+          [requestId, resolvedConvertedFromRequestId]
+        );
+      } catch (customServiceCopyError) {
+        console.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            service: 'request-service',
+            level: 'error',
+            event: 'purchase_convert_custom_services_copy_failed',
+            sourceRequestId: resolvedConvertedFromRequestId,
+            requestId,
+            message: customServiceCopyError?.message
+          })
+        );
+      }
+    }
 
     return {
 

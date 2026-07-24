@@ -2,8 +2,8 @@
 
 import Link from 'next/link';
 import { useState } from 'react';
-import { useAuth } from '../../../../context/AuthContext';
 import { useVmCatalogVms } from '../../../../hooks/useVmCatalogVms';
+import { useVmCatalogPortal } from '../../../../context/VmCatalogPortalContext';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
@@ -32,14 +32,17 @@ function formatInr(amount: number | undefined): string {
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
-  const styles: Record<VmCatalogCategory, string> = {
+  const styles: Record<string, string> = {
+    ubuntu: 'bg-orange-50 text-orange-700 border-orange-200',
+    rocky: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+    debian: 'bg-pink-50 text-pink-700 border-pink-200',
     linux: 'bg-green-50 text-green-700 border-green-200',
     windows: 'bg-blue-50 text-blue-700 border-blue-200',
     gpu: 'bg-purple-50 text-purple-700 border-purple-200',
   };
   return (
     <span
-      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category]}`}
+      className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-xs font-medium capitalize ${styles[category] || styles.linux}`}
     >
       {category}
     </span>
@@ -97,8 +100,8 @@ function ConnectionDetails({ vm }: { vm: ICatalogVm }) {
 }
 
 export default function MyVmsPage() {
-  const { isAuthenticated } = useAuth();
-  const { vms, loading, error, refetch } = useVmCatalogVms(isAuthenticated);
+  const { routes } = useVmCatalogPortal();
+  const { vms, loading, error, refetch } = useVmCatalogVms();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const router = useRouter();
 
@@ -112,7 +115,7 @@ export default function MyVmsPage() {
           </p>
         </div>
         <Link
-          href="/console/create-vm/create"
+          href={routes.create}
           className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717]"
         >
           <Plus className="h-4 w-4" />
@@ -136,7 +139,7 @@ export default function MyVmsPage() {
                 When you submit a catalog request, it will show up here.
               </p>
               <Link
-                href="/console/create-vm/create"
+                href={routes.create}
                 className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[#B91C1C] hover:text-[#a01717]"
               >
                 <Plus className="h-4 w-4" />
@@ -186,7 +189,7 @@ export default function MyVmsPage() {
                           setExpandedId((prev) => (prev === vm._id ? null : vm._id))
                         }
                         onOpenConsole={() =>
-                          router.push(`/console/create-vm/my-vms/${vm._id}/console`)
+                          router.push(routes.console(vm._id))
                         }
                       />
                     );

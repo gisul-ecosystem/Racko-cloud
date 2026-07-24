@@ -5,7 +5,7 @@
 #   VM_USER_UAT        — SSH user (e.g. ubuntu)
 #   VM_SSH_KEY_UAT     — Private SSH key for the VM user
 #
-# Service env files live on the VM under /opt/racko-uat/<service>/.env (e.g. cloud-automation/.env) — not in GitHub secrets.
+# Service env files live on the VM under /opt/racko/<service>/.env (e.g. cloud-automation/.env, cloud_automation_reseller/.env) — not in GitHub secrets.
 # client-portal bakes NEXT_PUBLIC_GATEWAY_URL to the public API (e.g. https://api-uat.racko.ai).
 # cloud-automation large-lab batch sizes are also set in docker-compose.yml (defaults: 25).
 # Nginx must proxy /api/ → :8000 on uat.racko.ai and each tenant domain (proxy_read_timeout >= 300s).
@@ -86,6 +86,22 @@ jobs:
 
       - name: Push cloud-automation-aws image
         run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-aws:uat
+
+  build-cloud-automation-reseller:
+    name: Build & Push cloud-automation-reseller
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build cloud-automation-reseller image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:uat -f cloud_automation_reseller/Dockerfile cloud_automation_reseller/
+
+      - name: Push cloud-automation-reseller image
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:uat
 
   build-client-portal:
     name: Build & Push client-portal
@@ -226,6 +242,7 @@ jobs:
       - build-cloud-gateway
       - build-cloud-automation
       - build-cloud-automation-aws
+      - build-cloud-automation-reseller
       - build-client-portal
       - build-create-vm-catalog-agent
       - deploy-agent
@@ -277,10 +294,10 @@ jobs:
              echo 'Docker login...'; \
              echo '${DOCKERHUB_TOKEN}' | docker login -u '${DOCKERHUB_USERNAME}' --password-stdin; \
              echo 'Deploying...'; \
-             sudo docker-compose -f docker-compose.yml down --remove-orphans; \
-             sudo docker-compose -f docker-compose.yml pull; \
-             sudo docker-compose -f docker-compose.yml up -d; \
-             sudo docker-compose -f docker-compose.yml ps"
+             sudo docker compose -f docker-compose.yml down --remove-orphans; \
+             sudo docker compose -f docker-compose.yml pull; \
+             sudo docker compose -f docker-compose.yml up -d; \
+             sudo docker compose -f docker-compose.yml ps"
 
       - name: Summary
         run: |
@@ -290,3 +307,4 @@ jobs:
           echo "Core API:       http://${VM_HOST}:8001"
           echo "Azure service:  http://${VM_HOST}:3002"
           echo "AWS service:    http://${VM_HOST}:3003"
+          echo "Reseller svc:   http://${VM_HOST}:3005"

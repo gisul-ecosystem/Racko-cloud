@@ -4,6 +4,8 @@ const { validateUsageSchedule } = require('../utils/usageSchedule');
 const { normalizeCostingMode } = require('../utils/costingMode');
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const allowedIdModes = new Set(['test_ids', 'azure_ids']);
+
 const allowedRequestFields = new Set([
   'customerEmail',
   'accountCount',
@@ -23,8 +25,16 @@ const allowedRequestFields = new Set([
   'perUserBudgetUsd',
   'resourceCleanupEnabled',
   'resourceCleanupIntervalHours',
+  'resourceCleanupTime',
+  'resourceCleanupTimezone',
   'resourceCleanupAction',
-  'usageWindows'
+  'usageWindows',
+  'projectName',
+  'idMode',
+  'microsoftLicenseSkuId',
+  'microsoftLicenseSkuPartNumber',
+  'convertedFromRequestId',
+  'purchaseToken'
 ]);
 
 const timePattern = /^\d{2}:\d{2}$/;
@@ -50,8 +60,16 @@ const validateRequestPayload = (body) => {
     perUserBudgetUsd,
     resourceCleanupEnabled,
     resourceCleanupIntervalHours,
+    resourceCleanupTime,
+    resourceCleanupTimezone,
     resourceCleanupAction,
-    usageWindows
+    usageWindows,
+    projectName,
+    idMode,
+    microsoftLicenseSkuId,
+    microsoftLicenseSkuPartNumber,
+    convertedFromRequestId,
+    purchaseToken
   } = body;
 
   if (invalidFields.length > 0) {
@@ -62,8 +80,58 @@ const validateRequestPayload = (body) => {
     throw new AppError('customerEmail must be a valid email address.', 400);
   }
 
+  if (projectName !== undefined) {
+    if (typeof projectName !== 'string' || projectName.trim().length === 0) {
+      throw new AppError('projectName must be a non-empty string when provided.', 400);
+    }
+
+    if (projectName.trim().length > 120) {
+      throw new AppError('projectName must be 120 characters or fewer.', 400);
+    }
+  }
+
+  if (idMode !== undefined) {
+    if (typeof idMode !== 'string' || !allowedIdModes.has(idMode)) {
+      throw new AppError("idMode must be 'test_ids' or 'azure_ids' when provided.", 400);
+    }
+  }
+
+  if (microsoftLicenseSkuId !== undefined && microsoftLicenseSkuId !== null) {
+    if (typeof microsoftLicenseSkuId !== 'string' || microsoftLicenseSkuId.trim().length === 0) {
+      throw new AppError('microsoftLicenseSkuId must be a non-empty string when provided.', 400);
+    }
+  }
+
+  if (microsoftLicenseSkuPartNumber !== undefined && microsoftLicenseSkuPartNumber !== null) {
+    if (
+      typeof microsoftLicenseSkuPartNumber !== 'string'
+      || microsoftLicenseSkuPartNumber.trim().length === 0
+    ) {
+      throw new AppError(
+        'microsoftLicenseSkuPartNumber must be a non-empty string when provided.',
+        400
+      );
+    }
+  }
+
+  if (convertedFromRequestId !== undefined && convertedFromRequestId !== null) {
+    if (!Number.isInteger(Number(convertedFromRequestId)) || Number(convertedFromRequestId) <= 0) {
+      throw new AppError('convertedFromRequestId must be a positive integer when provided.', 400);
+    }
+  }
+
+  if (purchaseToken !== undefined && purchaseToken !== null) {
+    if (typeof purchaseToken !== 'string' || purchaseToken.trim().length === 0) {
+      throw new AppError('purchaseToken must be a non-empty string when provided.', 400);
+    }
+  }
+
   if (!Number.isInteger(accountCount) || accountCount <= 0) {
     throw new AppError('accountCount must be a positive integer.', 400);
+  }
+
+  if (idMode === 'test_ids' && accountCount > 5) {
+    throw new AppError('accountCount must be between 1 and 5 for Azure test_ids.', 400);
   }
 
   if (typeof location !== 'string' || location.trim().length === 0) {
@@ -156,9 +224,25 @@ const validateRequestPayload = (body) => {
     }
   }
 
-  if (resolvedResourceCleanupEnabled && resourceCleanupIntervalHours === undefined) {
+  if (resourceCleanupTime !== undefined && resourceCleanupTime !== null) {
+    if (typeof resourceCleanupTime !== 'string' || !timePattern.test(resourceCleanupTime.trim())) {
+      throw new AppError('resourceCleanupTime must be in HH:MM format when provided.', 400);
+    }
+  }
+
+  if (resourceCleanupTimezone !== undefined && resourceCleanupTimezone !== null) {
+    if (typeof resourceCleanupTimezone !== 'string' || !resourceCleanupTimezone.trim()) {
+      throw new AppError('resourceCleanupTimezone must be a non-empty string when provided.', 400);
+    }
+  }
+
+  if (
+    resolvedResourceCleanupEnabled
+    && resourceCleanupIntervalHours === undefined
+    && (resourceCleanupTime === undefined || resourceCleanupTime === null)
+  ) {
     throw new AppError(
-      'Cleanup interval is required when resource cleanup is enabled.',
+      'resourceCleanupTime is required when resource cleanup is enabled.',
       400
     );
   }

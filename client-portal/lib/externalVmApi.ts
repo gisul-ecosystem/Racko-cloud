@@ -1,4 +1,5 @@
 import { apiRequest } from './apiClient';
+import type { AccessSchedule, AccessScheduleInput } from './accessSchedule';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,7 @@ export interface IExternalVM {
   tenantId?: string;
   assignedTo?: string | null;
   assignedTenantUserId?: string | null;
+  accessSchedule?: AccessSchedule | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -168,16 +170,42 @@ export interface BulkAssignExternalPairsDto {
   passwordMode?: 'auto' | 'shared';
   sharedPassword?: string;
   userIds?: string[];
+  accessSchedule?: AccessScheduleInput;
 }
 
 export async function bulkAssignExternalOneToOne(
   dto: BulkAssignExternalPairsDto
 ): Promise<BulkAssignExternalPairsResult> {
-  const res = await apiRequest<ApiResponse<BulkAssignExternalPairsResult>>(
+  const start = await apiRequest<ApiResponse<{ jobId: string }>>(
     '/api/v1/external-vms/assign/bulk',
     { method: 'POST', body: JSON.stringify(dto) }
   );
-  return res.data;
+  const jobId = start.data.jobId;
+  const { pollBulkAssignJob } = await import('./pollBulkAssignJob');
+  const done = await pollBulkAssignJob<BulkAssignExternalPairRow>(async () => {
+    const res = await apiRequest<
+      ApiResponse<{
+        job: {
+          id: string;
+          status: string;
+          total: number;
+          completed: number;
+          failed: number;
+          pending: number;
+          errorMessage?: string;
+        };
+        assigned: number;
+        failed: number;
+        pairs: BulkAssignExternalPairRow[];
+      }>
+    >(`/api/v1/external-vms/assign/jobs/${jobId}`);
+    return res.data;
+  });
+  return {
+    assigned: done.assigned,
+    failed: done.failed,
+    pairs: done.pairs,
+  };
 }
 
 export async function unassignExternalVM(id: string): Promise<void> {

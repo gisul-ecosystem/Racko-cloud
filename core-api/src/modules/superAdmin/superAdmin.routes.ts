@@ -7,6 +7,7 @@ import {
   manualWalletCreditSchema,
   setTenantAdminActiveSchema,
   superAdminManualCreditsListSchema,
+  superAdminTenantAdminParamSchema,
   superAdminTenantIdParamSchema,
   superAdminWalletTransactionsSchema,
 } from './superAdmin.validation';
@@ -33,6 +34,14 @@ router.patch(
   validateRequest(setTenantAdminActiveSchema),
   (req, res, next) => {
     superAdminController.setTenantAdminActive(req, res, next);
+  }
+);
+
+router.delete(
+  '/tenants/:tenantId/admins/:tenantUserId',
+  validateRequest(superAdminTenantAdminParamSchema),
+  (req, res, next) => {
+    superAdminController.deleteTenantAdmin(req, res, next);
   }
 );
 

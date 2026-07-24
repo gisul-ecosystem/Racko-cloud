@@ -9,6 +9,7 @@ import {
   tenantVmConsoleSchema,
   tenantVmIdParamSchema,
   tenantVmListQuerySchema,
+  tenantVmScheduleSchema,
 } from './tenantVm.validation';
 
 const router = Router();
@@ -47,6 +48,13 @@ router.delete(
   requireTenantRole('tenant_admin'),
   validateRequest(tenantVmIdParamSchema),
   (req, res, next) => tenantVmController.unassignVm(req, res, next)
+);
+
+router.patch(
+  '/:vmId/schedule',
+  requireTenantRole('tenant_admin'),
+  validateRequest(tenantVmScheduleSchema),
+  (req, res, next) => tenantVmController.updateVmSchedule(req, res, next)
 );
 
 router.get(

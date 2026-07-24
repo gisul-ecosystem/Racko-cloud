@@ -3,7 +3,21 @@ import mongoose from 'mongoose';
 import type { AuthenticatedRequest } from '../../types';
 import { vmCatalogService } from './vmCatalog.service';
 import type { CreateCatalogVmRequestInput } from './vmCatalog.validation';
+import type {
+  CalculateVmPricingInput,
+  ListVmPricingQuery,
+} from './vmCatalog.validation';
 import type { VmCatalogStatus } from '../../models/catalogVm.model';
+import {
+  selectProvider,
+  listPricing as listResellerPricing,
+} from './resellerClient';
+import {
+  getUsdToInrRate,
+  periodFromHourlyUsd,
+  usdToInrPeriod,
+  convertUsdAmount,
+} from '../../utils/usdToInr';
 
 function success<T>(res: Response, message: string, data: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, data });
@@ -158,6 +172,121 @@ async function reject(req: Request, res: Response, next: NextFunction): Promise<
   }
 }
 
+async function changeTemplate(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const reviewerId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = (req.body || {}) as { template?: string };
+    const request = await vmCatalogService.changeTemplateToWindows(id, reviewerId, {
+      ...(body.template ? { template: body.template } : {}),
+    });
+    success(res, 'OS template changed to Windows on Webyne. Ready to attach.', { request });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function powerAction(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as { action: 'virtualizor' | 'start' | 'stop' | 'reboot' };
+    const result = await vmCatalogService.powerAction(id, body.action);
+    success(res, `Webyne ${body.action} completed.`, result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function calculatePricing(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const body = req.body as CalculateVmPricingInput;
+    const providers = body.providers ?? body.provider;
+    const data = await selectProvider({
+      category: body.category,
+      durationDays: body.durationDays,
+      specs: body.specs
+        ? {
+            cpu: body.specs.cpu != null ? String(body.specs.cpu) : undefined,
+            ram: body.specs.ram != null ? String(body.specs.ram) : undefined,
+            disk: body.specs.disk != null ? String(body.specs.disk) : undefined,
+          }
+        : undefined,
+      canonicalSpec: body.canonicalSpec,
+      nestedVirtualization: body.nestedVirtualization === true,
+      ...(providers !== undefined ? { providers } : {}),
+    });
+
+    const fx = await getUsdToInrRate();
+    const usd = periodFromHourlyUsd(data.rawTotalPricePerHr);
+    const inr = usdToInrPeriod(usd, fx.usdToInr);
+
+    success(res, 'VM pricing calculated.', {
+      ...data,
+      currency: data.currency || 'USD',
+      usdToInr: fx.usdToInr,
+      fxSource: fx.source,
+      pricingUsd: usd,
+      pricingInr: inr,
+      rawComputePricePerHrInr: convertUsdAmount(data.rawComputePricePerHr, fx.usdToInr),
+      rawStoragePricePerHrInr: convertUsdAmount(data.rawStoragePricePerHr, fx.usdToInr),
+      rawIpPricePerHrInr: convertUsdAmount(data.rawIpPricePerHr, fx.usdToInr),
+      rawPublicIpPricePerHrInr: convertUsdAmount(data.rawPublicIpPricePerHr, fx.usdToInr),
+      rawPrivateIpPricePerHrInr: convertUsdAmount(data.rawPrivateIpPricePerHr, fx.usdToInr),
+      rawTotalPricePerHrInr: convertUsdAmount(data.rawTotalPricePerHr, fx.usdToInr),
+      rawTotalWithPublicIpPerHrInr: convertUsdAmount(
+        data.rawTotalWithPublicIpPerHr ?? data.rawTotalPricePerHr,
+        fx.usdToInr
+      ),
+      rawTotalWithPrivateIpPerHrInr: convertUsdAmount(
+        data.rawTotalWithPrivateIpPerHr,
+        fx.usdToInr
+      ),
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function listPricing(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const query = req.query as unknown as ListVmPricingQuery;
+    const data = await listResellerPricing({
+      providers: query.providers,
+      provider: query.provider,
+      category: query.category,
+      canonicalSpec: query.canonicalSpec,
+      limit: query.limit,
+      nestedVirtualization: query.nestedVirtualization,
+    });
+
+    const fx = await getUsdToInrRate();
+    const rows = (data.rows || []).map((row) => {
+      const usd = periodFromHourlyUsd(row.rawTotalPricePerHr);
+      const inr = usdToInrPeriod(usd, fx.usdToInr);
+      return {
+        ...row,
+        currency: row.currency || 'USD',
+        pricingUsd: usd,
+        pricingInr: inr,
+        rawTotalPricePerHrInr: convertUsdAmount(row.rawTotalPricePerHr, fx.usdToInr),
+        rawComputePricePerHrInr: convertUsdAmount(row.rawComputePricePerHr, fx.usdToInr),
+        rawStoragePricePerHrInr: convertUsdAmount(row.rawStoragePricePerHr, fx.usdToInr),
+        rawIpPricePerHrInr: convertUsdAmount(row.rawIpPricePerHr, fx.usdToInr),
+      };
+    });
+
+    success(res, 'VM pricing rows retrieved.', {
+      ...data,
+      rows,
+      usdToInr: fx.usdToInr,
+      fxSource: fx.source,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export const vmCatalogController = {
   overview,
   list,
@@ -169,5 +298,9 @@ export const vmCatalogController = {
   approve,
   fetchDetails,
   attach,
+  changeTemplate,
+  powerAction,
   reject,
+  calculatePricing,
+  listPricing,
 };

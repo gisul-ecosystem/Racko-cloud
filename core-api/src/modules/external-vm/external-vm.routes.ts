@@ -67,6 +67,12 @@ router.post(
   (req, res, next) => externalVMController.bulkAssignOneToOne(req, res, next)
 );
 
+router.get(
+  '/assign/jobs/:jobId',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => externalVMController.getBulkAssignJobStatus(req, res, next)
+);
+
 router.delete(
   '/assign/:id',
   requireRole('admin', 'super_admin'),

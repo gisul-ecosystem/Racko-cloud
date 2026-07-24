@@ -23,6 +23,8 @@ export class InternalTenantController {
         id: tenant._id.toString(),
         slug: tenant.slug,
         status: tenant.status,
+        ipAccessMode: tenant.ipAccessMode ?? 'all',
+        allowedIps: tenant.allowedIps ?? [],
       });
     } catch (error) {
       next(error);

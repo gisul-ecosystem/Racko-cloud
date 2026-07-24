@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, Check, Cloud, FilePlus2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
@@ -15,12 +15,16 @@ import {
 } from '../../../lib/cloudRequestWallet';
 import {
   createAdminAccessRequest,
+  createPrivilegedRoleRequest,
   createRequestWithPricing,
+  getPurchaseClonePayload,
+  listPrivilegedRoles,
 } from '../../api/client';
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../../lib/cloudAccent';
 import { hexToRgba } from '../../../lib/tenantAccentStyles';
 import { useAvailableLocations } from '../../hooks/useAvailableLocations';
+import { useMicrosoftLicenses } from '../../hooks/useMicrosoftLicenses';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
 import { useServiceCatalog } from '../../hooks/useServiceCatalog';
 import type {
@@ -30,12 +34,23 @@ import type {
   ServiceCatalogResponse,
   UsageWindow,
   CostingMode,
+  AzureIdMode,
+  PurchaseCloneCustomRole,
+  PurchaseCloneCustomService,
 } from '../../types/catalog';
 import {
   defaultEndDate,
   defaultStartDate,
+  defaultTestIdsEndDate,
+  defaultTestIdsStartDate,
+  addHoursToDateTimeLocal,
+  isProjectDetailsComplete,
   normalizeServiceId,
+  pickCheapestLocation,
   supportsPauseCleanup,
+  TEST_IDS_DEFAULTS,
+  TEST_IDS_MAX_ACCOUNT_COUNT,
+  isValidCleanupTime,
 } from '../../utils/requestForm';
 import {
   convertUsdToInr,
@@ -45,7 +60,6 @@ import {
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
 import { CreateRequestSubmitBar } from './CreateRequestSubmitBar';
-import { isCustomerDetailsComplete } from '../../utils/requestForm';
 
 function resolveTierAutomatedServices(
   catalog: ServiceCatalogResponse,
@@ -120,6 +134,8 @@ function resolveSelectedRoles(
 }
 
 function validateForm(input: {
+  projectName: string;
+  idMode: AzureIdMode | null;
   customerEmail: string;
   accountCount: number;
   location: string;
@@ -131,12 +147,21 @@ function validateForm(input: {
   endDate: string;
   usageWindows: UsageWindow[];
   resourceCleanupEnabled: boolean;
-  resourceCleanupIntervalHours?: number;
+  resourceCleanupTime: string;
   resourceCleanupAction?: 'delete' | 'pause';
   perUserBudgetUsd?: number;
+  costingMode?: CostingMode;
 }): string[] {
   const errors: string[] = [];
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  if (!String(input.projectName || '').trim()) {
+    errors.push('Enter a project name.');
+  }
+
+  if (!input.idMode) {
+    errors.push('Select Azure test_ids or Azure IDs.');
+  }
 
   if (!emailPattern.test(input.customerEmail.trim())) {
     errors.push('Enter a valid customer email address.');
@@ -144,6 +169,8 @@ function validateForm(input: {
 
   if (!Number.isInteger(input.accountCount) || input.accountCount <= 0) {
     errors.push('Account count must be a positive integer.');
+  } else if (input.idMode === 'test_ids' && input.accountCount > TEST_IDS_MAX_ACCOUNT_COUNT) {
+    errors.push(`Azure test_ids supports a maximum of ${TEST_IDS_MAX_ACCOUNT_COUNT} accounts.`);
   }
 
   if (input.serviceIds.length === 0) {
@@ -193,16 +220,12 @@ function validateForm(input: {
   }
 
   if (input.resourceCleanupEnabled) {
-    if (
-      !Number.isInteger(input.resourceCleanupIntervalHours)
-      || (input.resourceCleanupIntervalHours ?? 0) < 1
-      || (input.resourceCleanupIntervalHours ?? 0) > 24
-    ) {
-      errors.push('Enter a resource cleanup interval between 1 and 24 hours when enabled.');
+    if (!isValidCleanupTime(input.resourceCleanupTime)) {
+      errors.push('Choose a daily cleanup time (HH:MM) when resource cleanup is enabled.');
     }
   }
 
-  if (input.perUserBudgetUsd !== undefined) {
+  if (input.costingMode === 'per_user' && input.perUserBudgetUsd !== undefined) {
     if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
       errors.push('Budget per user must be a positive number.');
     }
@@ -213,6 +236,10 @@ function validateForm(input: {
 
 export function RequestWorkspace() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromTestRequest = searchParams.get('fromTestRequest');
+  const purchaseToken = searchParams.get('purchaseToken');
+  const isPurchaseConvert = Boolean(fromTestRequest && purchaseToken);
   const AZURE_ROUTES = useAzureRoutes();
   const accent = useCloudAccentColor();
   const soft = hexToRgba(accent, 0.1);
@@ -222,19 +249,28 @@ export function RequestWorkspace() {
   const [selectedInstances, setSelectedInstances] = useState<SelectedInstance[]>([]);
   const [manualRoles, setManualRoles] = useState<Record<number, string[]>>({});
   const [location, setLocation] = useState('');
+  const [projectName, setProjectName] = useState('');
+  const [idMode, setIdMode] = useState<AzureIdMode | null>(null);
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
-  const costingMode: CostingMode = 'per_user';
+  const [costingMode, setCostingMode] = useState<CostingMode>('shared');
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
   const [usageWindows, setUsageWindows] = useState<UsageWindow[]>([]);
   const [usageWindowTimezone, setUsageWindowTimezone] = useState('Asia/Kolkata');
   const [resourceCleanupEnabled, setResourceCleanupEnabled] = useState(false);
-  const [resourceCleanupIntervalHours, setResourceCleanupIntervalHours] = useState<
-    number | undefined
-  >(undefined);
+  const [resourceCleanupTime, setResourceCleanupTime] = useState('');
   const [resourceCleanupAction, setResourceCleanupAction] = useState<'delete' | 'pause'>('delete');
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
+  const [selectedLicenseSkuId, setSelectedLicenseSkuId] = useState('');
+  const [selectedLicenseSkuPartNumber, setSelectedLicenseSkuPartNumber] = useState('');
+  const [orgAdminCustomRoles, setOrgAdminCustomRoles] = useState<PurchaseCloneCustomRole[]>([]);
+  const [orgAdminCustomServices, setOrgAdminCustomServices] = useState<PurchaseCloneCustomService[]>(
+    []
+  );
+  const [convertedFromRequestId, setConvertedFromRequestId] = useState<number | null>(null);
+  const [cloneLoading, setCloneLoading] = useState(isPurchaseConvert);
+  const [cloneError, setCloneError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
@@ -249,10 +285,39 @@ export function RequestWorkspace() {
   const [adminAccessSubmitting, setAdminAccessSubmitting] = useState(false);
   const [adminAccessMessage, setAdminAccessMessage] = useState<string | null>(null);
 
+  const [privilegedRoleOpen, setPrivilegedRoleOpen] = useState(false);
+  const [privilegedRoles, setPrivilegedRoles] = useState<{ name: string; definitionId: string }[]>(
+    []
+  );
+  const [privilegedRolesLoading, setPrivilegedRolesLoading] = useState(false);
+  const [selectedPrivilegedRole, setSelectedPrivilegedRole] = useState('');
+  const [privilegedRoleSubmitting, setPrivilegedRoleSubmitting] = useState(false);
+  const [privilegedRoleSubmitted, setPrivilegedRoleSubmitted] = useState(false);
+  const [privilegedRoleMessage, setPrivilegedRoleMessage] = useState<string | null>(null);
+  const [privilegedRoleMessageType, setPrivilegedRoleMessageType] = useState<
+    'success' | 'error' | null
+  >(null);
+
+  const azureIdsSnapshotRef = useRef<{
+    accountCount: number;
+    costingMode: CostingMode;
+    startDate: string;
+    endDate: string;
+    usageWindows: UsageWindow[];
+    resourceCleanupEnabled: boolean;
+    resourceCleanupTime: string;
+    perUserBudgetUsd?: number;
+  } | null>(null);
+
   const { locations, loading: locationsLoading, error: locationsError } = useAvailableLocations(
     selectedServiceIds,
     selectedInstances
   );
+  const {
+    licenses,
+    loading: licensesLoading,
+    error: licensesError,
+  } = useMicrosoftLicenses(Boolean(catalog));
 
   const refreshWallet = useCallback(async () => {
     setWalletLoading(true);
@@ -274,6 +339,63 @@ export function RequestWorkspace() {
   useEffect(() => {
     void refreshWallet();
   }, [refreshWallet]);
+
+  useEffect(() => {
+    if (!isPurchaseConvert || !purchaseToken) return;
+
+    let cancelled = false;
+    setCloneLoading(true);
+    setCloneError(null);
+
+    void getPurchaseClonePayload(purchaseToken)
+      .then((payload) => {
+        if (cancelled) return;
+        setConvertedFromRequestId(payload.sourceRequestId);
+        setProjectName(payload.projectName || '');
+        setIdMode('azure_ids');
+        setCustomerEmail(payload.customerEmail || '');
+        setAccountCount(payload.accountCount || 1);
+        setLocation(payload.location || '');
+        setCostingMode(payload.costingMode || 'shared');
+        setStartDate(defaultStartDate());
+        setEndDate(defaultEndDate());
+        setUsageWindows(payload.usageWindows || []);
+        if (payload.usageWindows?.[0]?.timezone) {
+          setUsageWindowTimezone(payload.usageWindows[0].timezone);
+        }
+        setResourceCleanupEnabled(Boolean(payload.resourceCleanupEnabled));
+        setResourceCleanupTime(payload.resourceCleanupTime || '');
+        if (payload.resourceCleanupTimezone) {
+          setUsageWindowTimezone(payload.resourceCleanupTimezone);
+        }
+        setResourceCleanupAction(payload.resourceCleanupAction || 'delete');
+        setPerUserBudgetUsd(payload.perUserBudgetUsd);
+        setSelectedServiceIds(payload.serviceIds || []);
+        setSelectedInstances(payload.selectedInstances || []);
+        setSelectedLicenseSkuId(payload.microsoftLicenseSkuId || '');
+        setSelectedLicenseSkuPartNumber(payload.microsoftLicenseSkuPartNumber || '');
+        setOrgAdminCustomRoles(payload.customRoles || []);
+        setOrgAdminCustomServices(payload.customServices || []);
+        const nextManual: Record<number, string[]> = {};
+        for (const entry of payload.selectedRoles || []) {
+          nextManual[entry.serviceId] = entry.roles;
+        }
+        setManualRoles(nextManual);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCloneError(
+          err instanceof ApiError ? err.message : 'Unable to load purchase details from this link.'
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setCloneLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPurchaseConvert, purchaseToken]);
 
   const tierAutomatedServices = useMemo(
     () => (catalog ? resolveTierAutomatedServices(catalog, selectedInstances) : new Set<number>()),
@@ -300,8 +422,14 @@ export function RequestWorkspace() {
   }, [pauseCleanupAvailable, resourceCleanupAction]);
 
   useEffect(() => {
-    if (!locations.some((entry) => entry.arm_region_name === location)) {
-      setLocation('');
+    if (locations.length === 0) {
+      if (location) setLocation('');
+      return;
+    }
+
+    const stillValid = locations.some((entry) => entry.arm_region_name === location);
+    if (!stillValid) {
+      setLocation(pickCheapestLocation(locations));
     }
   }, [locations, location]);
 
@@ -333,41 +461,112 @@ export function RequestWorkspace() {
 
   const { pricing, loading: pricingLoading, error: pricingError } = usePricingEstimate(pricingPayload);
 
-  const handleToggleService = useCallback((serviceId: number) => {
-    const normalizedId = normalizeServiceId(serviceId);
-    if (!normalizedId) return;
+  const handleToggleService = useCallback(
+    (serviceId: number) => {
+      if (isPurchaseConvert) return;
+      const normalizedId = normalizeServiceId(serviceId);
+      if (!normalizedId) return;
 
-    setSelectedServiceIds((current) => {
-      if (current.includes(normalizedId)) {
-        return current.filter((id) => id !== normalizedId);
-      }
-      return [...current, normalizedId];
-    });
-    setSelectedInstances((current) => current.filter((entry) => entry.serviceId !== normalizedId));
-    setManualRoles((current) => {
-      const next = { ...current };
-      delete next[normalizedId];
-      return next;
-    });
-    setLocation('');
-  }, []);
+      setSelectedServiceIds((current) => {
+        if (current.includes(normalizedId)) {
+          return current.filter((id) => id !== normalizedId);
+        }
+        return [...current, normalizedId];
+      });
+      setSelectedInstances((current) => current.filter((entry) => entry.serviceId !== normalizedId));
+      setManualRoles((current) => {
+        const next = { ...current };
+        delete next[normalizedId];
+        return next;
+      });
+      setLocation('');
+    },
+    [isPurchaseConvert]
+  );
 
-  const handleSelectInstance = useCallback((serviceId: number, instanceOption: string) => {
-    setSelectedInstances((current) => {
-      const without = current.filter((entry) => entry.serviceId !== serviceId);
-      return [...without, { serviceId, instanceOption }];
-    });
-    setLocation('');
-  }, []);
+  const handleSelectInstance = useCallback(
+    (serviceId: number, instanceOption: string) => {
+      if (isPurchaseConvert) return;
+      setSelectedInstances((current) => {
+        const without = current.filter((entry) => entry.serviceId !== serviceId);
+        if (!instanceOption.trim()) return without;
+        return [...without, { serviceId, instanceOption }];
+      });
+      setLocation('');
+    },
+    [isPurchaseConvert]
+  );
 
   const handleRoleChange = useCallback((serviceId: number, roles: string[]) => {
     setManualRoles((current) => ({ ...current, [serviceId]: roles }));
   }, []);
 
+  const handleIdModeChange = useCallback(
+    (mode: AzureIdMode) => {
+      if (mode === 'test_ids') {
+        if (idMode !== 'test_ids') {
+          azureIdsSnapshotRef.current = {
+            accountCount,
+            costingMode,
+            startDate,
+            endDate,
+            usageWindows,
+            resourceCleanupEnabled,
+            resourceCleanupTime,
+            perUserBudgetUsd,
+          };
+        }
+
+        setIdMode('test_ids');
+        setAccountCount(TEST_IDS_DEFAULTS.accountCount);
+        setCostingMode('per_user');
+        setStartDate(defaultTestIdsStartDate());
+        setEndDate(defaultTestIdsEndDate());
+        setUsageWindows([]);
+        setResourceCleanupEnabled(true);
+        setResourceCleanupTime('');
+        setPerUserBudgetUsd(TEST_IDS_DEFAULTS.perUserBudgetUsd);
+        return;
+      }
+
+      const snapshot = azureIdsSnapshotRef.current;
+      setIdMode('azure_ids');
+      setAccountCount(snapshot?.accountCount ?? 10);
+      setCostingMode(snapshot?.costingMode ?? 'shared');
+      setStartDate(snapshot?.startDate ?? defaultStartDate());
+      setEndDate(snapshot?.endDate ?? defaultEndDate());
+      setUsageWindows(snapshot?.usageWindows ?? []);
+      setResourceCleanupEnabled(snapshot?.resourceCleanupEnabled ?? false);
+      setResourceCleanupTime(snapshot?.resourceCleanupTime ?? '');
+      setPerUserBudgetUsd(
+        snapshot?.costingMode === 'per_user' ? snapshot.perUserBudgetUsd : undefined
+      );
+    },
+    [
+      accountCount,
+      costingMode,
+      endDate,
+      idMode,
+      perUserBudgetUsd,
+      resourceCleanupEnabled,
+      resourceCleanupTime,
+      startDate,
+      usageWindows,
+    ]
+  );
+
   const handleSubmit = async () => {
     if (!catalog) return;
 
+    const selectedLicense = licenses.find((license) => license.skuId === selectedLicenseSkuId);
+    const licenseSkuId = (selectedLicense?.skuId || selectedLicenseSkuId || '').trim();
+    const licenseSkuPartNumber = (
+      selectedLicense?.skuPartNumber || selectedLicenseSkuPartNumber || ''
+    ).trim();
+
     const errors = validateForm({
+      projectName,
+      idMode,
       customerEmail,
       accountCount,
       location,
@@ -377,10 +576,12 @@ export function RequestWorkspace() {
       catalog,
       startDate,
       endDate,
-      usageWindows,
+      usageWindows: idMode === 'test_ids' ? [] : usageWindows,
       resourceCleanupEnabled,
-      resourceCleanupIntervalHours,
+      resourceCleanupTime,
+      resourceCleanupAction,
       perUserBudgetUsd,
+      costingMode,
     });
 
     setValidationErrors(errors);
@@ -431,17 +632,36 @@ export function RequestWorkspace() {
           selectedRoles,
           selectedInstances,
           costingMode,
-          resourceCleanupEnabled,
-          ...(resourceCleanupEnabled && resourceCleanupIntervalHours
+          projectName: projectName.trim(),
+          idMode: isPurchaseConvert ? 'azure_ids' : idMode ?? undefined,
+          ...(isPurchaseConvert && convertedFromRequestId
             ? {
-                resourceCleanupIntervalHours,
+                convertedFromRequestId,
+                purchaseToken: purchaseToken || undefined,
+              }
+            : {}),
+          ...(licenseSkuId
+            ? {
+                microsoftLicenseSkuId: licenseSkuId,
+                ...(licenseSkuPartNumber
+                  ? { microsoftLicenseSkuPartNumber: licenseSkuPartNumber }
+                  : {}),
+              }
+            : {}),
+          resourceCleanupEnabled,
+          ...(resourceCleanupEnabled && isValidCleanupTime(resourceCleanupTime)
+            ? {
+                resourceCleanupTime: resourceCleanupTime.trim(),
+                resourceCleanupTimezone: usageWindowTimezone,
                 ...(pauseCleanupAvailable && resourceCleanupAction === 'pause'
                   ? { resourceCleanupAction: 'pause' as const }
                   : {}),
               }
             : {}),
-          ...(perUserBudgetUsd !== undefined ? { perUserBudgetUsd } : {}),
-          ...(usageWindows.length > 0
+          ...(costingMode === 'per_user' && perUserBudgetUsd !== undefined
+            ? { perUserBudgetUsd }
+            : {}),
+          ...(idMode !== 'test_ids' && usageWindows.length > 0
             ? {
                 usageWindows: usageWindows.map((window) => ({
                   ...window,
@@ -525,6 +745,82 @@ export function RequestWorkspace() {
     }
   };
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPrivilegedRoles() {
+      setPrivilegedRolesLoading(true);
+      try {
+        const roles = await listPrivilegedRoles();
+        if (!cancelled) {
+          setPrivilegedRoles(roles);
+          if (roles.length > 0) {
+            setSelectedPrivilegedRole((current) => current || roles[0].name);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setPrivilegedRoles([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setPrivilegedRolesLoading(false);
+        }
+      }
+    }
+
+    void loadPrivilegedRoles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSubmitPrivilegedRoleRequest = async () => {
+    if (!selectedPrivilegedRole) {
+      setPrivilegedRoleMessage('Select a privileged role.');
+      setPrivilegedRoleMessageType('error');
+      return;
+    }
+
+    if (!customerEmail.trim()) {
+      setPrivilegedRoleMessage('Enter a customer email first.');
+      setPrivilegedRoleMessageType('error');
+      return;
+    }
+
+    setPrivilegedRoleSubmitting(true);
+    setPrivilegedRoleMessage(null);
+    setPrivilegedRoleMessageType(null);
+    setPrivilegedRoleSubmitted(false);
+    try {
+      await createPrivilegedRoleRequest({
+        customerEmail: customerEmail.trim(),
+        azureRole: selectedPrivilegedRole,
+      });
+      setPrivilegedRoleSubmitted(true);
+      setPrivilegedRoleMessageType('success');
+      setPrivilegedRoleMessage(
+        `${selectedPrivilegedRole} was submitted for ${customerEmail.trim()}. An org admin will approve it in Lab Management.`
+      );
+    } catch (err) {
+      setPrivilegedRoleSubmitted(false);
+      setPrivilegedRoleMessageType('error');
+      setPrivilegedRoleMessage(
+        err instanceof ApiError ? err.message : 'Failed to submit privileged role request.'
+      );
+    } finally {
+      setPrivilegedRoleSubmitting(false);
+    }
+  };
+
+  const handlePrivilegedRoleChange = (value: string) => {
+    setSelectedPrivilegedRole(value);
+    setPrivilegedRoleSubmitted(false);
+    setPrivilegedRoleMessage(null);
+    setPrivilegedRoleMessageType(null);
+  };
+
   const totalPrice = pricing?.totalPrice ?? pricing?.estimatedPrice ?? null;
   const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate);
   const insufficientBalance =
@@ -534,22 +830,24 @@ export function RequestWorkspace() {
     walletBalance < estimatedInr;
 
   const formProgress = useMemo(() => {
-    const detailsDone = isCustomerDetailsComplete({
-      customerEmail,
+    const detailsDone = isProjectDetailsComplete({
+      projectName,
       accountCount,
       startDate,
       endDate,
+      idMode,
     });
     const servicesDone = selectedServiceIds.length > 0;
+    const emailDone = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim());
     const regionDone = Boolean(location.trim());
 
     return [
       { label: 'Details', done: detailsDone },
-      { label: 'Policies', done: detailsDone },
       { label: 'Services', done: servicesDone },
+      { label: 'Email', done: emailDone },
       { label: 'Region', done: regionDone },
     ];
-  }, [customerEmail, accountCount, startDate, endDate, selectedServiceIds, location]);
+  }, [projectName, accountCount, startDate, endDate, idMode, selectedServiceIds, customerEmail, location]);
 
   const submitBarProps = {
     submitting,
@@ -610,10 +908,12 @@ export function RequestWorkspace() {
                   Azure automation
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
-                  Create request
+                  {isPurchaseConvert ? 'Continue purchase from test lab' : 'Create request'}
                 </h1>
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
-                  Provision Azure lab access for a customer using the service catalog.
+                  {isPurchaseConvert
+                    ? 'Services, permissions, and license are copied from your test IDs. Set dates, timing, cleanup, budget, and account count, then pay from your wallet.'
+                    : 'Provision Azure lab access for a customer using the service catalog.'}
                 </p>
               </div>
             </div>
@@ -629,7 +929,11 @@ export function RequestWorkspace() {
         <ErrorState message={catalogError} onRetry={refetch} />
       )}
 
-      {catalogLoading && (
+      {cloneError && (
+        <ErrorState message={cloneError} onRetry={() => window.location.reload()} />
+      )}
+
+      {(catalogLoading || cloneLoading) && (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           <div className="p-6">
             <TableSkeleton rows={6} cols={1} embedded />
@@ -637,7 +941,7 @@ export function RequestWorkspace() {
         </div>
       )}
 
-      {catalog && !catalogError && (
+      {catalog && !catalogError && !cloneLoading && !cloneError && (
         <>
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             <div className="border-b border-gray-100 px-6 py-4">
@@ -700,12 +1004,32 @@ export function RequestWorkspace() {
               onRoleChange={handleRoleChange}
               tierAutomatedServices={tierAutomatedServices}
               resolvedRoles={selectedRoles}
+              orgAdminCustomRoles={orgAdminCustomRoles}
+              orgAdminCustomServices={orgAdminCustomServices}
+              projectName={projectName}
+              onProjectNameChange={setProjectName}
+              idMode={idMode}
+              onIdModeChange={handleIdModeChange}
+              purchaseConvertMode={isPurchaseConvert}
               customerEmail={customerEmail}
               onCustomerEmailChange={setCustomerEmail}
               accountCount={accountCount}
               onAccountCountChange={setAccountCount}
+              costingMode={costingMode}
+              onCostingModeChange={(mode) => {
+                if (idMode === 'test_ids') return;
+                setCostingMode(mode);
+                if (mode === 'shared') {
+                  setPerUserBudgetUsd(undefined);
+                }
+              }}
               startDate={startDate}
-              onStartDateChange={setStartDate}
+              onStartDateChange={(value) => {
+                setStartDate(value);
+                if (idMode === 'test_ids') {
+                  setEndDate(addHoursToDateTimeLocal(value, 24));
+                }
+              }}
               endDate={endDate}
               onEndDateChange={setEndDate}
               usageWindows={usageWindows}
@@ -714,12 +1038,21 @@ export function RequestWorkspace() {
               onUsageWindowTimezoneChange={setUsageWindowTimezone}
               resourceCleanupEnabled={resourceCleanupEnabled}
               onResourceCleanupEnabledChange={setResourceCleanupEnabled}
-              resourceCleanupIntervalHours={resourceCleanupIntervalHours}
-              onResourceCleanupIntervalHoursChange={setResourceCleanupIntervalHours}
+              resourceCleanupTime={resourceCleanupTime}
+              onResourceCleanupTimeChange={setResourceCleanupTime}
               resourceCleanupAction={resourceCleanupAction}
               onResourceCleanupActionChange={setResourceCleanupAction}
               perUserBudgetUsd={perUserBudgetUsd}
               onPerUserBudgetUsdChange={setPerUserBudgetUsd}
+              licenses={licenses}
+              licensesLoading={licensesLoading}
+              licensesError={licensesError}
+              selectedLicenseSkuId={selectedLicenseSkuId}
+              onSelectedLicenseSkuIdChange={(skuId) => {
+                setSelectedLicenseSkuId(skuId);
+                const match = licenses.find((license) => license.skuId === skuId);
+                setSelectedLicenseSkuPartNumber(match?.skuPartNumber || '');
+              }}
               adminAccessOpen={adminAccessOpen}
               onAdminAccessOpenChange={setAdminAccessOpen}
               adminAccessServiceId={adminAccessServiceId}
@@ -729,6 +1062,17 @@ export function RequestWorkspace() {
               onSubmitAdminAccess={handleSubmitAdminAccess}
               adminAccessSubmitting={adminAccessSubmitting}
               adminAccessMessage={adminAccessMessage}
+              privilegedRoleOpen={privilegedRoleOpen}
+              onPrivilegedRoleOpenChange={setPrivilegedRoleOpen}
+              privilegedRoles={privilegedRoles}
+              privilegedRolesLoading={privilegedRolesLoading}
+              selectedPrivilegedRole={selectedPrivilegedRole}
+              onSelectedPrivilegedRoleChange={handlePrivilegedRoleChange}
+              onSubmitPrivilegedRoleRequest={handleSubmitPrivilegedRoleRequest}
+              privilegedRoleSubmitting={privilegedRoleSubmitting}
+              privilegedRoleSubmitted={privilegedRoleSubmitted}
+              privilegedRoleMessage={privilegedRoleMessage}
+              privilegedRoleMessageType={privilegedRoleMessageType}
               validationErrors={validationErrors}
             />
 

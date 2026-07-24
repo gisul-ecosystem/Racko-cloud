@@ -1,3 +1,7 @@
+import type { AccessSchedule, AccessScheduleInput } from '@/lib/accessSchedule';
+
+export type { AccessSchedule, AccessScheduleInput };
+
 export type TenantUserRole = 'tenant_admin' | 'tenant_user';
 
 /** Query param values for GET /api/v1/tenant-branding/asset?assetType= */
@@ -55,6 +59,8 @@ export interface TenantWallet {
 
 export type TenantServiceKey =
   | 'vm-management'
+  | 'create-vm'
+  | 'dedicated-server'
   | 'elastic-servers'
   | 'azure'
   | 'aws'
@@ -203,6 +209,7 @@ export interface TenantVmSummary {
   planPeriodEnd?: string | null;
   billingPeriod?: BillingPeriod | null;
   assignment?: TenantVmAssignmentSummary | null;
+  accessSchedule?: AccessSchedule | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -258,6 +265,7 @@ export interface TenantOnboardDto {
   sharedPassword?: string;
   emailPrefix?: string;
   email?: string;
+  accessSchedule?: AccessScheduleInput;
 }
 
 export interface TenantPlanSpecs {

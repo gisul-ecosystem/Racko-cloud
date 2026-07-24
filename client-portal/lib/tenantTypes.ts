@@ -1,6 +1,8 @@
 export type TenantStatus = 'pending' | 'active' | 'suspended' | 'cancelled';
 export type ServiceKey =
   | 'vm-management'
+  | 'create-vm'
+  | 'dedicated-server'
   | 'elastic-servers'
   | 'azure'
   | 'aws'
@@ -18,6 +20,16 @@ export const PLATFORM_SERVICE_CATALOG: Array<{
     key: 'vm-management',
     name: 'VPS Hosting',
     description: 'Provision and manage Racko cloud virtual machines',
+  },
+  {
+    key: 'create-vm',
+    name: 'VM Catalog',
+    description: 'Browse Webyne VM plans and request catalog virtual machines',
+  },
+  {
+    key: 'dedicated-server',
+    name: 'Dedicated Server',
+    description: 'Request and manage dedicated bare-metal servers',
   },
   {
     key: 'elastic-servers',
@@ -60,6 +72,8 @@ export interface TenantBranding {
   supportEmail?: string;
 }
 
+export type TenantIpAccessMode = 'all' | 'restricted';
+
 export interface Tenant {
   id: string;
   slug: string;
@@ -69,6 +83,8 @@ export interface Tenant {
   branding: TenantBranding;
   enabledServices: string[];
   limits: Record<string, unknown>;
+  ipAccessMode: TenantIpAccessMode;
+  allowedIps: string[];
   createdBy: string | null;
   createdAt: string;
   updatedAt: string;
@@ -151,6 +167,11 @@ export interface UpdateTenantInput {
   domain?: string;
   status?: TenantStatus;
   branding?: TenantBranding;
+}
+
+export interface UpdateTenantIpAccessInput {
+  ipAccessMode: TenantIpAccessMode;
+  allowedIps: string[];
 }
 
 export interface CreateTenantAdminInput {
@@ -322,6 +343,7 @@ export interface SuperAdminTenantVm {
   planPeriodEnd?: string | null;
   billingPeriod?: BillingPeriod | null;
   assignment?: SuperAdminTenantVmAssignment | null;
+  accessSchedule?: import('./accessSchedule').AccessSchedule | null;
   createdAt: string;
   updatedAt: string;
 }

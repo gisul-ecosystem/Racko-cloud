@@ -73,6 +73,27 @@ export function clearTenantAccessToken(): void {
   }
 }
 
+/**
+ * Opens `url` in a new tab, carrying the current tenant session along in a
+ * one-time `_s` URL param. A plain `window.open(url, '_blank')` loses the
+ * session because tenant auth lives in sessionStorage, which browsers only
+ * clone into the new tab when an opener relationship is kept — and even
+ * then, cloning isn't instant/guaranteed. TenantAuthContext reads `_s` on
+ * mount, persists it into its own sessionStorage, and strips it from the URL.
+ */
+export function openTenantUrlWithSession(url: string): void {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  const rawSession = sessionStorage.getItem(TENANT_SESSION_STORAGE_KEY);
+  const sessionParam = rawSession ? btoa(encodeURIComponent(rawSession)) : '';
+  const separator = url.includes('?') ? '&' : '?';
+  const finalUrl = sessionParam ? `${url}${separator}_s=${sessionParam}` : url;
+
+  window.open(finalUrl, '_blank');
+}
+
 interface TenantRequestOptions extends RequestInit {
   skipAuth?: boolean;
 }
@@ -103,7 +124,12 @@ export async function tenantPortalRequest<T>(
   });
 
   if (!res.ok) {
-    const errorData = (await res.json()) as { message?: string; code?: string };
+    const errorData = (await res.json()) as {
+      message?: string;
+      code?: string;
+      nextWindow?: string | null;
+      errors?: string[];
+    };
     const code = errorData.code ?? errorData.message;
 
     if (
@@ -119,7 +145,10 @@ export async function tenantPortalRequest<T>(
       throw new ApiError('Session expired. Please log in again.', 401, 'SESSION_EXPIRED');
     }
 
-    throw new ApiError(errorData.message ?? 'Request failed', res.status, code);
+    throw new ApiError(errorData.message ?? 'Request failed', res.status, code, {
+      nextWindow: errorData.nextWindow,
+      errors: errorData.errors,
+    });
   }
 
   return res.json() as Promise<T>;

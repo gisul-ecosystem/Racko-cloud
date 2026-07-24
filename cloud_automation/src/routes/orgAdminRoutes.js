@@ -19,6 +19,16 @@ router.delete(
   requireSuperAdmin,
   orgAdminController.deleteRequest
 );
+router.patch(
+  '/resource-groups/:requestId/expiry',
+  requireSuperAdmin,
+  orgAdminController.extendRequestExpiration
+);
+router.post(
+  '/resource-groups/:requestId/send-purchase-confirmation',
+  requireSuperAdmin,
+  orgAdminController.sendPurchaseConfirmationMail
+);
 router.get(
   '/resource-groups/:requestId/monitoring',
   requireSuperAdmin,
@@ -115,6 +125,21 @@ router.patch(
   '/access-requests/:id',
   requireSuperAdmin,
   orgAdminController.reviewAccessRequest
+);
+router.get(
+  '/privileged-role-requests',
+  requireSuperAdmin,
+  orgAdminController.listPrivilegedRoleRequests
+);
+router.patch(
+  '/privileged-role-requests/:id',
+  requireSuperAdmin,
+  orgAdminController.reviewPrivilegedRoleRequest
+);
+router.post(
+  '/resource-groups/:requestId/privileged-roles/assign-all',
+  requireSuperAdmin,
+  orgAdminController.assignPrivilegedRoleToAllUsers
 );
 
 module.exports = router;

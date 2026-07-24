@@ -5,6 +5,7 @@ import {
   OrgAdminError,
   deleteOrgAdminUser,
   deleteOrgAdminRequest,
+  extendOrgAdminRequestExpiration,
   forceOrgAdminLogout,
   getOrgMonitoringLogs,
   getOrgResourceGroupDetail,
@@ -12,10 +13,13 @@ import {
   getOrgSharedAzureCost,
   listOrgAccessRequests,
   listOrgAzureRoles,
+  listOrgPrivilegedRoleRequests,
   listOrgRequests,
   renewOrgAdminUserBudget,
   reviewOrgAccessRequest,
+  reviewOrgPrivilegedRoleRequest,
   reprovisionOrgAdminRoles,
+  sendOrgAdminPurchaseConfirmationMail,
   triggerOrgAdminCleanup,
   triggerOrgRequestCleanup,
   unblockOrgAdminUser,
@@ -24,6 +28,7 @@ import {
 } from '../api/orgAdminClient';
 import type {
   OrgAdminAccessRequest,
+  OrgAdminPrivilegedRoleRequest,
   OrgAdminAzureRoleOption,
   OrgAdminMonitoringResponse,
   OrgAdminRequestDetail,
@@ -40,9 +45,11 @@ interface UseOrgAdminPortalResult {
   users: OrgAdminUser[];
   availableRoles: OrgAdminAzureRoleOption[];
   accessRequests: OrgAdminAccessRequest[];
+  privilegedRoleRequests: OrgAdminPrivilegedRoleRequest[];
   overviewLoading: boolean;
   detailLoading: boolean;
   accessLoading: boolean;
+  privilegedRoleLoading: boolean;
   saving: boolean;
   overviewError: string | null;
   detailError: string | null;
@@ -52,11 +59,19 @@ interface UseOrgAdminPortalResult {
   refreshOverview: () => Promise<void>;
   refreshDetail: () => Promise<void>;
   refreshAccessRequests: () => Promise<void>;
+  refreshPrivilegedRoleRequests: () => Promise<void>;
   updateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   deleteUser: (userId: number) => Promise<boolean>;
   deleteRequest: () => Promise<boolean>;
+  extendExpiration: (expiresAt: string) => Promise<boolean>;
+  sendPurchaseConfirmationMail: () => Promise<boolean>;
   forceLogout: (userId: number) => Promise<boolean>;
   reviewAccess: (
+    id: number,
+    status: 'approved' | 'rejected',
+    reviewNotes?: string
+  ) => Promise<boolean>;
+  reviewPrivilegedRole: (
     id: number,
     status: 'approved' | 'rejected',
     reviewNotes?: string
@@ -94,9 +109,13 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const [users, setUsers] = useState<OrgAdminUser[]>([]);
   const [availableRoles, setAvailableRoles] = useState<OrgAdminAzureRoleOption[]>([]);
   const [accessRequests, setAccessRequests] = useState<OrgAdminAccessRequest[]>([]);
+  const [privilegedRoleRequests, setPrivilegedRoleRequests] = useState<
+    OrgAdminPrivilegedRoleRequest[]
+  >([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [accessLoading, setAccessLoading] = useState(false);
+  const [privilegedRoleLoading, setPrivilegedRoleLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -203,6 +222,12 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         setUsers([]);
         setDetailError(null);
         await refreshOverview();
+        return;
+      }
+
+      // Surface permission errors; stop silent polling from hammering 403s.
+      if (err instanceof OrgAdminError && (err.status === 403 || err.status === 401)) {
+        setDetailError(err.message || 'Failed to load request detail.');
       }
     } finally {
       refreshInFlightRef.current = false;
@@ -223,13 +248,27 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     }
   }, []);
 
+  const refreshPrivilegedRoleRequests = useCallback(async () => {
+    setPrivilegedRoleLoading(true);
+
+    try {
+      const requests = await listOrgPrivilegedRoleRequests({ status: 'pending' });
+      setPrivilegedRoleRequests(requests);
+    } catch {
+      // Non-blocking for the main view.
+    } finally {
+      setPrivilegedRoleLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshOverview();
     void refreshAccessRequests();
+    void refreshPrivilegedRoleRequests();
     void listOrgAzureRoles()
       .then(setAvailableRoles)
       .catch(() => setAvailableRoles([]));
-  }, [refreshOverview, refreshAccessRequests]);
+  }, [refreshOverview, refreshAccessRequests, refreshPrivilegedRoleRequests]);
 
   useEffect(() => {
     if (selectedRequestId != null) {
@@ -245,6 +284,8 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
 
   useEffect(() => {
     if (selectedRequestId == null) return undefined;
+    // Don't keep polling when the session lacks Lab Management permission.
+    if (detailError && /insufficient permissions/i.test(detailError)) return undefined;
 
     // Always poll frequently so Offline → Online after login/stale-reopen appears quickly.
     // Slightly faster when someone is already active.
@@ -255,7 +296,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     }, refreshInterval);
 
     return () => window.clearInterval(intervalId);
-  }, [selectedRequestId, hasActiveUsers, refreshDetailSilent]);
+  }, [selectedRequestId, hasActiveUsers, refreshDetailSilent, detailError]);
 
   const selectRequest = useCallback((requestId: number | null) => {
     setSelectedRequestId(requestId);
@@ -356,6 +397,56 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     }
   }, [selectedRequestId, refreshOverview, handleApiError]);
 
+  const extendExpiration = useCallback(
+    async (expiresAt: string) => {
+      if (selectedRequestId == null) return false;
+
+      setSaving(true);
+      setActionError(null);
+      setActionSuccess(null);
+
+      try {
+        const result = await extendOrgAdminRequestExpiration(selectedRequestId, expiresAt);
+        setActionSuccess(
+          result.message ||
+            result.data?.message ||
+            `Request #${selectedRequestId} expiration extended.`
+        );
+        await refreshOverview();
+        await refreshDetail();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to extend expiration.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, refreshOverview, refreshDetail, handleApiError]
+  );
+
+  const sendPurchaseConfirmationMail = useCallback(async () => {
+    if (selectedRequestId == null) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await sendOrgAdminPurchaseConfirmationMail(selectedRequestId);
+      setActionSuccess(
+        result.message ||
+          `Confirmation mail sent${result.recipientEmail ? ` to ${result.recipientEmail}` : ''}.`
+      );
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to send confirmation mail.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, handleApiError]);
+
   const forceLogout = useCallback(
     async (userId: number) => {
       if (selectedRequestId == null) return false;
@@ -405,6 +496,34 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       }
     },
     [selectedRequestId, refreshAccessRequests, refreshDetail, handleApiError]
+  );
+
+  const reviewPrivilegedRole = useCallback(
+    async (id: number, status: 'approved' | 'rejected', reviewNotes?: string) => {
+      setSaving(true);
+      setActionError(null);
+      setActionSuccess(null);
+
+      try {
+        const result = await reviewOrgPrivilegedRoleRequest(id, { status, reviewNotes });
+        const assignedCount =
+          status === 'approved' && result.request?.rolesAssigned
+            ? ` Assigned to ${result.request.rolesAssigned} user role(s).`
+            : '';
+        setActionSuccess(`Privileged role request ${status}.${assignedCount}`);
+        await refreshPrivilegedRoleRequests();
+        if (selectedRequestId != null) {
+          await refreshDetail();
+        }
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to review privileged role request.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, refreshPrivilegedRoleRequests, refreshDetail, handleApiError]
   );
 
   const fetchUserMonitoring = useCallback(
@@ -646,9 +765,11 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     users,
     availableRoles,
     accessRequests,
+    privilegedRoleRequests,
     overviewLoading,
     detailLoading,
     accessLoading,
+    privilegedRoleLoading,
     saving,
     overviewError,
     detailError,
@@ -658,11 +779,15 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     refreshOverview,
     refreshDetail,
     refreshAccessRequests,
+    refreshPrivilegedRoleRequests,
     updateRoles,
     deleteUser,
     deleteRequest,
+    extendExpiration,
+    sendPurchaseConfirmationMail,
     forceLogout,
     reviewAccess,
+    reviewPrivilegedRole,
     fetchUserMonitoring,
     fetchUserAzureCost,
     fetchSharedAzureCost,

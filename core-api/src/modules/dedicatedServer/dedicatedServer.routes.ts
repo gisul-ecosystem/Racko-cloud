@@ -11,6 +11,7 @@ import {
   listDedicatedRequestsQuerySchema,
   rejectDedicatedRequestSchema,
   updateDedicatedPlanSchema,
+  updateDedicatedPricingSettingsSchema,
 } from './dedicatedServer.validation';
 
 const router = Router();
@@ -46,6 +47,23 @@ router.delete(
   validateRequest(dedicatedIdParamSchema),
   (req, res, next) => {
     dedicatedServerController.deletePlan(req, res, next);
+  }
+);
+
+router.post('/plans/seed', requireRole('super_admin'), (req, res, next) => {
+  dedicatedServerController.seedPlans(req, res, next);
+});
+
+router.get('/pricing-settings', requireRole('super_admin'), (req, res, next) => {
+  dedicatedServerController.getPricingSettings(req, res, next);
+});
+
+router.put(
+  '/pricing-settings',
+  requireRole('super_admin'),
+  validateRequest(updateDedicatedPricingSettingsSchema),
+  (req, res, next) => {
+    dedicatedServerController.updatePricingSettings(req, res, next);
   }
 );
 

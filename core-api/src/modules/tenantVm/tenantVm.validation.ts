@@ -50,6 +50,29 @@ export const tenantVmListQuerySchema = z.object({
   }),
 });
 
+const accessScheduleBody = z
+  .object({
+    startDate: z.string().nullable().optional(),
+    endDate: z.string().nullable().optional(),
+    startTime: z.string().nullable().optional(),
+    endTime: z.string().nullable().optional(),
+    weeklySchedule: z.array(z.unknown()).nullable().optional(),
+    timezone: z.string().nullable().optional(),
+  })
+  .optional();
+
+export const tenantVmScheduleSchema = z.object({
+  params: z.object({ vmId: mongoObjectId }),
+  body: z.object({
+    startDate: z.string().nullable().optional(),
+    endDate: z.string().nullable().optional(),
+    startTime: z.string().nullable().optional(),
+    endTime: z.string().nullable().optional(),
+    weeklySchedule: z.array(z.unknown()).nullable().optional(),
+    timezone: z.string().nullable().optional(),
+  }),
+});
+
 export const tenantOnboardSchema = z.object({
   body: z
     .object({
@@ -61,6 +84,7 @@ export const tenantOnboardSchema = z.object({
       passwordMode: z.enum(['auto', 'shared']),
       sharedPassword: assignPasswordRules.optional(),
       email: z.string().email('email must be a valid email').toLowerCase().trim().optional(),
+      accessSchedule: accessScheduleBody,
     })
     .superRefine((data, ctx) => {
       if (data.passwordMode === 'shared' && !data.sharedPassword) {
