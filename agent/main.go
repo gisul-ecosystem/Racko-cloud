@@ -17,6 +17,7 @@ import (
 	"github.com/racko-ai/agent/register"
 	"github.com/racko-ai/agent/reporter"
 	"github.com/racko-ai/agent/store"
+	"github.com/racko-ai/agent/tracker"
 	"github.com/racko-ai/agent/winsvc"
 )
 
@@ -109,6 +110,14 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 			log.Fatalf("[agent] Registration failed: %v", err)
 		}
 		log.Printf("[agent] Registered with agentId=%s", agentID)
+
+		// First registration — capture baseline snapshot now.
+		// This runs synchronously before the watcher starts so the baseline
+		// file is always present before we begin tracking changes.
+		log.Println("[agent] First run — capturing baseline snapshot...")
+		if err := tracker.CaptureAndUpload(agentID, cfg); err != nil {
+			log.Printf("[agent] WARNING: baseline capture failed: %v (continuing)", err)
+		}
 	} else {
 		log.Printf("[agent] Using existing agentId=%s", agentID)
 	}
@@ -138,6 +147,13 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 	}()
 
 	go heartbeat.Start(cfg, agentID, cancelDone, cancel)
+
+	// Start filesystem + registry watcher — tracks all changes after baseline.
+	// Load baseline from disk for diffing (nil if not yet captured — watcher
+	// still runs but won't skip unchanged files).
+	baseline, _ := tracker.LoadLocal()
+	wtr := tracker.NewWatcher(agentID, cfg, baseline)
+	go wtr.Start(cancelDone)
 
 	rep := reporter.New(cfg)
 	exec := executor.New(agentID, cfg, rep)

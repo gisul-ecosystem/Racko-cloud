@@ -10,6 +10,7 @@ import {
   fetchMachine,
   createJobs,
   fetchJobs,
+  fetchMachines,
   deleteMachine,
   execCommand,
   resetMachines,
@@ -22,9 +23,11 @@ import {
 } from '../../../../../lib/machineManagerApi';
 import { useJobStream } from '../../../../../hooks/useJobStream';
 import { ConfirmModal } from '../../../../../components/ui/ConfirmModal';
+import { CloneToModal } from '../../../../../components/machine-manager/CloneToModal';
+import { ActivityLogPanel } from '../../../../../components/machine-manager/ActivityLogPanel';
 import {
   Server, ArrowLeft, Cpu, HardDrive, MemoryStick,
-  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X, Trash2, Terminal, Play, RotateCcw,
+  Monitor, CheckCircle2, Loader2, RefreshCw, Package, FileText, X, Trash2, Terminal, Play, RotateCcw, Copy,
 } from 'lucide-react';
 
 const jobStatusCfg: Record<JobStatus, { label: string; dot: string; text: string }> = {
@@ -157,6 +160,10 @@ export default function MachineDetailPage() {
   const [resetError, setResetError] = useState<string>('');
   const sseRef = useRef<EventSource | null>(null);
 
+  // Clone state
+  const [showCloneModal, setShowCloneModal] = useState(false);
+  const [allMachines, setAllMachines] = useState<IMachine[]>([]);
+
   // Terminal tabs state — each tab is an independent terminal session
   interface TerminalEntry { command: string; output: string; exitCode: number; ts: string }
   interface TerminalTab { id: number; label: string; history: TerminalEntry[]; input: string; historyIndex: number; running: boolean }
@@ -190,9 +197,14 @@ export default function MachineDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, allJobs] = await Promise.all([fetchMachine(id), fetchJobs()]);
+      const [m, allJobs, machines] = await Promise.all([
+        fetchMachine(id),
+        fetchJobs(),
+        fetchMachines(),
+      ]);
       setMachine(m);
       setJobs(allJobs.filter((j) => j.machineId === id));
+      setAllMachines(machines);
     } catch {
       addToast('error', 'Failed to load machine.');
     } finally {
@@ -370,6 +382,14 @@ export default function MachineDetailPage() {
         />
       )}
 
+      {showCloneModal && machine && (
+        <CloneToModal
+          sourceMachine={machine}
+          allMachines={allMachines}
+          onClose={() => setShowCloneModal(false)}
+        />
+      )}
+
       {/* Back */}
       <Link href="/console/machine-manager/machines"
         className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-800">
@@ -402,6 +422,14 @@ export default function MachineDetailPage() {
               ? <><Loader2 className="h-3.5 w-3.5 animate-spin" /> Resetting…</>
               : <><RotateCcw className="h-3.5 w-3.5" /> Reset VM</>
             }
+          </button>
+          <button
+            onClick={() => setShowCloneModal(true)}
+            disabled={machine.status !== 'online'}
+            title={machine.status !== 'online' ? 'Agent must be online to clone' : 'Clone all changes to another VM'}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100 disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <Copy className="h-3.5 w-3.5" /> Clone to VM
           </button>
           <button
             onClick={() => setShowRemoveConfirm(true)}
@@ -617,6 +645,11 @@ export default function MachineDetailPage() {
             Run
           </button>
         </div>
+      </div>
+
+      {/* Change Log */}
+      <div className="mb-6">
+        <ActivityLogPanel machineId={machine._id} />
       </div>
 
       {/* Install Software */}
