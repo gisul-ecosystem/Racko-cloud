@@ -45,7 +45,16 @@ export default function TenantAdminOverviewPage() {
     void load();
   }, [load]);
 
-  if (tenantUser?.role === 'tenant_user') return null;
+  if (tenantUser?.role === 'tenant_user') {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <div
+          className="h-7 w-7 animate-spin rounded-full border-2 border-t-transparent"
+          style={{ borderColor: accentColor, borderTopColor: 'transparent' }}
+        />
+      </div>
+    );
+  }
 
   if (error && !loading) {
     return <ErrorState title="Overview unavailable" message={error} onRetry={() => void load()} />;

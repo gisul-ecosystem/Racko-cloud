@@ -18,11 +18,17 @@ export default function TenantAdminLayout({ children }: { children: React.ReactN
     return <TenantBillingShell>{children}</TenantBillingShell>;
   }
 
-  const shell = <TenantVpsAdminShell>{children}</TenantVpsAdminShell>;
-
+  // Shell stays mounted during the service check so navigation doesn't flash
+  // the root dark body (RequireTenantService used to replace the whole shell).
   if (isEndUserResources) {
-    return shell;
+    return <TenantVpsAdminShell>{children}</TenantVpsAdminShell>;
   }
 
-  return <RequireTenantService serviceKey="vm-management">{shell}</RequireTenantService>;
+  return (
+    <TenantVpsAdminShell>
+      <RequireTenantService serviceKey="vm-management" embedded>
+        {children}
+      </RequireTenantService>
+    </TenantVpsAdminShell>
+  );
 }
