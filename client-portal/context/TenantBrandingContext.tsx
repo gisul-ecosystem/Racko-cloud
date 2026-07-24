@@ -4,6 +4,7 @@ import React, {
   createContext,
   useContext,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -92,21 +93,27 @@ function resolveFaviconSrc(
 
 export function TenantBrandingProvider({ children }: { children: React.ReactNode }) {
   const [branding, setBranding] = useState<TenantBranding>(DEFAULT_BRANDING);
+  // Never read localStorage in useState initializers — that mismatches SSR hydration
+  // and can crash the client after login/navigation.
   const [assetUrls, setAssetUrls] = useState<Partial<Record<TenantBrandingAssetType, string>>>(
-    () => {
-      const cached = readCachedTenantBranding();
-      return cached?.faviconDataUrl ? { favicon: cached.faviconDataUrl } : {};
-    }
+    {}
   );
   const [loading, setLoading] = useState(true);
   const [tenantNotFound, setTenantNotFound] = useState(false);
   const [brandingError, setBrandingError] = useState<string | null>(null);
-  const [portalName, setPortalName] = useState(() => {
-    const cached = readCachedTenantBranding();
-    if (cached?.portalName) return cached.portalName;
-    return resolvePortalNameFromEnv();
-  });
+  const [portalName, setPortalName] = useState(resolvePortalNameFromEnv);
   const objectUrlsRef = useRef<string[]>([]);
+
+  useLayoutEffect(() => {
+    const cached = readCachedTenantBranding();
+    if (!cached) return;
+    if (cached.portalName) setPortalName(cached.portalName);
+    if (cached.faviconDataUrl) {
+      setAssetUrls((prev) =>
+        prev.favicon ? prev : { ...prev, favicon: cached.faviconDataUrl }
+      );
+    }
+  }, []);
 
   useEffect(() => {
     // Don't overwrite a cached / API portal name with hostname guess.
@@ -189,7 +196,11 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
           }
         }
         objectUrlsRef.current = nextObjectUrls;
-        setAssetUrls(next);
+        // Keep a previously cached favicon if this fetch omitted it (transient miss).
+        setAssetUrls((prev) => ({
+          ...next,
+          favicon: next.favicon ?? prev.favicon,
+        }));
 
         const resolvedName = merged.name?.trim() || '';
         if (resolvedName) {
@@ -197,7 +208,15 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
         }
       } catch (err) {
         if (cancelled) return;
-        setAssetUrls({});
+        // Do not wipe a working cached favicon on API failure — login/console
+        // still need accent defaults, but assets can stay.
+        setAssetUrls((prev) => {
+          const cached = readCachedTenantBranding();
+          if (cached?.faviconDataUrl) {
+            return { favicon: cached.faviconDataUrl };
+          }
+          return prev.favicon ? { favicon: prev.favicon } : {};
+        });
         setBranding(DEFAULT_BRANDING);
 
         if (err instanceof ApiError) {
