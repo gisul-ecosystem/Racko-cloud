@@ -4,6 +4,7 @@ import { machineManagerController } from './machine-manager.controller';
 import { trackerController } from './tracker.controller';
 import { agentFileUpload } from '../../middleware/agentFileUpload.middleware';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
+import { requireAgentAuth } from '../../middleware/requireAgentAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import {
@@ -278,22 +279,29 @@ agentRouter.get(
 
 // ─── Tracker agent routes (authenticated by X-Agent-ID header) ────────────────
 
-// POST /api/v1/agent/baseline — agent posts baseline snapshot on first registration
+// POST /api/v1/agent/baseline — agent posts baseline snapshot (chunked, 2MB per chunk)
+// Large body limit: baseline file list can be thousands of entries.
 agentRouter.post(
   '/baseline',
+  requireAgentAuth,
+  express.json({ limit: '10mb' }),
   (req, res, next) => trackerController.saveBaseline(req, res, next)
 );
 
-// POST /api/v1/agent/activity — agent posts a single activity event
+// POST /api/v1/agent/activity — agent posts a single activity event (small payload)
 agentRouter.post(
   '/activity',
+  requireAgentAuth,
+  express.json({ limit: '2mb' }),
   (req, res, next) => trackerController.appendActivity(req, res, next)
 );
 
 // POST /api/v1/agent/file-upload — agent uploads a file (any size, any type)
-// multer.single('file') reads the multipart body and puts the file in req.file
+// No body size limit here — SeaweedFS handles large files via streaming multipart.
+// nginx limit for this specific path is set to 0 (unlimited) in server config.
 agentRouter.post(
   '/file-upload',
+  requireAgentAuth,
   agentFileUpload.single('file'),
   (req, res, next) => trackerController.uploadFile(req, res, next)
 );
@@ -301,18 +309,21 @@ agentRouter.post(
 // GET /api/v1/agent/file-download?ref=<storageRef> — agent downloads a file during clone
 agentRouter.get(
   '/file-download',
+  requireAgentAuth,
   (req, res, next) => trackerController.downloadFile(req, res, next)
 );
 
 // GET /api/v1/agent/clone-manifest — target agent fetches source activity log
 agentRouter.get(
   '/clone-manifest',
+  requireAgentAuth,
   (req, res, next) => trackerController.getCloneManifest(req, res, next)
 );
 
 // POST /api/v1/agent/clone-install — target agent requests a software install job
 agentRouter.post(
   '/clone-install',
+  requireAgentAuth,
   (req, res, next) => trackerController.cloneInstall(req, res, next)
 );
 

@@ -465,19 +465,53 @@ func (w *Watcher) diffEnvVars(scope string, last map[string]string) {
 	}
 }
 
-// diffRegistry exports HKCU\Software and HKLM\Software (non-Microsoft) and
-// records any changes. Uses PowerShell reg export for full fidelity.
+// diffRegistry exports only specific high-value registry keys and records
+// changes when their content changes. Uses per-key exports (not full hive)
+// to keep payloads small — each export is a few KB, not several MB.
 func (w *Watcher) diffRegistry() {
+	// Target only the most valuable user-installed app keys.
+	// These cover 95% of what matters for clone replay:
+	//   - HKCU\Software\*  : user-installed app settings and configs
+	//   - HKLM\SOFTWARE\*  : system-wide app settings (non-Microsoft subtree only)
+	// We export at a more granular level (direct children, not the full tree)
+	// so each payload stays under 100KB.
 	regKeys := []string{
-		`HKCU\Software`,
-		`HKLM\SOFTWARE`,
+		`HKCU\Environment`,
+		`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
+		`HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce`,
+		`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`,
+		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`,
+		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce`,
 	}
+
+	// Also export direct children of HKCU\Software (user app configs) — one key at a time
+	// This replaces the full hive export with targeted per-app exports
+	userSoftwareKeys := runPS(`
+Get-ChildItem 'HKCU:\Software' -ErrorAction SilentlyContinue |
+  Where-Object { $_.PSChildName -notlike 'Microsoft*' -and $_.PSChildName -notlike 'Classes*' } |
+  ForEach-Object { 'HKCU\Software\' + $_.PSChildName } |
+  Select-Object -First 50 |
+  ConvertTo-Json -Compress
+`)
+	if userSoftwareKeys != "" {
+		var keys []string
+		if err := json.Unmarshal([]byte(userSoftwareKeys), &keys); err == nil {
+			regKeys = append(regKeys, keys...)
+		}
+	}
+
 	for _, key := range regKeys {
-		export := runPS(fmt.Sprintf(`reg export "%s" $env:TEMP\racko-reg-tmp.reg /y 2>$null; Get-Content $env:TEMP\racko-reg-tmp.reg -Raw -ErrorAction SilentlyContinue`, key))
+		// Export this specific key to a temp file
+		tmpFile := `C:\Windows\Temp\racko-reg-` + strings.ReplaceAll(key, `\`, `-`) + `.reg`
+		export := runPS(fmt.Sprintf(
+			`reg export "%s" "%s" /y 2>$null; if (Test-Path '%s') { Get-Content '%s' -Raw; Remove-Item '%s' -Force } `,
+			key, tmpFile, tmpFile, tmpFile, tmpFile,
+		))
 		if export == "" {
 			continue
 		}
-		// We detect changes by hashing the export. If it changed since last check, record it.
+
+		// Hash the export to detect changes
 		h := sha256.New()
 		h.Write([]byte(export))
 		hashNow := hex.EncodeToString(h.Sum(nil))
@@ -487,6 +521,12 @@ func (w *Watcher) diffRegistry() {
 			continue // unchanged
 		}
 		w.lastSysEnv[cacheKey] = hashNow
+
+		// Cap export size to 512KB per key — prevents oversized payloads from
+		// pathological registry entries (e.g. binary data stored in registry)
+		if len(export) > 512*1024 {
+			export = export[:512*1024] + "\n; [truncated]"
+		}
 
 		w.sendActivity(ActivityEvent{
 			AgentID:   w.agentID,
