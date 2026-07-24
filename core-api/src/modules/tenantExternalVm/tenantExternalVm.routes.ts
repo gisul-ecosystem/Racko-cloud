@@ -52,6 +52,12 @@ router.post(
   (req, res, next) => tenantExternalVmController.bulkAssignOneToOne(req, res, next)
 );
 
+router.get(
+  '/assign/jobs/:jobId',
+  requireTenantRole('tenant_admin'),
+  (req, res, next) => tenantExternalVmController.getBulkAssignJobStatus(req, res, next)
+);
+
 router.delete(
   '/assign/:id',
   requireTenantRole('tenant_admin'),

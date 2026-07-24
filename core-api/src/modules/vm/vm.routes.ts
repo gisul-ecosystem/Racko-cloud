@@ -104,12 +104,19 @@ router.post(
   (req, res, next) => vmController.assignVMs(req, res, next)
 );
 
-// POST /api/v1/vms/assign/bulk — 1:1 bulk assign VMs to users
+// POST /api/v1/vms/assign/bulk — 1:1 bulk assign VMs to users (async job)
 router.post(
   '/assign/bulk',
   requireRole('admin', 'super_admin'),
   validateRequest(bulkAssignPairsSchema),
   (req, res, next) => vmController.bulkAssignOneToOne(req, res, next)
+);
+
+// GET /api/v1/vms/assign/jobs/:jobId — poll bulk assign job
+router.get(
+  '/assign/jobs/:jobId',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => vmController.getBulkAssignJobStatus(req, res, next)
 );
 
 // PATCH /api/v1/vms/override/bulk — grant/revoke override for many VMs (super_admin)
