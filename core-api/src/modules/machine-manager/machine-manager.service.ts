@@ -652,6 +652,10 @@ class MachineManagerService {
         // Clear job history so machine appears fresh after reset
         await JobModel.deleteMany({ machineId: new mongoose.Types.ObjectId(machineId) });
 
+        // Clear activity log — machine is back to baseline state, slate wiped clean
+        const { clearActivityLog } = await import('./tracker.service');
+        await clearActivityLog(new mongoose.Types.ObjectId(machineId));
+
         logger.info('[MachineManager] Reset initiated', {
           machineId,
           agentId: doc.agentId,
