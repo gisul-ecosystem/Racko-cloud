@@ -10,10 +10,20 @@ import type { TenantServiceKey } from '@/types/tenantPortal';
 interface RequireTenantServiceProps {
   serviceKey: TenantServiceKey;
   children: React.ReactNode;
+  /**
+   * When true, the gate sits inside an existing light shell — use an inline
+   * spinner. When false (default), paint a full light page so the root dark
+   * body never flashes during the check.
+   */
+  embedded?: boolean;
 }
 
 /** Redirects to the services hub when the required service is not active. */
-export function RequireTenantService({ serviceKey, children }: RequireTenantServiceProps) {
+export function RequireTenantService({
+  serviceKey,
+  children,
+  embedded = false,
+}: RequireTenantServiceProps) {
   const router = useRouter();
   const { accentColor } = useTenantBranding();
   const { loading, hasActiveService } = useTenantServices();
@@ -25,15 +35,20 @@ export function RequireTenantService({ serviceKey, children }: RequireTenantServ
     }
   }, [loading, allowed, router]);
 
-  if (loading) {
+  if (loading || !allowed) {
+    if (embedded) {
+      return (
+        <div className="flex justify-center py-16">
+          <Loader2 className="h-7 w-7 animate-spin" style={{ color: accentColor }} />
+        </div>
+      );
+    }
     return (
-      <div className="flex justify-center py-16">
+      <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <Loader2 className="h-7 w-7 animate-spin" style={{ color: accentColor }} />
       </div>
     );
   }
-
-  if (!allowed) return null;
 
   return <>{children}</>;
 }

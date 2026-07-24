@@ -4,7 +4,6 @@ import { useEffect, useRef } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
-import { TenantServicesProvider } from '@/context/TenantServicesContext';
 import { TenantConsoleShell } from '@/components/tenant/TenantConsoleShell';
 
 function TenantConsoleAuthGate({ children }: { children: React.ReactNode }) {
@@ -64,9 +63,5 @@ function TenantConsoleAuthGate({ children }: { children: React.ReactNode }) {
 }
 
 export default function TenantConsoleLayout({ children }: { children: React.ReactNode }) {
-  return (
-    <TenantServicesProvider>
-      <TenantConsoleAuthGate>{children}</TenantConsoleAuthGate>
-    </TenantServicesProvider>
-  );
+  return <TenantConsoleAuthGate>{children}</TenantConsoleAuthGate>;
 }
