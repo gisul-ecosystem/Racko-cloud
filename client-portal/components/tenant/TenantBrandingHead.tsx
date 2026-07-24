@@ -3,108 +3,101 @@
 import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { readCachedTenantBranding } from '@/lib/tenantBrandingCache';
-import { buildSquareFaviconSet, type SquareFaviconSet } from '@/lib/normalizeFavicon';
+import { buildSquareFaviconSet } from '@/lib/normalizeFavicon';
 
-const TENANT_ICON_ATTR = 'data-tenant-branding';
+const TENANT_FLAG = 'data-tenant-branding';
 
-function removeTenantIconLinks(): void {
-  document
-    .querySelectorAll<HTMLLinkElement>(`link[${TENANT_ICON_ATTR}='favicon']`)
-    .forEach((el) => el.remove());
-}
-
-function upsertIconLink(opts: {
+/**
+ * Only create/update links WE own. Never mutate or remove Next.js metadata
+ * <link> nodes — that causes client-side "Application error" crashes.
+ */
+function upsertOwnedIcon(opts: {
+  key: string;
   rel: string;
   href: string;
   sizes?: string;
   type?: string;
 }): void {
-  const link = document.createElement('link');
-  link.rel = opts.rel;
-  link.href = opts.href;
-  if (opts.sizes) link.setAttribute('sizes', opts.sizes);
-  if (opts.type) link.type = opts.type;
-  link.setAttribute(TENANT_ICON_ATTR, 'favicon');
-  document.head.appendChild(link);
+  try {
+    const selector = `link[${TENANT_FLAG}="${opts.key}"]`;
+    let el = document.head.querySelector<HTMLLinkElement>(selector);
+    if (!el) {
+      el = document.createElement('link');
+      el.setAttribute(TENANT_FLAG, opts.key);
+      el.rel = opts.rel;
+      document.head.appendChild(el);
+    }
+    el.rel = opts.rel;
+    el.href = opts.href;
+    if (opts.sizes) el.setAttribute('sizes', opts.sizes);
+    else el.removeAttribute('sizes');
+    if (opts.type) el.type = opts.type;
+  } catch {
+    // Never let favicon DOM work take down the app.
+  }
 }
 
-/**
- * Replace default / previous icons with square variants at explicit sizes.
- * Avoids browsers stretching a non-square upload into a square tab slot.
- */
-function applySquareFavicons(set: SquareFaviconSet): void {
-  // Retarget any leftover root Racko icons, then remove so only sized links remain.
-  document
-    .querySelectorAll<HTMLLinkElement>(
-      "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']"
-    )
-    .forEach((el) => el.remove());
-
-  removeTenantIconLinks();
-
-  upsertIconLink({
+function applyOwnedFavicons(href32: string, href48?: string, appleHref?: string): void {
+  upsertOwnedIcon({
+    key: 'icon-32',
     rel: 'icon',
-    href: set.icon32,
+    href: href32,
     sizes: '32x32',
     type: 'image/png',
   });
-  upsertIconLink({
+  upsertOwnedIcon({
+    key: 'icon-48',
     rel: 'icon',
-    href: set.icon48,
+    href: href48 || href32,
     sizes: '48x48',
     type: 'image/png',
   });
-  upsertIconLink({
+  upsertOwnedIcon({
+    key: 'shortcut',
     rel: 'shortcut icon',
-    href: set.icon32,
+    href: href32,
     type: 'image/png',
   });
-  upsertIconLink({
+  upsertOwnedIcon({
+    key: 'apple',
     rel: 'apple-touch-icon',
-    href: set.apple180,
+    href: appleHref || href32,
     sizes: '180x180',
   });
 }
 
-/** Fast path for cached 64×64 square PNG (already normalized). */
-function applyCachedSquareFavicon(href: string): void {
-  document
-    .querySelectorAll<HTMLLinkElement>(
-      "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']"
-    )
-    .forEach((el) => el.remove());
-
-  upsertIconLink({ rel: 'icon', href, sizes: '32x32', type: 'image/png' });
-  upsertIconLink({ rel: 'icon', href, sizes: '48x48', type: 'image/png' });
-  upsertIconLink({ rel: 'shortcut icon', href, type: 'image/png' });
-  upsertIconLink({ rel: 'apple-touch-icon', href, sizes: '180x180' });
-}
-
 /**
- * Applies per-tenant favicon + document title.
- * Favicons are normalized to square (contain) at 32 / 48 / 180 so tab icons
- * keep the correct shape across sizes.
+ * Applies per-tenant favicon + document title after mount.
+ * SSR generateMetadata already sets first paint; this only overlays owned links.
  */
 export function TenantBrandingHead() {
   const { faviconSrc, portalName, loading } = useTenantBranding();
   const appliedSrcRef = useRef<string | null>(null);
 
   useLayoutEffect(() => {
-    const cached = readCachedTenantBranding();
-    if (!cached) return;
+    try {
+      const cached = readCachedTenantBranding();
+      if (!cached) return;
 
-    if (cached.portalName) {
-      document.title = cached.portalName;
-    }
-    if (cached.faviconDataUrl) {
-      applyCachedSquareFavicon(cached.faviconDataUrl);
+      if (cached.portalName) {
+        document.title = cached.portalName;
+      }
+      if (cached.faviconDataUrl) {
+        applyOwnedFavicons(cached.faviconDataUrl);
+      }
+    } catch {
+      // ignore
     }
   }, []);
 
   useEffect(() => {
     if (loading) return;
     if (!portalName || portalName === 'Portal') return;
-    document.title = portalName;
+    try {
+      document.title = portalName;
+    } catch {
+      // ignore
+    }
   }, [portalName, loading]);
 
   useEffect(() => {
@@ -117,12 +110,11 @@ export function TenantBrandingHead() {
       try {
         const set = await buildSquareFaviconSet(faviconSrc);
         if (cancelled) return;
-        applySquareFavicons(set);
+        applyOwnedFavicons(set.icon32, set.icon48, set.apple180);
         appliedSrcRef.current = faviconSrc;
       } catch {
         if (cancelled) return;
-        // Fallback: still set something rather than leaving Racko.
-        applyCachedSquareFavicon(faviconSrc);
+        applyOwnedFavicons(faviconSrc);
         appliedSrcRef.current = faviconSrc;
       }
     })();

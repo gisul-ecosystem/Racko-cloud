@@ -43,7 +43,12 @@ export async function renderSquareFaviconDataUrl(
   ctx.imageSmoothingQuality = 'high';
   ctx.drawImage(img, dx, dy, dw, dh);
 
-  return canvas.toDataURL('image/png');
+  try {
+    return canvas.toDataURL('image/png');
+  } catch {
+    // Tainted canvas / SecurityError — fall back to original source.
+    return source;
+  }
 }
 
 export interface SquareFaviconSet {
