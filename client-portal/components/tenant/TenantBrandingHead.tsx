@@ -1,79 +1,134 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { readCachedTenantBranding } from '@/lib/tenantBrandingCache';
+import { buildSquareFaviconSet, type SquareFaviconSet } from '@/lib/normalizeFavicon';
 
-const ICON_SELECTOR =
-  "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']";
+const TENANT_ICON_ATTR = 'data-tenant-branding';
 
-/** Applies per-tenant favicon + document title, replacing root-layout Racko defaults. */
+function removeTenantIconLinks(): void {
+  document
+    .querySelectorAll<HTMLLinkElement>(`link[${TENANT_ICON_ATTR}='favicon']`)
+    .forEach((el) => el.remove());
+}
+
+function upsertIconLink(opts: {
+  rel: string;
+  href: string;
+  sizes?: string;
+  type?: string;
+}): void {
+  const link = document.createElement('link');
+  link.rel = opts.rel;
+  link.href = opts.href;
+  if (opts.sizes) link.setAttribute('sizes', opts.sizes);
+  if (opts.type) link.type = opts.type;
+  link.setAttribute(TENANT_ICON_ATTR, 'favicon');
+  document.head.appendChild(link);
+}
+
+/**
+ * Replace default / previous icons with square variants at explicit sizes.
+ * Avoids browsers stretching a non-square upload into a square tab slot.
+ */
+function applySquareFavicons(set: SquareFaviconSet): void {
+  // Retarget any leftover root Racko icons, then remove so only sized links remain.
+  document
+    .querySelectorAll<HTMLLinkElement>(
+      "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']"
+    )
+    .forEach((el) => el.remove());
+
+  removeTenantIconLinks();
+
+  upsertIconLink({
+    rel: 'icon',
+    href: set.icon32,
+    sizes: '32x32',
+    type: 'image/png',
+  });
+  upsertIconLink({
+    rel: 'icon',
+    href: set.icon48,
+    sizes: '48x48',
+    type: 'image/png',
+  });
+  upsertIconLink({
+    rel: 'shortcut icon',
+    href: set.icon32,
+    type: 'image/png',
+  });
+  upsertIconLink({
+    rel: 'apple-touch-icon',
+    href: set.apple180,
+    sizes: '180x180',
+  });
+}
+
+/** Fast path for cached 64×64 square PNG (already normalized). */
+function applyCachedSquareFavicon(href: string): void {
+  document
+    .querySelectorAll<HTMLLinkElement>(
+      "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']"
+    )
+    .forEach((el) => el.remove());
+
+  upsertIconLink({ rel: 'icon', href, sizes: '32x32', type: 'image/png' });
+  upsertIconLink({ rel: 'icon', href, sizes: '48x48', type: 'image/png' });
+  upsertIconLink({ rel: 'shortcut icon', href, type: 'image/png' });
+  upsertIconLink({ rel: 'apple-touch-icon', href, sizes: '180x180' });
+}
+
+/**
+ * Applies per-tenant favicon + document title.
+ * Favicons are normalized to square (contain) at 32 / 48 / 180 so tab icons
+ * keep the correct shape across sizes.
+ */
 export function TenantBrandingHead() {
   const { faviconSrc, portalName, loading } = useTenantBranding();
+  const appliedSrcRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    const cached = readCachedTenantBranding();
+    if (!cached) return;
+
+    if (cached.portalName) {
+      document.title = cached.portalName;
+    }
+    if (cached.faviconDataUrl) {
+      applyCachedSquareFavicon(cached.faviconDataUrl);
+    }
+  }, []);
 
   useEffect(() => {
     if (loading) return;
     if (!portalName || portalName === 'Portal') return;
-
-    const previousTitle = document.title;
     document.title = portalName;
-    return () => {
-      document.title = previousTitle;
-    };
   }, [portalName, loading]);
 
   useEffect(() => {
     if (loading) return;
+    if (!faviconSrc) return;
+    if (appliedSrcRef.current === faviconSrc) return;
 
-    if (!faviconSrc) {
-      document
-        .querySelectorAll<HTMLLinkElement>("link[data-tenant-branding='favicon']")
-        .forEach((el) => el.remove());
-      return;
-    }
-
-    const existing = Array.from(document.querySelectorAll<HTMLLinkElement>(ICON_SELECTOR));
-    const snapshots = existing.map((el) => ({
-      el,
-      href: el.getAttribute('href'),
-      rel: el.getAttribute('rel'),
-      type: el.getAttribute('type'),
-      hadTenantFlag: el.getAttribute('data-tenant-branding') === 'favicon',
-    }));
-
-    // Retarget every default icon link so the browser cannot keep Racko's favicon.
-    for (const el of existing) {
-      el.setAttribute('href', faviconSrc);
-      el.setAttribute('data-tenant-branding', 'favicon');
-      if (!el.rel || el.rel === 'shortcut icon') {
-        el.rel = 'icon';
+    let cancelled = false;
+    void (async () => {
+      try {
+        const set = await buildSquareFaviconSet(faviconSrc);
+        if (cancelled) return;
+        applySquareFavicons(set);
+        appliedSrcRef.current = faviconSrc;
+      } catch {
+        if (cancelled) return;
+        // Fallback: still set something rather than leaving Racko.
+        applyCachedSquareFavicon(faviconSrc);
+        appliedSrcRef.current = faviconSrc;
       }
-    }
-
-    // Guarantee at least one icon link if Next.js metadata hadn't injected any yet.
-    let created: HTMLLinkElement | null = null;
-    if (existing.length === 0) {
-      created = document.createElement('link');
-      created.rel = 'icon';
-      created.href = faviconSrc;
-      created.setAttribute('data-tenant-branding', 'favicon');
-      document.head.appendChild(created);
-    }
+    })();
 
     return () => {
-      for (const snap of snapshots) {
-        if (!snap.el.parentNode) continue;
-        if (snap.hadTenantFlag) {
-          snap.el.remove();
-          continue;
-        }
-        if (snap.href != null) snap.el.setAttribute('href', snap.href);
-        else snap.el.removeAttribute('href');
-        if (snap.rel != null) snap.el.setAttribute('rel', snap.rel);
-        if (snap.type != null) snap.el.setAttribute('type', snap.type);
-        else snap.el.removeAttribute('type');
-        snap.el.removeAttribute('data-tenant-branding');
-      }
-      created?.remove();
+      cancelled = true;
     };
   }, [faviconSrc, loading]);
 

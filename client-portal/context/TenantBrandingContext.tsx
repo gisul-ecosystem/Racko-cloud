@@ -16,6 +16,8 @@ import {
 } from '@/lib/tenantPortalApi';
 import { isTenantBrandingAssetPath, resolveTenantBrandingUrl } from '@/lib/tenantBrandingUrl';
 import { getTenantDevDomain } from '@/lib/gatewayUrl';
+import { writeCachedTenantBranding, readCachedTenantBranding } from '@/lib/tenantBrandingCache';
+import { renderSquareFaviconDataUrl } from '@/lib/normalizeFavicon';
 import type { TenantBranding, TenantBrandingAssetType } from '@/types/tenantPortal';
 
 const DEFAULT_BRANDING: TenantBranding = {
@@ -91,16 +93,29 @@ function resolveFaviconSrc(
 export function TenantBrandingProvider({ children }: { children: React.ReactNode }) {
   const [branding, setBranding] = useState<TenantBranding>(DEFAULT_BRANDING);
   const [assetUrls, setAssetUrls] = useState<Partial<Record<TenantBrandingAssetType, string>>>(
-    {}
+    () => {
+      const cached = readCachedTenantBranding();
+      return cached?.faviconDataUrl ? { favicon: cached.faviconDataUrl } : {};
+    }
   );
   const [loading, setLoading] = useState(true);
   const [tenantNotFound, setTenantNotFound] = useState(false);
   const [brandingError, setBrandingError] = useState<string | null>(null);
-  const [portalName, setPortalName] = useState(resolvePortalNameFromEnv);
+  const [portalName, setPortalName] = useState(() => {
+    const cached = readCachedTenantBranding();
+    if (cached?.portalName) return cached.portalName;
+    return resolvePortalNameFromEnv();
+  });
   const objectUrlsRef = useRef<string[]>([]);
 
   useEffect(() => {
-    setPortalName(resolvePortalNameFromHost());
+    // Don't overwrite a cached / API portal name with hostname guess.
+    setPortalName((prev) => {
+      const cached = readCachedTenantBranding();
+      if (cached?.portalName) return cached.portalName;
+      if (prev && prev !== 'Portal') return prev;
+      return resolvePortalNameFromHost();
+    });
   }, []);
 
   useEffect(() => {
@@ -141,10 +156,20 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
             if (!hasAsset) return [assetType, null] as const;
 
             // Favicon must be a data URL — browsers ignore blob: for <link rel="icon">.
-            const url =
-              assetType === 'favicon'
-                ? await fetchTenantBrandingAssetDataUrl(assetType, cacheBust)
-                : await fetchTenantBrandingAssetObjectUrl(assetType, cacheBust);
+            // Keep the original for high-quality multi-size rendering; cache a square 64.
+            if (assetType === 'favicon') {
+              const raw = await fetchTenantBrandingAssetDataUrl(assetType, cacheBust);
+              if (!raw) return [assetType, null] as const;
+              try {
+                const cache64 = await renderSquareFaviconDataUrl(raw, 64);
+                writeCachedTenantBranding({ faviconDataUrl: cache64 });
+              } catch {
+                // ignore cache normalize failure
+              }
+              return [assetType, raw] as const;
+            }
+
+            const url = await fetchTenantBrandingAssetObjectUrl(assetType, cacheBust);
             return [assetType, url] as const;
           })
         );
@@ -165,6 +190,11 @@ export function TenantBrandingProvider({ children }: { children: React.ReactNode
         }
         objectUrlsRef.current = nextObjectUrls;
         setAssetUrls(next);
+
+        const resolvedName = merged.name?.trim() || '';
+        if (resolvedName) {
+          writeCachedTenantBranding({ portalName: resolvedName });
+        }
       } catch (err) {
         if (cancelled) return;
         setAssetUrls({});
