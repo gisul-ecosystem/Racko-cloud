@@ -66,13 +66,14 @@ const services = [
     icon: Globe,
     description: GCP_SERVICE.description,
   },
-  {
-    id: 'docs',
-    name: 'Documentation',
-    href: '/console/docs',
-    icon: BookOpen,
-    description: 'Guides and reference for VPS, Elastic Server, AWS, and Azure services',
-  },
+  // TODO: Documentation card temporarily hidden
+  // {
+  //   id: 'docs',
+  //   name: 'Documentation',
+  //   href: '/console/docs',
+  //   icon: BookOpen,
+  //   description: 'Guides and reference for VPS, Elastic Server, AWS, and Azure services',
+  // },
   {
     id: 'machine-manager',
     name: 'Machine Manager',

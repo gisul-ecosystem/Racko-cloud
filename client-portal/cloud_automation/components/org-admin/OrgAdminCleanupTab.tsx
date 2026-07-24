@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Loader2, Pause, Trash2 } from 'lucide-react';
 import { getOrgCleanupLogs } from '../../api/orgAdminClient';
 import type { OrgAdminCleanupLog, OrgAdminRequestDetail, OrgAdminUser } from '../../types/orgAdmin';
+import { formatCleanupTimeLabel } from '../../utils/requestForm';
 
 interface OrgAdminCleanupTabProps {
   users: OrgAdminUser[];
@@ -121,7 +122,17 @@ export function OrgAdminCleanupTab({
   }
 
   const lastLog = cleanupLogs[0];
+  const cleanupTime = request?.resourceCleanupTime;
+  const cleanupTimezone = request?.resourceCleanupTimezone;
   const intervalHours = request?.resourceCleanupIntervalHours;
+  const cleanupScheduleLabel =
+    autoCleanupEnabled && cleanupTime
+      ? `Daily at ${formatCleanupTimeLabel(cleanupTime)}${
+          cleanupTimezone ? ` (${cleanupTimezone.replace(/_/g, ' ')})` : ''
+        }`
+      : autoCleanupEnabled && intervalHours
+        ? `Every ${intervalHours} hours`
+        : 'Not scheduled';
 
   if (users.length === 0) {
     return (
@@ -152,10 +163,8 @@ export function OrgAdminCleanupTab({
 
       <div className="grid gap-3 sm:grid-cols-3">
         <div className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3.5">
-          <p className="text-xs text-gray-500">Cleanup every</p>
-          <p className="text-sm font-semibold text-gray-900">
-            {autoCleanupEnabled && intervalHours ? `${intervalHours} hours` : 'Not scheduled'}
-          </p>
+          <p className="text-xs text-gray-500">Cleanup schedule</p>
+          <p className="text-sm font-semibold text-gray-900">{cleanupScheduleLabel}</p>
         </div>
         <div className="rounded-lg border border-gray-100 bg-gray-50 px-4 py-3.5">
           <p className="text-xs text-gray-500">Next scheduled run</p>
@@ -187,7 +196,11 @@ export function OrgAdminCleanupTab({
           <p className="text-xs text-gray-500">Scheduled auto {isPause ? 'pause' : 'cleanup'}</p>
           <p className="text-sm font-semibold text-gray-900">
             {autoCleanupEnabled ? 'Enabled' : 'Disabled'}
-            {autoCleanupEnabled && intervalHours ? ` · every ${intervalHours}h` : ''}
+            {autoCleanupEnabled && cleanupTime
+              ? ` · daily at ${formatCleanupTimeLabel(cleanupTime)}`
+              : autoCleanupEnabled && intervalHours
+                ? ` · every ${intervalHours}h`
+                : ''}
           </p>
         </div>
         <span

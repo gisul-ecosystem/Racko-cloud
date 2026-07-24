@@ -173,6 +173,8 @@ export interface CreateRequestPayload {
   cleanupIntervalHours?: number;
   resourceCleanupEnabled?: boolean;
   resourceCleanupIntervalHours?: number;
+  resourceCleanupTime?: string;
+  resourceCleanupTimezone?: string;
   resourceCleanupAction?: 'delete' | 'pause';
   usageWindows?: UsageWindow[];
   perUserBudgetUsd?: number;
@@ -197,6 +199,17 @@ export interface AdminAccessRequestPayload {
   defaultRole: string;
   requestedAccess: string;
   accountCount: number;
+}
+
+export interface PrivilegedRoleOption {
+  name: string;
+  definitionId: string;
+}
+
+export interface PrivilegedRoleRequestPayload {
+  customerEmail: string;
+  azureRole: string;
+  requestId?: number;
 }
 
 export interface PurchaseCloneCustomRole {
@@ -224,6 +237,8 @@ export interface PurchaseClonePayload {
   perUserBudgetUsd?: number;
   resourceCleanupEnabled: boolean;
   resourceCleanupIntervalHours?: number;
+  resourceCleanupTime?: string;
+  resourceCleanupTimezone?: string;
   resourceCleanupAction: 'delete' | 'pause';
   microsoftLicenseSkuId?: string | null;
   microsoftLicenseSkuPartNumber?: string | null;

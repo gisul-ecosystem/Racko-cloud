@@ -10,7 +10,9 @@ const NotificationType = {
   LAB_EXPIRED: 'lab_expired',
   FORCE_LOGOUT: 'force_logout',
   ACCESS_REQUEST: 'access_request',
-  ACCESS_REQUEST_REVIEWED: 'access_request_reviewed'
+  ACCESS_REQUEST_REVIEWED: 'access_request_reviewed',
+  PRIVILEGED_ROLE_REQUEST: 'privileged_role_request',
+  PRIVILEGED_ROLE_REQUEST_REVIEWED: 'privileged_role_request_reviewed'
 };
 
 const SEVERITY_MAP = {
@@ -23,7 +25,9 @@ const SEVERITY_MAP = {
   lab_expired: 'info',
   force_logout: 'warning',
   access_request: 'info',
-  access_request_reviewed: 'success'
+  access_request_reviewed: 'success',
+  privileged_role_request: 'info',
+  privileged_role_request_reviewed: 'success'
 };
 
 function mapNotificationRow(row) {
