@@ -151,6 +151,20 @@ func (w *Watcher) Start(done <-chan struct{}) {
 		w.addRecursive(fsw, root)
 	}
 
+	// Watch each local fixed drive at root level ONLY (non-recursive).
+	// This catches new top-level folders on any drive (C:\, D:\, E:\ etc.).
+	// Drives are detected dynamically at startup via GetLogicalDriveStrings
+	// so the agent works correctly on VMs with multiple drives.
+	// We do NOT recurse into drive roots at startup — that would watch
+	// C:\Windows\* and generate thousands of noise events from system processes.
+	for _, drive := range getLocalDrives() {
+		if err := fsw.Add(drive); err != nil {
+			log.Printf("[tracker/watcher] Could not watch drive root %s: %v", drive, err)
+		} else {
+			log.Printf("[tracker/watcher] Watching drive root (shallow): %s", drive)
+		}
+	}
+
 	// Flush timer — collect events in 5-second batches to avoid event storms.
 	flushTicker := time.NewTicker(5 * time.Second)
 	defer flushTicker.Stop()
@@ -225,11 +239,17 @@ func (w *Watcher) handleFsEvent(event fsnotify.Event, fsw *fsnotify.Watcher) {
 	case event.Has(fsnotify.Remove):
 		w.pending[event.Name] = fsnotify.Remove
 	case event.Has(fsnotify.Create):
-		// If a new directory is created, add it to the watcher so new files
-		// inside it are also watched.
 		info, err := os.Stat(event.Name)
 		if err == nil && info.IsDir() {
-			w.addRecursive(fsw, event.Name)
+			// Always add new directories recursively so files inside them are tracked.
+			// This covers two cases:
+			//   1. New subdirectory inside an already-watched path (e.g. C:\Users\Admin\newdir)
+			//   2. New TOP-LEVEL folder on C:\ (e.g. C:\myproject) — caught by the shallow
+			//      C:\ root watch. We recurse into it so all its contents are tracked.
+			if !shouldExcludePath(event.Name) {
+				w.addRecursive(fsw, event.Name)
+				log.Printf("[tracker/watcher] New directory detected, now watching recursively: %s", event.Name)
+			}
 		}
 		w.pending[event.Name] = fsnotify.Create
 	case event.Has(fsnotify.Write):
