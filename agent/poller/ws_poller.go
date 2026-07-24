@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/tracker"
 )
 
 // Job represents a pending install job received from the platform.
@@ -192,6 +193,18 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				}
 				log.Printf("[ws-poller] Received exec commandId=%s", execMsg.CommandID)
 				go p.runExec(execMsg.CommandID, execMsg.Command, safeWrite)
+			} else if msg.Type == "clone_replay" {
+				var cloneMsg struct {
+					SessionID       string `json:"sessionId"`
+					SourceMachineID string `json:"sourceMachineId"`
+				}
+				if err := json.Unmarshal(msg.Payload, &cloneMsg); err != nil {
+					log.Printf("[ws-poller] Malformed clone_replay payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received clone_replay sessionId=%s sourceMachineId=%s",
+					cloneMsg.SessionID, cloneMsg.SourceMachineID)
+				go p.runCloneReplay(cloneMsg.SessionID, cloneMsg.SourceMachineID, safeWrite)
 			}
 		}
 	}()
@@ -364,8 +377,39 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	sendEvent("reset_complete", 0, "", true, "")
 }
 
+// ─── Clone Replay ─────────────────────────────────────────────────────────────
+
+// runCloneReplay fetches the source VM's activity log and replays it onto this VM.
+// Sends clone_progress events during execution and clone_complete when done.
+func (p *WSPoller) runCloneReplay(sessionID, sourceMachineID string, safeWrite func(int, []byte) error) {
+	sendEvent := func(eventType string, phase int, message string, success bool, errMsg string) {
+		payload := map[string]interface{}{
+			"sessionId": sessionID,
+			"machineId": p.agentID,
+		}
+		if eventType == "clone_progress" {
+			payload["phase"] = phase
+			payload["message"] = message
+		} else {
+			payload["success"] = success
+			if errMsg != "" {
+				payload["error"] = errMsg
+			}
+		}
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":    eventType,
+			"payload": payload,
+		})
+		if err := safeWrite(websocket.TextMessage, msg); err != nil {
+			log.Printf("[ws-poller] runCloneReplay: failed to send %s: %v", eventType, err)
+		}
+	}
+
+	rep := tracker.NewReplayer(p.agentID, p.cfg, sendEvent)
+	rep.Run(sessionID, sourceMachineID)
+}
+
 // ─── Uninstall ────────────────────────────────────────────────────────────────
-// runUninstall stops all agent goroutines first (heartbeat, poller) then
 // launches the cleanup script. Using cancel() ensures heartbeat stops
 // immediately so it cannot re-launch selfUninstall on the next tick.
 func (p *WSPoller) runUninstall() {

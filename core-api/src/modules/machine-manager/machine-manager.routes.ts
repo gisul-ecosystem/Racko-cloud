@@ -1,6 +1,8 @@
 import { Router } from 'express';
 import express from 'express';
 import { machineManagerController } from './machine-manager.controller';
+import { trackerController } from './tracker.controller';
+import { agentFileUpload } from '../../middleware/agentFileUpload.middleware';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
@@ -49,6 +51,13 @@ machineRouter.get(
 machineRouter.get(
   '/reset-stream/:sessionId',
   (req, res) => void machineManagerController.streamResetStatus(req, res)
+);
+
+// GET /api/v1/machines/clone-stream/:sessionId — SSE stream for clone replay status (before requireAuth)
+// Uses short-lived ticket for auth (EventSource cannot send Authorization headers)
+machineRouter.get(
+  '/clone-stream/:sessionId',
+  (req, res) => void trackerController.streamCloneStatus(req, res)
 );
 
 machineRouter.use(requireAuth);
@@ -176,6 +185,29 @@ machineRouter.post(
   (req, res, next) => machineManagerController.execCommand(req, res, next)
 );
 
+// ─── Tracker / Clone routes (authenticated admin) ─────────────────────────────
+
+// GET /api/v1/machines/:id/activity — full change log for a machine
+machineRouter.get(
+  '/:id/activity',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => trackerController.getActivityLog(req, res, next)
+);
+
+// POST /api/v1/machines/:id/clone-to/:targetId — trigger clone replay on target machine
+machineRouter.post(
+  '/:id/clone-to/:targetId',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => trackerController.cloneTo(req, res, next)
+);
+
+// POST /api/v1/machines/clone-stream-ticket — issue SSE stream ticket (must be before /:id)
+machineRouter.post(
+  '/clone-stream-ticket',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => trackerController.issueCloneStreamTicket(req, res, next)
+);
+
 // ─── Agent routes (no JWT auth — uses accountToken in body) ──────────────────
 
 // GET /api/v1/agent/install/linux?token=<accountToken> — serves shell install script (public)
@@ -242,6 +274,46 @@ agentRouter.post(
 agentRouter.get(
   '/software-catalog/:id',
   (req, res, next) => machineManagerController.agentGetSoftware(req, res, next)
+);
+
+// ─── Tracker agent routes (authenticated by X-Agent-ID header) ────────────────
+
+// POST /api/v1/agent/baseline — agent posts baseline snapshot on first registration
+agentRouter.post(
+  '/baseline',
+  (req, res, next) => trackerController.saveBaseline(req, res, next)
+);
+
+// POST /api/v1/agent/activity — agent posts a single activity event
+agentRouter.post(
+  '/activity',
+  (req, res, next) => trackerController.appendActivity(req, res, next)
+);
+
+// POST /api/v1/agent/file-upload — agent uploads a file (any size, any type)
+// multer.single('file') reads the multipart body and puts the file in req.file
+agentRouter.post(
+  '/file-upload',
+  agentFileUpload.single('file'),
+  (req, res, next) => trackerController.uploadFile(req, res, next)
+);
+
+// GET /api/v1/agent/file-download?ref=<storageRef> — agent downloads a file during clone
+agentRouter.get(
+  '/file-download',
+  (req, res, next) => trackerController.downloadFile(req, res, next)
+);
+
+// GET /api/v1/agent/clone-manifest — target agent fetches source activity log
+agentRouter.get(
+  '/clone-manifest',
+  (req, res, next) => trackerController.getCloneManifest(req, res, next)
+);
+
+// POST /api/v1/agent/clone-install — target agent requests a software install job
+agentRouter.post(
+  '/clone-install',
+  (req, res, next) => trackerController.cloneInstall(req, res, next)
 );
 
 export { machineRouter, agentRouter };
