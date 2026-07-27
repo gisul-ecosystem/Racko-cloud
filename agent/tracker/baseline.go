@@ -505,6 +505,12 @@ func shouldExcludePath(path string) bool {
 		// Temp folders — transient
 		`appdata\local\temp`,
 		`appdata\locallow`,
+		// Windows Search / IndexedDB cache files — auto-generated, not user content
+		`appdata\local\packages`,                          // all UWP package caches (TokenBroker, Search, Edge etc.)
+		// Windows Search database files — rebuilt automatically
+		`.jfm`,   // IndexedDB journal
+		`edb.chk`, // ESE database checkpoint
+		`edb.log`, // ESE transaction log
 		// Paging / hibernate files
 		`pagefile.sys`,
 		`hiberfil.sys`,
