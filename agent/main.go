@@ -153,11 +153,37 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 	// still runs but won't skip unchanged files).
 	baseline, _ := tracker.LoadLocal()
 	wtr := tracker.NewWatcher(agentID, cfg, baseline)
-	go wtr.Start(cancelDone)
+
+	// watcherDone is the channel that stops the watcher goroutine.
+	// We keep a reference so reset can stop the watcher before running the
+	// cleanup script (prevents 300+ fake file_delete events polluting the log)
+	// and restart it fresh after reset completes.
+	watcherDone := make(chan struct{})
+	go wtr.Start(watcherDone)
+
+	// stopWatcher stops the current watcher and starts a fresh one.
+	// Called by the poller around the reset script execution.
+	stopWatcher := func() {
+		select {
+		case <-watcherDone:
+			// already stopped
+		default:
+			close(watcherDone)
+		}
+		log.Println("[agent] Watcher stopped for reset")
+	}
+
+	restartWatcher := func() {
+		watcherDone = make(chan struct{})
+		baseline2, _ := tracker.LoadLocal()
+		wtr2 := tracker.NewWatcher(agentID, cfg, baseline2)
+		go wtr2.Start(watcherDone)
+		log.Println("[agent] Watcher restarted after reset")
+	}
 
 	rep := reporter.New(cfg)
 	exec := executor.New(agentID, cfg, rep)
-	p := poller.NewWS(cfg, agentID, exec.Handle, cancel)
+	p := poller.NewWS(cfg, agentID, exec.Handle, cancel, stopWatcher, restartWatcher)
 	p.Start(cancelDone)
 
 	log.Println("[agent] Stopped.")
