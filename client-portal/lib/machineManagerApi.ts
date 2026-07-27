@@ -308,3 +308,49 @@ export function openResetStatusStream(
   const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
   return new EventSource(url, { withCredentials: true });
 }
+
+// ─── Clone API ────────────────────────────────────────────────────────────────
+
+export interface ActivityEvent {
+  _id: string;
+  type: string;
+  timestamp: string;
+  payload: Record<string, unknown>;
+  sequence: number;
+}
+
+export async function fetchActivityLog(machineId: string): Promise<ActivityEvent[]> {
+  const res = await apiRequest<{ success: boolean; data: { activities: ActivityEvent[]; total: number } }>(
+    `/api/v1/machines/${machineId}/activity`
+  );
+  return res.data.activities;
+}
+
+export async function cloneMachineTo(
+  sourceMachineId: string,
+  targetMachineId: string
+): Promise<{ sessionId: string }> {
+  const res = await apiRequest<{ success: boolean; message: string; data: { sessionId: string } }>(
+    `/api/v1/machines/${sourceMachineId}/clone-to/${targetMachineId}`,
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
+export async function issueCloneStreamTicket(
+  sessionId: string
+): Promise<{ streamTicket: string; expiresInSeconds: number }> {
+  const res = await apiRequest<{ success: boolean; data: { streamTicket: string; expiresInSeconds: number } }>(
+    '/api/v1/machines/clone-stream-ticket',
+    { method: 'POST', body: JSON.stringify({ sessionId }) }
+  );
+  return res.data;
+}
+
+export function openCloneStatusStream(
+  sessionId: string,
+  streamTicket: string
+): EventSource {
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/clone-stream/${sessionId}?ticket=${streamTicket}`;
+  return new EventSource(url, { withCredentials: true });
+}

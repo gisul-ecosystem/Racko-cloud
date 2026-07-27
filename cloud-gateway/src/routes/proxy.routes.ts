@@ -339,6 +339,12 @@ router.get('/api/v1/machines/:id/download-agent', authMiddleware, verifyMiddlewa
 router.post('/api/v1/machines/:id/exec', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.delete('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// Clone + activity log routes
+router.get('/api/v1/machines/:id/activity', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/:id/clone-to/:targetId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.post('/api/v1/machines/clone-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+// SSE stream for clone status — NO gateway auth. core-api validates the ?ticket= internally.
+router.get('/api/v1/machines/clone-stream/:sessionId', sseProxy);
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -356,10 +362,20 @@ router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
 router.post('/api/v1/agent/heartbeat', coreApiProxy);
 router.get('/api/v1/agent/software-catalog/:id', coreApiProxy);
+// Tracker agent routes — authenticated by X-Agent-ID header (not JWT)
+// core-api's requireAgentAuth middleware validates agentId against the machines collection
+router.post('/api/v1/agent/baseline', coreApiProxy);
+router.post('/api/v1/agent/activity', coreApiProxy);
+router.post('/api/v1/agent/file-upload', coreApiProxy);
+router.get('/api/v1/agent/file-download', coreApiProxy);
+router.get('/api/v1/agent/clone-manifest', coreApiProxy);
+router.post('/api/v1/agent/clone-install', coreApiProxy);
 // ─── TENANT PUBLIC ROUTES (host → x-tenant-id; no platform JWT) ───────────────
 router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/forgot-password', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/reset-password', injectTenantHeader, coreApiProxy);
+// access-check requires tenant Bearer token — injectTenantHeader sets x-tenant-id from host
+router.get('/api/v1/tenant-auth/access-check', injectTenantHeader, coreApiProxy);
 router.get('/api/v1/tenant-branding', injectTenantHeader, coreApiProxy);
 router.get('/api/v1/tenant-branding/asset', injectTenantHeader, coreApiProxy);
 

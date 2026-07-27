@@ -4,7 +4,6 @@ import { useEffect } from 'react';
 import { usePathname, useRouter } from 'next/navigation';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
-import { TenantServicesProvider } from '@/context/TenantServicesContext';
 import { TenantShell } from '@/components/tenant/TenantShell';
 
 export default function TenantDashboardLayout({ children }: { children: React.ReactNode }) {
@@ -31,9 +30,5 @@ export default function TenantDashboardLayout({ children }: { children: React.Re
     );
   }
 
-  return (
-    <TenantServicesProvider>
-      {isAdminMirror ? children : <TenantShell>{children}</TenantShell>}
-    </TenantServicesProvider>
-  );
+  return isAdminMirror ? children : <TenantShell>{children}</TenantShell>;
 }

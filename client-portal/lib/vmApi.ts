@@ -653,11 +653,36 @@ export interface BulkAssignPairsDto {
 }
 
 export async function bulkAssignOneToOne(dto: BulkAssignPairsDto): Promise<BulkAssignPairsResult> {
-  const res = await apiRequest<ApiResponse<BulkAssignPairsResult>>(
+  const start = await apiRequest<ApiResponse<{ jobId: string }>>(
     '/api/v1/vms/assign/bulk',
     { method: 'POST', body: JSON.stringify(dto) }
   );
-  return res.data;
+  const jobId = start.data.jobId;
+  const { pollBulkAssignJob } = await import('./pollBulkAssignJob');
+  const done = await pollBulkAssignJob<BulkAssignPairRow>(async () => {
+    const res = await apiRequest<
+      ApiResponse<{
+        job: {
+          id: string;
+          status: string;
+          total: number;
+          completed: number;
+          failed: number;
+          pending: number;
+          errorMessage?: string;
+        };
+        assigned: number;
+        failed: number;
+        pairs: BulkAssignPairRow[];
+      }>
+    >(`/api/v1/vms/assign/jobs/${jobId}`);
+    return res.data;
+  });
+  return {
+    assigned: done.assigned,
+    failed: done.failed,
+    pairs: done.pairs,
+  };
 }
 
 export async function unassignVM(vmId: string): Promise<void> {

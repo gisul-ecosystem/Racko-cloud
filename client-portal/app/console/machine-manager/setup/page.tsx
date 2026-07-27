@@ -56,9 +56,11 @@ type SetupPath = 'physical' | 'vm' | 'template' | null;
 
 function PathSelector({ onSelect }: { onSelect: (p: SetupPath) => void }) {
   const paths = [
-    { id: 'physical' as const, icon: Monitor, title: 'Physical Machine', desc: 'Download and run the agent on your laptop, desktop, or any physical machine.' },
+    // TODO: Physical Machine temporarily disabled
+    // { id: 'physical' as const, icon: Monitor, title: 'Physical Machine', desc: 'Download and run the agent on your laptop, desktop, or any physical machine.' },
     { id: 'vm' as const, icon: Server, title: 'VM', desc: 'Add existing VMs by IP. The platform pushes the agent remotely via SSH/WinRM.' },
-    { id: 'template' as const, icon: Layers, title: 'VM Template', desc: 'Bake the agent into a VM template. Every cloned VM auto-registers on first boot.' },
+    // TODO: VM Template temporarily disabled
+    // { id: 'template' as const, icon: Layers, title: 'VM Template', desc: 'Bake the agent into a VM template. Every cloned VM auto-registers on first boot.' },
   ];
   return (
     <div>

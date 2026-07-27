@@ -1,79 +1,126 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useLayoutEffect, useRef } from 'react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { readCachedTenantBranding } from '@/lib/tenantBrandingCache';
+import { buildSquareFaviconSet } from '@/lib/normalizeFavicon';
 
-const ICON_SELECTOR =
-  "link[rel='icon'], link[rel='shortcut icon'], link[rel='apple-touch-icon']";
+const TENANT_FLAG = 'data-tenant-branding';
 
-/** Applies per-tenant favicon + document title, replacing root-layout Racko defaults. */
+/**
+ * Only create/update links WE own. Never mutate or remove Next.js metadata
+ * <link> nodes — that causes client-side "Application error" crashes.
+ */
+function upsertOwnedIcon(opts: {
+  key: string;
+  rel: string;
+  href: string;
+  sizes?: string;
+  type?: string;
+}): void {
+  try {
+    const selector = `link[${TENANT_FLAG}="${opts.key}"]`;
+    let el = document.head.querySelector<HTMLLinkElement>(selector);
+    if (!el) {
+      el = document.createElement('link');
+      el.setAttribute(TENANT_FLAG, opts.key);
+      el.rel = opts.rel;
+      document.head.appendChild(el);
+    }
+    el.rel = opts.rel;
+    el.href = opts.href;
+    if (opts.sizes) el.setAttribute('sizes', opts.sizes);
+    else el.removeAttribute('sizes');
+    if (opts.type) el.type = opts.type;
+  } catch {
+    // Never let favicon DOM work take down the app.
+  }
+}
+
+function applyOwnedFavicons(href32: string, href48?: string, appleHref?: string): void {
+  upsertOwnedIcon({
+    key: 'icon-32',
+    rel: 'icon',
+    href: href32,
+    sizes: '32x32',
+    type: 'image/png',
+  });
+  upsertOwnedIcon({
+    key: 'icon-48',
+    rel: 'icon',
+    href: href48 || href32,
+    sizes: '48x48',
+    type: 'image/png',
+  });
+  upsertOwnedIcon({
+    key: 'shortcut',
+    rel: 'shortcut icon',
+    href: href32,
+    type: 'image/png',
+  });
+  upsertOwnedIcon({
+    key: 'apple',
+    rel: 'apple-touch-icon',
+    href: appleHref || href32,
+    sizes: '180x180',
+  });
+}
+
+/**
+ * Applies per-tenant favicon + document title after mount.
+ * SSR generateMetadata already sets first paint; this only overlays owned links.
+ */
 export function TenantBrandingHead() {
   const { faviconSrc, portalName, loading } = useTenantBranding();
+  const appliedSrcRef = useRef<string | null>(null);
+
+  useLayoutEffect(() => {
+    try {
+      const cached = readCachedTenantBranding();
+      if (!cached) return;
+
+      if (cached.portalName) {
+        document.title = cached.portalName;
+      }
+      if (cached.faviconDataUrl) {
+        applyOwnedFavicons(cached.faviconDataUrl);
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   useEffect(() => {
     if (loading) return;
     if (!portalName || portalName === 'Portal') return;
-
-    const previousTitle = document.title;
-    document.title = portalName;
-    return () => {
-      document.title = previousTitle;
-    };
+    try {
+      document.title = portalName;
+    } catch {
+      // ignore
+    }
   }, [portalName, loading]);
 
   useEffect(() => {
     if (loading) return;
+    if (!faviconSrc) return;
+    if (appliedSrcRef.current === faviconSrc) return;
 
-    if (!faviconSrc) {
-      document
-        .querySelectorAll<HTMLLinkElement>("link[data-tenant-branding='favicon']")
-        .forEach((el) => el.remove());
-      return;
-    }
-
-    const existing = Array.from(document.querySelectorAll<HTMLLinkElement>(ICON_SELECTOR));
-    const snapshots = existing.map((el) => ({
-      el,
-      href: el.getAttribute('href'),
-      rel: el.getAttribute('rel'),
-      type: el.getAttribute('type'),
-      hadTenantFlag: el.getAttribute('data-tenant-branding') === 'favicon',
-    }));
-
-    // Retarget every default icon link so the browser cannot keep Racko's favicon.
-    for (const el of existing) {
-      el.setAttribute('href', faviconSrc);
-      el.setAttribute('data-tenant-branding', 'favicon');
-      if (!el.rel || el.rel === 'shortcut icon') {
-        el.rel = 'icon';
+    let cancelled = false;
+    void (async () => {
+      try {
+        const set = await buildSquareFaviconSet(faviconSrc);
+        if (cancelled) return;
+        applyOwnedFavicons(set.icon32, set.icon48, set.apple180);
+        appliedSrcRef.current = faviconSrc;
+      } catch {
+        if (cancelled) return;
+        applyOwnedFavicons(faviconSrc);
+        appliedSrcRef.current = faviconSrc;
       }
-    }
-
-    // Guarantee at least one icon link if Next.js metadata hadn't injected any yet.
-    let created: HTMLLinkElement | null = null;
-    if (existing.length === 0) {
-      created = document.createElement('link');
-      created.rel = 'icon';
-      created.href = faviconSrc;
-      created.setAttribute('data-tenant-branding', 'favicon');
-      document.head.appendChild(created);
-    }
+    })();
 
     return () => {
-      for (const snap of snapshots) {
-        if (!snap.el.parentNode) continue;
-        if (snap.hadTenantFlag) {
-          snap.el.remove();
-          continue;
-        }
-        if (snap.href != null) snap.el.setAttribute('href', snap.href);
-        else snap.el.removeAttribute('href');
-        if (snap.rel != null) snap.el.setAttribute('rel', snap.rel);
-        if (snap.type != null) snap.el.setAttribute('type', snap.type);
-        else snap.el.removeAttribute('type');
-        snap.el.removeAttribute('data-tenant-branding');
-      }
-      created?.remove();
+      cancelled = true;
     };
   }, [faviconSrc, loading]);
 

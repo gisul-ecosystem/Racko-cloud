@@ -14,6 +14,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/tracker"
 )
 
 // Job represents a pending install job received from the platform.
@@ -32,11 +33,13 @@ type JobHandler func(job Job)
 // WSPoller connects to the platform via WebSocket and receives jobs in real-time.
 // It implements infinite reconnection with exponential backoff.
 type WSPoller struct {
-	cfg     *config.Config
-	agentID string
-	handler JobHandler
-	backoff *backoffState
-	cancel  func() // called on uninstall to stop all goroutines cleanly
+	cfg            *config.Config
+	agentID        string
+	handler        JobHandler
+	backoff        *backoffState
+	cancel         func() // called on uninstall to stop all goroutines cleanly
+	stopWatcher    func() // called before reset to pause filesystem tracking
+	restartWatcher func() // called after reset to resume filesystem tracking
 }
 
 type backoffState struct {
@@ -45,12 +48,14 @@ type backoffState struct {
 }
 
 // NewWS creates a WebSocket poller.
-func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func()) *WSPoller {
+func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func(), stopWatcher func(), restartWatcher func()) *WSPoller {
 	return &WSPoller{
-		cfg:     cfg,
-		agentID: agentID,
-		handler: handler,
-		cancel:  cancel,
+		cfg:            cfg,
+		agentID:        agentID,
+		handler:        handler,
+		cancel:         cancel,
+		stopWatcher:    stopWatcher,
+		restartWatcher: restartWatcher,
 		backoff: &backoffState{
 			current: 5 * time.Second,
 			max:     60 * time.Second,
@@ -192,6 +197,18 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				}
 				log.Printf("[ws-poller] Received exec commandId=%s", execMsg.CommandID)
 				go p.runExec(execMsg.CommandID, execMsg.Command, safeWrite)
+			} else if msg.Type == "clone_replay" {
+				var cloneMsg struct {
+					SessionID       string `json:"sessionId"`
+					SourceMachineID string `json:"sourceMachineId"`
+				}
+				if err := json.Unmarshal(msg.Payload, &cloneMsg); err != nil {
+					log.Printf("[ws-poller] Malformed clone_replay payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received clone_replay sessionId=%s sourceMachineId=%s",
+					cloneMsg.SessionID, cloneMsg.SourceMachineID)
+				go p.runCloneReplay(cloneMsg.SessionID, cloneMsg.SourceMachineID, safeWrite)
 			}
 		}
 	}()
@@ -338,6 +355,14 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	sendEvent("reset_progress", 1, "Running reset script...", false, "")
 	log.Printf("[ws-poller] runReset: executing script, sessionId=%s", sessionID)
 
+	// Stop the watcher BEFORE running the reset script.
+	// Without this, the watcher detects every file the reset script deletes
+	// and records them as file_delete activity events — polluting the change log
+	// with 300+ fake deletions that represent the reset, not user changes.
+	if p.stopWatcher != nil {
+		p.stopWatcher()
+	}
+
 	// ── Step 3: Run with -File flag (required by the script's safety guard) ───
 	cmd := exec.Command("powershell.exe",
 		"-NonInteractive",
@@ -345,6 +370,12 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 		"-File", tmpPath,
 	)
 	out, err := cmd.CombinedOutput()
+
+	// Restart the watcher AFTER reset completes — whether success or failure.
+	// The watcher will now track changes from the clean post-reset state.
+	if p.restartWatcher != nil {
+		p.restartWatcher()
+	}
 
 	if err != nil {
 		errMsg := string(out)
@@ -364,8 +395,39 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	sendEvent("reset_complete", 0, "", true, "")
 }
 
+// ─── Clone Replay ─────────────────────────────────────────────────────────────
+
+// runCloneReplay fetches the source VM's activity log and replays it onto this VM.
+// Sends clone_progress events during execution and clone_complete when done.
+func (p *WSPoller) runCloneReplay(sessionID, sourceMachineID string, safeWrite func(int, []byte) error) {
+	sendEvent := func(eventType string, phase int, message string, success bool, errMsg string) {
+		payload := map[string]interface{}{
+			"sessionId": sessionID,
+			"machineId": p.agentID,
+		}
+		if eventType == "clone_progress" {
+			payload["phase"] = phase
+			payload["message"] = message
+		} else {
+			payload["success"] = success
+			if errMsg != "" {
+				payload["error"] = errMsg
+			}
+		}
+		msg, _ := json.Marshal(map[string]interface{}{
+			"type":    eventType,
+			"payload": payload,
+		})
+		if err := safeWrite(websocket.TextMessage, msg); err != nil {
+			log.Printf("[ws-poller] runCloneReplay: failed to send %s: %v", eventType, err)
+		}
+	}
+
+	rep := tracker.NewReplayer(p.agentID, p.cfg, sendEvent)
+	rep.Run(sessionID, sourceMachineID)
+}
+
 // ─── Uninstall ────────────────────────────────────────────────────────────────
-// runUninstall stops all agent goroutines first (heartbeat, poller) then
 // launches the cleanup script. Using cancel() ensures heartbeat stops
 // immediately so it cannot re-launch selfUninstall on the next tick.
 func (p *WSPoller) runUninstall() {
