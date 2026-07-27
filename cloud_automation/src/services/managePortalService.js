@@ -337,17 +337,12 @@ const getPortalSessionByToken = async (sessionToken) => {
 
 const normalizeLoginId = (value) => String(value || '').trim().toLowerCase();
 
-const verifyAzureUserCredentials = async ({ requestId, username, password }) => {
-  const loginId = normalizeLoginId(username);
-
-  if (!loginId || !password) {
-    throw new AppError('Username and password are required.', 400);
-  }
-
-  const result = await db.query(
+const findAzureUserForPortalLogin = async ({ requestId, loginId }) => {
+  const scopedResult = await db.query(
     `
       SELECT
         id,
+        request_id,
         azure_user_id,
         username,
         temporary_password,
@@ -366,7 +361,43 @@ const verifyAzureUserCredentials = async ({ requestId, username, password }) => 
     [requestId, loginId]
   );
 
-  const user = result.rows[0] || null;
+  if (scopedResult.rows[0]) {
+    return scopedResult.rows[0];
+  }
+
+  const globalResult = await db.query(
+    `
+      SELECT
+        id,
+        request_id,
+        azure_user_id,
+        username,
+        temporary_password,
+        status,
+        blocked_until,
+        COALESCE(is_deleted, false) AS is_deleted
+      FROM azure_users
+      WHERE COALESCE(is_deleted, false) = false
+        AND (
+          lower(username) = $1
+          OR lower(azure_user_id) = $1
+        )
+      LIMIT 1
+    `,
+    [loginId]
+  );
+
+  return globalResult.rows[0] || null;
+};
+
+const verifyAzureUserCredentials = async ({ requestId, username, password }) => {
+  const loginId = normalizeLoginId(username);
+
+  if (!loginId || !password) {
+    throw new AppError('Username and password are required.', 400);
+  }
+
+  const user = await findAzureUserForPortalLogin({ requestId, loginId });
 
   if (!user || String(user.temporary_password) !== String(password)) {
     throw new AppError('Invalid username or password.', 401);
@@ -383,6 +414,7 @@ const verifyAzureUserCredentials = async ({ requestId, username, password }) => 
 
   return {
     id: user.id,
+    requestId: user.request_id,
     azureUserId: user.azure_user_id,
     username: user.username
   };
@@ -687,6 +719,11 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
       password: credentials.password
     });
 
+    const sessionRequestId =
+      actor.actorType === 'user' && actor.azureUser?.requestId
+        ? actor.azureUser.requestId
+        : portalToken.request_id;
+
     const sessionToken = crypto.randomUUID();
     const sessionHash = sha256Hex(sessionToken);
     const sessionExpiresAt = new Date(portalToken.expires_at);
@@ -722,7 +759,7 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
       [
         crypto.randomUUID(),
         portalToken.id,
-        portalToken.request_id,
+        sessionRequestId,
         portalToken.customer_email,
         sessionHash,
         sessionExpiresAt,
@@ -732,11 +769,11 @@ const exchangeAccessToken = async (rawToken, credentials = {}) => {
       ]
     );
 
-    const resourceGroup = await getRequestResourceGroupName(portalToken.request_id);
+    const resourceGroup = await getRequestResourceGroupName(sessionRequestId);
     const userId = actor.userId;
 
     responseData = {
-      requestId: portalToken.request_id,
+      requestId: sessionRequestId,
       customerEmail: portalToken.customer_email,
       admin: actor.admin,
       azureUser: actor.azureUser || null,
