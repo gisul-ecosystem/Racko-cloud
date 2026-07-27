@@ -83,6 +83,9 @@ export async function saveBaseline(
  * The sequence number is auto-incremented per machine using MongoDB's
  * findOneAndUpdate + $inc pattern so events are always ordered correctly
  * even under concurrent writes.
+ *
+ * For file_rename events: automatically deletes the old path's S3 object
+ * to prevent storage accumulation when files are renamed multiple times.
  */
 export async function appendActivity(
   agentId: string,
@@ -93,6 +96,40 @@ export async function appendActivity(
   const machine = await MachineModel.findOne({ agentId });
   if (!machine) {
     throw new NotFoundError(`Agent not found: ${agentId}`);
+  }
+
+  // Rename deduplication: when a file is renamed, delete the old S3 object
+  // so storage doesn't accumulate with each rename. We find the most recent
+  // file_write for the old path and delete its storageRef from S3.
+  if (type === 'file_rename') {
+    const renamePayload = payload as { oldPath?: string; newPath?: string };
+    if (renamePayload.oldPath) {
+      const oldActivity = await MachineActivityModel.findOne({
+        machineId: machine._id,
+        type: 'file_write',
+        'payload.path': renamePayload.oldPath,
+      }).sort({ sequence: -1 }); // most recent first
+
+      if (oldActivity) {
+        const oldPayload = oldActivity.payload as { storageRef?: string };
+        if (oldPayload.storageRef) {
+          // Delete from S3 — best-effort, non-fatal
+          try {
+            await seaweedfsService.delete(oldPayload.storageRef);
+            logger.info('[Tracker] Deleted old S3 object on rename', {
+              oldPath: renamePayload.oldPath,
+              storageRef: oldPayload.storageRef,
+            });
+          } catch (err) {
+            logger.warn('[Tracker] Could not delete old S3 object on rename (non-fatal)', {
+              oldPath: renamePayload.oldPath,
+              storageRef: oldPayload.storageRef,
+              err,
+            });
+          }
+        }
+      }
+    }
   }
 
   // Atomic sequence increment — stored in a small counter doc alongside activity
