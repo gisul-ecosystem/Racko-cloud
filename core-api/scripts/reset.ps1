@@ -153,7 +153,7 @@ $pfSystemFolders = @(
     'Windows Media Player','Windows NT','Windows Photo Viewer','Windows Security',
     'Windows Sidebar','Windows Journal','Microsoft','Microsoft.NET',
     'Microsoft Analysis Services','Microsoft Office','Microsoft SQL Server',
-    'Uninstall Information','Cloudbase Solutions','Qemu-ga','Virtio-Win','VMware'
+    'Uninstall Information','Cloudbase Solutions','Qemu-ga','Virtio-Win','VMware','PackageManagement'
 )
 
 # ── Windows-owned AppData folders (whitelist) ────────────────

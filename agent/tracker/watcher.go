@@ -163,6 +163,38 @@ func (w *Watcher) Start(done <-chan struct{}) {
 		} else {
 			log.Printf("[tracker/watcher] Watching drive root (shallow): %s", drive)
 		}
+
+		// Also recursively watch all PRE-EXISTING top-level folders on this drive
+		// that are not in the exclude list. This covers folders like C:\inetpub,
+		// C:\sysprep1007, C:\tools etc. that existed before the agent was installed
+		// and would not be caught by the shallow root watch alone.
+		// The shallow root watch handles NEW folders created after agent startup.
+		entries, err := os.ReadDir(drive)
+		if err != nil {
+			continue
+		}
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			fullPath := filepath.Join(drive, entry.Name())
+			if shouldExcludePath(fullPath) {
+				continue
+			}
+			// Skip paths already covered by getWatchPaths() to avoid double-watching
+			alreadyWatched := false
+			for _, wp := range getWatchPaths() {
+				if strings.EqualFold(fullPath, wp) {
+					alreadyWatched = true
+					break
+				}
+			}
+			if alreadyWatched {
+				continue
+			}
+			w.addRecursive(fsw, fullPath)
+			log.Printf("[tracker/watcher] Watching pre-existing root folder recursively: %s", fullPath)
+		}
 	}
 
 	// Flush timer — collect events in 5-second batches to avoid event storms.
