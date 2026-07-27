@@ -33,11 +33,13 @@ type JobHandler func(job Job)
 // WSPoller connects to the platform via WebSocket and receives jobs in real-time.
 // It implements infinite reconnection with exponential backoff.
 type WSPoller struct {
-	cfg     *config.Config
-	agentID string
-	handler JobHandler
-	backoff *backoffState
-	cancel  func() // called on uninstall to stop all goroutines cleanly
+	cfg            *config.Config
+	agentID        string
+	handler        JobHandler
+	backoff        *backoffState
+	cancel         func() // called on uninstall to stop all goroutines cleanly
+	stopWatcher    func() // called before reset to pause filesystem tracking
+	restartWatcher func() // called after reset to resume filesystem tracking
 }
 
 type backoffState struct {
@@ -46,12 +48,14 @@ type backoffState struct {
 }
 
 // NewWS creates a WebSocket poller.
-func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func()) *WSPoller {
+func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func(), stopWatcher func(), restartWatcher func()) *WSPoller {
 	return &WSPoller{
-		cfg:     cfg,
-		agentID: agentID,
-		handler: handler,
-		cancel:  cancel,
+		cfg:            cfg,
+		agentID:        agentID,
+		handler:        handler,
+		cancel:         cancel,
+		stopWatcher:    stopWatcher,
+		restartWatcher: restartWatcher,
 		backoff: &backoffState{
 			current: 5 * time.Second,
 			max:     60 * time.Second,
@@ -351,6 +355,14 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	sendEvent("reset_progress", 1, "Running reset script...", false, "")
 	log.Printf("[ws-poller] runReset: executing script, sessionId=%s", sessionID)
 
+	// Stop the watcher BEFORE running the reset script.
+	// Without this, the watcher detects every file the reset script deletes
+	// and records them as file_delete activity events — polluting the change log
+	// with 300+ fake deletions that represent the reset, not user changes.
+	if p.stopWatcher != nil {
+		p.stopWatcher()
+	}
+
 	// ── Step 3: Run with -File flag (required by the script's safety guard) ───
 	cmd := exec.Command("powershell.exe",
 		"-NonInteractive",
@@ -358,6 +370,12 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 		"-File", tmpPath,
 	)
 	out, err := cmd.CombinedOutput()
+
+	// Restart the watcher AFTER reset completes — whether success or failure.
+	// The watcher will now track changes from the clean post-reset state.
+	if p.restartWatcher != nil {
+		p.restartWatcher()
+	}
 
 	if err != nil {
 		errMsg := string(out)

@@ -1046,6 +1046,46 @@ Invoke-ForEachUserHive -Action {
     }
 }
 
+# Re-pin Edge and File Explorer to the taskbar by writing a default layout XML.
+# This runs for all user profiles so every user who logs in gets the correct
+# default taskbar with Edge + File Explorer pinned, matching the clean VM state.
+Write-Host "-- Restoring default taskbar pins (Edge + File Explorer) --" -ForegroundColor Cyan
+
+$defaultTaskbarXml = @'
+<?xml version="1.0" encoding="utf-8"?>
+<LayoutModificationTemplate
+    xmlns="http://schemas.microsoft.com/Start/2014/LayoutModification"
+    xmlns:defaultlayout="http://schemas.microsoft.com/Start/2014/FullDefaultLayout"
+    xmlns:start="http://schemas.microsoft.com/Start/2014/StartLayout"
+    xmlns:taskbar="http://schemas.microsoft.com/Start/2014/TaskbarLayout"
+    Version="1">
+  <CustomTaskbarLayoutCollection PinListPlacement="Replace">
+    <defaultlayout:TaskbarLayout>
+      <taskbar:TaskbarPinList>
+        <taskbar:DesktopApp DesktopApplicationLinkPath="%APPDATA%\Microsoft\Windows\Start Menu\Programs\System Tools\File Explorer.lnk" />
+        <taskbar:DesktopApp DesktopApplicationLinkPath="%PROGRAMDATA%\Microsoft\Windows\Start Menu\Programs\Microsoft Edge.lnk" />
+      </taskbar:TaskbarPinList>
+    </defaultlayout:TaskbarLayout>
+  </CustomTaskbarLayoutCollection>
+</LayoutModificationTemplate>
+'@
+
+foreach ($userDir in (Get-UserProfiles)) {
+    $userProfile = $userDir.FullName
+    if (-not $userProfile) { continue }
+    $shellDir = Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell'
+    if (-not (Test-Path $shellDir)) {
+        New-Item -ItemType Directory -Path $shellDir -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+    $layoutPath = Join-Path $shellDir 'LayoutModification.xml'
+    try {
+        Set-Content -Path $layoutPath -Value $defaultTaskbarXml -Encoding UTF8 -Force -ErrorAction SilentlyContinue
+        Write-Host "  Wrote default taskbar layout for: $($userDir.Name)" -ForegroundColor DarkGray
+    } catch {
+        Write-Host "  WARNING: Could not write taskbar layout for $($userDir.Name): $_" -ForegroundColor DarkYellow
+    }
+}
+
 # --- 17k: Personalization reset (wallpaper/theme back to default, key NOT deleted) ---
 Write-Host "-- Personalization reset --" -ForegroundColor Cyan
 Invoke-ForEachUserHive -Action {
@@ -1128,6 +1168,67 @@ try {
     Write-Host "  Explorer restarted -- session state cleared" -ForegroundColor DarkGray
 } catch {
     Write-Host "  Could not restart Explorer -- $_" -ForegroundColor DarkYellow
+}
+
+# Clear Recycle Bin AFTER Explorer restarts so the icon refreshes to empty.
+# Running it before Explorer restarts causes the icon to remain showing "full"
+# even though the bin was emptied.
+Write-Host "-- Emptying Recycle Bin (post-Explorer restart refresh) --" -ForegroundColor Cyan
+try {
+    Start-Sleep -Milliseconds 500  # brief pause so Explorer shell is ready
+    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+    Write-Host "  Recycle Bin emptied and icon refreshed" -ForegroundColor Green
+} catch {
+    Write-Host "  Could not empty Recycle Bin -- $_" -ForegroundColor DarkYellow
+}
+
+Write-Host "`n=== PHASE 18: DRIVE ROOT SWEEP (user-created folders on all drives) ===" -ForegroundColor Cyan
+
+# Dynamically detect all fixed drives on this VM and delete any top-level folder
+# that is not a known Windows system folder.
+# This catches folders like C:\mahi, C:\work, D:\projects etc. that users create
+# directly on a drive root — these are not covered by any other phase.
+
+# System folders that must never be deleted — per drive letter
+# C:\ has many more protected folders than other drives
+$cSystemFolders = @(
+    'Windows','Users','Program Files','Program Files (x86)','ProgramData',
+    'inetpub','PerfLogs','sysprep1007','$Recycle.Bin','$WinREAgent',
+    'Config.Msi','Recovery','System Volume Information','$SysReset',
+    'OneDriveTemp','MSOCache'
+)
+# For non-C drives, only Windows metadata folders are protected
+$otherDriveSystemFolders = @(
+    '$Recycle.Bin','System Volume Information','$WinREAgent'
+)
+
+# Get all fixed local drives (type 3 = Fixed)
+$fixedDrives = [System.IO.DriveInfo]::GetDrives() |
+    Where-Object { $_.DriveType -eq [System.IO.DriveType]::Fixed -and $_.IsReady }
+
+foreach ($drive in $fixedDrives) {
+    $driveLetter = $drive.RootDirectory.FullName  # e.g. "C:\"
+    $isSystemDrive = ($driveLetter -like 'C:\' -or $driveLetter -like 'C:/')
+    $protectedFolders = if ($isSystemDrive) { $cSystemFolders } else { $otherDriveSystemFolders }
+
+    Write-Host "  Sweeping drive root: $driveLetter" -ForegroundColor DarkGray
+
+    foreach ($dir in (Get-ChildItem $driveLetter -Directory -ErrorAction SilentlyContinue)) {
+        $isProtected = $false
+        foreach ($s in $protectedFolders) {
+            if ($dir.Name -eq $s -or $dir.Name -like $s) {
+                $isProtected = $true
+                break
+            }
+        }
+        if ($isProtected) { continue }
+
+        Write-Host "  Removing user folder: $($dir.FullName)" -ForegroundColor Yellow
+        Remove-FolderWithRetry -Path $dir.FullName
+        if (-not (Test-Path $dir.FullName)) {
+            Write-Host "  Removed: $($dir.FullName)" -ForegroundColor Green
+        }
+    }
 }
 
 Write-Host "`n=== RESET COMPLETE ===" -ForegroundColor Cyan
