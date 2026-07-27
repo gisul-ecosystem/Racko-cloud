@@ -461,30 +461,64 @@ func getWatchPaths() []string {
 }
 
 // shouldExcludePath returns true for paths that should never be tracked —
-// OS internals, agent data, transient cache, paging files.
+// OS internals, agent data, transient cache, paging files, and Windows
+// auto-generated noise files that have no value for clone replay.
 func shouldExcludePath(path string) bool {
 	lp := strings.ToLower(path)
 	excludes := []string{
+		// Windows OS — never touch
 		`c:\windows`,
+		// Agent data — never track our own files
 		`c:\programdata\racko-agent`,
+		// Windows system-managed ProgramData
 		`c:\programdata\microsoft`,
 		`c:\programdata\windows`,
 		`c:\programdata\package cache`,
 		`c:\programdata\usoprivate`,
 		`c:\programdata\usoshared`,
 		`c:\programdata\softwareDistribution`,
+		// Excluded user profile system folders
 		`c:\users\default`,
 		`c:\users\public`,
 		`c:\users\all users`,
+		// Windows Recent — shortcut files auto-created when user opens folders
+		// These are OS bookkeeping, not user-created content. They get rebuilt
+		// automatically on the target VM so cloning them is pointless.
+		`appdata\roaming\microsoft\windows\recent`,
+		// Jump Lists — binary cache files auto-updated by Windows
+		`appdata\roaming\microsoft\windows\recent\automaticdestinations`,
+		`appdata\roaming\microsoft\windows\recent\customdestinations`,
+		// PowerShell history — updated every command, cloning 50+ events is noise
+		`appdata\roaming\microsoft\windows\powershell\psreadline\consolehost_history.txt`,
+		// Edge/IE/Chrome web cache — transient binary cache files
+		`appdata\local\microsoft\windows\webcache`,
+		`appdata\local\microsoft\windows\history`,
 		`appdata\local\microsoft\windows\inetcache`,
 		`appdata\local\microsoft\windows\temporary internet files`,
+		// Icon cache — rebuilt by Windows automatically
+		`appdata\local\iconcache`,
+		`appdata\local\microsoft\windows\explorer`,
+		// Windows Notification cache
+		`appdata\local\microsoft\windows\notifications`,
+		// Windows Search cache
+		`appdata\local\microsoft\windows\caches`,
+		// Temp folders — transient
 		`appdata\local\temp`,
 		`appdata\locallow`,
+		// Paging / hibernate files
 		`pagefile.sys`,
 		`hiberfil.sys`,
 		`swapfile.sys`,
-		`.tmp`,
-		`~$`, // Office lock files
+		// Office lock files
+		`~$`,
+		// Recycle bin and system restore
+		`$recycle.bin`,
+		`system volume information`,
+		`$winreagent`,
+		// Windows recovery
+		`c:\recovery`,
+		// MSI installer cache
+		`c:\config.msi`,
 	}
 	for _, ex := range excludes {
 		if strings.HasPrefix(lp, strings.ToLower(ex)) || strings.Contains(lp, strings.ToLower(ex)) {
