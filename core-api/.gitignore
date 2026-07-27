@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Environment variables
+.env
+.env.example
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Build output
+dist/
+
+# Tenant branding volume cache (binary source of truth is MongoDB)
+data/tenant-assets/
+
+# Logs
+logs/
+*.log
+
+# TypeScript
+*.tsbuildinfo
+
+# Coverage
+coverage/

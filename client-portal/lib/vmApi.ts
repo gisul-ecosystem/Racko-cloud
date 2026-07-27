@@ -1,0 +1,848 @@
+import { apiRequest } from './apiClient';
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+export interface ProxmoxTemplate {
+  vmid: number;
+  name: string;
+  node: string;
+  cpu: number;       // allocated cores
+  memory: number;    // allocated RAM bytes
+  disk: number;      // used disk bytes
+  maxdisk: number;   // allocated disk bytes
+  status: string;
+  template: number;
+  isCustom?: boolean; // true if admin-created custom template
+}
+
+export interface TemplateDetails {
+  vmid: number;
+  name: string;
+  node: string;
+  cpuCores: number;
+  memoryGb: number;
+  diskGb: number;
+  osType?: string;
+  description?: string;
+  defaultUsername: string;   // fixed cloud-init username from the template (fallback 'Admin')
+}
+
+export type VMStatus =
+  | 'creating' | 'running' | 'stopped' | 'paused'
+  | 'suspended' | 'error' | 'deleting' | 'deleted';
+
+export type CloneType = 'dedicated_storage' | 'dynamic_storage';
+
+export type HyperVStatus = 'disabled' | 'pending' | 'enabling' | 'disabling' | 'enabled' | 'failed';
+
+export type SoftwareInstallStatus = 'pending' | 'installing' | 'installed' | 'failed';
+
+export interface SoftwareInstallEntry {
+  softwareId: string;
+  name: string;
+  status: SoftwareInstallStatus;
+  lastError?: string;
+  installedAt?: string;
+}
+
+export interface SoftwareCatalogItem {
+  _id: string;
+  name: string;
+  slug: string;
+  description?: string;
+  iconUrl?: string;
+  version?: string;
+  estimatedMinutes: number;
+  isActive: boolean;
+}
+
+export interface VirtualizationStatus {
+  enableVirtualization: boolean;
+  hyperVStatus: HyperVStatus;
+  hyperVLastError?: string;
+}
+
+export interface IVM {
+  _id: string;
+  vmid: number;
+  node: string;
+  adminId: string;
+  assignedTo?: string | null;
+  name: string;
+  description?: string;
+  templateId: number;
+  templateName: string;
+  cloneType: CloneType;
+  allocatedCpu: number;
+  allocatedMemoryGb: number;
+  allocatedDiskGb: number;
+  status: VMStatus;
+  proxmoxStatus: string;
+  ipAddress?: string;
+  macAddress?: string;
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol?: 'rdp' | 'ssh';
+  consoleReady?: boolean;
+  jobId?: string;
+  haEnabled: boolean;
+  enableVirtualization?: boolean;
+  hyperVStatus?: HyperVStatus;
+  hyperVLastError?: string;
+  createdAt: string;
+  updatedAt: string;
+  deletedAt?: string;
+  automationManaged?: boolean;
+  automationSchedule?: {
+    name: string;
+    startTime: string;
+    stopTime: string;
+    timezone: string;
+  };
+  isRestricted?: boolean;
+}
+
+export interface VMLiveStatus {
+  vmid: number;
+  node: string;
+  status: string;
+  cpu: { usagePercent: number; allocated: number };
+  memory: { usedGb: number; allocatedGb: number; usagePercent: number };
+  disk: { usedGb: number; allocatedGb: number };
+  uptime: { seconds: number; formatted: string };
+  ipAddress?: string;
+}
+
+export interface VMDetails {
+  vm: {
+    id: string;
+    vmid: number;
+    node: string;
+    name: string;
+    description?: string;
+    status: VMStatus;
+    cloneType: CloneType;
+    allocatedCpu: number;
+    allocatedMemoryGb: number;
+    allocatedDiskGb: number;
+    ipAddress?: string;
+    macAddress?: string;
+    consoleUsername?: string;
+    consolePassword?: string;
+    consoleProtocol?: 'rdp' | 'ssh';
+    consoleReady?: boolean;
+    haEnabled: boolean;
+    enableVirtualization: boolean;
+    hyperVStatus: HyperVStatus;
+    hyperVLastError?: string;
+    softwareInstalls: SoftwareInstallEntry[];
+    automationManaged?: boolean;
+    automationSchedule?: {
+      name: string;
+      startTime: string;
+      stopTime: string;
+      timezone: string;
+    };
+    canResume?: boolean;
+    isRestricted: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
+  liveStatus?: VMLiveStatus;
+  recentEvents: VMEvent[];
+}
+
+export interface VMEvent {
+  event: string;
+  status: 'success' | 'failed';
+  createdAt: string;
+  details?: Record<string, unknown>;
+  errorMessage?: string;
+}
+
+export interface VMOperationResult {
+  success: boolean;
+  vmid: number;
+  node: string;
+  operation: string;
+  taskId?: string;
+  error?: string;
+}
+
+export type JobStatus = 'pending' | 'processing' | 'completed' | 'partial' | 'failed' | 'cancelling' | 'cancelled';
+
+export type JobPhase = 'building_golden_image' | 'cloning_vms';
+
+export type VMJobType =
+  | 'single_create'
+  | 'bulk_create'
+  | 'bulk_delete'
+  | 'bulk_start'
+  | 'bulk_stop'
+  | 'vm_clone';
+
+export interface IVMJob {
+  _id: string;
+  adminId: string;
+  type: VMJobType;
+  status: JobStatus;
+  phase?: JobPhase;
+  total: number;
+  completed: number;
+  failed: number;
+  pending: number;
+  vmIds: string[];
+  targetVmIds?: string[];
+  failedVmids: number[];
+  requestedSpecs: {
+    templateId: number;
+    templateName: string;
+    cloneType: CloneType;
+    cpuCores: number;
+    memoryGb: number;
+    diskGb: number;
+    namePrefix: string;
+    count: number;
+    consoleUsername?: string;
+    passwordMode?: PasswordMode;
+    consolePassword?: string;
+    consoleProtocol?: 'rdp' | 'ssh';
+  };
+  jobErrors: Array<{ index: number; vmName: string; error: string; node?: string }>;
+  startedAt: string;
+  completedAt?: string;
+  cancelledAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NodeAlert {
+  _id: string;
+  node: string;
+  resource: 'cpu' | 'ram' | 'storage';
+  severity: 'warning' | 'critical' | 'full';
+  currentPercent: number;
+  thresholdPercent: number;
+  status: 'active' | 'resolved';
+  storagePool?: string;
+  resolvedAt?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type PasswordMode = 'fixed' | 'dynamic';
+
+export interface CreateVMDto {
+  templateId: number;
+  name: string;
+  count: number;
+  cloneType: CloneType;
+  cpuCores?: number;
+  memoryGb?: number;
+  diskGb?: number;
+  description?: string;
+  // Console username is derived from the template ciuser at creation — not client-supplied.
+  passwordMode: PasswordMode;
+  consolePassword?: string;          // only sent in fixed mode
+  enableVirtualization?: boolean;
+  softwareIds?: string[];
+}
+
+export interface JobVMCredential {
+  id: string;
+  name: string;
+  status: string;
+  ipAddress?: string;
+  consoleUsername?: string;
+  consolePassword?: string;
+  consoleProtocol: 'rdp' | 'ssh';
+}
+
+// ─── API response wrapper ─────────────────────────────────────────────────────
+
+interface ApiResponse<T> {
+  success: boolean;
+  message: string;
+  data: T;
+}
+
+// ─── Templates ────────────────────────────────────────────────────────────────
+
+export async function fetchTemplates(): Promise<ProxmoxTemplate[]> {
+  const res = await apiRequest<ApiResponse<{ templates: ProxmoxTemplate[]; total: number }>>(
+    '/api/v1/vms/templates'
+  );
+  return res.data.templates;
+}
+
+export async function fetchTemplateDetails(templateId: number): Promise<TemplateDetails> {
+  const res = await apiRequest<ApiResponse<{ template: TemplateDetails }>>(
+    `/api/v1/vms/templates/${templateId}`
+  );
+  return res.data.template;
+}
+
+export interface RemovedTemplateEntry {
+  vmid: number;
+  name: string;
+}
+
+export interface TemplateCatalogResponse {
+  templates: ProxmoxTemplate[];
+  enabledVmids: number[];
+  removedFromCluster?: RemovedTemplateEntry[];
+}
+
+export interface TemplateSelectionResult {
+  enabledCount: number;
+  removedFromCluster?: RemovedTemplateEntry[];
+  warning?: string;
+}
+
+export async function fetchTemplateCatalog(): Promise<TemplateCatalogResponse> {
+  const res = await apiRequest<ApiResponse<TemplateCatalogResponse>>(
+    '/api/v1/vms/templates/catalog'
+  );
+  return res.data;
+}
+
+export async function saveTemplateSelection(enabledVmids: number[]): Promise<TemplateSelectionResult> {
+  const res = await apiRequest<ApiResponse<TemplateSelectionResult>>(
+    '/api/v1/vms/templates/selection',
+    {
+      method: 'PUT',
+      body: JSON.stringify({ enabledVmids }),
+    }
+  );
+  return res.data;
+}
+
+// ─── VM CRUD ──────────────────────────────────────────────────────────────────
+
+export async function createVM(
+  dto: CreateVMDto
+): Promise<{ jobId: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string }>>('/api/v1/vms', {
+    method: 'POST',
+    body: JSON.stringify(dto),
+  });
+  return { jobId: res.data.jobId! };
+}
+
+export async function fetchMyVMs(filters?: {
+  status?: string;
+  cloneType?: string;
+  node?: string;
+  isRestricted?: boolean;
+}): Promise<IVM[]> {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  if (filters?.cloneType) params.set('cloneType', filters.cloneType);
+  if (filters?.node) params.set('node', filters.node);
+  if (typeof filters?.isRestricted === 'boolean') params.set('isRestricted', String(filters.isRestricted));
+  const qs = params.toString();
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    `/api/v1/vms${qs ? `?${qs}` : ''}`
+  );
+  return res.data.vms;
+}
+
+export async function fetchAllVMsAdmin(filters?: {
+  status?: string;
+  cloneType?: string;
+  node?: string;
+}): Promise<IVM[]> {
+  const params = new URLSearchParams();
+  if (filters?.status) params.set('status', filters.status);
+  if (filters?.cloneType) params.set('cloneType', filters.cloneType);
+  if (filters?.node) params.set('node', filters.node);
+  const qs = params.toString();
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    `/api/v1/vms/admin/all${qs ? `?${qs}` : ''}`
+  );
+  return res.data.vms;
+}
+
+export async function fetchVMDetails(vmId: string): Promise<VMDetails> {
+  const res = await apiRequest<ApiResponse<VMDetails>>(`/api/v1/vms/${vmId}`);
+  return res.data;
+}
+
+export async function fetchVMStatus(vmId: string): Promise<VMLiveStatus> {
+  const res = await apiRequest<ApiResponse<{ status: VMLiveStatus }>>(
+    `/api/v1/vms/${vmId}/status`
+  );
+  return res.data.status;
+}
+
+export async function fetchVMEvents(vmId: string): Promise<VMEvent[]> {
+  const res = await apiRequest<ApiResponse<{ events: VMEvent[]; total: number }>>(
+    `/api/v1/vms/${vmId}/events`
+  );
+  return res.data.events;
+}
+
+export async function deleteVM(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/${vmId}`, { method: 'DELETE' });
+}
+
+export interface BulkPowerResult {
+  succeeded: number;
+  failed: number;
+  restrictedSkipped: number;
+  errors: Array<{ vmId: string; message: string }>;
+}
+
+export interface BulkDeleteResult {
+  jobId: string;
+  restrictedSkipped: number;
+}
+
+export async function bulkDeleteVMs(vmIds: string[]): Promise<BulkDeleteResult> {
+  const res = await apiRequest<ApiResponse<BulkDeleteResult>>('/api/v1/vms/bulk-delete', {
+    method: 'POST',
+    body: JSON.stringify({ vmIds }),
+  });
+  return res.data;
+}
+
+export async function bulkStartVMs(vmIds: string[]): Promise<BulkPowerResult> {
+  const res = await apiRequest<ApiResponse<BulkPowerResult>>('/api/v1/vms/bulk-start', {
+    method: 'POST',
+    body: JSON.stringify({ vmIds }),
+  });
+  return res.data;
+}
+
+export async function bulkStopVMs(vmIds: string[]): Promise<BulkPowerResult> {
+  const res = await apiRequest<ApiResponse<BulkPowerResult>>('/api/v1/vms/bulk-stop', {
+    method: 'POST',
+    body: JSON.stringify({ vmIds }),
+  });
+  return res.data;
+}
+
+// ─── VM Restriction ───────────────────────────────────────────────────────────
+
+export async function restrictVM(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/${vmId}/restrict`, { method: 'PATCH' });
+}
+
+export async function unrestrictVM(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/${vmId}/unrestrict`, { method: 'PATCH' });
+}
+
+// ─── VM power operations ──────────────────────────────────────────────────────
+
+export async function startVM(vmId: string): Promise<VMOperationResult> {
+  const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
+    `/api/v1/vms/${vmId}/start`,
+    { method: 'POST' }
+  );
+  return res.data.result;
+}
+
+export async function stopVM(vmId: string): Promise<VMOperationResult> {
+  const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
+    `/api/v1/vms/${vmId}/stop`,
+    { method: 'POST' }
+  );
+  return res.data.result;
+}
+
+export async function forceStopVM(vmId: string): Promise<VMOperationResult> {
+  const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
+    `/api/v1/vms/${vmId}/force-stop`,
+    { method: 'POST' }
+  );
+  return res.data.result;
+}
+
+export async function hibernateVM(vmId: string): Promise<VMOperationResult> {
+  const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
+    `/api/v1/vms/${vmId}/hibernate`,
+    { method: 'POST' }
+  );
+  return res.data.result;
+}
+
+export async function restartVM(vmId: string): Promise<VMOperationResult> {
+  const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
+    `/api/v1/vms/${vmId}/restart`,
+    { method: 'POST' }
+  );
+  return res.data.result;
+}
+
+export async function resetVM(vmId: string): Promise<VMOperationResult> {
+  const res = await apiRequest<ApiResponse<{ result: VMOperationResult }>>(
+    `/api/v1/vms/${vmId}/reset`,
+    { method: 'POST' }
+  );
+  return res.data.result;
+}
+
+// ─── Virtualization (Hyper-V) ─────────────────────────────────────────────────
+
+export async function fetchVirtualizationStatus(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization`
+  );
+  return res.data;
+}
+
+export async function enableVirtualization(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization/enable`,
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
+export async function disableVirtualization(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization/disable`,
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
+export async function cancelVirtualization(vmId: string): Promise<VirtualizationStatus> {
+  const res = await apiRequest<ApiResponse<VirtualizationStatus>>(
+    `/api/v1/vms/${vmId}/virtualization/cancel`,
+    { method: 'POST' }
+  );
+  return res.data;
+}
+
+export async function cancelSoftwareInstalls(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/${vmId}/software/cancel`, { method: 'POST' });
+}
+
+// ─── Jobs ─────────────────────────────────────────────────────────────────────
+
+export async function fetchMyJobs(limit = 20): Promise<IVMJob[]> {
+  const res = await apiRequest<ApiResponse<{ jobs: IVMJob[]; total: number }>>(
+    `/api/v1/vms/jobs?limit=${limit}`
+  );
+  return res.data.jobs;
+}
+
+export async function fetchJobStatus(
+  jobId: string
+): Promise<{ job: IVMJob; vms: JobVMCredential[] }> {
+  const res = await apiRequest<ApiResponse<{ job: IVMJob; vms?: JobVMCredential[] }>>(
+    `/api/v1/vms/jobs/${jobId}`
+  );
+  return { job: res.data.job, vms: res.data.vms ?? [] };
+}
+
+export async function cancelJob(jobId: string): Promise<{ jobId: string; status: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string; status: string }>>(
+    `/api/v1/vms/jobs/${jobId}/cancel`,
+    { method: 'PATCH' }
+  );
+  return res.data;
+}
+
+// ─── Alerts ───────────────────────────────────────────────────────────────────
+
+export async function fetchActiveAlerts(): Promise<NodeAlert[]> {
+  const res = await apiRequest<ApiResponse<{ alerts: NodeAlert[]; total: number }>>(
+    '/api/v1/proxmox/alerts'
+  );
+  return res.data.alerts;
+}
+
+export async function fetchAlertHistory(limit = 50): Promise<NodeAlert[]> {
+  const res = await apiRequest<ApiResponse<{ alerts: NodeAlert[]; total: number }>>(
+    `/api/v1/proxmox/alerts/history?limit=${limit}`
+  );
+  return res.data.alerts;
+}
+
+// ─── VM Assignment ────────────────────────────────────────────────────────────
+
+export async function fetchAvailableVMs(): Promise<IVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    '/api/v1/vms/assign/available'
+  );
+  return res.data.vms;
+}
+
+export async function fetchAssignedVMCounts(): Promise<Record<string, number>> {
+  const res = await apiRequest<ApiResponse<{ counts: Record<string, number> }>>(
+    '/api/v1/vms/assign/counts'
+  );
+  return res.data.counts;
+}
+
+export async function fetchAssignedVMsForUser(userId: string): Promise<IVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    `/api/v1/vms/assign/user/${userId}`
+  );
+  return res.data.vms;
+}
+
+export async function assignVMs(
+  userId: string,
+  vmIds: string[],
+  accessSchedule?: import('./accessSchedule').AccessScheduleInput
+): Promise<{ assigned: number }> {
+  const res = await apiRequest<ApiResponse<{ assigned: number }>>(
+    '/api/v1/vms/assign',
+    {
+      method: 'POST',
+      body: JSON.stringify({ userId, vmIds, ...(accessSchedule ? { accessSchedule } : {}) }),
+    }
+  );
+  return res.data;
+}
+
+export async function updateVmAccessSchedule(
+  vmId: string,
+  accessSchedule: import('./accessSchedule').AccessScheduleInput
+): Promise<import('./accessSchedule').AccessSchedule> {
+  const res = await apiRequest<
+    ApiResponse<import('./accessSchedule').AccessSchedule>
+  >(`/api/v1/vms/${vmId}/schedule`, {
+    method: 'PATCH',
+    body: JSON.stringify(accessSchedule),
+  });
+  return res.data;
+}
+
+export async function updateVmAccessOverride(
+  vmId: string,
+  body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+): Promise<import('./accessSchedule').AccessSchedule> {
+  const res = await apiRequest<
+    ApiResponse<import('./accessSchedule').AccessSchedule>
+  >(`/api/v1/vms/${vmId}/override`, {
+    method: 'PATCH',
+    body: JSON.stringify(body),
+  });
+  return res.data;
+}
+
+export interface BulkAssignPairRow {
+  vmId: string;
+  vmName: string;
+  userId?: string;
+  userEmail: string;
+  password?: string;
+  status: 'assigned' | 'failed';
+  error?: string;
+}
+
+export interface BulkAssignPairsResult {
+  assigned: number;
+  failed: number;
+  pairs: BulkAssignPairRow[];
+}
+
+export type BulkAssignMode = 'create' | 'existing';
+
+export interface BulkAssignPairsDto {
+  vmIds: string[];
+  mode: BulkAssignMode;
+  emailPrefix?: string;
+  passwordMode?: 'auto' | 'shared';
+  sharedPassword?: string;
+  userIds?: string[];
+}
+
+export async function bulkAssignOneToOne(dto: BulkAssignPairsDto): Promise<BulkAssignPairsResult> {
+  const start = await apiRequest<ApiResponse<{ jobId: string }>>(
+    '/api/v1/vms/assign/bulk',
+    { method: 'POST', body: JSON.stringify(dto) }
+  );
+  const jobId = start.data.jobId;
+  const { pollBulkAssignJob } = await import('./pollBulkAssignJob');
+  const done = await pollBulkAssignJob<BulkAssignPairRow>(async () => {
+    const res = await apiRequest<
+      ApiResponse<{
+        job: {
+          id: string;
+          status: string;
+          total: number;
+          completed: number;
+          failed: number;
+          pending: number;
+          errorMessage?: string;
+        };
+        assigned: number;
+        failed: number;
+        pairs: BulkAssignPairRow[];
+      }>
+    >(`/api/v1/vms/assign/jobs/${jobId}`);
+    return res.data;
+  });
+  return {
+    assigned: done.assigned,
+    failed: done.failed,
+    pairs: done.pairs,
+  };
+}
+
+export async function unassignVM(vmId: string): Promise<void> {
+  await apiRequest(`/api/v1/vms/assign/${vmId}`, { method: 'DELETE' });
+}
+
+export async function fetchMyAssignedVMs(): Promise<IVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
+    '/api/v1/vms/my-assigned'
+  );
+  return res.data.vms;
+}
+
+// ─── Software catalog ─────────────────────────────────────────────────────────
+
+export async function fetchSoftwareCatalog(): Promise<SoftwareCatalogItem[]> {
+  const res = await apiRequest<ApiResponse<{ software: SoftwareCatalogItem[]; total: number }>>(
+    '/api/v1/software'
+  );
+  return res.data.software;
+}
+
+// ─── VM Cloning ───────────────────────────────────────────────────────────────
+
+export interface ClonedVM extends IVM {
+  sourceVmId?: string;
+  sourceVmName?: string;
+  isVmClone: boolean;
+}
+
+export async function cloneVM(vmId: string, name: string, count: number = 1): Promise<{ jobId: string }> {
+  const res = await apiRequest<ApiResponse<{ jobId: string }>>(
+    `/api/v1/vms/${vmId}/clone`,
+    { method: 'POST', body: JSON.stringify({ name, count }) }
+  );
+  return res.data;
+}
+
+export async function fetchClonedVMs(): Promise<ClonedVM[]> {
+  const res = await apiRequest<ApiResponse<{ vms: ClonedVM[]; total: number }>>(
+    '/api/v1/vms/clones'
+  );
+  return res.data.vms;
+}
+
+// ─── VM automation (hibernate / resume schedules) ─────────────────────────────
+
+export interface VmAutomation {
+  _id: string;
+  name: string;
+  adminId: string;
+  vmIds: string[];
+  vmCount: number;
+  startTime: string;
+  stopTime: string;
+  startDate: string;
+  endDate: string;
+  timezone: string;
+  isActive: boolean;
+  lastResumeOn?: string;
+  lastHibernateOn?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateVmAutomationDto {
+  name: string;
+  vmIds: string[];
+  startTime: string;
+  stopTime: string;
+  startDate: string;
+  endDate: string;
+  timezone: string;
+}
+
+export async function fetchVmAutomations(): Promise<VmAutomation[]> {
+  const res = await apiRequest<ApiResponse<{ automations: VmAutomation[] }>>(
+    '/api/v1/vm-automations'
+  );
+  return res.data.automations;
+}
+
+export async function createVmAutomation(dto: CreateVmAutomationDto): Promise<VmAutomation> {
+  const res = await apiRequest<ApiResponse<{ automation: VmAutomation }>>(
+    '/api/v1/vm-automations',
+    { method: 'POST', body: JSON.stringify(dto) }
+  );
+  return res.data.automation;
+}
+
+export async function updateVmAutomation(
+  automationId: string,
+  patch: Partial<CreateVmAutomationDto> & { isActive?: boolean }
+): Promise<VmAutomation> {
+  const res = await apiRequest<ApiResponse<{ automation: VmAutomation }>>(
+    `/api/v1/vm-automations/${automationId}`,
+    { method: 'PATCH', body: JSON.stringify(patch) }
+  );
+  return res.data.automation;
+}
+
+export async function deleteVmAutomation(automationId: string): Promise<void> {
+  await apiRequest(`/api/v1/vm-automations/${automationId}`, { method: 'DELETE' });
+}
+
+// ─── Admin VM Templates ───────────────────────────────────────────────────────
+
+export type AdminVmTemplateStatus = 'creating' | 'ready' | 'failed';
+
+export type AdminVmTemplateBuildStep =
+  | 'stopping_source'
+  | 'cloning'
+  | 'starting_source'
+  | 'running_sysprep'
+  | 'converting'
+  | null;
+
+export interface AdminVmTemplate {
+  _id: string;
+  adminId: string;
+  name: string;
+  sourceVmId: string;
+  sourceVmName: string;
+  proxmoxVmid: number | null;
+  node: string | null;
+  status: AdminVmTemplateStatus;
+  buildStep: AdminVmTemplateBuildStep;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export async function fetchAdminVmTemplates(): Promise<AdminVmTemplate[]> {
+  const res = await apiRequest<ApiResponse<{ templates: AdminVmTemplate[] }>>(
+    '/api/v1/admin-vm-templates'
+  );
+  return res.data.templates;
+}
+
+export async function createAdminVmTemplate(
+  sourceVmId: string,
+  name: string
+): Promise<AdminVmTemplate> {
+  const res = await apiRequest<ApiResponse<{ template: AdminVmTemplate }>>(
+    '/api/v1/admin-vm-templates',
+    { method: 'POST', body: JSON.stringify({ sourceVmId, name }) }
+  );
+  return res.data.template;
+}
+
+export async function deleteAdminVmTemplate(templateId: string): Promise<void> {
+  await apiRequest(`/api/v1/admin-vm-templates/${templateId}`, { method: 'DELETE' });
+}
+
+export async function fetchAdminVmTemplateStreamTicket(
+  templateId: string
+): Promise<{ streamToken: string; expiresIn: number }> {
+  const res = await apiRequest<ApiResponse<{ streamToken: string; expiresIn: number }>>(
+    `/api/v1/admin-vm-templates/${templateId}/stream-ticket`,
+    { method: 'POST' }
+  );
+  return res.data;
+}

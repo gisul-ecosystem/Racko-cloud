@@ -1,0 +1,4 @@
+ALTER TABLE azure_users
+  ADD COLUMN IF NOT EXISTS peak_resource_count INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS last_resource_count INTEGER DEFAULT 0,
+  ADD COLUMN IF NOT EXISTS resources_synced_at TIMESTAMPTZ;

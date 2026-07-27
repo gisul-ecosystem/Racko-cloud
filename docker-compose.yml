@@ -1,0 +1,126 @@
+version: '3.9'
+ 
+services:
+  core-api:
+    build:
+      context: .
+      dockerfile: core-api/Dockerfile
+    image: gisuldocker/racko-core-api:dev
+    env_file:
+      - core-api/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CORE_API_PORT:-8001}
+      JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
+      TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
+      RESELLER_SERVICE_URL: http://cloud-automation-reseller:3005
+      SEAWEEDFS_ENDPOINT: https://storage.gisul.co.in
+      SEAWEEDFS_BUCKET: racko-vm-activity
+    volumes:
+      - tenant-assets:/data/tenant-assets
+      - ./agent/dist:/agent/dist:ro
+    ports:
+      - "${CORE_API_PORT:-8001}:8001"
+    depends_on:
+      - create-vm-catalog-agent
+      - cloud-automation-reseller
+ 
+  cloud-automation:
+    image: gisuldocker/racko-cloud-automation:dev
+    env_file:
+      - cloud-automation/.env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_PORT:-3002}
+      # Large-lab defaults (override in cloud-automation/.env). One batch per HTTP request
+      # when PROVISION_STEP_TIME_BUDGET_MS=0 so nginx/CDN do not kill large multi-service labs.
+      BULK_PROVISION_CONCURRENCY: ${BULK_PROVISION_CONCURRENCY:-40}
+      DELETE_AZURE_CONCURRENCY: ${DELETE_AZURE_CONCURRENCY:-40}
+      RESOURCE_GROUP_BATCH_SIZE: ${RESOURCE_GROUP_BATCH_SIZE:-50}
+      USER_PROVISION_BATCH_SIZE: ${USER_PROVISION_BATCH_SIZE:-50}
+      ROLE_PROVISION_BATCH_SIZE: ${ROLE_PROVISION_BATCH_SIZE:-50}
+      SERVICE_POLICY_BATCH_SIZE: ${SERVICE_POLICY_BATCH_SIZE:-50}
+      BUDGET_PROVISION_BATCH_SIZE: ${BUDGET_PROVISION_BATCH_SIZE:-50}
+      RESOURCE_SCOPED_USER_BATCH_SIZE: ${RESOURCE_SCOPED_USER_BATCH_SIZE:-50}
+      MAX_PROVISION_ACCOUNT_COUNT: ${MAX_PROVISION_ACCOUNT_COUNT:-1000}
+      PROVISION_STEP_TIME_BUDGET_MS: ${PROVISION_STEP_TIME_BUDGET_MS:-0}
+      SUPABASE_DB_STATEMENT_TIMEOUT_MS: ${SUPABASE_DB_STATEMENT_TIMEOUT_MS:-0}
+      SUPABASE_DB_QUERY_TIMEOUT_MS: ${SUPABASE_DB_QUERY_TIMEOUT_MS:-0}
+      SIGNIN_STALE_SESSION_MINUTES: ${SIGNIN_STALE_SESSION_MINUTES:-90}
+      SIGNIN_MONITOR_LOOKBACK_MINUTES: ${SIGNIN_MONITOR_LOOKBACK_MINUTES:-180}
+    ports:
+      - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
+ 
+  cloud-automation-aws:
+    image: gisuldocker/racko-cloud-automation-aws:dev
+    env_file:
+      - cloud-automation-aws/.env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
+    ports:
+      - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
+
+  cloud-automation-reseller:
+    image: gisuldocker/racko-cloud-automation-reseller:dev
+    env_file:
+      - cloud_automation_reseller/.env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_RESELLER_PORT:-3005}
+      NODE_ENV: production
+    ports:
+      - "${CLOUD_AUTOMATION_RESELLER_PORT:-3005}:3005"
+ 
+  cloud-gateway:
+    build:
+      context: .
+      dockerfile: cloud-gateway/Dockerfile
+    image: gisuldocker/racko-cloud-gateway:dev
+    env_file:
+      - cloud-gateway/.env
+    environment:
+      PORT: ${GATEWAY_PORT:-8000}
+      JWT_ACCESS_EXPIRES_IN: ${GATEWAY_JWT_ACCESS_EXPIRES_IN:-15m}
+    depends_on:
+      - core-api
+      - cloud-automation
+      - cloud-automation-aws
+    ports:
+      - "${GATEWAY_PORT:-8000}:8000"
+ 
+  client-portal:
+    build:
+      context: .
+      dockerfile: client-portal/Dockerfile
+    image: gisuldocker/racko-client-portal:dev
+    env_file:
+      - client-portal/.env
+    environment:
+      HOSTNAME: 0.0.0.0
+      PORT: ${CLIENT_PORTAL_PORT:-3000}
+      GATEWAY_INTERNAL_URL: http://cloud-gateway:8000
+      CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
+    depends_on:
+      - cloud-gateway
+      - create-vm-catalog-agent
+    ports:
+      - "${CLIENT_PORTAL_PORT:-3000}:3000"
+
+  create-vm-catalog-agent:
+    build:
+      context: .
+      dockerfile: create-vm-catalog-agent/Dockerfile
+    image: gisuldocker/racko-create-vm-catalog-agent:dev
+    env_file:
+      - create-vm-catalog-agent/.env
+    environment:
+      NODE_ENV: production
+      PORT: ${CREATE_VM_CATALOG_AGENT_PORT:-3789}
+      HOSTNAME: 0.0.0.0
+      SKIP_CATALOG_AGENT_WARMUP: ${SKIP_CATALOG_AGENT_WARMUP:-false}
+    ports:
+      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+    volumes:
+      - ./create-vm-catalog-agent/state:/app/state:rw
+
+volumes:
+  tenant-assets:

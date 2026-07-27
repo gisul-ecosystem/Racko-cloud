@@ -1,0 +1,881 @@
+const { Client } = require('@microsoft/microsoft-graph-client');
+const { createAzureCredential } = require('../config/azure');
+const db = require('../db/postgres');
+const AppError = require('../utils/AppError');
+const { createNotification, NotificationType } = require('./notificationService');
+const { getTodayLimitMinutes, resolveScheduleForRequest } = require('../utils/usageSchedule');
+const { evaluateUsageAccess } = require('./usageAccessEvaluator');
+const { getLiveSessionMinutes, resetDailyCountersIfNeeded } = require('./usageMiddlewareHelper');
+const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
+const { isWindowEnforcementPaused } = require('../utils/windowEnforcementPause');
+const { DateTime } = require('luxon');
+
+/**
+ * Create Microsoft Graph client
+ */
+const createGraphClient = () => {
+  const tenantId = process.env.AZURE_TENANT_ID;
+  const clientId = process.env.AZURE_CLIENT_ID;
+  const clientSecret = process.env.AZURE_CLIENT_SECRET;
+
+  if (!tenantId || !clientId || !clientSecret) {
+    throw new Error('Missing required Azure credentials for Graph API');
+  }
+
+  const credential = createAzureCredential({ tenantId, clientId, clientSecret });
+
+  const client = Client.initWithMiddleware({
+    authProvider: {
+      getAccessToken: async () => {
+        const token = await credential.getToken('https://graph.microsoft.com/.default');
+        return token.token;
+      }
+    }
+  });
+
+  return client;
+};
+
+/**
+ * Revoke Azure access by terminating sessions and disabling account
+ * Does NOT remove RBAC assignments - preserves permissions for next day
+ */
+async function sleep(ms) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function disableAzureAccountWithRetry(client, azureUserId, { attempts = 3 } = {}) {
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      await client.api(`/users/${azureUserId}`).patch({
+        accountEnabled: false
+      });
+
+      // Graph can briefly return stale accountEnabled after a successful patch.
+      await sleep(attempt === 1 ? 400 : 1000 * attempt);
+
+      const userState = await client
+        .api(`/users/${azureUserId}`)
+        .select('accountEnabled')
+        .get();
+
+      if (userState.accountEnabled === false) {
+        return { status: 'success', attempts: attempt };
+      }
+
+      lastError = 'account_still_enabled';
+      console.warn(
+        `[AZURE_REVOKE] Account ${azureUserId} still enabled after disable attempt ${attempt}/${attempts}`
+      );
+    } catch (error) {
+      lastError = error.message;
+      console.error(
+        `[AZURE_REVOKE] Disable attempt ${attempt}/${attempts} failed for ${azureUserId}: ${error.message}`
+      );
+    }
+  }
+
+  return { status: 'failed', error: lastError || 'account_still_enabled', attempts };
+}
+
+async function revokeAzureAccess({ azureUserId, userId, requestId }) {
+  try {
+    console.log(`[AZURE_REVOKE] Revoking Azure access for user ${userId} (Azure ID: ${azureUserId})`);
+
+    const client = createGraphClient();
+    const actions = [];
+
+    // Step 1: Disable the Azure account first so new tokens cannot be minted.
+    const disableResult = await disableAzureAccountWithRetry(client, azureUserId);
+    if (disableResult.status === 'success') {
+      console.log(`[ACCOUNT_DISABLED] Azure account disabled for user ${azureUserId}`);
+      actions.push({
+        action: 'disable_account',
+        status: 'success',
+        attempts: disableResult.attempts
+      });
+    } else {
+      console.error(
+        `[AZURE_REVOKE] Account ${azureUserId} could not be disabled: ${disableResult.error}`
+      );
+      actions.push({
+        action: 'disable_account',
+        status: 'failed',
+        error: disableResult.error
+      });
+    }
+
+    // Step 2: Revoke all active sign-in sessions
+    try {
+      await client.api(`/users/${azureUserId}/revokeSignInSessions`).post({});
+      console.log(`[AZURE_SESSION_REVOKED] All sign-in sessions revoked for Azure user ${azureUserId}`);
+      actions.push({ action: 'revoke_sessions', status: 'success' });
+    } catch (error) {
+      console.error(`[AZURE_REVOKE] Error revoking sessions: ${error.message}`);
+      actions.push({ action: 'revoke_sessions', status: 'failed', error: error.message });
+    }
+
+    console.log(
+      '[AZURE_REVOKE] Active portal tabs may stay usable until the current access token expires ' +
+      '(often up to ~60 minutes). Disable + revoke blocks new sign-ins immediately.'
+    );
+
+    return actions;
+  } catch (error) {
+    console.error(`[AZURE_REVOKE] Error revoking Azure access:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Restore Azure access by enabling account
+ * Used during daily reset at midnight
+ */
+async function restoreAzureAccess({ azureUserId, userId, requestId }) {
+  try {
+    console.log(`[AZURE_RESTORE] Restoring Azure access for user ${userId} (Azure ID: ${azureUserId})`);
+
+    const client = createGraphClient();
+
+    // Re-enable the Azure account
+    await client.api(`/users/${azureUserId}`).patch({
+      accountEnabled: true
+    });
+
+    console.log(`[ACCOUNT_RESTORED] Azure account re-enabled for user ${azureUserId}`);
+
+    return {
+      action: 'restore_account',
+      status: 'success'
+    };
+  } catch (error) {
+    console.error(`[AZURE_RESTORE] Error restoring Azure access:`, error);
+    throw error;
+  }
+}
+
+/**
+ * Enforce usage limit by revoking Azure sessions and disabling account
+ * RBAC assignments are preserved for next day
+ */
+async function enforceUsageLimit({ requestId, userId }) {
+  try {
+    console.log(`[ENFORCEMENT] Enforcing usage limit for request ${requestId}, user ${userId}`);
+
+    // Get request and user details
+    const result = await db.query(
+      `
+      SELECT 
+        r.id as request_id,
+        r.enforce_in_azure,
+        au.id as user_id,
+        au.azure_user_id,
+        au.username,
+        au.used_today_minutes,
+        r.daily_limit_minutes,
+        r.usage_schedule,
+        r.enable_daily_usage
+      FROM requests r
+      JOIN azure_users au ON au.request_id = r.id
+      WHERE r.id = $1 AND au.id = $2
+      `,
+      [requestId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new AppError('Request or user not found.', 404);
+    }
+
+    const data = result.rows[0];
+
+    const pauseResult = await db.query(
+      `
+        SELECT window_enforcement_paused_until
+        FROM azure_users
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (isWindowEnforcementPaused(pauseResult.rows[0])) {
+      console.log(`[ENFORCEMENT] Skipping limit enforcement — admin pause active for user ${userId}`);
+      return {
+        success: true,
+        message: 'Window enforcement paused by admin.',
+        enforced: false
+      };
+    }
+
+    // Check if enforcement in Azure is enabled
+    if (!data.enforce_in_azure) {
+      console.log(`[ENFORCEMENT] Azure enforcement disabled for request ${requestId}. Skipping.`);
+      return {
+        success: true,
+        message: 'Azure enforcement is disabled for this request.',
+        enforced: false
+      };
+    }
+
+    const liveSessionMins = await getLiveSessionMinutes(requestId, userId);
+    const windowResult = await db.query(
+      `
+        SELECT timezone
+        FROM request_usage_windows
+        WHERE request_id = $1
+        LIMIT 1
+      `,
+      [requestId]
+    );
+    const schedule = resolveScheduleForRequest(data);
+    const tz =
+      windowResult.rows[0]?.timezone || schedule?.timezone || 'Asia/Kolkata';
+    const trackingDate = DateTime.now().setZone(tz).toISODate();
+    const usedMinutes = windowResult.rows.length
+      ? await getConsumedMinutesToday(userId, trackingDate, tz)
+      : Number(data.used_today_minutes || 0) + liveSessionMins;
+    const limitMinutes = schedule
+      ? getTodayLimitMinutes(schedule)
+      : Number(data.daily_limit_minutes || 0);
+
+    if (usedMinutes < limitMinutes) {
+      console.log(`[ENFORCEMENT] User ${userId} has not exceeded limit. Skipping enforcement.`);
+      return {
+        success: true,
+        message: 'User has not exceeded daily limit.',
+        enforced: false
+      };
+    }
+
+    console.log(
+      `[ENFORCEMENT] User ${userId} (${data.username}) exceeded limit: ${usedMinutes}/${limitMinutes} minutes`
+    );
+
+    // Revoke Azure sessions and disable account
+    const azureActions = await revokeAzureAccess({
+      azureUserId: data.azure_user_id,
+      userId,
+      requestId
+    });
+
+    // Update database status
+    await db.query(
+      `
+      UPDATE azure_users
+      SET 
+        blocked_until = (CURRENT_DATE + INTERVAL '1 day'),
+        blocked_reason = 'daily_limit_reached',
+        used_today_minutes = $3,
+        azure_account_enabled = false,
+        status = 'Blocked'
+      WHERE id = $1 AND request_id = $2
+      `,
+      [userId, requestId, usedMinutes]
+    );
+
+    // Close all active sessions
+    await db.query(
+      `
+      UPDATE user_usage_sessions
+      SET
+        logout_at = NOW(),
+        minutes_used = EXTRACT(EPOCH FROM (NOW() - login_at)) / 60,
+        ended_reason = 'daily_limit_reached'
+      WHERE request_id = $1 
+        AND user_id = $2 
+        AND logout_at IS NULL
+      `,
+      [requestId, userId]
+    );
+
+    const consumedMinutes = windowResult.rows.length
+      ? await getConsumedMinutesToday(userId, trackingDate, tz)
+      : usedMinutes;
+
+    await db.query(
+      `
+      INSERT INTO daily_usage_tracking
+        (request_id, azure_user_id, tracking_date, consumed_minutes, limit_reached_at)
+      VALUES ($1, $2, $3, $4, NOW())
+      ON CONFLICT (azure_user_id, tracking_date)
+      DO UPDATE SET
+        consumed_minutes = EXCLUDED.consumed_minutes,
+        limit_reached = TRUE,
+        limit_reached_at = NOW(),
+        updated_at = NOW()
+      `,
+      [requestId, userId, trackingDate, consumedMinutes]
+    );
+
+    // Log enforcement action
+    await db.query(
+      `
+      INSERT INTO usage_enforcement_logs (
+        request_id,
+        user_id,
+        action,
+        details,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, NOW())
+      `,
+      [
+        requestId,
+        userId,
+        'limit_exceeded_azure_revoked',
+        JSON.stringify({
+          azureActions,
+          usedMinutes,
+          limitMinutes,
+          azureUsername: data.username,
+          message: 'Azure sessions revoked and account disabled. RBAC preserved.'
+        })
+      ]
+    );
+
+    console.log(
+      `[ENFORCEMENT] Azure access revoked for user ${userId} (${data.username}). ` +
+      `Account disabled. RBAC assignments preserved.`
+    );
+
+    await createNotification({
+      type: NotificationType.DAILY_LIMIT_REACHED,
+      title: 'Daily usage limit reached',
+      message: `${data.username} has reached the daily limit (${usedMinutes} mins used) in Lab #${requestId}`,
+      requestId
+    });
+
+    return {
+      success: true,
+      message: 'Usage limit enforced. Azure sessions revoked and account disabled. RBAC preserved.',
+      enforced: true,
+      details: {
+        azureActions
+      }
+    };
+  } catch (error) {
+    console.error('[ENFORCEMENT] Error enforcing usage limit:', error);
+    
+    // Log error but don't throw - enforcement failures shouldn't break the flow
+    try {
+      await db.query(
+        `
+        INSERT INTO usage_enforcement_logs (
+          request_id,
+          user_id,
+          action,
+          details,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, NOW())
+        `,
+        [
+          requestId,
+          userId,
+          'enforcement_error',
+          JSON.stringify({
+            error: error.message,
+            stack: error.stack
+          })
+        ]
+      );
+    } catch (logError) {
+      console.error('[ENFORCEMENT] Error logging enforcement failure:', logError);
+    }
+
+    return {
+      success: false,
+      message: error.message,
+      enforced: false
+    };
+  }
+}
+
+async function enforceScheduleViolation({
+  requestId,
+  userId,
+  reason = 'outside_window',
+  blockedUntil = null,
+  message = 'Scheduled access violation.'
+}) {
+  try {
+    console.log(`[ENFORCEMENT] Schedule violation (${reason}) for request ${requestId}, user ${userId}`);
+
+    const result = await db.query(
+      `
+      SELECT
+        r.id as request_id,
+        r.enforce_in_azure,
+        au.id as user_id,
+        au.azure_user_id,
+        au.username
+      FROM requests r
+      JOIN azure_users au ON au.request_id = r.id
+      WHERE r.id = $1 AND au.id = $2
+      `,
+      [requestId, userId]
+    );
+
+    if (result.rows.length === 0) {
+      throw new AppError('Request or user not found.', 404);
+    }
+
+    const data = result.rows[0];
+
+    const pauseResult = await db.query(
+      `
+        SELECT window_enforcement_paused_until
+        FROM azure_users
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [userId]
+    );
+
+    if (isWindowEnforcementPaused(pauseResult.rows[0])) {
+      console.log(
+        `[ENFORCEMENT] Skipping schedule enforcement (${reason}) — admin pause active for user ${userId}`
+      );
+      return {
+        success: true,
+        enforced: false,
+        skipped: 'enforcement_paused',
+        reason
+      };
+    }
+
+    const nextBlockedUntil = blockedUntil || new Date(Date.now() + 60 * 60 * 1000);
+    let azureActions = [];
+
+    if (data.enforce_in_azure) {
+      azureActions = await revokeAzureAccess({
+        azureUserId: data.azure_user_id,
+        userId,
+        requestId
+      });
+    }
+
+    await db.query(
+      `
+      UPDATE azure_users
+      SET
+        blocked_until = $3,
+        status = 'Blocked'
+      WHERE id = $1 AND request_id = $2
+      `,
+      [userId, requestId, nextBlockedUntil]
+    );
+
+    await db.query(
+      `
+      UPDATE user_usage_sessions
+      SET
+        logout_at = NOW(),
+        minutes_used = EXTRACT(EPOCH FROM (NOW() - login_at)) / 60
+      WHERE request_id = $1
+        AND user_id = $2
+        AND logout_at IS NULL
+      `,
+      [requestId, userId]
+    );
+
+    await db.query(
+      `
+      INSERT INTO usage_enforcement_logs (
+        request_id,
+        user_id,
+        action,
+        details,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, NOW())
+      `,
+      [
+        requestId,
+        userId,
+        `schedule_${reason}`,
+        JSON.stringify({
+          reason,
+          message,
+          blockedUntil: nextBlockedUntil,
+          azureActions,
+          azureUsername: data.username
+        })
+      ]
+    );
+
+    return {
+      success: true,
+      enforced: true,
+      reason,
+      blockedUntil: nextBlockedUntil,
+      azureActions
+    };
+  } catch (error) {
+    console.error('[ENFORCEMENT] Error enforcing schedule violation:', error);
+    return {
+      success: false,
+      enforced: false,
+      message: error.message
+    };
+  }
+}
+
+const ENFORCEMENT_COOLDOWN_MS = 3 * 60 * 1000;
+
+async function enforceBlockedAzureUsers() {
+  try {
+    const result = await db.query(
+      `
+      SELECT
+        au.id,
+        au.request_id,
+        au.azure_user_id,
+        au.username,
+        au.used_today_minutes,
+        au.last_reset_date,
+        au.blocked_until,
+        au.status,
+        r.enable_daily_usage,
+        r.daily_limit_minutes,
+        r.usage_schedule,
+        r.enforce_in_azure
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      WHERE r.enable_daily_usage = true
+        AND r.enforce_in_azure = true
+        AND COALESCE(au.is_deleted, false) = false
+        AND au.status = 'Blocked'
+        AND au.blocked_until IS NOT NULL
+        AND au.blocked_until > NOW()
+        AND (
+          au.window_enforcement_paused_until IS NULL
+          OR au.window_enforcement_paused_until <= NOW()
+        )
+      `
+    );
+
+    if (result.rows.length === 0) {
+      return { checked: 0, enforced: 0 };
+    }
+
+    let enforced = 0;
+
+    for (const row of result.rows) {
+      const access = evaluateUsageAccess({
+        request: row,
+        user: row,
+        currentSessionMinutes: 0,
+        at: new Date()
+      });
+
+      if (access.allowed) {
+        continue;
+      }
+
+      const lastEnforcement = await db.query(
+        `
+        SELECT created_at
+        FROM usage_enforcement_logs
+        WHERE request_id = $1
+          AND user_id = $2
+        ORDER BY created_at DESC
+        LIMIT 1
+        `,
+        [row.request_id, row.id]
+      );
+
+      const lastEnforcedAt = lastEnforcement.rows[0]?.created_at
+        ? new Date(lastEnforcement.rows[0].created_at).getTime()
+        : 0;
+
+      if (Date.now() - lastEnforcedAt < ENFORCEMENT_COOLDOWN_MS) {
+        continue;
+      }
+
+      console.log(
+        `[ENFORCEMENT] Re-checking blocked user ${row.id} (${row.username}) - ${access.reason}`
+      );
+
+      await revokeAzureAccess({
+        azureUserId: row.azure_user_id,
+        userId: row.id,
+        requestId: row.request_id
+      });
+
+      await db.query(
+        `
+        INSERT INTO usage_enforcement_logs (
+          request_id,
+          user_id,
+          action,
+          details,
+          created_at
+        )
+        VALUES ($1, $2, $3, $4, NOW())
+        `,
+        [
+          row.request_id,
+          row.id,
+          `blocked_user_recheck_${access.reason}`,
+          JSON.stringify({
+            reason: access.reason,
+            message: access.message,
+            blockedUntil: row.blocked_until,
+            azureUsername: row.username
+          })
+        ]
+      );
+
+      enforced += 1;
+    }
+
+    if (enforced > 0) {
+      console.log(`[ENFORCEMENT] Re-revoked Azure access for ${enforced} blocked user(s).`);
+    }
+
+    return { checked: result.rows.length, enforced };
+  } catch (error) {
+    console.error('[ENFORCEMENT] Error re-checking blocked Azure users:', error.message);
+    return { checked: 0, enforced: 0, error: error.message };
+  }
+}
+
+async function revokeAzureAccessForUser({ requestId, userId }) {
+  const result = await db.query(
+    `
+      SELECT
+        au.azure_user_id,
+        au.username,
+        r.enforce_in_azure,
+        EXISTS (
+          SELECT 1
+          FROM request_usage_windows ruw
+          WHERE ruw.request_id = r.id
+            AND ruw.daily_limit_hours IS NOT NULL
+        ) AS has_usage_windows
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      WHERE r.id = $1 AND au.id = $2
+    `,
+    [requestId, userId]
+  );
+
+  if (!result.rows.length || !result.rows[0].azure_user_id) {
+    return { success: false, message: 'User not found.' };
+  }
+
+  const data = result.rows[0];
+  const shouldRevoke = data.enforce_in_azure === true || data.has_usage_windows === true;
+
+  if (!shouldRevoke) {
+    return { success: true, message: 'Azure enforcement disabled for this request.', enforced: false };
+  }
+
+  const azureActions = await revokeAzureAccess({
+    azureUserId: data.azure_user_id,
+    userId,
+    requestId
+  });
+
+  const disableSucceeded = azureActions.some(
+    (action) => action.action === 'disable_account' && action.status === 'success'
+  );
+
+  await db.query(
+    `
+      UPDATE azure_users
+      SET
+        azure_account_enabled = CASE
+          WHEN $3::boolean THEN false
+          ELSE azure_account_enabled
+        END,
+        status = CASE
+          WHEN $3::boolean THEN 'Blocked'
+          ELSE status
+        END
+      WHERE id = $1 AND request_id = $2
+    `,
+    [userId, requestId, disableSucceeded]
+  );
+
+  await db.query(
+    `
+      INSERT INTO usage_enforcement_logs (
+        request_id,
+        user_id,
+        action,
+        details,
+        created_at
+      )
+      VALUES ($1, $2, $3, $4, NOW())
+    `,
+    [
+      requestId,
+      userId,
+      'force_logout_azure_revoked',
+      JSON.stringify({
+        azureActions,
+        azureUsername: data.username
+      })
+    ]
+  );
+
+  return {
+    success: true,
+    enforced: true,
+    azureActions,
+    accountDisabled: disableSucceeded
+  };
+}
+
+/**
+ * Check all active sessions against daily limits including live elapsed time.
+ * Revokes Azure access when limit is reached.
+ */
+async function enforceUsageLimits() {
+  const users = await db.query(
+    `
+      SELECT
+        au.id AS user_id,
+        au.request_id,
+        au.username,
+        au.azure_user_id,
+        au.used_today_minutes,
+        au.last_reset_date,
+        au.blocked_until,
+        au.azure_account_enabled,
+        r.enable_daily_usage,
+        r.daily_limit_minutes,
+        r.usage_schedule,
+        r.enforce_in_azure,
+        uus.id AS active_session_id,
+        uus.login_at AS session_started_at
+      FROM azure_users au
+      JOIN requests r ON r.id = au.request_id
+      LEFT JOIN user_usage_sessions uus
+        ON uus.user_id = au.id
+       AND uus.request_id = au.request_id
+       AND uus.logout_at IS NULL
+      WHERE r.enable_daily_usage = true
+        AND COALESCE(r.daily_limit_minutes, 0) > 0
+        AND r.status = 'Completed'
+        AND COALESCE(r.expired, false) = false
+        AND (r.expiry_date IS NULL OR r.expiry_date > NOW())
+        AND COALESCE(au.is_deleted, false) = false
+        AND COALESCE(au.azure_account_enabled, true) = true
+        AND au.status != 'Blocked'
+    `
+  );
+
+  for (const user of users.rows) {
+    if (!user.enforce_in_azure) {
+      continue;
+    }
+
+    const request = {
+      enable_daily_usage: user.enable_daily_usage,
+      daily_limit_minutes: user.daily_limit_minutes,
+      usage_schedule: user.usage_schedule
+    };
+
+    const refreshedUser = await resetDailyCountersIfNeeded(
+      request,
+      user,
+      user.user_id,
+      user.request_id
+    );
+
+    let liveSessionMins = 0;
+    if (user.active_session_id && user.session_started_at) {
+      liveSessionMins = Math.floor(
+        (Date.now() - new Date(user.session_started_at).getTime()) / 60000
+      );
+    }
+
+    const access = evaluateUsageAccess({
+      request,
+      user: refreshedUser,
+      currentSessionMinutes: liveSessionMins
+    });
+
+    if (access.allowed) {
+      continue;
+    }
+
+    if (access.reason !== 'limit_exceeded' && access.reason !== 'blocked') {
+      continue;
+    }
+
+    console.log(
+      `[usageEnforcement] ${user.username} exceeded daily limit: ${access.usedMinutes}/${access.limitMinutes} mins`
+    );
+
+    await enforceUsageLimit({
+      requestId: user.request_id,
+      userId: user.user_id
+    });
+  }
+}
+
+async function restoreExpiredUsers() {
+  const users = await db.query(
+    `
+      SELECT
+        au.id AS user_id,
+        au.request_id,
+        au.azure_user_id,
+        au.username
+      FROM azure_users au
+      WHERE COALESCE(au.azure_account_enabled, true) = false
+        AND au.blocked_reason = 'daily_limit_reached'
+        AND au.blocked_until IS NOT NULL
+        AND au.blocked_until <= NOW()
+        AND COALESCE(au.is_deleted, false) = false
+    `
+  );
+
+  for (const user of users.rows) {
+    try {
+      if (user.azure_user_id) {
+        await restoreAzureAccess({
+          azureUserId: user.azure_user_id,
+          userId: user.user_id,
+          requestId: user.request_id
+        });
+      }
+
+      await db.query(
+        `
+          UPDATE azure_users
+          SET azure_account_enabled = true,
+              blocked_reason = NULL,
+              blocked_until = NULL,
+              used_today_minutes = 0,
+              status = 'Created'
+          WHERE id = $1
+        `,
+        [user.user_id]
+      );
+
+      console.log(`[usageEnforcement] Restored access for ${user.username}`);
+    } catch (error) {
+      console.error(`[usageEnforcement] Restore failed for ${user.username}:`, error.message);
+    }
+  }
+
+  return users.rows.length;
+}
+
+module.exports = {
+  enforceUsageLimit,
+  enforceUsageLimits,
+  enforceScheduleViolation,
+  enforceBlockedAzureUsers,
+  revokeAzureAccess,
+  revokeAzureAccessForUser,
+  restoreAzureAccess,
+  restoreExpiredUsers
+};
