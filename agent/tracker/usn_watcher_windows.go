@@ -467,39 +467,28 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 
 	switch {
 	case rec.Reason&(usnReasonFileCreate|usnReasonDataExtend|usnReasonDataOverwrite|usnReasonDataTruncation|usnReasonNamedDataExtend) != 0:
-		// File create or data write — always wins over a prior delete in the
-		// same flush window. A file that is created and then modified in the
-		// same 5-second batch should be uploaded, not deleted.
 		if !isDir {
 			w.pending[fullPath] = usnOpWrite
-			log.Printf("[tracker/usn] queued write: %s (reason=0x%X)", fullPath, rec.Reason)
 		}
 
 	case rec.Reason&usnReasonFileDelete != 0:
 		if !isDir {
-			// Only record as delete if we haven't already seen a create/write
-			// for this path in the current flush window.
 			if existing, ok := w.pending[fullPath]; !ok || existing != usnOpWrite {
 				w.pending[fullPath] = usnOpDelete
-				log.Printf("[tracker/usn] queued delete: %s", fullPath)
 			}
 		}
 
 	case rec.Reason&usnReasonRenameOldName != 0:
-		// Store old path keyed by file reference number for correlation.
 		w.usnRenameOld[rec.FileReferenceNumber] = fullPath
 
 	case rec.Reason&usnReasonRenameNewName != 0:
 		if !isDir {
 			if oldPath, ok := w.usnRenameOld[rec.FileReferenceNumber]; ok {
-				w.renamed[fullPath] = oldPath // newPath → oldPath
+				w.renamed[fullPath] = oldPath
 				delete(w.usnRenameOld, rec.FileReferenceNumber)
 				w.pending[oldPath] = usnOpRename
-				log.Printf("[tracker/usn] queued rename: %s → %s", oldPath, fullPath)
 			} else {
-				// No matching old name (missed the RenameOldName record) — treat as write
 				w.pending[fullPath] = usnOpWrite
-				log.Printf("[tracker/usn] queued write (rename new, no old): %s", fullPath)
 			}
 		}
 	}
