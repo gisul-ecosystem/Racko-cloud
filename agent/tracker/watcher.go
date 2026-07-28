@@ -202,7 +202,6 @@ func (w *Watcher) flush() {
 	log.Printf("[tracker/watcher] flush: processing %d pending events", len(snapshot))
 
 	for path, op := range snapshot {
-		log.Printf("[tracker/watcher] flush: path=%s op=%d", path, op)
 		switch op {
 		case usnOpDelete:
 			w.sendActivity(ActivityEvent{
@@ -213,7 +212,6 @@ func (w *Watcher) flush() {
 			})
 
 		case usnOpRename:
-			// path here is the OLD path — newPath is the key in renames map
 			for newPath, oldPath := range renames {
 				if strings.EqualFold(oldPath, path) {
 					w.sendActivity(ActivityEvent{
@@ -230,7 +228,7 @@ func (w *Watcher) flush() {
 			info, err := os.Stat(path)
 			if err != nil || info.IsDir() {
 				log.Printf("[tracker/watcher] flush: skipping %s (stat err=%v isDir=%v)", path, err, err == nil && info.IsDir())
-				continue // file disappeared or is a dir — skip
+				continue
 			}
 			log.Printf("[tracker/watcher] flush: uploading %s (%d bytes)", path, info.Size())
 			w.uploadAndRecord(path, info)

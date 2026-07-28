@@ -469,8 +469,7 @@ func shouldExcludePath(path string) bool {
 		// Windows OS — never touch
 		`c:\windows`,
 		// Agent data — never track our own files
-		`c:\programdata\racko-agent`,
-		// Windows system-managed ProgramData
+		`c:\programdata\racko-agent`,		// Windows system-managed ProgramData
 		`c:\programdata\microsoft`,
 		`c:\programdata\windows`,
 		`c:\programdata\package cache`,
