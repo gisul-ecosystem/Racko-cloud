@@ -1052,22 +1052,26 @@ foreach ($userDir in (Get-UserProfiles)) {
         }
     }
 
-    # Recreate Microsoft Edge.lnk if missing
+    # Always recreate Microsoft Edge.lnk with IconLocation pointing to msedge.exe.
+    # The default pin created by Windows sets IconLocation to a profile .ico file inside
+    # AppData\Local\Microsoft\Edge\User Data\Default\ — which Phase 4 deletes.
+    # Using the exe as the icon source means it always exists regardless of reset state.
     $edgeExe = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
     if (-not (Test-Path $edgeExe)) {
         $edgeExe = 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
     }
     $edgeLink = Join-Path $pinnedDir 'Microsoft Edge.lnk'
-    if (-not (Test-Path $edgeLink) -and (Test-Path $edgeExe)) {
+    if (Test-Path $edgeExe) {
         try {
             $sh = New-Object -ComObject WScript.Shell
             $sc = $sh.CreateShortcut($edgeLink)
-            $sc.TargetPath  = $edgeExe
-            $sc.Description = 'Microsoft Edge'
+            $sc.TargetPath    = $edgeExe
+            $sc.IconLocation  = "$edgeExe,0"
+            $sc.Description   = 'Microsoft Edge'
             $sc.Save()
-            Write-Host "  Recreated Microsoft Edge.lnk for: $($userDir.Name)" -ForegroundColor DarkGray
+            Write-Host "  Restored Microsoft Edge.lnk (icon from exe) for: $($userDir.Name)" -ForegroundColor DarkGray
         } catch {
-            Write-Host "  WARNING: Could not recreate Microsoft Edge.lnk for $($userDir.Name): $_" -ForegroundColor DarkYellow
+            Write-Host "  WARNING: Could not restore Microsoft Edge.lnk for $($userDir.Name): $_" -ForegroundColor DarkYellow
         }
     }
 
