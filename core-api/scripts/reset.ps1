@@ -868,12 +868,25 @@ foreach ($svc in (Get-CimInstance Win32_Service -ErrorAction SilentlyContinue)) 
 # ============================================================
 Write-Host "`n=== PHASE 16: EMPTYING RECYCLE BIN ===" -ForegroundColor Cyan
 
-try {
-    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
-    Write-Host "  Recycle Bin emptied" -ForegroundColor Green
-} catch {
-    Write-Host "  Could not empty Recycle Bin -- $_" -ForegroundColor DarkYellow
+# Clear-RecycleBin only empties the current session user's bin (LocalSystem when
+# running as a service). We directly delete contents from each per-user SID folder
+# under $Recycle.Bin on every fixed drive so all users' bins are fully cleared.
+function Clear-AllRecycleBins {
+    $fixedDrives = [System.IO.DriveInfo]::GetDrives() |
+        Where-Object { $_.DriveType -eq [System.IO.DriveType]::Fixed -and $_.IsReady }
+    foreach ($drive in $fixedDrives) {
+        $recyclePath = Join-Path $drive.RootDirectory.FullName '$Recycle.Bin'
+        if (-not (Test-Path $recyclePath)) { continue }
+        Get-ChildItem $recyclePath -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "  Cleared Recycle Bin on $($drive.RootDirectory.FullName)" -ForegroundColor DarkGray
+    }
 }
+
+Clear-AllRecycleBins
+Write-Host "  Recycle Bin emptied (all users, all drives)" -ForegroundColor Green
 
 # ============================================================
 # PHASE 17 — Trace / activity / network / system cleanup
@@ -1203,12 +1216,10 @@ try {
 }
 
 # Clear Recycle Bin AFTER Explorer restarts so the icon refreshes to empty.
-# Running it before Explorer restarts causes the icon to remain showing "full"
-# even though the bin was emptied.
 Write-Host "-- Emptying Recycle Bin (post-Explorer restart refresh) --" -ForegroundColor Cyan
 try {
     Start-Sleep -Milliseconds 500  # brief pause so Explorer shell is ready
-    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+    Clear-AllRecycleBins
     Write-Host "  Recycle Bin emptied and icon refreshed" -ForegroundColor Green
 } catch {
     Write-Host "  Could not empty Recycle Bin -- $_" -ForegroundColor DarkYellow
