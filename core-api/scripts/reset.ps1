@@ -1006,32 +1006,72 @@ try {
 } catch { }
 
 # --- 17j: Taskbar pins + layout cache ---
-# Strategy: keep Edge and File Explorer pins intact (skip their .lnk files).
-# Only remove shortcuts added by users (other apps they pinned).
-# TaskBand registry key is NOT touched — it already has the correct pin state.
+# Strategy:
+#   1. Remove user-added app pins from the TaskBar folder (keep Edge + File Explorer .lnk files)
+#   2. Recreate Edge + File Explorer .lnk files if they are missing (e.g. from a previous bad reset)
+#   3. TaskBand registry key is NOT touched — it holds the pin order/state
 Write-Host "-- Taskbar pins --" -ForegroundColor Cyan
 
-# Shortcuts to keep on the taskbar (Edge + File Explorer stay pinned)
+# Shortcuts to always keep / recreate
 $keepTaskbarPins = @('Microsoft Edge.lnk', 'File Explorer.lnk')
 
 foreach ($userDir in (Get-UserProfiles)) {
     $userProfile = $userDir.FullName
     if (-not $userProfile) { continue }
 
-    # Remove user-added pinned shortcuts but keep Edge and File Explorer
-    $pinned = Join-Path $userProfile 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
-    if (Test-Path $pinned) {
-        foreach ($file in (Get-ChildItem $pinned -File -ErrorAction SilentlyContinue)) {
-            if ($keepTaskbarPins -contains $file.Name) {
-                Write-Host "  Keeping taskbar pin: $($file.Name)" -ForegroundColor DarkGray
-                continue
-            }
-            Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
-            Write-Host "  Removed taskbar pin: $($file.Name)" -ForegroundColor DarkGray
+    $pinnedDir = Join-Path $userProfile 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
+
+    # Ensure the folder exists
+    if (-not (Test-Path $pinnedDir)) {
+        New-Item -ItemType Directory -Path $pinnedDir -Force -ErrorAction SilentlyContinue | Out-Null
+    }
+
+    # Remove user-added pinned shortcuts — skip Edge and File Explorer
+    foreach ($file in (Get-ChildItem $pinnedDir -File -ErrorAction SilentlyContinue)) {
+        if ($keepTaskbarPins -contains $file.Name) {
+            Write-Host "  Keeping taskbar pin: $($file.Name)" -ForegroundColor DarkGray
+            continue
+        }
+        Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
+        Write-Host "  Removed taskbar pin: $($file.Name)" -ForegroundColor DarkGray
+    }
+
+    # Recreate File Explorer.lnk if missing
+    # File Explorer is a shell special item — no TargetPath, uses shell AppID
+    $feLink = Join-Path $pinnedDir 'File Explorer.lnk'
+    if (-not (Test-Path $feLink)) {
+        try {
+            $sh = New-Object -ComObject WScript.Shell
+            $sc = $sh.CreateShortcut($feLink)
+            $sc.TargetPath  = 'explorer.exe'
+            $sc.Description = 'File Explorer'
+            $sc.Save()
+            Write-Host "  Recreated File Explorer.lnk for: $($userDir.Name)" -ForegroundColor DarkGray
+        } catch {
+            Write-Host "  WARNING: Could not recreate File Explorer.lnk for $($userDir.Name): $_" -ForegroundColor DarkYellow
         }
     }
 
-    # Remove taskbar cache DB files (Windows rebuilds these automatically)
+    # Recreate Microsoft Edge.lnk if missing
+    $edgeExe = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+    if (-not (Test-Path $edgeExe)) {
+        $edgeExe = 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+    }
+    $edgeLink = Join-Path $pinnedDir 'Microsoft Edge.lnk'
+    if (-not (Test-Path $edgeLink) -and (Test-Path $edgeExe)) {
+        try {
+            $sh = New-Object -ComObject WScript.Shell
+            $sc = $sh.CreateShortcut($edgeLink)
+            $sc.TargetPath  = $edgeExe
+            $sc.Description = 'Microsoft Edge'
+            $sc.Save()
+            Write-Host "  Recreated Microsoft Edge.lnk for: $($userDir.Name)" -ForegroundColor DarkGray
+        } catch {
+            Write-Host "  WARNING: Could not recreate Microsoft Edge.lnk for $($userDir.Name): $_" -ForegroundColor DarkYellow
+        }
+    }
+
+    # Remove taskbar layout cache files (Windows rebuilds these automatically)
     foreach ($cacheFile in @(
         (Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\DefaultLayouts.xml'),
         (Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml'),
