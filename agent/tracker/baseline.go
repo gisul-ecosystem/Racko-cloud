@@ -490,6 +490,8 @@ func shouldExcludePath(path string) bool {
 		`appdata\roaming\microsoft\windows\recent\customdestinations`,
 		// PowerShell history — updated every command, cloning 50+ events is noise
 		`appdata\roaming\microsoft\windows\powershell\psreadline\consolehost_history.txt`,
+		// PowerShell startup profile cache — updated every time PowerShell opens
+		`appdata\local\microsoft\windows\powershell`,
 		// Edge/IE/Chrome web cache — transient binary cache files
 		`appdata\local\microsoft\windows\webcache`,
 		`appdata\local\microsoft\windows\history`,

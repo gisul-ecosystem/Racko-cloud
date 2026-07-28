@@ -19,10 +19,6 @@ const MACHINE_RESOURCES = {
   'g2-standard-4': { vcpu: 4, ramGb: 16, family: 'g2' },
 };
 
-let skuCache = null;
-let skuCacheAt = 0;
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-
 function requireGcpAuth() {
   if (!gcpConfig.apiKey && !gcpConfig.keyFilename && !gcpConfig.credentials) {
     throw new Error(
@@ -85,8 +81,6 @@ async function fetchCatalogPage(pageToken) {
 }
 
 async function loadComputeSkus() {
-  if (skuCache && Date.now() - skuCacheAt < CACHE_TTL_MS) return skuCache;
-
   const skus = [];
   let pageToken = '';
   let pages = 0;
@@ -102,8 +96,6 @@ async function loadComputeSkus() {
     throw new Error('GCP Billing Catalog returned no Compute Engine SKUs');
   }
 
-  skuCache = skus;
-  skuCacheAt = Date.now();
   return skus;
 }
 

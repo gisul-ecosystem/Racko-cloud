@@ -103,7 +103,8 @@ export function GrantAccessOverrideModal({
         ) : null}
 
         <p className="mb-4 text-sm text-gray-600">
-          Temporarily bypass the weekly schedule for this resource. Superadmin only.
+          Temporarily bypass the weekly schedule for this resource so the assigned
+          user can connect outside the normal access window.
         </p>
 
         <div className="space-y-3">

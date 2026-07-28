@@ -95,6 +95,25 @@ export const updateExternalVmScheduleSchema = z.object({
   }),
 });
 
+export const updateExternalVmOverrideSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z.object({
+    accessOverride: z.boolean(),
+    accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
+});
+
+export const bulkUpdateExternalVmOverrideSchema = z.object({
+  body: z.object({
+    ids: z
+      .array(mongoObjectId)
+      .min(1, 'At least one server must be specified')
+      .max(250, 'Cannot update more than 250 servers at once'),
+    accessOverride: z.boolean(),
+    accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
+});
+
 export const bulkAssignExternalPairsSchema = z.object({
   body: z
     .object({

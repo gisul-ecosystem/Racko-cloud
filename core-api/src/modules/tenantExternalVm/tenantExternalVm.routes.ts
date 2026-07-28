@@ -11,6 +11,8 @@ import {
   assignExternalVMsSchema,
   bulkAssignExternalPairsSchema,
   updateExternalVmScheduleSchema,
+  updateExternalVmOverrideSchema,
+  bulkUpdateExternalVmOverrideSchema,
 } from '../external-vm/external-vm.validation';
 import { tenantExternalVmController } from './tenantExternalVm.controller';
 
@@ -70,6 +72,20 @@ router.patch(
   requireTenantRole('tenant_admin'),
   validateRequest(updateExternalVmScheduleSchema),
   (req, res, next) => tenantExternalVmController.updateSchedule(req, res, next)
+);
+
+router.patch(
+  '/override/bulk',
+  requireTenantRole('tenant_admin'),
+  validateRequest(bulkUpdateExternalVmOverrideSchema),
+  (req, res, next) => tenantExternalVmController.bulkUpdateOverride(req, res, next)
+);
+
+router.patch(
+  '/:id/override',
+  requireTenantRole('tenant_admin'),
+  validateRequest(updateExternalVmOverrideSchema),
+  (req, res, next) => tenantExternalVmController.updateOverride(req, res, next)
 );
 
 router.post(
