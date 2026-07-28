@@ -332,7 +332,16 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 
 	log.Printf("[tracker/usn] Watching volume %s (journalID=%d, startUSN=%d)", drive, journalData.UsnJournalID, startUSN)
 
-	readBuf := make([]byte, 64*1024) // 64KB read buffer
+	// Allocate a properly aligned read buffer via a fixed-size array embedded in a struct.
+	// DeviceIoControl on Windows requires the output buffer to be aligned on an 8-byte boundary.
+	// Go's make([]byte, N) doesn't guarantee alignment, causing ERROR_INVALID_USER_BUFFER.
+	type alignedBuf struct {
+		_   [0]uint64 // force 8-byte alignment
+		buf [65536]byte
+	}
+	aligned := &alignedBuf{}
+	readBuf := aligned.buf[:]
+
 	currentUSN := startUSN
 
 	ticker := time.NewTicker(2 * time.Second)
