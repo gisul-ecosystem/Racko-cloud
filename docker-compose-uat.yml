@@ -12,7 +12,7 @@ services:
       TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
       CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
       RESELLER_SERVICE_URL: http://cloud-automation-reseller:3005
-      SEAWEEDFS_ENDPOINT: https://storage.gisul.co.in
+      SEAWEEDFS_ENDPOINT: https://s3api.gisul.co.in
       SEAWEEDFS_BUCKET: racko-vm-activity
     volumes:
       - tenant-assets:/data/tenant-assets

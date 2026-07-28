@@ -1006,43 +1006,85 @@ try {
 } catch { }
 
 # --- 17j: Taskbar pins + layout cache ---
+# Strategy:
+#   1. Remove user-added app pins from the TaskBar folder (keep Edge + File Explorer .lnk files)
+#   2. Recreate Edge + File Explorer .lnk files if they are missing (e.g. from a previous bad reset)
+#   3. TaskBand registry key is NOT touched — it holds the pin order/state
 Write-Host "-- Taskbar pins --" -ForegroundColor Cyan
+
+# Shortcuts to always keep / recreate
+$keepTaskbarPins = @('Microsoft Edge.lnk', 'File Explorer.lnk')
+
 foreach ($userDir in (Get-UserProfiles)) {
     $userProfile = $userDir.FullName
     if (-not $userProfile) { continue }
 
-    # Remove pinned shortcut files
-    $pinned = Join-Path $userProfile 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
-    if (Test-Path $pinned) {
-        Get-ChildItem $pinned -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+    $pinnedDir = Join-Path $userProfile 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
+
+    # Ensure the folder exists
+    if (-not (Test-Path $pinnedDir)) {
+        New-Item -ItemType Directory -Path $pinnedDir -Force -ErrorAction SilentlyContinue | Out-Null
     }
 
-    # Remove taskbar layout XML — Windows rebuilds default layout on next login
-    $layoutXml = Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml'
-    if (Test-Path $layoutXml) {
-        Remove-Item $layoutXml -Force -ErrorAction SilentlyContinue
-        Write-Host "  Cleared taskbar layout: $layoutXml" -ForegroundColor DarkGray
+    # Remove user-added pinned shortcuts — skip Edge and File Explorer
+    foreach ($file in (Get-ChildItem $pinnedDir -File -ErrorAction SilentlyContinue)) {
+        if ($keepTaskbarPins -contains $file.Name) {
+            Write-Host "  Keeping taskbar pin: $($file.Name)" -ForegroundColor DarkGray
+            continue
+        }
+        Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
+        Write-Host "  Removed taskbar pin: $($file.Name)" -ForegroundColor DarkGray
     }
 
-    # Remove taskbar cache DB files
+    # Recreate File Explorer.lnk if missing
+    # File Explorer is a shell special item — no TargetPath, uses shell AppID
+    $feLink = Join-Path $pinnedDir 'File Explorer.lnk'
+    if (-not (Test-Path $feLink)) {
+        try {
+            $sh = New-Object -ComObject WScript.Shell
+            $sc = $sh.CreateShortcut($feLink)
+            $sc.TargetPath  = 'explorer.exe'
+            $sc.Description = 'File Explorer'
+            $sc.Save()
+            Write-Host "  Recreated File Explorer.lnk for: $($userDir.Name)" -ForegroundColor DarkGray
+        } catch {
+            Write-Host "  WARNING: Could not recreate File Explorer.lnk for $($userDir.Name): $_" -ForegroundColor DarkYellow
+        }
+    }
+
+    # Always recreate Microsoft Edge.lnk with IconLocation pointing to msedge.exe.
+    # The default pin created by Windows sets IconLocation to a profile .ico file inside
+    # AppData\Local\Microsoft\Edge\User Data\Default\ — which Phase 4 deletes.
+    # Using the exe as the icon source means it always exists regardless of reset state.
+    $edgeExe = 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe'
+    if (-not (Test-Path $edgeExe)) {
+        $edgeExe = 'C:\Program Files\Microsoft\Edge\Application\msedge.exe'
+    }
+    $edgeLink = Join-Path $pinnedDir 'Microsoft Edge.lnk'
+    if (Test-Path $edgeExe) {
+        try {
+            $sh = New-Object -ComObject WScript.Shell
+            $sc = $sh.CreateShortcut($edgeLink)
+            $sc.TargetPath    = $edgeExe
+            $sc.IconLocation  = "$edgeExe,0"
+            $sc.Description   = 'Microsoft Edge'
+            $sc.Save()
+            Write-Host "  Restored Microsoft Edge.lnk (icon from exe) for: $($userDir.Name)" -ForegroundColor DarkGray
+        } catch {
+            Write-Host "  WARNING: Could not restore Microsoft Edge.lnk for $($userDir.Name): $_" -ForegroundColor DarkYellow
+        }
+    }
+
+    # Remove taskbar layout cache files (Windows rebuilds these automatically)
     foreach ($cacheFile in @(
         (Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\DefaultLayouts.xml'),
+        (Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml'),
         (Join-Path $userProfile 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts')
     )) {
         if (Test-Path $cacheFile) {
             Remove-Item $cacheFile -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "  Cleared taskbar cache: $cacheFile" -ForegroundColor DarkGray
         }
-    }
-}
-
-# Clear the TaskBand registry key per user (stores pinned app order/state)
-Invoke-ForEachUserHive -Action {
-    param($hiveRoot)
-    $taskBandKey = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
-    if (Test-Path $taskBandKey) {
-        Remove-Item $taskBandKey -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "  Cleared TaskBand registry key" -ForegroundColor DarkGray
     }
 }
 
@@ -1110,6 +1152,19 @@ try {
         Set-ItemProperty -Path $explorerKey -Name 'DesktopProcess' -Value 0 -ErrorAction SilentlyContinue
     }
 
+    # Delete icon cache BEFORE stopping Explorer so there are no file locks.
+    # Explorer rebuilds the cache fresh on restart — fixes stale/blank icons for
+    # Edge, File Explorer, and any other taskbar/desktop shortcuts.
+    foreach ($userDir in (Get-UserProfiles)) {
+        $localApp = Join-Path $userDir.FullName 'AppData\Local'
+        Remove-Item (Join-Path $localApp 'IconCache.db') -Force -ErrorAction SilentlyContinue
+        Remove-Item (Join-Path $localApp 'Microsoft\Windows\Explorer\iconcache_*.db') -Force -ErrorAction SilentlyContinue
+    }
+    # Also clear for the current session (LocalSystem / running user)
+    Remove-Item "$env:LOCALAPPDATA\IconCache.db" -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache_*.db" -Force -ErrorAction SilentlyContinue
+    Write-Host "  Icon cache cleared -- will rebuild on Explorer restart" -ForegroundColor DarkGray
+
     Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 
@@ -1128,6 +1183,67 @@ try {
     Write-Host "  Explorer restarted -- session state cleared" -ForegroundColor DarkGray
 } catch {
     Write-Host "  Could not restart Explorer -- $_" -ForegroundColor DarkYellow
+}
+
+# Clear Recycle Bin AFTER Explorer restarts so the icon refreshes to empty.
+# Running it before Explorer restarts causes the icon to remain showing "full"
+# even though the bin was emptied.
+Write-Host "-- Emptying Recycle Bin (post-Explorer restart refresh) --" -ForegroundColor Cyan
+try {
+    Start-Sleep -Milliseconds 500  # brief pause so Explorer shell is ready
+    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+    Write-Host "  Recycle Bin emptied and icon refreshed" -ForegroundColor Green
+} catch {
+    Write-Host "  Could not empty Recycle Bin -- $_" -ForegroundColor DarkYellow
+}
+
+Write-Host "`n=== PHASE 18: DRIVE ROOT SWEEP (user-created folders on all drives) ===" -ForegroundColor Cyan
+
+# Dynamically detect all fixed drives on this VM and delete any top-level folder
+# that is not a known Windows system folder.
+# This catches folders like C:\mahi, C:\work, D:\projects etc. that users create
+# directly on a drive root — these are not covered by any other phase.
+
+# System folders that must never be deleted — per drive letter
+# C:\ has many more protected folders than other drives
+$cSystemFolders = @(
+    'Windows','Users','Program Files','Program Files (x86)','ProgramData',
+    'inetpub','PerfLogs','sysprep1007','$Recycle.Bin','$WinREAgent',
+    'Config.Msi','Recovery','System Volume Information','$SysReset',
+    'OneDriveTemp','MSOCache'
+)
+# For non-C drives, only Windows metadata folders are protected
+$otherDriveSystemFolders = @(
+    '$Recycle.Bin','System Volume Information','$WinREAgent'
+)
+
+# Get all fixed local drives (type 3 = Fixed)
+$fixedDrives = [System.IO.DriveInfo]::GetDrives() |
+    Where-Object { $_.DriveType -eq [System.IO.DriveType]::Fixed -and $_.IsReady }
+
+foreach ($drive in $fixedDrives) {
+    $driveLetter = $drive.RootDirectory.FullName  # e.g. "C:\"
+    $isSystemDrive = ($driveLetter -like 'C:\' -or $driveLetter -like 'C:/')
+    $protectedFolders = if ($isSystemDrive) { $cSystemFolders } else { $otherDriveSystemFolders }
+
+    Write-Host "  Sweeping drive root: $driveLetter" -ForegroundColor DarkGray
+
+    foreach ($dir in (Get-ChildItem $driveLetter -Directory -ErrorAction SilentlyContinue)) {
+        $isProtected = $false
+        foreach ($s in $protectedFolders) {
+            if ($dir.Name -eq $s -or $dir.Name -like $s) {
+                $isProtected = $true
+                break
+            }
+        }
+        if ($isProtected) { continue }
+
+        Write-Host "  Removing user folder: $($dir.FullName)" -ForegroundColor Yellow
+        Remove-FolderWithRetry -Path $dir.FullName
+        if (-not (Test-Path $dir.FullName)) {
+            Write-Host "  Removed: $($dir.FullName)" -ForegroundColor Green
+        }
+    }
 }
 
 Write-Host "`n=== RESET COMPLETE ===" -ForegroundColor Cyan
