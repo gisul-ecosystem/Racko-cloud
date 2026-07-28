@@ -1148,6 +1148,19 @@ try {
         Set-ItemProperty -Path $explorerKey -Name 'DesktopProcess' -Value 0 -ErrorAction SilentlyContinue
     }
 
+    # Delete icon cache BEFORE stopping Explorer so there are no file locks.
+    # Explorer rebuilds the cache fresh on restart — fixes stale/blank icons for
+    # Edge, File Explorer, and any other taskbar/desktop shortcuts.
+    foreach ($userDir in (Get-UserProfiles)) {
+        $localApp = Join-Path $userDir.FullName 'AppData\Local'
+        Remove-Item (Join-Path $localApp 'IconCache.db') -Force -ErrorAction SilentlyContinue
+        Remove-Item (Join-Path $localApp 'Microsoft\Windows\Explorer\iconcache_*.db') -Force -ErrorAction SilentlyContinue
+    }
+    # Also clear for the current session (LocalSystem / running user)
+    Remove-Item "$env:LOCALAPPDATA\IconCache.db" -Force -ErrorAction SilentlyContinue
+    Remove-Item "$env:LOCALAPPDATA\Microsoft\Windows\Explorer\iconcache_*.db" -Force -ErrorAction SilentlyContinue
+    Write-Host "  Icon cache cleared -- will rebuild on Explorer restart" -ForegroundColor DarkGray
+
     Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
 
