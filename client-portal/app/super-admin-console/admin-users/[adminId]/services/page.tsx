@@ -87,7 +87,7 @@ export default function AdminUserServicesPage() {
     <div className="mx-auto max-w-screen-lg space-y-6 p-6 lg:p-8">
       <div>
         <Link
-          href="/super-admin-console/admin-users"
+          href="/super-admin-console/customers"
           className="mb-2 inline-flex items-center gap-1 text-xs text-gray-500 hover:text-[#B91C1C]"
         >
           <ArrowLeft className="h-3 w-3" /> Back to admin users

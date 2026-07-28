@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
-import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { superAdminOrderController } from './superAdminOrder.controller';
 
@@ -31,7 +31,7 @@ const rejectOrderSchema = z.object({
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireRole('super_admin'));
+router.use(requirePermission('white_labelling.manage'));
 
 router.get(
   '/',

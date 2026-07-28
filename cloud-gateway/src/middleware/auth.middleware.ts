@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import jwt from 'jsonwebtoken';
 import { config } from '../config';
 import { UnauthorizedError } from '../utils/errors';
-import type { AuthenticatedRequest } from '../types';
+import type { AuthenticatedRequest, UserRole } from '../types';
 
 interface AccessTokenPayload {
   userId: string;
@@ -34,7 +34,7 @@ export function authMiddleware(req: Request, _res: Response, next: NextFunction)
 
     (req as AuthenticatedRequest).user = {
       userId: payload.userId,
-      role: payload.role as 'super_admin' | 'admin',
+      role: payload.role as UserRole,
       sessionId: payload.sessionId,
     };
 

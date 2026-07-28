@@ -1,8 +1,9 @@
-import type { UserRole } from '../../types';
+import type { UserRole, AccountType, OnboardingStatus } from '../../types';
 
 export interface RegisterDto {
   email: string;
   password: string;
+  accountType?: AccountType;
 }
 
 export interface LoginDto {
@@ -22,6 +23,8 @@ export interface AuthUser {
   id: string;
   email: string;
   role: UserRole;
+  accountType: AccountType;
+  onboardingStatus: OnboardingStatus;
   isEmailVerified: boolean;
   lastLoginAt?: Date;
 }

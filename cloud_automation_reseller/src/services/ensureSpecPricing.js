@@ -5,6 +5,7 @@ import {
   GCP_PRICING_REGIONS,
 } from '../config/specMap.js';
 import CloudRegionPricing, {
+  pricingDiskType,
   toPricingMode,
   pricingModeQuery,
 } from '../models/CloudRegionPricing.js';
@@ -15,10 +16,10 @@ import { normalizeProviders } from '../config/cloudProviders.js';
 import {
   fetchEc2Hourly,
   ebsHourly,
-  fetchEbsGp3GbMonth,
+  fetchEbsGbMonth,
   fetchAwsPublicIpHourly,
 } from './awsPriceFetch.js';
-import { fetchAzureDiskGbMonth, fetchAzurePublicIpHourly } from './azurePricing.js';
+import { fetchAzureDiskMonthly, fetchAzurePublicIpHourly } from './azurePricing.js';
 
 const RETAIL_API = 'https://prices.azure.com/api/retail/prices';
 
@@ -29,9 +30,6 @@ async function fetchAzureVmHourly(armSkuName, armRegionName, windows = false) {
     `armRegionName eq '${armRegionName}'`,
     `priceType eq 'Consumption'`,
     `contains(meterName, 'Spot') eq false`,
-    `contains(meterName, 'Low Priority') eq false`,
-    `contains(skuName, 'Low Priority') eq false`,
-    `contains(skuName, 'Spot') eq false`,
     windows
       ? `contains(productName, 'Windows') eq true`
       : `contains(productName, 'Windows') eq false`,
@@ -47,17 +45,72 @@ async function fetchAzureVmHourly(armSkuName, armRegionName, windows = false) {
     (i) =>
       i.type === 'Consumption' &&
       typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour' &&
-      !/Low Priority|Spot/i.test(`${i.meterName || ''} ${i.skuName || ''} ${i.productName || ''}`)
+      i.unitOfMeasure === '1 Hour'
   );
   return match?.retailPrice ?? null;
 }
 
+/** Pre-live-API Azure constant — never a current Retail IP rate we observed. */
+const LEGACY_AZURE_IP = 0.004;
+/** Pre-live-API Azure Premium SSD approximation ($/GB-month). */
+const LEGACY_AZURE_DISK_GB_MONTH = 0.12;
+
+const PRICING_CACHE_MAX_AGE_MS =
+  Number(process.env.PRICING_CACHE_MAX_AGE_MS) || 6 * 60 * 60 * 1000;
+
+function isStalePricingRow(row, diskGb) {
+  if (!row?.fetchedAt) return true;
+  if (Date.now() - new Date(row.fetchedAt).getTime() > PRICING_CACHE_MAX_AGE_MS) {
+    return true;
+  }
+  // Old Azure path wrote IP=0.004 and storage = diskGb * 0.12/730.
+  if (row.provider === 'azure' && row.rawIpPricePerHr === LEGACY_AZURE_IP) return true;
+  if (row.provider === 'azure' && diskGb != null) {
+    const legacyStorage = Number(diskGb) * (LEGACY_AZURE_DISK_GB_MONTH / 730);
+    if (
+      Number.isFinite(row.rawStoragePricePerHr) &&
+      Math.abs(row.rawStoragePricePerHr - legacyStorage) < 1e-12
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Providers that still need a live re-price for this spec.
+ */
+async function providersNeedingPricing(
+  canonicalSpec,
+  category,
+  providers,
+  pricingMode,
+  diskGb,
+  diskType
+) {
+  const rows = await CloudRegionPricing.find({
+    canonicalSpec,
+    category,
+    provider: { $in: providers },
+    diskType,
+    ...pricingModeQuery(pricingMode),
+  })
+    .select('provider fetchedAt rawIpPricePerHr rawStoragePricePerHr')
+    .lean();
+
+  return providers.filter((p) => {
+    const mine = rows.filter((r) => r.provider === p);
+    if (mine.length === 0) return true;
+    return mine.some((r) => isStalePricingRow(r, diskGb));
+  });
+}
+
 /**
  * Ensure CloudRegionPricing has rows for this exact canonicalSpec + pricingMode.
- * Resolves SKUs dynamically when not in the static map, then re-prices all requested
- * providers on every call using live provider price APIs. Rows are still upserted into
- * CloudRegionPricing for inspection/debugging, but they are not treated as reusable cache.
+ * Resolves SKUs dynamically when not in the static map, then prices requested providers.
+ * All unit rates come from live provider price APIs — no hardcoded fallbacks.
+ * Re-fetches when cache is missing, older than PRICING_CACHE_MAX_AGE_MS, or still
+ * carrying known legacy Azure hardcodes (IP 0.004 / disk 0.12).
  */
 export async function ensureSpecPricing({
   canonicalSpec,
@@ -65,12 +118,30 @@ export async function ensureSpecPricing({
   vcpu,
   ramGb,
   diskGb,
+  diskType = 'standard_ssd',
   gpu = false,
   providers,
   nestedVirtualization = false,
 } = {}) {
   const providersUsed = normalizeProviders(providers);
   const pricingMode = toPricingMode(nestedVirtualization);
+  const pricingDisk = pricingDiskType(
+    diskType === 'standard_hdd' || diskType === 'standard_ssd' ? 'storage_only' : 'vm',
+    diskType
+  );
+  const storageOnly = pricingDisk !== 'default';
+  const missingProviders = await providersNeedingPricing(
+    canonicalSpec,
+    category,
+    providersUsed,
+    pricingMode,
+    diskGb,
+    pricingDisk
+  );
+  if (missingProviders.length === 0) {
+    return { cached: true, written: 0, mappings: null, providersUsed, pricingMode };
+  }
+
   const mappings = await ensureSkuMappings({
     canonicalSpec,
     vcpu,
@@ -85,14 +156,14 @@ export async function ensureSpecPricing({
   const errors = [...(mappings.errors || [])];
   const categories =
     category === 'gpu' ? ['gpu'] : category === 'windows' ? ['windows'] : [category];
-  const shouldPrice = (p) => providersUsed.includes(p);
+  const shouldPrice = (p) => missingProviders.includes(p);
 
   if (shouldPrice('aws') && mappings.aws?.instanceType) {
     for (const region of AWS_PRICING_REGIONS) {
       let ebsGbMonth;
       let ipHourly;
       try {
-        ebsGbMonth = await fetchEbsGp3GbMonth(region);
+        ebsGbMonth = await fetchEbsGbMonth(region, diskType);
         ipHourly = await fetchAwsPublicIpHourly(region);
       } catch (err) {
         errors.push(`aws ancillary ${region}: ${err instanceof Error ? err.message : String(err)}`);
@@ -109,13 +180,14 @@ export async function ensureSpecPricing({
           const storage = ebsHourly(mappings.aws.ebsGb, ebsGbMonth);
           const total = compute + storage + ipHourly;
           await CloudRegionPricing.findOneAndUpdate(
-            { provider: 'aws', region, category: cat, canonicalSpec, pricingMode },
+            { provider: 'aws', region, category: cat, canonicalSpec, pricingMode, diskType: pricingDisk },
             {
               provider: 'aws',
               region,
               category: cat,
               canonicalSpec,
               pricingMode,
+              diskType: pricingDisk,
               rawComputePricePerHr: compute,
               rawStoragePricePerHr: storage,
               rawIpPricePerHr: ipHourly,
@@ -137,13 +209,13 @@ export async function ensureSpecPricing({
     }
   }
 
-  if (shouldPrice('azure') && mappings.azure?.vmSize) {
+  if (shouldPrice('azure') && (storageOnly || mappings.azure?.vmSize)) {
     for (const region of AZURE_PRICING_REGIONS) {
-      let diskGbMonth;
+      let diskMonthly;
       let ipHourly;
       try {
-        diskGbMonth = await fetchAzureDiskGbMonth(region);
-        ipHourly = await fetchAzurePublicIpHourly(region);
+        diskMonthly = await fetchAzureDiskMonthly(region, diskGb, diskType);
+        ipHourly = storageOnly ? 0 : await fetchAzurePublicIpHourly(region);
       } catch (err) {
         errors.push(
           `azure ancillary ${region}: ${err instanceof Error ? err.message : String(err)}`
@@ -152,31 +224,37 @@ export async function ensureSpecPricing({
       }
       for (const cat of categories) {
         try {
-          const compute = await fetchAzureVmHourly(
-            mappings.azure.vmSize,
-            region,
-            cat === 'windows'
-          );
-          if (compute == null) {
-            errors.push(`azure ${mappings.azure.vmSize}@${region}/${cat}: no price`);
-            continue;
+          let compute = 0;
+          let instanceType = null;
+          if (!storageOnly) {
+            compute = await fetchAzureVmHourly(
+              mappings.azure.vmSize,
+              region,
+              cat === 'windows'
+            );
+            if (compute == null) {
+              errors.push(`azure ${mappings.azure.vmSize}@${region}/${cat}: no price`);
+              continue;
+            }
+            instanceType = mappings.azure.vmSize;
           }
-          const storage = (Number(mappings.azure.diskGb) || 0) * (diskGbMonth / 730);
+          const storage = Number(diskMonthly.monthlyPrice) / 730;
           const total = compute + storage + ipHourly;
           await CloudRegionPricing.findOneAndUpdate(
-            { provider: 'azure', region, category: cat, canonicalSpec, pricingMode },
+            { provider: 'azure', region, category: cat, canonicalSpec, pricingMode, diskType: pricingDisk },
             {
               provider: 'azure',
               region,
               category: cat,
               canonicalSpec,
               pricingMode,
+              diskType: pricingDisk,
               rawComputePricePerHr: compute,
               rawStoragePricePerHr: storage,
               rawIpPricePerHr: ipHourly,
               rawTotalPricePerHr: total,
               currency: 'USD',
-              instanceType: mappings.azure.vmSize,
+              ...(instanceType ? { instanceType } : {}),
               fetchedAt: now,
               source: 'api',
             },
@@ -211,13 +289,14 @@ export async function ensureSpecPricing({
               rates: ociRates,
             });
             await CloudRegionPricing.findOneAndUpdate(
-              { provider: 'oci', region, category: cat, canonicalSpec, pricingMode },
+              { provider: 'oci', region, category: cat, canonicalSpec, pricingMode, diskType: pricingDisk },
               {
                 provider: 'oci',
                 region,
                 category: cat,
                 canonicalSpec,
                 pricingMode,
+                diskType: pricingDisk,
                 ...priced,
                 currency: 'USD',
                 instanceType: `${mappings.oci.shape}/${mappings.oci.ocpus}ocpu/${mappings.oci.memoryInGBs}gb`,
@@ -251,18 +330,20 @@ export async function ensureSpecPricing({
           const priced = computeGcpHourly({
             machineType: mappings.gcp.machineType,
             diskGb: mappings.gcp.diskGb,
+            diskType,
             category: cat,
             acceleratorCount: mappings.gcp.acceleratorCount || 0,
             rates: gcpRates,
           });
           await CloudRegionPricing.findOneAndUpdate(
-            { provider: 'gcp', region, category: cat, canonicalSpec, pricingMode },
+            { provider: 'gcp', region, category: cat, canonicalSpec, pricingMode, diskType: pricingDisk },
             {
               provider: 'gcp',
               region,
               category: cat,
               canonicalSpec,
               pricingMode,
+              diskType: pricingDisk,
               ...priced,
               currency: 'USD',
               instanceType: mappings.gcp.machineType,

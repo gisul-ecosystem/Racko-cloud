@@ -6,7 +6,7 @@ import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { TenantNotificationBell } from './TenantNotificationBell';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
-import { tenantVps } from '@/lib/tenantAdminRoutes';
+import { TENANT_CONSOLE, tenantVps } from '@/lib/tenantAdminRoutes';
 
 interface TenantTopBarProps {
   onToggleSidebar: () => void;
@@ -18,7 +18,7 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
   const { tenantUser, logout } = useTenantAuth();
   const { logoSrc, portalName, accentColor } = useTenantBranding();
   const isAdmin = tenantUser?.role === 'tenant_admin';
-  const homeHref = isAdmin ? '/tenant/console' : tenantVps.vms;
+  const homeHref = isAdmin ? TENANT_CONSOLE : tenantVps.vms;
 
   return (
     <header className="sticky top-0 z-10 border-b border-gray-200 bg-white">
@@ -72,7 +72,7 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
           </div>
           {isAdmin ? (
             <Link
-              href="/tenant/dashboard/profile"
+              href="/console/dashboard/profile"
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-50"
               aria-label="Profile"
             >

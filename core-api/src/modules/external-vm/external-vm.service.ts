@@ -28,7 +28,7 @@ import {
   unblockUserSession,
 } from '../vmAccessSchedule/scheduleManager';
 
-type PlatformActorRole = 'admin' | 'super_admin' | 'user';
+type PlatformActorRole = 'admin' | 'super_admin' | 'staff' | 'user';
 
 interface TenantExternalVmActor {
   id: string;

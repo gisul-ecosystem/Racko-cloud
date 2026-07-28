@@ -74,14 +74,15 @@ export default function SuperAdminMachineManagerLayout({ children }: { children:
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
   const { sidebarOpen, setSidebarOpen, toggleSidebar } = useServiceShell(true);
+  const isControlPlaneUser = user?.role === 'super_admin' || user?.role === 'staff';
 
   useEffect(() => {
     if (isLoading) return;
     if (!isAuthenticated || !user) { router.replace('/login'); return; }
-    if (user.role !== 'super_admin') {
+    if (!isControlPlaneUser) {
       router.replace(user.role === 'admin' ? '/console' : '/dashboard/user');
     }
-  }, [isLoading, isAuthenticated, user, router]);
+  }, [isLoading, isAuthenticated, user, router, isControlPlaneUser]);
 
   if (isLoading) {
     return (
@@ -91,7 +92,7 @@ export default function SuperAdminMachineManagerLayout({ children }: { children:
     );
   }
 
-  if (!isAuthenticated || !user || user.role !== 'super_admin') return null;
+  if (!isAuthenticated || !user || !isControlPlaneUser) return null;
 
   return (
     <ServiceShellLayout
