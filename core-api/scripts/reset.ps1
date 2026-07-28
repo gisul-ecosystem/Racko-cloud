@@ -1006,83 +1006,41 @@ try {
 } catch { }
 
 # --- 17j: Taskbar pins + layout cache ---
+# Strategy: keep Edge and File Explorer pins intact (skip their .lnk files).
+# Only remove shortcuts added by users (other apps they pinned).
+# TaskBand registry key is NOT touched — it already has the correct pin state.
 Write-Host "-- Taskbar pins --" -ForegroundColor Cyan
+
+# Shortcuts to keep on the taskbar (Edge + File Explorer stay pinned)
+$keepTaskbarPins = @('Microsoft Edge.lnk', 'File Explorer.lnk')
+
 foreach ($userDir in (Get-UserProfiles)) {
     $userProfile = $userDir.FullName
     if (-not $userProfile) { continue }
 
-    # Remove pinned shortcut files
+    # Remove user-added pinned shortcuts but keep Edge and File Explorer
     $pinned = Join-Path $userProfile 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
     if (Test-Path $pinned) {
-        Get-ChildItem $pinned -File -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
+        foreach ($file in (Get-ChildItem $pinned -File -ErrorAction SilentlyContinue)) {
+            if ($keepTaskbarPins -contains $file.Name) {
+                Write-Host "  Keeping taskbar pin: $($file.Name)" -ForegroundColor DarkGray
+                continue
+            }
+            Remove-Item $file.FullName -Force -ErrorAction SilentlyContinue
+            Write-Host "  Removed taskbar pin: $($file.Name)" -ForegroundColor DarkGray
+        }
     }
 
-    # Remove taskbar layout XML — Windows rebuilds default layout on next login
-    $layoutXml = Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml'
-    if (Test-Path $layoutXml) {
-        Remove-Item $layoutXml -Force -ErrorAction SilentlyContinue
-        Write-Host "  Cleared taskbar layout: $layoutXml" -ForegroundColor DarkGray
-    }
-
-    # Remove taskbar cache DB files
+    # Remove taskbar cache DB files (Windows rebuilds these automatically)
     foreach ($cacheFile in @(
         (Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\DefaultLayouts.xml'),
+        (Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell\LayoutModification.xml'),
         (Join-Path $userProfile 'AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts')
     )) {
         if (Test-Path $cacheFile) {
             Remove-Item $cacheFile -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "  Cleared taskbar cache: $cacheFile" -ForegroundColor DarkGray
         }
-    }
-}
-
-# Clear the TaskBand registry key per user (stores pinned app order/state)
-Invoke-ForEachUserHive -Action {
-    param($hiveRoot)
-    $taskBandKey = "$hiveRoot\Software\Microsoft\Windows\CurrentVersion\Explorer\Taskband"
-    if (Test-Path $taskBandKey) {
-        Remove-Item $taskBandKey -Recurse -Force -ErrorAction SilentlyContinue
-        Write-Host "  Cleared TaskBand registry key" -ForegroundColor DarkGray
-    }
-}
-
-# Re-pin Edge and File Explorer to the taskbar by writing a default layout XML.
-# This runs for all user profiles so every user who logs in gets the correct
-# default taskbar with Edge + File Explorer pinned, matching the clean VM state.
-Write-Host "-- Restoring default taskbar pins (Edge + File Explorer) --" -ForegroundColor Cyan
-
-$defaultTaskbarXml = @'
-<?xml version="1.0" encoding="utf-8"?>
-<LayoutModificationTemplate
-    xmlns="http://schemas.microsoft.com/Start/2014/LayoutModification"
-    xmlns:defaultlayout="http://schemas.microsoft.com/Start/2014/FullDefaultLayout"
-    xmlns:start="http://schemas.microsoft.com/Start/2014/StartLayout"
-    xmlns:taskbar="http://schemas.microsoft.com/Start/2014/TaskbarLayout"
-    Version="1">
-  <CustomTaskbarLayoutCollection PinListPlacement="Replace">
-    <defaultlayout:TaskbarLayout>
-      <taskbar:TaskbarPinList>
-        <taskbar:DesktopApp DesktopApplicationLinkPath="%APPDATA%\Microsoft\Windows\Start Menu\Programs\System Tools\File Explorer.lnk" />
-        <taskbar:DesktopApp DesktopApplicationID="MSEdge" />
-      </taskbar:TaskbarPinList>
-    </defaultlayout:TaskbarLayout>
-  </CustomTaskbarLayoutCollection>
-</LayoutModificationTemplate>
-'@
-
-foreach ($userDir in (Get-UserProfiles)) {
-    $userProfile = $userDir.FullName
-    if (-not $userProfile) { continue }
-    $shellDir = Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Shell'
-    if (-not (Test-Path $shellDir)) {
-        New-Item -ItemType Directory -Path $shellDir -Force -ErrorAction SilentlyContinue | Out-Null
-    }
-    $layoutPath = Join-Path $shellDir 'LayoutModification.xml'
-    try {
-        Set-Content -Path $layoutPath -Value $defaultTaskbarXml -Encoding UTF8 -Force -ErrorAction SilentlyContinue
-        Write-Host "  Wrote default taskbar layout for: $($userDir.Name)" -ForegroundColor DarkGray
-    } catch {
-        Write-Host "  WARNING: Could not write taskbar layout for $($userDir.Name): $_" -ForegroundColor DarkYellow
     }
 }
 
