@@ -1154,18 +1154,8 @@ try {
 
     # Delete saved desktop icon positions so Windows auto-arranges all icons
     # to top-left grid on Explorer restart — resets any layout the user had.
-    # Handle current logged-in user via HKCU
-    Remove-Item "HKCU:\Software\Microsoft\Windows\Shell\Bags\1\Desktop" -Recurse -Force -ErrorAction SilentlyContinue
-    # Handle all mounted user hives under HKU (other logged-in users)
-    if (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue) {
-        Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
-            $_.PSChildName -match 'S-1-5-21' -and $_.PSChildName -notmatch '_Classes'
-        } | ForEach-Object {
-            $bagsPath = "HKU:\$($_.PSChildName)\Software\Microsoft\Windows\Shell\Bags\1\Desktop"
-            Remove-Item $bagsPath -Recurse -Force -ErrorAction SilentlyContinue
-        }
-    }
-    Write-Host "  Desktop icon positions cleared -- will auto-arrange on restart" -ForegroundColor DarkGray
+    # NOTE: must happen AFTER Explorer is stopped — Explorer writes positions back
+    # to registry during shutdown, so deleting before stop gets overwritten.
 
     # Delete icon cache BEFORE stopping Explorer so there are no file locks.
     # Explorer rebuilds the cache fresh on restart — fixes stale/blank icons for
@@ -1182,6 +1172,18 @@ try {
 
     Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
     Start-Sleep -Seconds 2
+
+    # Delete Bags\1\Desktop AFTER Explorer is fully stopped so it cannot write back
+    Remove-Item "HKCU:\Software\Microsoft\Windows\Shell\Bags\1\Desktop" -Recurse -Force -ErrorAction SilentlyContinue
+    if (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue) {
+        Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
+            $_.PSChildName -match 'S-1-5-21' -and $_.PSChildName -notmatch '_Classes'
+        } | ForEach-Object {
+            $bagsPath = "HKU:\$($_.PSChildName)\Software\Microsoft\Windows\Shell\Bags\1\Desktop"
+            Remove-Item $bagsPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Host "  Desktop icon positions cleared -- will auto-arrange on restart" -ForegroundColor DarkGray
 
     # Start Explorer as the shell (desktop only, no folder window)
     $shell = New-Object -ComObject Shell.Application -ErrorAction SilentlyContinue
