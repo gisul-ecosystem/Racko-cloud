@@ -5,11 +5,16 @@ package tracker
 // activity records to the server's activity log endpoint.
 //
 // Architecture:
-//   fsnotify watches all paths returned by getWatchPaths() recursively.
+//   Windows: USN Journal polling (usn_watcher_windows.go) — one handle per volume,
+//   kernel-level reliability, survives agent restarts via checkpoint files.
+//   Non-Windows: no-op stub (usn_watcher_other.go).
+//
 //   Events are debounced into 5-second batches (prevents event storms during
 //   large software installs that create thousands of files rapidly).
-//   Each batch is processed: new/modified files are read + uploaded; deletions
-//   and renames are recorded. The activity record is then posted to the server.
+//   Each batch is processed in a separate goroutine so uploads never block
+//   the event loop. New/modified files are read + uploaded to SeaweedFS;
+//   deletions and renames are recorded. The activity record is then posted
+//   to the server.
 
 import (
 	"bytes"
@@ -28,7 +33,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fsnotify/fsnotify"
 	"github.com/racko-ai/agent/config"
 )
 
@@ -99,9 +103,14 @@ type Watcher struct {
 	client   *http.Client
 
 	// pending holds paths that changed since the last flush, protected by mu.
+	// Values are usnOp constants (usnOpWrite, usnOpDelete, usnOpRename).
 	mu      sync.Mutex
-	pending map[string]fsnotify.Op // path → latest Op
-	renamed map[string]string      // newPath → oldPath for renames
+	pending map[string]usnOp  // path → latest op
+	renamed map[string]string  // newPath → oldPath for renames
+
+	// usnRenameOld maps FileReferenceNumber → old path, used to correlate
+	// RenameOldName and RenameNewName USN records into a single rename event.
+	usnRenameOld map[uint64]string
 
 	// baseline used for diffing registry + env vars
 	baseline *Baseline
@@ -114,12 +123,13 @@ type Watcher struct {
 // NewWatcher creates a Watcher. baseline may be nil if not yet captured.
 func NewWatcher(agentID string, cfg *config.Config, baseline *Baseline) *Watcher {
 	w := &Watcher{
-		agentID:  agentID,
-		cfg:      cfg,
-		client:   &http.Client{Timeout: 60 * time.Second},
-		pending:  make(map[string]fsnotify.Op),
-		renamed:  make(map[string]string),
-		baseline: baseline,
+		agentID:      agentID,
+		cfg:          cfg,
+		client:       &http.Client{Timeout: 60 * time.Second},
+		pending:      make(map[string]usnOp),
+		renamed:      make(map[string]string),
+		usnRenameOld: make(map[uint64]string),
+		baseline:     baseline,
 	}
 	// Seed env var snapshot from baseline so we only report deltas.
 	if baseline != nil {
@@ -134,70 +144,18 @@ func NewWatcher(agentID string, cfg *config.Config, baseline *Baseline) *Watcher
 
 // Start begins watching. Blocks until done is closed.
 func (w *Watcher) Start(done <-chan struct{}) {
-	log.Println("[tracker/watcher] Starting filesystem watcher...")
+	log.Println("[tracker/watcher] Starting USN Journal watcher...")
 
-	fsw, err := fsnotify.NewWatcher()
-	if err != nil {
-		log.Printf("[tracker/watcher] Could not create fsnotify watcher: %v", err)
-		return
-	}
-	defer fsw.Close()
+	// Launch USN journal watchers for all fixed drives (Windows)
+	// or no-op stub (other platforms) in a separate goroutine.
+	usnDone := make(chan struct{})
+	go func() {
+		w.startUSNWatcher(usnDone)
+	}()
 
-	// Add all watch paths recursively.
-	for _, root := range getWatchPaths() {
-		if _, err := os.Stat(root); err != nil {
-			continue // path doesn't exist on this VM — skip
-		}
-		w.addRecursive(fsw, root)
-	}
-
-	// Watch each local fixed drive at root level ONLY (non-recursive).
-	// This catches new top-level folders on any drive (C:\, D:\, E:\ etc.).
-	// Drives are detected dynamically at startup via GetLogicalDriveStrings
-	// so the agent works correctly on VMs with multiple drives.
-	// We do NOT recurse into drive roots at startup — that would watch
-	// C:\Windows\* and generate thousands of noise events from system processes.
-	for _, drive := range getLocalDrives() {
-		if err := fsw.Add(drive); err != nil {
-			log.Printf("[tracker/watcher] Could not watch drive root %s: %v", drive, err)
-		} else {
-			log.Printf("[tracker/watcher] Watching drive root (shallow): %s", drive)
-		}
-
-		// Also recursively watch all PRE-EXISTING top-level folders on this drive
-		// that are not in the exclude list. This covers folders like C:\inetpub,
-		// C:\sysprep1007, C:\tools etc. that existed before the agent was installed
-		// and would not be caught by the shallow root watch alone.
-		// The shallow root watch handles NEW folders created after agent startup.
-		entries, err := os.ReadDir(drive)
-		if err != nil {
-			continue
-		}
-		for _, entry := range entries {
-			if !entry.IsDir() {
-				continue
-			}
-			fullPath := filepath.Join(drive, entry.Name())
-			if shouldExcludePath(fullPath) {
-				continue
-			}
-			// Skip paths already covered by getWatchPaths() to avoid double-watching
-			alreadyWatched := false
-			for _, wp := range getWatchPaths() {
-				if strings.EqualFold(fullPath, wp) {
-					alreadyWatched = true
-					break
-				}
-			}
-			if alreadyWatched {
-				continue
-			}
-			w.addRecursive(fsw, fullPath)
-			log.Printf("[tracker/watcher] Watching pre-existing root folder recursively: %s", fullPath)
-		}
-	}
-
-	// Flush timer — collect events in 5-second batches to avoid event storms.
+	// Flush timer — collect pending events in 5-second batches.
+	// flush() runs in its own goroutine so large file uploads never block
+	// the event loop or the USN journal reader.
 	flushTicker := time.NewTicker(5 * time.Second)
 	defer flushTicker.Stop()
 
@@ -210,126 +168,62 @@ func (w *Watcher) Start(done <-chan struct{}) {
 	for {
 		select {
 		case <-done:
+			close(usnDone)
 			log.Println("[tracker/watcher] Stopping.")
 			return
 
-		case event, ok := <-fsw.Events:
-			if !ok {
-				return
-			}
-			w.handleFsEvent(event, fsw)
-
-		case err, ok := <-fsw.Errors:
-			if !ok {
-				return
-			}
-			log.Printf("[tracker/watcher] fsnotify error: %v", err)
-
 		case <-flushTicker.C:
-			w.flush()
+			// Run flush in a goroutine — uploads can take minutes for large files.
+			// This ensures the ticker keeps firing and USN events keep accumulating
+			// even while a previous flush batch is still uploading.
+			go w.flush()
 
 		case <-regTicker.C:
-			w.checkRegistryAndEnv()
+			go w.checkRegistryAndEnv()
 		}
-	}
-}
-
-// addRecursive adds path and all subdirectories to the fsnotify watcher.
-func (w *Watcher) addRecursive(fsw *fsnotify.Watcher, root string) {
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if !d.IsDir() {
-			return nil
-		}
-		if shouldExcludePath(path) {
-			return filepath.SkipDir
-		}
-		if err := fsw.Add(path); err != nil {
-			// Non-fatal — some dirs are access-denied, just skip them
-			return nil
-		}
-		return nil
-	})
-}
-
-// handleFsEvent debounces filesystem events into the pending map.
-func (w *Watcher) handleFsEvent(event fsnotify.Event, fsw *fsnotify.Watcher) {
-	if shouldExcludePath(event.Name) {
-		return
-	}
-
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	switch {
-	case event.Has(fsnotify.Rename):
-		// fsnotify fires Rename on the OLD path. The CREATE on the new path
-		// comes as a separate event. We track the old path for correlation.
-		w.pending[event.Name] = fsnotify.Rename
-	case event.Has(fsnotify.Remove):
-		w.pending[event.Name] = fsnotify.Remove
-	case event.Has(fsnotify.Create):
-		info, err := os.Stat(event.Name)
-		if err == nil && info.IsDir() {
-			// Always add new directories recursively so files inside them are tracked.
-			// This covers two cases:
-			//   1. New subdirectory inside an already-watched path (e.g. C:\Users\Admin\newdir)
-			//   2. New TOP-LEVEL folder on C:\ (e.g. C:\myproject) — caught by the shallow
-			//      C:\ root watch. We recurse into it so all its contents are tracked.
-			if !shouldExcludePath(event.Name) {
-				w.addRecursive(fsw, event.Name)
-				log.Printf("[tracker/watcher] New directory detected, now watching recursively: %s", event.Name)
-			}
-		}
-		w.pending[event.Name] = fsnotify.Create
-	case event.Has(fsnotify.Write):
-		// Only upgrade to Write if we haven't already seen a Create for this path
-		// (Create + Write = new file, just record as Create).
-		if existing, ok := w.pending[event.Name]; !ok || existing == fsnotify.Write {
-			w.pending[event.Name] = fsnotify.Write
-		}
-	case event.Has(fsnotify.Chmod):
-		// Ignore permission-only changes — not relevant for clone replay.
 	}
 }
 
 // flush processes all pending events and sends activity records to the server.
+// Called from a goroutine so it never blocks the main watcher select loop.
 func (w *Watcher) flush() {
 	w.mu.Lock()
 	if len(w.pending) == 0 {
 		w.mu.Unlock()
 		return
 	}
-	// Snapshot pending and clear it so the watcher can keep accumulating.
+	// Snapshot pending and clear it so the USN reader can keep accumulating.
 	snapshot := w.pending
 	renames := w.renamed
-	w.pending = make(map[string]fsnotify.Op)
+	w.pending = make(map[string]usnOp)
 	w.renamed = make(map[string]string)
 	w.mu.Unlock()
 
 	for path, op := range snapshot {
 		switch op {
-		case fsnotify.Remove, fsnotify.Rename:
-			// Check if this is the old side of a rename.
-			if newPath, ok := renames[path]; ok {
-				w.sendActivity(ActivityEvent{
-					AgentID:   w.agentID,
-					Type:      ActivityFileRename,
-					Timestamp: time.Now().UTC(),
-					Payload:   FileRenamePayload{OldPath: path, NewPath: newPath},
-				})
-			} else {
-				w.sendActivity(ActivityEvent{
-					AgentID:   w.agentID,
-					Type:      ActivityFileDelete,
-					Timestamp: time.Now().UTC(),
-					Payload:   FileDeletePayload{Path: path},
-				})
+		case usnOpDelete:
+			w.sendActivity(ActivityEvent{
+				AgentID:   w.agentID,
+				Type:      ActivityFileDelete,
+				Timestamp: time.Now().UTC(),
+				Payload:   FileDeletePayload{Path: path},
+			})
+
+		case usnOpRename:
+			// path here is the OLD path — newPath is the key in renames map
+			for newPath, oldPath := range renames {
+				if strings.EqualFold(oldPath, path) {
+					w.sendActivity(ActivityEvent{
+						AgentID:   w.agentID,
+						Type:      ActivityFileRename,
+						Timestamp: time.Now().UTC(),
+						Payload:   FileRenamePayload{OldPath: path, NewPath: newPath},
+					})
+					break
+				}
 			}
 
-		case fsnotify.Create, fsnotify.Write:
+		case usnOpWrite:
 			info, err := os.Stat(path)
 			if err != nil || info.IsDir() {
 				continue // file disappeared or is a dir — skip
