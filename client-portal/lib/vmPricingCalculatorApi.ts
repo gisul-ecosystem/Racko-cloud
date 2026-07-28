@@ -2,14 +2,18 @@ import { apiRequest } from './apiClient';
 
 export type CloudProvider = 'aws' | 'azure' | 'oci' | 'gcp';
 export type PricingCategory = 'linux' | 'windows' | 'gpu';
+export type PricingCalculatorMode = 'vm' | 'storage_only';
+export type ManagedDiskType = 'standard_hdd' | 'standard_ssd';
 
 export interface VmPricingCalculateInput {
   category: PricingCategory;
+  mode?: PricingCalculatorMode;
   durationDays?: number;
   specs?: {
-    cpu: string | number;
-    ram: string | number;
+    cpu?: string | number;
+    ram?: string | number;
     disk: string | number;
+    diskType?: ManagedDiskType;
   };
   canonicalSpec?: string;
   providers?: CloudProvider[];
@@ -29,6 +33,7 @@ export interface VmPricingSelectResult {
   region: string | null;
   category: PricingCategory;
   canonicalSpec: string;
+  mode?: PricingCalculatorMode;
   pricingMode?: 'normal' | 'nested';
   nestedVirtualization?: boolean;
   rawComputePricePerHr?: number;

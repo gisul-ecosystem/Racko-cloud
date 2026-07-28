@@ -1,6 +1,10 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
+import {
+  requirePermission,
+  requireRoleOrPermission,
+} from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { vmCatalogController } from './vmCatalog.controller';
 import { vmCatalogPlanController } from './vmCatalogPlan.controller';
@@ -22,30 +26,33 @@ import {
 
 const router = Router();
 
-// VM catalog routes (admin + super_admin)
 router.use(requireAuth);
 
 /** Catalog plans (DB-backed; not live scrape) */
-router.get('/plans', requireRole('admin', 'super_admin'), (req, res, next) => {
-  vmCatalogPlanController.listPlans(req, res, next);
-});
+router.get(
+  '/plans',
+  requireRoleOrPermission(['admin', 'super_admin'], 'pricing.webyne.read', 'pricing.webyne.write'),
+  (req, res, next) => {
+    vmCatalogPlanController.listPlans(req, res, next);
+  }
+);
 
 router.post(
   '/plans',
-  requireRole('super_admin'),
+  requirePermission('pricing.webyne.write'),
   validateRequest(createVmCatalogPlanSchema),
   (req, res, next) => {
     vmCatalogPlanController.createPlan(req, res, next);
   }
 );
 
-router.post('/plans/seed', requireRole('super_admin'), (req, res, next) => {
+router.post('/plans/seed', requirePermission('pricing.webyne.write'), (req, res, next) => {
   vmCatalogPlanController.seedPlans(req, res, next);
 });
 
 router.patch(
   '/plans/:id',
-  requireRole('super_admin'),
+  requirePermission('pricing.webyne.write'),
   validateRequest(updateVmCatalogPlanSchema),
   (req, res, next) => {
     vmCatalogPlanController.updatePlan(req, res, next);
@@ -54,7 +61,7 @@ router.patch(
 
 router.delete(
   '/plans/:id',
-  requireRole('super_admin'),
+  requirePermission('pricing.webyne.write'),
   validateRequest(vmCatalogPlanIdParamSchema),
   (req, res, next) => {
     vmCatalogPlanController.deletePlan(req, res, next);
@@ -98,14 +105,18 @@ router.post(
   }
 );
 
-/** Super-admin: requester cards (must be before /requests/:id) */
-router.get('/requests/requesters', requireRole('super_admin'), (req, res, next) => {
-  vmCatalogController.listRequesters(req, res, next);
-});
+/** Control plane: requester cards */
+router.get(
+  '/requests/requesters',
+  requirePermission('webyne.requests.read'),
+  (req, res, next) => {
+    vmCatalogController.listRequesters(req, res, next);
+  }
+);
 
 router.get(
   '/requests',
-  requireRole('super_admin'),
+  requirePermission('webyne.requests.read'),
   validateRequest(listCatalogVmRequestsQuerySchema),
   (req, res, next) => {
     vmCatalogController.listRequests(req, res, next);
@@ -114,7 +125,7 @@ router.get(
 
 router.patch(
   '/requests/:id/approve',
-  requireRole('super_admin'),
+  requirePermission('webyne.requests.approve'),
   validateRequest(catalogVmRequestIdParamSchema),
   (req, res, next) => {
     vmCatalogController.approve(req, res, next);
@@ -123,7 +134,7 @@ router.patch(
 
 router.patch(
   '/requests/:id/fetch-details',
-  requireRole('super_admin'),
+  requirePermission('webyne.requests.approve'),
   validateRequest(catalogVmRequestIdParamSchema),
   (req, res, next) => {
     vmCatalogController.fetchDetails(req, res, next);
@@ -132,7 +143,7 @@ router.patch(
 
 router.patch(
   '/requests/:id/attach',
-  requireRole('super_admin'),
+  requirePermission('webyne.requests.attach'),
   validateRequest(catalogVmRequestIdParamSchema),
   (req, res, next) => {
     vmCatalogController.attach(req, res, next);
@@ -141,7 +152,7 @@ router.patch(
 
 router.patch(
   '/requests/:id/change-template',
-  requireRole('super_admin'),
+  requirePermission('webyne.requests.attach'),
   validateRequest(changeCatalogVmTemplateSchema),
   (req, res, next) => {
     vmCatalogController.changeTemplate(req, res, next);
@@ -150,7 +161,7 @@ router.patch(
 
 router.post(
   '/requests/:id/power',
-  requireRole('super_admin'),
+  requirePermission('webyne.requests.power'),
   validateRequest(catalogVmPowerActionSchema),
   (req, res, next) => {
     vmCatalogController.powerAction(req, res, next);
@@ -159,17 +170,16 @@ router.post(
 
 router.patch(
   '/requests/:id/reject',
-  requireRole('super_admin'),
+  requirePermission('webyne.requests.reject'),
   validateRequest(rejectCatalogVmRequestSchema),
   (req, res, next) => {
     vmCatalogController.reject(req, res, next);
   }
 );
 
-/** Super-admin: multi-cloud VM pricing calculator */
 router.post(
   '/pricing/calculate',
-  requireRole('super_admin'),
+  requirePermission('pricing.webyne.read'),
   validateRequest(calculateVmPricingSchema),
   (req, res, next) => {
     vmCatalogController.calculatePricing(req, res, next);
@@ -178,7 +188,7 @@ router.post(
 
 router.get(
   '/pricing',
-  requireRole('super_admin'),
+  requirePermission('pricing.webyne.read'),
   validateRequest(listVmPricingQuerySchema),
   (req, res, next) => {
     vmCatalogController.listPricing(req, res, next);

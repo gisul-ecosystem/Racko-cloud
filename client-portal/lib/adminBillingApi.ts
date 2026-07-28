@@ -53,6 +53,18 @@ export async function getAdminWalletByUserId(userId: string): Promise<AdminWalle
   );
 }
 
+export async function getAdminWalletTransactionsByUserId(
+  userId: string,
+  page = 1,
+  limit = 20
+): Promise<AdminWalletTransactionsResult> {
+  return unwrap(
+    apiRequest<ApiEnvelope<AdminWalletTransactionsResult>>(
+      `/api/v1/admin-billing/wallet/${userId}/transactions?page=${page}&limit=${limit}`
+    )
+  );
+}
+
 export async function getMyAdminWalletTransactions(
   page = 1,
   limit = 20

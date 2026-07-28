@@ -1,6 +1,20 @@
-import { User } from '../../models/user.model';
+import { User, type IUser } from '../../models/user.model';
 import { NotFoundError, ForbiddenError } from '../../utils/errors';
 import type { UserProfile } from './user.types';
+
+function toProfile(user: IUser): UserProfile {
+  return {
+    id: user._id.toString(),
+    email: user.email,
+    role: user.role,
+    accountType: user.accountType ?? 'legacy',
+    onboardingStatus: user.onboardingStatus ?? 'active',
+    isEmailVerified: user.isEmailVerified,
+    isActive: user.isActive,
+    lastLoginAt: user.lastLoginAt,
+    createdAt: user.createdAt,
+  };
+}
 
 export class UserService {
   /**
@@ -16,15 +30,7 @@ export class UserService {
       throw new NotFoundError('User not found.');
     }
 
-    return {
-      id: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      isEmailVerified: user.isEmailVerified,
-      isActive: user.isActive,
-      lastLoginAt: user.lastLoginAt,
-      createdAt: user.createdAt,
-    };
+    return toProfile(user);
   }
 
   /**
@@ -35,15 +41,7 @@ export class UserService {
       .select('-password -emailVerificationToken -emailVerificationExpires -failedLoginAttempts')
       .sort({ createdAt: -1 });
 
-    return users.map((user) => ({
-      id: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      isEmailVerified: user.isEmailVerified,
-      isActive: user.isActive,
-      lastLoginAt: user.lastLoginAt,
-      createdAt: user.createdAt,
-    }));
+    return users.map((user) => toProfile(user));
   }
 
   /**
@@ -69,15 +67,7 @@ export class UserService {
     user.isActive = isActive;
     await user.save();
 
-    return {
-      id: user._id.toString(),
-      email: user.email,
-      role: user.role,
-      isEmailVerified: user.isEmailVerified,
-      isActive: user.isActive,
-      lastLoginAt: user.lastLoginAt,
-      createdAt: user.createdAt,
-    };
+    return toProfile(user);
   }
 }
 

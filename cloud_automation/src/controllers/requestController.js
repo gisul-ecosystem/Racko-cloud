@@ -99,9 +99,13 @@ const createRequest = async (req, res, next) => {
 
 const getAllRequests = async (req, res, next) => {
   try {
+    const ownerId =
+      typeof req.query.ownerId === 'string' ? req.query.ownerId.trim() : undefined;
+
     const requests = await requestService.getAllRequests({
       rackoUserId: req.rackoUser.userId,
-      isSuperAdmin: req.rackoUser.isSuperAdmin
+      isSuperAdmin: req.rackoUser.isSuperAdmin,
+      ownerId,
     });
 
     res.status(200).json({

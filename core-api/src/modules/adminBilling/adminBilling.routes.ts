@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { adminBillingController } from './adminBilling.controller';
 import {
@@ -100,7 +101,7 @@ router.post(
 // POST /api/v1/admin-billing/wallet/credit
 router.post(
   '/wallet/credit',
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   validateRequest(creditWalletSchema),
   (req, res, next) => {
     adminBillingController.creditWallet(req, res, next);
@@ -109,7 +110,7 @@ router.post(
 
 router.get(
   '/wallet/:userId',
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   validateRequest(userIdParamSchema),
   (req, res, next) => {
     adminBillingController.getWalletByUserId(req, res, next);
@@ -118,7 +119,7 @@ router.get(
 
 router.get(
   '/wallet/:userId/transactions',
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   validateRequest(listTransactionsSchema),
   (req, res, next) => {
     adminBillingController.listTransactions(req, res, next);

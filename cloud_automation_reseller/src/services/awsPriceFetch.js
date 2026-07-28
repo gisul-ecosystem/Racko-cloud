@@ -51,27 +51,36 @@ async function cachedAncillary(key, fn) {
   return value;
 }
 
+function awsVolumeApiName(diskType = 'standard_ssd') {
+  return diskType === 'standard_hdd' ? 'st1' : 'gp3';
+}
+
 /**
- * Live EBS gp3 USD per GB-month for a region (Price List API).
+ * Live EBS USD per GB-month for a region and disk type (Price List API).
  */
-export async function fetchEbsGp3GbMonth(regionCode) {
-  return cachedAncillary(`ebs-gp3:${regionCode}`, async () => {
+export async function fetchEbsGbMonth(regionCode, diskType = 'standard_ssd') {
+  const volumeApiName = awsVolumeApiName(diskType);
+  return cachedAncillary(`ebs-${volumeApiName}:${regionCode}`, async () => {
     const command = new GetProductsCommand({
       ServiceCode: 'AmazonEC2',
       Filters: [
         { Type: 'TERM_MATCH', Field: 'regionCode', Value: regionCode },
         { Type: 'TERM_MATCH', Field: 'productFamily', Value: 'Storage' },
-        { Type: 'TERM_MATCH', Field: 'volumeApiName', Value: 'gp3' },
+        { Type: 'TERM_MATCH', Field: 'volumeApiName', Value: volumeApiName },
       ],
       MaxResults: 10,
     });
     const res = await pricingClient.send(command);
     const rate = extractOnDemandUsd(res.PriceList);
     if (rate == null) {
-      throw new Error(`AWS Price List missing EBS gp3 rate for ${regionCode}`);
+      throw new Error(`AWS Price List missing EBS ${volumeApiName} rate for ${regionCode}`);
     }
     return rate;
   });
+}
+
+export async function fetchEbsGp3GbMonth(regionCode) {
+  return fetchEbsGbMonth(regionCode, 'standard_ssd');
 }
 
 /**

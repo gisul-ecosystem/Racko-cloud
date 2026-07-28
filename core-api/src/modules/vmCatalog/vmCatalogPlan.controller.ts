@@ -17,6 +17,7 @@ async function listPlans(req: Request, res: Response, next: NextFunction): Promi
     const activeOnly = authReq.user.role === 'admin';
     const applySellPrice = authReq.user.role === 'admin';
     const forCustomer = authReq.user.role === 'admin';
+    // staff / super_admin see base prices (SA pricing UI); admin sees sell prices
     const plans = await vmCatalogPlanService.list({ activeOnly, applySellPrice, forCustomer });
     success(res, 'VM catalog plans retrieved.', { plans, total: plans.length });
   } catch (err) {

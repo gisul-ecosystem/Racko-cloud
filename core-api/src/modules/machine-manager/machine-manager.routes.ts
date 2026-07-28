@@ -5,7 +5,7 @@ import { trackerController } from './tracker.controller';
 import { agentFileUpload } from '../../middleware/agentFileUpload.middleware';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireAgentAuth } from '../../middleware/requireAgentAuth.middleware';
-import { requireRole } from '../../middleware/requireRole.middleware';
+import { requireRoleOrPermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import {
   createMachineSchema,
@@ -66,7 +66,7 @@ machineRouter.use(requireAuth);
 // POST /api/v1/machines/bulk — must come before /:id to avoid collision
 machineRouter.post(
   '/bulk',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(bulkCreateMachineSchema),
   (req, res, next) => machineManagerController.bulkCreate(req, res, next)
 );
@@ -74,7 +74,7 @@ machineRouter.post(
 // POST /api/v1/machines/push-agent — VM push flow (must come before /:id)
 machineRouter.post(
   '/push-agent',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(pushAgentSchema),
   (req, res, next) => machineManagerController.pushAgent(req, res, next)
 );
@@ -82,28 +82,28 @@ machineRouter.post(
 // POST /api/v1/machines/push-stream-ticket — issue SSE ticket for push session
 machineRouter.post(
   '/push-stream-ticket',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => machineManagerController.issuePushStreamTicket(req, res, next)
 );
 
 // POST /api/v1/machines/reset — initiate VM reset on one or more machines (must come before /:id)
 machineRouter.post(
   '/reset',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => machineManagerController.resetMachines(req, res, next)
 );
 
 // POST /api/v1/machines/reset-stream-ticket — issue SSE stream ticket for reset session
 machineRouter.post(
   '/reset-stream-ticket',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => machineManagerController.issueResetStreamTicket(req, res, next)
 );
 
 // POST /api/v1/machines/jobs — must come before /:id
 machineRouter.post(
   '/jobs',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(createJobSchema),
   (req, res, next) => machineManagerController.createJob(req, res, next)
 );
@@ -111,7 +111,7 @@ machineRouter.post(
 // GET /api/v1/machines/jobs — must come before /:id
 machineRouter.get(
   '/jobs',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => machineManagerController.listJobs(req, res, next)
 );
 
@@ -119,14 +119,14 @@ machineRouter.get(
 machineRouter.post(
   '/jobs/:id/stream-ticket',
   requireAuth,
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => machineManagerController.issueJobStreamTicket(req, res, next)
 );
 
 // GET /api/v1/machines/jobs/:id
 machineRouter.get(
   '/jobs/:id',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(jobIdParamSchema),
   (req, res, next) => machineManagerController.getJob(req, res, next)
 );
@@ -134,7 +134,7 @@ machineRouter.get(
 // POST /api/v1/machines
 machineRouter.post(
   '/',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(createMachineSchema),
   (req, res, next) => machineManagerController.create(req, res, next)
 );
@@ -142,14 +142,14 @@ machineRouter.post(
 // GET /api/v1/machines
 machineRouter.get(
   '/',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => machineManagerController.list(req, res, next)
 );
 
 // GET /api/v1/machines/:id
 machineRouter.get(
   '/:id',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(machineIdParamSchema),
   (req, res, next) => machineManagerController.getOne(req, res, next)
 );
@@ -157,7 +157,7 @@ machineRouter.get(
 // POST /api/v1/machines/:id/download-agent/token — authenticated, issues short-lived token
 machineRouter.post(
   '/:id/download-agent/token',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(machineIdParamSchema),
   (req, res, next) => machineManagerController.issueDownloadToken(req, res, next)
 );
@@ -165,7 +165,7 @@ machineRouter.post(
 // GET /api/v1/machines/:id/download-agent — kept for internal use
 machineRouter.get(
   '/:id/download-agent',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(machineIdParamSchema),
   (req, res, next) => machineManagerController.downloadAgent(req, res, next)
 );
@@ -173,7 +173,7 @@ machineRouter.get(
 // DELETE /api/v1/machines/:id
 machineRouter.delete(
   '/:id',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(machineIdParamSchema),
   (req, res, next) => machineManagerController.remove(req, res, next)
 );
@@ -181,7 +181,7 @@ machineRouter.delete(
 // POST /api/v1/machines/:id/exec — run a PowerShell command on the machine via WebSocket
 machineRouter.post(
   '/:id/exec',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(machineIdParamSchema),
   (req, res, next) => machineManagerController.execCommand(req, res, next)
 );
@@ -191,21 +191,21 @@ machineRouter.post(
 // GET /api/v1/machines/:id/activity — full change log for a machine
 machineRouter.get(
   '/:id/activity',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => trackerController.getActivityLog(req, res, next)
 );
 
 // POST /api/v1/machines/:id/clone-to/:targetId — trigger clone replay on target machine
 machineRouter.post(
   '/:id/clone-to/:targetId',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => trackerController.cloneTo(req, res, next)
 );
 
 // POST /api/v1/machines/clone-stream-ticket — issue SSE stream ticket (must be before /:id)
 machineRouter.post(
   '/clone-stream-ticket',
-  requireRole('admin', 'super_admin'),
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   (req, res, next) => trackerController.issueCloneStreamTicket(req, res, next)
 );
 

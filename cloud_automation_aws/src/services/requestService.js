@@ -385,12 +385,19 @@ export const createRequest = async (payload, userId) => {
   return request;
 };
 
-export const getAllRequests = async ({ rackoUserId, isSuperAdmin } = {}) => {
+export const getAllRequests = async ({ rackoUserId, isSuperAdmin, ownerId } = {}) => {
   if (!isSuperAdmin && !rackoUserId) {
     return [];
   }
 
-  const query = isSuperAdmin ? {} : { createdBy: rackoUserId };
+  const filterOwnerId = String(ownerId || '').trim();
+  let query = {};
+
+  if (isSuperAdmin && filterOwnerId) {
+    query = { createdBy: filterOwnerId };
+  } else if (!isSuperAdmin) {
+    query = { createdBy: rackoUserId };
+  }
 
   return Request.find(query)
     .sort({ createdAt: -1 })

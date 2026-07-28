@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, Cloud, HardDrive, LayoutGrid, Monitor, PlusCircle, Server, Wallet } from 'lucide-react';
+import { Boxes, Cloud, HardDrive, LayoutGrid, Monitor, PlusCircle, Server, Shield, Wallet } from 'lucide-react';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
@@ -69,6 +69,14 @@ const SHORTCUTS: Array<{
     label: 'Machine Manager',
     href: tenantConsole.machineManager,
     icon: <Monitor className="h-4 w-4 shrink-0" />,
+  },
+];
+
+const ADMIN_LINKS = [
+  {
+    label: 'Access control',
+    href: `${TENANT_CONSOLE}/access-control`,
+    icon: <Shield className="h-4 w-4 shrink-0" />,
   },
 ];
 
@@ -150,6 +158,36 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
                 </Link>
               );
             })}
+
+            {isAdmin
+              ? ADMIN_LINKS.map((link) => {
+                  const isActive =
+                    pathname === link.href || pathname.startsWith(`${link.href}/`);
+                  return (
+                    <Link
+                      key={link.href}
+                      href={link.href}
+                      onClick={() => closeIfMobile(onCloseSidebar)}
+                      className={`mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                        isActive ? '' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+                      }`}
+                      style={
+                        isActive
+                          ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
+                          : undefined
+                      }
+                    >
+                      <span
+                        style={isActive ? { color: accentColor } : undefined}
+                        className={isActive ? '' : 'text-gray-400'}
+                      >
+                        {link.icon}
+                      </span>
+                      {link.label}
+                    </Link>
+                  );
+                })
+              : null}
           </nav>
         </div>
       </aside>

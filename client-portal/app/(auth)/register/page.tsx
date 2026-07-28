@@ -1,8 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { z } from 'zod';
+import { Building2, UserRound } from 'lucide-react';
 import { apiRequest, ApiError } from '../../../lib/apiClient';
 import { AuthBrand } from '../../../components/auth/AuthBrand';
 
@@ -49,7 +51,10 @@ interface RegisterResponse {
   message: string;
 }
 
-export default function RegisterPage() {
+function RegisterForm() {
+  const searchParams = useSearchParams();
+  const initialType = searchParams.get('type') === 'b2b' ? 'b2b' : 'b2c';
+  const [accountType, setAccountType] = useState<'b2c' | 'b2b'>(initialType);
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -81,7 +86,7 @@ export default function RegisterPage() {
     try {
       await apiRequest<RegisterResponse>('/api/v1/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email, password, accountType }),
         skipAuth: true,
       });
       setSuccess(true);
@@ -112,6 +117,9 @@ export default function RegisterPage() {
               We&apos;ve sent a verification link to{' '}
               <span className="text-white font-medium">{email}</span>.
             </p>
+            <p className="mt-3 text-xs text-gray-500">
+              Account type: {accountType === 'b2b' ? 'Organization' : 'Individual'}
+            </p>
             <p className="text-gray-500 text-xs mt-4">The link expires in 24 hours.</p>
             <Link href="/login" className={`inline-block mt-6 text-sm ${LINK_ACCENT}`}>
               Back to sign in
@@ -131,9 +139,35 @@ export default function RegisterPage() {
           <div className="mb-6">
             <h1 className="text-xl font-semibold text-white">Create an account</h1>
             <p className="text-gray-400 text-sm mt-1">
-              You are registering as an{' '}
-              <span className="text-[#DC2626] font-medium">Admin</span>
+              Choose whether you are joining as an individual or an organization.
             </p>
+          </div>
+
+          <div className="mb-5 grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setAccountType('b2c')}
+              className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                accountType === 'b2c'
+                  ? 'border-[#B91C1C] bg-red-950/30 text-white'
+                  : 'border-gray-700 text-gray-300'
+              }`}
+            >
+              <UserRound className="h-4 w-4" />
+              Register as Individual
+            </button>
+            <button
+              type="button"
+              onClick={() => setAccountType('b2b')}
+              className={`flex items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-medium ${
+                accountType === 'b2b'
+                  ? 'border-[#B91C1C] bg-red-950/30 text-white'
+                  : 'border-gray-700 text-gray-300'
+              }`}
+            >
+              <Building2 className="h-4 w-4" />
+              Register as Organization
+            </button>
           </div>
 
           <form onSubmit={handleSubmit} noValidate className="space-y-5">
@@ -243,7 +277,11 @@ export default function RegisterPage() {
               disabled={isLoading}
               className={BTN_PRIMARY}
             >
-              {isLoading ? 'Creating account...' : 'Create account'}
+              {isLoading
+                ? 'Creating account...'
+                : accountType === 'b2b'
+                ? 'Create organization account'
+                : 'Create individual account'}
             </button>
           </form>
 
@@ -256,5 +294,19 @@ export default function RegisterPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#0a0f1e] flex items-center justify-center px-4 text-white">
+          Loading...
+        </div>
+      }
+    >
+      <RegisterForm />
+    </Suspense>
   );
 }

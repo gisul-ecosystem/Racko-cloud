@@ -24,6 +24,13 @@ const cloudRegionPricingSchema = new mongoose.Schema(
       default: 'normal',
       index: true,
     },
+    diskType: {
+      type: String,
+      enum: ['default', 'standard_hdd', 'standard_ssd'],
+      required: true,
+      default: 'default',
+      index: true,
+    },
     rawComputePricePerHr: { type: Number, required: true, min: 0 },
     rawStoragePricePerHr: { type: Number, default: 0, min: 0 },
     rawIpPricePerHr: { type: Number, default: 0, min: 0 },
@@ -44,13 +51,13 @@ const cloudRegionPricingSchema = new mongoose.Schema(
 );
 
 cloudRegionPricingSchema.index(
-  { canonicalSpec: 1, category: 1, pricingMode: 1, rawTotalPricePerHr: 1 },
-  { name: 'spec_category_mode_price' }
+  { canonicalSpec: 1, category: 1, pricingMode: 1, diskType: 1, rawTotalPricePerHr: 1 },
+  { name: 'spec_category_mode_disktype_price' }
 );
 
 cloudRegionPricingSchema.index(
-  { provider: 1, region: 1, category: 1, canonicalSpec: 1, pricingMode: 1 },
-  { unique: true, name: 'provider_region_spec_mode_unique' }
+  { provider: 1, region: 1, category: 1, canonicalSpec: 1, pricingMode: 1, diskType: 1 },
+  { unique: true, name: 'provider_region_spec_mode_disktype_unique' }
 );
 
 /** Normalize nestedVirtualization flag → storage pricingMode. */
@@ -71,6 +78,10 @@ export function pricingModeQuery(pricingMode) {
   return {
     $or: [{ pricingMode: 'normal' }, { pricingMode: { $exists: false } }],
   };
+}
+
+export function pricingDiskType(mode, diskType) {
+  return mode === 'storage_only' ? diskType || 'standard_ssd' : 'default';
 }
 
 const CloudRegionPricing = mongoose.model('CloudRegionPricing', cloudRegionPricingSchema);

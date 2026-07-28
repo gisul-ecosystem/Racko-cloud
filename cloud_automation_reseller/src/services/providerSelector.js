@@ -1,4 +1,5 @@
 import CloudRegionPricing, {
+  pricingDiskType,
   toPricingMode,
   pricingModeQuery,
 } from '../models/CloudRegionPricing.js';
@@ -11,15 +12,90 @@ function roundUsdHr(n) {
   return Math.round((Number(n) || 0) * 1e8) / 1e8;
 }
 
-/** Map a CloudRegionPricing row into the /api/select payload (incl. public vs private IP). */
-export function toSelectResult(row, reason, providersUsed) {
-  const compute = Number(row.rawComputePricePerHr) || 0;
-  const storage = Number(row.rawStoragePricePerHr) || 0;
-  const publicIp = roundUsdHr(row.rawIpPricePerHr);
-  const privateIp = 0; // private NIC/IP is included; not billed separately
-  const withPublicIp = roundUsdHr(
-    Number(row.rawTotalPricePerHr) || compute + storage + publicIp
+function storagePerGbMonth(row, diskGb) {
+  const storageHourly = Number(row?.rawStoragePricePerHr);
+  if (!Number.isFinite(storageHourly) || !Number.isFinite(diskGb) || diskGb <= 0) return null;
+  return (storageHourly * 730) / diskGb;
+}
+
+function median(values) {
+  const sorted = [...values].sort((a, b) => a - b);
+  if (sorted.length === 0) return null;
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+}
+
+export function isStorageRowAnomalous(row, siblingRows, diskGb, deviationThreshold = 0.2) {
+  const currentRate = storagePerGbMonth(row, diskGb);
+  if (!Number.isFinite(currentRate)) return false;
+
+  const comparableRates = siblingRows
+    .map((sibling) => {
+      const parts = resolveSpecParts(sibling.canonicalSpec, {}, sibling.category || 'linux');
+      if (!parts?.diskGb || parts.diskGb === diskGb) return null;
+      return {
+        diskGb: parts.diskGb,
+        storageHourly: Number(sibling.rawStoragePricePerHr) || 0,
+        perGbMonth: storagePerGbMonth(sibling, parts.diskGb),
+      };
+    })
+    .filter((entry) => entry && Number.isFinite(entry.perGbMonth));
+
+  if (comparableRates.length < 2) return false;
+
+  const lowerDiskSizes = comparableRates.filter((entry) => entry.diskGb < diskGb);
+  const hasMonotonicViolation = lowerDiskSizes.some(
+    (entry) => currentRate < entry.perGbMonth * (1 - deviationThreshold)
+      || (Number(row.rawStoragePricePerHr) || 0) < entry.storageHourly
   );
+  if (hasMonotonicViolation) return true;
+
+  const baseline = median(comparableRates.map((entry) => entry.perGbMonth));
+  if (!Number.isFinite(baseline) || baseline <= 0) return false;
+  return Math.abs(currentRate - baseline) / baseline > deviationThreshold;
+}
+
+async function filterStorageAnomalies(rows, parts, category, pricingMode, diskType) {
+  const evaluated = await Promise.all(
+    rows.map(async (row) => {
+      const specPattern = new RegExp(
+        `^${parts.vcpu}vcpu-${parts.ramGb}gb-\\d+gbssd${parts.gpu ? '-gpu' : ''}$`
+      );
+      const siblings = await CloudRegionPricing.find({
+        provider: row.provider,
+        region: row.region,
+        category,
+        canonicalSpec: specPattern,
+        diskType,
+        ...pricingModeQuery(pricingMode),
+      })
+        .select('canonicalSpec rawStoragePricePerHr category')
+        .lean();
+
+      return {
+        row,
+        anomalous: isStorageRowAnomalous(row, siblings, parts.diskGb),
+      };
+    })
+  );
+
+  const filtered = evaluated.filter((entry) => !entry.anomalous).map((entry) => entry.row);
+  return {
+    rows: filtered.length > 0 ? filtered : rows,
+    anomalyFiltered: filtered.length > 0 && filtered.length !== rows.length,
+  };
+}
+
+/** Map a CloudRegionPricing row into the /api/select payload (incl. public vs private IP). */
+export function toSelectResult(row, reason, providersUsed, options = {}) {
+  const storageOnly = options.storageOnly === true;
+  const compute = storageOnly ? 0 : Number(row.rawComputePricePerHr) || 0;
+  const storage = Number(row.rawStoragePricePerHr) || 0;
+  const publicIp = storageOnly ? 0 : roundUsdHr(row.rawIpPricePerHr);
+  const privateIp = 0; // private NIC/IP is included; not billed separately
+  const withPublicIp = storageOnly
+    ? roundUsdHr(storage)
+    : roundUsdHr(Number(row.rawTotalPricePerHr) || compute + storage + publicIp);
   const withPrivateIp = roundUsdHr(compute + storage + privateIp);
 
   return {
@@ -29,7 +105,8 @@ export function toSelectResult(row, reason, providersUsed) {
     canonicalSpec: row.canonicalSpec,
     pricingMode: row.pricingMode || 'normal',
     nestedVirtualization: (row.pricingMode || 'normal') === 'nested',
-    rawComputePricePerHr: row.rawComputePricePerHr,
+    mode: storageOnly ? 'storage_only' : 'vm',
+    rawComputePricePerHr: storageOnly ? 0 : row.rawComputePricePerHr,
     rawStoragePricePerHr: row.rawStoragePricePerHr,
     /** @deprecated Prefer rawPublicIpPricePerHr — same value (public IP hourly). */
     rawIpPricePerHr: publicIp,
@@ -78,15 +155,21 @@ function buildResolvedSkus(mappings, providersUsed) {
 export async function selectProvider({
   canonicalSpec,
   category,
+  mode = 'vm',
   durationDays,
   specs,
   providers,
   nestedVirtualization = false,
 } = {}) {
-  const providersUsed = normalizeProviders(providers);
+  const requestedProviders = normalizeProviders(providers);
+  const providersUsed =
+    mode === 'storage_only' && specs?.diskType
+      ? requestedProviders.filter((provider) => provider !== 'oci')
+      : requestedProviders;
   const days = Number(durationDays) || 0;
   const cat = category || 'linux';
   const pricingMode = toPricingMode(nestedVirtualization);
+  const diskType = pricingDiskType(mode, specs?.diskType);
   const parts = resolveSpecParts(canonicalSpec, specs || {}, cat);
   const spec = parts.canonicalSpec;
 
@@ -114,19 +197,27 @@ export async function selectProvider({
     vcpu: parts.vcpu,
     ramGb: parts.ramGb,
     diskGb: parts.diskGb,
+    diskType: specs?.diskType,
     gpu: parts.gpu,
     providers: providersUsed,
     nestedVirtualization: pricingMode === 'nested',
   });
 
-  const row = await CloudRegionPricing.findOne({
+  const rows = await CloudRegionPricing.find({
     canonicalSpec: spec,
     category: cat,
     provider: { $in: providersUsed },
+    diskType,
     ...modeFilter,
   })
-    .sort({ rawTotalPricePerHr: 1 })
+    .sort(mode === 'storage_only' ? { rawStoragePricePerHr: 1, rawTotalPricePerHr: 1 } : { rawTotalPricePerHr: 1 })
     .lean();
+
+  const { rows: filteredRows, anomalyFiltered } =
+    mode === 'storage_only'
+      ? await filterStorageAnomalies(rows, parts, cat, pricingMode, diskType)
+      : { rows, anomalyFiltered: false };
+  const row = filteredRows[0];
 
   if (!row) {
     return {
@@ -149,14 +240,19 @@ export async function selectProvider({
   return {
     ...toSelectResult(
       row,
-      dynamicMeta && !dynamicMeta.cached
-        ? pricingMode === 'nested'
-          ? 'cheapest_cloud_nested_dynamic'
-          : 'cheapest_cloud_dynamic'
-        : pricingMode === 'nested'
-          ? 'cheapest_cloud_nested'
-          : 'cheapest_cloud',
-      providersUsed
+      mode === 'storage_only'
+        ? anomalyFiltered
+          ? 'storage_only_anomaly_filtered'
+          : 'storage_only_cheapest'
+        : dynamicMeta && !dynamicMeta.cached
+          ? pricingMode === 'nested'
+            ? 'cheapest_cloud_nested_dynamic'
+            : 'cheapest_cloud_dynamic'
+          : pricingMode === 'nested'
+            ? 'cheapest_cloud_nested'
+            : 'cheapest_cloud',
+      providersUsed,
+      { storageOnly: mode === 'storage_only' }
     ),
     ...(resolvedSkus ? { resolvedSkus } : {}),
   };

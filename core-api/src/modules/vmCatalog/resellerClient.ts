@@ -4,8 +4,9 @@ import { logger } from '../../utils/logger';
 export interface ResellerSelectInput {
   canonicalSpec?: string;
   category: string;
+  mode?: 'vm' | 'storage_only';
   durationDays: number;
-  specs?: { cpu?: string; ram?: string; disk?: string };
+  specs?: { cpu?: string; ram?: string; disk?: string; diskType?: 'standard_hdd' | 'standard_ssd' };
   /** Limit cheapest-provider search to these clouds. Omit for all. */
   providers?: string[] | string;
   /** Backward-compatible alias for providers. */
@@ -19,6 +20,7 @@ export interface ResellerSelectResult {
   region: string | null;
   category: string;
   canonicalSpec: string;
+  mode?: 'vm' | 'storage_only';
   pricingMode?: 'normal' | 'nested';
   nestedVirtualization?: boolean;
   rawTotalPricePerHr: number | null;
