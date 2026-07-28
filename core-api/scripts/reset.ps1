@@ -1171,7 +1171,7 @@ try {
     Write-Host "  Icon cache cleared -- will rebuild on Explorer restart" -ForegroundColor DarkGray
 
     Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 5  # wait for Explorer to fully exit and finish writing registry
 
     # Delete Bags\1\Desktop AFTER Explorer is fully stopped so it cannot write back
     Remove-Item "HKCU:\Software\Microsoft\Windows\Shell\Bags\1\Desktop" -Recurse -Force -ErrorAction SilentlyContinue
