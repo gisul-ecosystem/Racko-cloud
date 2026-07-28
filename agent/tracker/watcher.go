@@ -227,10 +227,8 @@ func (w *Watcher) flush() {
 		case usnOpWrite:
 			info, err := os.Stat(path)
 			if err != nil || info.IsDir() {
-				log.Printf("[tracker/watcher] flush: skipping %s (stat err=%v isDir=%v)", path, err, err == nil && info.IsDir())
 				continue
 			}
-			log.Printf("[tracker/watcher] flush: uploading %s (%d bytes)", path, info.Size())
 			w.uploadAndRecord(path, info)
 		}
 	}
@@ -241,13 +239,11 @@ func (w *Watcher) flush() {
 func (w *Watcher) uploadAndRecord(path string, info os.FileInfo) {
 	hash := hashFile(path)
 	if hash == "" {
-		log.Printf("[tracker/watcher] uploadAndRecord: skipping %s (unreadable)", path)
 		return // unreadable file — skip
 	}
 
 	// Check if the baseline already has this exact file with the same hash.
 	if w.baseline != nil && w.isUnchangedFromBaseline(path, hash) {
-		log.Printf("[tracker/watcher] uploadAndRecord: skipping %s (unchanged from baseline)", path)
 		return
 	}
 
