@@ -7,6 +7,8 @@ import {
   PLATFORM_PERMISSION_CATALOG,
   PLATFORM_ALL_PERMISSION_KEYS,
   PLATFORM_SYSTEM_ROLE_SEEDS,
+  platformPermissionKeysForServices,
+  type PlatformServiceEntitlementKey,
   isPlatformPermission,
 } from './platformPermissions.catalog';
 import {
@@ -18,6 +20,7 @@ import {
   setSubjectRoles,
   listSubjectRoleIds,
 } from '../orgRbac/orgRbac.helpers';
+import { adminServicesService } from '../adminServices/adminServices.service';
 
 const permissionCache = new Map<string, { keys: Set<string>; expiresAt: number; orgId: string }>();
 const CACHE_TTL_MS = 30_000;
@@ -46,6 +49,35 @@ export function resolvePlatformOrgOwnerId(user: {
 }
 
 class PlatformRbacService {
+  async listPermissionCatalog(orgId: string) {
+    const allowed = await this.getAllowedPermissionKeys(orgId);
+    return PLATFORM_PERMISSION_CATALOG.filter((permission) => allowed.has(permission.key));
+  }
+
+  private async getAllowedPermissionKeys(orgId: string): Promise<Set<string>> {
+    const services = await adminServicesService.listForAdmin(new mongoose.Types.ObjectId(orgId));
+    const activeServiceKeys = services
+      .filter((service) => service.status === 'active')
+      .map((service) => service.serviceKey) as PlatformServiceEntitlementKey[];
+    return new Set(platformPermissionKeysForServices(activeServiceKeys));
+  }
+
+  private filterToAllowedPermissions(permissions: string[], allowed: Set<string>): string[] {
+    return [...new Set(permissions.filter((permission) => allowed.has(permission)))];
+  }
+
+  private async assertAllowedForOrg(orgId: string, permissions: string[]): Promise<string[]> {
+    const deduped = assertPlatformPermissions(permissions);
+    const allowed = await this.getAllowedPermissionKeys(orgId);
+    const disallowed = deduped.filter((permission) => !allowed.has(permission));
+    if (disallowed.length > 0) {
+      throw new ValidationError(
+        `Permissions not available for this admin's enabled services: ${disallowed.join(', ')}`
+      );
+    }
+    return deduped;
+  }
+
   clearCache(orgId?: string, subjectId?: string): void {
     if (orgId && subjectId) {
       permissionCache.delete(cacheKey(orgId, subjectId));
@@ -60,10 +92,6 @@ class PlatformRbacService {
     permissionCache.clear();
   }
 
-  listPermissionCatalog() {
-    return PLATFORM_PERMISSION_CATALOG;
-  }
-
   async ensureOrgRoles(orgId: string): Promise<void> {
     await ensureSystemRoles({
       scope: 'platform',
@@ -74,7 +102,14 @@ class PlatformRbacService {
 
   async listRoles(orgId: string) {
     await this.ensureOrgRoles(orgId);
-    return listOrgRoles('platform', orgId);
+    const [roles, allowed] = await Promise.all([
+      listOrgRoles('platform', orgId),
+      this.getAllowedPermissionKeys(orgId),
+    ]);
+    return roles.map((role) => ({
+      ...role,
+      permissions: this.filterToAllowedPermissions(role.permissions, allowed),
+    }));
   }
 
   async createRole(
@@ -82,14 +117,15 @@ class PlatformRbacService {
     input: { name: string; description?: string; permissions: string[] },
     actorId: string
   ) {
+    const permissions = await this.assertAllowedForOrg(orgId, input.permissions);
     return createOrgRole({
       scope: 'platform',
       orgId,
       name: input.name,
       description: input.description,
-      permissions: input.permissions,
+      permissions,
       createdBy: actorId,
-      assertPermissions: assertPlatformPermissions,
+      assertPermissions: (keys) => keys,
     });
   }
 
@@ -98,12 +134,15 @@ class PlatformRbacService {
     roleId: string,
     input: { name?: string; description?: string; permissions?: string[]; isActive?: boolean }
   ) {
+    const permissions =
+      input.permissions == null ? undefined : await this.assertAllowedForOrg(orgId, input.permissions);
     const updated = await updateOrgRole({
       scope: 'platform',
       orgId,
       roleId,
       ...input,
-      assertPermissions: assertPlatformPermissions,
+      ...(permissions ? { permissions } : {}),
+      assertPermissions: (keys) => keys,
     });
     this.clearCache(orgId);
     return updated;
@@ -117,8 +156,9 @@ class PlatformRbacService {
     orgId: string;
     isOrgOwner: boolean;
   }): Promise<Set<string>> {
+    const allowed = await this.getAllowedPermissionKeys(input.orgId);
     if (input.isOrgOwner) {
-      return new Set(PLATFORM_ALL_PERMISSION_KEYS);
+      return new Set([...PLATFORM_ALL_PERMISSION_KEYS].filter((permission) => allowed.has(permission)));
     }
 
     const key = cacheKey(input.orgId, input.subjectId);
@@ -127,11 +167,12 @@ class PlatformRbacService {
       return new Set(cached.keys);
     }
 
-    const perms = await getSubjectPermissionSet({
+    const rawPerms = await getSubjectPermissionSet({
       scope: 'platform',
       orgId: input.orgId,
       subjectId: input.subjectId,
     });
+    const perms = new Set([...rawPerms].filter((permission) => allowed.has(permission)));
     permissionCache.set(key, {
       keys: perms,
       expiresAt: Date.now() + CACHE_TTL_MS,
@@ -161,7 +202,7 @@ class PlatformRbacService {
       orgId,
       subjectIds,
     });
-    const roles = await this.listRoles(orgId);
+    const [roles, allowed] = await Promise.all([this.listRoles(orgId), this.getAllowedPermissionKeys(orgId)]);
     const roleNameById = new Map(roles.map((r) => [r._id, r.name]));
 
     return people.map((p) => {
@@ -169,7 +210,7 @@ class PlatformRbacService {
       const isOwner = id === orgId && p.role === 'admin' && !p.orgOwnerId;
       const roleIds = isOwner ? roles.map((r) => r._id) : roleIdsBySubject.get(id) || [];
       const permissions = isOwner
-        ? [...PLATFORM_ALL_PERMISSION_KEYS]
+        ? [...PLATFORM_ALL_PERMISSION_KEYS].filter((permission) => allowed.has(permission))
         : roles
             .filter((r) => roleIds.includes(r._id))
             .flatMap((r) => r.permissions);

@@ -51,9 +51,9 @@ export class PlatformRbacController {
 
   getCatalog = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      await resolveActorOrg(req as AuthenticatedRequest);
+      const ctx = await resolveActorOrg(req as AuthenticatedRequest);
       success(res, 'Permission catalog retrieved.', {
-        permissions: platformRbacService.listPermissionCatalog(),
+        permissions: await platformRbacService.listPermissionCatalog(ctx.orgId),
       });
     } catch (err) {
       next(err);

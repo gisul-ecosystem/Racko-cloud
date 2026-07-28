@@ -32,12 +32,13 @@ function toPublic(doc: IAdminServiceConfig): AdminServicePublic {
 
 async function requirePlatformAdmin(adminId: mongoose.Types.ObjectId): Promise<{
   seeded: boolean;
+  orgOwnerId?: mongoose.Types.ObjectId | null;
 }> {
-  const user = await User.findById(adminId).select('role adminServicesSeeded');
+  const user = await User.findById(adminId).select('role adminServicesSeeded orgOwnerId');
   if (!user || user.role !== 'admin') {
     throw new NotFoundError('Admin user not found.');
   }
-  return { seeded: Boolean(user.adminServicesSeeded) };
+  return { seeded: Boolean(user.adminServicesSeeded), orgOwnerId: user.orgOwnerId };
 }
 
 async function insertKeys(
@@ -69,6 +70,14 @@ async function markSeeded(adminId: mongoose.Types.ObjectId): Promise<void> {
 }
 
 class AdminServicesService {
+  async resolveEntitlementAdminId(adminId: mongoose.Types.ObjectId): Promise<mongoose.Types.ObjectId> {
+    const user = await User.findById(adminId).select('role orgOwnerId');
+    if (!user || user.role !== 'admin') {
+      throw new NotFoundError('Admin user not found.');
+    }
+    return user.orgOwnerId || adminId;
+  }
+
   /** New admin registration — only VM Catalog + Dedicated Server. */
   async seedDefaultsForNewAdmin(
     adminId: mongoose.Types.ObjectId,
@@ -109,11 +118,13 @@ class AdminServicesService {
   }
 
   async listMine(adminId: mongoose.Types.ObjectId): Promise<AdminServicePublic[]> {
-    return this.ensureServices(adminId);
+    const entitlementAdminId = await this.resolveEntitlementAdminId(adminId);
+    return this.ensureServices(entitlementAdminId);
   }
 
   async listForAdmin(adminId: mongoose.Types.ObjectId): Promise<AdminServicePublic[]> {
-    return this.ensureServices(adminId);
+    const entitlementAdminId = await this.resolveEntitlementAdminId(adminId);
+    return this.ensureServices(entitlementAdminId);
   }
 
   async assignService(
@@ -174,7 +185,8 @@ class AdminServicesService {
     adminId: mongoose.Types.ObjectId,
     serviceKey: AdminServiceKey
   ): Promise<void> {
-    const services = await this.ensureServices(adminId);
+    const entitlementAdminId = await this.resolveEntitlementAdminId(adminId);
+    const services = await this.ensureServices(entitlementAdminId);
     const ok = services.some((s) => s.serviceKey === serviceKey && s.status === 'active');
     if (!ok) {
       throw new ForbiddenError(`Service "${serviceKey}" is not enabled for this admin.`);

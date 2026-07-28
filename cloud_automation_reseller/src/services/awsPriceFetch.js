@@ -83,43 +83,74 @@ export async function fetchEbsGp3GbMonth(regionCode) {
   return fetchEbsGbMonth(regionCode, 'standard_ssd');
 }
 
+function extractHourlyUsdFromProduct(product) {
+  const onDemand = product.terms?.OnDemand;
+  if (!onDemand) return null;
+  const term = onDemand[Object.keys(onDemand)[0]];
+  const dims = term?.priceDimensions;
+  if (!dims) return null;
+  const dim = dims[Object.keys(dims)[0]];
+  if (!/Hrs|Hours|Hour/i.test(dim?.unit || '')) return null;
+  const unitPrice = parseFloat(dim?.pricePerUnit?.USD ?? 'NaN');
+  return Number.isFinite(unitPrice) && unitPrice >= 0 ? unitPrice : null;
+}
+
 /**
- * Live public IPv4 / Elastic IP in-use USD/hr for a region.
+ * Live public IPv4 in-use USD/hr for a region.
+ * Since Feb 2024 AWS bills this under AmazonVPC (group VPCPublicIPv4Address), not EC2.
  */
 export async function fetchAwsPublicIpHourly(regionCode) {
   return cachedAncillary(`eip:${regionCode}`, async () => {
-    const command = new GetProductsCommand({
-      ServiceCode: 'AmazonEC2',
-      Filters: [
+    const filterSets = [
+      [
+        { Type: 'TERM_MATCH', Field: 'regionCode', Value: regionCode },
+        { Type: 'TERM_MATCH', Field: 'group', Value: 'VPCPublicIPv4Address' },
+      ],
+      [
         { Type: 'TERM_MATCH', Field: 'regionCode', Value: regionCode },
         { Type: 'TERM_MATCH', Field: 'group', Value: 'IP Address' },
       ],
-      MaxResults: 25,
-    });
-    const res = await pricingClient.send(command);
-    for (const raw of res.PriceList || []) {
-      try {
-        const product = JSON.parse(raw);
-        const attrs = product.product?.attributes || {};
-        const desc = `${attrs.usagetype || ''} ${attrs.groupDescription || ''} ${attrs.operation || ''}`;
-        // Prefer in-use / associated public IPv4 (not idle EIP)
-        if (!/PublicIPv4|ElasticIP|IdleAddress|Public IP/i.test(desc + JSON.stringify(attrs))) {
-          continue;
+      [
+        { Type: 'TERM_MATCH', Field: 'regionCode', Value: regionCode },
+        { Type: 'TERM_MATCH', Field: 'productFamily', Value: 'IP Address' },
+      ],
+    ];
+
+    let best = null;
+    let bestScore = 0;
+
+    for (const serviceCode of ['AmazonVPC', 'AmazonEC2']) {
+      for (const filters of filterSets) {
+        const command = new GetProductsCommand({
+          ServiceCode: serviceCode,
+          Filters: filters,
+          MaxResults: 25,
+        });
+        const res = await pricingClient.send(command);
+        for (const raw of res.PriceList || []) {
+          try {
+            const product = JSON.parse(raw);
+            const attrs = product.product?.attributes || {};
+            const blob = `${attrs.usagetype || ''} ${attrs.groupDescription || ''} ${attrs.group || ''}`;
+            if (!/PublicIPv4|Public IP|VPCPublicIPv4|ElasticIP|IP Address/i.test(blob)) continue;
+            const unitPrice = extractHourlyUsdFromProduct(product);
+            if (unitPrice == null) continue;
+            const inUse = /InUse|In-use|In use/i.test(blob);
+            const idle = /Idle/i.test(blob);
+            const score = (inUse ? 30 : idle ? 5 : 10) + (unitPrice > 0 ? 1 : 0);
+            if (score > bestScore) {
+              bestScore = score;
+              best = unitPrice;
+            }
+          } catch {
+            /* try next */
+          }
         }
-        if (/Idle/i.test(attrs.groupDescription || attrs.usagetype || '')) continue;
-        const onDemand = product.terms?.OnDemand;
-        if (!onDemand) continue;
-        const term = onDemand[Object.keys(onDemand)[0]];
-        const dims = term?.priceDimensions;
-        if (!dims) continue;
-        const dim = dims[Object.keys(dims)[0]];
-        if (!/Hrs|Hours|Hour/i.test(dim?.unit || '')) continue;
-        const unitPrice = parseFloat(dim?.pricePerUnit?.USD ?? 'NaN');
-        if (Number.isFinite(unitPrice) && unitPrice >= 0) return unitPrice;
-      } catch {
-        /* try next */
+        if (best != null && bestScore >= 30) return best;
       }
     }
+
+    if (best != null) return best;
     throw new Error(`AWS Price List missing public IPv4 hourly rate for ${regionCode}`);
   });
 }

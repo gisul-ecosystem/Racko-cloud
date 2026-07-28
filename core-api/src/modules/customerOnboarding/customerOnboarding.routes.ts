@@ -32,7 +32,7 @@ const reviewOrganizationRequestSchema = z.object({
     id: z.string().regex(/^[a-f\d]{24}$/i, 'Invalid request id'),
   }),
   body: z.object({
-    status: z.enum(['approved', 'rejected', 'more_info_required']),
+    status: z.enum(['approved', 'rejected']),
     ndaStatus: z.enum(['not_started', 'pending', 'completed']).optional(),
     reviewerNotes: z.string().trim().max(2000).optional(),
   }),
@@ -154,20 +154,15 @@ router.patch(
 
       const user = await User.findById(requestDoc.userId);
       if (user) {
-        user.onboardingStatus =
-          status === 'approved'
-            ? 'org_approved'
-            : status === 'rejected'
-            ? 'org_rejected'
-            : 'org_details_pending';
+        user.onboardingStatus = status === 'approved' ? 'org_approved' : 'org_rejected';
         await user.save();
 
         await sendPlainEmail({
           to: user.email,
-          subject: `Organization access request ${status.replace(/_/g, ' ')}`,
-          html: `<p>Your organization access request is now <strong>${status.replace(/_/g, ' ')}</strong>.</p>
+          subject: `Organization access request ${status}`,
+          html: `<p>Your organization access request was <strong>${status}</strong>.</p>
 <p>${reviewerNotes ?? ''}</p>`,
-          text: `Your organization access request is now ${status.replace(/_/g, ' ')}.\n${reviewerNotes ?? ''}`,
+          text: `Your organization access request was ${status}.\n${reviewerNotes ?? ''}`,
         });
       }
 
