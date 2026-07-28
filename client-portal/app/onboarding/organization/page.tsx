@@ -71,7 +71,7 @@ export default function OrganizationOnboardingPage() {
     try {
       const next = await submitOrganizationRequest(form);
       setRequest(next);
-      setFlash('Organization request submitted for super admin review.');
+      setFlash('Organization request submitted for Racko Admin review.');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to submit organization request.');
     } finally {
@@ -97,8 +97,8 @@ export default function OrganizationOnboardingPage() {
 
         <h1 className="text-2xl font-semibold">Organization onboarding</h1>
         <p className="mt-2 text-sm text-gray-300">
-          Fill in your company details. The request goes to Super Admin, NDA is handled internally,
-          and access is enabled after approval.
+          Fill in your company details. The request goes to Racko Admin and access is enabled after
+          approval.
         </p>
 
         {flash ? <div className="mt-4 rounded-lg bg-green-900/30 px-4 py-3 text-sm text-green-300">{flash}</div> : null}
@@ -182,7 +182,7 @@ export default function OrganizationOnboardingPage() {
               disabled={saving}
               className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
             >
-              {saving ? 'Submitting...' : 'Submit for super admin review'}
+              {saving ? 'Submitting...' : 'Submit for Racko Admin review'}
             </button>
           </form>
         )}

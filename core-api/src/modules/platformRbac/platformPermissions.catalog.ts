@@ -4,6 +4,17 @@ export interface OrgPermissionDef {
   group: string;
 }
 
+export type PlatformServiceEntitlementKey =
+  | 'create-vm'
+  | 'dedicated-server'
+  | 'vm-management'
+  | 'elastic-servers'
+  | 'azure'
+  | 'aws'
+  | 'gcp'
+  | 'docs'
+  | 'machine-manager';
+
 /** Permissions for platform admin console (customer org). */
 export const PLATFORM_PERMISSION_CATALOG: OrgPermissionDef[] = [
   { key: 'console.access', label: 'Access services console', group: 'Console' },
@@ -32,6 +43,26 @@ export const PLATFORM_PERMISSION_CATALOG: OrgPermissionDef[] = [
 ];
 
 export const PLATFORM_ALL_PERMISSION_KEYS = PLATFORM_PERMISSION_CATALOG.map((p) => p.key);
+
+const ALWAYS_ALLOWED_PLATFORM_PERMISSION_KEYS = [
+  'console.access',
+  'billing.read',
+  'billing.topup',
+  'rbac.roles.write',
+  'rbac.assign',
+] as const;
+
+const SERVICE_PERMISSION_KEYS: Record<PlatformServiceEntitlementKey, string[]> = {
+  'create-vm': ['create_vm.read', 'create_vm.request'],
+  'dedicated-server': ['dedicated.read', 'dedicated.request'],
+  'vm-management': ['vms.read', 'vms.manage', 'vms.assign', 'team.manage'],
+  'elastic-servers': ['elastic.read', 'elastic.manage'],
+  azure: ['azure.read', 'azure.manage'],
+  aws: ['aws.read', 'aws.manage'],
+  gcp: ['gcp.read', 'gcp.manage'],
+  docs: ['docs.read'],
+  'machine-manager': ['machine_manager.manage'],
+};
 
 export const PLATFORM_SYSTEM_ROLE_SEEDS: Array<{
   slug: string;
@@ -91,4 +122,16 @@ export const PLATFORM_SYSTEM_ROLE_SEEDS: Array<{
 
 export function isPlatformPermission(key: string): boolean {
   return PLATFORM_ALL_PERMISSION_KEYS.includes(key);
+}
+
+export function platformPermissionKeysForServices(
+  serviceKeys: readonly PlatformServiceEntitlementKey[]
+): string[] {
+  const allowed = new Set<string>(ALWAYS_ALLOWED_PLATFORM_PERMISSION_KEYS);
+  for (const serviceKey of serviceKeys) {
+    for (const permission of SERVICE_PERMISSION_KEYS[serviceKey] || []) {
+      allowed.add(permission);
+    }
+  }
+  return [...allowed];
 }

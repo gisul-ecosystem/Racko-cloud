@@ -95,6 +95,7 @@ function CustomerDirectoryContent() {
   const [requests, setRequests] = useState<OrganizationAccessRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedRequest, setSelectedRequest] = useState<OrganizationAccessRequest | null>(null);
 
   useEffect(() => {
     setFilter(parseFilter(searchParams.get('filter')));
@@ -186,7 +187,11 @@ function CustomerDirectoryContent() {
   const showOrgRequests = filter === 'all' || filter === 'organization';
   const showTenants = filter === 'all' || filter === 'tenant';
   const showCustomers = filter !== 'tenant';
-  const pendingOrgCount = requests.filter((r) => r.status === 'pending').length;
+  const openOrgRequests = useMemo(
+    () => requests.filter((r) => r.status === 'pending'),
+    [requests]
+  );
+  const pendingOrgCount = openOrgRequests.length;
   const headerCount =
     filter === 'tenant'
       ? tenants.length
@@ -196,13 +201,18 @@ function CustomerDirectoryContent() {
 
   async function handleReview(
     req: OrganizationAccessRequest,
-    status: 'approved' | 'rejected' | 'more_info_required'
+    status: 'approved' | 'rejected'
   ) {
     try {
-      await reviewOrganizationRequest(req._id, {
+      const updated = await reviewOrganizationRequest(req._id, {
         status,
         ndaStatus: status === 'approved' ? 'completed' : req.ndaStatus,
       });
+      if (status === 'approved' || status === 'rejected') {
+        setSelectedRequest(null);
+      } else {
+        setSelectedRequest((prev) => (prev?._id === updated._id ? updated : prev));
+      }
       await load();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to update request.');
@@ -313,17 +323,21 @@ function CustomerDirectoryContent() {
                       Loading…
                     </td>
                   </tr>
-                ) : requests.length === 0 ? (
+                ) : openOrgRequests.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="px-4 py-8 text-center text-gray-500">
-                      No organization requests yet.
+                      No pending organization requests.
                     </td>
                   </tr>
                 ) : (
-                  requests.map((req) => {
+                  openOrgRequests.map((req) => {
                     const userInfo = typeof req.userId === 'string' ? null : req.userId;
                     return (
-                      <tr key={req._id} className="border-b border-gray-100 align-top">
+                      <tr
+                        key={req._id}
+                        className="cursor-pointer border-b border-gray-100 align-top transition hover:bg-gray-50"
+                        onClick={() => setSelectedRequest(req)}
+                      >
                         <td className="px-4 py-3">
                           <p className="font-medium text-gray-900">{req.contactName}</p>
                           <p className="text-xs text-gray-500">
@@ -345,7 +359,10 @@ function CustomerDirectoryContent() {
                         <td className="px-4 py-3 capitalize text-gray-700">
                           {req.ndaStatus.replace(/_/g, ' ')}
                         </td>
-                        <td className="px-4 py-3 text-right">
+                        <td
+                          className="px-4 py-3 text-right"
+                          onClick={(e) => e.stopPropagation()}
+                        >
                           {isSuperAdmin ? (
                             <div className="flex justify-end gap-2">
                               <button
@@ -354,13 +371,6 @@ function CustomerDirectoryContent() {
                                 className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white"
                               >
                                 Approve
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => void handleReview(req, 'more_info_required')}
-                                className="rounded-lg bg-amber-500 px-3 py-1.5 text-xs font-semibold text-white"
-                              >
-                                Need Info
                               </button>
                               <button
                                 type="button"
@@ -568,6 +578,115 @@ function CustomerDirectoryContent() {
         )}
       </section>
       ) : null}
+
+      {selectedRequest ? (
+        <OrganizationRequestDetailModal
+          request={selectedRequest}
+          isSuperAdmin={isSuperAdmin}
+          onClose={() => setSelectedRequest(null)}
+          onReview={(status) => void handleReview(selectedRequest, status)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function DetailField({ label, value }: { label: string; value?: string | null }) {
+  return (
+    <div>
+      <dt className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">{label}</dt>
+      <dd className="mt-1 whitespace-pre-wrap text-sm text-gray-900">{value?.trim() ? value : '—'}</dd>
+    </div>
+  );
+}
+
+function OrganizationRequestDetailModal({
+  request,
+  isSuperAdmin,
+  onClose,
+  onReview,
+}: {
+  request: OrganizationAccessRequest;
+  isSuperAdmin: boolean;
+  onClose: () => void;
+  onReview: (status: 'approved' | 'rejected') => void;
+}) {
+  const userInfo = typeof request.userId === 'string' ? null : request.userId;
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="org-request-detail-title"
+        className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="sticky top-0 flex items-start justify-between gap-3 border-b border-gray-100 bg-white px-5 py-4">
+          <div>
+            <h3 id="org-request-detail-title" className="text-base font-semibold text-gray-900">
+              Organization request details
+            </h3>
+            <p className="mt-0.5 text-xs text-gray-500">
+              Submitted {formatDate(request.createdAt)} · Status{' '}
+              <span className="capitalize">{request.status.replace(/_/g, ' ')}</span>
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-lg border border-gray-200 px-2.5 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+          >
+            Close
+          </button>
+        </div>
+
+        <div className="space-y-6 px-5 py-5">
+          <dl className="grid gap-4 sm:grid-cols-2">
+            <DetailField label="Contact name" value={request.contactName} />
+            <DetailField label="Email" value={userInfo?.email} />
+            <DetailField label="Company name" value={request.companyName} />
+            <DetailField label="Company website" value={request.companyWebsite} />
+            <DetailField label="Phone" value={request.phone} />
+            <DetailField label="Designation" value={request.designation} />
+            <DetailField label="Company size" value={request.companySize} />
+            <DetailField label="Tax / registration ID" value={request.taxId} />
+            <div className="sm:col-span-2">
+              <DetailField label="Registered address" value={request.registeredAddress} />
+            </div>
+            <div className="sm:col-span-2">
+              <DetailField label="Use case" value={request.useCase} />
+            </div>
+            <div className="sm:col-span-2">
+              <DetailField label="Expected usage" value={request.expectedUsage} />
+            </div>
+            <DetailField label="NDA status" value={request.ndaStatus.replace(/_/g, ' ')} />
+            <DetailField label="Reviewer notes" value={request.reviewerNotes} />
+          </dl>
+
+          {isSuperAdmin ? (
+            <div className="flex flex-wrap justify-end gap-2 border-t border-gray-100 pt-4">
+              <button
+                type="button"
+                onClick={() => onReview('approved')}
+                className="rounded-lg bg-green-600 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Approve
+              </button>
+              <button
+                type="button"
+                onClick={() => onReview('rejected')}
+                className="rounded-lg bg-red-600 px-3 py-1.5 text-xs font-semibold text-white"
+              >
+                Reject
+              </button>
+            </div>
+          ) : null}
+        </div>
+      </div>
     </div>
   );
 }

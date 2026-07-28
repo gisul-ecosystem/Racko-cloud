@@ -81,7 +81,7 @@ export async function fetchOrganizationRequests(): Promise<OrganizationAccessReq
 export async function reviewOrganizationRequest(
   id: string,
   input: {
-    status: 'approved' | 'rejected' | 'more_info_required';
+    status: 'approved' | 'rejected';
     ndaStatus?: 'not_started' | 'pending' | 'completed';
     reviewerNotes?: string;
   }

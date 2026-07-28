@@ -115,6 +115,7 @@ async function providersNeedingPricing(
 export async function ensureSpecPricing({
   canonicalSpec,
   category = 'linux',
+  mode = 'vm',
   vcpu,
   ramGb,
   diskGb,
@@ -125,11 +126,12 @@ export async function ensureSpecPricing({
 } = {}) {
   const providersUsed = normalizeProviders(providers);
   const pricingMode = toPricingMode(nestedVirtualization);
-  const pricingDisk = pricingDiskType(
-    diskType === 'standard_hdd' || diskType === 'standard_ssd' ? 'storage_only' : 'vm',
-    diskType
-  );
-  const storageOnly = pricingDisk !== 'default';
+  // VM quotes must use diskType "default"; storage-only quotes use standard_ssd/hdd.
+  // Do NOT infer storage_only from the diskType string alone — that broke VM calculator
+  // lookups (writes went to standard_ssd while selectProvider queried default).
+  const quoteMode = mode === 'storage_only' ? 'storage_only' : 'vm';
+  const pricingDisk = pricingDiskType(quoteMode, diskType);
+  const storageOnly = quoteMode === 'storage_only';
   const missingProviders = await providersNeedingPricing(
     canonicalSpec,
     category,

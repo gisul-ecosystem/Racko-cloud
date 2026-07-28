@@ -194,6 +194,7 @@ export async function selectProvider({
   const dynamicMeta = await ensureSpecPricing({
     canonicalSpec: spec,
     category: cat,
+    mode,
     vcpu: parts.vcpu,
     ramGb: parts.ramGb,
     diskGb: parts.diskGb,
