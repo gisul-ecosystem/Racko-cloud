@@ -332,7 +332,16 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 
 	log.Printf("[tracker/usn] Watching volume %s (journalID=%d, startUSN=%d)", drive, journalData.UsnJournalID, startUSN)
 
-	readBuf := make([]byte, 64*1024) // 64KB read buffer
+	// Allocate a properly aligned read buffer via a fixed-size array embedded in a struct.
+	// DeviceIoControl on Windows requires the output buffer to be aligned on an 8-byte boundary.
+	// Go's make([]byte, N) doesn't guarantee alignment, causing ERROR_INVALID_USER_BUFFER.
+	type alignedBuf struct {
+		_   [0]uint64 // force 8-byte alignment
+		buf [65536]byte
+	}
+	aligned := &alignedBuf{}
+	readBuf := aligned.buf[:]
+
 	currentUSN := startUSN
 
 	ticker := time.NewTicker(2 * time.Second)
@@ -389,11 +398,7 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 				continue // nothing new
 			}
 
-			log.Printf("[tracker/usn] %s: read %d bytes in batch (USN %d→%d)",
-				drive, bytesReturned, currentUSN, nextUSN)
-
 			// Parse records starting at offset 8.
-			recordCount := 0
 			offset := uint32(8)
 			for offset < bytesReturned {
 				if offset+uint32(unsafe.Sizeof(usnRecordV2{})) > bytesReturned {
@@ -405,11 +410,8 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 				}
 
 				w.processUSNRecord(rec, readBuf[offset:offset+rec.RecordLength], volHandle, drive)
-				recordCount++
 				offset += rec.RecordLength
 			}
-
-			log.Printf("[tracker/usn] %s: processed %d records", drive, recordCount)
 
 			currentUSN = nextUSN
 			saveUSNCheckpoint(driveLetter, currentUSN)
@@ -424,11 +426,9 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 	nameOffset := rec.FileNameOffset
 	nameLen := rec.FileNameLength
 	if int(nameOffset)+int(nameLen) > len(data) {
-		log.Printf("[tracker/usn] Record name out of bounds (offset=%d len=%d dataLen=%d)", nameOffset, nameLen, len(data))
 		return
 	}
 	nameBytes := data[nameOffset : nameOffset+nameLen]
-	// Convert UTF-16LE to string
 	u16 := make([]uint16, len(nameBytes)/2)
 	for i := range u16 {
 		u16[i] = binary.LittleEndian.Uint16(nameBytes[i*2:])
@@ -438,69 +438,56 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 		return
 	}
 
-	log.Printf("[tracker/usn] Record: file=%q reason=0x%X fileRef=%d parentRef=%d",
-		fileName, rec.Reason, rec.FileReferenceNumber, rec.ParentFileReferenceNumber)
-
 	// Try to resolve the full path from the file reference number.
-	// This is best-effort — if the file was deleted, we may not be able to resolve it.
 	fullPath, err := fileRefToPath(volHandle, rec.FileReferenceNumber)
 	if err != nil {
-		log.Printf("[tracker/usn] fileRefToPath failed for %q (ref=%d): %v", fileName, rec.FileReferenceNumber, err)
-		// For deleted files we can't resolve the path from ref number.
-		// Use parent ref + filename as fallback only for delete events.
-		if rec.Reason&usnReasonFileDelete != 0 {
+		// For deleted/renamed-away files, fall back to parent ref + filename.
+		if rec.Reason&(usnReasonFileDelete|usnReasonRenameOldName) != 0 {
 			parentPath, perr := fileRefToPath(volHandle, rec.ParentFileReferenceNumber)
 			if perr == nil {
 				fullPath = filepath.Join(parentPath, fileName)
-				log.Printf("[tracker/usn] Delete fallback path: %s", fullPath)
 			} else {
-				log.Printf("[tracker/usn] Parent path also failed for %q: %v", fileName, perr)
 				return // can't determine path — skip
 			}
 		} else {
 			return
 		}
-	} else {
-		log.Printf("[tracker/usn] Resolved path: %s", fullPath)
 	}
 
-	// Apply exclusion filter — same rules as fsnotify path
+	// Apply exclusion filter
 	if shouldExcludePath(fullPath) {
 		return
 	}
 
-	// Skip directories for file_write events — we only track file content
+	// Skip directories — we only track file content
 	isDir := rec.FileAttributes&fileAttributeDirectory != 0
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	switch {
+	case rec.Reason&(usnReasonFileCreate|usnReasonDataExtend|usnReasonDataOverwrite|usnReasonDataTruncation|usnReasonNamedDataExtend) != 0:
+		if !isDir {
+			w.pending[fullPath] = usnOpWrite
+		}
+
 	case rec.Reason&usnReasonFileDelete != 0:
 		if !isDir {
-			w.pending[fullPath] = usnOpDelete
+			if existing, ok := w.pending[fullPath]; !ok || existing != usnOpWrite {
+				w.pending[fullPath] = usnOpDelete
+			}
 		}
 
 	case rec.Reason&usnReasonRenameOldName != 0:
-		// Store the old name — we'll correlate with RenameNewName
 		w.usnRenameOld[rec.FileReferenceNumber] = fullPath
 
 	case rec.Reason&usnReasonRenameNewName != 0:
 		if !isDir {
 			if oldPath, ok := w.usnRenameOld[rec.FileReferenceNumber]; ok {
-				w.renamed[fullPath] = oldPath // newPath → oldPath
+				w.renamed[fullPath] = oldPath
 				delete(w.usnRenameOld, rec.FileReferenceNumber)
 				w.pending[oldPath] = usnOpRename
 			} else {
-				// No matching old name — treat as a new write
-				w.pending[fullPath] = usnOpWrite
-			}
-		}
-
-	case rec.Reason&(usnReasonFileCreate|usnReasonDataExtend|usnReasonDataOverwrite|usnReasonDataTruncation|usnReasonNamedDataExtend) != 0:
-		if !isDir {
-			// Don't downgrade a rename to a write
-			if _, exists := w.pending[fullPath]; !exists {
 				w.pending[fullPath] = usnOpWrite
 			}
 		}
