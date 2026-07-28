@@ -3,9 +3,6 @@ import CloudRegionPricing from '../models/CloudRegionPricing.js';
 
 const RETAIL_API = 'https://prices.azure.com/api/retail/prices';
 
-const ancillaryCache = new Map();
-const ANCILLARY_TTL_MS = 6 * 60 * 60 * 1000;
-
 async function fetchRetailPage(filter, skip = 0) {
   const url = new URL(RETAIL_API);
   url.searchParams.set('$filter', filter);
@@ -25,6 +22,8 @@ async function fetchVmHourlyUsd(armSkuName, armRegionName) {
     `armRegionName eq '${armRegionName}'`,
     `priceType eq 'Consumption'`,
     `contains(meterName, 'Spot') eq false`,
+    `contains(meterName, 'Low Priority') eq false`,
+    `contains(skuName, 'Low Priority') eq false`,
     `contains(productName, 'Windows') eq false`,
   ].join(' and ');
 
@@ -34,7 +33,8 @@ async function fetchVmHourlyUsd(armSkuName, armRegionName) {
     (i) =>
       i.type === 'Consumption' &&
       typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour'
+      i.unitOfMeasure === '1 Hour' &&
+      !/Low Priority|Spot/i.test(`${i.meterName || ''} ${i.skuName || ''} ${i.productName || ''}`)
   );
   return match?.retailPrice ?? null;
 }
@@ -46,6 +46,8 @@ async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
     `armRegionName eq '${armRegionName}'`,
     `priceType eq 'Consumption'`,
     `contains(meterName, 'Spot') eq false`,
+    `contains(meterName, 'Low Priority') eq false`,
+    `contains(skuName, 'Low Priority') eq false`,
     `contains(productName, 'Windows') eq true`,
   ].join(' and ');
 
@@ -55,16 +57,13 @@ async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
     (i) =>
       i.type === 'Consumption' &&
       typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour'
+      i.unitOfMeasure === '1 Hour' &&
+      !/Low Priority|Spot/i.test(`${i.meterName || ''} ${i.skuName || ''} ${i.productName || ''}`)
   );
   return match?.retailPrice ?? null;
 }
 
 export async function fetchAzureDiskGbMonth(armRegionName) {
-  const key = `disk:${armRegionName}`;
-  const hit = ancillaryCache.get(key);
-  if (hit && Date.now() - hit.at < ANCILLARY_TTL_MS) return hit.value;
-
   const filter = [
     `serviceName eq 'Storage'`,
     `armRegionName eq '${armRegionName}'`,
@@ -95,15 +94,10 @@ export async function fetchAzureDiskGbMonth(armRegionName) {
   if (rate == null || !Number.isFinite(rate)) {
     throw new Error(`Azure Retail Prices missing Premium SSD GB-month rate for ${armRegionName}`);
   }
-  ancillaryCache.set(key, { at: Date.now(), value: rate });
   return rate;
 }
 
 export async function fetchAzurePublicIpHourly(armRegionName) {
-  const key = `ip:${armRegionName}`;
-  const hit = ancillaryCache.get(key);
-  if (hit && Date.now() - hit.at < ANCILLARY_TTL_MS) return hit.value;
-
   const filter = [
     `serviceName eq 'Virtual Network'`,
     `armRegionName eq '${armRegionName}'`,
@@ -124,7 +118,6 @@ export async function fetchAzurePublicIpHourly(armRegionName) {
   if (rate == null || !Number.isFinite(rate)) {
     throw new Error(`Azure Retail Prices missing Public IP hourly rate for ${armRegionName}`);
   }
-  ancillaryCache.set(key, { at: Date.now(), value: rate });
   return rate;
 }
 

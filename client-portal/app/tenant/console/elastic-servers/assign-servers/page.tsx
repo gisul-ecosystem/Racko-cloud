@@ -13,11 +13,16 @@ import {
   fetchAvailableTenantExternalVMs,
   fetchTenantExternalVMAssignCounts,
   unassignTenantExternalVM,
+  updateTenantExternalVmOverride,
   updateTenantExternalVmSchedule,
   type IExternalVM,
 } from '@/lib/tenantExternalVmApi';
 import { AccessScheduleBadge } from '@/components/access-schedule/AccessScheduleBadge';
 import { EditAccessScheduleModal } from '@/components/access-schedule/EditAccessScheduleModal';
+import {
+  GrantAccessOverrideModal,
+  type AccessOverridePayload,
+} from '@/components/access-schedule/GrantAccessOverrideModal';
 import { WeeklyAccessHoursEditor } from '@/components/access-schedule/WeeklyAccessHoursEditor';
 import { ApiError } from '@/lib/apiClient';
 import {
@@ -29,7 +34,7 @@ import {
   type WeeklyAccessEditorValue,
 } from '@/lib/accessSchedule';
 import type { TenantUserProfile } from '@/types/tenantPortal';
-import { UserCheck, X, Server, CheckSquare, Square, AlertCircle, Loader2, ChevronRight, CalendarClock } from 'lucide-react';
+import { UserCheck, X, Server, CheckSquare, Square, AlertCircle, Loader2, ChevronRight, CalendarClock, Shield } from 'lucide-react';
 
 function ServerCard({
   vm,
@@ -113,6 +118,7 @@ function AssignDrawer({
     createDefaultWeeklyEditorValue()
   );
   const [scheduleTarget, setScheduleTarget] = useState<IExternalVM | null>(null);
+  const [overrideTarget, setOverrideTarget] = useState<IExternalVM | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -177,14 +183,24 @@ function AssignDrawer({
                               {formatAccessScheduleDigest(schedule)}
                             </p>
                           </div>
-                          <button
-                            type="button"
-                            onClick={() => setScheduleTarget(vm)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50"
-                          >
-                            <CalendarClock className="h-3 w-3" />
-                            Edit
-                          </button>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setScheduleTarget(vm)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:bg-gray-50"
+                            >
+                              <CalendarClock className="h-3 w-3" />
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setOverrideTarget(vm)}
+                              className="inline-flex items-center gap-1 rounded-lg border border-amber-200 bg-amber-50 px-2 py-1 text-[11px] text-amber-800 hover:bg-amber-100"
+                            >
+                              <Shield className="h-3 w-3" />
+                              Override
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -281,6 +297,21 @@ function AssignDrawer({
           onSave={async (payload: AccessScheduleInput) => {
             await updateTenantExternalVmSchedule(scheduleTarget._id, payload);
             setScheduleTarget(null);
+            onChanged();
+            await load();
+          }}
+        />
+      ) : null}
+
+      {overrideTarget ? (
+        <GrantAccessOverrideModal
+          open
+          vmName={overrideTarget.name}
+          currentlyActive={Boolean(toAccessSchedule(overrideTarget.accessSchedule)?.override)}
+          onClose={() => setOverrideTarget(null)}
+          onSave={async (payload: AccessOverridePayload) => {
+            await updateTenantExternalVmOverride(overrideTarget._id, payload);
+            setOverrideTarget(null);
             onChanged();
             await load();
           }}

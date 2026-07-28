@@ -29,6 +29,9 @@ async function fetchAzureVmHourly(armSkuName, armRegionName, windows = false) {
     `armRegionName eq '${armRegionName}'`,
     `priceType eq 'Consumption'`,
     `contains(meterName, 'Spot') eq false`,
+    `contains(meterName, 'Low Priority') eq false`,
+    `contains(skuName, 'Low Priority') eq false`,
+    `contains(skuName, 'Spot') eq false`,
     windows
       ? `contains(productName, 'Windows') eq true`
       : `contains(productName, 'Windows') eq false`,
@@ -44,70 +47,17 @@ async function fetchAzureVmHourly(armSkuName, armRegionName, windows = false) {
     (i) =>
       i.type === 'Consumption' &&
       typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour'
+      i.unitOfMeasure === '1 Hour' &&
+      !/Low Priority|Spot/i.test(`${i.meterName || ''} ${i.skuName || ''} ${i.productName || ''}`)
   );
   return match?.retailPrice ?? null;
 }
 
-/** Pre-live-API Azure constant — never a current Retail IP rate we observed. */
-const LEGACY_AZURE_IP = 0.004;
-/** Pre-live-API Azure Premium SSD approximation ($/GB-month). */
-const LEGACY_AZURE_DISK_GB_MONTH = 0.12;
-
-const PRICING_CACHE_MAX_AGE_MS =
-  Number(process.env.PRICING_CACHE_MAX_AGE_MS) || 6 * 60 * 60 * 1000;
-
-function isStalePricingRow(row, diskGb) {
-  if (!row?.fetchedAt) return true;
-  if (Date.now() - new Date(row.fetchedAt).getTime() > PRICING_CACHE_MAX_AGE_MS) {
-    return true;
-  }
-  // Old Azure path wrote IP=0.004 and storage = diskGb * 0.12/730.
-  if (row.provider === 'azure' && row.rawIpPricePerHr === LEGACY_AZURE_IP) return true;
-  if (row.provider === 'azure' && diskGb != null) {
-    const legacyStorage = Number(diskGb) * (LEGACY_AZURE_DISK_GB_MONTH / 730);
-    if (
-      Number.isFinite(row.rawStoragePricePerHr) &&
-      Math.abs(row.rawStoragePricePerHr - legacyStorage) < 1e-12
-    ) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Providers that still need a live re-price for this spec.
- */
-async function providersNeedingPricing(
-  canonicalSpec,
-  category,
-  providers,
-  pricingMode,
-  diskGb
-) {
-  const rows = await CloudRegionPricing.find({
-    canonicalSpec,
-    category,
-    provider: { $in: providers },
-    ...pricingModeQuery(pricingMode),
-  })
-    .select('provider fetchedAt rawIpPricePerHr rawStoragePricePerHr')
-    .lean();
-
-  return providers.filter((p) => {
-    const mine = rows.filter((r) => r.provider === p);
-    if (mine.length === 0) return true;
-    return mine.some((r) => isStalePricingRow(r, diskGb));
-  });
-}
-
 /**
  * Ensure CloudRegionPricing has rows for this exact canonicalSpec + pricingMode.
- * Resolves SKUs dynamically when not in the static map, then prices requested providers.
- * All unit rates come from live provider price APIs — no hardcoded fallbacks.
- * Re-fetches when cache is missing, older than PRICING_CACHE_MAX_AGE_MS, or still
- * carrying known legacy Azure hardcodes (IP 0.004 / disk 0.12).
+ * Resolves SKUs dynamically when not in the static map, then re-prices all requested
+ * providers on every call using live provider price APIs. Rows are still upserted into
+ * CloudRegionPricing for inspection/debugging, but they are not treated as reusable cache.
  */
 export async function ensureSpecPricing({
   canonicalSpec,
@@ -121,17 +71,6 @@ export async function ensureSpecPricing({
 } = {}) {
   const providersUsed = normalizeProviders(providers);
   const pricingMode = toPricingMode(nestedVirtualization);
-  const missingProviders = await providersNeedingPricing(
-    canonicalSpec,
-    category,
-    providersUsed,
-    pricingMode,
-    diskGb
-  );
-  if (missingProviders.length === 0) {
-    return { cached: true, written: 0, mappings: null, providersUsed, pricingMode };
-  }
-
   const mappings = await ensureSkuMappings({
     canonicalSpec,
     vcpu,
@@ -146,7 +85,7 @@ export async function ensureSpecPricing({
   const errors = [...(mappings.errors || [])];
   const categories =
     category === 'gpu' ? ['gpu'] : category === 'windows' ? ['windows'] : [category];
-  const shouldPrice = (p) => missingProviders.includes(p);
+  const shouldPrice = (p) => providersUsed.includes(p);
 
   if (shouldPrice('aws') && mappings.aws?.instanceType) {
     for (const region of AWS_PRICING_REGIONS) {
