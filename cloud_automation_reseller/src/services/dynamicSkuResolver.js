@@ -51,6 +51,21 @@ const NESTED_AWS_FAMILIES = [
 const NESTED_AZURE_NAME_RE =
   /^Standard_(D\d+s?_v3|D\d+as_v4|D\d+ads_v5|E\d+s?_v3|E\d+as_v4|E\d+ads_v5|F\d+s_v2|F\d+)$/i;
 
+/**
+ * General-purpose Azure series for normal (non-nested) dynamic picks.
+ * Burstable B and legacy A fit tighter but invert size ladders (e.g. B2as 8GB
+ * cheaper than A2_v2 4GB), so prefer D/E/F when available.
+ */
+const PREFERRED_AZURE_NAME_RE = /^Standard_(D|E|F)\d/i;
+const BURSTABLE_OR_LEGACY_AZURE_RE = /^Standard_(B|A)\d/i;
+
+function azureFamilyRank(name) {
+  const n = String(name || '');
+  if (PREFERRED_AZURE_NAME_RE.test(n)) return 0;
+  if (BURSTABLE_OR_LEGACY_AZURE_RE.test(n)) return 2;
+  return 1;
+}
+
 let azureSkuCache = null;
 let azureSkuCacheAt = 0;
 const AZURE_SKU_TTL_MS = 6 * 60 * 60 * 1000;
@@ -166,6 +181,8 @@ async function listAwsInstanceTypes(client) {
 /**
  * Azure: use Resource SKUs API only.
  * Nested mode excludes B-series and only allows nested-capable series.
+ * Normal mode prefers D/E/F general-purpose over burstable B / legacy A so
+ * cross-cloud cheapest picks stay monotonic with size.
  * No hardcoded size ladder — returns null when the live SKU list cannot resolve a match.
  */
 export async function resolveAzureSku({
@@ -189,11 +206,20 @@ export async function resolveAzureSku({
   }
 
   const skus = await listAzureVmSkus();
-  const candidates = skus.filter((s) => {
+  let candidates = skus.filter((s) => {
     if (s.vcpu < needVcpu || s.memoryGb < needRam || s.gpu) return false;
     if (nested) return isNestedAzureSize(s.name);
     return true;
   });
+  if (!nested) {
+    const preferred = candidates.filter((s) => azureFamilyRank(s.name) === 0);
+    if (preferred.length > 0) {
+      candidates = preferred;
+    } else {
+      const nonBurst = candidates.filter((s) => azureFamilyRank(s.name) < 2);
+      if (nonBurst.length > 0) candidates = nonBurst;
+    }
+  }
   if (candidates.length === 0) {
     return null;
   }
@@ -201,6 +227,8 @@ export async function resolveAzureSku({
     const overA = a.vcpu - needVcpu + (a.memoryGb - needRam);
     const overB = b.vcpu - needVcpu + (b.memoryGb - needRam);
     if (overA !== overB) return overA - overB;
+    const rankDiff = azureFamilyRank(a.name) - azureFamilyRank(b.name);
+    if (rankDiff !== 0) return rankDiff;
     return a.name.localeCompare(b.name);
   });
   const best = candidates[0];

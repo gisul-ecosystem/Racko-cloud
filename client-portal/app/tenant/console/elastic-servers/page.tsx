@@ -11,6 +11,10 @@ import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { AccessScheduleBadge } from '@/components/access-schedule/AccessScheduleBadge';
 import { EditAccessScheduleModal } from '@/components/access-schedule/EditAccessScheduleModal';
+import {
+  GrantAccessOverrideModal,
+  type AccessOverridePayload,
+} from '@/components/access-schedule/GrantAccessOverrideModal';
 import { ApiError } from '@/lib/apiClient';
 import {
   formatAccessScheduleDigest,
@@ -19,8 +23,10 @@ import {
 } from '@/lib/accessSchedule';
 import {
   bulkDeleteTenantExternalVMs,
+  bulkUpdateTenantExternalVmOverride,
   deleteTenantExternalVM,
   fetchTenantExternalVMs,
+  updateTenantExternalVmOverride,
   updateTenantExternalVmSchedule,
   type ExternalVMProtocol,
   type IExternalVM,
@@ -28,7 +34,7 @@ import {
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
 import { hexToRgba, tenantAccentButton } from '@/lib/tenantAccentStyles';
-import { CalendarClock, Server, Plus, Upload, RefreshCw, Monitor, Trash2 } from 'lucide-react';
+import { CalendarClock, Server, Plus, Upload, RefreshCw, Monitor, Trash2, Shield } from 'lucide-react';
 
 function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
   const styles =
@@ -56,6 +62,11 @@ export default function TenantMyServersPage() {
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
   const [scheduleTarget, setScheduleTarget] = useState<IExternalVM | null>(null);
+  const [overrideTarget, setOverrideTarget] = useState<{
+    ids: string[];
+    label: string;
+    currentlyActive: boolean;
+  } | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   useEffect(() => {
@@ -150,6 +161,21 @@ export default function TenantMyServersPage() {
     refetch();
   }
 
+  async function saveOverride(payload: AccessOverridePayload) {
+    if (!overrideTarget) return;
+    if (overrideTarget.ids.length === 1) {
+      await updateTenantExternalVmOverride(overrideTarget.ids[0]!, payload);
+    } else {
+      await bulkUpdateTenantExternalVmOverride(overrideTarget.ids, payload);
+    }
+    addToast(
+      'success',
+      payload.accessOverride ? 'Access override granted.' : 'Access override revoked.'
+    );
+    setOverrideTarget(null);
+    refetch();
+  }
+
   return (
     <div className="max-w-screen-xl">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
@@ -192,6 +218,16 @@ export default function TenantMyServersPage() {
         />
       ) : null}
 
+      {overrideTarget ? (
+        <GrantAccessOverrideModal
+          open
+          vmName={overrideTarget.label}
+          currentlyActive={overrideTarget.currentlyActive}
+          onClose={() => setOverrideTarget(null)}
+          onSave={saveOverride}
+        />
+      ) : null}
+
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Servers</h1>
@@ -213,6 +249,25 @@ export default function TenantMyServersPage() {
                 className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
               >
                 {allSelected ? 'Deselect all' : 'Select all'}
+              </button>
+              <button
+                type="button"
+                disabled={selectedIds.size === 0}
+                onClick={() =>
+                  setOverrideTarget({
+                    ids: selectedServers.map((vm) => vm._id),
+                    label: `${selectedServers.length} selected server${
+                      selectedServers.length === 1 ? '' : 's'
+                    }`,
+                    currentlyActive: selectedServers.some((vm) =>
+                      Boolean(toAccessSchedule(vm.accessSchedule)?.override)
+                    ),
+                  })
+                }
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                <Shield className="h-3.5 w-3.5" />
+                Override selected{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
               </button>
               <button
                 type="button"
@@ -392,6 +447,21 @@ export default function TenantMyServersPage() {
                                   title="Edit access schedule"
                                 >
                                   <CalendarClock className="h-3.5 w-3.5" />
+                                </button>
+                                <button
+                                  onClick={() =>
+                                    setOverrideTarget({
+                                      ids: [vm._id],
+                                      label: vm.name,
+                                      currentlyActive: Boolean(
+                                        toAccessSchedule(vm.accessSchedule)?.override
+                                      ),
+                                    })
+                                  }
+                                  className="inline-flex items-center justify-center rounded-lg border border-amber-200 bg-amber-50 p-1.5 text-amber-800 transition hover:bg-amber-100"
+                                  title="Grant access override"
+                                >
+                                  <Shield className="h-3.5 w-3.5" />
                                 </button>
                                 <button
                                   onClick={() => setPendingDelete(vm)}

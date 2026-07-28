@@ -213,6 +213,38 @@ export class TenantExternalVmController {
     }
   }
 
+  async updateOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const data = await externalVMService.updateTenantExternalVmOverride(
+        id,
+        tenantActor(req),
+        req.body as { accessOverride: boolean; accessOverrideUntil?: string | null }
+      );
+      success(res, 'Server access override updated.', data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async bulkUpdateOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { ids, ...body } = req.body as {
+        ids: string[];
+        accessOverride: boolean;
+        accessOverrideUntil?: string | null;
+      };
+      const data = await externalVMService.bulkUpdateTenantExternalVmOverride(
+        ids.map((id) => new mongoose.Types.ObjectId(id)),
+        tenantActor(req),
+        body
+      );
+      success(res, `Access override updated for ${data.updated} server(s).`, data);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   async getOne(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);

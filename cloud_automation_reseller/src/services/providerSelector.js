@@ -107,7 +107,7 @@ export async function selectProvider({
 
   const modeFilter = pricingModeQuery(pricingMode);
 
-  // Always run ensure first so stale/legacy-hardcoded cache rows are refreshed.
+  // Always run ensure first so each request prices the requested providers live.
   const dynamicMeta = await ensureSpecPricing({
     canonicalSpec: spec,
     category: cat,
@@ -149,7 +149,7 @@ export async function selectProvider({
   return {
     ...toSelectResult(
       row,
-      dynamicMeta && !dynamicMeta.cached
+      dynamicMeta
         ? pricingMode === 'nested'
           ? 'cheapest_cloud_nested_dynamic'
           : 'cheapest_cloud_dynamic'
