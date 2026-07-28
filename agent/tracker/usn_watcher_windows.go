@@ -373,6 +373,8 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 						(*byte)(unsafe.Pointer(&jd)), uint32(unsafe.Sizeof(jd)), &bytesReturned, nil)
 					currentUSN = jd.NextUsn
 					log.Printf("[tracker/usn] Journal wrapped on %s — resetting to USN %d", drive, currentUSN)
+				} else {
+					log.Printf("[tracker/usn] DeviceIoControl READ error on %s: %v", drive, err)
 				}
 				continue
 			}
@@ -387,7 +389,11 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 				continue // nothing new
 			}
 
+			log.Printf("[tracker/usn] %s: read %d bytes in batch (USN %d→%d)",
+				drive, bytesReturned, currentUSN, nextUSN)
+
 			// Parse records starting at offset 8.
+			recordCount := 0
 			offset := uint32(8)
 			for offset < bytesReturned {
 				if offset+uint32(unsafe.Sizeof(usnRecordV2{})) > bytesReturned {
@@ -399,8 +405,11 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 				}
 
 				w.processUSNRecord(rec, readBuf[offset:offset+rec.RecordLength], volHandle, drive)
+				recordCount++
 				offset += rec.RecordLength
 			}
+
+			log.Printf("[tracker/usn] %s: processed %d records", drive, recordCount)
 
 			currentUSN = nextUSN
 			saveUSNCheckpoint(driveLetter, currentUSN)
@@ -415,6 +424,7 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 	nameOffset := rec.FileNameOffset
 	nameLen := rec.FileNameLength
 	if int(nameOffset)+int(nameLen) > len(data) {
+		log.Printf("[tracker/usn] Record name out of bounds (offset=%d len=%d dataLen=%d)", nameOffset, nameLen, len(data))
 		return
 	}
 	nameBytes := data[nameOffset : nameOffset+nameLen]
@@ -428,22 +438,30 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 		return
 	}
 
+	log.Printf("[tracker/usn] Record: file=%q reason=0x%X fileRef=%d parentRef=%d",
+		fileName, rec.Reason, rec.FileReferenceNumber, rec.ParentFileReferenceNumber)
+
 	// Try to resolve the full path from the file reference number.
 	// This is best-effort — if the file was deleted, we may not be able to resolve it.
 	fullPath, err := fileRefToPath(volHandle, rec.FileReferenceNumber)
 	if err != nil {
+		log.Printf("[tracker/usn] fileRefToPath failed for %q (ref=%d): %v", fileName, rec.FileReferenceNumber, err)
 		// For deleted files we can't resolve the path from ref number.
 		// Use parent ref + filename as fallback only for delete events.
 		if rec.Reason&usnReasonFileDelete != 0 {
 			parentPath, perr := fileRefToPath(volHandle, rec.ParentFileReferenceNumber)
 			if perr == nil {
 				fullPath = filepath.Join(parentPath, fileName)
+				log.Printf("[tracker/usn] Delete fallback path: %s", fullPath)
 			} else {
+				log.Printf("[tracker/usn] Parent path also failed for %q: %v", fileName, perr)
 				return // can't determine path — skip
 			}
 		} else {
 			return
 		}
+	} else {
+		log.Printf("[tracker/usn] Resolved path: %s", fullPath)
 	}
 
 	// Apply exclusion filter — same rules as fsnotify path
