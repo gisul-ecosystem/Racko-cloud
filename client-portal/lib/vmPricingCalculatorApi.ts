@@ -28,6 +28,42 @@ export interface PricingPeriod {
   yearly: number | null;
 }
 
+export interface VmPricingDynamicMappings {
+  aws?: {
+    instanceType: string;
+    ebsGb?: number;
+    source?: string;
+  } | null;
+  azure?: {
+    vmSize: string;
+    diskGb?: number;
+    source?: string;
+  } | null;
+  oci?: {
+    shape: string;
+    ocpus?: number;
+    memoryInGBs?: number;
+    bootVolumeGb?: number;
+    source?: string;
+  } | null;
+  gcp?: {
+    machineType: string;
+    diskGb?: number;
+    acceleratorCount?: number;
+    source?: string;
+  } | null;
+}
+
+export interface VmPricingDynamicMeta {
+  cached: boolean;
+  written: number;
+  providersUsed?: CloudProvider[];
+  pricingMode?: 'normal' | 'nested';
+  mappings?: VmPricingDynamicMappings | null;
+  errors?: string[];
+  errorCount?: number;
+}
+
 export interface VmPricingSelectResult {
   provider: CloudProvider | 'webyne';
   region: string | null;
@@ -58,6 +94,7 @@ export interface VmPricingSelectResult {
   autoProvisioned: boolean;
   reason?: string;
   providersUsed?: CloudProvider[];
+  dynamicPricing?: VmPricingDynamicMeta;
   fetchedAt?: string;
   resolvedSkus?: Partial<Record<CloudProvider, string | null>>;
   usdToInr?: number;

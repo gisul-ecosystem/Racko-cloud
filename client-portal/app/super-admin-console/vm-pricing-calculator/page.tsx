@@ -130,12 +130,15 @@ export default function VmPricingCalculatorPage() {
       if (selection.reason === 'no_cloud_pricing_for_spec') {
         setResult(null);
         setFxMeta({});
+        const detailErrors = selection.dynamicPricing?.errors?.slice(0, 3) ?? [];
+        const detail =
+          detailErrors.length > 0 ? ` Details: ${detailErrors.join(' · ')}` : '';
         setError(
           isOciBlockVolume
-            ? 'No OCI block volume pricing found for that size.'
+            ? `No OCI block volume pricing found for that size.${detail}`
             : isStorageOnly
-            ? 'No cloud storage pricing found for that size and disk type.'
-            : 'No cloud pricing found for that spec.'
+            ? `No cloud storage pricing found for that size and disk type.${detail}`
+            : `No cloud pricing found for that spec.${detail}`
         );
         return;
       }
