@@ -132,6 +132,38 @@ export async function appendActivity(
     }
   }
 
+  // File write deduplication: when a file is re-uploaded (same path, new content),
+  // delete the previous S3 object so only the latest version is kept in storage.
+  if (type === 'file_write') {
+    const writePayload = payload as { path?: string; storageRef?: string };
+    if (writePayload.path) {
+      const prevActivity = await MachineActivityModel.findOne({
+        machineId: machine._id,
+        type: 'file_write',
+        'payload.path': writePayload.path,
+      }).sort({ sequence: -1 }); // most recent first
+
+      if (prevActivity) {
+        const prevPayload = prevActivity.payload as { storageRef?: string };
+        if (prevPayload.storageRef && prevPayload.storageRef !== writePayload.storageRef) {
+          try {
+            await seaweedfsService.delete(prevPayload.storageRef);
+            logger.debug('[Tracker] Deleted old S3 object on file update', {
+              path: writePayload.path,
+              oldStorageRef: prevPayload.storageRef,
+            });
+          } catch (err) {
+            logger.warn('[Tracker] Could not delete old S3 object on file update (non-fatal)', {
+              path: writePayload.path,
+              storageRef: prevPayload.storageRef,
+              err,
+            });
+          }
+        }
+      }
+    }
+  }
+
   // Atomic sequence increment — stored in a small counter doc alongside activity
   const counter = await ActivityCounterModel.findOneAndUpdate(
     { machineId: machine._id },
