@@ -324,12 +324,22 @@ func (w *Watcher) uploadFile(path string, sizeBytes int64, hash string) (string,
 	}
 	defer f.Close()
 
+	// Get the actual current file size at upload time — not the size at event time.
+	// Files can grow between when the USN event fires and when the flush runs
+	// (e.g. Chrome DLLs being written during installation). Using stale sizeBytes
+	// causes ContentLength mismatch → broken connection.
+	actualInfo, err := f.Stat()
+	if err != nil {
+		return "", fmt.Errorf("stat file at upload time: %w", err)
+	}
+	actualSize := actualInfo.Size()
+
 	putReq, err := http.NewRequest(http.MethodPut, urlResult.Data.PresignedUrl, f)
 	if err != nil {
 		return "", fmt.Errorf("build PUT request: %w", err)
 	}
 	putReq.Header.Set("Content-Type", mimeType)
-	putReq.ContentLength = sizeBytes
+	putReq.ContentLength = actualSize
 
 	// Use a longer timeout for large files
 	uploadClient := &http.Client{Timeout: 30 * time.Minute}
