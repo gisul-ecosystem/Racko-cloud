@@ -17,6 +17,7 @@ import {
   GetObjectCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { Readable } from 'stream';
 import { config } from '../config';
 import { logger } from '../utils/logger';
@@ -148,6 +149,44 @@ class SeaweedFSService {
     } catch (err) {
       logger.warn('[SeaweedFS] Delete failed (non-fatal)', { key: storageRef, err });
     }
+  }
+
+  /**
+   * Generate a presigned PUT URL for direct agent-to-S3 upload.
+   *
+   * The agent uses this URL to PUT the file directly to SeaweedFS,
+   * bypassing nginx and core-api entirely — no size limit, no memory pressure.
+   *
+   * @param machineId   Owning machine ID (used as key prefix)
+   * @param sha256      SHA256 hash of the file (used for dedup in the key)
+   * @param filename    Original filename
+   * @param mimeType    MIME type of the file
+   * @param ttlSeconds  How long the URL is valid (default: 1 hour)
+   * @returns           { presignedUrl, storageRef }
+   */
+  async generatePresignedPutUrl(
+    machineId: string,
+    sha256: string,
+    filename: string,
+    mimeType: string,
+    ttlSeconds = 3600
+  ): Promise<{ presignedUrl: string; storageRef: string }> {
+    const safeFilename = filename.replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const storageRef = `${machineId}/${sha256}/${safeFilename}`;
+
+    const command = new PutObjectCommand({
+      Bucket:      this.bucket,
+      Key:         storageRef,
+      ContentType: mimeType,
+    });
+
+    const presignedUrl = await getSignedUrl(getClient(), command, {
+      expiresIn: ttlSeconds,
+    });
+
+    logger.debug('[SeaweedFS] Generated presigned PUT URL', { storageRef, ttlSeconds });
+
+    return { presignedUrl, storageRef };
   }
 }
 

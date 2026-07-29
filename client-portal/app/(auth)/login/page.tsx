@@ -27,7 +27,6 @@ interface ResendResponse {
 
 export default function LoginPage() {
   const { login } = useAuth();
-
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -68,7 +67,7 @@ export default function LoginPage() {
             setLockedUntil(unlockDate.toLocaleTimeString());
           }
           setErrors({ general: err.message });
-        } else if (err.code === 'EMAIL_NOT_VERIFIED') {
+        } else if (err.code === 'EMAIL_NOT_VERIFIED' || err.code === 'PASSWORD_SETUP_REQUIRED') {
           setErrors({ general: err.message });
         } else {
           setErrors({ general: err.message });
@@ -167,7 +166,7 @@ export default function LoginPage() {
               <div className={`rounded-lg px-4 py-3 text-sm ${
                 errorCode === 'ACCOUNT_LOCKED'
                   ? 'bg-purple-900/30 border border-purple-700 text-purple-300'
-                  : errorCode === 'EMAIL_NOT_VERIFIED'
+                  : errorCode === 'EMAIL_NOT_VERIFIED' || errorCode === 'PASSWORD_SETUP_REQUIRED'
                   ? 'bg-yellow-900/30 border border-yellow-700 text-yellow-300'
                   : 'bg-red-900/30 border border-red-700 text-red-300'
               }`}>
@@ -190,6 +189,13 @@ export default function LoginPage() {
                     )}
                   </div>
                 )}
+                {errorCode === 'PASSWORD_SETUP_REQUIRED' && (
+                  <div className="mt-2">
+                    <Link href="/forgot-password" className="text-xs text-yellow-200 underline">
+                      Need a fresh password setup link?
+                    </Link>
+                  </div>
+                )}
               </div>
             )}
 
@@ -205,9 +211,7 @@ export default function LoginPage() {
 
           <p className="text-center text-sm text-gray-400 mt-6">
             Don&apos;t have an account?{' '}
-            <Link href="/register" className={LINK_ACCENT}>
-              Register as Admin
-            </Link>
+            <Link href="/register" className={LINK_ACCENT}>Register</Link>
           </p>
         </div>
       </div>

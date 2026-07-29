@@ -82,6 +82,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.replace('/login');
       return;
     }
+    if (user.accountType === 'b2c' && user.onboardingStatus === 'kyc_pending') {
+      router.replace('/onboarding/individual-kyc');
+      return;
+    }
+    if (
+      user.accountType === 'b2b' &&
+      ['org_details_pending', 'org_review_pending', 'org_rejected'].includes(user.onboardingStatus)
+    ) {
+      router.replace('/onboarding/organization');
+      return;
+    }
     if (pathname.startsWith('/dashboard/super-admin') && user.role !== 'super_admin') {
       router.replace('/dashboard/admin');
     }

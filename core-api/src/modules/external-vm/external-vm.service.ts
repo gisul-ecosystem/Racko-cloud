@@ -22,9 +22,13 @@ import {
   parseAccessScheduleInput,
   type AccessScheduleInput,
 } from '../vmAccessSchedule/accessScheduleParse';
-import { checkAccessWindow } from '../vmAccessSchedule/scheduleManager';
+import {
+  cancelSchedule,
+  checkAccessWindow,
+  unblockUserSession,
+} from '../vmAccessSchedule/scheduleManager';
 
-type PlatformActorRole = 'admin' | 'super_admin' | 'user';
+type PlatformActorRole = 'admin' | 'super_admin' | 'staff' | 'user';
 
 interface TenantExternalVmActor {
   id: string;
@@ -772,6 +776,76 @@ class ExternalVMService {
     });
 
     return toAccessScheduleView(doc);
+  }
+
+  /**
+   * Grant or revoke access override for a tenant-owned elastic server (tenant_admin).
+   * Lets the assigned user connect outside weekly / legacy schedule windows.
+   */
+  async updateTenantExternalVmOverride(
+    id: mongoose.Types.ObjectId,
+    actor: TenantExternalVmActor,
+    body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+  ): Promise<NonNullable<ExternalVMResponse['accessSchedule']>> {
+    if (actor.role !== 'tenant_admin') {
+      throw new ForbiddenError('Only tenant admins can grant access overrides.');
+    }
+
+    const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
+
+    if (body.accessOverride) {
+      doc.accessOverride = true;
+      doc.accessOverrideUntil = body.accessOverrideUntil
+        ? new Date(body.accessOverrideUntil)
+        : null;
+      cancelSchedule(doc._id.toString());
+      if (doc.assignedTenantUserId) {
+        unblockUserSession(doc.assignedTenantUserId.toString());
+      }
+    } else {
+      doc.accessOverride = false;
+      doc.accessOverrideUntil = null;
+    }
+
+    await doc.save();
+
+    logger.info('[ExternalVM] Access override updated', {
+      externalVmId: doc._id.toString(),
+      tenantId: actor.tenantId,
+      actorId: actor.id,
+      accessOverride: doc.accessOverride,
+      accessOverrideUntil: doc.accessOverrideUntil,
+    });
+
+    return toAccessScheduleView(doc);
+  }
+
+  async bulkUpdateTenantExternalVmOverride(
+    ids: mongoose.Types.ObjectId[],
+    actor: TenantExternalVmActor,
+    body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+  ): Promise<{
+    updated: number;
+    results: Array<{ externalVmId: string; ok: boolean; error?: string }>;
+  }> {
+    const results: Array<{ externalVmId: string; ok: boolean; error?: string }> = [];
+    let updated = 0;
+
+    for (const id of ids) {
+      try {
+        await this.updateTenantExternalVmOverride(id, actor, body);
+        results.push({ externalVmId: id.toString(), ok: true });
+        updated += 1;
+      } catch (err) {
+        results.push({
+          externalVmId: id.toString(),
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return { updated, results };
   }
 
   private async openGuacamole(

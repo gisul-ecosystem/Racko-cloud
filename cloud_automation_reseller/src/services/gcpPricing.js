@@ -19,10 +19,6 @@ const MACHINE_RESOURCES = {
   'g2-standard-4': { vcpu: 4, ramGb: 16, family: 'g2' },
 };
 
-let skuCache = null;
-let skuCacheAt = 0;
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-
 function requireGcpAuth() {
   if (!gcpConfig.apiKey && !gcpConfig.keyFilename && !gcpConfig.credentials) {
     throw new Error(
@@ -85,8 +81,6 @@ async function fetchCatalogPage(pageToken) {
 }
 
 async function loadComputeSkus() {
-  if (skuCache && Date.now() - skuCacheAt < CACHE_TTL_MS) return skuCache;
-
   const skus = [];
   let pageToken = '';
   let pages = 0;
@@ -102,8 +96,6 @@ async function loadComputeSkus() {
     throw new Error('GCP Billing Catalog returned no Compute Engine SKUs');
   }
 
-  skuCache = skus;
-  skuCacheAt = Date.now();
   return skus;
 }
 
@@ -167,11 +159,17 @@ export async function getGcpUnitRates(region = 'asia-south1') {
       new RegExp(place, 'i').test(s.description || '') &&
       !/Spot|Preemptible|N2D/i.test(s.description || ''),
   ]);
-  const pd = findRate(skus, [
+  const pdBalanced = findRate(skus, [
     (s) =>
       /Balanced PD Capacity/i.test(s.description || '') &&
       new RegExp(place, 'i').test(s.description || ''),
     (s) => /Balanced PD Capacity/i.test(s.description || ''),
+  ]);
+  const pdStandard = findRate(skus, [
+    (s) =>
+      /Standard PD Capacity/i.test(s.description || '') &&
+      new RegExp(place, 'i').test(s.description || ''),
+    (s) => /Standard PD Capacity/i.test(s.description || ''),
   ]);
   const ip = findRate(skus, [
     (s) => /Static Ip Charge/i.test(s.description || '') && /In Use/i.test(s.description || ''),
@@ -202,7 +200,8 @@ export async function getGcpUnitRates(region = 'asia-south1') {
     n1RamGbPerHr: requireRate(`N1 RAM (${place})`, n1Ram),
     n2CorePerHr: n2Core,
     n2RamGbPerHr: n2Ram,
-    pdBalancedGbPerMonth: requireRate(`Balanced PD (${place})`, pd),
+    pdBalancedGbPerMonth: requireRate(`Balanced PD (${place})`, pdBalanced),
+    pdStandardGbPerMonth: requireRate(`Standard PD (${place})`, pdStandard),
     publicIpPerHr: requireRate('Public IP in-use', ip),
     windowsCorePerHr: windows,
     t4GpuPerHr: t4Gpu,
@@ -225,6 +224,7 @@ export function machineResources(machineType) {
 export function computeGcpHourly({
   machineType,
   diskGb,
+  diskType = 'standard_ssd',
   category = 'linux',
   acceleratorCount = 0,
   rates,
@@ -263,7 +263,9 @@ export function computeGcpHourly({
     }
     compute += Number(acceleratorCount) * rates.t4GpuPerHr;
   }
-  const storage = (Number(diskGb) || 0) * (rates.pdBalancedGbPerMonth / 730);
+  const diskGbMonth =
+    diskType === 'standard_hdd' ? rates.pdStandardGbPerMonth : rates.pdBalancedGbPerMonth;
+  const storage = (Number(diskGb) || 0) * (diskGbMonth / 730);
   const ip = rates.publicIpPerHr;
   return {
     rawComputePricePerHr: compute,

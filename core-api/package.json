@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.621.0",
+    "@aws-sdk/s3-request-presigner": "^3.621.0",
     "argon2": "^0.31.2",
     "axios": "^1.18.1",
     "axios-cookiejar-support": "^7.0.0",

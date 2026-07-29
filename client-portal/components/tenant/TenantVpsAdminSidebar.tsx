@@ -21,7 +21,7 @@ interface TenantVpsAdminSidebarProps {
   onCloseSidebar: () => void;
 }
 
-/** Mirrors admin VpsAdminSidebar labels/order under /tenant/dashboard/admin. */
+/** Mirrors admin VpsAdminSidebar labels/order under /console/dashboard/admin. */
 export function TenantVpsAdminSidebar({
   sidebarOpen,
   onCloseSidebar,

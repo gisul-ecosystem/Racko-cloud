@@ -71,7 +71,7 @@ function StatCard({
 
 /**
  * Shared VPS Overview dashboard used by admin `/dashboard/admin`
- * and tenant `/tenant/dashboard/overview` — same UI, different data source.
+ * and tenant `/console/dashboard/overview` — same UI, different data source.
  */
 export function VpsOverviewDashboard({
   email,

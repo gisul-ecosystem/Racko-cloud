@@ -308,7 +308,7 @@ export function TenantVmDetailView() {
         <PageNotice>
           Plan expired.{' '}
           {isAdmin ? (
-            <Link href={`/tenant/dashboard/plans/${vm.id}`} className="font-medium underline">
+            <Link href={`/console/dashboard/plans/${vm.id}`} className="font-medium underline">
               Renew this VM in VM Plans
             </Link>
           ) : (
@@ -442,7 +442,7 @@ export function TenantVmDetailView() {
             <div className="mt-4 border-t border-gray-100 pt-4">
               {isAdmin ? (
                 <Link
-                  href={`/tenant/dashboard/plans/${vm.id}`}
+                  href={`/console/dashboard/plans/${vm.id}`}
                   className="inline-flex items-center gap-1 text-sm font-medium hover:underline"
                   style={{ color: accentColor }}
                 >
@@ -474,7 +474,7 @@ export function TenantVmDetailView() {
                   <p className="text-xs text-gray-500">
                     To remove access,{' '}
                     <Link
-                      href="/tenant/dashboard/admin/users"
+                      href="/console/dashboard/admin/users"
                       className="font-medium hover:underline"
                       style={{ color: accentColor }}
                     >
@@ -487,7 +487,7 @@ export function TenantVmDetailView() {
                 <div className="space-y-3">
                   <p className="text-sm text-gray-500">No user assigned to this VM.</p>
                   <Link
-                    href="/tenant/dashboard/admin/assign-vms"
+                    href="/console/dashboard/admin/assign-vms"
                     className="inline-flex text-sm font-medium hover:underline"
                     style={{ color: accentColor }}
                   >

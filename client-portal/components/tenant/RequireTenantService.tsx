@@ -6,6 +6,7 @@ import { Loader2 } from 'lucide-react';
 import { useTenantServices } from '@/context/TenantServicesContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import type { TenantServiceKey } from '@/types/tenantPortal';
+import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 
 interface RequireTenantServiceProps {
   serviceKey: TenantServiceKey;
@@ -31,7 +32,7 @@ export function RequireTenantService({
 
   useEffect(() => {
     if (!loading && !allowed) {
-      router.replace('/tenant/console');
+      router.replace(TENANT_CONSOLE);
     }
   }, [loading, allowed, router]);
 

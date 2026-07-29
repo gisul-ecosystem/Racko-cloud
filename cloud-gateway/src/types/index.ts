@@ -1,6 +1,6 @@
 import type { Request } from 'express';
 
-export type UserRole = 'super_admin' | 'admin' | 'user';
+export type UserRole = 'super_admin' | 'staff' | 'admin' | 'user';
 
 export interface VerifiedUser {
   userId: string;

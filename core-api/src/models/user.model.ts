@@ -1,13 +1,15 @@
 import mongoose, { Document, Model, Schema } from 'mongoose';
 import { hashPassword, verifyPassword } from '../utils/argon2';
 import { v4 as uuidv4 } from 'uuid';
-import type { UserRole } from '../types';
+import type { UserRole, AccountType, OnboardingStatus } from '../types';
 
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
   email: string;
   password: string;
   role: UserRole;
+  accountType: AccountType;
+  onboardingStatus: OnboardingStatus;
   isEmailVerified: boolean;
   isActive: boolean;
   isLocked: boolean;
@@ -21,7 +23,10 @@ export interface IUser extends Document {
   passwordChangedAt?: Date;
   passwordResetToken?: string;
   passwordResetExpires?: Date;
+  mustSetPassword?: boolean;
   createdBy?: mongoose.Types.ObjectId;  // admin who provisioned this user (null for self-registered)
+  /** When set on role=admin, this user is an org operator under the owner admin. */
+  orgOwnerId?: mongoose.Types.ObjectId;
   enrollmentKey: string;                // used for VM template agent auto-registration
   /** Platform admin service entitlements were initialized (defaults or full catalog). */
   adminServicesSeeded?: boolean;
@@ -53,9 +58,21 @@ const userSchema = new Schema<IUser, IUserModel>(
     },
     role: {
       type: String,
-      enum: ['super_admin', 'admin', 'user'],
+      enum: ['super_admin', 'staff', 'admin', 'user'],
       default: 'admin',
       required: true,
+    },
+    accountType: {
+      type: String,
+      enum: ['legacy', 'b2c', 'b2b'],
+      default: 'b2c',
+      index: true,
+    },
+    onboardingStatus: {
+      type: String,
+      enum: ['active', 'kyc_pending', 'org_details_pending', 'org_review_pending', 'org_approved', 'org_rejected'],
+      default: 'active',
+      index: true,
     },
     isEmailVerified: {
       type: Boolean,
@@ -105,7 +122,16 @@ const userSchema = new Schema<IUser, IUserModel>(
     passwordResetExpires: {
       type: Date,
     },
+    mustSetPassword: {
+      type: Boolean,
+      default: false,
+    },
     createdBy: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      index: true,
+    },
+    orgOwnerId: {
       type: Schema.Types.ObjectId,
       ref: 'User',
       index: true,
