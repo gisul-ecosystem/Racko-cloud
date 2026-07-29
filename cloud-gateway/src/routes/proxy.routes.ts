@@ -94,6 +94,14 @@ const sharedProxyOptions = {
 // Explicit routes use the full path — no rewrite needed
 const coreApiProxy = createProxyMiddleware(sharedProxyOptions);
 
+/** Live multi-cloud pricing can take >10s; default REQUEST_TIMEOUT_MS is too short. */
+const PRICING_PROXY_TIMEOUT_MS = Math.max(config.REQUEST_TIMEOUT_MS, 300_000);
+const coreApiPricingProxy = createProxyMiddleware({
+  ...sharedProxyOptions,
+  timeout: PRICING_PROXY_TIMEOUT_MS,
+  proxyTimeout: PRICING_PROXY_TIMEOUT_MS,
+});
+
 // Catch-all mounted at /api/v1 — Express strips that prefix from req.url before
 // the proxy runs, so we must restore it for core-api routes like /api/v1/tenants
 const coreApiCatchAllProxy = createProxyMiddleware({
@@ -307,8 +315,8 @@ router.patch('/api/v1/vm-catalog/requests/:id/attach', authMiddleware, verifyMid
 router.patch('/api/v1/vm-catalog/requests/:id/change-template', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/vm-catalog/requests/:id/power', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.patch('/api/v1/vm-catalog/requests/:id/reject', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
-router.post('/api/v1/vm-catalog/pricing/calculate', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
-router.get('/api/v1/vm-catalog/pricing', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/vm-catalog/pricing/calculate', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiPricingProxy);
+router.get('/api/v1/vm-catalog/pricing', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiPricingProxy);
 
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
