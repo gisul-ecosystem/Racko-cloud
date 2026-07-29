@@ -511,7 +511,6 @@ export function OrgAdminRequestDetailPanel({
                 onDeleteUser={onDeleteUser}
                 onTriggerCleanup={onManualCleanup}
                 onRequestCleanup={onRequestCleanup}
-                cleanupRunning={cleanupRunning}
                 onUpdateRoles={onUpdateRoles}
                 fetchUserMonitoring={fetchUserMonitoring}
                 onFetchAzureCost={onFetchAzureCost}

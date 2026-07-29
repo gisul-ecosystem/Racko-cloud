@@ -47,7 +47,7 @@ export function OrgAdminAddUsersModal({
     }
 
     if (parsedCount > maxCount) {
-      setError(`You can add up to ${maxCount} user${maxCount === 1 ? '' : 's'} at a time.`);
+      setError(`You can add up to ${maxCount} users at a time.`);
       return null;
     }
 

@@ -312,6 +312,8 @@ export function OrgAdminPortal() {
 
           {filtered.map((request) => {
             const open = selectedRequestId === request.id;
+            const startRaw = request.startsAt || request.startDate;
+            const expiryRaw = request.expiresAt || request.expiryDate;
 
             return (
               <div key={request.id}>
@@ -355,27 +357,25 @@ export function OrgAdminPortal() {
                     <OrgAdminLabStatusBadge status={request.status} />
                     <div className="flex items-center gap-1.5 text-xs text-gray-400">
                       <span>
-                        {(request.startsAt || request.startDate
-                          ? new Date(request.startsAt || request.startDate)
-                          : null
-                        )?.toLocaleString(undefined, {
+                        {startRaw
+                          ? new Date(startRaw).toLocaleString(undefined, {
                           month: 'numeric',
                           day: 'numeric',
                           hour: '2-digit',
                           minute: '2-digit',
-                        }) || '—'}
+                        })
+                          : '—'}
                       </span>
                       <span>→</span>
                       <span>
-                        {(request.expiresAt || request.expiryDate
-                          ? new Date(request.expiresAt || request.expiryDate)
-                          : null
-                        )?.toLocaleString(undefined, {
+                        {expiryRaw
+                          ? new Date(expiryRaw).toLocaleString(undefined, {
                           month: 'numeric',
                           day: 'numeric',
                           hour: '2-digit',
                           minute: '2-digit',
-                        }) || '—'}
+                        })
+                          : '—'}
                       </span>
                     </div>
                     <ChevronRight
