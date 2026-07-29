@@ -513,7 +513,7 @@ func shouldExcludePath(path string) bool {
 		// Windows Timeline / Activity History — auto-managed by OS, not user content
 		`appdata\local\connecteddevicesplatform`,
 		// Windows Token Broker cache — SSO/auth tokens managed by OS
-		`appdata\local\microsoft\tokenbrokercache`,
+		`appdata\local\microsoft\tokenbroker\cache`,
 		// Temp folders — transient
 		`appdata\local\temp`,
 		`appdata\locallow`,

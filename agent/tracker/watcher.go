@@ -199,8 +199,6 @@ func (w *Watcher) flush() {
 	w.renamed = make(map[string]string)
 	w.mu.Unlock()
 
-	log.Printf("[tracker/watcher] flush: processing %d pending events", len(snapshot))
-
 	for path, op := range snapshot {
 		switch op {
 		case usnOpDelete:
@@ -290,8 +288,6 @@ func (w *Watcher) uploadFile(path string, sizeBytes int64, hash string) (string,
 		url.QueryEscape(filepath.Base(path)),
 		url.QueryEscape(mimeType),
 	)
-
-	log.Printf("[tracker/watcher] requesting presigned URL: %s", uploadURL)
 
 	req, err := http.NewRequest(http.MethodGet, uploadURL, nil)
 	if err != nil {
