@@ -536,6 +536,10 @@ func shouldExcludePath(path string) bool {
 		`swapfile.sys`,
 		// Office lock files
 		`~$`,
+		// Temporary files — browser downloads, partial files, system temp
+		`.tmp`,
+		`.crdownload`,  // Chrome/Edge partial downloads
+		`.part`,        // Firefox partial downloads
 		// Recycle bin and system restore
 		`$recycle.bin`,
 		`system volume information`,
