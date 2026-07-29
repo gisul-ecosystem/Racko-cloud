@@ -444,14 +444,11 @@ func hashFile(path string) string {
 }
 
 // getWatchPaths returns the list of root paths the tracker watches for changes.
-// These are the same paths the watcher monitors — centralised here so baseline
-// and watcher always agree on what is in scope.
+// Only user data paths are tracked — software installation paths (Program Files,
+// ProgramData) are excluded since we only clone user files, not software.
 func getWatchPaths() []string {
 	return []string{
 		`C:\Users`,
-		`C:\Program Files`,
-		`C:\Program Files (x86)`,
-		`C:\ProgramData`,
 		`C:\tools`,
 		`C:\dev`,
 		`C:\projects`,
