@@ -26,6 +26,7 @@ import (
 	"log"
 	"mime"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -281,13 +282,16 @@ func (w *Watcher) uploadFile(path string, sizeBytes int64, hash string) (string,
 	}
 
 	// ── Step 2: Request a presigned PUT URL from core-api ─────────────────────
+	// URL-encode query params — mimeType contains '/' which would break the URL
 	uploadURL := fmt.Sprintf(
 		"%s/api/v1/agent/upload-url?sha256=%s&filename=%s&mimeType=%s",
 		w.cfg.PlatformURL,
 		hash,
-		filepath.Base(path),
-		mimeType,
+		url.QueryEscape(filepath.Base(path)),
+		url.QueryEscape(mimeType),
 	)
+
+	log.Printf("[tracker/watcher] requesting presigned URL: %s", uploadURL)
 
 	req, err := http.NewRequest(http.MethodGet, uploadURL, nil)
 	if err != nil {
