@@ -82,6 +82,7 @@ export async function selectProvider({
   specs,
   providers,
   nestedVirtualization = false,
+  architecture,
 } = {}) {
   const providersUsed = normalizeProviders(providers);
   const days = Number(durationDays) || 0;
@@ -117,6 +118,7 @@ export async function selectProvider({
     gpu: parts.gpu,
     providers: providersUsed,
     nestedVirtualization: pricingMode === 'nested',
+    architecture,
   });
 
   const row = await CloudRegionPricing.findOne({
@@ -141,6 +143,7 @@ export async function selectProvider({
       reason: 'no_cloud_pricing_for_spec',
       providersUsed,
       dynamicPricing: dynamicMeta,
+      architecturePreference: dynamicMeta?.mappings?.architecturePreference,
     };
   }
 
@@ -159,5 +162,7 @@ export async function selectProvider({
       providersUsed
     ),
     ...(resolvedSkus ? { resolvedSkus } : {}),
+    architecturePreference: dynamicMeta?.architecturePreference
+      || dynamicMeta?.mappings?.architecturePreference,
   };
 }

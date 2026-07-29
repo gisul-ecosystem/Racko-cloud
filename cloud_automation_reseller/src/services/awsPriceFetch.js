@@ -18,6 +18,33 @@ export function extractOnDemandUsd(priceList) {
   }
 }
 
+function onDemandHourlyEntries(priceList) {
+  const out = [];
+  for (const raw of priceList || []) {
+    try {
+      const product = JSON.parse(raw);
+      const attrs = product.product?.attributes || {};
+      const onDemand = product.terms?.OnDemand;
+      if (!onDemand) continue;
+      const term = onDemand[Object.keys(onDemand)[0]];
+      const dims = term?.priceDimensions;
+      if (!dims) continue;
+      const dim = dims[Object.keys(dims)[0]];
+      const unitPrice = parseFloat(dim?.pricePerUnit?.USD ?? 'NaN');
+      if (!Number.isFinite(unitPrice)) continue;
+      if (!/Hrs|Hours|Hour/i.test(dim?.unit || '')) continue;
+      out.push({
+        attrs,
+        description: String(dim?.description || ''),
+        unitPrice,
+      });
+    } catch {
+      /* ignore malformed row */
+    }
+  }
+  return out;
+}
+
 /**
  * Fetch EC2 on-demand USD/hr via AWS Price List API.
  * Uses regionCode (e.g. eu-west-1) — more reliable than human location names.
@@ -33,11 +60,30 @@ export async function fetchEc2Hourly(instanceType, regionCode, os = 'Linux') {
       { Type: 'TERM_MATCH', Field: 'capacitystatus', Value: 'Used' },
       { Type: 'TERM_MATCH', Field: 'preInstalledSw', Value: 'NA' },
     ],
-    MaxResults: 1,
+    MaxResults: 20,
   });
 
   const res = await pricingClient.send(command);
-  return extractOnDemandUsd(res.PriceList);
+  const entries = onDemandHourlyEntries(res.PriceList);
+
+  if (/windows/i.test(os)) {
+    const included = entries.find(
+      (e) =>
+        e.attrs.operatingSystem === 'Windows' &&
+        e.attrs.preInstalledSw === 'NA' &&
+        e.attrs.licenseModel === 'No License required' &&
+        !/BYOL|without licenses/i.test(e.description)
+    );
+    if (included) return included.unitPrice;
+  }
+
+  const standard = entries.find(
+    (e) =>
+      e.attrs.operatingSystem === os &&
+      e.attrs.preInstalledSw === 'NA' &&
+      !/BYOL|without licenses/i.test(e.description)
+  );
+  return standard?.unitPrice ?? extractOnDemandUsd(res.PriceList);
 }
 
 /**
@@ -66,10 +112,10 @@ export async function fetchEbsGp3GbMonth(regionCode) {
  */
 export async function fetchAwsPublicIpHourly(regionCode) {
   const command = new GetProductsCommand({
-    ServiceCode: 'AmazonEC2',
+    ServiceCode: 'AmazonVPC',
     Filters: [
       { Type: 'TERM_MATCH', Field: 'regionCode', Value: regionCode },
-      { Type: 'TERM_MATCH', Field: 'group', Value: 'IP Address' },
+      { Type: 'TERM_MATCH', Field: 'group', Value: 'VPCPublicIPv4Address' },
     ],
     MaxResults: 25,
   });
@@ -79,11 +125,11 @@ export async function fetchAwsPublicIpHourly(regionCode) {
       const product = JSON.parse(raw);
       const attrs = product.product?.attributes || {};
       const desc = `${attrs.usagetype || ''} ${attrs.groupDescription || ''} ${attrs.operation || ''}`;
-      // Prefer in-use / associated public IPv4 (not idle EIP)
-      if (!/PublicIPv4|ElasticIP|IdleAddress|Public IP/i.test(desc + JSON.stringify(attrs))) {
+      // AWS public IPv4 pricing lives in AmazonVPC. Prefer the in-use charge, not idle/IPAM.
+      if (!/PublicIPv4|InUseAddress|Public IPv4/i.test(desc + JSON.stringify(attrs))) {
         continue;
       }
-      if (/Idle/i.test(attrs.groupDescription || attrs.usagetype || '')) continue;
+      if (/Idle|IPAM|ContiguousBlock/i.test(desc)) continue;
       const onDemand = product.terms?.OnDemand;
       if (!onDemand) continue;
       const term = onDemand[Object.keys(onDemand)[0]];

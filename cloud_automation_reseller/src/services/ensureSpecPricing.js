@@ -68,6 +68,7 @@ export async function ensureSpecPricing({
   gpu = false,
   providers,
   nestedVirtualization = false,
+  architecture,
 } = {}) {
   const providersUsed = normalizeProviders(providers);
   const pricingMode = toPricingMode(nestedVirtualization);
@@ -78,6 +79,8 @@ export async function ensureSpecPricing({
     diskGb,
     gpu: gpu || category === 'gpu',
     nestedVirtualization: pricingMode === 'nested',
+    category,
+    architecture,
   });
 
   const now = new Date();
@@ -286,11 +289,13 @@ export async function ensureSpecPricing({
     written,
     providersUsed,
     pricingMode,
+    architecturePreference: mappings.architecturePreference,
     mappings: {
       aws: mappings.aws,
       azure: mappings.azure,
       oci: mappings.oci,
       gcp: mappings.gcp,
+      architecturePreference: mappings.architecturePreference,
     },
     errors: errors.slice(0, 30),
     errorCount: errors.length,

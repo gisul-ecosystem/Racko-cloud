@@ -15,7 +15,7 @@ async function fetchRetailPage(filter, skip = 0) {
   return res.json();
 }
 
-async function fetchVmHourlyUsd(armSkuName, armRegionName) {
+export async function fetchVmHourlyUsd(armSkuName, armRegionName) {
   const filter = [
     `serviceName eq 'Virtual Machines'`,
     `armSkuName eq '${armSkuName}'`,
@@ -39,7 +39,7 @@ async function fetchVmHourlyUsd(armSkuName, armRegionName) {
   return match?.retailPrice ?? null;
 }
 
-async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
+export async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
   const filter = [
     `serviceName eq 'Virtual Machines'`,
     `armSkuName eq '${armSkuName}'`,
