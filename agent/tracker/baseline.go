@@ -523,6 +523,11 @@ func shouldExcludePath(path string) bool {
 		`ntuser.dat`,
 		`ntuser.dat.log`,
 		`ntuser.pol`,
+		// NTFS internal system folders — never user content
+		`$extend`,
+		`$deleted`,
+		// VMware guest tools logs — not user content
+		`c:\programdata\vmware`,
 		`hiberfil.sys`,
 		`swapfile.sys`,
 		// Office lock files
