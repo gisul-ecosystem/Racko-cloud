@@ -18,6 +18,7 @@ const {
   loadUsageWindowsByRequest,
   evaluateWindowDailyLimitAccess
 } = require('./usageWindowAccessService');
+const { evaluateServicePeriodAccess } = require('../utils/servicePeriodAccess');
 
 const REQUEST_NOT_EXPIRED_SQL = `
   (
@@ -189,6 +190,7 @@ const loadTrackedUsers = async () => {
         r.enforce_in_azure,
         r.expiry_date,
         r.expires_at,
+        r.starts_at,
         EXISTS (
           SELECT 1
           FROM request_usage_windows ruw
@@ -283,6 +285,14 @@ async function heartbeatUsageSession({
 
 async function openUsageSession(user, signIn, loginTime) {
   let access = { allowed: true, reason: 'ok' };
+
+  const servicePeriod = evaluateServicePeriodAccess(user, loginTime);
+  if (!servicePeriod.allowed) {
+    console.log(
+      `[SIGNIN_MONITOR] User ${user.id} (${user.username}) denied — ${servicePeriod.reason}: ${servicePeriod.message}`
+    );
+    return { action: 'denied', reason: servicePeriod.reason, message: servicePeriod.message };
+  }
 
   // Force-logout / admin block must apply for window-based labs too.
   // (enable_daily_usage may be false while request_usage_windows is configured.)

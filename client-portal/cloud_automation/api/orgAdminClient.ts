@@ -328,10 +328,13 @@ export async function triggerOrgRequestCleanup(
   requestId: number
 ): Promise<{
   success: boolean;
-  action: 'delete' | 'pause';
-  affectedCount: number;
-  deletedCount: number;
-  totalDeleted: number;
+  started?: boolean;
+  async?: boolean;
+  message?: string;
+  action?: 'delete' | 'pause';
+  affectedCount?: number;
+  deletedCount?: number;
+  totalDeleted?: number;
 }> {
   return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/cleanup`, {
     method: 'POST',
@@ -357,6 +360,77 @@ export async function unblockOrgAdminUser(
       body: JSON.stringify(options),
     }
   );
+}
+
+export async function unblockAllOrgAdminUsers(
+  requestId: number,
+  options: { resetUsage?: boolean; pauseWindowEnforcement?: boolean; pauseWindowHours?: number } = {}
+): Promise<{
+  success: boolean;
+  requestId: number;
+  totalUsers: number;
+  unblockedCount: number;
+  failedCount: number;
+  results: Array<{ userId: number; username?: string; success: boolean; error?: string }>;
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/unblock-all`, {
+    method: 'POST',
+    body: JSON.stringify(options),
+  });
+}
+
+export async function blockAllOrgAdminUsers(requestId: number): Promise<{
+  success: boolean;
+  requestId: number;
+  totalUsers: number;
+  blockedCount: number;
+  failedCount: number;
+  results: Array<{ userId: number; username?: string; success: boolean; error?: string }>;
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/block-all`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export async function addOrgAdminUser(
+  requestId: number,
+  count = 1
+): Promise<{
+  success: boolean;
+  requestId: number;
+  createdCount: number;
+  failedCount: number;
+  customerEmail?: string;
+  user?: {
+    id: number;
+    username: string;
+    azureUserId: string;
+    status: string;
+    userNumber: number;
+    resourceGroup?: string | null;
+  };
+  users: Array<{
+    id: number;
+    username: string;
+    azureUserId: string;
+    status: string;
+    userNumber: number;
+    resourceGroup?: string | null;
+    emailSent?: boolean;
+    emailError?: string | null;
+  }>;
+  userCount: number;
+  accountCount: number;
+  emailsSent: number;
+  emailFailures: number;
+  emailSent?: boolean;
+  emailError?: string | null;
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/users`, {
+    method: 'POST',
+    body: JSON.stringify({ count }),
+  });
 }
 
 export async function getOrgUserSessions(
@@ -402,6 +476,14 @@ export async function getOrgLabHistory(
   const query = params.toString();
   return orgAdminRequest(
     `/resource-groups/${encodeURIComponent(requestId)}/history${query ? `?${query}` : ''}`
+  );
+}
+
+export async function getOrgConsumptionReport(
+  requestId: number
+): Promise<{ success: boolean; report: import('../types/orgAdmin').OrgAdminConsumptionReport }> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/consumption-report`
   );
 }
 

@@ -11,7 +11,7 @@ import {
   getMinutesTodayForDisplay,
   LIVE_COST_TICK_MS,
 } from '../../utils/costDisplayUtils';
-import { formatMinutes } from '../../utils/formatters';
+import { formatMinutes, formatCurrency } from '../../utils/formatters';
 
 import type { OrgAdminUser, OrgAdminUserAzureCost } from '../../types/orgAdmin';
 
@@ -53,6 +53,7 @@ export function UserCostCell({
   const liveCost = computeClientLiveCost(user, nowMs);
   const minutesToday = getMinutesTodayForDisplay(user, nowMs);
   const azureMtd = azureCost?.monthToDateCost ?? user.azureCostMtd ?? 0;
+  const costCurrency = azureCost?.currency || user.costCurrency || 'USD';
   const sharePercent = azureCost?.sharePercent ?? null;
   const syncedAt = azureCost?.queriedAt || user.lastCostSyncedAt;
   const freshnessNote =
@@ -77,7 +78,8 @@ export function UserCostCell({
             <ChevronRight className="mt-0.5 h-3.5 w-3.5 shrink-0" />
           )}
           <span className="text-[13px] font-semibold text-violet-900">
-            {sharePercent != null ? `${sharePercent.toFixed(1)}%` : '—'} · ${azureMtd.toFixed(2)}
+            {sharePercent != null ? `${sharePercent.toFixed(1)}%` : '—'} ·{' '}
+            {formatCurrency(azureMtd, costCurrency)}
           </span>
         </button>
         <p className="mt-0.5 text-[10px] text-gray-400">attributed MTD share</p>
@@ -88,7 +90,8 @@ export function UserCostCell({
               {sharePercent != null ? `${sharePercent.toFixed(2)}%` : '—'} of shared RG MTD
             </p>
             <p className="mt-1">
-              <span className="font-medium text-gray-700">Attributed MTD:</span> ${azureMtd.toFixed(4)}
+              <span className="font-medium text-gray-700">Attributed MTD:</span>{' '}
+              {formatCurrency(azureMtd, costCurrency)}
             </p>
             <p className="mt-1 text-gray-500">{freshnessNote}</p>
           </div>
@@ -119,7 +122,7 @@ export function UserCostCell({
           <span>
             <span className="font-medium text-violet-800">Azure MTD:</span>{' '}
             <span className={`font-semibold ${user.budgetExceeded ? 'text-red-600' : 'text-violet-900'}`}>
-              ${azureMtd.toFixed(2)}
+              {formatCurrency(azureMtd, costCurrency)}
             </span>
             <span className="text-gray-500"> (synced {formatSyncedAgo(syncedAt, nowMs)})</span>
           </span>

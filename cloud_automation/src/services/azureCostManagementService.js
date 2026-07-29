@@ -283,10 +283,167 @@ const getCachedResourceGroupCosts = (resourceGroupName, requestCreatedAt) => {
   };
 };
 
+const indexCostQueryColumns = (columns) => {
+  const map = {};
+  columns.forEach((column, index) => {
+    map[String(column.name)] = index;
+  });
+  return map;
+};
+
+const parseAzureUsageDate = (rawValue) => {
+  const rawDate = String(rawValue ?? '');
+  if (rawDate.length >= 8) {
+    return `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`;
+  }
+  return rawDate;
+};
+
+const queryDailyCostsForResourceGroups = async ({
+  resourceGroupNames,
+  from,
+  to,
+  groupByResourceGroup = true
+}) => {
+  const normalizedGroups = [...new Set(
+    (resourceGroupNames || [])
+      .map((name) => normalizeResourceGroupName(name))
+      .filter(Boolean)
+  )];
+
+  if (!normalizedGroups.length) {
+    return { currency: 'USD', rows: [] };
+  }
+
+  if (!from || !to) {
+    throw new AppError('Both from and to dates are required for daily cost queries.', 400);
+  }
+
+  const { accessToken, subscriptionId } = await getManagementAccessToken();
+  const url = `https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.CostManagement/query?api-version=${API_VERSION}`;
+
+  const dataset = {
+    granularity: 'Daily',
+    aggregation: {
+      totalCost: {
+        name: 'PreTaxCost',
+        function: 'Sum'
+      }
+    },
+    filter: {
+      dimensions: {
+        name: 'ResourceGroupName',
+        operator: 'In',
+        values: normalizedGroups
+      }
+    }
+  };
+
+  if (groupByResourceGroup) {
+    dataset.grouping = [{ type: 'Dimension', name: 'ResourceGroupName' }];
+  }
+
+  const body = {
+    type: 'ActualCost',
+    timeframe: 'Custom',
+    timePeriod: {
+      from: `${from}T00:00:00Z`,
+      to: `${to}T23:59:59Z`
+    },
+    dataset
+  };
+
+  let lastError;
+
+  for (let attempt = 1; attempt <= MAX_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      const response = await axios.post(url, body, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 60000
+      });
+
+      const columns = response.data?.properties?.columns || [];
+      const rawRows = response.data?.properties?.rows || [];
+      const idx = indexCostQueryColumns(columns);
+
+      const costIdx = idx.PreTaxCost ?? idx.Cost ?? idx.totalCost ?? 0;
+      const dateIdx = idx.UsageDate ?? idx.BillingMonth ?? idx.Date ?? 1;
+      const rgIdx = idx.ResourceGroupName ?? idx.ResourceGroup;
+      const currencyIdx = idx.Currency;
+
+      let currency = 'USD';
+      const rows = [];
+
+      for (const row of rawRows) {
+        const date = parseAzureUsageDate(row[dateIdx]);
+        const cost = Number(row[costIdx] || 0);
+        if (currencyIdx != null && row[currencyIdx]) {
+          currency = String(row[currencyIdx]);
+        }
+
+        rows.push({
+          date,
+          cost: Number(Number.isFinite(cost) ? cost.toFixed(4) : 0),
+          resourceGroup:
+            groupByResourceGroup && rgIdx != null
+              ? String(row[rgIdx] || '').toUpperCase()
+              : null
+        });
+      }
+
+      logCostManagementEvent('daily_cost_query_completed', {
+        resourceGroupCount: normalizedGroups.length,
+        rowCount: rows.length,
+        from,
+        to,
+        groupByResourceGroup
+      });
+
+      return { currency, rows };
+    } catch (error) {
+      lastError = error;
+      const statusCode = Number(error?.response?.status);
+
+      if (statusCode === 403) {
+        throw new AppError(
+          'Azure Cost Management access denied. Assign Cost Management Reader to the service principal on the subscription.',
+          502
+        );
+      }
+
+      if (!RETRYABLE_STATUS_CODES.has(statusCode)) {
+        break;
+      }
+
+      if (attempt < MAX_RETRY_ATTEMPTS) {
+        await sleep(RETRY_BASE_DELAY_MS * attempt);
+      }
+    }
+  }
+
+  const message =
+    lastError?.response?.data?.error?.message ||
+    lastError?.message ||
+    'Failed to query Azure daily cost data.';
+
+  logCostManagementEvent('daily_cost_query_failed', {
+    resourceGroupCount: normalizedGroups.length,
+    from,
+    to,
+    message
+  });
+
+  throw new AppError(message, 502);
+};
+
 module.exports = {
   getResourceGroupCosts,
   getCachedResourceGroupCosts,
   queryCostForResourceGroup,
+  queryDailyCostsForResourceGroups,
   normalizeResourceGroupName,
   COST_CACHE_TTL_MS
 };
