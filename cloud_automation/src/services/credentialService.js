@@ -6,7 +6,8 @@ const { createNotification, NotificationType } = require('./notificationService'
 const {
   buildCredentialEmailHtml,
   buildTestIdsCredentialEmailHtml,
-  buildNewUserCredentialEmailHtml
+  buildNewUserCredentialEmailHtml,
+  buildBulkNewUserCredentialEmailHtml
 } = require('./email/credentialEmailService');
 const {
   buildCredentialSpreadsheetBuffer,
@@ -15,6 +16,37 @@ const {
 
 const DELIVERY_STATUS_QUEUED = 'queued';
 const DELIVERY_STATUS_SENT = 'sent';
+
+const resolveCustomerRecipientEmail = (request) => {
+  const customerEmail = String(request?.customer_email || '').trim();
+  if (!customerEmail) {
+    throw new AppError('Request has no customer email configured.', 400);
+  }
+  return customerEmail;
+};
+
+const resolvePortalContext = async (requestId, request, delivery) => {
+  let portalLink = delivery?.portalLink || null;
+  let adminCredentials = {
+    username: delivery?.adminUsername || null,
+    temporaryPassword: delivery?.adminTemporaryPassword || null
+  };
+
+  if (!portalLink) {
+    const portal = await accessPortalService.issueAccessPortalTokenForRequest(requestId);
+    portalLink = portal.manageUrl;
+    adminCredentials = portal.adminCredentials;
+
+    await upsertDeliveryRecord(db, requestId, request.customer_email, DELIVERY_STATUS_QUEUED, {
+      portalLink,
+      adminUsername: adminCredentials?.username || null,
+      adminTemporaryPassword: adminCredentials?.temporaryPassword || null,
+      portalExpiresAt: portal.expiresAt
+    });
+  }
+
+  return { portalLink, adminCredentials };
+};
 
 let credentialDeliverySchemaPromise = null;
 
@@ -569,24 +601,8 @@ const sendNewUserCredentials = async (requestId, userId) => {
     throw new AppError('Provisioned user not found for this request.', 404);
   }
 
-  let portalLink = delivery?.portalLink || null;
-  let adminCredentials = {
-    username: delivery?.adminUsername || null,
-    temporaryPassword: delivery?.adminTemporaryPassword || null
-  };
-
-  if (!portalLink) {
-    const portal = await accessPortalService.issueAccessPortalTokenForRequest(requestId);
-    portalLink = portal.manageUrl;
-    adminCredentials = portal.adminCredentials;
-
-    await upsertDeliveryRecord(db, requestId, request.customer_email, DELIVERY_STATUS_QUEUED, {
-      portalLink,
-      adminUsername: adminCredentials?.username || null,
-      adminTemporaryPassword: adminCredentials?.temporaryPassword || null,
-      portalExpiresAt: portal.expiresAt
-    });
-  }
+  const recipientEmail = resolveCustomerRecipientEmail(request);
+  const { portalLink, adminCredentials } = await resolvePortalContext(requestId, request, delivery);
 
   const html = buildNewUserCredentialEmailHtml({
     requestId,
@@ -601,28 +617,28 @@ const sendNewUserCredentials = async (requestId, userId) => {
   logCredentialEvent('info', 'new_user_credential_email_started', {
     requestId,
     userId: normalizedUserId,
-    recipientEmail: request.customer_email,
+    recipientEmail,
     username: user.username
   });
 
   await enqueueEmail({
-    recipientEmail: request.customer_email,
+    recipientEmail,
     subject: emailSubject,
     html,
-    relatedType: 'credential_delivery',
-    relatedId: `${requestId}:${normalizedUserId}`,
+    relatedType: 'new_user_credential',
+    relatedId: String(requestId),
     onSuccess: async () => {
       logCredentialEvent('info', 'new_user_credential_email_success', {
         requestId,
         userId: normalizedUserId,
-        recipientEmail: request.customer_email
+        recipientEmail
       });
     },
     onFailure: async (error) => {
       logCredentialEvent('error', 'new_user_credential_email_failed', {
         requestId,
         userId: normalizedUserId,
-        recipientEmail: request.customer_email,
+        recipientEmail,
         message: error?.message
       });
     }
@@ -632,8 +648,94 @@ const sendNewUserCredentials = async (requestId, userId) => {
     success: true,
     requestId,
     userId: normalizedUserId,
-    recipientEmail: request.customer_email,
+    recipientEmail,
     username: user.username,
+    deliveryStatus: DELIVERY_STATUS_QUEUED
+  };
+};
+
+const sendNewUsersCredentials = async (requestId, userIds) => {
+  validateRequestId(requestId);
+
+  const normalizedUserIds = [...new Set(
+    (Array.isArray(userIds) ? userIds : [])
+      .map((value) => Number(value))
+      .filter((value) => Number.isInteger(value) && value > 0)
+  )];
+
+  if (normalizedUserIds.length === 0) {
+    throw new AppError('At least one userId is required.', 400);
+  }
+
+  if (normalizedUserIds.length === 1) {
+    return sendNewUserCredentials(requestId, normalizedUserIds[0]);
+  }
+
+  const [request, delivery, users] = await Promise.all([
+    getRequestById(db, requestId),
+    getCredentialDelivery(requestId),
+    Promise.all(normalizedUserIds.map((userId) => getProvisionedUserById(db, requestId, userId)))
+  ]);
+
+  if (!request) {
+    throw new AppError('Request not found.', 404);
+  }
+
+  const resolvedUsers = users.filter(Boolean);
+  if (resolvedUsers.length !== normalizedUserIds.length) {
+    throw new AppError('One or more provisioned users were not found for this request.', 404);
+  }
+
+  const recipientEmail = resolveCustomerRecipientEmail(request);
+  const { portalLink, adminCredentials } = await resolvePortalContext(requestId, request, delivery);
+
+  const html = buildBulkNewUserCredentialEmailHtml({
+    requestId,
+    users: resolvedUsers,
+    adminCredentials,
+    portalLink,
+    costingMode: request.costing_mode
+  });
+
+  const emailSubject = `New Azure Users Added — Request #${requestId}`;
+
+  logCredentialEvent('info', 'bulk_new_user_credential_email_started', {
+    requestId,
+    userIds: normalizedUserIds,
+    recipientEmail,
+    userCount: resolvedUsers.length
+  });
+
+  await enqueueEmail({
+    recipientEmail,
+    subject: emailSubject,
+    html,
+    relatedType: 'new_user_credential',
+    relatedId: String(requestId),
+    onSuccess: async () => {
+      logCredentialEvent('info', 'bulk_new_user_credential_email_success', {
+        requestId,
+        userIds: normalizedUserIds,
+        recipientEmail,
+        userCount: resolvedUsers.length
+      });
+    },
+    onFailure: async (error) => {
+      logCredentialEvent('error', 'bulk_new_user_credential_email_failed', {
+        requestId,
+        userIds: normalizedUserIds,
+        recipientEmail,
+        message: error?.message
+      });
+    }
+  });
+
+  return {
+    success: true,
+    requestId,
+    userIds: normalizedUserIds,
+    recipientEmail,
+    userCount: resolvedUsers.length,
     deliveryStatus: DELIVERY_STATUS_QUEUED
   };
 };
@@ -643,6 +745,7 @@ module.exports = {
   sendCredentials,
   sendCredentialsForRequest: sendCredentials,
   sendNewUserCredentials,
+  sendNewUsersCredentials,
   buildCredentialSpreadsheetForRequest,
   buildCredentialSpreadsheetAttachment
 };

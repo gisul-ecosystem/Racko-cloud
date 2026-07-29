@@ -5,6 +5,16 @@ const { sendCredentialEmailWithRetry } = require('./email/credentialEmailService
 const activeJobs = new Set();
 const STALE_SENDING_JOB_MS = 5 * 60 * 1000;
 
+const parseCredentialDeliveryRequestId = (relatedId) => {
+  const raw = String(relatedId || '').trim();
+  if (!/^\d+$/.test(raw)) {
+    return null;
+  }
+
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+};
+
 const logEmailQueueEvent = (level, event, details = {}) => {
   const entry = {
     timestamp: new Date().toISOString(),
@@ -48,7 +58,12 @@ const syncRelatedDeliveryStatus = async (job, deliveryStatus) => {
     return;
   }
 
-  await syncCredentialDeliveryStatus(job.related_id, deliveryStatus);
+  const requestId = parseCredentialDeliveryRequestId(job.related_id);
+  if (!requestId) {
+    return;
+  }
+
+  await syncCredentialDeliveryStatus(requestId, deliveryStatus);
 };
 
 const ensureTable = async () => {
@@ -170,17 +185,20 @@ const processEmailJob = async (jobId, callbacks = {}) => {
       };
 
       if (job.related_type === 'credential_delivery' && job.related_id) {
-        try {
-          const { buildCredentialSpreadsheetAttachment } = require('./credentialService');
-          const attachment = await buildCredentialSpreadsheetAttachment(Number(job.related_id));
-          mailOptions.attachments = [attachment];
-        } catch (attachmentError) {
-          logEmailQueueEvent('error', 'credential_spreadsheet_attachment_failed', {
-            jobId,
-            requestId: job.related_id,
-            message: attachmentError?.message
-          });
-          throw attachmentError;
+        const requestId = parseCredentialDeliveryRequestId(job.related_id);
+        if (requestId) {
+          try {
+            const { buildCredentialSpreadsheetAttachment } = require('./credentialService');
+            const attachment = await buildCredentialSpreadsheetAttachment(requestId);
+            mailOptions.attachments = [attachment];
+          } catch (attachmentError) {
+            logEmailQueueEvent('error', 'credential_spreadsheet_attachment_failed', {
+              jobId,
+              requestId,
+              message: attachmentError?.message
+            });
+            throw attachmentError;
+          }
         }
       }
 

@@ -2096,7 +2096,9 @@ const triggerUserCleanup = async (requestId, userId, { action } = {}) => {
   };
 };
 
-const triggerRequestCleanup = async (requestId, { action, triggeredBy = 'admin_manual' } = {}) => {
+const requestCleanupInFlight = new Set();
+
+const executeRequestCleanup = async (requestId, { action, triggeredBy = 'admin_manual' } = {}) => {
   const { runResourceCleanupForRequest } = require('./resourceCleanupService');
   const { computeNextDailyCleanupRunAt } = require('../utils/resourceCleanupSchedule');
   const { rows: requestRows } = await db.query(
@@ -2172,6 +2174,55 @@ const triggerRequestCleanup = async (requestId, { action, triggeredBy = 'admin_m
     affected
   };
 };
+
+const triggerRequestCleanup = async (
+  requestId,
+  { action, triggeredBy = 'admin_manual', async: runAsync = true } = {}
+) => {
+  if (requestCleanupInFlight.has(requestId)) {
+    throw new AppError('Cleanup is already running for this request.', 409);
+  }
+
+  const shouldRunAsync = runAsync !== false && triggeredBy === 'admin_manual';
+
+  if (shouldRunAsync) {
+    requestCleanupInFlight.add(requestId);
+
+    setImmediate(() => {
+      executeRequestCleanup(requestId, { action, triggeredBy })
+        .catch((error) => {
+          console.error(
+            JSON.stringify({
+              service: 'org-admin-service',
+              event: 'request_cleanup_background_failed',
+              requestId,
+              message: error?.message || 'Unknown cleanup failure'
+            })
+          );
+        })
+        .finally(() => {
+          requestCleanupInFlight.delete(requestId);
+        });
+    });
+
+    return {
+      requestId,
+      started: true,
+      async: true,
+      message:
+        'Cleanup started in the background. Synapse and other Azure resources can take several minutes to delete — live counts will refresh automatically.'
+    };
+  }
+
+  try {
+    requestCleanupInFlight.add(requestId);
+    return await executeRequestCleanup(requestId, { action, triggeredBy });
+  } finally {
+    requestCleanupInFlight.delete(requestId);
+  }
+};
+
+const isRequestCleanupRunning = (requestId) => requestCleanupInFlight.has(Number(requestId));
 
 const getLabHistory = async (requestId, { userId = null, limit = 200 } = {}) => {
   const { getLabHistoryForRequest } = require('./labHistoryService');
@@ -3010,56 +3061,133 @@ const blockAllUsers = async ({ requestId, adminEmail }) => {
   };
 };
 
-const addUserToRequest = async ({ adminEmail, requestId }) => {
+const MAX_ADD_USERS_PER_REQUEST = 50;
+
+const addUserToRequest = async ({ adminEmail, requestId, count = 1 }) => {
   const { addUserToRequest: provisionAddUser } = require('./userProvisionService');
-  const { sendNewUserCredentials } = require('./credentialService');
+  const { sendNewUsersCredentials } = require('./credentialService');
 
   const normalizedRequestId = Number(requestId);
+  const normalizedCount = Number(count);
+
   if (!Number.isInteger(normalizedRequestId) || normalizedRequestId <= 0) {
     throw new AppError('Request id must be a positive integer.', 400);
   }
 
-  const result = await provisionAddUser(normalizedRequestId);
-
-  let emailSent = false;
-  let emailError = null;
-
-  try {
-    await sendNewUserCredentials(normalizedRequestId, result.user.id);
-    emailSent = true;
-  } catch (error) {
-    emailError = error?.message || 'Failed to queue credential email.';
+  if (!Number.isInteger(normalizedCount) || normalizedCount <= 0) {
+    throw new AppError('count must be a positive integer.', 400);
   }
 
-  await db.query(
+  if (normalizedCount > MAX_ADD_USERS_PER_REQUEST) {
+    throw new AppError(
+      `Cannot add more than ${MAX_ADD_USERS_PER_REQUEST} users at a time.`,
+      400
+    );
+  }
+
+  const requestResult = await db.query(
     `
-      INSERT INTO access_portal_audit_logs (request_id, customer_email, actor, action, target_user_id, details)
-      SELECT r.id, r.customer_email, $1, 'user_added', $2, $3::jsonb
-      FROM requests r
-      WHERE r.id = $4
+      SELECT customer_email
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
     `,
-    [
-      adminEmail || 'org-admin',
-      result.user.id,
-      JSON.stringify({
-        username: result.user.username,
-        userNumber: result.userNumber,
-        userCount: result.userCount,
-        accountCount: result.accountCount,
-        emailSent,
-        emailError
-      }),
-      normalizedRequestId
-    ]
+    [normalizedRequestId]
   );
+
+  if (requestResult.rows.length === 0) {
+    throw new AppError('Request not found.', 404);
+  }
+
+  const customerEmail = String(requestResult.rows[0].customer_email || '').trim();
+  if (!customerEmail) {
+    throw new AppError('Request has no customer email; cannot send credentials.', 400);
+  }
+
+  const users = [];
+  const createdUserIds = [];
+  let lastResult = null;
+  let failedCount = 0;
+
+  for (let index = 0; index < normalizedCount; index += 1) {
+    try {
+      const result = await provisionAddUser(normalizedRequestId);
+      lastResult = result;
+      createdUserIds.push(result.user.id);
+
+      users.push({
+        ...result.user,
+        userNumber: result.userNumber,
+        emailSent: false,
+        emailError: null
+      });
+
+      await db.query(
+        `
+          INSERT INTO access_portal_audit_logs (request_id, customer_email, actor, action, target_user_id, details)
+          SELECT r.id, r.customer_email, $1, 'user_added', $2, $3::jsonb
+          FROM requests r
+          WHERE r.id = $4
+        `,
+        [
+          adminEmail || 'org-admin',
+          result.user.id,
+          JSON.stringify({
+            username: result.user.username,
+            userNumber: result.userNumber,
+            userCount: result.userCount,
+            accountCount: result.accountCount,
+            batchIndex: index + 1,
+            batchSize: normalizedCount
+          }),
+          normalizedRequestId
+        ]
+      );
+    } catch (error) {
+      failedCount += 1;
+      if (users.length === 0) {
+        throw error;
+      }
+      break;
+    }
+  }
+
+  if (!lastResult) {
+    throw new AppError('Failed to add users.', 502);
+  }
+
+  let emailsSent = 0;
+  let emailFailures = 0;
+  let emailError = null;
+
+  if (createdUserIds.length > 0) {
+    try {
+      await sendNewUsersCredentials(normalizedRequestId, createdUserIds);
+      emailsSent = 1;
+      users.forEach((user) => {
+        user.emailSent = true;
+      });
+    } catch (error) {
+      emailError = error?.message || 'Failed to queue credential email.';
+      emailFailures = 1;
+      users.forEach((user) => {
+        user.emailError = emailError;
+      });
+    }
+  }
 
   return {
     requestId: normalizedRequestId,
-    user: result.user,
-    userCount: result.userCount,
-    accountCount: result.accountCount,
-    userNumber: result.userNumber,
-    emailSent,
+    createdCount: users.length,
+    failedCount,
+    customerEmail,
+    user: users[users.length - 1] || null,
+    users,
+    userCount: lastResult.userCount,
+    accountCount: lastResult.accountCount,
+    emailsSent,
+    emailFailures,
+    emailSent: emailsSent > 0,
     emailError
   };
 };
@@ -3178,6 +3306,7 @@ module.exports = {
   updateUserCleanupSettings,
   triggerUserCleanup,
   triggerRequestCleanup,
+  isRequestCleanupRunning,
   getCleanupLogs,
   getLabHistory,
   getConsumptionReport,

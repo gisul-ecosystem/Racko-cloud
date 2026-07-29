@@ -625,13 +625,19 @@ const blockAllUsers = async (req, res, next) => {
 const addUserToRequest = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
+    const count = Number(req.body?.count ?? 1);
 
     if (!Number.isInteger(requestId) || requestId <= 0) {
       throw new AppError('Request id must be a positive integer.', 400);
     }
 
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new AppError('count must be a positive integer.', 400);
+    }
+
     const result = await orgAdminService.addUserToRequest({
       requestId,
+      count,
       adminEmail: getSuperAdminActor(req)
     });
 
@@ -750,6 +756,11 @@ const triggerRequestCleanup = async (req, res, next) => {
       action,
       triggeredBy: 'admin_manual'
     });
+
+    if (result.started) {
+      res.status(202).json({ success: true, ...result });
+      return;
+    }
 
     res.status(200).json({ success: true, ...result });
   } catch (error) {

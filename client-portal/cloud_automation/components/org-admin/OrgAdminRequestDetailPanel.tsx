@@ -71,6 +71,8 @@ interface OrgAdminRequestDetailPanelProps {
   loading: boolean;
   detailError: string | null;
   saving: boolean;
+  cleanupRunning?: boolean;
+  deletingRequest?: boolean;
   onRetry: () => void;
   onForceLogout: (userId: number) => Promise<boolean>;
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
@@ -84,7 +86,7 @@ interface OrgAdminRequestDetailPanelProps {
   onUnblock?: (userId: number) => Promise<boolean>;
   onUnblockAll?: () => Promise<boolean>;
   onBlockAll?: () => Promise<boolean>;
-  onAddUser?: () => Promise<boolean>;
+  onAddUser?: (count: number) => Promise<boolean>;
   onDeleteUser?: (userId: number) => Promise<boolean>;
   onDeleteRequest?: () => Promise<boolean>;
   onExtendExpiration?: (expiresAt: string) => Promise<boolean>;
@@ -104,6 +106,8 @@ export function OrgAdminRequestDetailPanel({
   loading,
   detailError,
   saving,
+  cleanupRunning = false,
+  deletingRequest = false,
   onRetry,
   onForceLogout,
   onUpdateRoles,
@@ -380,15 +384,15 @@ export function OrgAdminRequestDetailPanel({
               <button
                 type="button"
                 onClick={() => void handleDeleteRequest()}
-                disabled={saving || sendingMail || extending}
+                disabled={deletingRequest || sendingMail || extending}
                 className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {saving ? (
+                {deletingRequest ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Trash2 className="h-3.5 w-3.5" />
                 )}
-                {saving ? 'Deleting from Azure...' : 'Delete Request'}
+                {deletingRequest ? 'Deleting from Azure...' : 'Delete Request'}
               </button>
             )}
           </div>
@@ -494,6 +498,7 @@ export function OrgAdminRequestDetailPanel({
                 loading={loading}
                 selectedUserId={selectedUserId}
                 saving={saving}
+                cleanupRunning={cleanupRunning}
                 isRefreshing={isRefreshing}
                 lastUpdatedAt={lastUpdatedAt}
                 hasActiveUsers={hasActiveUsers}
@@ -505,6 +510,8 @@ export function OrgAdminRequestDetailPanel({
                 onAddUser={onAddUser}
                 onDeleteUser={onDeleteUser}
                 onTriggerCleanup={onManualCleanup}
+                onRequestCleanup={onRequestCleanup}
+                cleanupRunning={cleanupRunning}
                 onUpdateRoles={onUpdateRoles}
                 fetchUserMonitoring={fetchUserMonitoring}
                 onFetchAzureCost={onFetchAzureCost}
@@ -523,6 +530,7 @@ export function OrgAdminRequestDetailPanel({
               onToggleCleanup={onToggleCleanup}
               onManualCleanup={onManualCleanup}
               onRequestCleanup={onRequestCleanup}
+              cleanupRunning={cleanupRunning}
             />
           )}
 

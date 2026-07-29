@@ -43,6 +43,8 @@ export function OrgAdminPortal() {
     accessLoading,
     privilegedRoleLoading,
     saving,
+    cleanupRunning,
+    deletingRequest,
     overviewError,
     detailError,
     actionError,
@@ -391,6 +393,8 @@ export function OrgAdminPortal() {
                     loading={detailLoading}
                     detailError={detailError}
                     saving={saving}
+                    cleanupRunning={cleanupRunning}
+                    deletingRequest={deletingRequest}
                     onRetry={() => void refreshDetail()}
                     onForceLogout={forceLogout}
                     onUpdateRoles={updateRoles}

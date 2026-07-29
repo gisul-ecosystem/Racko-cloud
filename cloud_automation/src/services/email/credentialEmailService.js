@@ -217,6 +217,10 @@ const buildNewUserCredentialEmailHtml = ({
                 <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(user.username)}</td>
               </tr>
               <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Azure User ID</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(user.azure_user_id || '')}</td>
+              </tr>
+              <tr>
                 <td style="padding: 8px 0; color: #6b7280;">Temporary Password</td>
                 <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(user.temporary_password)}</td>
               </tr>
@@ -258,6 +262,85 @@ const buildNewUserCredentialEmailHtml = ({
   `;
 };
 
+const buildBulkNewUserCredentialEmailHtml = ({
+  requestId,
+  users,
+  adminCredentials,
+  portalLink,
+  costingMode
+}) => {
+  const isPerUser = String(costingMode || '').toLowerCase() === 'per_user';
+  const rowsHtml = users
+    .map(
+      (user, index) => `
+        <tr>
+          <td style="border-bottom: 1px solid #e5e7eb; padding: 12px 10px;">${index + 1}</td>
+          <td style="border-bottom: 1px solid #e5e7eb; padding: 12px 10px; font-family: Consolas, monospace;">${escapeHtml(user.username)}</td>
+          <td style="border-bottom: 1px solid #e5e7eb; padding: 12px 10px; font-family: Consolas, monospace;">${escapeHtml(user.azure_user_id || '')}</td>
+          <td style="border-bottom: 1px solid #e5e7eb; padding: 12px 10px; font-family: Consolas, monospace;">${escapeHtml(user.temporary_password)}</td>
+          <td style="border-bottom: 1px solid #e5e7eb; padding: 12px 10px;">${escapeHtml(user.status || 'Created')}</td>
+        </tr>
+      `
+    )
+    .join('');
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="font-family: Arial, Helvetica, sans-serif; color: #111827; background: #f8fafc; margin: 0; padding: 24px;">
+        <div style="max-width: 760px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 28px;">
+          <h1 style="margin: 0 0 8px; font-size: 24px; line-height: 1.2;">New Azure Lab Users Added</h1>
+          <p style="margin: 0 0 20px; font-size: 16px; color: #374151;">
+            ${users.length} new learner account${users.length === 1 ? '' : 's'} ${users.length === 1 ? 'was' : 'were'} added to request <strong>#${escapeHtml(requestId)}</strong>.
+          </p>
+          ${isPerUser ? '<p style="margin: 0 0 12px; font-size: 14px; color: #374151;">This lab uses per-user resource groups — a dedicated resource group was created for each user.</p>' : ''}
+          <div style="overflow-x: auto;">
+            <table style="border-collapse: collapse; width: 100%; min-width: 680px; border: 1px solid #e5e7eb; border-radius: 12px;">
+              <thead>
+                <tr>
+                  <th style="border-bottom: 1px solid #d1d5db; text-align: left; padding: 12px 10px; background: #f9fafb; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">#</th>
+                  <th style="border-bottom: 1px solid #d1d5db; text-align: left; padding: 12px 10px; background: #f9fafb; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">Username</th>
+                  <th style="border-bottom: 1px solid #d1d5db; text-align: left; padding: 12px 10px; background: #f9fafb; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">Azure User ID</th>
+                  <th style="border-bottom: 1px solid #d1d5db; text-align: left; padding: 12px 10px; background: #f9fafb; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">Temporary Password</th>
+                  <th style="border-bottom: 1px solid #d1d5db; text-align: left; padding: 12px 10px; background: #f9fafb; font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em;">Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>
+          <div style="margin-top: 24px; padding: 20px; border: 1px solid #e5e7eb; border-radius: 14px; background: #f9fafb;">
+            <p style="margin: 0 0 12px; font-size: 14px; font-weight: 700; color: #374151;">Manage Portal Login</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 0 0 16px;">
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280; width: 150px;">Username</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(adminCredentials?.username || '')}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Temporary Password</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(adminCredentials?.temporaryPassword || '')}</td>
+              </tr>
+            </table>
+            <a
+              href="${escapeHtml(portalLink)}"
+              style="display: inline-block; background: #111827; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 700;"
+            >
+              Open Manage Portal
+            </a>
+            <p style="margin: 14px 0 0; font-size: 14px; word-break: break-all;">
+              <a href="${escapeHtml(portalLink)}" style="color: #2563eb;">${escapeHtml(portalLink)}</a>
+            </p>
+          </div>
+          <p style="margin: 18px 0 0; font-size: 13px; color: #6b7280;">
+            These users have the same Azure roles and permissions as the other learners in this lab.
+          </p>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 const sendCredentialEmailWithRetry = async ({ to, subject, html, attachments = [] }) =>
   sendMailWithRetry({ to, subject, html, attachments });
 
@@ -266,5 +349,6 @@ module.exports = {
   buildTestIdsCredentialEmailHtml,
   buildAccessPortalEmailHtml,
   buildNewUserCredentialEmailHtml,
+  buildBulkNewUserCredentialEmailHtml,
   sendCredentialEmailWithRetry
 };

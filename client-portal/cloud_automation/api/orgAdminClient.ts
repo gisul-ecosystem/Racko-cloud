@@ -328,10 +328,13 @@ export async function triggerOrgRequestCleanup(
   requestId: number
 ): Promise<{
   success: boolean;
-  action: 'delete' | 'pause';
-  affectedCount: number;
-  deletedCount: number;
-  totalDeleted: number;
+  started?: boolean;
+  async?: boolean;
+  message?: string;
+  action?: 'delete' | 'pause';
+  affectedCount?: number;
+  deletedCount?: number;
+  totalDeleted?: number;
 }> {
   return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/cleanup`, {
     method: 'POST',
@@ -390,10 +393,16 @@ export async function blockAllOrgAdminUsers(requestId: number): Promise<{
   });
 }
 
-export async function addOrgAdminUser(requestId: number): Promise<{
+export async function addOrgAdminUser(
+  requestId: number,
+  count = 1
+): Promise<{
   success: boolean;
   requestId: number;
-  user: {
+  createdCount: number;
+  failedCount: number;
+  customerEmail?: string;
+  user?: {
     id: number;
     username: string;
     azureUserId: string;
@@ -401,15 +410,26 @@ export async function addOrgAdminUser(requestId: number): Promise<{
     userNumber: number;
     resourceGroup?: string | null;
   };
+  users: Array<{
+    id: number;
+    username: string;
+    azureUserId: string;
+    status: string;
+    userNumber: number;
+    resourceGroup?: string | null;
+    emailSent?: boolean;
+    emailError?: string | null;
+  }>;
   userCount: number;
   accountCount: number;
-  userNumber: number;
-  emailSent: boolean;
+  emailsSent: number;
+  emailFailures: number;
+  emailSent?: boolean;
   emailError?: string | null;
 }> {
   return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/users`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify({ count }),
   });
 }
 
