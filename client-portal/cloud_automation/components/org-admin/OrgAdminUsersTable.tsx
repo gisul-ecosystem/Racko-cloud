@@ -11,8 +11,10 @@ import {
   Loader2,
   LogOut,
   Search,
+  Shield,
   ShieldOff,
   Trash2,
+  UserPlus,
   UserX,
   Users,
 } from 'lucide-react';
@@ -56,6 +58,9 @@ interface OrgAdminUsersTableProps {
   onSelect: (userId: number) => void;
   onForceLogout: (userId: number) => Promise<boolean>;
   onUnblock?: (userId: number) => Promise<boolean>;
+  onUnblockAll?: () => Promise<boolean>;
+  onBlockAll?: () => Promise<boolean>;
+  onAddUser?: () => Promise<boolean>;
   onDeleteUser?: (userId: number) => Promise<boolean>;
   onTriggerCleanup?: (userId: number) => Promise<boolean>;
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
@@ -511,6 +516,9 @@ export function OrgAdminUsersTable({
   onSelect,
   onForceLogout,
   onUnblock,
+  onUnblockAll,
+  onBlockAll,
+  onAddUser,
   onDeleteUser,
   onTriggerCleanup,
   onUpdateRoles,
@@ -522,6 +530,9 @@ export function OrgAdminUsersTable({
   const [usageUser, setUsageUser] = useState<OrgAdminUser | null>(null);
   const [loggingOutUserId, setLoggingOutUserId] = useState<number | null>(null);
   const [unblockingUserId, setUnblockingUserId] = useState<number | null>(null);
+  const [unblockingAll, setUnblockingAll] = useState(false);
+  const [blockingAll, setBlockingAll] = useState(false);
+  const [addingUser, setAddingUser] = useState(false);
   const [cleanupUserId, setCleanupUserId] = useState<number | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
   const [roleChangingUserId, setRoleChangingUserId] = useState<number | null>(null);
@@ -792,6 +803,70 @@ export function OrgAdminUsersTable({
     }
   }
 
+  async function handleUnblockAll() {
+    if (!onUnblockAll) return;
+    if (
+      !confirm(
+        `Unblock all ${users.length} user(s) immediately?\n\nThis re-enables every Azure account and pauses usage-window enforcement for 24 hours. Passwords are not reset in bulk — use individual Unblock if a user needs a new password.`
+      )
+    ) {
+      return;
+    }
+
+    setUnblockingAll(true);
+    try {
+      await onUnblockAll();
+    } finally {
+      setUnblockingAll(false);
+    }
+  }
+
+  async function handleBlockAll() {
+    if (!onBlockAll) return;
+    if (
+      !confirm(
+        `Block all ${users.length} user(s) immediately?\n\nThis disables every Azure account for this lab. Users stay blocked until you use Unblock all or unblock them individually.`
+      )
+    ) {
+      return;
+    }
+
+    setBlockingAll(true);
+    try {
+      await onBlockAll();
+    } finally {
+      setBlockingAll(false);
+    }
+  }
+
+  async function handleAddUser() {
+    if (!onAddUser) return;
+
+    const accountCountLabel =
+      request?.accountCount != null && request.accountCount > 0
+        ? `\nAccount count will increase from ${request.accountCount} to ${request.accountCount + 1}.`
+        : `\nUser count will increase from ${users.length} to ${users.length + 1}.`;
+
+    const rgNote = isSharedCosting
+      ? 'The user will join the shared resource group with the same roles as existing users.'
+      : 'A dedicated resource group will be created for this user with the same roles and services.';
+
+    if (
+      !confirm(
+        `Add a new user to this lab?${accountCountLabel}\n\n${rgNote}\n\nCredentials will be emailed to the customer.`
+      )
+    ) {
+      return;
+    }
+
+    setAddingUser(true);
+    try {
+      await onAddUser();
+    } finally {
+      setAddingUser(false);
+    }
+  }
+
   async function handleDeleteUser(event: React.MouseEvent, user: OrgAdminUser) {
     event.stopPropagation();
     if (!onDeleteUser) return;
@@ -925,6 +1000,55 @@ export function OrgAdminUsersTable({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onAddUser ? (
+              <button
+                type="button"
+                onClick={() => void handleAddUser()}
+                disabled={saving || addingUser || blockingAll || unblockingAll}
+                className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {addingUser ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <UserPlus className="h-3.5 w-3.5" />
+                )}
+                {addingUser
+                  ? 'Adding user…'
+                  : request?.accountCount
+                    ? `Add user (${users.length}/${request.accountCount})`
+                    : `Add user (${users.length})`}
+              </button>
+            ) : null}
+            {onBlockAll ? (
+              <button
+                type="button"
+                onClick={() => void handleBlockAll()}
+                disabled={saving || blockingAll || unblockingAll || addingUser || users.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {blockingAll ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Shield className="h-3.5 w-3.5" />
+                )}
+                {blockingAll ? 'Blocking all…' : 'Block all'}
+              </button>
+            ) : null}
+            {onUnblockAll ? (
+              <button
+                type="button"
+                onClick={() => void handleUnblockAll()}
+                disabled={saving || unblockingAll || blockingAll || addingUser || users.length === 0}
+                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {unblockingAll ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ShieldOff className="h-3.5 w-3.5" />
+                )}
+                {unblockingAll ? 'Unblocking all…' : 'Unblock all'}
+              </button>
+            ) : null}
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}

@@ -359,6 +359,60 @@ export async function unblockOrgAdminUser(
   );
 }
 
+export async function unblockAllOrgAdminUsers(
+  requestId: number,
+  options: { resetUsage?: boolean; pauseWindowEnforcement?: boolean; pauseWindowHours?: number } = {}
+): Promise<{
+  success: boolean;
+  requestId: number;
+  totalUsers: number;
+  unblockedCount: number;
+  failedCount: number;
+  results: Array<{ userId: number; username?: string; success: boolean; error?: string }>;
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/unblock-all`, {
+    method: 'POST',
+    body: JSON.stringify(options),
+  });
+}
+
+export async function blockAllOrgAdminUsers(requestId: number): Promise<{
+  success: boolean;
+  requestId: number;
+  totalUsers: number;
+  blockedCount: number;
+  failedCount: number;
+  results: Array<{ userId: number; username?: string; success: boolean; error?: string }>;
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/block-all`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export async function addOrgAdminUser(requestId: number): Promise<{
+  success: boolean;
+  requestId: number;
+  user: {
+    id: number;
+    username: string;
+    azureUserId: string;
+    status: string;
+    userNumber: number;
+    resourceGroup?: string | null;
+  };
+  userCount: number;
+  accountCount: number;
+  userNumber: number;
+  emailSent: boolean;
+  emailError?: string | null;
+}> {
+  return orgAdminRequest(`/resource-groups/${encodeURIComponent(requestId)}/users`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
 export async function getOrgUserSessions(
   requestId: number,
   userId: number
@@ -402,6 +456,14 @@ export async function getOrgLabHistory(
   const query = params.toString();
   return orgAdminRequest(
     `/resource-groups/${encodeURIComponent(requestId)}/history${query ? `?${query}` : ''}`
+  );
+}
+
+export async function getOrgConsumptionReport(
+  requestId: number
+): Promise<{ success: boolean; report: import('../types/orgAdmin').OrgAdminConsumptionReport }> {
+  return orgAdminRequest(
+    `/resource-groups/${encodeURIComponent(requestId)}/consumption-report`
   );
 }
 

@@ -32,6 +32,16 @@ function toDateTimeLocalValue(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function resolveCurrentStart(
+  request: OrgAdminRequestSummary,
+  detail: OrgAdminRequestDetail | null
+): Date | null {
+  const raw = detail?.startsAt || request.startsAt || request.startDate;
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function resolveCurrentExpiry(
   request: OrgAdminRequestSummary,
   detail: OrgAdminRequestDetail | null
@@ -72,6 +82,9 @@ interface OrgAdminRequestDetailPanelProps {
   onManualCleanup: (userId: number) => Promise<boolean>;
   onRequestCleanup?: () => Promise<boolean>;
   onUnblock?: (userId: number) => Promise<boolean>;
+  onUnblockAll?: () => Promise<boolean>;
+  onBlockAll?: () => Promise<boolean>;
+  onAddUser?: () => Promise<boolean>;
   onDeleteUser?: (userId: number) => Promise<boolean>;
   onDeleteRequest?: () => Promise<boolean>;
   onExtendExpiration?: (expiresAt: string) => Promise<boolean>;
@@ -102,6 +115,9 @@ export function OrgAdminRequestDetailPanel({
   onManualCleanup,
   onRequestCleanup,
   onUnblock,
+  onUnblockAll,
+  onBlockAll,
+  onAddUser,
   onDeleteUser,
   onDeleteRequest,
   onExtendExpiration,
@@ -122,6 +138,11 @@ export function OrgAdminRequestDetailPanel({
 
   const currentExpiry = useMemo(
     () => resolveCurrentExpiry(request, requestDetail),
+    [request, requestDetail]
+  );
+
+  const currentStart = useMemo(
+    () => resolveCurrentStart(request, requestDetail),
     [request, requestDetail]
   );
 
@@ -225,6 +246,18 @@ export function OrgAdminRequestDetailPanel({
     { label: 'Customer', value: request.customerEmail },
     { label: 'Region', value: request.region || '—' },
     {
+      label: 'Starts',
+      value: currentStart
+        ? currentStart.toLocaleString(undefined, {
+            year: 'numeric',
+            month: 'numeric',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : '—',
+    },
+    {
       label: 'Expires',
       value: currentExpiry
         ? currentExpiry.toLocaleString(undefined, {
@@ -236,7 +269,13 @@ export function OrgAdminRequestDetailPanel({
           })
         : '—',
     },
-    { label: 'Users', value: String(request.userCount) },
+    {
+      label: 'Users',
+      value:
+        requestDetail?.accountCount != null && requestDetail.accountCount > 0
+          ? `${users.length} / ${requestDetail.accountCount}`
+          : String(users.length || request.userCount),
+    },
     ...(requestDetail?.liveSummary?.activeSessions
       ? [{ label: 'Live sessions', value: String(requestDetail.liveSummary.activeSessions) }]
       : []),
@@ -461,6 +500,9 @@ export function OrgAdminRequestDetailPanel({
                 onSelect={setSelectedUserId}
                 onForceLogout={onForceLogout}
                 onUnblock={onUnblock}
+                onUnblockAll={onUnblockAll}
+                onBlockAll={onBlockAll}
+                onAddUser={onAddUser}
                 onDeleteUser={onDeleteUser}
                 onTriggerCleanup={onManualCleanup}
                 onUpdateRoles={onUpdateRoles}

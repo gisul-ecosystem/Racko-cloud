@@ -337,6 +337,25 @@ const getPortalSessionByToken = async (sessionToken) => {
 
 const normalizeLoginId = (value) => String(value || '').trim().toLowerCase();
 
+const assertManagePortalUserAccessAllowed = (user, messagePrefix = 'This account') => {
+  if (user.blocked_until && new Date(user.blocked_until).getTime() > Date.now()) {
+    throw new AppError(`${messagePrefix} is temporarily blocked from portal access.`, 403);
+  }
+
+  if (user.blocked_reason === 'admin_block' || user.azure_account_enabled === false) {
+    throw new AppError(`${messagePrefix} is blocked and cannot sign in.`, 403);
+  }
+
+  const normalizedStatus = String(user.status || '').trim().toLowerCase();
+  if (normalizedStatus === 'disabled') {
+    throw new AppError(`${messagePrefix} is blocked and cannot sign in.`, 403);
+  }
+
+  if (normalizedStatus === 'blocked' && user.azure_account_enabled === false) {
+    throw new AppError(`${messagePrefix} is blocked and cannot sign in.`, 403);
+  }
+};
+
 const findAzureUserForPortalLogin = async ({ requestId, loginId }) => {
   const scopedResult = await db.query(
     `
@@ -348,6 +367,8 @@ const findAzureUserForPortalLogin = async ({ requestId, loginId }) => {
         temporary_password,
         status,
         blocked_until,
+        blocked_reason,
+        azure_account_enabled,
         COALESCE(is_deleted, false) AS is_deleted
       FROM azure_users
       WHERE request_id = $1
@@ -375,6 +396,8 @@ const findAzureUserForPortalLogin = async ({ requestId, loginId }) => {
         temporary_password,
         status,
         blocked_until,
+        blocked_reason,
+        azure_account_enabled,
         COALESCE(is_deleted, false) AS is_deleted
       FROM azure_users
       WHERE COALESCE(is_deleted, false) = false
@@ -403,14 +426,7 @@ const verifyAzureUserCredentials = async ({ requestId, username, password }) => 
     throw new AppError('Invalid username or password.', 401);
   }
 
-  const normalizedStatus = String(user.status || '').trim().toLowerCase();
-  if (normalizedStatus === 'blocked' || normalizedStatus === 'disabled') {
-    throw new AppError('This account is blocked and cannot sign in.', 403);
-  }
-
-  if (user.blocked_until && new Date(user.blocked_until).getTime() > Date.now()) {
-    throw new AppError('This account is temporarily blocked from portal access.', 403);
-  }
+  assertManagePortalUserAccessAllowed(user);
 
   return {
     id: user.id,
@@ -1772,6 +1788,8 @@ const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
         temporary_password,
         status,
         blocked_until,
+        blocked_reason,
+        azure_account_enabled,
         COALESCE(is_deleted, false) AS is_deleted
       FROM azure_users
       WHERE id = $1
@@ -1787,14 +1805,7 @@ const getAzureConsoleLaunch = async (sessionToken, requestId, userId) => {
     throw new AppError('Provisioned user not found.', 404);
   }
 
-  const normalizedStatus = String(user.status || '').trim().toLowerCase();
-  if (normalizedStatus === 'blocked' || normalizedStatus === 'disabled') {
-    throw new AppError('This user is blocked and cannot open the Azure console.', 403);
-  }
-
-  if (user.blocked_until && new Date(user.blocked_until).getTime() > Date.now()) {
-    throw new AppError('This user is temporarily blocked from Azure access.', 403);
-  }
+  assertManagePortalUserAccessAllowed(user, 'This user');
 
   const azureConfig = validateAzureEnv();
   const verifiedDomain = await resolveAzureVerifiedDomain();

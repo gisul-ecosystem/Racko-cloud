@@ -89,7 +89,7 @@ async function enforceDailyHourLimits() {
      AND dut.tracking_date = (NOW() AT TIME ZONE COALESCE(ruw.timezone, 'Asia/Kolkata'))::date
     WHERE r.status = 'Completed'
       AND COALESCE(r.expired, FALSE) = FALSE
-      AND r.expiry_date >= NOW()
+      AND (r.expires_at IS NULL OR r.expires_at >= NOW())
       AND ruw.daily_limit_hours IS NOT NULL
       AND ruw.day_of_week = EXTRACT(DOW FROM NOW() AT TIME ZONE ruw.timezone)
       AND au.azure_user_id IS NOT NULL

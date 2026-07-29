@@ -9,10 +9,13 @@ require('dotenv').config();
 
 const crypto = require('crypto');
 const db = require('../src/db/postgres');
+const { createGraphClient } = require('../src/provisioners/azure/userProvisioner');
 
 const PORTAL_TOKEN = '561e2481-68d5-40c5-b64b-a36904721740';
 const SHARED_REQUEST_ID = 307;
+const SOURCE_REQUEST_ID = 309;
 const USERNAME = 'cust-309-user-1';
+const PASSWORD = process.env.PORTAL_USER_PASSWORD || 'VnynxCg@_2j*c*#N';
 
 const sha256Hex = (value) => crypto.createHash('sha256').update(String(value)).digest('hex');
 
@@ -21,19 +24,32 @@ const sha256Hex = (value) => crypto.createHash('sha256').update(String(value)).d
     `
       SELECT *
       FROM azure_users
-      WHERE request_id = 309
-        AND lower(username) = lower($1)
+      WHERE request_id = $1
+        AND lower(username) = lower($2)
         AND COALESCE(is_deleted, false) = false
       LIMIT 1
     `,
-    [USERNAME]
+    [SOURCE_REQUEST_ID, USERNAME]
   );
 
   if (!source.rows.length) {
-    throw new Error(`${USERNAME} not found on request #309`);
+    throw new Error(`${USERNAME} not found on request #${SOURCE_REQUEST_ID}`);
   }
 
   const user = source.rows[0];
+  const portalPassword = PASSWORD || user.temporary_password;
+
+  if (user.azure_user_id) {
+    const { graphClient } = createGraphClient();
+    await graphClient.api(`/users/${user.azure_user_id}`).patch({
+      accountEnabled: true,
+      passwordProfile: {
+        forceChangePasswordNextSignIn: false,
+        password: String(portalPassword)
+      }
+    });
+    console.log(`Synced Azure AD password for ${USERNAME}`);
+  }
 
   const existingAlias = await db.query(
     `
@@ -64,11 +80,11 @@ const sha256Hex = (value) => crypto.createHash('sha256').update(String(value)).d
       `,
       [
         existingAlias.rows[0].id,
-        user.temporary_password,
+        portalPassword,
         user.azure_user_id,
         user.azure_resource_group_name,
         user.azure_resource_group_id,
-        user.status,
+        user.status
       ]
     );
     console.log(`Updated existing portal alias on request #${SHARED_REQUEST_ID} for ${USERNAME}`);
@@ -102,18 +118,30 @@ const sha256Hex = (value) => crypto.createHash('sha256').update(String(value)).d
         SHARED_REQUEST_ID,
         user.azure_user_id,
         user.username,
-        user.temporary_password,
+        portalPassword,
         user.status,
         nextUserNumber.rows[0].next_number,
         user.azure_resource_group_name,
-        user.azure_resource_group_id,
+        user.azure_resource_group_id
       ]
     );
     console.log(`Created portal alias on request #${SHARED_REQUEST_ID} for ${USERNAME}`);
   }
 
-  const tokenHash = sha256Hex(PORTAL_TOKEN);
   await db.query(
+    `
+      UPDATE azure_users
+      SET temporary_password = $2,
+          azure_account_enabled = TRUE
+      WHERE request_id = $1
+        AND lower(username) = lower($3)
+        AND COALESCE(is_deleted, false) = false
+    `,
+    [SOURCE_REQUEST_ID, portalPassword, USERNAME]
+  );
+
+  const tokenHash = sha256Hex(PORTAL_TOKEN);
+  const tokenUpdate = await db.query(
     `
       UPDATE access_portal_tokens
       SET request_id = $2,
@@ -121,15 +149,39 @@ const sha256Hex = (value) => crypto.createHash('sha256').update(String(value)).d
           used_at = NULL,
           expires_at = GREATEST(expires_at, NOW() + INTERVAL '7 days')
       WHERE token_hash = $1
+      RETURNING id
     `,
     [tokenHash, SHARED_REQUEST_ID]
   );
 
+  if (!tokenUpdate.rows.length) {
+    const requestMeta = await db.query(
+      `SELECT customer_email FROM requests WHERE id = $1`,
+      [SHARED_REQUEST_ID]
+    );
+    await db.query(
+      `
+        INSERT INTO access_portal_tokens (id, request_id, customer_email, token_hash, expires_at, used)
+        VALUES (gen_random_uuid(), $1, $2, $3, NOW() + INTERVAL '7 days', false)
+      `,
+      [
+        SHARED_REQUEST_ID,
+        requestMeta.rows[0]?.customer_email || 'dev-portal@racko.ai',
+        tokenHash
+      ]
+    );
+    console.log('Created missing portal token row');
+  }
+
   console.log('');
-  console.log('Shared dev portal link (all 12 learners):');
+  console.log('Shared dev portal link:');
   console.log(`https://dev.racko.ai/manage-users?token=${PORTAL_TOKEN}`);
   console.log('');
-  console.log(`${USERNAME} can now sign in on this link with the same password.`);
+  console.log(`${USERNAME} can sign in with:`);
+  console.log(`  Username: ${USERNAME}`);
+  console.log(`  Password: ${portalPassword}`);
+  console.log(`  Azure user ID: ${user.azure_user_id}`);
+  console.log(`  Resource group: ${user.azure_resource_group_name}`);
 
   await db.end();
 })().catch(async (error) => {

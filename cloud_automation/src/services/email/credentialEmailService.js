@@ -185,6 +185,79 @@ const buildAccessPortalEmailHtml = ({ requestId, manageUrl, expiresAt }) => `
   </html>
 `;
 
+const buildNewUserCredentialEmailHtml = ({
+  requestId,
+  user,
+  adminCredentials,
+  portalLink,
+  costingMode
+}) => {
+  const isPerUser = String(costingMode || '').toLowerCase() === 'per_user';
+  const resourceGroupLine = user.resource_group_name
+    ? `<p style="margin: 0 0 12px; font-size: 14px; color: #374151;">
+         Resource group: <strong>${escapeHtml(user.resource_group_name)}</strong>
+       </p>`
+    : '';
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="font-family: Arial, Helvetica, sans-serif; color: #111827; background: #f8fafc; margin: 0; padding: 24px;">
+        <div style="max-width: 720px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 28px;">
+          <h1 style="margin: 0 0 8px; font-size: 24px; line-height: 1.2;">New Azure Lab User Added</h1>
+          <p style="margin: 0 0 20px; font-size: 16px; color: #374151;">
+            A new learner account was added to request <strong>#${escapeHtml(requestId)}</strong>.
+          </p>
+          ${isPerUser ? '<p style="margin: 0 0 12px; font-size: 14px; color: #374151;">This lab uses per-user resource groups — a dedicated resource group was created for this user.</p>' : ''}
+          <div style="padding: 20px; border: 1px solid #e5e7eb; border-radius: 14px; background: #f9fafb;">
+            <p style="margin: 0 0 12px; font-size: 14px; font-weight: 700; color: #374151;">New User Credentials</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 0 0 8px;">
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280; width: 150px;">Username</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(user.username)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Temporary Password</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(user.temporary_password)}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Status</td>
+                <td style="padding: 8px 0; color: #111827;">${escapeHtml(user.status || 'Created')}</td>
+              </tr>
+            </table>
+            ${resourceGroupLine}
+          </div>
+          <div style="margin-top: 24px; padding: 20px; border: 1px solid #e5e7eb; border-radius: 14px; background: #f9fafb;">
+            <p style="margin: 0 0 12px; font-size: 14px; font-weight: 700; color: #374151;">Manage Portal Login</p>
+            <table style="border-collapse: collapse; width: 100%; margin: 0 0 16px;">
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280; width: 150px;">Username</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(adminCredentials?.username || '')}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280;">Temporary Password</td>
+                <td style="padding: 8px 0; font-family: Consolas, monospace; color: #111827;">${escapeHtml(adminCredentials?.temporaryPassword || '')}</td>
+              </tr>
+            </table>
+            <a
+              href="${escapeHtml(portalLink)}"
+              style="display: inline-block; background: #111827; color: #ffffff; text-decoration: none; padding: 12px 18px; border-radius: 10px; font-weight: 700;"
+            >
+              Open Manage Portal
+            </a>
+            <p style="margin: 14px 0 0; font-size: 14px; word-break: break-all;">
+              <a href="${escapeHtml(portalLink)}" style="color: #2563eb;">${escapeHtml(portalLink)}</a>
+            </p>
+          </div>
+          <p style="margin: 18px 0 0; font-size: 13px; color: #6b7280;">
+            This user has the same Azure roles and permissions as the other learners in this lab.
+          </p>
+        </div>
+      </body>
+    </html>
+  `;
+};
+
 const sendCredentialEmailWithRetry = async ({ to, subject, html, attachments = [] }) =>
   sendMailWithRetry({ to, subject, html, attachments });
 
@@ -192,5 +265,6 @@ module.exports = {
   buildCredentialEmailHtml,
   buildTestIdsCredentialEmailHtml,
   buildAccessPortalEmailHtml,
+  buildNewUserCredentialEmailHtml,
   sendCredentialEmailWithRetry
 };

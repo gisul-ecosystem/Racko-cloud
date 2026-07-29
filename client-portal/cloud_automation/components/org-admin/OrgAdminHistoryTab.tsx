@@ -1,9 +1,12 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  Calculator,
+  ChevronDown,
+  ChevronUp,
   Clock,
-  DollarSign,
+  Download,
   HardDrive,
   History,
   Loader2,
@@ -12,8 +15,9 @@ import {
   Trash2,
   User,
 } from 'lucide-react';
-import { getOrgLabHistory } from '../../api/orgAdminClient';
+import { getOrgConsumptionReport, getOrgLabHistory } from '../../api/orgAdminClient';
 import { formatCurrency } from '../../utils/formatters';
+import { downloadConsumptionReportExcel } from '../../utils/consumptionReportExport';
 import type {
   OrgAdminLabHistory,
   OrgAdminLabHistoryTimelineEntry,
@@ -67,6 +71,9 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filterUserId, setFilterUserId] = useState<string>('all');
+  const [showTotalMtd, setShowTotalMtd] = useState(false);
+  const [downloadingReport, setDownloadingReport] = useState(false);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
     setLoading(true);
@@ -87,6 +94,51 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
   useEffect(() => {
     void loadHistory();
   }, [loadHistory]);
+
+  const totalMtdSummary = useMemo(() => {
+    const defaultCostCurrency =
+      history?.defaultCostCurrency || users[0]?.costCurrency || 'USD';
+    const summaries = history?.userSummaries ?? [];
+    const source =
+      users.length > 0
+        ? users.map((user) => ({
+            amount: Number(user.azureCostMtd ?? 0),
+            currency: user.costCurrency || defaultCostCurrency,
+          }))
+        : summaries.map((summary) => ({
+            amount: Number(summary.azureCostMtdUsd ?? 0),
+            currency: summary.costCurrency || defaultCostCurrency,
+          }));
+
+    const total = source.reduce((sum, entry) => sum + entry.amount, 0);
+    const currencies = [...new Set(source.map((entry) => entry.currency).filter(Boolean))];
+    const currency = currencies.length === 1 ? currencies[0] : defaultCostCurrency;
+
+    return {
+      total,
+      currency,
+      userCount: source.length,
+      mixedCurrencies: currencies.length > 1,
+    };
+  }, [history, users]);
+
+  const handleDownloadConsumptionReport = useCallback(async () => {
+    setDownloadingReport(true);
+    setDownloadError(null);
+    try {
+      const response = await getOrgConsumptionReport(requestId);
+      if (!response.success || !response.report) {
+        throw new Error('Failed to load consumption report.');
+      }
+      await downloadConsumptionReportExcel(response.report);
+    } catch (reportError) {
+      setDownloadError(
+        reportError instanceof Error ? reportError.message : 'Failed to download consumption report.'
+      );
+    } finally {
+      setDownloadingReport(false);
+    }
+  }, [requestId]);
 
   if (loading && !history) {
     return (
@@ -113,6 +165,10 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
   }
 
   const summaries = history?.userSummaries ?? [];
+  const currencyByUserId = new Map(
+    summaries.map((summary) => [summary.userId, summary.costCurrency || history?.defaultCostCurrency || 'USD'])
+  );
+  const defaultCostCurrency = history?.defaultCostCurrency || 'USD';
 
   return (
     <div className="space-y-5 px-6 py-5">
@@ -145,6 +201,37 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
           </select>
           <button
             type="button"
+            onClick={() => setShowTotalMtd((current) => !current)}
+            disabled={totalMtdSummary.userCount === 0}
+            className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm transition disabled:cursor-not-allowed disabled:opacity-50 ${
+              showTotalMtd
+                ? 'border-violet-300 bg-violet-50 text-violet-900'
+                : 'border-gray-200 text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            <Calculator className="h-4 w-4" />
+            Total MTD
+            {showTotalMtd ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => void handleDownloadConsumptionReport()}
+            disabled={downloadingReport || users.length === 0}
+            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {downloadingReport ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4" />
+            )}
+            Download consumption report
+          </button>
+          <button
+            type="button"
             onClick={() => void loadHistory()}
             disabled={loading}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
@@ -158,6 +245,44 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
           </button>
         </div>
       </div>
+
+      {downloadError && (
+        <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {downloadError}
+        </p>
+      )}
+
+      {showTotalMtd && totalMtdSummary.userCount > 0 && (
+        <div className="rounded-xl border border-violet-200 bg-gradient-to-r from-violet-50 to-white px-4 py-4 shadow-sm">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-violet-700">
+                Total Azure MTD — all users
+              </p>
+              <p className="mt-1 text-2xl font-bold text-violet-950">
+                {formatCurrency(totalMtdSummary.total, totalMtdSummary.currency)}
+              </p>
+              <p className="mt-1 text-xs text-gray-500">
+                Sum of month-to-date Azure spend across {totalMtdSummary.userCount} user
+                {totalMtdSummary.userCount !== 1 ? 's' : ''}
+                {filterUserId !== 'all' ? ' (includes users not shown in the filter)' : ''}
+              </p>
+              {totalMtdSummary.mixedCurrencies && (
+                <p className="mt-1 text-xs text-amber-700">
+                  Multiple currencies detected — total shown in {totalMtdSummary.currency}.
+                </p>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowTotalMtd(false)}
+              className="text-xs font-medium text-violet-800 hover:underline"
+            >
+              Hide
+            </button>
+          </div>
+        </div>
+      )}
 
       {summaries.length > 0 && (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -183,15 +308,14 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
                 </div>
                 <div>
                   <p className="font-medium uppercase tracking-wide text-gray-400">Live cost</p>
-                  <p className="mt-1 inline-flex items-center gap-1 text-sm font-semibold text-gray-900">
-                    <DollarSign className="h-3.5 w-3.5" />
-                    {formatCurrency(summary.liveCostUsd)}
+                  <p className="mt-1 text-sm font-semibold text-gray-900">
+                    {formatCurrency(summary.liveCostUsd, 'USD')}
                   </p>
                 </div>
                 <div>
                   <p className="font-medium uppercase tracking-wide text-gray-400">Azure MTD</p>
                   <p className="mt-1 text-sm font-semibold text-gray-900">
-                    {formatCurrency(summary.azureCostMtdUsd)}
+                    {formatCurrency(summary.azureCostMtdUsd, summary.costCurrency || defaultCostCurrency)}
                   </p>
                 </div>
                 <div>
@@ -255,7 +379,15 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
                       <span>Live: {formatCurrency(entry.liveCostUsd)}</span>
                     )}
                     {entry.azureCostMtdUsd != null && (
-                      <span>Azure MTD: {formatCurrency(entry.azureCostMtdUsd)}</span>
+                      <span>
+                        Azure MTD:{' '}
+                        {formatCurrency(
+                          entry.azureCostMtdUsd,
+                          (entry.userId != null
+                            ? currencyByUserId.get(entry.userId)
+                            : null) || defaultCostCurrency
+                        )}
+                      </span>
                     )}
                     {entry.resourceCount != null && (
                       <span>Resources before cleanup: {entry.resourceCount}</span>

@@ -24,6 +24,8 @@ const { isRequestExpired, DEFAULT_LAB_EXPIRY_TIMEZONE } = require('../utils/requ
 const {
   getResourceGroupCosts,
   getCachedResourceGroupCosts,
+  queryDailyCostsForResourceGroups,
+  normalizeResourceGroupName,
   COST_CACHE_TTL_MS
 } = require('./azureCostManagementService');
 const { formatMinutes } = require('../utils/formatMinutes');
@@ -42,6 +44,7 @@ const {
   getTodayLimitMinutes
 } = require('../utils/usageSchedule');
 const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
+const { evaluateCombinedLabAccess } = require('../utils/labAccess');
 
 let armClient = null;
 
@@ -351,12 +354,14 @@ const loadResourceGroupDetail = async (requestId) => {
         r.status,
         r.expiry_date,
         r.expires_at,
+        r.starts_at,
         r.enable_daily_usage,
         r.daily_limit_minutes,
         r.usage_schedule,
         r.enforce_in_azure,
         r.costing_mode,
         r.created_at,
+        r.account_count,
         r.resource_cleanup_enabled,
         r.resource_cleanup_interval_hours,
         r.resource_cleanup_time,
@@ -388,6 +393,9 @@ const loadResourceGroupDetail = async (requestId) => {
   );
   const hasUsageTracking =
     request.enable_daily_usage === true || hasDailyLimitWindows;
+  const labAccessNow = hasUsageWindows
+    ? evaluateCombinedLabAccess(request, usageWindows)
+    : { allowed: true, blockedReason: null, blockedReasonLabel: null };
 
   const usersResult = await db.query(
     `
@@ -560,6 +568,7 @@ const loadResourceGroupDetail = async (requestId) => {
 
   const windowAccessByUser = hasDailyLimitWindows
     ? await evaluateWindowDailyLimitAccessBatch({
+        request,
         userIds: enrichedUsers.map((user) => Number(user.id)),
         windows: usageWindows,
         consumedMinutesByUser: new Map(
@@ -612,6 +621,10 @@ const loadResourceGroupDetail = async (requestId) => {
         if (windowEnforcementPaused) {
           usedTodayMinutes = Math.max(usedTodayMinutes, todayMinutes);
         }
+      } else if (hasUsageWindows && !labAccessNow.allowed) {
+        blockedForToday = true;
+        blockedReason = labAccessNow.blockedReason;
+        blockedReasonLabel = labAccessNow.blockedReasonLabel;
       } else if (request.enable_daily_usage === true) {
         const storedClosedMinutes =
           user.storedMinsToday ??
@@ -651,7 +664,8 @@ const loadResourceGroupDetail = async (requestId) => {
       }
 
       const effectiveAccountEnabled =
-        windowEnforcementPaused || user.azureAccountEnabled !== false;
+        windowEnforcementPaused
+        || (user.azureAccountEnabled !== false && (!hasUsageWindows || labAccessNow.allowed));
 
       const displayStatus = deriveUserDisplayStatus({
         azureAccountEnabled: effectiveAccountEnabled,
@@ -709,6 +723,7 @@ const loadResourceGroupDetail = async (requestId) => {
       status: request.status,
       expiryDate: request.expiry_date,
       expiresAt: request.expires_at || null,
+      startsAt: request.starts_at || null,
       enableDailyUsage: hasUsageTracking,
       hasUsageWindows,
       dailyLimitHours: todayWindowConfig?.dailyLimitHours ?? null,
@@ -732,6 +747,8 @@ const loadResourceGroupDetail = async (requestId) => {
       cleanupIntervalHours:
         request.cleanup_interval_hours != null ? Number(request.cleanup_interval_hours) : null,
       createdAt: request.created_at,
+      accountCount: Number(request.account_count || 0),
+      userCount: users.length,
       projectName: request.project_name || null,
       idMode:
         request.id_mode === 'test_ids' || request.id_mode === 'azure_ids'
@@ -1799,6 +1816,7 @@ const listRequests = async () => {
         r.costing_mode,
         r.location,
         r.created_at,
+        r.starts_at,
         r.expiry_date,
         r.expires_at,
         r.azure_resource_group_name,
@@ -1827,7 +1845,8 @@ const listRequests = async () => {
     requestName: row.azure_resource_group_name,
     projectName: row.project_name || null,
     idMode: row.id_mode === 'test_ids' || row.id_mode === 'azure_ids' ? row.id_mode : null,
-    startDate: row.created_at,
+    startDate: row.starts_at || row.created_at,
+    startsAt: row.starts_at || null,
     expiryDate: row.expiry_date,
     expiresAt: row.expires_at || null,
     userCount: Number(row.user_count || 0),
@@ -2165,6 +2184,289 @@ const getLabHistory = async (requestId, { userId = null, limit = 200 } = {}) => 
   return history;
 };
 
+const roundCost = (value) => Number(Number(value || 0).toFixed(4));
+
+const buildIsoDateRange = (fromDate, toDate) => {
+  const days = [];
+  let cursor = DateTime.fromISO(fromDate, { zone: 'utc' }).startOf('day');
+  const end = DateTime.fromISO(toDate, { zone: 'utc' }).startOf('day');
+
+  while (cursor <= end) {
+    days.push(cursor.toISODate());
+    cursor = cursor.plus({ days: 1 });
+  }
+
+  return days;
+};
+
+const loadMergedMinutesByUserForEachDay = async (
+  requestId,
+  timezone,
+  periodStartDate,
+  periodEndDate
+) => {
+  const tz = timezone || 'Asia/Kolkata';
+  const { rows } = await db.query(
+    `
+      SELECT
+        user_id,
+        login_at,
+        COALESCE(logout_at, NOW()) AS end_at
+      FROM user_usage_sessions
+      WHERE request_id = $1
+        AND DATE(login_at AT TIME ZONE $2) >= $3::date
+        AND DATE(login_at AT TIME ZONE $2) <= $4::date
+      ORDER BY user_id ASC, login_at ASC
+    `,
+    [requestId, tz, periodStartDate, periodEndDate]
+  );
+
+  const gapMs = getSessionMergeGapMs();
+  const intervalsByUserDay = new Map();
+
+  for (const row of rows) {
+    const userId = Number(row.user_id);
+    const loginAt = new Date(row.login_at);
+    const endAt = new Date(row.end_at);
+    const day = DateTime.fromJSDate(loginAt).setZone(tz).toISODate();
+    const key = `${userId}|${day}`;
+
+    if (!intervalsByUserDay.has(key)) {
+      intervalsByUserDay.set(key, []);
+    }
+
+    intervalsByUserDay.get(key).push({
+      start: loginAt,
+      end: endAt
+    });
+  }
+
+  const minutesByUserDay = new Map();
+
+  for (const [key, intervals] of intervalsByUserDay) {
+    minutesByUserDay.set(key, sumMergedSessionMinutes(intervals, gapMs));
+  }
+
+  return minutesByUserDay;
+};
+
+const getConsumptionReport = async (requestId) => {
+  const requestResult = await db.query(
+    `
+      SELECT
+        id,
+        costing_mode,
+        created_at,
+        starts_at,
+        expiry_date,
+        azure_resource_group_name
+      FROM requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+
+  const request = requestResult.rows[0];
+
+  if (!request) {
+    throw new AppError('Resource group request not found.', 404);
+  }
+
+  const timezone = await resolveRequestUsageTimezone(requestId);
+  const today = DateTime.now().setZone(timezone).toISODate();
+  const periodStart = toIsoDateStart(request.starts_at || request.created_at) || today;
+  const expiryDate = request.expiry_date ? toIsoDateStart(request.expiry_date) : null;
+  const periodEnd = expiryDate && expiryDate < today ? expiryDate : today;
+
+  if (periodStart > periodEnd) {
+    throw new AppError('Lab has not started yet — no consumption data available.', 400);
+  }
+
+  const days = buildIsoDateRange(periodStart, periodEnd);
+  const perUserCosting = isPerUserCosting(request.costing_mode);
+
+  const { rows: users } = await db.query(
+    `
+      SELECT
+        id,
+        username,
+        user_number,
+        azure_resource_group_name
+      FROM azure_users
+      WHERE request_id = $1
+        AND COALESCE(is_deleted, false) = false
+      ORDER BY username ASC
+    `,
+    [requestId]
+  );
+
+  if (!users.length) {
+    return {
+      requestId: Number(requestId),
+      currency: 'USD',
+      period: { from: periodStart, to: periodEnd },
+      days,
+      users: [],
+      dailyTotals: Object.fromEntries(days.map((day) => [day, 0])),
+      grandTotal: 0
+    };
+  }
+
+  let currency = 'USD';
+  const costByUserDay = new Map();
+
+  for (const user of users) {
+    costByUserDay.set(Number(user.id), new Map(days.map((day) => [day, 0])));
+  }
+
+  if (perUserCosting) {
+    const stagingGroups = await getStagingResourceGroups(requestId);
+    const rgToUserId = new Map();
+
+    for (const user of users) {
+      const rgName =
+        user.azure_resource_group_name
+        || stagingGroups.find((entry) => Number(entry.user_number) === Number(user.user_number))
+          ?.azure_resource_group_name;
+
+      if (rgName) {
+        rgToUserId.set(normalizeResourceGroupName(rgName), Number(user.id));
+      }
+    }
+
+    const resourceGroupNames = [...rgToUserId.keys()];
+
+    if (resourceGroupNames.length > 0) {
+      const dailyCosts = await queryDailyCostsForResourceGroups({
+        resourceGroupNames,
+        from: periodStart,
+        to: periodEnd,
+        groupByResourceGroup: true
+      });
+
+      currency = dailyCosts.currency || currency;
+
+      for (const row of dailyCosts.rows) {
+        const userId = rgToUserId.get(normalizeResourceGroupName(row.resourceGroup));
+        if (!userId || !row.date) {
+          continue;
+        }
+
+        const userDayCosts = costByUserDay.get(userId);
+        if (!userDayCosts) {
+          continue;
+        }
+
+        userDayCosts.set(
+          row.date,
+          roundCost((userDayCosts.get(row.date) || 0) + row.cost)
+        );
+      }
+    }
+  } else {
+    const resourceGroup = request.azure_resource_group_name;
+
+    if (!resourceGroup) {
+      throw new AppError('No shared Azure resource group is linked to this request.', 404);
+    }
+
+    const dailyCosts = await queryDailyCostsForResourceGroups({
+      resourceGroupNames: [resourceGroup],
+      from: periodStart,
+      to: periodEnd,
+      groupByResourceGroup: false
+    });
+
+    currency = dailyCosts.currency || currency;
+    const dailyTotalsFromAzure = new Map(days.map((day) => [day, 0]));
+
+    for (const row of dailyCosts.rows) {
+      if (!row.date) {
+        continue;
+      }
+      dailyTotalsFromAzure.set(
+        row.date,
+        roundCost((dailyTotalsFromAzure.get(row.date) || 0) + row.cost)
+      );
+    }
+
+    const minutesByUserDay = await loadMergedMinutesByUserForEachDay(
+      requestId,
+      timezone,
+      periodStart,
+      periodEnd
+    );
+
+    for (const day of days) {
+      const dayTotal = dailyTotalsFromAzure.get(day) || 0;
+      const minutesByUser = new Map();
+
+      for (const user of users) {
+        const minutes = minutesByUserDay.get(`${user.id}|${day}`) || 0;
+        minutesByUser.set(Number(user.id), minutes);
+      }
+
+      const totalMinutes = [...minutesByUser.values()].reduce((sum, value) => sum + value, 0);
+
+      for (const user of users) {
+        const userId = Number(user.id);
+        const userMinutes = minutesByUser.get(userId) || 0;
+        const attributedCost =
+          totalMinutes > 0 && userMinutes > 0
+            ? roundCost(dayTotal * (userMinutes / totalMinutes))
+            : 0;
+        costByUserDay.get(userId)?.set(day, attributedCost);
+      }
+    }
+  }
+
+  const dailyTotals = Object.fromEntries(
+    days.map((day) => [
+      day,
+      roundCost(
+        users.reduce((sum, user) => sum + (costByUserDay.get(Number(user.id))?.get(day) || 0), 0)
+      )
+    ])
+  );
+
+  const reportUsers = users.map((user) => {
+    const userDayCosts = costByUserDay.get(Number(user.id)) || new Map();
+    const dailyCosts = Object.fromEntries(
+      days.map((day) => [day, userDayCosts.get(day) || 0])
+    );
+    const total = roundCost(Object.values(dailyCosts).reduce((sum, value) => sum + value, 0));
+
+    return {
+      userId: Number(user.id),
+      username: user.username,
+      dailyCosts,
+      total
+    };
+  });
+
+  const grandTotal = roundCost(Object.values(dailyTotals).reduce((sum, value) => sum + value, 0));
+
+  return {
+    requestId: Number(requestId),
+    currency,
+    period: { from: periodStart, to: periodEnd },
+    days,
+    users: reportUsers,
+    dailyTotals,
+    grandTotal
+  };
+};
+
+const toIsoDateStart = (value) => {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString().slice(0, 10);
+};
+
 const getCleanupLogs = async (requestId, { limit = 20 } = {}) => {
   const resolvedLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
 
@@ -2415,6 +2717,353 @@ const unblockUser = async ({
   };
 };
 
+const unblockAllUsers = async ({
+  requestId,
+  adminEmail,
+  resetUsage = true,
+  pauseWindowEnforcement = true,
+  pauseWindowHours = 24
+}) => {
+  const { DateTime } = require('luxon');
+  const { createGraphClient } = require('../provisioners/azure/userProvisioner');
+  const { batchEnableUsers } = require('../provisioners/azure/graphBatchProvisioner');
+
+  const { rows: users } = await db.query(
+    `
+      SELECT id, username, azure_user_id
+      FROM azure_users
+      WHERE request_id = $1
+        AND azure_user_id IS NOT NULL
+        AND COALESCE(is_deleted, false) = false
+      ORDER BY id ASC
+    `,
+    [requestId]
+  );
+
+  if (!users.length) {
+    throw new AppError('No users found for this request.', 404);
+  }
+
+  const windowResult = await db.query(
+    `
+      SELECT timezone
+      FROM request_usage_windows
+      WHERE request_id = $1
+      LIMIT 1
+    `,
+    [requestId]
+  );
+  const timezone = windowResult.rows[0]?.timezone || 'Asia/Kolkata';
+  const todayDate = DateTime.now().setZone(timezone).toISODate();
+  const pauseUntil =
+    pauseWindowEnforcement === false
+      ? null
+      : DateTime.now()
+          .setZone(timezone)
+          .plus({ hours: Math.max(Number(pauseWindowHours) || 24, 1) })
+          .toUTC()
+          .toISO();
+
+  const { graphClient } = createGraphClient();
+  const { enabled: enabledAzureIds, failed: graphFailures } = await batchEnableUsers(
+    graphClient,
+    users.map((user) => user.azure_user_id),
+    `unblock-all request ${requestId}`
+  );
+
+  const enabledAzureIdSet = new Set(enabledAzureIds.map((id) => String(id).toLowerCase()));
+  const enabledUsers = users.filter((user) =>
+    enabledAzureIdSet.has(String(user.azure_user_id).toLowerCase())
+  );
+  const enabledUserIds = enabledUsers.map((user) => user.id);
+
+  if (enabledUserIds.length) {
+    await db.query(
+      `
+        UPDATE azure_users
+        SET
+          azure_account_enabled = TRUE,
+          blocked_until = NULL,
+          blocked_reason = NULL,
+          blocked_at = NULL,
+          window_enforcement_paused_until = $2,
+          used_today_minutes = CASE WHEN $3 THEN 0 ELSE used_today_minutes END,
+          status = CASE WHEN status = 'Blocked' THEN 'Created' ELSE status END
+        WHERE id = ANY($1::int[])
+      `,
+      [enabledUserIds, pauseUntil, resetUsage === true]
+    );
+
+    if (resetUsage) {
+      await db.query(
+        `
+          UPDATE user_usage_sessions
+          SET
+            logout_at = login_at,
+            minutes_used = 0,
+            ended_reason = COALESCE(ended_reason, 'admin_reset')
+          WHERE user_id = ANY($1::int[])
+            AND DATE(login_at AT TIME ZONE $2) = $3::date
+            AND (logout_at IS NULL OR minutes_used > 0)
+        `,
+        [enabledUserIds, timezone, todayDate]
+      );
+
+      await db.query(
+        `
+          INSERT INTO daily_usage_tracking
+            (request_id, azure_user_id, tracking_date, consumed_minutes, limit_reached, limit_reached_at)
+          SELECT $1, au.id, $2, 0, FALSE, NULL
+          FROM azure_users au
+          WHERE au.id = ANY($3::int[])
+          ON CONFLICT (azure_user_id, tracking_date)
+          DO UPDATE SET
+            consumed_minutes = 0,
+            limit_reached = FALSE,
+            limit_reached_at = NULL,
+            updated_at = NOW()
+        `,
+        [requestId, todayDate, enabledUserIds]
+      );
+    } else {
+      await db.query(
+        `
+          UPDATE daily_usage_tracking
+          SET
+            limit_reached = FALSE,
+            limit_reached_at = NULL,
+            updated_at = NOW()
+          WHERE azure_user_id = ANY($1::int[])
+            AND tracking_date = $2
+        `,
+        [enabledUserIds, todayDate]
+      );
+    }
+  }
+
+  const failedByAzureId = new Map(
+    graphFailures.map((entry) => [String(entry.azureUserId).toLowerCase(), entry.error])
+  );
+  const results = users.map((user) => {
+    const azureKey = String(user.azure_user_id).toLowerCase();
+    if (enabledAzureIdSet.has(azureKey)) {
+      return {
+        userId: user.id,
+        username: user.username,
+        success: true
+      };
+    }
+
+    return {
+      userId: user.id,
+      username: user.username,
+      success: false,
+      error: failedByAzureId.get(azureKey) || 'Failed to enable Azure account'
+    };
+  });
+
+  const unblockedCount = results.filter((entry) => entry.success).length;
+
+  await db.query(
+    `
+      INSERT INTO access_portal_audit_logs (request_id, customer_email, actor, action, target_user_id, details)
+      SELECT r.id, r.customer_email, $1, 'all_users_unblocked', NULL, $2::jsonb
+      FROM requests r
+      WHERE r.id = $3
+    `,
+    [
+      adminEmail || 'org-admin',
+      JSON.stringify({
+        resetUsage,
+        pauseWindowEnforcement,
+        pauseWindowHours,
+        unblockedCount,
+        totalUsers: users.length,
+        results
+      }),
+      requestId
+    ]
+  );
+
+  if (unblockedCount === 0) {
+    throw new AppError(
+      graphFailures[0]?.error ||
+        'Could not unblock any users. Microsoft Graph may be rate limiting — wait a moment and try again.',
+      502
+    );
+  }
+
+  return {
+    requestId,
+    totalUsers: users.length,
+    unblockedCount,
+    failedCount: users.length - unblockedCount,
+    results
+  };
+};
+
+const blockAllUsers = async ({ requestId, adminEmail }) => {
+  const { createGraphClient } = require('../provisioners/azure/userProvisioner');
+  const { batchDisableUsers } = require('../provisioners/azure/graphBatchProvisioner');
+
+  const { rows: users } = await db.query(
+    `
+      SELECT id, username, azure_user_id
+      FROM azure_users
+      WHERE request_id = $1
+        AND azure_user_id IS NOT NULL
+        AND COALESCE(is_deleted, false) = false
+      ORDER BY id ASC
+    `,
+    [requestId]
+  );
+
+  if (!users.length) {
+    throw new AppError('No users found for this request.', 404);
+  }
+
+  const { graphClient } = createGraphClient();
+  const { disabled: disabledAzureIds, failed: graphFailures } = await batchDisableUsers(
+    graphClient,
+    users.map((user) => user.azure_user_id),
+    `block-all request ${requestId}`
+  );
+
+  const disabledAzureIdSet = new Set(disabledAzureIds.map((id) => String(id).toLowerCase()));
+  const disabledUsers = users.filter((user) =>
+    disabledAzureIdSet.has(String(user.azure_user_id).toLowerCase())
+  );
+  const disabledUserIds = disabledUsers.map((user) => user.id);
+
+  if (disabledUserIds.length) {
+    await db.query(
+      `
+        UPDATE azure_users
+        SET
+          azure_account_enabled = FALSE,
+          blocked_reason = 'admin_block',
+          blocked_at = NOW(),
+          blocked_until = NULL,
+          window_enforcement_paused_until = NULL,
+          status = 'Blocked'
+        WHERE id = ANY($1::int[])
+      `,
+      [disabledUserIds]
+    );
+  }
+
+  const failedByAzureId = new Map(
+    graphFailures.map((entry) => [String(entry.azureUserId).toLowerCase(), entry.error])
+  );
+  const results = users.map((user) => {
+    const azureKey = String(user.azure_user_id).toLowerCase();
+    if (disabledAzureIdSet.has(azureKey)) {
+      return {
+        userId: user.id,
+        username: user.username,
+        success: true
+      };
+    }
+
+    return {
+      userId: user.id,
+      username: user.username,
+      success: false,
+      error: failedByAzureId.get(azureKey) || 'Failed to disable Azure account'
+    };
+  });
+
+  const blockedCount = results.filter((entry) => entry.success).length;
+
+  await db.query(
+    `
+      INSERT INTO access_portal_audit_logs (request_id, customer_email, actor, action, target_user_id, details)
+      SELECT r.id, r.customer_email, $1, 'all_users_blocked', NULL, $2::jsonb
+      FROM requests r
+      WHERE r.id = $3
+    `,
+    [
+      adminEmail || 'org-admin',
+      JSON.stringify({
+        blockedCount,
+        totalUsers: users.length,
+        results
+      }),
+      requestId
+    ]
+  );
+
+  if (blockedCount === 0) {
+    throw new AppError(
+      graphFailures[0]?.error ||
+        'Could not block any users. Microsoft Graph may be rate limiting — wait a moment and try again.',
+      502
+    );
+  }
+
+  return {
+    requestId,
+    totalUsers: users.length,
+    blockedCount,
+    failedCount: users.length - blockedCount,
+    results
+  };
+};
+
+const addUserToRequest = async ({ adminEmail, requestId }) => {
+  const { addUserToRequest: provisionAddUser } = require('./userProvisionService');
+  const { sendNewUserCredentials } = require('./credentialService');
+
+  const normalizedRequestId = Number(requestId);
+  if (!Number.isInteger(normalizedRequestId) || normalizedRequestId <= 0) {
+    throw new AppError('Request id must be a positive integer.', 400);
+  }
+
+  const result = await provisionAddUser(normalizedRequestId);
+
+  let emailSent = false;
+  let emailError = null;
+
+  try {
+    await sendNewUserCredentials(normalizedRequestId, result.user.id);
+    emailSent = true;
+  } catch (error) {
+    emailError = error?.message || 'Failed to queue credential email.';
+  }
+
+  await db.query(
+    `
+      INSERT INTO access_portal_audit_logs (request_id, customer_email, actor, action, target_user_id, details)
+      SELECT r.id, r.customer_email, $1, 'user_added', $2, $3::jsonb
+      FROM requests r
+      WHERE r.id = $4
+    `,
+    [
+      adminEmail || 'org-admin',
+      result.user.id,
+      JSON.stringify({
+        username: result.user.username,
+        userNumber: result.userNumber,
+        userCount: result.userCount,
+        accountCount: result.accountCount,
+        emailSent,
+        emailError
+      }),
+      normalizedRequestId
+    ]
+  );
+
+  return {
+    requestId: normalizedRequestId,
+    user: result.user,
+    userCount: result.userCount,
+    accountCount: result.accountCount,
+    userNumber: result.userNumber,
+    emailSent,
+    emailError
+  };
+};
+
 const getUserSessions = async (requestId, userId, { limit = 50 } = {}) => {
   const resolvedLimit = Math.min(Math.max(Number(limit) || 50, 1), 100);
 
@@ -2531,6 +3180,10 @@ module.exports = {
   triggerRequestCleanup,
   getCleanupLogs,
   getLabHistory,
+  getConsumptionReport,
   getUserSessions,
-  unblockUser
+  unblockUser,
+  unblockAllUsers,
+  blockAllUsers,
+  addUserToRequest
 };
