@@ -510,6 +510,8 @@ func shouldExcludePath(path string) bool {
 		`appdata\local\microsoft\windows\notifications`,
 		// Windows Search cache
 		`appdata\local\microsoft\windows\caches`,
+		// Windows Timeline / Activity History — auto-managed by OS, not user content
+		`appdata\local\connecteddevicesplatform`,
 		// Temp folders — transient
 		`appdata\local\temp`,
 		`appdata\locallow`,
