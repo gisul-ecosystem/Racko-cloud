@@ -41,7 +41,9 @@ router.post('/requests', async (req, res, next) => {
 router.get('/requests', async (req, res, next) => {
   try {
     const actor = getRackoActor(req);
-    const requests = await getAllRequests(actor);
+    const ownerId =
+      typeof req.query.ownerId === 'string' ? req.query.ownerId.trim() : undefined;
+    const requests = await getAllRequests({ ...actor, ownerId });
     res.json({ success: true, data: requests, count: requests.length });
   } catch (err) {
     next(err);

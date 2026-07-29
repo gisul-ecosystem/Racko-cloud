@@ -92,17 +92,21 @@ export const listCatalogVmRequestsQuerySchema = z.object({
 });
 
 const cloudProviderEnum = z.enum(['aws', 'azure', 'oci', 'gcp']);
+const calculatorModeEnum = z.enum(['vm', 'storage_only']);
+const managedDiskTypeEnum = z.enum(['standard_hdd', 'standard_ssd']);
 
 export const calculateVmPricingSchema = z.object({
   body: z
     .object({
       category: z.enum(['linux', 'windows', 'gpu']).default('linux'),
+      mode: calculatorModeEnum.optional().default('vm'),
       durationDays: z.coerce.number().int().min(1).max(3650).default(1),
       specs: z
         .object({
           cpu: z.union([z.string(), z.number()]).optional(),
           ram: z.union([z.string(), z.number()]).optional(),
           disk: z.union([z.string(), z.number()]).optional(),
+          diskType: managedDiskTypeEnum.optional(),
         })
         .optional(),
       canonicalSpec: z.string().min(1).max(100).trim().optional(),
@@ -114,8 +118,13 @@ export const calculateVmPricingSchema = z.object({
         .optional(),
       nestedVirtualization: z.boolean().optional().default(false),
     })
-    .refine((b) => Boolean(b.canonicalSpec) || Boolean(b.specs), {
-      message: 'canonicalSpec or specs is required',
+    .refine((b) => {
+      if (b.canonicalSpec) return true;
+      if (!b.specs) return false;
+      if (b.mode === 'storage_only') return b.specs.disk !== undefined;
+      return true;
+    }, {
+      message: 'canonicalSpec or specs is required (storage_only mode requires disk)',
     }),
 });
 

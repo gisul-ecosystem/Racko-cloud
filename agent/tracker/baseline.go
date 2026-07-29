@@ -469,8 +469,7 @@ func shouldExcludePath(path string) bool {
 		// Windows OS — never touch
 		`c:\windows`,
 		// Agent data — never track our own files
-		`c:\programdata\racko-agent`,
-		// Windows system-managed ProgramData
+		`c:\programdata\racko-agent`,		// Windows system-managed ProgramData
 		`c:\programdata\microsoft`,
 		`c:\programdata\windows`,
 		`c:\programdata\package cache`,
@@ -490,11 +489,20 @@ func shouldExcludePath(path string) bool {
 		`appdata\roaming\microsoft\windows\recent\customdestinations`,
 		// PowerShell history — updated every command, cloning 50+ events is noise
 		`appdata\roaming\microsoft\windows\powershell\psreadline\consolehost_history.txt`,
+		// PowerShell startup profile cache — updated every time PowerShell opens
+		`appdata\local\microsoft\windows\powershell`,
 		// Edge/IE/Chrome web cache — transient binary cache files
 		`appdata\local\microsoft\windows\webcache`,
 		`appdata\local\microsoft\windows\history`,
 		`appdata\local\microsoft\windows\inetcache`,
 		`appdata\local\microsoft\windows\temporary internet files`,
+		// Edge browser internal data — cache, LevelDB, session, logs
+		// These are ephemeral browser-managed files, not user content
+		`appdata\local\microsoft\edge\user data`,
+		// Chrome browser internal data
+		`appdata\local\google\chrome\user data`,
+		// Firefox internal data
+		`appdata\roaming\mozilla\firefox\profiles`,
 		// Icon cache — rebuilt by Windows automatically
 		`appdata\local\iconcache`,
 		`appdata\local\microsoft\windows\explorer`,
@@ -502,6 +510,8 @@ func shouldExcludePath(path string) bool {
 		`appdata\local\microsoft\windows\notifications`,
 		// Windows Search cache
 		`appdata\local\microsoft\windows\caches`,
+		// Windows Timeline / Activity History — auto-managed by OS, not user content
+		`appdata\local\connecteddevicesplatform`,
 		// Temp folders — transient
 		`appdata\local\temp`,
 		`appdata\locallow`,
@@ -511,8 +521,15 @@ func shouldExcludePath(path string) bool {
 		`.jfm`,   // IndexedDB journal
 		`edb.chk`, // ESE database checkpoint
 		`edb.log`, // ESE transaction log
-		// Paging / hibernate files
-		`pagefile.sys`,
+		// Registry hive files — always locked by Windows, never readable
+		`ntuser.dat`,
+		`ntuser.dat.log`,
+		`ntuser.pol`,
+		// NTFS internal system folders — never user content
+		`$extend`,
+		`$deleted`,
+		// VMware guest tools logs — not user content
+		`c:\programdata\vmware`,
 		`hiberfil.sys`,
 		`swapfile.sys`,
 		// Office lock files

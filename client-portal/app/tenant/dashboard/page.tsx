@@ -1,13 +1,6 @@
-'use client';
+import { redirect } from 'next/navigation';
 
-import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
-import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
-
-export default function TenantDashboardIndexRedirect() {
-  const router = useRouter();
-  useEffect(() => {
-    router.replace(TENANT_CONSOLE);
-  }, [router]);
-  return null;
+/** Legacy /tenant/dashboard → /console/dashboard. */
+export default function LegacyTenantDashboardRedirect() {
+  redirect('/console/dashboard');
 }

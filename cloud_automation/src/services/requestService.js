@@ -895,7 +895,22 @@ async function createRequest({
 
 
 
-async function getAllRequests({ rackoUserId, isSuperAdmin } = {}) {
+async function getAllRequests({ rackoUserId, isSuperAdmin, ownerId } = {}) {
+  const filterOwnerId = String(ownerId || '').trim();
+
+  if (isSuperAdmin && filterOwnerId) {
+    const result = await db.query(
+      `
+      SELECT *
+      FROM requests
+      WHERE racko_user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [filterOwnerId]
+    );
+    return result.rows;
+  }
+
   if (isSuperAdmin) {
     const result = await db.query(
       `

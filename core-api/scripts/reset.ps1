@@ -868,12 +868,25 @@ foreach ($svc in (Get-CimInstance Win32_Service -ErrorAction SilentlyContinue)) 
 # ============================================================
 Write-Host "`n=== PHASE 16: EMPTYING RECYCLE BIN ===" -ForegroundColor Cyan
 
-try {
-    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
-    Write-Host "  Recycle Bin emptied" -ForegroundColor Green
-} catch {
-    Write-Host "  Could not empty Recycle Bin -- $_" -ForegroundColor DarkYellow
+# Clear-RecycleBin only empties the current session user's bin (LocalSystem when
+# running as a service). We directly delete contents from each per-user SID folder
+# under $Recycle.Bin on every fixed drive so all users' bins are fully cleared.
+function Clear-AllRecycleBins {
+    $fixedDrives = [System.IO.DriveInfo]::GetDrives() |
+        Where-Object { $_.DriveType -eq [System.IO.DriveType]::Fixed -and $_.IsReady }
+    foreach ($drive in $fixedDrives) {
+        $recyclePath = Join-Path $drive.RootDirectory.FullName '$Recycle.Bin'
+        if (-not (Test-Path $recyclePath)) { continue }
+        Get-ChildItem $recyclePath -Force -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ChildItem $_.FullName -Force -ErrorAction SilentlyContinue |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        Write-Host "  Cleared Recycle Bin on $($drive.RootDirectory.FullName)" -ForegroundColor DarkGray
+    }
 }
+
+Clear-AllRecycleBins
+Write-Host "  Recycle Bin emptied (all users, all drives)" -ForegroundColor Green
 
 # ============================================================
 # PHASE 17 — Trace / activity / network / system cleanup
@@ -1152,6 +1165,11 @@ try {
         Set-ItemProperty -Path $explorerKey -Name 'DesktopProcess' -Value 0 -ErrorAction SilentlyContinue
     }
 
+    # Delete saved desktop icon positions so Windows auto-arranges all icons
+    # to top-left grid on Explorer restart — resets any layout the user had.
+    # NOTE: must happen AFTER Explorer is stopped — Explorer writes positions back
+    # to registry during shutdown, so deleting before stop gets overwritten.
+
     # Delete icon cache BEFORE stopping Explorer so there are no file locks.
     # Explorer rebuilds the cache fresh on restart — fixes stale/blank icons for
     # Edge, File Explorer, and any other taskbar/desktop shortcuts.
@@ -1166,7 +1184,19 @@ try {
     Write-Host "  Icon cache cleared -- will rebuild on Explorer restart" -ForegroundColor DarkGray
 
     Stop-Process -Name 'explorer' -Force -ErrorAction SilentlyContinue
-    Start-Sleep -Seconds 2
+    Start-Sleep -Seconds 5  # wait for Explorer to fully exit and finish writing registry
+
+    # Delete Bags\1\Desktop AFTER Explorer is fully stopped so it cannot write back
+    Remove-Item "HKCU:\Software\Microsoft\Windows\Shell\Bags\1\Desktop" -Recurse -Force -ErrorAction SilentlyContinue
+    if (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue) {
+        Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
+            $_.PSChildName -match 'S-1-5-21' -and $_.PSChildName -notmatch '_Classes'
+        } | ForEach-Object {
+            $bagsPath = "HKU:\$($_.PSChildName)\Software\Microsoft\Windows\Shell\Bags\1\Desktop"
+            Remove-Item $bagsPath -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+    Write-Host "  Desktop icon positions cleared -- will auto-arrange on restart" -ForegroundColor DarkGray
 
     # Start Explorer as the shell (desktop only, no folder window)
     $shell = New-Object -ComObject Shell.Application -ErrorAction SilentlyContinue
@@ -1186,12 +1216,10 @@ try {
 }
 
 # Clear Recycle Bin AFTER Explorer restarts so the icon refreshes to empty.
-# Running it before Explorer restarts causes the icon to remain showing "full"
-# even though the bin was emptied.
 Write-Host "-- Emptying Recycle Bin (post-Explorer restart refresh) --" -ForegroundColor Cyan
 try {
     Start-Sleep -Milliseconds 500  # brief pause so Explorer shell is ready
-    Clear-RecycleBin -Force -ErrorAction SilentlyContinue
+    Clear-AllRecycleBins
     Write-Host "  Recycle Bin emptied and icon refreshed" -ForegroundColor Green
 } catch {
     Write-Host "  Could not empty Recycle Bin -- $_" -ForegroundColor DarkYellow

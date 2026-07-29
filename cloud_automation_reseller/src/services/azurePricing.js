@@ -3,6 +3,35 @@ import CloudRegionPricing from '../models/CloudRegionPricing.js';
 
 const RETAIL_API = 'https://prices.azure.com/api/retail/prices';
 
+const AZURE_DISK_SKUS = {
+  standard_ssd: new Map([
+    [32, 'E4'],
+    [64, 'E6'],
+    [128, 'E10'],
+    [256, 'E15'],
+    [512, 'E20'],
+    [1024, 'E30'],
+    [2048, 'E40'],
+    [4096, 'E50'],
+    [8192, 'E60'],
+    [16384, 'E70'],
+    [32767, 'E80'],
+  ]),
+  standard_hdd: new Map([
+    [32, 'S4'],
+    [64, 'S6'],
+    [128, 'S10'],
+    [256, 'S15'],
+    [512, 'S20'],
+    [1024, 'S30'],
+    [2048, 'S40'],
+    [4096, 'S50'],
+    [8192, 'S60'],
+    [16384, 'S70'],
+    [32767, 'S80'],
+  ]),
+};
+
 async function fetchRetailPage(filter, skip = 0) {
   const url = new URL(RETAIL_API);
   url.searchParams.set('$filter', filter);
@@ -15,6 +44,33 @@ async function fetchRetailPage(filter, skip = 0) {
   return res.json();
 }
 
+function pickAzureVmHourly(items, { windows = false } = {}) {
+  const candidates = (items || []).filter((i) => {
+    if (i.type !== 'Consumption') return false;
+    if (typeof i.retailPrice !== 'number' || !Number.isFinite(i.retailPrice)) return false;
+    if (i.unitOfMeasure !== '1 Hour') return false;
+
+    const product = String(i.productName || '');
+    const meter = String(i.meterName || '');
+    const sku = String(i.skuName || '');
+    const blob = `${product} ${meter} ${sku}`;
+
+    if (/Spot|Low Priority|DevTest|Cloud Services/i.test(blob)) return false;
+    if (!/Virtual Machines/i.test(product)) return false;
+
+    const isWindows = /Windows/i.test(product);
+    if (windows ? !isWindows : isWindows) return false;
+
+    return true;
+  });
+
+  // Prefer the exact SKU meter over any leftover variants.
+  const exact = candidates.find((i) => !/Low Priority|Spot/i.test(i.meterName || ''));
+  return exact?.retailPrice ?? candidates[0]?.retailPrice ?? null;
+}
+
+export { pickAzureVmHourly };
+
 export async function fetchVmHourlyUsd(armSkuName, armRegionName) {
   const filter = [
     `serviceName eq 'Virtual Machines'`,
@@ -22,21 +78,11 @@ export async function fetchVmHourlyUsd(armSkuName, armRegionName) {
     `armRegionName eq '${armRegionName}'`,
     `priceType eq 'Consumption'`,
     `contains(meterName, 'Spot') eq false`,
-    `contains(meterName, 'Low Priority') eq false`,
-    `contains(skuName, 'Low Priority') eq false`,
     `contains(productName, 'Windows') eq false`,
   ].join(' and ');
 
   const data = await fetchRetailPage(filter);
-  const items = data?.Items || [];
-  const match = items.find(
-    (i) =>
-      i.type === 'Consumption' &&
-      typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour' &&
-      !/Low Priority|Spot/i.test(`${i.meterName || ''} ${i.skuName || ''} ${i.productName || ''}`)
-  );
-  return match?.retailPrice ?? null;
+  return pickAzureVmHourly(data?.Items || [], { windows: false });
 }
 
 export async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
@@ -46,55 +92,86 @@ export async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
     `armRegionName eq '${armRegionName}'`,
     `priceType eq 'Consumption'`,
     `contains(meterName, 'Spot') eq false`,
-    `contains(meterName, 'Low Priority') eq false`,
-    `contains(skuName, 'Low Priority') eq false`,
     `contains(productName, 'Windows') eq true`,
   ].join(' and ');
 
   const data = await fetchRetailPage(filter);
-  const items = data?.Items || [];
-  const match = items.find(
-    (i) =>
-      i.type === 'Consumption' &&
-      typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour' &&
-      !/Low Priority|Spot/i.test(`${i.meterName || ''} ${i.skuName || ''} ${i.productName || ''}`)
-  );
-  return match?.retailPrice ?? null;
+  return pickAzureVmHourly(data?.Items || [], { windows: true });
 }
 
-export async function fetchAzureDiskGbMonth(armRegionName) {
+export function resolveAzureDiskSku(diskGb, diskType = 'standard_ssd') {
+  const family = AZURE_DISK_SKUS[diskType];
+  if (!family) return null;
+  const requestedGb = Number(diskGb);
+  for (const [tierGb, skuCode] of family.entries()) {
+    if (requestedGb <= tierGb) {
+      return { skuCode, tierGb };
+    }
+  }
+  return null;
+}
+
+export function azureDiskSkuCode(diskGb, diskType = 'standard_ssd') {
+  return resolveAzureDiskSku(diskGb, diskType)?.skuCode || null;
+}
+
+export async function fetchAzureDiskMonthly(
+  armRegionName,
+  diskGb,
+  diskType = 'standard_ssd'
+) {
+  const diskFamily =
+    diskType === 'standard_hdd'
+      ? {
+          productName: 'Standard HDD Managed Disks',
+          shortName: 'Standard HDD',
+        }
+      : {
+          productName: 'Standard SSD Managed Disks',
+          shortName: 'Standard SSD',
+        };
+  const resolvedSku = resolveAzureDiskSku(diskGb, diskType);
+  if (!resolvedSku) {
+    throw new Error(
+      `Azure Retail Prices has no configured ${diskFamily.shortName} SKU for ${diskGb} GB`
+    );
+  }
+  const { skuCode, tierGb } = resolvedSku;
   const filter = [
     `serviceName eq 'Storage'`,
     `armRegionName eq '${armRegionName}'`,
     `priceType eq 'Consumption'`,
-    `contains(productName, 'Premium SSD Managed Disks') eq true`,
+    `contains(productName, '${diskFamily.productName}') eq true`,
     `contains(meterName, 'Disk') eq true`,
   ].join(' and ');
 
   const data = await fetchRetailPage(filter);
   const items = data?.Items || [];
-  const perGb = items.find(
+  const row = items.find(
     (i) =>
       typeof i.retailPrice === 'number' &&
-      /GB/i.test(i.unitOfMeasure || '') &&
-      /Premium SSD/i.test(i.productName || '') &&
+      i.unitOfMeasure === '1/Month' &&
+      new RegExp(`^${skuCode}\\s+LRS\\b`, 'i').test(i.meterName || i.skuName || '') &&
+      new RegExp(diskFamily.shortName, 'i').test(i.productName || '') &&
       !/Snapshot|Mount|Burst/i.test(i.meterName || '')
   );
-  let rate = perGb?.retailPrice ?? null;
-  if (rate == null) {
-    const p10 = items.find(
-      (i) =>
-        typeof i.retailPrice === 'number' &&
-        /P10/i.test(i.meterName || i.skuName || '') &&
-        /Month/i.test(i.unitOfMeasure || '')
+  if (!row || !Number.isFinite(row.retailPrice)) {
+    throw new Error(
+      `Azure Retail Prices missing exact ${skuCode} LRS ${diskFamily.shortName} monthly price for ${armRegionName}`
     );
-    if (p10) rate = p10.retailPrice / 128;
   }
-  if (rate == null || !Number.isFinite(rate)) {
-    throw new Error(`Azure Retail Prices missing Premium SSD GB-month rate for ${armRegionName}`);
-  }
-  return rate;
+  const result = {
+    monthlyPrice: row.retailPrice,
+    skuCode,
+    tierGb,
+    skuName: row.skuName || null,
+    meterName: row.meterName || null,
+    productName: row.productName || null,
+    armRegionName,
+    diskGb: Number(diskGb),
+    diskType,
+  };
+  return result;
 }
 
 export async function fetchAzurePublicIpHourly(armRegionName) {
@@ -135,10 +212,10 @@ export async function syncAzurePricing() {
     const categories = category === 'gpu' ? ['gpu'] : ['linux', 'windows'];
 
     for (const region of AZURE_PRICING_REGIONS) {
-      let diskGbMonth;
+      let diskMonthly;
       let ipHourly;
       try {
-        diskGbMonth = await fetchAzureDiskGbMonth(region);
+        diskMonthly = await fetchAzureDiskMonthly(region, mapping.diskGb, 'standard_ssd');
         ipHourly = await fetchAzurePublicIpHourly(region);
       } catch (err) {
         errors.push(
@@ -159,7 +236,7 @@ export async function syncAzurePricing() {
             continue;
           }
 
-          const storage = (Number(mapping.diskGb) || 0) * (diskGbMonth / 730);
+          const storage = Number(diskMonthly.monthlyPrice) / 730;
           const total = compute + storage + ipHourly;
 
           await CloudRegionPricing.findOneAndUpdate(

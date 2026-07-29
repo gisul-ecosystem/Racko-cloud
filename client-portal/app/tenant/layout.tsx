@@ -8,12 +8,12 @@ export async function generateMetadata() {
   return buildTenantMetadata();
 }
 
-export default function TenantRootLayout({ children }: { children: React.ReactNode }) {
+/** Legacy /tenant/* shell — middleware redirects; keep providers for any residual render. */
+export default function LegacyTenantRootLayout({ children }: { children: React.ReactNode }) {
   return (
     <TenantAuthProvider>
       <TenantBrandingProvider>
         <TenantServicesProvider>
-          {/* Light canvas so route transitions never flash the root dark body */}
           <div className="min-h-screen bg-gray-50 text-gray-900">
             <TenantBrandingHead />
             {children}

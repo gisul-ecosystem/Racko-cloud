@@ -11,13 +11,13 @@ interface TenantShellProps {
 }
 
 function resolveShellTitles(pathname: string): { title: string; subtitle: string } {
-  if (pathname.startsWith('/tenant/dashboard/plans')) {
+  if (pathname.startsWith('/console/dashboard/plans')) {
     return { title: 'VM Plans', subtitle: 'Renew and extend plans' };
   }
-  if (pathname.startsWith('/tenant/dashboard/profile')) {
+  if (pathname.startsWith('/console/dashboard/profile')) {
     return { title: 'Profile', subtitle: 'Account settings' };
   }
-  if (pathname.startsWith('/tenant/dashboard/notifications')) {
+  if (pathname.startsWith('/console/dashboard/notifications')) {
     return { title: 'Notifications', subtitle: 'Alerts and updates' };
   }
   return { title: 'Tenant Portal', subtitle: 'Services & resources' };

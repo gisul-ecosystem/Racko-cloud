@@ -93,7 +93,7 @@ export function TenantRecentResources() {
                 <tr key={vm.id} className="border-b border-gray-50 hover:bg-gray-50/80">
                   <td className="px-6 py-3">
                     <Link
-                      href={`/tenant/dashboard/admin/vms/${vm.id}`}
+                      href={`/console/dashboard/admin/vms/${vm.id}`}
                       className="font-medium text-gray-900 hover:underline"
                       style={{ color: undefined }}
                       onMouseEnter={(e) => {

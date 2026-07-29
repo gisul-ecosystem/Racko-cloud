@@ -103,7 +103,7 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
   const logout = useCallback(() => {
     clearTenantAccessToken();
     setState({ tenantUser: null, isLoading: false, isAuthenticated: false });
-    router.replace('/tenant/login');
+    router.replace('/console/login');
   }, [router]);
 
   useEffect(() => {

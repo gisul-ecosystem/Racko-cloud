@@ -23,13 +23,24 @@ const connectDB = async () => {
     });
     console.log(`MongoDB connected — ${process.env.MONGODB_DB_NAME || 'racko_reseller'}`);
 
-    // Drop pre-pricingMode unique index so normal + nested rows can coexist.
+    // Drop legacy unique indexes so disk-type-aware rows can coexist cleanly.
     try {
       const col = mongoose.connection.collection('cloud_region_pricing');
       const indexes = await col.indexes();
       if (indexes.some((idx) => idx.name === 'provider_region_spec_unique')) {
         await col.dropIndex('provider_region_spec_unique');
         console.log('Dropped legacy index provider_region_spec_unique');
+      }
+      if (indexes.some((idx) => idx.name === 'provider_region_spec_mode_unique')) {
+        await col.dropIndex('provider_region_spec_mode_unique');
+        console.log('Dropped legacy index provider_region_spec_mode_unique');
+      }
+      const backfill = await col.updateMany(
+        { diskType: { $exists: false } },
+        { $set: { diskType: 'default' } }
+      );
+      if (backfill.modifiedCount > 0) {
+        console.log(`Backfilled diskType=default on ${backfill.modifiedCount} pricing rows`);
       }
     } catch (idxErr) {
       console.warn(

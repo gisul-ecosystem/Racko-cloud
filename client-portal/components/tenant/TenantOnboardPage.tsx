@@ -208,7 +208,7 @@ export function TenantOnboardPage() {
     <div className="max-w-4xl space-y-6">
       <div>
         <Link
-          href="/tenant/dashboard/admin/vms"
+          href="/console/dashboard/admin/vms"
           className="mb-4 inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900"
         >
           <ChevronLeft className="h-4 w-4" />
@@ -305,7 +305,7 @@ export function TenantOnboardPage() {
             >
               Onboard more VMs
             </button>
-            <Link href="/tenant/dashboard/admin/users" className="text-sm font-medium text-[#B91C1C] hover:underline">
+            <Link href="/console/dashboard/admin/users" className="text-sm font-medium text-[#B91C1C] hover:underline">
               View users
             </Link>
           </div>
