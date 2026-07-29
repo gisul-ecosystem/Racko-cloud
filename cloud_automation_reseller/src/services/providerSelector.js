@@ -122,188 +122,211 @@ async function fetchLivePricingRows({
   });
   errors.push(...(mappings.errors || []));
 
+  const jobs = [];
+
   if (providersUsed.includes('aws')) {
     for (const region of AWS_PRICING_REGIONS) {
-      try {
-        const ebsGbMonth = await fetchEbsGbMonth(region, diskType);
-        const storage = ebsHourly(parts.diskGb, ebsGbMonth);
-        if (storageOnly) {
-          rows.push({
-            provider: 'aws',
-            region,
-            category,
-            canonicalSpec,
-            pricingMode,
-            rawComputePricePerHr: 0,
-            rawStoragePricePerHr: storage,
-            rawIpPricePerHr: 0,
-            rawTotalPricePerHr: storage,
-            currency: 'USD',
-            instanceType: null,
-            fetchedAt: new Date(),
-          });
-          continue;
-        }
+      jobs.push(
+        (async () => {
+          try {
+            const ebsGbMonth = await fetchEbsGbMonth(region, diskType);
+            const storage = ebsHourly(parts.diskGb, ebsGbMonth);
+            if (storageOnly) {
+              rows.push({
+                provider: 'aws',
+                region,
+                category,
+                canonicalSpec,
+                pricingMode,
+                rawComputePricePerHr: 0,
+                rawStoragePricePerHr: storage,
+                rawIpPricePerHr: 0,
+                rawTotalPricePerHr: storage,
+                currency: 'USD',
+                instanceType: null,
+                fetchedAt: new Date(),
+              });
+              return;
+            }
 
-        if (!mappings.aws?.instanceType) continue;
-        const os = category === 'windows' ? 'Windows' : 'Linux';
-        const compute = await fetchEc2Hourly(mappings.aws.instanceType, region, os);
-        if (compute == null || !Number.isFinite(compute)) {
-          errors.push(`aws ${mappings.aws.instanceType}@${region}/${category}: no compute price`);
-          continue;
-        }
-        const ipHourly = await fetchAwsPublicIpHourly(region);
-        rows.push({
-          provider: 'aws',
-          region,
-          category,
-          canonicalSpec,
-          pricingMode,
-          rawComputePricePerHr: compute,
-          rawStoragePricePerHr: storage,
-          rawIpPricePerHr: ipHourly,
-          rawTotalPricePerHr: compute + storage + ipHourly,
-          currency: 'USD',
-          instanceType: mappings.aws.instanceType,
-          fetchedAt: new Date(),
-        });
-      } catch (err) {
-        errors.push(`aws ${region}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+            if (!mappings.aws?.instanceType) return;
+            const os = category === 'windows' ? 'Windows' : 'Linux';
+            const [compute, ipHourly] = await Promise.all([
+              fetchEc2Hourly(mappings.aws.instanceType, region, os),
+              fetchAwsPublicIpHourly(region),
+            ]);
+            if (compute == null || !Number.isFinite(compute)) {
+              errors.push(`aws ${mappings.aws.instanceType}@${region}/${category}: no compute price`);
+              return;
+            }
+            rows.push({
+              provider: 'aws',
+              region,
+              category,
+              canonicalSpec,
+              pricingMode,
+              rawComputePricePerHr: compute,
+              rawStoragePricePerHr: storage,
+              rawIpPricePerHr: ipHourly,
+              rawTotalPricePerHr: compute + storage + ipHourly,
+              currency: 'USD',
+              instanceType: mappings.aws.instanceType,
+              fetchedAt: new Date(),
+            });
+          } catch (err) {
+            errors.push(`aws ${region}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })()
+      );
     }
   }
 
   if (providersUsed.includes('azure')) {
     for (const region of AZURE_PRICING_REGIONS) {
-      try {
-        const diskMonthly = await fetchAzureDiskMonthly(region, parts.diskGb, diskType);
-        const storage = Number(diskMonthly.monthlyPrice) / 730;
-        if (storageOnly) {
-          rows.push({
-            provider: 'azure',
-            region,
-            category,
-            canonicalSpec,
-            pricingMode,
-            rawComputePricePerHr: 0,
-            rawStoragePricePerHr: storage,
-            rawIpPricePerHr: 0,
-            rawTotalPricePerHr: storage,
-            currency: 'USD',
-            instanceType: null,
-            fetchedAt: new Date(),
-          });
-          continue;
-        }
+      jobs.push(
+        (async () => {
+          try {
+            const diskMonthly = await fetchAzureDiskMonthly(region, parts.diskGb, diskType);
+            const storage = Number(diskMonthly.monthlyPrice) / 730;
+            if (storageOnly) {
+              rows.push({
+                provider: 'azure',
+                region,
+                category,
+                canonicalSpec,
+                pricingMode,
+                rawComputePricePerHr: 0,
+                rawStoragePricePerHr: storage,
+                rawIpPricePerHr: 0,
+                rawTotalPricePerHr: storage,
+                currency: 'USD',
+                instanceType: null,
+                fetchedAt: new Date(),
+              });
+              return;
+            }
 
-        if (!mappings.azure?.vmSize) continue;
-        const compute =
-          category === 'windows'
-            ? await fetchVmWindowsHourlyUsd(mappings.azure.vmSize, region)
-            : await fetchVmHourlyUsd(mappings.azure.vmSize, region);
-        if (compute == null || !Number.isFinite(compute)) {
-          errors.push(`azure ${mappings.azure.vmSize}@${region}/${category}: no compute price`);
-          continue;
-        }
-        const ipHourly = await fetchAzurePublicIpHourly(region);
-        rows.push({
-          provider: 'azure',
-          region,
-          category,
-          canonicalSpec,
-          pricingMode,
-          rawComputePricePerHr: compute,
-          rawStoragePricePerHr: storage,
-          rawIpPricePerHr: ipHourly,
-          rawTotalPricePerHr: compute + storage + ipHourly,
-          currency: 'USD',
-          instanceType: mappings.azure.vmSize,
-          fetchedAt: new Date(),
-        });
-      } catch (err) {
-        errors.push(`azure ${region}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+            if (!mappings.azure?.vmSize) return;
+            const [compute, ipHourly] = await Promise.all([
+              category === 'windows'
+                ? fetchVmWindowsHourlyUsd(mappings.azure.vmSize, region)
+                : fetchVmHourlyUsd(mappings.azure.vmSize, region),
+              fetchAzurePublicIpHourly(region),
+            ]);
+            if (compute == null || !Number.isFinite(compute)) {
+              errors.push(`azure ${mappings.azure.vmSize}@${region}/${category}: no compute price`);
+              return;
+            }
+            rows.push({
+              provider: 'azure',
+              region,
+              category,
+              canonicalSpec,
+              pricingMode,
+              rawComputePricePerHr: compute,
+              rawStoragePricePerHr: storage,
+              rawIpPricePerHr: ipHourly,
+              rawTotalPricePerHr: compute + storage + ipHourly,
+              currency: 'USD',
+              instanceType: mappings.azure.vmSize,
+              fetchedAt: new Date(),
+            });
+          } catch (err) {
+            errors.push(`azure ${region}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })()
+      );
     }
   }
 
   if (providersUsed.includes('gcp')) {
     for (const region of GCP_PRICING_REGIONS) {
-      try {
-        const rates = await getGcpUnitRates(region);
-        if (storageOnly) {
-          const storageRate =
-            diskType === 'standard_hdd' ? rates.pdStandardGbPerMonth : rates.pdBalancedGbPerMonth;
-          const storage = (Number(parts.diskGb) || 0) * (storageRate / 730);
-          rows.push({
-            provider: 'gcp',
-            region,
-            category,
-            canonicalSpec,
-            pricingMode,
-            rawComputePricePerHr: 0,
-            rawStoragePricePerHr: storage,
-            rawIpPricePerHr: 0,
-            rawTotalPricePerHr: storage,
-            currency: 'USD',
-            instanceType: null,
-            fetchedAt: new Date(),
-          });
-          continue;
-        }
+      jobs.push(
+        (async () => {
+          try {
+            const rates = await getGcpUnitRates(region);
+            if (storageOnly) {
+              const storageRate =
+                diskType === 'standard_hdd' ? rates.pdStandardGbPerMonth : rates.pdBalancedGbPerMonth;
+              const storage = (Number(parts.diskGb) || 0) * (storageRate / 730);
+              rows.push({
+                provider: 'gcp',
+                region,
+                category,
+                canonicalSpec,
+                pricingMode,
+                rawComputePricePerHr: 0,
+                rawStoragePricePerHr: storage,
+                rawIpPricePerHr: 0,
+                rawTotalPricePerHr: storage,
+                currency: 'USD',
+                instanceType: null,
+                fetchedAt: new Date(),
+              });
+              return;
+            }
 
-        if (!mappings.gcp?.machineType) continue;
-        const priced = computeGcpHourly({
-          machineType: mappings.gcp.machineType,
-          diskGb: mappings.gcp.diskGb,
-          diskType,
-          category,
-          acceleratorCount: mappings.gcp.acceleratorCount || 0,
-          rates,
-        });
-        rows.push({
-          provider: 'gcp',
-          region,
-          category,
-          canonicalSpec,
-          pricingMode,
-          ...priced,
-          currency: 'USD',
-          instanceType: mappings.gcp.machineType,
-          fetchedAt: new Date(),
-        });
-      } catch (err) {
-        errors.push(`gcp ${region}: ${err instanceof Error ? err.message : String(err)}`);
-      }
+            if (!mappings.gcp?.machineType) return;
+            const priced = computeGcpHourly({
+              machineType: mappings.gcp.machineType,
+              diskGb: mappings.gcp.diskGb,
+              diskType,
+              category,
+              acceleratorCount: mappings.gcp.acceleratorCount || 0,
+              rates,
+            });
+            rows.push({
+              provider: 'gcp',
+              region,
+              category,
+              canonicalSpec,
+              pricingMode,
+              ...priced,
+              currency: 'USD',
+              instanceType: mappings.gcp.machineType,
+              fetchedAt: new Date(),
+            });
+          } catch (err) {
+            errors.push(`gcp ${region}: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        })()
+      );
     }
   }
 
   if (!storageOnly && providersUsed.includes('oci') && mappings.oci?.shape) {
-    try {
-      const rates = await getOciUnitRates({ shape: mappings.oci.shape });
-      for (const region of OCI_PRICING_REGIONS) {
-        const priced = computeOciHourly({
-          ocpus: mappings.oci.ocpus,
-          memoryInGBs: mappings.oci.memoryInGBs,
-          bootVolumeGb: mappings.oci.bootVolumeGb,
-          category,
-          rates,
-        });
-        rows.push({
-          provider: 'oci',
-          region,
-          category,
-          canonicalSpec,
-          pricingMode,
-          ...priced,
-          currency: 'USD',
-          instanceType: `${mappings.oci.shape}/${mappings.oci.ocpus}ocpu/${mappings.oci.memoryInGBs}gb`,
-          fetchedAt: new Date(),
-        });
-      }
-    } catch (err) {
-      errors.push(`oci rates: ${err instanceof Error ? err.message : String(err)}`);
-    }
+    jobs.push(
+      (async () => {
+        try {
+          const rates = await getOciUnitRates({ shape: mappings.oci.shape });
+          for (const region of OCI_PRICING_REGIONS) {
+            const priced = computeOciHourly({
+              ocpus: mappings.oci.ocpus,
+              memoryInGBs: mappings.oci.memoryInGBs,
+              bootVolumeGb: mappings.oci.bootVolumeGb,
+              category,
+              rates,
+            });
+            rows.push({
+              provider: 'oci',
+              region,
+              category,
+              canonicalSpec,
+              pricingMode,
+              ...priced,
+              currency: 'USD',
+              instanceType: `${mappings.oci.shape}/${mappings.oci.ocpus}ocpu/${mappings.oci.memoryInGBs}gb`,
+              fetchedAt: new Date(),
+            });
+          }
+        } catch (err) {
+          errors.push(`oci rates: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      })()
+    );
   }
+
+  await Promise.all(jobs);
 
   return {
     rows,

@@ -1,4 +1,5 @@
 import { config } from '../../config';
+import { AppError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 
 export interface ResellerSelectInput {
@@ -110,9 +111,28 @@ async function postReseller<T>(
     }
 
     return (data.data ?? data) as T;
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new AppError(
+        `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
+        504,
+        'RESELLER_TIMEOUT'
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof Error && err.name === 'AbortError') ||
+    (typeof err === 'object' &&
+      err !== null &&
+      'code' in err &&
+      (err as { code?: string }).code === 'ABORT_ERR')
+  );
 }
 
 async function getReseller<T>(
@@ -152,6 +172,15 @@ async function getReseller<T>(
     }
 
     return (data.data ?? data) as T;
+  } catch (err) {
+    if (isAbortError(err)) {
+      throw new AppError(
+        `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
+        504,
+        'RESELLER_TIMEOUT'
+      );
+    }
+    throw err;
   } finally {
     clearTimeout(timer);
   }
@@ -160,7 +189,8 @@ async function getReseller<T>(
 export async function selectProvider(
   input: ResellerSelectInput
 ): Promise<ResellerSelectResult> {
-  return postReseller<ResellerSelectResult>('/api/select', input, 'select', 60_000);
+  // Live multi-cloud quotes routinely exceed 60s when regions are slow.
+  return postReseller<ResellerSelectResult>('/api/select', input, 'select', 300_000);
 }
 
 export interface ResellerPricingRow {
