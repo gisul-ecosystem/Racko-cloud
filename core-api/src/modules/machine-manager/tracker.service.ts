@@ -183,6 +183,30 @@ export async function clearActivityLog(machineId: mongoose.Types.ObjectId): Prom
   logger.info('[Tracker] Activity log cleared', { machineId: machineId.toString() });
 }
 
+/**
+ * Generate a presigned S3 PUT URL for direct agent-to-SeaweedFS upload.
+ * The agent uses this to upload files of any size directly, bypassing nginx.
+ */
+export async function getPresignedUploadUrl(
+  agentId: string,
+  sha256: string,
+  filename: string,
+  mimeType: string
+): Promise<{ presignedUrl: string; storageRef: string }> {
+  const machine = await MachineModel.findOne({ agentId });
+  if (!machine) {
+    throw new NotFoundError(`Agent not found: ${agentId}`);
+  }
+
+  return seaweedfsService.generatePresignedPutUrl(
+    machine._id.toString(),
+    sha256,
+    filename,
+    mimeType,
+    3600 // 1 hour TTL
+  );
+}
+
 // ─── File upload / download ───────────────────────────────────────────────────
 
 /**

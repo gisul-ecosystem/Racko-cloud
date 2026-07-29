@@ -25,7 +25,6 @@ import (
 	"io"
 	"log"
 	"mime"
-	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -247,11 +246,9 @@ func (w *Watcher) uploadAndRecord(path string, info os.FileInfo) {
 		return
 	}
 
-	storageRef, err := w.uploadFile(path, info.Size())
+	storageRef, err := w.uploadFile(path, info.Size(), hash)
 	if err != nil {
 		log.Printf("[tracker/watcher] Upload failed for %s: %v", path, err)
-		// Still record the activity with an empty storageRef so the activity
-		// log is complete. Clone replay will skip files with no storageRef.
 		storageRef = ""
 	}
 
@@ -274,66 +271,80 @@ func (w *Watcher) uploadAndRecord(path string, info os.FileInfo) {
 	})
 }
 
-// uploadFile streams the file to the server's file-upload endpoint which proxies
-// it to SeaweedFS. Returns the SeaweedFS file ID (storageRef).
-// Uses multipart streaming so large files don't buffer entirely in memory.
-func (w *Watcher) uploadFile(path string, sizeBytes int64) (string, error) {
+// uploadFile fetches a presigned S3 PUT URL from core-api and uses it to upload
+// the file directly to SeaweedFS — bypassing nginx entirely so there is no size limit.
+// Falls back to the legacy multipart endpoint if presigned URL fetch fails.
+func (w *Watcher) uploadFile(path string, sizeBytes int64, hash string) (string, error) {
+	mimeType := mime.TypeByExtension(filepath.Ext(path))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	// ── Step 2: Request a presigned PUT URL from core-api ─────────────────────
+	uploadURL := fmt.Sprintf(
+		"%s/api/v1/agent/upload-url?sha256=%s&filename=%s&mimeType=%s",
+		w.cfg.PlatformURL,
+		hash,
+		filepath.Base(path),
+		mimeType,
+	)
+
+	req, err := http.NewRequest(http.MethodGet, uploadURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build upload-url request: %w", err)
+	}
+	req.Header.Set("X-Agent-ID", w.agentID)
+
+	urlResp, err := w.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch presigned url: %w", err)
+	}
+	defer urlResp.Body.Close()
+
+	if urlResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(urlResp.Body)
+		return "", fmt.Errorf("upload-url server %d: %s", urlResp.StatusCode, string(body))
+	}
+
+	var urlResult struct {
+		Data struct {
+			PresignedUrl string `json:"presignedUrl"`
+			StorageRef   string `json:"storageRef"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(urlResp.Body).Decode(&urlResult); err != nil {
+		return "", fmt.Errorf("decode upload-url response: %w", err)
+	}
+
+	// ── Step 3: PUT the file directly to SeaweedFS using the presigned URL ────
+	// This bypasses nginx completely — no size limit.
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("open: %w", err)
+		return "", fmt.Errorf("open file: %w", err)
 	}
 	defer f.Close()
 
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
-
-	// Write multipart in a goroutine so reading and writing happen concurrently.
-	go func() {
-		defer pw.Close()
-		defer mw.Close()
-		_ = mw.WriteField("agentId", w.agentID)
-		_ = mw.WriteField("filePath", path)
-		part, err := mw.CreateFormFile("file", filepath.Base(path))
-		if err != nil {
-			pw.CloseWithError(err)
-			return
-		}
-		if _, err := io.Copy(part, f); err != nil {
-			pw.CloseWithError(err)
-		}
-	}()
-
-	uploadURL := w.cfg.PlatformURL + "/api/v1/agent/file-upload"
-	req, err := http.NewRequest(http.MethodPost, uploadURL, pr)
+	putReq, err := http.NewRequest(http.MethodPut, urlResult.Data.PresignedUrl, f)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("build PUT request: %w", err)
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("X-Agent-ID", w.agentID)
-	// Do not set Content-Length — we're streaming, length is unknown.
+	putReq.Header.Set("Content-Type", mimeType)
+	putReq.ContentLength = sizeBytes
 
-	// Use a longer timeout for file uploads — large files may take a while.
+	// Use a longer timeout for large files
 	uploadClient := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := uploadClient.Do(req)
+	putResp, err := uploadClient.Do(putReq)
 	if err != nil {
-		return "", fmt.Errorf("http upload: %w", err)
+		return "", fmt.Errorf("PUT to S3: %w", err)
 	}
-	defer resp.Body.Close()
+	defer putResp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("server %d: %s", resp.StatusCode, string(body))
+	if putResp.StatusCode != http.StatusOK && putResp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(putResp.Body)
+		return "", fmt.Errorf("S3 PUT %d: %s", putResp.StatusCode, string(body))
 	}
 
-	var result struct {
-		Data struct {
-			StorageRef string `json:"storageRef"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
-	}
-	return result.Data.StorageRef, nil
+	return urlResult.Data.StorageRef, nil
 }
 
 // sendActivity POSTs a single activity event to the server.

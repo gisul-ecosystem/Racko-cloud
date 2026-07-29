@@ -366,6 +366,7 @@ router.get('/api/v1/agent/software-catalog/:id', coreApiProxy);
 // core-api's requireAgentAuth middleware validates agentId against the machines collection
 router.post('/api/v1/agent/baseline', coreApiProxy);
 router.post('/api/v1/agent/activity', coreApiProxy);
+router.get('/api/v1/agent/upload-url', coreApiProxy);  // presigned PUT URL for direct-to-S3 upload
 router.post('/api/v1/agent/file-upload', coreApiProxy);
 router.get('/api/v1/agent/file-download', coreApiProxy);
 router.get('/api/v1/agent/clone-manifest', coreApiProxy);

@@ -296,9 +296,18 @@ agentRouter.post(
   (req, res, next) => trackerController.appendActivity(req, res, next)
 );
 
-// POST /api/v1/agent/file-upload — agent uploads a file (any size, any type)
+// GET /api/v1/agent/upload-url — agent requests a presigned S3 PUT URL for direct upload
+// Returns a time-limited URL so the agent PUTs the file directly to SeaweedFS,
+// bypassing nginx entirely — supports files of any size.
+agentRouter.get(
+  '/upload-url',
+  requireAgentAuth,
+  (req, res, next) => trackerController.getUploadUrl(req, res, next)
+);
+
+// POST /api/v1/agent/file-upload — kept for backward compatibility (small files)
 // No body size limit here — SeaweedFS handles large files via streaming multipart.
-// nginx limit for this specific path is set to 0 (unlimited) in server config.
+// For large files, prefer the presigned URL flow via GET /api/v1/agent/upload-url.
 agentRouter.post(
   '/file-upload',
   requireAgentAuth,
