@@ -6,7 +6,7 @@
 #   VM_SSH_KEY_UAT     — Private SSH key for the VM user
 #
 # Service env files live on the VM under /opt/racko/<service>/.env (e.g. cloud-automation/.env, cloud_automation_reseller/.env) — not in GitHub secrets.
-# client-portal bakes NEXT_PUBLIC_GATEWAY_URL to the public API (e.g. https://api-uat.racko.ai).
+# client-portal bakes NEXT_PUBLIC_GATEWAY_URL to the public API (e.g. https://api-test.racko.ai).
 # cloud-automation large-lab batch sizes are also set in docker-compose.yml (defaults: 25).
 # Nginx must proxy /api/ → :8000 on uat.racko.ai and each tenant domain (proxy_read_timeout >= 300s).
 
@@ -117,7 +117,7 @@ jobs:
         run: |
           docker build \
             --build-arg NEXT_PUBLIC_VM_MAX_BULK_COUNT=50 \
-            --build-arg NEXT_PUBLIC_GATEWAY_URL=https://api-uat.racko.ai \
+            --build-arg NEXT_PUBLIC_GATEWAY_URL=https://api-test.racko.ai \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-client-portal:uat \
             -f client-portal/Dockerfile client-portal/
 
@@ -151,14 +151,14 @@ jobs:
             output: racko-agent
             goos: linux
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-uat.racko.ai'
+            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-test.racko.ai'
           - os: windows-latest
             platform: windows
             output: racko-agent.exe
             goos: windows
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-uat.racko.ai -H windowsgui'
-            ldflags_url: 'https://api-uat.racko.ai'
+            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-test.racko.ai -H windowsgui'
+            ldflags_url: 'https://api-test.racko.ai'
 
     steps:
       - name: Checkout
