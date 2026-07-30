@@ -11,6 +11,16 @@ import {
   resolveInstanceTypeForService,
 } from './awsLivePricingService.js';
 import { computeServiceCost } from './pricingService.js';
+import {
+  computeNextDailyCleanupRunAt,
+  isValidCleanupTime,
+  normalizeCleanupTime,
+  normalizeCleanupTimezone,
+} from '../utils/resourceCleanupSchedule.js';
+import {
+  getPurchaseIntentDelayMs,
+  markRequestConverted,
+} from './purchaseIntentService.js';
 
 const DAY_NAME_TO_INDEX = {
   Sunday: 0,
@@ -211,6 +221,18 @@ function normalizePayload(payload) {
     payload.resource_cleanup_interval_hours ??
     payload.cleanupIntervalHours;
 
+  const resourceCleanupTime =
+    payload.resourceCleanupTime ?? payload.resource_cleanup_time ?? null;
+  const resourceCleanupTimezone =
+    payload.resourceCleanupTimezone ??
+    payload.resource_cleanup_timezone ??
+    payload.timezone ??
+    'Asia/Kolkata';
+
+  const convertedFromRequestId =
+    payload.convertedFromRequestId ?? payload.converted_from_request_id ?? null;
+  const purchaseToken = payload.purchaseToken ?? payload.purchase_token ?? null;
+
   const timezone = payload.timezone || 'Asia/Kolkata';
   const usageWindows = normalizeUsageWindows(
     payload.usageWindows ?? payload.usage_windows ?? [],
@@ -219,6 +241,8 @@ function normalizePayload(payload) {
 
   return {
     customerEmail: payload.customerEmail ?? payload.customer_email,
+    projectName: payload.projectName ?? payload.project_name ?? payload.requestName ?? payload.request_name,
+    idMode: payload.idMode ?? payload.id_mode,
     accountCount: payload.accountCount ?? payload.account_count,
     costingMode: payload.costingMode ?? payload.costing_mode ?? 'shared',
     accessType:
@@ -234,6 +258,8 @@ function normalizePayload(payload) {
     timezone,
     enableResourceCleanup,
     resourceCleanupIntervalHours,
+    resourceCleanupTime,
+    resourceCleanupTimezone,
     resourceCleanupAction:
       payload.resourceCleanupAction ?? payload.resource_cleanup_action ?? 'delete',
     perUserBudgetUsd: payload.perUserBudgetUsd ?? payload.per_user_budget_usd,
@@ -241,6 +267,8 @@ function normalizePayload(payload) {
     permissions: payload.permissions ?? [],
     selectedPermissions: payload.selectedPermissions ?? payload.selected_permissions,
     estimatedPrice: payload.estimatedPrice ?? payload.estimated_price,
+    convertedFromRequestId,
+    purchaseToken,
   };
 }
 
@@ -251,8 +279,22 @@ export const createRequest = async (payload, userId) => {
     throw validationError('customer_email must be a valid email address');
   }
 
+  const projectName = String(input.projectName || '').trim();
+  if (!projectName) {
+    throw validationError('project_name is required');
+  }
+
+  const idMode = input.idMode || 'aws_ids';
+  if (!['test_ids', 'aws_ids'].includes(idMode)) {
+    throw validationError("id_mode must be 'test_ids' or 'aws_ids'");
+  }
+
   if (!Number.isInteger(input.accountCount) || input.accountCount < 1) {
     throw validationError('account_count must be an integer >= 1');
+  }
+
+  if (idMode === 'test_ids' && input.accountCount > 5) {
+    throw validationError('account_count must be <= 5 for test_ids');
   }
 
   if (!input.startDate || !input.endDate) {
@@ -298,15 +340,29 @@ export const createRequest = async (payload, userId) => {
   }
 
   if (input.enableResourceCleanup) {
-    if (
+    const hasCleanupTime =
+      input.resourceCleanupTime != null &&
+      String(input.resourceCleanupTime).trim() !== '';
+
+    if (hasCleanupTime) {
+      if (!isValidCleanupTime(input.resourceCleanupTime)) {
+        throw validationError('resource_cleanup_time must be in HH:MM format when provided.');
+      }
+      try {
+        normalizeCleanupTimezone(input.resourceCleanupTimezone);
+      } catch (err) {
+        throw validationError(err.message);
+      }
+    } else if (
       !Number.isInteger(input.resourceCleanupIntervalHours) ||
       input.resourceCleanupIntervalHours < 1 ||
       input.resourceCleanupIntervalHours > 24
     ) {
       throw validationError(
-        'resource_cleanup_interval_hours must be an integer between 1 and 24 when cleanup is enabled'
+        'resource_cleanup_time is required when cleanup is enabled, or provide resource_cleanup_interval_hours between 1 and 24.'
       );
     }
+
     if (input.resourceCleanupAction !== 'delete') {
       throw validationError("AWS resource_cleanup_action currently supports 'delete' only");
     }
@@ -342,16 +398,43 @@ export const createRequest = async (payload, userId) => {
 
   let resourceCleanupNextRunAt;
   let cleanupNextRunAt;
-  if (input.enableResourceCleanup && input.resourceCleanupIntervalHours) {
-    const nextRun = new Date(
-      Date.now() + input.resourceCleanupIntervalHours * 60 * 60 * 1000
-    );
-    resourceCleanupNextRunAt = nextRun;
-    cleanupNextRunAt = nextRun;
+  let resolvedResourceCleanupTime = null;
+  let resolvedResourceCleanupTimezone = null;
+  let resolvedResourceCleanupIntervalHours = null;
+
+  if (input.enableResourceCleanup) {
+    const hasCleanupTime =
+      input.resourceCleanupTime != null &&
+      String(input.resourceCleanupTime).trim() !== '';
+
+    if (hasCleanupTime) {
+      resolvedResourceCleanupTime = normalizeCleanupTime(input.resourceCleanupTime);
+      resolvedResourceCleanupTimezone = normalizeCleanupTimezone(
+        input.resourceCleanupTimezone,
+        input.timezone
+      );
+      resolvedResourceCleanupIntervalHours = 24;
+      const nextRun = computeNextDailyCleanupRunAt({
+        timeHHMM: resolvedResourceCleanupTime,
+        timezone: resolvedResourceCleanupTimezone,
+      });
+      resourceCleanupNextRunAt = nextRun;
+      cleanupNextRunAt = nextRun;
+    } else if (input.resourceCleanupIntervalHours) {
+      resolvedResourceCleanupIntervalHours = input.resourceCleanupIntervalHours;
+      const nextRun = new Date(
+        Date.now() + input.resourceCleanupIntervalHours * 60 * 60 * 1000
+      );
+      resourceCleanupNextRunAt = nextRun;
+      cleanupNextRunAt = nextRun;
+    }
   }
 
   const request = await Request.create({
     customerEmail: input.customerEmail.trim(),
+    projectName,
+    requestName: projectName,
+    idMode,
     accountCount: input.accountCount,
     costingMode: input.costingMode,
     accessType: input.accessType,
@@ -363,16 +446,25 @@ export const createRequest = async (payload, userId) => {
     timezone: input.timezone,
     enableResourceCleanup: input.enableResourceCleanup,
     resourceCleanupIntervalHours: input.enableResourceCleanup
-      ? input.resourceCleanupIntervalHours
+      ? resolvedResourceCleanupIntervalHours ?? undefined
       : undefined,
+    resourceCleanupTime: resolvedResourceCleanupTime ?? undefined,
+    resourceCleanupTimezone: resolvedResourceCleanupTimezone ?? undefined,
     resourceCleanupAction: input.resourceCleanupAction,
     resourceCleanupNextRunAt,
     cleanupEnabled: input.enableResourceCleanup,
     cleanupIntervalHours: input.enableResourceCleanup
-      ? input.resourceCleanupIntervalHours
+      ? resolvedResourceCleanupIntervalHours ?? undefined
       : undefined,
     cleanupNextRunAt,
     perUserBudgetUsd: input.perUserBudgetUsd ?? null,
+    purchaseIntentDueAt:
+      idMode === 'test_ids' ? new Date(Date.now() + getPurchaseIntentDelayMs()) : undefined,
+    convertedFromRequestId:
+      input.convertedFromRequestId &&
+      mongoose.Types.ObjectId.isValid(input.convertedFromRequestId)
+        ? input.convertedFromRequestId
+        : undefined,
     selectedServices: resolvedServices,
     permissions: resolvedPermissions,
     selectedPermissions: selectedPermissionsMap.size ? selectedPermissionsMap : undefined,
@@ -381,6 +473,21 @@ export const createRequest = async (payload, userId) => {
     createdBy: userId || undefined,
     updatedAt: new Date(),
   });
+
+  if (input.convertedFromRequestId && mongoose.Types.ObjectId.isValid(input.convertedFromRequestId)) {
+    try {
+      await markRequestConverted(input.convertedFromRequestId, request._id);
+    } catch (err) {
+      console.warn('[requestService] Failed to mark source test lab converted:', err.message);
+    }
+  }
+
+  try {
+    const { linkPrivilegedRoleRequestsToRequest } = await import('./privilegedRoleService.js');
+    await linkPrivilegedRoleRequestsToRequest(request._id, request.customerEmail);
+  } catch (err) {
+    console.warn('[requestService] Failed to link privileged role requests:', err.message);
+  }
 
   return request;
 };

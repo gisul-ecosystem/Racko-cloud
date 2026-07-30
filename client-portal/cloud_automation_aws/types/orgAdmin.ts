@@ -24,6 +24,8 @@ export interface AwsOrgAdminRequestSummary {
   createdAt: string;
   selectedServices: string[];
   requestName?: string | null;
+  projectName?: string | null;
+  idMode?: 'test_ids' | 'aws_ids' | null;
 }
 
 export interface AwsOrgAdminUser {
@@ -53,6 +55,8 @@ export interface AwsOrgAdminUser {
   password?: string | null;
   accountId?: string | null;
   needsActivation?: boolean;
+  lastResourceCount?: number;
+  peakResourceCount?: number;
   totalSessions?: number;
   totalMins?: number;
   activeSession?: {
@@ -85,6 +89,8 @@ export interface AwsOrgAdminLiveSummary {
 export interface AwsOrgAdminRequestDetail {
   requestId: string;
   requestName?: string | null;
+  projectName?: string | null;
+  idMode?: 'test_ids' | 'aws_ids' | null;
   customerEmail: string;
   region: string;
   status: AwsRequestStatus | string;
@@ -193,6 +199,32 @@ export interface AwsOrgAdminAccessRequest {
   region?: string | null;
 }
 
+export interface AwsOrgAdminPrivilegedRoleRequest {
+  id: string;
+  requestId: string | null;
+  customerEmail: string;
+  awsRole: string;
+  awsRoleKey?: string;
+  status: string;
+  reviewedBy?: string | null;
+  reviewedAt?: string | null;
+  reviewNotes?: string | null;
+  createdAt: string;
+  region?: string | null;
+  requestStatus?: string | null;
+  projectName?: string | null;
+  rolesAssigned?: number;
+  usersProcessed?: number;
+  accessApplied?: boolean;
+}
+
+export interface AwsPrivilegedRoleOption {
+  key: string;
+  name: string;
+  description?: string;
+  managedPolicyArn?: string;
+}
+
 export interface AwsOrgAdminSharedCost {
   requestId: string;
   costingMode?: AwsCostingMode;
@@ -225,9 +257,77 @@ export interface AwsOrgAdminHistoryEntry {
   status?: string;
 }
 
+export interface AwsOrgAdminLabHistoryUserSummary {
+  userIndex: number;
+  userId?: string;
+  username: string;
+  totalMinutesLifetime: number;
+  totalMinutesToday: number;
+  liveCostUsd: number;
+  awsCostMtdUsd: number;
+  budgetAmountUsd?: number | null;
+  costCurrency?: string;
+  currentResourceCount: number;
+  peakResourceCount: number;
+  sessionCount: number;
+  openSessions: number;
+  cleanupRunCount: number;
+}
+
+export interface AwsOrgAdminLabHistoryTimelineEntry {
+  id: string;
+  type: 'session' | 'cleanup_snapshot' | 'cleanup_log' | 'daily_usage' | 'admin_event' | string;
+  at: string;
+  userIndex?: number | null;
+  username?: string | null;
+  title: string;
+  subtitle?: string;
+  minutes?: number;
+  liveCostUsd?: number;
+  awsCostMtdUsd?: number;
+  costUsd?: number;
+  resourceCount?: number;
+  peakResourceCount?: number;
+  resourcesDeleted?: number;
+  limitReached?: boolean;
+  isActive?: boolean;
+  triggeredBy?: string;
+  status?: string;
+  error?: string | null;
+  minutesLifetime?: number;
+  minutesToday?: number;
+}
+
 export interface AwsOrgAdminLabHistory {
   requestId: string;
-  entries: AwsOrgAdminHistoryEntry[];
+  expiryDate?: string | null;
+  labCreatedAt?: string | null;
+  hourlyRateUsd?: number;
+  defaultCostCurrency?: string;
+  userSummaries?: AwsOrgAdminLabHistoryUserSummary[];
+  timeline?: AwsOrgAdminLabHistoryTimelineEntry[];
+  sessions?: Array<{
+    id: string;
+    userIndex?: number | null;
+    username: string;
+    loginAt: string;
+    logoutAt: string | null;
+    minutesUsed: number;
+    endedReason: string | null;
+    liveCostUsd: number;
+    isActive: boolean;
+  }>;
+  dailyUsage?: Array<{
+    userIndex?: number | null;
+    userId?: string;
+    username: string;
+    trackingDate: string;
+    consumedMinutes: number;
+    limitReached: boolean;
+    limitReachedAt: string | null;
+  }>;
+  /** @deprecated Prefer timeline + userSummaries */
+  entries?: AwsOrgAdminHistoryEntry[];
 }
 
 export interface AwsCustomIamPolicy {

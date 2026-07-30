@@ -17,6 +17,7 @@ import { AwsLabStatusBadge } from './AwsLabStatusBadge';
 import { AwsOrgAdminRequestDetailPanel } from './AwsOrgAdminRequestDetailPanel';
 import { AwsOrgAdminStatCard } from './AwsOrgAdminStatCard';
 import { AwsOrgAdminAccessRequests } from './AwsOrgAdminAccessRequests';
+import { AwsOrgAdminPrivilegedRoleRequests } from './AwsOrgAdminPrivilegedRoleRequests';
 import { formatCurrency } from '../../api/orgAdminClient';
 
 export function OrgAdminPortal() {
@@ -26,9 +27,11 @@ export function OrgAdminPortal() {
     requestDetail,
     iamPolicies,
     accessRequests,
+    privilegedRoleRequests,
     overviewLoading,
     detailLoading,
     accessLoading,
+    privilegedRoleLoading,
     saving,
     overviewError,
     detailError,
@@ -57,20 +60,26 @@ export function OrgAdminPortal() {
     handleCleanup,
     handleSyncSpend,
     handleReviewAccess,
+    handleReviewPrivilegedRole,
     handleDeleteRequest,
     handleFixPermissions,
     handleRequestCleanup,
     handleToggleCleanup,
     handleRequestCleanupSettings,
     handleUnblock,
+    handleAddUser,
+    handleBlockAll,
+    handleUnblockAll,
     fetchUserCost,
     fetchSharedCost,
     handleForceLogout,
+    sendPurchaseConfirmationMail,
     fetchUserMonitoring,
     clearActionFeedback,
     lastUpdatedAt,
     isRefreshing,
     hasActiveUsers,
+    refreshPrivilegedRoleRequests,
   } = useOrgAdminPortal();
 
   const filtered = useMemo(() => {
@@ -83,7 +92,8 @@ export function OrgAdminPortal() {
         request.customerEmail.toLowerCase().includes(query) ||
         String(request.requestId).includes(query) ||
         (request.region || '').toLowerCase().includes(query) ||
-        (request.requestName || '').toLowerCase().includes(query);
+        (request.requestName || '').toLowerCase().includes(query) ||
+        (request.projectName || '').toLowerCase().includes(query);
       return matchesStatus && matchesRegion && matchesSearch;
     });
   }, [requests, search, statusFilter, regionFilter]);
@@ -144,6 +154,13 @@ export function OrgAdminPortal() {
         loading={accessLoading}
         saving={saving}
         onReview={handleReviewAccess}
+      />
+
+      <AwsOrgAdminPrivilegedRoleRequests
+        requests={privilegedRoleRequests}
+        loading={privilegedRoleLoading}
+        saving={saving}
+        onReview={handleReviewPrivilegedRole}
       />
 
       {(actionError || actionSuccess) && (
@@ -264,13 +281,19 @@ export function OrgAdminPortal() {
                       : 'border-gray-200'
                   }`}
                 >
-                  <div className="min-w-[180px]">
-                    <div className="text-sm font-bold text-gray-900">
-                      #{String(request.requestId).slice(-6)}
+                  <div className="min-w-[220px]">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <div className="truncate text-sm font-bold text-gray-900">
+                        {request.projectName?.trim() ||
+                          request.requestName?.trim() ||
+                          `Request #${String(request.requestId).slice(-6)}`}
+                      </div>
+                      {request.idMode === 'test_ids' ? (
+                        <span className="inline-flex shrink-0 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">
+                          Test ID
+                        </span>
+                      ) : null}
                     </div>
-                    {request.requestName && (
-                      <div className="text-sm font-medium text-gray-700">{request.requestName}</div>
-                    )}
                     <div className="text-sm text-gray-500">{request.customerEmail}</div>
                   </div>
 
@@ -332,6 +355,9 @@ export function OrgAdminPortal() {
                     onSuspend={handleSuspend}
                     onReinstate={handleReinstate}
                     onUnblock={handleUnblock}
+                    onAddUser={handleAddUser}
+                    onBlockAll={handleBlockAll}
+                    onUnblockAll={handleUnblockAll}
                     onDelete={handleDeleteUser}
                     onConsoleUrl={handleConsoleUrl}
                     onUpdatePermissions={handleUpdatePermissions}
@@ -341,6 +367,11 @@ export function OrgAdminPortal() {
                     onRequestCleanupSettings={handleRequestCleanupSettings}
                     onFetchCost={fetchUserCost}
                     onForceLogout={handleForceLogout}
+                    onSendPurchaseConfirmationMail={sendPurchaseConfirmationMail}
+                    onPrivilegedRolesChanged={() => {
+                      void refreshDetail();
+                      void refreshPrivilegedRoleRequests();
+                    }}
                     fetchUserMonitoring={fetchUserMonitoring}
                     lastUpdatedAt={lastUpdatedAt}
                     isRefreshing={isRefreshing}

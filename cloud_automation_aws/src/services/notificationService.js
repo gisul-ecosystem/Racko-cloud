@@ -11,6 +11,8 @@ const SEVERITY_MAP = {
   budget_renewed: 'success',
   user_suspended: 'warning',
   user_reinstated: 'success',
+  privileged_role_request: 'info',
+  privileged_role_request_reviewed: 'info',
 };
 
 function mapNotification(doc) {
