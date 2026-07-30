@@ -139,7 +139,7 @@ export function AwsOrgAdminHistoryTab({
   }
 
   const summaries = history?.userSummaries ?? [];
-  const timeline = history?.timeline?.length
+  const timeline: AwsOrgAdminLabHistoryTimelineEntry[] = history?.timeline?.length
     ? history.timeline
     : (history?.entries || []).map((entry) => ({
         id: String(entry.id),
