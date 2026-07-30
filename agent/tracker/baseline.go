@@ -444,14 +444,11 @@ func hashFile(path string) string {
 }
 
 // getWatchPaths returns the list of root paths the tracker watches for changes.
-// These are the same paths the watcher monitors — centralised here so baseline
-// and watcher always agree on what is in scope.
+// Only user data paths are tracked — software installation paths (Program Files,
+// ProgramData) are excluded since we only clone user files, not software.
 func getWatchPaths() []string {
 	return []string{
 		`C:\Users`,
-		`C:\Program Files`,
-		`C:\Program Files (x86)`,
-		`C:\ProgramData`,
 		`C:\tools`,
 		`C:\dev`,
 		`C:\projects`,
@@ -476,8 +473,10 @@ func shouldExcludePath(path string) bool {
 		`c:\programdata\usoprivate`,
 		`c:\programdata\usoshared`,
 		`c:\programdata\softwareDistribution`,
-		// Excluded user profile system folders
-		`c:\users\default`,
+		// AppData — software stores internal data here (caches, settings, updaters).
+		// Users don't manually create content in AppData, so exclude entirely.
+		// This covers Chrome, VS Code, Office, any software vendor — no per-app rules needed.
+		`appdata`,
 		`c:\users\public`,
 		`c:\users\all users`,
 		// Windows Recent — shortcut files auto-created when user opens folders
@@ -501,6 +500,9 @@ func shouldExcludePath(path string) bool {
 		`appdata\local\microsoft\edge\user data`,
 		// Chrome browser internal data
 		`appdata\local\google\chrome\user data`,
+		// Google updater — auto-update service files, not user content
+		`appdata\local\google\update`,
+		`appdata\local\google\googleupdate`,
 		// Firefox internal data
 		`appdata\roaming\mozilla\firefox\profiles`,
 		// Icon cache — rebuilt by Windows automatically
