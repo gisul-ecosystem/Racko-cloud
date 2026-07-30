@@ -4,14 +4,46 @@ const AppError = require('../utils/AppError');
 
 const API_VERSION = '2023-11-01';
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
-const MAX_RETRY_ATTEMPTS = 3;
+const MAX_RETRY_ATTEMPTS = 5;
 const RETRY_BASE_DELAY_MS = 400;
 const COST_CACHE_TTL_MS = 15 * 60 * 1000;
 
 /** @type {Map<string, { data: object, fetchedAt: number }>} */
 const costCache = new Map();
 
+/** @type {Map<string, { data: object, fetchedAt: number }>} */
+const dailyCostCache = new Map();
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+const getRetryDelayMs = (error, attempt, statusCode) => {
+  const retryAfter = error?.response?.headers?.['retry-after'];
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      return Math.min(seconds * 1000, 60_000);
+    }
+  }
+
+  if (statusCode === 429) {
+    return Math.min(30_000, 1000 * 2 ** (attempt - 1));
+  }
+
+  return RETRY_BASE_DELAY_MS * attempt;
+};
+
+const buildDailyCostCacheKey = ({
+  resourceGroupNames,
+  from,
+  to,
+  groupByResourceGroup
+}) =>
+  [
+    [...resourceGroupNames].sort().join('|'),
+    from,
+    to,
+    groupByResourceGroup ? 'rg' : 'flat'
+  ].join('::');
 
 const logCostManagementEvent = (event, details = {}) => {
   console.log(
@@ -319,6 +351,17 @@ const queryDailyCostsForResourceGroups = async ({
     throw new AppError('Both from and to dates are required for daily cost queries.', 400);
   }
 
+  const cacheKey = buildDailyCostCacheKey({
+    resourceGroupNames: normalizedGroups,
+    from,
+    to,
+    groupByResourceGroup
+  });
+  const cachedDaily = dailyCostCache.get(cacheKey);
+  if (cachedDaily && Date.now() - cachedDaily.fetchedAt < COST_CACHE_TTL_MS) {
+    return cachedDaily.data;
+  }
+
   const { accessToken, subscriptionId } = await getManagementAccessToken();
   const url = `https://management.azure.com/subscriptions/${subscriptionId}/providers/Microsoft.CostManagement/query?api-version=${API_VERSION}`;
 
@@ -394,6 +437,8 @@ const queryDailyCostsForResourceGroups = async ({
         });
       }
 
+      const result = { currency, rows };
+
       logCostManagementEvent('daily_cost_query_completed', {
         resourceGroupCount: normalizedGroups.length,
         rowCount: rows.length,
@@ -402,7 +447,8 @@ const queryDailyCostsForResourceGroups = async ({
         groupByResourceGroup
       });
 
-      return { currency, rows };
+      dailyCostCache.set(cacheKey, { data: result, fetchedAt: Date.now() });
+      return result;
     } catch (error) {
       lastError = error;
       const statusCode = Number(error?.response?.status);
@@ -419,7 +465,7 @@ const queryDailyCostsForResourceGroups = async ({
       }
 
       if (attempt < MAX_RETRY_ATTEMPTS) {
-        await sleep(RETRY_BASE_DELAY_MS * attempt);
+        await sleep(getRetryDelayMs(error, attempt, statusCode));
       }
     }
   }

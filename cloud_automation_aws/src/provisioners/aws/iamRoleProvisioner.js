@@ -3,6 +3,9 @@ import {
   PutRolePolicyCommand,
   DeleteRoleCommand,
   DeleteRolePolicyCommand,
+  ListAttachedRolePoliciesCommand,
+  DetachRolePolicyCommand,
+  ListRolePoliciesCommand,
 } from '@aws-sdk/client-iam';
 import { iamClient, MASTER_ACCOUNT_ID } from '../../config/aws.js';
 import { buildPermissionPolicy } from '../../config/iamPolicies.js';
@@ -83,9 +86,7 @@ export async function createLabRole(request, userIndex) {
 
 export async function createLabRoles(request) {
   const accountCount = Number(request.accountCount) || 1;
-  const roles = request.labRoles?.length
-    ? request.labRoles
-    : [];
+  const roles = request.labRoles?.length ? request.labRoles : [];
 
   for (let i = 0; i < accountCount; i += 1) {
     const role = await createLabRole(request, i);
@@ -100,20 +101,70 @@ export async function createLabRoles(request) {
   return roles;
 }
 
+/** Detach managed policies, remove inline policies, then delete the IAM role. */
+export async function deleteLabRoleFully(roleName, client = iamClient) {
+  if (!roleName) return;
+
+  try {
+    const { AttachedPolicies } = await client.send(
+      new ListAttachedRolePoliciesCommand({ RoleName: roleName })
+    );
+    for (const policy of AttachedPolicies || []) {
+      try {
+        await client.send(
+          new DetachRolePolicyCommand({
+            RoleName: roleName,
+            PolicyArn: policy.PolicyArn,
+          })
+        );
+      } catch (err) {
+        if (err.name !== 'NoSuchEntityException') {
+          console.warn(
+            `[iamRoleProvisioner] Detach ${policy.PolicyArn} from ${roleName}: ${err.message}`
+          );
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name === 'NoSuchEntityException') return;
+    console.warn(`[iamRoleProvisioner] List attached policies for ${roleName}: ${err.message}`);
+  }
+
+  try {
+    const { PolicyNames } = await client.send(
+      new ListRolePoliciesCommand({ RoleName: roleName })
+    );
+    for (const policyName of PolicyNames || []) {
+      try {
+        await client.send(
+          new DeleteRolePolicyCommand({
+            RoleName: roleName,
+            PolicyName: policyName,
+          })
+        );
+      } catch (err) {
+        if (err.name !== 'NoSuchEntityException') {
+          console.warn(
+            `[iamRoleProvisioner] Delete inline ${policyName} on ${roleName}: ${err.message}`
+          );
+        }
+      }
+    }
+  } catch (err) {
+    if (err.name !== 'NoSuchEntityException') {
+      console.warn(`[iamRoleProvisioner] List inline policies for ${roleName}: ${err.message}`);
+    }
+  }
+
+  await client.send(new DeleteRoleCommand({ RoleName: roleName }));
+  console.log(`[iamRoleProvisioner] Deleted role ${roleName}`);
+}
+
 export async function rollbackLabRoles(roles = []) {
   for (const role of roles) {
     if (!role?.roleName) continue;
     try {
-      await iamClient.send(
-        new DeleteRolePolicyCommand({
-          RoleName: role.roleName,
-          PolicyName: 'RackoLabPermissions',
-        })
-      );
-      await iamClient.send(
-        new DeleteRoleCommand({ RoleName: role.roleName })
-      );
-      console.log(`[iamRoleProvisioner] Deleted role ${role.roleName}`);
+      await deleteLabRoleFully(role.roleName);
     } catch (err) {
       console.error(`[iamRoleProvisioner] Rollback failed for ${role.roleName}:`, err.message);
     }

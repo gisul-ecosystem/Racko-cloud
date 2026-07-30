@@ -74,6 +74,43 @@ export async function reinstateUser(req, res, next) {
   }
 }
 
+export async function addUsers(req, res, next) {
+  try {
+    const result = await orgAdminService.addUsersToRequest(req.params.requestId, {
+      count: req.body?.count ?? 1,
+      actor: actor(req),
+    });
+    res.status(201).json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function blockAllUsers(req, res, next) {
+  try {
+    const result = await orgAdminService.blockAllUsers(req.params.requestId, {
+      actor: actor(req),
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function unblockAllUsers(req, res, next) {
+  try {
+    const result = await orgAdminService.unblockAllUsers(req.params.requestId, {
+      actor: actor(req),
+      resetUsage: req.body?.resetUsage !== false,
+      pauseWindowEnforcement: req.body?.pauseWindowEnforcement !== false,
+      pauseWindowHours: req.body?.pauseWindowHours ?? 24,
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export async function generateConsoleUrl(req, res, next) {
   try {
     const result = await orgAdminService.generateUserConsoleUrl(
@@ -436,4 +473,94 @@ export async function getRequestCustomServices(req, res, next) {
   try {
     res.json({ success: true, services: await customConfigService.getRequestCustomServices(req.params.requestId) });
   } catch (err) { next(err); }
+}
+
+export async function sendPurchaseConfirmationMail(req, res, next) {
+  try {
+    const { sendPurchaseIntentEmailByRequestId } = await import(
+      '../services/purchaseIntentService.js'
+    );
+    const result = await sendPurchaseIntentEmailByRequestId(req.params.requestId, {
+      force: true,
+    });
+    res.status(200).json({
+      success: true,
+      message: `Confirmation mail sent to ${result.recipientEmail}.`,
+      ...result,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listPrivilegedAwsRoles(req, res, next) {
+  try {
+    const { listAssignablePrivilegedRoles } = await import('../services/privilegedRoleService.js');
+    res.json({ success: true, roles: listAssignablePrivilegedRoles() });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listPrivilegedRoleRequests(req, res, next) {
+  try {
+    const { listPrivilegedRoleRequests } = await import('../services/privilegedRoleService.js');
+    const requests = await listPrivilegedRoleRequests({
+      status: req.query.status,
+      requestId: req.query.requestId,
+    });
+    res.json({ success: true, requests });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function reviewPrivilegedRoleRequest(req, res, next) {
+  try {
+    const { reviewPrivilegedRoleRequest } = await import('../services/privilegedRoleService.js');
+    const result = await reviewPrivilegedRoleRequest(req.params.id, {
+      status: req.body?.status,
+      reviewNotes: req.body?.reviewNotes,
+      actor: actor(req),
+    });
+    res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function assignPrivilegedRoleToAll(req, res, next) {
+  try {
+    const { assignPrivilegedRoleToAllUsers } = await import('../services/privilegedRoleService.js');
+    const result = await assignPrivilegedRoleToAllUsers(
+      req.params.requestId,
+      req.body?.awsRole || req.body?.role,
+      { actor: actor(req) }
+    );
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function listPrivilegedRoleAssignments(req, res, next) {
+  try {
+    const { listAssignmentsForRequest } = await import('../services/privilegedRoleService.js');
+    const assignments = await listAssignmentsForRequest(req.params.requestId);
+    res.json({ success: true, assignments });
+  } catch (err) {
+    next(err);
+  }
+}
+
+export async function revokePrivilegedRoleAssignment(req, res, next) {
+  try {
+    const { revokePrivilegedRoleAssignment } = await import('../services/privilegedRoleService.js');
+    const result = await revokePrivilegedRoleAssignment(req.params.assignmentId, {
+      actor: actor(req),
+    });
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
 }

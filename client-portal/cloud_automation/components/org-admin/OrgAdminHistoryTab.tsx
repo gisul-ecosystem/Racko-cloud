@@ -74,6 +74,7 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
   const [showTotalMtd, setShowTotalMtd] = useState(false);
   const [downloadingReport, setDownloadingReport] = useState(false);
   const [downloadError, setDownloadError] = useState<string | null>(null);
+  const [downloadNotice, setDownloadNotice] = useState<string | null>(null);
 
   const loadHistory = useCallback(async () => {
     setLoading(true);
@@ -125,12 +126,18 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
   const handleDownloadConsumptionReport = useCallback(async () => {
     setDownloadingReport(true);
     setDownloadError(null);
+    setDownloadNotice(null);
     try {
       const response = await getOrgConsumptionReport(requestId);
       if (!response.success || !response.report) {
         throw new Error('Failed to load consumption report.');
       }
       await downloadConsumptionReportExcel(response.report);
+      if (response.report.dataSource === 'estimated') {
+        setDownloadNotice(
+          'Report downloaded using stored spend totals (Azure Cost Management was temporarily busy). Daily amounts are estimated from session time.'
+        );
+      }
     } catch (reportError) {
       setDownloadError(
         reportError instanceof Error ? reportError.message : 'Failed to download consumption report.'
@@ -249,6 +256,12 @@ export function OrgAdminHistoryTab({ requestId, users }: OrgAdminHistoryTabProps
       {downloadError && (
         <p className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm text-red-700">
           {downloadError}
+        </p>
+      )}
+
+      {downloadNotice && (
+        <p className="rounded-lg border border-amber-100 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {downloadNotice}
         </p>
       )}
 

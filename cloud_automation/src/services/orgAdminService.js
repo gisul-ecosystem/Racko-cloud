@@ -2301,6 +2301,237 @@ const loadMergedMinutesByUserForEachDay = async (
   return minutesByUserDay;
 };
 
+const isAzureRateLimitError = (error) => {
+  const statusCode = Number(error?.statusCode || error?.response?.status);
+  if (statusCode === 429) {
+    return true;
+  }
+
+  return String(error?.message || '')
+    .toLowerCase()
+    .includes('too many requests');
+};
+
+const loadStoredSpendByUser = async (requestId, userIds) => {
+  const { rows } = await db.query(
+    `
+      SELECT azure_user_id, current_spend, currency
+      FROM user_budget_spend
+      WHERE request_id = $1
+        AND azure_user_id = ANY($2::int[])
+    `,
+    [requestId, userIds]
+  );
+
+  const spendByUserId = new Map();
+  let currency = 'USD';
+
+  for (const row of rows) {
+    spendByUserId.set(Number(row.azure_user_id), parseFloat(row.current_spend || 0));
+    if (row.currency) {
+      currency = String(row.currency);
+    }
+  }
+
+  return { spendByUserId, currency };
+};
+
+const distributeSpendAcrossDays = (totalSpend, days, minutesPerDay) => {
+  const dayCosts = new Map(days.map((day) => [day, 0]));
+  const totalMinutes = minutesPerDay.reduce((sum, value) => sum + value, 0);
+
+  if (totalSpend <= 0) {
+    return dayCosts;
+  }
+
+  if (totalMinutes <= 0) {
+    dayCosts.set(days[days.length - 1], roundCost(totalSpend));
+    return dayCosts;
+  }
+
+  let allocated = 0;
+
+  for (let index = 0; index < days.length; index += 1) {
+    const day = days[index];
+    const minutes = minutesPerDay[index];
+    const isLast = index === days.length - 1;
+    const cost = isLast
+      ? roundCost(totalSpend - allocated)
+      : roundCost(totalSpend * (minutes / totalMinutes));
+
+    if (!isLast) {
+      allocated += cost;
+    }
+
+    if (minutes > 0 || isLast) {
+      dayCosts.set(day, cost);
+    }
+  }
+
+  return dayCosts;
+};
+
+const buildConsumptionReportFromStoredSpend = async ({
+  requestId,
+  users,
+  days,
+  periodStart,
+  periodEnd,
+  timezone,
+  perUserCosting
+}) => {
+  const userIds = users.map((user) => Number(user.id));
+  const { spendByUserId, currency } = await loadStoredSpendByUser(requestId, userIds);
+  const minutesByUserDay = await loadMergedMinutesByUserForEachDay(
+    requestId,
+    timezone,
+    periodStart,
+    periodEnd
+  );
+  const costByUserDay = new Map();
+
+  for (const user of users) {
+    costByUserDay.set(Number(user.id), new Map(days.map((day) => [day, 0])));
+  }
+
+  if (perUserCosting) {
+    for (const user of users) {
+      const userId = Number(user.id);
+      const totalSpend = spendByUserId.get(userId) || 0;
+      const minutesPerDay = days.map(
+        (day) => minutesByUserDay.get(`${userId}|${day}`) || 0
+      );
+      const distributed = distributeSpendAcrossDays(totalSpend, days, minutesPerDay);
+      costByUserDay.set(userId, distributed);
+    }
+  } else {
+    const grandTotal = roundCost(
+      [...spendByUserId.values()].reduce((sum, value) => sum + value, 0)
+    );
+    const minutesPerDay = days.map((day) =>
+      users.reduce(
+        (sum, user) => sum + (minutesByUserDay.get(`${user.id}|${day}`) || 0),
+        0
+      )
+    );
+    const dailyTotals = distributeSpendAcrossDays(grandTotal, days, minutesPerDay);
+
+    for (const day of days) {
+      const dayTotal = dailyTotals.get(day) || 0;
+      const minutesByUser = new Map(
+        users.map((user) => [
+          Number(user.id),
+          minutesByUserDay.get(`${user.id}|${day}`) || 0
+        ])
+      );
+      const totalMinutes = [...minutesByUser.values()].reduce((sum, value) => sum + value, 0);
+
+      for (const user of users) {
+        const userId = Number(user.id);
+        const userMinutes = minutesByUser.get(userId) || 0;
+        const attributedCost =
+          totalMinutes > 0 && userMinutes > 0
+            ? roundCost(dayTotal * (userMinutes / totalMinutes))
+            : 0;
+        costByUserDay.get(userId)?.set(day, attributedCost);
+      }
+    }
+  }
+
+  return { costByUserDay, currency, dataSource: 'estimated' };
+};
+
+const finalizeConsumptionReport = ({
+  requestId,
+  users,
+  days,
+  periodStart,
+  periodEnd,
+  currency,
+  costByUserDay,
+  dataSource = 'azure'
+}) => {
+  const dailyTotals = Object.fromEntries(
+    days.map((day) => [
+      day,
+      roundCost(
+        users.reduce((sum, user) => sum + (costByUserDay.get(Number(user.id))?.get(day) || 0), 0)
+      )
+    ])
+  );
+
+  const reportUsers = users.map((user) => {
+    const userDayCosts = costByUserDay.get(Number(user.id)) || new Map();
+    const dailyCosts = Object.fromEntries(
+      days.map((day) => [day, userDayCosts.get(day) || 0])
+    );
+    const total = roundCost(Object.values(dailyCosts).reduce((sum, value) => sum + value, 0));
+
+    return {
+      userId: Number(user.id),
+      username: user.username,
+      dailyCosts,
+      total
+    };
+  });
+
+  const grandTotal = roundCost(Object.values(dailyTotals).reduce((sum, value) => sum + value, 0));
+
+  return {
+    requestId: Number(requestId),
+    currency,
+    period: { from: periodStart, to: periodEnd },
+    days,
+    users: reportUsers,
+    dailyTotals,
+    grandTotal,
+    dataSource
+  };
+};
+
+const applyAzureDailyCostsToReport = ({
+  users,
+  days,
+  costByUserDay,
+  dailyCosts,
+  perUserCosting,
+  rgToUserId
+}) => {
+  if (perUserCosting) {
+    for (const row of dailyCosts.rows) {
+      const userId = rgToUserId.get(normalizeResourceGroupName(row.resourceGroup));
+      if (!userId || !row.date) {
+        continue;
+      }
+
+      const userDayCosts = costByUserDay.get(userId);
+      if (!userDayCosts) {
+        continue;
+      }
+
+      userDayCosts.set(
+        row.date,
+        roundCost((userDayCosts.get(row.date) || 0) + row.cost)
+      );
+    }
+    return;
+  }
+
+  const dailyTotalsFromAzure = new Map(days.map((day) => [day, 0]));
+
+  for (const row of dailyCosts.rows) {
+    if (!row.date) {
+      continue;
+    }
+    dailyTotalsFromAzure.set(
+      row.date,
+      roundCost((dailyTotalsFromAzure.get(row.date) || 0) + row.cost)
+    );
+  }
+
+  return dailyTotalsFromAzure;
+};
+
 const getConsumptionReport = async (requestId) => {
   const requestResult = await db.query(
     `
@@ -2366,147 +2597,148 @@ const getConsumptionReport = async (requestId) => {
 
   let currency = 'USD';
   const costByUserDay = new Map();
+  let dataSource = 'azure';
 
   for (const user of users) {
     costByUserDay.set(Number(user.id), new Map(days.map((day) => [day, 0])));
   }
 
-  if (perUserCosting) {
-    const stagingGroups = await getStagingResourceGroups(requestId);
-    const rgToUserId = new Map();
+  try {
+    if (perUserCosting) {
+      const stagingGroups = await getStagingResourceGroups(requestId);
+      const rgToUserId = new Map();
 
-    for (const user of users) {
-      const rgName =
-        user.azure_resource_group_name
-        || stagingGroups.find((entry) => Number(entry.user_number) === Number(user.user_number))
-          ?.azure_resource_group_name;
+      for (const user of users) {
+        const rgName =
+          user.azure_resource_group_name
+          || stagingGroups.find((entry) => Number(entry.user_number) === Number(user.user_number))
+            ?.azure_resource_group_name;
 
-      if (rgName) {
-        rgToUserId.set(normalizeResourceGroupName(rgName), Number(user.id));
+        if (rgName) {
+          rgToUserId.set(normalizeResourceGroupName(rgName), Number(user.id));
+        }
       }
-    }
 
-    const resourceGroupNames = [...rgToUserId.keys()];
+      const resourceGroupNames = [...rgToUserId.keys()];
 
-    if (resourceGroupNames.length > 0) {
+      if (resourceGroupNames.length > 0) {
+        const dailyCosts = await queryDailyCostsForResourceGroups({
+          resourceGroupNames,
+          from: periodStart,
+          to: periodEnd,
+          groupByResourceGroup: true
+        });
+
+        currency = dailyCosts.currency || currency;
+        applyAzureDailyCostsToReport({
+          users,
+          days,
+          costByUserDay,
+          dailyCosts,
+          perUserCosting: true,
+          rgToUserId
+        });
+      }
+    } else {
+      const resourceGroup = request.azure_resource_group_name;
+
+      if (!resourceGroup) {
+        throw new AppError('No shared Azure resource group is linked to this request.', 404);
+      }
+
       const dailyCosts = await queryDailyCostsForResourceGroups({
-        resourceGroupNames,
+        resourceGroupNames: [resourceGroup],
         from: periodStart,
         to: periodEnd,
-        groupByResourceGroup: true
+        groupByResourceGroup: false
       });
 
       currency = dailyCosts.currency || currency;
+      const dailyTotalsFromAzure = applyAzureDailyCostsToReport({
+        users,
+        days,
+        costByUserDay,
+        dailyCosts,
+        perUserCosting: false,
+        rgToUserId: new Map()
+      });
 
-      for (const row of dailyCosts.rows) {
-        const userId = rgToUserId.get(normalizeResourceGroupName(row.resourceGroup));
-        if (!userId || !row.date) {
-          continue;
+      const minutesByUserDay = await loadMergedMinutesByUserForEachDay(
+        requestId,
+        timezone,
+        periodStart,
+        periodEnd
+      );
+
+      for (const day of days) {
+        const dayTotal = dailyTotalsFromAzure.get(day) || 0;
+        const minutesByUser = new Map();
+
+        for (const user of users) {
+          const minutes = minutesByUserDay.get(`${user.id}|${day}`) || 0;
+          minutesByUser.set(Number(user.id), minutes);
         }
 
-        const userDayCosts = costByUserDay.get(userId);
-        if (!userDayCosts) {
-          continue;
-        }
+        const totalMinutes = [...minutesByUser.values()].reduce((sum, value) => sum + value, 0);
 
-        userDayCosts.set(
-          row.date,
-          roundCost((userDayCosts.get(row.date) || 0) + row.cost)
-        );
+        for (const user of users) {
+          const userId = Number(user.id);
+          const userMinutes = minutesByUser.get(userId) || 0;
+          const attributedCost =
+            totalMinutes > 0 && userMinutes > 0
+              ? roundCost(dayTotal * (userMinutes / totalMinutes))
+              : 0;
+          costByUserDay.get(userId)?.set(day, attributedCost);
+        }
       }
     }
-  } else {
-    const resourceGroup = request.azure_resource_group_name;
+  } catch (err) {
+    const canFallback =
+      isAzureRateLimitError(err) ||
+      Number(err?.statusCode) >= 500 ||
+      String(err?.message || '').toLowerCase().includes('failed to query azure daily cost');
 
-    if (!resourceGroup) {
-      throw new AppError('No shared Azure resource group is linked to this request.', 404);
+    if (!canFallback) {
+      throw err;
     }
 
-    const dailyCosts = await queryDailyCostsForResourceGroups({
-      resourceGroupNames: [resourceGroup],
-      from: periodStart,
-      to: periodEnd,
-      groupByResourceGroup: false
+    console.warn(
+      JSON.stringify({
+        service: 'org-admin-service',
+        event: 'consumption_report_azure_fallback',
+        requestId,
+        message: err?.message || 'Azure daily cost query failed'
+      })
+    );
+
+    const fallback = await buildConsumptionReportFromStoredSpend({
+      requestId,
+      users,
+      days,
+      periodStart,
+      periodEnd,
+      timezone,
+      perUserCosting
     });
 
-    currency = dailyCosts.currency || currency;
-    const dailyTotalsFromAzure = new Map(days.map((day) => [day, 0]));
-
-    for (const row of dailyCosts.rows) {
-      if (!row.date) {
-        continue;
-      }
-      dailyTotalsFromAzure.set(
-        row.date,
-        roundCost((dailyTotalsFromAzure.get(row.date) || 0) + row.cost)
-      );
+    for (const user of users) {
+      costByUserDay.set(Number(user.id), fallback.costByUserDay.get(Number(user.id)));
     }
 
-    const minutesByUserDay = await loadMergedMinutesByUserForEachDay(
-      requestId,
-      timezone,
-      periodStart,
-      periodEnd
-    );
-
-    for (const day of days) {
-      const dayTotal = dailyTotalsFromAzure.get(day) || 0;
-      const minutesByUser = new Map();
-
-      for (const user of users) {
-        const minutes = minutesByUserDay.get(`${user.id}|${day}`) || 0;
-        minutesByUser.set(Number(user.id), minutes);
-      }
-
-      const totalMinutes = [...minutesByUser.values()].reduce((sum, value) => sum + value, 0);
-
-      for (const user of users) {
-        const userId = Number(user.id);
-        const userMinutes = minutesByUser.get(userId) || 0;
-        const attributedCost =
-          totalMinutes > 0 && userMinutes > 0
-            ? roundCost(dayTotal * (userMinutes / totalMinutes))
-            : 0;
-        costByUserDay.get(userId)?.set(day, attributedCost);
-      }
-    }
+    currency = fallback.currency;
+    dataSource = fallback.dataSource;
   }
 
-  const dailyTotals = Object.fromEntries(
-    days.map((day) => [
-      day,
-      roundCost(
-        users.reduce((sum, user) => sum + (costByUserDay.get(Number(user.id))?.get(day) || 0), 0)
-      )
-    ])
-  );
-
-  const reportUsers = users.map((user) => {
-    const userDayCosts = costByUserDay.get(Number(user.id)) || new Map();
-    const dailyCosts = Object.fromEntries(
-      days.map((day) => [day, userDayCosts.get(day) || 0])
-    );
-    const total = roundCost(Object.values(dailyCosts).reduce((sum, value) => sum + value, 0));
-
-    return {
-      userId: Number(user.id),
-      username: user.username,
-      dailyCosts,
-      total
-    };
-  });
-
-  const grandTotal = roundCost(Object.values(dailyTotals).reduce((sum, value) => sum + value, 0));
-
-  return {
-    requestId: Number(requestId),
-    currency,
-    period: { from: periodStart, to: periodEnd },
+  return finalizeConsumptionReport({
+    requestId,
+    users,
     days,
-    users: reportUsers,
-    dailyTotals,
-    grandTotal
-  };
+    periodStart,
+    periodEnd,
+    currency,
+    costByUserDay,
+    dataSource
+  });
 };
 
 const toIsoDateStart = (value) => {

@@ -1,6 +1,6 @@
 'use client';
 
-import { AlertCircle, ChevronRight } from 'lucide-react';
+import { AlertCircle, CheckCircle2, ChevronDown, ChevronRight, Loader2, Shield } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
 import {
   RACKO_BTN_PRIMARY,
@@ -10,6 +10,7 @@ import { COMMON_TIMEZONES } from '../../constants';
 import {
   checkboxClass,
   inputClass,
+  inputDisabledClass,
   labelClass,
   optionCardClass,
   sectionClass,
@@ -18,9 +19,13 @@ import {
 import { InstancePicker } from './InstancePicker';
 import { PermissionsPicker } from './PermissionsPicker';
 import { RegionPicker } from './RegionPicker';
-import { RequestStepper } from './RequestStepper';
+import { FINAL_FORM_STEP, RequestStepper } from './RequestStepper';
 import { SectionHeader } from './SectionHeader';
 import { ServiceSelector } from './ServiceSelector';
+import {
+  clampTestIdsAccountCount,
+  TEST_IDS_MAX_ACCOUNT_COUNT,
+} from '../../utils/requestForm';
 
 const USAGE_WINDOW_DAYS = [
   'Sunday',
@@ -61,6 +66,11 @@ export function RequestForm({
   pricingRegion,
   region,
   onRegionChange,
+  projectName,
+  onProjectNameChange,
+  idMode,
+  onIdModeChange,
+  purchaseConvertMode = false,
   customerEmail,
   onCustomerEmailChange,
   accountCount,
@@ -80,8 +90,10 @@ export function RequestForm({
   onTimezoneChange,
   enableResourceCleanup,
   onEnableResourceCleanupChange,
-  resourceCleanupIntervalHours,
-  onResourceCleanupIntervalHoursChange,
+  resourceCleanupTime,
+  onResourceCleanupTimeChange,
+  resourceCleanupTimezone,
+  onResourceCleanupTimezoneChange,
   budgetEnabled,
   onBudgetEnabledChange,
   perUserBudgetUsd,
@@ -92,14 +104,27 @@ export function RequestForm({
   availableRegions,
   regionsLoading,
   regionsError,
+  privilegedRoleOpen = false,
+  onPrivilegedRoleOpenChange,
+  privilegedRoles = [],
+  privilegedRolesLoading = false,
+  selectedPrivilegedRole = '',
+  onSelectedPrivilegedRoleChange,
+  onSubmitPrivilegedRoleRequest,
+  privilegedRoleSubmitting = false,
+  privilegedRoleSubmitted = false,
+  privilegedRoleMessage = null,
+  privilegedRoleMessageType = null,
 }) {
+  const isTestIds = idMode === 'test_ids';
+
   useEffect(() => {
-    if (!startDate || !endDate) return;
+    if (isTestIds || !startDate || !endDate) return;
     const start = new Date(startDate);
     const end = new Date(endDate);
     const days = Math.ceil((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
     onAccessTypeChange(days > 7 ? 'identity_center' : 'magic_link');
-  }, [startDate, endDate, onAccessTypeChange]);
+  }, [startDate, endDate, onAccessTypeChange, isTestIds]);
 
   const selectedServices = useMemo(
     () => services.filter((service) => selectedServiceIds.includes(service._id)),
@@ -175,88 +200,111 @@ export function RequestForm({
           <div className="p-6">
             <SectionHeader
               step={1}
-              title="Customer details"
-              description="Who is this lab for, how many accounts, and when does access run?"
+              title="Project details"
+              description="Name the lab, choose AWS ID type, then set the service window and account count."
             />
             <div className="mt-6 grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
-              <label className={labelClass} htmlFor="customerEmail">
-                Customer email
+              <label className={labelClass} htmlFor="projectName">
+                Project name
               </label>
               <input
-                id="customerEmail"
-                type="email"
+                id="projectName"
+                type="text"
                 className={inputClass}
-                value={customerEmail}
-                onChange={(event) => onCustomerEmailChange(event.target.value)}
-                placeholder="customer@company.com"
-                required
-              />
-            </div>
-            <div>
-              <label className={labelClass} htmlFor="accountCount">
-                Account count
-              </label>
-              <input
-                id="accountCount"
-                type="number"
-                min={1}
-                max={50}
-                className={inputClass}
-                value={accountCount}
-                onChange={(event) => onAccountCountChange(Number(event.target.value))}
+                value={projectName}
+                onChange={(event) => onProjectNameChange(event.target.value)}
+                placeholder="e.g. Contoso AWS Lab"
+                maxLength={120}
                 required
               />
             </div>
 
             <div className="sm:col-span-2">
-              <span className={labelClass}>Access type</span>
-              <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                <button
-                  type="button"
-                  onClick={() => onAccessTypeChange('magic_link')}
-                  className={optionCardClass(accessType === 'magic_link')}
-                >
-                  <div className="text-sm font-semibold text-gray-900">Magic link access</div>
-                  <p className="mt-1 text-xs leading-relaxed text-gray-500">
-                    Best for short labs (≤7 days). Admin generates one-click console links from the
-                    manage portal. No password needed.
-                  </p>
-                  <p className="mt-2 text-[11px] font-semibold text-[var(--cloud-accent,#B91C1C)]">
-                    Max session: 12 hours per link
-                  </p>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => onAccessTypeChange('identity_center')}
-                  className={optionCardClass(accessType === 'identity_center')}
-                >
-                  <div className="text-sm font-semibold text-gray-900">Direct IAM login</div>
-                  <p className="mt-1 text-xs leading-relaxed text-gray-500">
-                    Best for long labs (&gt;7 days). Users receive username and password and can sign
-                    in directly to the AWS console for the full lab duration.
-                  </p>
-                  <p className="mt-2 text-[11px] font-semibold text-blue-700">
-                    Persistent access for full lab duration
-                  </p>
-                </button>
-              </div>
-
-              {accessType === 'identity_center' && (
-                <div className="mt-3 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-800">
-                  Each lab user gets an IAM account with a console username and password emailed
-                  directly. Users can log in anytime during the lab — no MFA or activation flow.
+              <span className={labelClass}>AWS ID type</span>
+              {purchaseConvertMode ? (
+                <div className="mt-2 rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+                  Purchasing full AWS IDs from your test lab. Services and permissions stay the same
+                  as the test request.
                 </div>
-              )}
-
-              {accessType === 'magic_link' && (
-                <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                  Magic links expire after 12 hours. Regenerate links from the manage portal for
-                  extended access.
+              ) : (
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => onIdModeChange('test_ids')}
+                    className={optionCardClass(idMode === 'test_ids')}
+                  >
+                    <div className="text-sm font-semibold text-gray-900">AWS test_ids</div>
+                    <p className="mt-1 text-xs leading-relaxed text-gray-500">
+                      Short test labs with fixed defaults: up to 5 accounts, 24-hour window, $10 budget,
+                      and resource cleanup every 24 hours.
+                    </p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onIdModeChange('aws_ids')}
+                    className={optionCardClass(idMode === 'aws_ids')}
+                  >
+                    <div className="text-sm font-semibold text-gray-900">AWS IDs</div>
+                    <p className="mt-1 text-xs leading-relaxed text-gray-500">
+                      Standard provisioning with full control over account count, duration, cleanup,
+                      and daily usage windows.
+                    </p>
+                  </button>
                 </div>
               )}
             </div>
+
+            {idMode === 'aws_ids' && (
+              <div className="sm:col-span-2">
+                <span className={labelClass}>Access type</span>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  <button
+                    type="button"
+                    onClick={() => onAccessTypeChange('magic_link')}
+                    className={optionCardClass(accessType === 'magic_link')}
+                  >
+                    <div className="text-sm font-semibold text-gray-900">Magic link access</div>
+                    <p className="mt-1 text-xs leading-relaxed text-gray-500">
+                      Best for short labs (≤7 days). Admin generates one-click console links from the
+                      manage portal. No password needed.
+                    </p>
+                    <p className="mt-2 text-[11px] font-semibold text-[var(--cloud-accent,#B91C1C)]">
+                      Max session: 12 hours per link
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => onAccessTypeChange('identity_center')}
+                    className={optionCardClass(accessType === 'identity_center')}
+                  >
+                    <div className="text-sm font-semibold text-gray-900">Direct IAM login</div>
+                    <p className="mt-1 text-xs leading-relaxed text-gray-500">
+                      Best for long labs (&gt;7 days). Users receive username and password and can sign
+                      in directly to the AWS console for the full lab duration.
+                    </p>
+                    <p className="mt-2 text-[11px] font-semibold text-blue-700">
+                      Persistent access for full lab duration
+                    </p>
+                  </button>
+                </div>
+
+                {accessType === 'identity_center' && (
+                  <div className="mt-3 rounded-md border border-blue-300 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                    Each lab user gets an IAM account with a console username and password emailed
+                    directly. Users can log in anytime during the lab — no MFA or activation flow.
+                  </div>
+                )}
+
+                {accessType === 'magic_link' && (
+                  <div className="mt-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                    Magic links expire after 12 hours. Regenerate links from the manage portal for
+                    extended access.
+                  </div>
+                )}
+              </div>
+            )}
 
             <div>
               <label className={labelClass} htmlFor="startDate">
@@ -278,15 +326,46 @@ export function RequestForm({
               <input
                 id="endDate"
                 type="datetime-local"
-                className={inputClass}
+                className={isTestIds ? inputDisabledClass : inputClass}
                 value={endDate}
                 onChange={(event) => onEndDateChange(event.target.value)}
+                disabled={isTestIds}
                 required
               />
-              {durationDays > 0 && (
+              {isTestIds ? (
+                <p className="mt-1 text-xs text-gray-500">
+                  End date is fixed at 24 hours after the start for test_ids.
+                </p>
+              ) : durationDays > 0 ? (
                 <p className="mt-1 text-xs text-gray-400">{durationDays} day{durationDays !== 1 ? 's' : ''}</p>
-              )}
+              ) : null}
             </div>
+
+            {idMode ? (
+              <div>
+                <label className={labelClass} htmlFor="accountCount">
+                  Account count
+                </label>
+                <input
+                  id="accountCount"
+                  type="number"
+                  min={1}
+                  max={isTestIds ? TEST_IDS_MAX_ACCOUNT_COUNT : 50}
+                  className={inputClass}
+                  value={accountCount}
+                  onChange={(event) => {
+                    const raw = Number(event.target.value);
+                    onAccountCountChange(isTestIds ? clampTestIdsAccountCount(raw) : raw);
+                  }}
+                  required
+                />
+                {isTestIds ? (
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    Select 1–{TEST_IDS_MAX_ACCOUNT_COUNT} accounts for AWS test_ids.
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
           </div>
           </div>
         </section>
@@ -298,8 +377,18 @@ export function RequestForm({
             <SectionHeader
               step={2}
               title="Daily usage windows"
-              description="Optionally restrict which days and hours lab users can access AWS."
+              description={
+                isTestIds
+                  ? 'Disabled for AWS test_ids.'
+                  : 'Optionally restrict which days and hours lab users can access AWS.'
+              }
             />
+            {isTestIds ? (
+              <div className="mt-6 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                Daily usage windows are turned off for test IDs. Users can access the lab for the full
+                24-hour window.
+              </div>
+            ) : (
             <div className="mt-6">
           <label className="flex cursor-pointer items-center gap-3">
             <input
@@ -449,6 +538,7 @@ export function RequestForm({
             </>
           )}
             </div>
+            )}
           </div>
         </section>
       )}
@@ -459,9 +549,67 @@ export function RequestForm({
             <SectionHeader
               step={3}
               title="Resource cleanup"
-              description="Automatically delete lab resources on a schedule to control spend."
+              description="Automatically clean up lab resources once per day at a time you choose."
             />
             <div className="mt-6">
+          {isTestIds ? (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                Daily resource cleanup is enabled for test IDs. All AWS resources inside lab accounts
+                are deleted once per day at the time you select.
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="resourceCleanupTime">
+                  Delete all resources inside lab daily at
+                </label>
+                <input
+                  id="resourceCleanupTime"
+                  type="time"
+                  className={inputClass}
+                  value={resourceCleanupTime}
+                  onChange={(event) => onResourceCleanupTimeChange(event.target.value)}
+                  required
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  Choose when lab resources are cleaned up each day.
+                </p>
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="resourceCleanupTimezone">
+                  Cleanup timezone
+                </label>
+                <select
+                  id="resourceCleanupTimezone"
+                  className={inputClass}
+                  value={resourceCleanupTimezone}
+                  onChange={(event) => onResourceCleanupTimezoneChange(event.target.value)}
+                >
+                  <option value="Asia/Kolkata">IST — Asia/Kolkata</option>
+                  <option value="UTC">UTC</option>
+                  <option value="America/New_York">EST — America/New_York</option>
+                  <option value="America/Los_Angeles">PST — America/Los_Angeles</option>
+                  <option value="Europe/London">GMT — Europe/London</option>
+                  <option value="Asia/Dubai">GST — Asia/Dubai</option>
+                  {COMMON_TIMEZONES.filter(
+                    (entry) =>
+                      ![
+                        'Asia/Kolkata',
+                        'UTC',
+                        'America/New_York',
+                        'America/Los_Angeles',
+                        'Europe/London',
+                        'Asia/Dubai',
+                      ].includes(entry)
+                  ).map((entry) => (
+                    <option key={entry} value={entry}>
+                      {entry.replace(/_/g, ' ')}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          ) : (
+          <>
           <label className="flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
@@ -469,46 +617,71 @@ export function RequestForm({
               onChange={(event) => {
                 onEnableResourceCleanupChange(event.target.checked);
                 if (!event.target.checked) {
-                  onResourceCleanupIntervalHoursChange(undefined);
-                } else if (!resourceCleanupIntervalHours) {
-                  onResourceCleanupIntervalHoursChange(4);
+                  onResourceCleanupTimeChange('');
                 }
               }}
               className={checkboxClass}
             />
-            <span className="text-sm font-medium text-gray-900">Enable periodic resource cleanup</span>
+            <span className="text-sm font-medium text-gray-900">Enable daily resource cleanup</span>
           </label>
           {enableResourceCleanup && (
-            <div className="mt-4">
-              <label className={labelClass} htmlFor="resourceCleanupIntervalHours">
-                Delete all resources inside lab every (hours)
-              </label>
-              <input
-                id="resourceCleanupIntervalHours"
-                type="number"
-                min={1}
-                max={24}
-                placeholder="e.g. 4"
-                className={inputClass}
-                value={resourceCleanupIntervalHours ?? ''}
-                onChange={(event) => {
-                  const value = event.target.value;
-                  onResourceCleanupIntervalHoursChange(
-                    value ? Number.parseInt(value, 10) : undefined
-                  );
-                }}
-              />
-              <p className="mt-2 text-xs text-gray-500">
-                Every {resourceCleanupIntervalHours || '?'} hour(s), all AWS resources (EC2
-                instances, EKS clusters, RDS databases, S3 objects, etc.) inside the lab accounts
-                will be automatically deleted. IAM users and account structure are kept — lab users
-                can create new resources again immediately after cleanup.
-              </p>
-              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
-                ⚠ This permanently deletes all resources in lab accounts on a timer. Lab users lose
-                their work.
+            <div className="mt-4 space-y-4">
+              <div>
+                <label className={labelClass} htmlFor="resourceCleanupTime">
+                  Delete all resources inside lab daily at
+                </label>
+                <input
+                  id="resourceCleanupTime"
+                  type="time"
+                  className={inputClass}
+                  value={resourceCleanupTime}
+                  onChange={(event) => onResourceCleanupTimeChange(event.target.value)}
+                  required
+                />
+                <p className="mt-2 text-xs text-gray-500">
+                  Runs daily at this time in {resourceCleanupTimezone.replace(/_/g, ' ')}.
+                </p>
+              </div>
+              <div>
+                <label className={labelClass} htmlFor="resourceCleanupTimezone">
+                  Cleanup timezone
+                </label>
+                <select
+                  id="resourceCleanupTimezone"
+                  className={inputClass}
+                  value={resourceCleanupTimezone}
+                  onChange={(event) => onResourceCleanupTimezoneChange(event.target.value)}
+                >
+                  <option value="Asia/Kolkata">IST — Asia/Kolkata</option>
+                  <option value="Asia/Singapore">SGT — Asia/Singapore</option>
+                  <option value="America/New_York">US/Eastern — America/New_York</option>
+                  <option value="America/Los_Angeles">US/Pacific — America/Los_Angeles</option>
+                  <option value="Europe/London">GMT — Europe/London</option>
+                  <option value="UTC">UTC</option>
+                  {COMMON_TIMEZONES.filter(
+                    (entry) =>
+                      ![
+                        'Asia/Kolkata',
+                        'Asia/Singapore',
+                        'America/New_York',
+                        'America/Los_Angeles',
+                        'Europe/London',
+                        'UTC',
+                      ].includes(entry)
+                  ).map((entry) => (
+                    <option key={entry} value={entry}>
+                      {entry.replace(/_/g, ' ')}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+                ⚠ This permanently deletes all resources in lab accounts on a daily schedule. Lab users lose
+                their work at the selected time.
               </div>
             </div>
+          )}
+          </>
           )}
             </div>
           </div>
@@ -521,9 +694,33 @@ export function RequestForm({
             <SectionHeader
               step={4}
               title="Budget cap"
-              description="Optionally disable lab users when their AWS spend exceeds a limit."
+              description={
+                isTestIds
+                  ? 'Default $10 spending cap for AWS test_ids.'
+                  : 'Optionally disable lab users when their AWS spend exceeds a limit.'
+              }
             />
             <div className="mt-6">
+          {isTestIds ? (
+            <div>
+              <label className={labelClass} htmlFor="perUserBudgetUsd">
+                Budget per user (USD)
+              </label>
+              <input
+                id="perUserBudgetUsd"
+                type="number"
+                min={1}
+                step={0.01}
+                className={inputDisabledClass}
+                value={perUserBudgetUsd ?? ''}
+                disabled
+              />
+              <p className="mt-2 text-xs text-gray-500">
+                Fixed at $10 per user for AWS test_ids labs.
+              </p>
+            </div>
+          ) : (
+          <>
           <label className="flex cursor-pointer items-center gap-3">
             <input
               type="checkbox"
@@ -563,6 +760,8 @@ export function RequestForm({
               </p>
             </div>
           )}
+          </>
+          )}
             </div>
           </div>
         </section>
@@ -593,7 +792,7 @@ export function RequestForm({
             <SectionHeader
               step={6}
               title="Instances & usage estimates"
-              description={`Choose instance sizes for compute services and lab usage tiers for GB/request-based services. Preview uses ${pricingRegion} until you pick a region in step 8.`}
+              description={`Choose instance sizes for compute services and lab usage tiers for GB/request-based services. Preview uses ${pricingRegion} until you pick a region in step ${FINAL_FORM_STEP}.`}
             />
             <div className="mt-6">
             <InstancePicker
@@ -632,6 +831,139 @@ export function RequestForm({
           <div className="p-6">
             <SectionHeader
               step={8}
+              title="Customer email"
+              description="Credentials and lab access details will be sent to this address."
+            />
+            <div className="mt-6">
+              <label className={labelClass} htmlFor="customerEmail">
+                Email ID
+              </label>
+              <input
+                id="customerEmail"
+                type="email"
+                className={inputClass}
+                value={customerEmail}
+                onChange={(event) => onCustomerEmailChange(event.target.value)}
+                placeholder="customer@company.com"
+                required
+              />
+            </div>
+
+            {typeof onPrivilegedRoleOpenChange === 'function' && (
+              <div className="mt-6 border-t border-gray-100 pt-5">
+                <button
+                  type="button"
+                  onClick={() => onPrivilegedRoleOpenChange(!privilegedRoleOpen)}
+                  className="flex w-full items-center justify-between gap-2 text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-violet-50 text-violet-700">
+                      <Shield className="h-4 w-4" />
+                    </div>
+                    <div>
+                      <span className="block text-sm font-semibold text-gray-900">
+                        Request privileged roles
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        Managed IAM packs (AdministratorAccess excluded) — sent to Lab Management
+                        for approval
+                      </span>
+                    </div>
+                  </div>
+                  <ChevronDown
+                    className={`h-4 w-4 text-gray-400 transition ${privilegedRoleOpen ? 'rotate-180' : ''}`}
+                  />
+                </button>
+
+                {privilegedRoleOpen && (
+                  <div className="mt-4 space-y-4 rounded-xl border border-violet-200/80 bg-violet-50/40 p-5">
+                    <div>
+                      <label className={labelClass} htmlFor="privilegedRoleSelect">
+                        Privileged role
+                      </label>
+                      <select
+                        id="privilegedRoleSelect"
+                        className={inputClass}
+                        value={selectedPrivilegedRole}
+                        onChange={(event) => onSelectedPrivilegedRoleChange?.(event.target.value)}
+                        disabled={privilegedRolesLoading}
+                      >
+                        <option value="">
+                          {privilegedRolesLoading ? 'Loading roles…' : 'Select a role'}
+                        </option>
+                        {privilegedRoles.map((role) => (
+                          <option key={role.key || role.name} value={role.name}>
+                            {role.name}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1.5 text-xs text-gray-600">
+                        AdministratorAccess is excluded. Org admin must approve before the policy is
+                        attached to all lab users.
+                      </p>
+                    </div>
+
+                    <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                      {privilegedRoleSubmitted ? (
+                        <button
+                          type="button"
+                          disabled
+                          className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-green-300 bg-green-600 px-4 py-2.5 text-sm font-semibold text-white sm:w-auto"
+                        >
+                          <CheckCircle2 className="h-4 w-4" />
+                          Request sent
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={onSubmitPrivilegedRoleRequest}
+                          disabled={privilegedRoleSubmitting || !selectedPrivilegedRole}
+                          className={`${RACKO_BTN_PRIMARY} w-full sm:w-auto sm:min-w-[148px]`}
+                        >
+                          {privilegedRoleSubmitting ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin" />
+                              Submitting…
+                            </>
+                          ) : (
+                            'Submit request'
+                          )}
+                        </button>
+                      )}
+
+                      {privilegedRoleSubmitted ? (
+                        <span className="text-xs font-medium text-green-700">
+                          Pending org-admin approval
+                        </span>
+                      ) : null}
+                    </div>
+
+                    {privilegedRoleSubmitted && privilegedRoleMessage ? (
+                      <div className="rounded-lg border border-green-200 bg-green-50 px-3 py-2">
+                        <p className="text-sm text-green-800">{privilegedRoleMessage}</p>
+                      </div>
+                    ) : null}
+
+                    {!privilegedRoleSubmitted &&
+                    privilegedRoleMessage &&
+                    privilegedRoleMessageType === 'error' ? (
+                      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2">
+                        <p className="text-sm text-red-800">{privilegedRoleMessage}</p>
+                      </div>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        </section>
+      )}
+
+      {currentStep === 9 && (
+        <section className={sectionClass}>
+          <div className="p-6">
+            <SectionHeader
+              step={9}
               title="AWS region"
               description="Regions with live pricing for your selected services and instances."
             />
@@ -658,7 +990,7 @@ export function RequestForm({
           >
             Back
           </button>
-          {currentStep < 8 ? (
+          {currentStep < FINAL_FORM_STEP ? (
             <button type="button" onClick={onNext} className={RACKO_BTN_PRIMARY}>
               Next
               <ChevronRight className="h-4 w-4" />

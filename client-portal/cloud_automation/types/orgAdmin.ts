@@ -183,6 +183,8 @@ export interface OrgAdminConsumptionReport {
   users: OrgAdminConsumptionReportUserRow[];
   dailyTotals: Record<string, number>;
   grandTotal: number;
+  /** Present when Azure Cost Management was unavailable and stored spend was used. */
+  dataSource?: 'azure' | 'estimated';
 }
 
 export interface OrgAdminLiveResource {

@@ -1,4 +1,5 @@
 import { cloudAutomationRequest } from '../../lib/cloudAutomationRequest';
+import { ApiError } from '../../lib/apiClient';
 
 type ApiResponse<T> = {
   success: boolean;
@@ -180,6 +181,10 @@ export async function calculatePricingEstimate(
 }
 
 export interface AwsCreateRequestPayload {
+  projectName?: string;
+  project_name?: string;
+  idMode?: 'test_ids' | 'aws_ids';
+  id_mode?: 'test_ids' | 'aws_ids';
   customerEmail?: string;
   customer_email?: string;
   accountCount?: number;
@@ -197,6 +202,10 @@ export interface AwsCreateRequestPayload {
   timezone?: string;
   enableResourceCleanup?: boolean;
   enable_resource_cleanup?: boolean;
+  resourceCleanupTime?: string;
+  resource_cleanup_time?: string;
+  resourceCleanupTimezone?: string;
+  resource_cleanup_timezone?: string;
   resourceCleanupIntervalHours?: number;
   resource_cleanup_interval_hours?: number;
   cleanupEnabled?: boolean;
@@ -282,6 +291,60 @@ export async function createRequest(
   return awsRequest<AwsCreateRequestResponse>(awsPath('/requests'), {
     method: 'POST',
     body: JSON.stringify(payload),
+  });
+}
+
+export interface AwsPurchaseClonePayload {
+  sourceRequestId: string;
+  projectName?: string;
+  customerEmail?: string;
+  accountCount?: number;
+  region?: string;
+  costingMode?: 'shared' | 'per_user';
+  accessType?: 'magic_link' | 'identity_center';
+  usageWindows?: AwsUsageWindow[];
+  enableDailyUsage?: boolean;
+  resourceCleanupEnabled?: boolean;
+  resourceCleanupTime?: string;
+  resourceCleanupTimezone?: string;
+  resourceCleanupIntervalHours?: number | null;
+  perUserBudgetUsd?: number | null;
+  timezone?: string;
+  selectedServices?: Array<{
+    serviceId: string;
+    serviceName?: string;
+    instanceType?: string | null;
+    pricingType?: 'instance' | 'flat_rate';
+  }>;
+  permissions?: Array<{
+    serviceId: string;
+    serviceName?: string;
+    policies?: string[];
+  }>;
+}
+
+/** Load prefilled purchase form data from a test_ids purchase email token. */
+export async function getPurchaseClonePayload(token: string): Promise<AwsPurchaseClonePayload> {
+  const params = new URLSearchParams({ token });
+  const response = await awsRequest<{
+    success: boolean;
+    data: AwsPurchaseClonePayload;
+    message?: string;
+  }>(`${awsPath('/purchase-intent/clone')}?${params.toString()}`);
+  if (!response?.data) {
+    throw new ApiError(response?.message || 'Unable to load purchase details from this link.', 404);
+  }
+  return response.data;
+}
+
+/** Record Yes/No response from the purchase intent email. */
+export async function respondToPurchaseIntent(
+  token: string,
+  responseValue: 'yes' | 'no'
+): Promise<{ requestId: string; response: string; alreadyHandled?: boolean }> {
+  return awsRequest(awsPath('/purchase-intent/respond'), {
+    method: 'POST',
+    body: JSON.stringify({ token, response: responseValue }),
   });
 }
 
@@ -429,6 +492,31 @@ export async function reinstateRequestUser(
 ): Promise<{ success: boolean; message: string }> {
   return awsRequest(awsPath(`/requests/${requestId}/users/${userIndex}/reinstate`), {
     method: 'POST',
+  });
+}
+
+export interface AwsPrivilegedRoleOption {
+  key: string;
+  name: string;
+  description?: string;
+  managedPolicyArn?: string;
+}
+
+export async function listPrivilegedRoles(): Promise<AwsPrivilegedRoleOption[]> {
+  const response = await awsRequest<ApiResponse<{ roles: AwsPrivilegedRoleOption[] }>>(
+    awsPath('/privileged-role-requests/roles')
+  );
+  return response.roles ?? [];
+}
+
+export async function createPrivilegedRoleRequest(payload: {
+  customerEmail: string;
+  awsRole: string;
+  requestId?: string;
+}): Promise<{ success: boolean; request: unknown }> {
+  return awsRequest(awsPath('/privileged-role-requests'), {
+    method: 'POST',
+    body: JSON.stringify(payload),
   });
 }
 
