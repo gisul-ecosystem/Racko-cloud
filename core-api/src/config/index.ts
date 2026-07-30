@@ -149,6 +149,26 @@ const envSchema = z.object({
     .default('true')
     .transform((v) => v === 'true'),
 
+  // Private IP pool (custnet1) — bounded allocatable block seeded lazily on
+  // first private VM creation. custnet1 itself is a flat /16, but we only
+  // ever hand out addresses from this smaller CIDR, so seeding stays fast
+  // and we never collide with statically-assigned custnet1 hosts. The /16
+  // is still used as the cloud-init netmask (see bulkProcessor.ts) since the
+  // bridge itself is not subnetted — only the *allocatable range* is bounded.
+  PRIVATE_POOL_CIDR: z.string().default('10.110.100.0/22'),
+  PRIVATE_POOL_GATEWAY: z.string().default('10.110.0.1'),
+  /** Comma-separated IPs to never hand out (static/known-in-use custnet1 hosts). Config-driven so it can grow without a code change. */
+  PRIVATE_POOL_RESERVED: z
+    .string()
+    .optional()
+    .default('10.110.0.1,10.110.50.50,10.110.255.10,10.110.255.11')
+    .transform((value) =>
+      value
+        .split(',')
+        .map((ip) => ip.trim())
+        .filter(Boolean)
+    ),
+
   // Guacamole (browser-based VM console)
   GUACAMOLE_BASE_URL: z.string().url('GUACAMOLE_BASE_URL must be a valid URL'),
   GUACAMOLE_PUBLIC_URL: z.string().url('GUACAMOLE_PUBLIC_URL must be a valid URL'),
