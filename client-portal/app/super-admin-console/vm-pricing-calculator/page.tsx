@@ -103,7 +103,8 @@ export default function VmPricingCalculatorPage() {
     setCalculatorMode(mode);
     if (mode === 'oci_block_volume') {
       setProviderFilter('oci');
-    } else if (providerFilter === 'oci') {
+    } else if (mode === 'storage_only' && providerFilter === 'oci') {
+      // OCI is not part of managed-disk storage quotes.
       setProviderFilter('all');
     }
     setResult(null);
@@ -277,7 +278,7 @@ export default function VmPricingCalculatorPage() {
             <label className="block text-sm">
               <span className="mb-1.5 block font-medium text-gray-700">Provider</span>
               <select
-                value={providerFilter === 'oci' ? 'all' : providerFilter}
+                value={providerFilter}
                 onChange={(e) => setProviderFilter(e.target.value as ProviderFilter)}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
               >
