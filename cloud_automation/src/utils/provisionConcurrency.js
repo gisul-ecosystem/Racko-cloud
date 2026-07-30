@@ -70,6 +70,12 @@ const getDeleteAzureConcurrency = () =>
     30
   );
 
+const getResourceCleanupConcurrency = () =>
+  parsePositiveInt(
+    process.env.RESOURCE_CLEANUP_CONCURRENCY || process.env.DELETE_AZURE_CONCURRENCY,
+    6
+  );
+
 module.exports = {
   getBulkProvisionConcurrency,
   getRoleProvisionConcurrency,
@@ -82,5 +88,6 @@ module.exports = {
   getResourceScopedUserBatchSize,
   getProvisionStepTimeBudgetMs,
   getMaxProvisionAccountCount,
-  getDeleteAzureConcurrency
+  getDeleteAzureConcurrency,
+  getResourceCleanupConcurrency
 };

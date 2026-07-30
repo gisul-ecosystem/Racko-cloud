@@ -11,8 +11,10 @@ import {
   Loader2,
   LogOut,
   Search,
+  Shield,
   ShieldOff,
   Trash2,
+  UserPlus,
   UserX,
   Users,
 } from 'lucide-react';
@@ -39,6 +41,7 @@ import type {
 } from '../../types/orgAdmin';
 
 import { OrgAdminUserUsageModal } from './OrgAdminUserUsageModal';
+import { OrgAdminAddUsersModal } from './OrgAdminAddUsersModal';
 import { SharedCostSummaryCard } from './SharedCostSummaryCard';
 import { UserCostCell } from './UserCostCell';
 
@@ -56,8 +59,13 @@ interface OrgAdminUsersTableProps {
   onSelect: (userId: number) => void;
   onForceLogout: (userId: number) => Promise<boolean>;
   onUnblock?: (userId: number) => Promise<boolean>;
+  onUnblockAll?: () => Promise<boolean>;
+  onBlockAll?: () => Promise<boolean>;
+  onAddUser?: (count: number) => Promise<boolean>;
   onDeleteUser?: (userId: number) => Promise<boolean>;
   onTriggerCleanup?: (userId: number) => Promise<boolean>;
+  onRequestCleanup?: () => Promise<boolean>;
+  cleanupRunning?: boolean;
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
   fetchUserMonitoring: (userId: number) => Promise<import('../../types/orgAdmin').OrgAdminMonitoringResponse | null>;
   onFetchAzureCost: (userId: number, options?: { refresh?: boolean }) => Promise<OrgAdminUserAzureCost | null>;
@@ -511,8 +519,13 @@ export function OrgAdminUsersTable({
   onSelect,
   onForceLogout,
   onUnblock,
+  onUnblockAll,
+  onBlockAll,
+  onAddUser,
   onDeleteUser,
   onTriggerCleanup,
+  onRequestCleanup,
+  cleanupRunning = false,
   onUpdateRoles,
   fetchUserMonitoring,
   onFetchAzureCost,
@@ -522,6 +535,10 @@ export function OrgAdminUsersTable({
   const [usageUser, setUsageUser] = useState<OrgAdminUser | null>(null);
   const [loggingOutUserId, setLoggingOutUserId] = useState<number | null>(null);
   const [unblockingUserId, setUnblockingUserId] = useState<number | null>(null);
+  const [unblockingAll, setUnblockingAll] = useState(false);
+  const [blockingAll, setBlockingAll] = useState(false);
+  const [addingUser, setAddingUser] = useState(false);
+  const [showAddUsersModal, setShowAddUsersModal] = useState(false);
   const [cleanupUserId, setCleanupUserId] = useState<number | null>(null);
   const [deletingUserId, setDeletingUserId] = useState<number | null>(null);
   const [roleChangingUserId, setRoleChangingUserId] = useState<number | null>(null);
@@ -545,6 +562,19 @@ export function OrgAdminUsersTable({
   const [nowMs, setNowMs] = useState(() => Date.now());
 
   const isSharedCosting = request?.costingMode === 'shared';
+
+  const totalLiveResources = useMemo(() => {
+    if (request?.liveSummary?.resourceCount != null) {
+      return request.liveSummary.resourceCount;
+    }
+
+    return users.reduce(
+      (sum, user) => sum + (user.liveResourceCount ?? user.resourceCount ?? 0),
+      0
+    );
+  }, [request?.liveSummary?.resourceCount, users]);
+
+  const cleanupIsPause = request?.resourceCleanupAction === 'pause';
 
   const showUsageTracking = Boolean(
     request?.enableDailyUsage || request?.hasUsageWindows || request?.dailyLimitMinutes
@@ -792,6 +822,56 @@ export function OrgAdminUsersTable({
     }
   }
 
+  async function handleUnblockAll() {
+    if (!onUnblockAll) return;
+    if (
+      !confirm(
+        `Unblock all ${users.length} user(s) immediately?\n\nThis re-enables every Azure account and pauses usage-window enforcement for 24 hours. Passwords are not reset in bulk — use individual Unblock if a user needs a new password.`
+      )
+    ) {
+      return;
+    }
+
+    setUnblockingAll(true);
+    try {
+      await onUnblockAll();
+    } finally {
+      setUnblockingAll(false);
+    }
+  }
+
+  async function handleBlockAll() {
+    if (!onBlockAll) return;
+    if (
+      !confirm(
+        `Block all ${users.length} user(s) immediately?\n\nThis disables every Azure account for this lab. Users stay blocked until you use Unblock all or unblock them individually.`
+      )
+    ) {
+      return;
+    }
+
+    setBlockingAll(true);
+    try {
+      await onBlockAll();
+    } finally {
+      setBlockingAll(false);
+    }
+  }
+
+  async function handleAddUsersSubmit(count: number) {
+    if (!onAddUser) return;
+
+    setAddingUser(true);
+    try {
+      const success = await onAddUser(count);
+      if (success) {
+        setShowAddUsersModal(false);
+      }
+    } finally {
+      setAddingUser(false);
+    }
+  }
+
   async function handleDeleteUser(event: React.MouseEvent, user: OrgAdminUser) {
     event.stopPropagation();
     if (!onDeleteUser) return;
@@ -812,6 +892,25 @@ export function OrgAdminUsersTable({
     } finally {
       setDeletingUserId(null);
     }
+  }
+
+  async function handleCleanupAllLive() {
+    if (!onRequestCleanup) return;
+
+    const liveNote =
+      totalLiveResources > 0
+        ? `\n\nApproximately ${totalLiveResources} live resource${totalLiveResources !== 1 ? 's' : ''} detected across this request.`
+        : '';
+
+    if (
+      !confirm(
+        `${cleanupIsPause ? 'Pause' : 'Delete'} all Azure resources for every user in this request?${liveNote}\n\nResource groups and RBAC assignments are kept so users can recreate resources afterward.`
+      )
+    ) {
+      return;
+    }
+
+    await onRequestCleanup();
   }
 
   async function handleCleanup(event: React.MouseEvent, user: OrgAdminUser) {
@@ -925,6 +1024,85 @@ export function OrgAdminUsersTable({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            {onAddUser ? (
+              <button
+                type="button"
+                onClick={() => setShowAddUsersModal(true)}
+                disabled={saving || addingUser || blockingAll || unblockingAll || cleanupRunning}
+                className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {addingUser ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <UserPlus className="h-3.5 w-3.5" />
+                )}
+                {addingUser
+                  ? 'Adding user…'
+                  : request?.accountCount
+                    ? `Add user (${users.length}/${request.accountCount})`
+                    : `Add user (${users.length})`}
+              </button>
+            ) : null}
+            {onRequestCleanup ? (
+              <button
+                type="button"
+                onClick={() => void handleCleanupAllLive()}
+                disabled={
+                  saving ||
+                  cleanupRunning ||
+                  blockingAll ||
+                  unblockingAll ||
+                  addingUser ||
+                  users.length === 0
+                }
+                className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                  cleanupIsPause
+                    ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                    : 'border-orange-200 bg-orange-50 text-orange-800 hover:bg-orange-100'
+                }`}
+              >
+                {cleanupRunning ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="h-3.5 w-3.5" />
+                )}
+                {cleanupRunning
+                  ? 'Cleaning up in background…'
+                  : totalLiveResources > 0
+                    ? `Cleanup live (${totalLiveResources})`
+                    : 'Cleanup live resources'}
+              </button>
+            ) : null}
+            {onBlockAll ? (
+              <button
+                type="button"
+                onClick={() => void handleBlockAll()}
+                disabled={saving || blockingAll || unblockingAll || addingUser || users.length === 0 || cleanupRunning}
+                className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {blockingAll ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Shield className="h-3.5 w-3.5" />
+                )}
+                {blockingAll ? 'Blocking all…' : 'Block all'}
+              </button>
+            ) : null}
+            {onUnblockAll ? (
+              <button
+                type="button"
+                onClick={() => void handleUnblockAll()}
+                disabled={saving || unblockingAll || blockingAll || addingUser || users.length === 0 || cleanupRunning}
+                className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {unblockingAll ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <ShieldOff className="h-3.5 w-3.5" />
+                )}
+                {unblockingAll ? 'Unblocking all…' : 'Unblock all'}
+              </button>
+            ) : null}
             <select
               value={statusFilter}
               onChange={(event) => setStatusFilter(event.target.value as StatusFilter)}
@@ -1386,6 +1564,21 @@ export function OrgAdminUsersTable({
           onClose={() => setUsageUser(null)}
         />
       )}
+
+      {showAddUsersModal && onAddUser ? (
+        <OrgAdminAddUsersModal
+          usersCount={users.length}
+          request={request}
+          isSharedCosting={isSharedCosting}
+          submitting={addingUser}
+          onClose={() => {
+            if (!addingUser) {
+              setShowAddUsersModal(false);
+            }
+          }}
+          onSubmit={handleAddUsersSubmit}
+        />
+      ) : null}
     </>
   );
 }

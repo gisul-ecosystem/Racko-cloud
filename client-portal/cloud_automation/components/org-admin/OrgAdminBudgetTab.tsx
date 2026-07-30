@@ -44,6 +44,7 @@ export function OrgAdminBudgetTab({ users, saving, onRenewBudget }: OrgAdminBudg
       {users.map((user) => {
         const spent = user.azureCostMtd ?? 0;
         const budget = user.totalBudget ?? 0;
+        const currency = user.costCurrency || 'USD';
         const pct = budget > 0 ? Math.min(100, Math.round((spent / budget) * 100)) : 0;
         const renewing = renewUserId === user.id;
         const busy = saving && busyUserId === user.id;
@@ -65,8 +66,8 @@ export function OrgAdminBudgetTab({ users, saving, onRenewBudget }: OrgAdminBudg
                 />
               </div>
               <div className="flex flex-wrap gap-2 text-xs text-gray-500">
-                <span>{formatCurrency(spent)} spent</span>
-                {budget > 0 && <span>of {formatCurrency(budget)}</span>}
+                <span>{formatCurrency(spent, currency)} spent</span>
+                {budget > 0 && <span>of {formatCurrency(budget, currency)}</span>}
                 <span className="ml-auto font-semibold text-gray-700">{pct}%</span>
               </div>
             </div>
@@ -80,7 +81,7 @@ export function OrgAdminBudgetTab({ users, saving, onRenewBudget }: OrgAdminBudg
                     step="0.01"
                     value={topUpAmount}
                     onChange={(event) => setTopUpAmount(event.target.value)}
-                    placeholder="Amount USD"
+                    placeholder={`Amount ${currency}`}
                     className="w-28 rounded-lg border border-gray-200 px-2 py-1 text-xs focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
                   />
                   <button

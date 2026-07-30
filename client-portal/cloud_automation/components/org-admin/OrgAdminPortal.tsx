@@ -43,6 +43,8 @@ export function OrgAdminPortal() {
     accessLoading,
     privilegedRoleLoading,
     saving,
+    cleanupRunning,
+    deletingRequest,
     overviewError,
     detailError,
     actionError,
@@ -68,6 +70,9 @@ export function OrgAdminPortal() {
     triggerCleanup,
     triggerRequestCleanup,
     unblockUser,
+    unblockAllUsers,
+    blockAllUsers,
+    addUser,
     reprovisionRoles,
     clearActionFeedback,
     lastUpdatedAt,
@@ -307,6 +312,8 @@ export function OrgAdminPortal() {
 
           {filtered.map((request) => {
             const open = selectedRequestId === request.id;
+            const startRaw = request.startsAt || request.startDate;
+            const expiryRaw = request.expiresAt || request.expiryDate;
 
             return (
               <div key={request.id}>
@@ -349,11 +356,25 @@ export function OrgAdminPortal() {
                   <div className="ml-auto flex min-w-[160px] flex-col items-end gap-1.5">
                     <OrgAdminLabStatusBadge status={request.status} />
                     <div className="flex items-center gap-1.5 text-xs text-gray-400">
-                      <span>{new Date(request.startDate).toLocaleDateString()}</span>
+                      <span>
+                        {startRaw
+                          ? new Date(startRaw).toLocaleString(undefined, {
+                          month: 'numeric',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
+                          : '—'}
+                      </span>
                       <span>→</span>
                       <span>
-                        {request.expiryDate
-                          ? new Date(request.expiryDate).toLocaleDateString()
+                        {expiryRaw
+                          ? new Date(expiryRaw).toLocaleString(undefined, {
+                          month: 'numeric',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })
                           : '—'}
                       </span>
                     </div>
@@ -372,6 +393,8 @@ export function OrgAdminPortal() {
                     loading={detailLoading}
                     detailError={detailError}
                     saving={saving}
+                    cleanupRunning={cleanupRunning}
+                    deletingRequest={deletingRequest}
                     onRetry={() => void refreshDetail()}
                     onForceLogout={forceLogout}
                     onUpdateRoles={updateRoles}
@@ -383,6 +406,9 @@ export function OrgAdminPortal() {
                     onManualCleanup={triggerCleanup}
                     onRequestCleanup={triggerRequestCleanup}
                     onUnblock={unblockUser}
+                    onUnblockAll={unblockAllUsers}
+                    onBlockAll={blockAllUsers}
+                    onAddUser={addUser}
                     onDeleteUser={deleteUser}
                     onDeleteRequest={deleteRequest}
                     onExtendExpiration={extendExpiration}
