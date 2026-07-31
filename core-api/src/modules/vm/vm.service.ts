@@ -28,6 +28,7 @@ import { processBulkDeletion } from './helpers/bulkDeleteProcessor';
 import { processVmClone } from './helpers/cloneProcessor';
 import { retryProxmoxDelete } from './helpers/deleteRetry';
 import { releaseIP } from './ipAllocator.service';
+import { decrypt } from '../../utils/crypto';
 import { ProxmoxNodeService } from '../proxmoxNode/proxmoxNode.service';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
@@ -123,13 +124,24 @@ function sleep(ms: number): Promise<void> {
 }
 
 /**
- * Fire-and-forget poll for a VM's private IP after it starts.
- *
- * Waits for the guest agent to come up, then queries network-get-interfaces and
- * stores the first address in the custnet1 range (10.100.x.x). All Proxmox/agent
- * errors are swallowed and retried — this never throws and never blocks the
- * caller (the start API responds immediately; the IP resolves in the background).
+ * Console passwords for private-network VMs are stored AES-256-CBC encrypted
+ * (see bulkProcessor.ts createSingleVM). Public-network VMs keep the existing
+ * plaintext storage untouched. Decrypt here — the single place every caller
+ * reads consolePassword for actual use/display — so callers never need to know
+ * which network type a VM has.
  */
+function resolveConsolePassword(vm: { consolePassword?: string; networkType?: string }): string | undefined {
+  if (!vm.consolePassword || vm.networkType !== 'private') return vm.consolePassword;
+  try {
+    return decrypt(vm.consolePassword);
+  } catch (err) {
+    logger.warn('[VM] Failed to decrypt private VM console password — returning raw value', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return vm.consolePassword;
+  }
+}
+
 /** Best-effort Proxmox power state for diagnostics (never throws). */
 async function probeProxmoxPowerState(
   node: string,
@@ -173,8 +185,29 @@ async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
   }
 }
 
+/**
+ * Fire-and-forget poll for a VM's console-readiness after it starts.
+ *
+ * Waits for the guest agent to come up, then queries network-get-interfaces.
+ * vm.ipAddress is already known and stored in the DB before the VM boots (set
+ * at IP-allocation time — see bulkProcessor.ts), so for PUBLIC VMs we only
+ * need to confirm the guest agent is responsive; we no longer match a
+ * specific address (that exact-match gate was removed to fix a boot-timing
+ * connectivity bug — see commit 98d489b).
+ *
+ * PRIVATE VMs (custnet1, 10.110.x.x) are gated more strictly: consoleReady is
+ * only set once the guest agent reports vm.ipAddress verbatim among its
+ * interfaces. This is a newer, less-proven path (custnet1 bridge + cloud-init
+ * ipconfig0 on a /16), so we deliberately verify the assigned address actually
+ * came up rather than assuming cloud-init succeeded — an exact match, never a
+ * prefix check, so a stray address on the same subnet can't false-positive.
+ *
+ * All Proxmox/agent errors are swallowed and retried — this never throws and
+ * never blocks the caller (the start API responds immediately; readiness
+ * resolves in the background).
+ */
 async function startIpPolling(
-  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress' | 'consoleProtocol'>,
+  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress' | 'consoleProtocol' | 'networkType'>,
   trigger = 'unknown',
   options: ConsolePollOptions = {}
 ): Promise<void> {
@@ -217,43 +250,63 @@ async function startIpPolling(
         `/nodes/${node}/qemu/${vmid}/agent/network-get-interfaces`
       );
       const interfaces = res.data.data.result ?? [];
+      const isPrivateNetwork = vm.networkType === 'private';
 
-      // Collect all seen IPv4s for logging only — we no longer match against vm.ipAddress
-      // because the IP is already known from the pool and stored in DB before the VM starts.
-      // We just need to confirm the guest agent is up and the VM has finished booting.
+      // Collect all seen IPv4s. For public VMs this is for logging only — we no
+      // longer match against vm.ipAddress there (see doc comment above). For
+      // private VMs it doubles as the exact-match check gating consoleReady.
       const seenIps: string[] = [];
+      let exactMatchFound = false;
       for (const iface of interfaces) {
         if (iface.name === 'lo') continue;
         for (const addr of iface['ip-addresses'] ?? []) {
           if (addr['ip-address-type'] === 'ipv4') {
             seenIps.push(`${iface.name}:${addr['ip-address']}`);
+            if (addr['ip-address'] === vm.ipAddress) exactMatchFound = true;
           }
         }
       }
 
-      logger.info(`[BulkVM] [vmid=${vmid}] STEP: startIpPolling attempt ${attempt}/${maxRetries} | data: guestAgentResponded=true interfacesReturned=${interfaces.length} seenIps=${seenIps.join(',') || 'none'} assignedIp=${vm.ipAddress}`);
+      logger.info(`[BulkVM] [vmid=${vmid}] STEP: startIpPolling attempt ${attempt}/${maxRetries} | data: guestAgentResponded=true interfacesReturned=${interfaces.length} seenIps=${seenIps.join(',') || 'none'} assignedIp=${vm.ipAddress} networkType=${vm.networkType ?? 'public'} exactMatchFound=${exactMatchFound}`);
 
-      // Guest agent responded — VM is booted and ready. IP is already correct in DB.
-      await sleep(cloudbaseGraceMs);
-      const consoleReadyAt = new Date().toISOString();
-      await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
-      logger.info(`[BulkVM] [vmid=${vmid}] STEP: consoleReady set to true | data: timestamp=${consoleReadyAt} assignedIp=${vm.ipAddress}`);
+      if (isPrivateNetwork && !exactMatchFound) {
+        // custnet1 + cloud-init ipconfig0 hasn't come up with the assigned
+        // address yet (or failed) — do not flag console-ready. Keep retrying;
+        // exhausting all retries here means the private IP never came up.
+        logger.warn('[VMConsolePoll] Private VM — guest agent responded but assigned IP not seen yet', {
+          vmId: vmObjectId.toString(),
+          vmid,
+          node,
+          trigger,
+          attempt,
+          assignedIp: vm.ipAddress,
+          allIpv4Seen: seenIps,
+        });
+      } else {
+        // Guest agent responded (and, for private VMs, the assigned IP was
+        // confirmed) — VM is booted and ready.
+        await sleep(cloudbaseGraceMs);
+        const consoleReadyAt = new Date().toISOString();
+        await VM.findByIdAndUpdate(vmObjectId, { consoleReady: true });
+        logger.info(`[BulkVM] [vmid=${vmid}] STEP: consoleReady set to true | data: timestamp=${consoleReadyAt} assignedIp=${vm.ipAddress}`);
 
-      if (vm.consoleProtocol === 'rdp') {
-        await fixWindowsRdpAccess(node, vmid);
+        if (vm.consoleProtocol === 'rdp') {
+          await fixWindowsRdpAccess(node, vmid);
+        }
+
+        logger.debug('[VMConsolePoll] consoleReady=true — guest agent confirmed boot', {
+          vmId: vmObjectId.toString(),
+          vmid,
+          node,
+          trigger,
+          attempt,
+          assignedIp: vm.ipAddress,
+          networkType: vm.networkType ?? 'public',
+          allIpv4Seen: seenIps,
+          cloudbaseGraceMs,
+        });
+        return;
       }
-
-      logger.debug('[VMConsolePoll] consoleReady=true — guest agent confirmed boot', {
-        vmId: vmObjectId.toString(),
-        vmid,
-        node,
-        trigger,
-        attempt,
-        assignedIp: vm.ipAddress,
-        allIpv4Seen: seenIps,
-        cloudbaseGraceMs,
-      });
-      return;
     } catch (err) {
       // Guest agent not ready yet, VM still booting, transient Proxmox error, etc.
       logger.warn('[VMConsolePoll] Guest-agent poll failed — will retry', {
@@ -715,6 +768,7 @@ export class VMService {
         projectId: dto.projectId
           ? new mongoose.Types.ObjectId(dto.projectId)
           : undefined,
+        networkType: dto.networkType ?? 'public',
       },
       jobErrors: [],
       startedAt: new Date(),
@@ -2298,7 +2352,7 @@ export class VMService {
         ipAddress: vm.ipAddress,
         macAddress: isEndUser ? undefined : vm.macAddress,
         consoleUsername: isEndUser ? undefined : vm.consoleUsername,
-        consolePassword: isEndUser ? undefined : vm.consolePassword,
+        consolePassword: isEndUser ? undefined : resolveConsolePassword(vm),
         consoleProtocol: vm.consoleProtocol ?? 'rdp',
         consoleReady: vm.consoleReady ?? false,
         haEnabled: isEndUser ? false : vm.haEnabled,
@@ -2552,7 +2606,7 @@ export class VMService {
     // once after creation (per-VM passwords in dynamic mode live on each VM doc).
     const vmDocs = job.vmIds.length
       ? await VM.find({ _id: { $in: job.vmIds } })
-          .select('name status ipAddress consoleUsername consolePassword consoleProtocol')
+          .select('name status ipAddress consoleUsername consolePassword consoleProtocol networkType')
           .lean()
       : [];
 
@@ -2562,7 +2616,7 @@ export class VMService {
       status: v.status,
       ipAddress: v.ipAddress,
       consoleUsername: v.consoleUsername,
-      consolePassword: v.consolePassword,
+      consolePassword: resolveConsolePassword(v),
       consoleProtocol: v.consoleProtocol ?? 'rdp',
     }));
 
@@ -3187,7 +3241,7 @@ export class VMService {
     // the legacy test VM). Query override still wins for protocol.
     const hostname = vm.ipAddress ?? process.env['TEST_VM_IP'];
     const username = vm.consoleUsername ?? process.env['TEST_VM_USERNAME'];
-    const password = vm.consolePassword ?? process.env['TEST_VM_PASSWORD'];
+    const password = resolveConsolePassword(vm) ?? process.env['TEST_VM_PASSWORD'];
     const protocol: GuacamoleProtocol = protocolOverride ?? vm.consoleProtocol ?? 'rdp';
 
     if (!hostname) {

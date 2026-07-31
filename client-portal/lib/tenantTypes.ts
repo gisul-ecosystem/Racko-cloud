@@ -309,6 +309,7 @@ export interface SuperAdminOrder {
   calculatedAmount: number;
   status: SuperAdminOrderStatus;
   billingPeriod?: BillingPeriod;
+  networkType?: 'public' | 'private';
   createdBy: string;
   approvedBy: string | null;
   rejectedBy: string | null;

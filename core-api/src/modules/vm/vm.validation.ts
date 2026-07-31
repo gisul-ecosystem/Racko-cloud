@@ -71,6 +71,12 @@ export const createVMSchema = z.object({
       .optional()
       .default([]),
     projectId: mongoObjectId,
+    networkType: z
+      .enum(['public', 'private'], {
+        invalid_type_error: 'networkType must be public or private',
+      })
+      .optional()
+      .default('public'),
   }).superRefine((data, ctx) => {
     // Fixed password mode requires an explicit password.
     // Dynamic mode generates one per VM server-side, so none is needed.

@@ -19,35 +19,12 @@ import {
   fetchEbsGbMonth,
   fetchAwsPublicIpHourly,
 } from './awsPriceFetch.js';
-import { fetchAzureDiskMonthly, fetchAzurePublicIpHourly } from './azurePricing.js';
-
-const RETAIL_API = 'https://prices.azure.com/api/retail/prices';
+import { fetchAzureDiskMonthly, fetchAzurePublicIpHourly, fetchVmHourlyUsd, fetchVmWindowsHourlyUsd } from './azurePricing.js';
 
 async function fetchAzureVmHourly(armSkuName, armRegionName, windows = false) {
-  const filter = [
-    `serviceName eq 'Virtual Machines'`,
-    `armSkuName eq '${armSkuName}'`,
-    `armRegionName eq '${armRegionName}'`,
-    `priceType eq 'Consumption'`,
-    `contains(meterName, 'Spot') eq false`,
-    windows
-      ? `contains(productName, 'Windows') eq true`
-      : `contains(productName, 'Windows') eq false`,
-  ].join(' and ');
-
-  const url = new URL(RETAIL_API);
-  url.searchParams.set('$filter', filter);
-  const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`Azure Retail Prices HTTP ${res.status}`);
-  const data = await res.json();
-  const items = data?.Items || [];
-  const match = items.find(
-    (i) =>
-      i.type === 'Consumption' &&
-      typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour'
-  );
-  return match?.retailPrice ?? null;
+  return windows
+    ? fetchVmWindowsHourlyUsd(armSkuName, armRegionName)
+    : fetchVmHourlyUsd(armSkuName, armRegionName);
 }
 
 /** Pre-live-API Azure constant — never a current Retail IP rate we observed. */
@@ -123,6 +100,7 @@ export async function ensureSpecPricing({
   gpu = false,
   providers,
   nestedVirtualization = false,
+  architecture,
 } = {}) {
   const providersUsed = normalizeProviders(providers);
   const pricingMode = toPricingMode(nestedVirtualization);
@@ -151,6 +129,8 @@ export async function ensureSpecPricing({
     diskGb,
     gpu: gpu || category === 'gpu',
     nestedVirtualization: pricingMode === 'nested',
+    category,
+    architecture,
   });
 
   const now = new Date();
@@ -369,11 +349,13 @@ export async function ensureSpecPricing({
     written,
     providersUsed,
     pricingMode,
+    architecturePreference: mappings.architecturePreference,
     mappings: {
       aws: mappings.aws,
       azure: mappings.azure,
       oci: mappings.oci,
       gcp: mappings.gcp,
+      architecturePreference: mappings.architecturePreference,
     },
     errors: errors.slice(0, 30),
     errorCount: errors.length,

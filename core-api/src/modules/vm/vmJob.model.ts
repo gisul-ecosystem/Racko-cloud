@@ -39,6 +39,7 @@ export interface IVMJob extends Document {
     enableVirtualization?: boolean;
     softwareIds?: mongoose.Types.ObjectId[];
     projectId?: mongoose.Types.ObjectId;
+    networkType?: 'public' | 'private';
     // Clone job extras
     sourceVmId?: mongoose.Types.ObjectId;
     sourceVmName?: string;
@@ -139,6 +140,7 @@ const vmJobSchema = new Schema<IVMJob>(
       enableVirtualization: { type: Boolean, default: false },
       softwareIds: { type: [Schema.Types.ObjectId], ref: 'Software', default: [] },
       projectId: { type: Schema.Types.ObjectId, ref: 'Project', default: null },
+      networkType: { type: String, enum: ['public', 'private'], default: 'public' },
       // Clone job extras
       sourceVmId: { type: Schema.Types.ObjectId, ref: 'VM', default: null },
       sourceVmName: { type: String, trim: true },

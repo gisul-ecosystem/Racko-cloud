@@ -1,18 +1,90 @@
-import { IpAddress } from './ipAddress.model';
+import { IpAddress, type IpPoolType } from './ipAddress.model';
 import { logger } from '../../utils/logger';
+import { parseCidr } from './helpers/ipCidr';
+import { config } from '../../config';
 
 const STALE_RESERVATION_MINUTES = 10;
 
+// The private pool lives on the custnet1 bridge — an internal-only network not
+// routed to the internet. custnet1 itself is a flat /16, but we deliberately
+// only seed/allocate from a bounded sub-block (PRIVATE_POOL_CIDR, default a
+// /22 = ~1000 hosts) instead of the full /16 (~65k hosts) to keep seeding fast
+// and avoid handing out addresses that are statically assigned elsewhere on
+// the bridge. PRIVATE_POOL_RESERVED additionally excludes specific known-in-use
+// addresses (e.g. the gateway, or hosts found by scanning the cluster) without
+// requiring a code change. Seeded lazily (see ensurePrivatePoolSeeded) so no
+// manual admin step is required before the first private VM is created.
+
+let privatePoolSeedPromise: Promise<void> | null = null;
+
 /**
- * Atomically reserve the lowest available public IP for a VM.
+ * Lazily seed the private IP pool from PRIVATE_POOL_CIDR the first time it's
+ * needed. Generates host IPs programmatically from the CIDR (parseCidr already
+ * excludes the network/broadcast addresses of the block), drops anything in
+ * PRIVATE_POOL_RESERVED, and upserts with $setOnInsert only — so an IP that
+ * already has a record (already allocated/used, or seeded by a previous run)
+ * is never touched, making re-seeding idempotent and unable to double-allocate.
+ * Cached in-process so concurrent callers await the same seed run instead of
+ * racing duplicate bulk inserts.
+ */
+async function ensurePrivatePoolSeeded(): Promise<void> {
+  const alreadySeeded = await IpAddress.exists({ poolType: 'private' });
+  if (alreadySeeded) return;
+
+  if (!privatePoolSeedPromise) {
+    privatePoolSeedPromise = (async () => {
+      const reserved = new Set(config.PRIVATE_POOL_RESERVED);
+      const allIps = parseCidr(config.PRIVATE_POOL_CIDR).filter(
+        (ip) => ip !== config.PRIVATE_POOL_GATEWAY && !reserved.has(ip)
+      );
+      const ops = allIps.map((ip) => ({
+        updateOne: {
+          filter: { ip },
+          update: {
+            $setOnInsert: {
+              ip,
+              gateway: config.PRIVATE_POOL_GATEWAY,
+              status: 'available' as const,
+              poolType: 'private' as const,
+            },
+          },
+          upsert: true,
+        },
+      }));
+
+      const result = await IpAddress.bulkWrite(ops, { ordered: false });
+      logger.info('[IPAllocator] Private pool auto-seeded from bounded custnet1 CIDR', {
+        cidr: config.PRIVATE_POOL_CIDR,
+        gateway: config.PRIVATE_POOL_GATEWAY,
+        reservedCount: reserved.size,
+        candidateCount: allIps.length,
+        inserted: result.upsertedCount,
+      });
+    })().finally(() => {
+      privatePoolSeedPromise = null;
+    });
+  }
+
+  await privatePoolSeedPromise;
+}
+
+/**
+ * Atomically reserve the lowest available IP from the given pool for a VM.
  * Uses findOneAndUpdate so two concurrent VM creations never get the same IP.
  * Stores a temporary reservation key (Proxmox vmid string) until the MongoDB
  * VM document is created, at which point updateIpVmId() replaces it.
  * Throws if the pool is exhausted.
  */
-export async function allocateIP(reservationKey: string): Promise<{ ip: string; gateway: string }> {
+export async function allocateIP(
+  reservationKey: string,
+  poolType: IpPoolType = 'public'
+): Promise<{ ip: string; gateway: string }> {
+  if (poolType === 'private') {
+    await ensurePrivatePoolSeeded();
+  }
+
   const record = await IpAddress.findOneAndUpdate(
-    { status: 'available' },
+    { status: 'available', poolType },
     {
       $set: {
         status: 'reserved',
@@ -24,11 +96,15 @@ export async function allocateIP(reservationKey: string): Promise<{ ip: string; 
   );
 
   if (!record) {
-    throw new Error('No public IPs available. The IP pool is exhausted.');
+    throw new Error(
+      poolType === 'private'
+        ? 'No private IPs available. The private (custnet1) IP pool is exhausted.'
+        : 'No public IPs available. The IP pool is exhausted.'
+    );
   }
 
-  logger.info('[IPAllocator] IP reserved', { ip: record.ip, gateway: record.gateway, reservationKey });
-  logger.info(`[BulkVM] [vmid=${reservationKey}] STEP: allocateIP called | data: ip=${record.ip} gateway=${record.gateway}`);
+  logger.info('[IPAllocator] IP reserved', { ip: record.ip, gateway: record.gateway, poolType, reservationKey });
+  logger.info(`[BulkVM] [vmid=${reservationKey}] STEP: allocateIP called | data: ip=${record.ip} gateway=${record.gateway} poolType=${poolType}`);
   return { ip: record.ip, gateway: record.gateway };
 }
 

@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { logger } from '../../../utils/logger';
-import { generatePassword } from '../../../utils/crypto';
+import { generatePassword, encrypt } from '../../../utils/crypto';
 import { config } from '../../../config';
 import { VM } from '../vm.model';
 import { IpAddress } from '../ipAddress.model';
@@ -292,6 +292,7 @@ export async function processBulkCreation(
           consoleProtocol: specs.consoleProtocol,
           enableVirtualization: specs.enableVirtualization ?? false,
           softwareIds: specs.softwareIds ?? [],
+          networkType: specs.networkType ?? 'public',
           schedulePostCreateJobs: job.type === 'single_create',
           projectId: specs.projectId,
         });
@@ -361,6 +362,7 @@ function buildVmSpecsForGoldenClone(
       consoleProtocol: specs.consoleProtocol,
       enableVirtualization: specs.enableVirtualization ?? false,
       softwareIds,
+      networkType: specs.networkType ?? 'public',
       softwarePreInstalled: true,
       schedulePostCreateJobs: false,
       projectId: specs.projectId,
@@ -587,6 +589,12 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
   const consolePassword =
     spec.passwordMode === 'dynamic' ? generatePassword() : (spec.consolePassword ?? '');
 
+  const isPrivateNetwork = spec.networkType === 'private';
+  // cloud-init always gets the raw password (cipassword). The DB copy is
+  // encrypted for private-network VMs — see resolveConsolePassword() in
+  // vm.service.ts, the single place it's decrypted back for use/display.
+  const storedConsolePassword = isPrivateNetwork ? encrypt(consolePassword) : consolePassword;
+
   // Resolve the correct storage pool for this clone.
   // resolveCloneStorage: prefers shared (Ceph/NFS), falls back to template's own storage.
   // For linked clones returns undefined — Proxmox enforces template storage automatically.
@@ -716,8 +724,9 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
       status: 'creating',
       proxmoxStatus: 'unknown',
       consoleUsername,
-      consolePassword,
+      consolePassword: storedConsolePassword,
       consoleProtocol: spec.consoleProtocol,
+      networkType: spec.networkType ?? 'public',
       jobId: spec.jobId,
       haEnabled: false,
       lastError: 'Clone task outcome unknown — connectivity lost during polling. Pending reconciliation.',
@@ -744,20 +753,33 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
     return vm._id;
   }
 
-  // Allocate a public IP from the pool before configuring the VM.
+  // Allocate an IP from the appropriate pool before configuring the VM.
   // If anything fails after this point, releaseIP is called in the catch below.
-  const { ip: allocatedIP, gateway: allocatedGateway } = await allocateIP(vmid.toString());
-  logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: allocateIP returned | data: ip=${allocatedIP} gateway=${allocatedGateway}`);
+  const { ip: allocatedIP, gateway: allocatedGateway } = await allocateIP(
+    vmid.toString(),
+    isPrivateNetwork ? 'private' : 'public'
+  );
+  logger.info(`[BulkVM] [vmName=${spec.vmName} vmid=${vmid}] STEP: allocateIP returned | data: ip=${allocatedIP} gateway=${allocatedGateway} poolType=${isPrivateNetwork ? 'private' : 'public'}`);
 
   let vm!: InstanceType<typeof VM>;
   try {
     // Inject the cloud-init password + apply any spec overrides. cloudbase-init sets
     // the password for the template's built-in account (no ciuser rename).
-    const configUpdates: Record<string, unknown> = {
-      cipassword: consolePassword,
-      ipconfig0: `ip=${allocatedIP}/24,gw=${allocatedGateway}`,
-      nameserver: '8.8.8.8',
-    };
+    // Private VMs move to the internal-only custnet1 bridge (with a lower MTU
+    // to match the overlay network) and get a /16 address on that subnet.
+    // Public VMs keep the template's own net0 (vmbr0) untouched — behavior unchanged.
+    const configUpdates: Record<string, unknown> = isPrivateNetwork
+      ? {
+          cipassword: consolePassword,
+          net0: 'virtio,bridge=custnet1,mtu=1400',
+          ipconfig0: `ip=${allocatedIP}/16,gw=${allocatedGateway}`,
+          nameserver: '8.8.8.8',
+        }
+      : {
+          cipassword: consolePassword,
+          ipconfig0: `ip=${allocatedIP}/24,gw=${allocatedGateway}`,
+          nameserver: '8.8.8.8',
+        };
     if (spec.cpuCores !== spec.templateCpuCores) configUpdates['cores'] = spec.cpuCores;
     if (spec.memoryGb !== spec.templateMemoryGb) configUpdates['memory'] = Math.round(spec.memoryGb * 1024);
 
@@ -802,8 +824,9 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
       proxmoxStatus: 'stopped',
       ipAddress: allocatedIP,
       consoleUsername,
-      consolePassword,
+      consolePassword: storedConsolePassword,
       consoleProtocol: spec.consoleProtocol,
+      networkType: spec.networkType ?? 'public',
       jobId: spec.jobId,
       haEnabled: false,
       enableVirtualization: spec.enableVirtualization ?? false,

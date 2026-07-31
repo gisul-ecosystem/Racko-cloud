@@ -3,7 +3,7 @@
 import { Loader2, RefreshCw } from 'lucide-react';
 
 import { formatSyncedAgo } from '../../utils/costDisplayUtils';
-import { formatMinutes } from '../../utils/formatters';
+import { formatMinutes, formatCurrency } from '../../utils/formatters';
 
 import type { OrgAdminSharedAzureCostSummary } from '../../types/orgAdmin';
 
@@ -45,7 +45,7 @@ export function SharedCostSummaryCard({ summary, loading, onRefresh }: SharedCos
         <div>
           <p className="text-[11px] text-gray-500">Azure Cost MTD (whole RG)</p>
           <p className="text-lg font-semibold text-violet-900">
-            {currency} {mtd.toFixed(2)}
+            {formatCurrency(mtd, currency)}
           </p>
         </div>
         <div>

@@ -129,6 +129,7 @@ export interface CreateVMDto {
   softwareIds?: string[];                // Windows templates only — software to install
   /** Required for platform admin HTTP creates. */
   projectId?: string;
+  networkType?: 'public' | 'private';    // public (default): vmbr0. private: custnet1 (internal only)
 }
 
 export interface VMFilters {
@@ -346,6 +347,7 @@ export interface BulkVMSpec {
   consoleProtocol: 'rdp' | 'ssh';
   enableVirtualization?: boolean;
   softwareIds?: mongoose.Types.ObjectId[];
+  networkType?: 'public' | 'private';
   /** Software already baked into golden template — mark installed, skip provisioner. */
   softwarePreInstalled?: boolean;
   /** Run Hyper-V / software queues after clone (single-VM create only). */

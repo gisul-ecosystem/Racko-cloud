@@ -56,6 +56,8 @@ export interface IVM extends Document {
   // Network
   ipAddress?: string;
   macAddress?: string;
+  /** public: internet-routable IP on vmbr0 (default). private: internal-only IP on custnet1. */
+  networkType: 'public' | 'private';
 
   // Console access (Guacamole)
   consoleUsername?: string;
@@ -218,6 +220,12 @@ const vmSchema = new Schema<IVM>(
     macAddress: {
       type: String,
       trim: true,
+    },
+    networkType: {
+      type: String,
+      enum: ['public', 'private'],
+      default: 'public',
+      required: true,
     },
     consoleUsername: {
       type: String,

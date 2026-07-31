@@ -3,8 +3,6 @@ import CloudRegionPricing from '../models/CloudRegionPricing.js';
 
 const RETAIL_API = 'https://prices.azure.com/api/retail/prices';
 
-const ancillaryCache = new Map();
-const ANCILLARY_TTL_MS = 6 * 60 * 60 * 1000;
 const AZURE_DISK_SKUS = {
   standard_ssd: new Map([
     [32, 'E4'],
@@ -46,7 +44,34 @@ async function fetchRetailPage(filter, skip = 0) {
   return res.json();
 }
 
-async function fetchVmHourlyUsd(armSkuName, armRegionName) {
+function pickAzureVmHourly(items, { windows = false } = {}) {
+  const candidates = (items || []).filter((i) => {
+    if (i.type !== 'Consumption') return false;
+    if (typeof i.retailPrice !== 'number' || !Number.isFinite(i.retailPrice)) return false;
+    if (i.unitOfMeasure !== '1 Hour') return false;
+
+    const product = String(i.productName || '');
+    const meter = String(i.meterName || '');
+    const sku = String(i.skuName || '');
+    const blob = `${product} ${meter} ${sku}`;
+
+    if (/Spot|Low Priority|DevTest|Cloud Services/i.test(blob)) return false;
+    if (!/Virtual Machines/i.test(product)) return false;
+
+    const isWindows = /Windows/i.test(product);
+    if (windows ? !isWindows : isWindows) return false;
+
+    return true;
+  });
+
+  // Prefer the exact SKU meter over any leftover variants.
+  const exact = candidates.find((i) => !/Low Priority|Spot/i.test(i.meterName || ''));
+  return exact?.retailPrice ?? candidates[0]?.retailPrice ?? null;
+}
+
+export { pickAzureVmHourly };
+
+export async function fetchVmHourlyUsd(armSkuName, armRegionName) {
   const filter = [
     `serviceName eq 'Virtual Machines'`,
     `armSkuName eq '${armSkuName}'`,
@@ -57,17 +82,10 @@ async function fetchVmHourlyUsd(armSkuName, armRegionName) {
   ].join(' and ');
 
   const data = await fetchRetailPage(filter);
-  const items = data?.Items || [];
-  const match = items.find(
-    (i) =>
-      i.type === 'Consumption' &&
-      typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour'
-  );
-  return match?.retailPrice ?? null;
+  return pickAzureVmHourly(data?.Items || [], { windows: false });
 }
 
-async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
+export async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
   const filter = [
     `serviceName eq 'Virtual Machines'`,
     `armSkuName eq '${armSkuName}'`,
@@ -78,14 +96,7 @@ async function fetchVmWindowsHourlyUsd(armSkuName, armRegionName) {
   ].join(' and ');
 
   const data = await fetchRetailPage(filter);
-  const items = data?.Items || [];
-  const match = items.find(
-    (i) =>
-      i.type === 'Consumption' &&
-      typeof i.retailPrice === 'number' &&
-      i.unitOfMeasure === '1 Hour'
-  );
-  return match?.retailPrice ?? null;
+  return pickAzureVmHourly(data?.Items || [], { windows: true });
 }
 
 export function resolveAzureDiskSku(diskGb, diskType = 'standard_ssd') {
@@ -126,10 +137,6 @@ export async function fetchAzureDiskMonthly(
     );
   }
   const { skuCode, tierGb } = resolvedSku;
-  const key = `disk-monthly:${diskType}:${armRegionName}:${diskGb}`;
-  const hit = ancillaryCache.get(key);
-  if (hit && Date.now() - hit.at < ANCILLARY_TTL_MS) return hit.value;
-
   const filter = [
     `serviceName eq 'Storage'`,
     `armRegionName eq '${armRegionName}'`,
@@ -164,15 +171,10 @@ export async function fetchAzureDiskMonthly(
     diskGb: Number(diskGb),
     diskType,
   };
-  ancillaryCache.set(key, { at: Date.now(), value: result });
   return result;
 }
 
 export async function fetchAzurePublicIpHourly(armRegionName) {
-  const key = `ip:${armRegionName}`;
-  const hit = ancillaryCache.get(key);
-  if (hit && Date.now() - hit.at < ANCILLARY_TTL_MS) return hit.value;
-
   const filter = [
     `serviceName eq 'Virtual Network'`,
     `armRegionName eq '${armRegionName}'`,
@@ -193,7 +195,6 @@ export async function fetchAzurePublicIpHourly(armRegionName) {
   if (rate == null || !Number.isFinite(rate)) {
     throw new Error(`Azure Retail Prices missing Public IP hourly rate for ${armRegionName}`);
   }
-  ancillaryCache.set(key, { at: Date.now(), value: rate });
   return rate;
 }
 

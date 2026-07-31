@@ -3,15 +3,18 @@
 import { Check } from 'lucide-react';
 
 export const FORM_STEPS = [
-  { id: 1, label: 'Customer' },
+  { id: 1, label: 'Project' },
   { id: 2, label: 'Usage' },
   { id: 3, label: 'Cleanup' },
   { id: 4, label: 'Budget' },
   { id: 5, label: 'Services' },
   { id: 6, label: 'Sizing' },
   { id: 7, label: 'Permissions' },
-  { id: 8, label: 'Region' },
+  { id: 8, label: 'Email' },
+  { id: 9, label: 'Region' },
 ];
+
+export const FINAL_FORM_STEP = FORM_STEPS.length;
 
 export function RequestStepper({ currentStep, maxReachableStep, onStepClick }) {
   const completedCount = FORM_STEPS.filter((step) => step.id < currentStep).length;

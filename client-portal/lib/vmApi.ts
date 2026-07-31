@@ -247,6 +247,7 @@ export interface CreateVMDto {
   enableVirtualization?: boolean;
   softwareIds?: string[];
   projectId?: string;
+  networkType?: 'public' | 'private'; // public (default): internet-routable. private: internal-only (custnet1)
 }
 
 export interface JobVMCredential {

@@ -580,6 +580,73 @@ const unblockUser = async (req, res, next) => {
   }
 };
 
+const unblockAllUsers = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const { resetUsage, pauseWindowEnforcement, pauseWindowHours } = req.body || {};
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.unblockAllUsers({
+      requestId,
+      adminEmail: getSuperAdminActor(req),
+      resetUsage: resetUsage !== false,
+      pauseWindowEnforcement: pauseWindowEnforcement !== false,
+      pauseWindowHours: Number(pauseWindowHours) || 24
+    });
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const blockAllUsers = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.blockAllUsers({
+      requestId,
+      adminEmail: getSuperAdminActor(req)
+    });
+
+    res.status(200).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
+const addUserToRequest = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+    const count = Number(req.body?.count ?? 1);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    if (!Number.isInteger(count) || count <= 0) {
+      throw new AppError('count must be a positive integer.', 400);
+    }
+
+    const result = await orgAdminService.addUserToRequest({
+      requestId,
+      count,
+      adminEmail: getSuperAdminActor(req)
+    });
+
+    res.status(201).json({ success: true, ...result });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const getUserSessions = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
@@ -656,6 +723,22 @@ const getLabHistory = async (req, res, next) => {
   }
 };
 
+const getConsumptionReport = async (req, res, next) => {
+  try {
+    const requestId = Number(req.params.requestId);
+
+    if (!Number.isInteger(requestId) || requestId <= 0) {
+      throw new AppError('Request id must be a positive integer.', 400);
+    }
+
+    const report = await orgAdminService.getConsumptionReport(requestId);
+
+    res.status(200).json({ success: true, report });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const triggerRequestCleanup = async (req, res, next) => {
   try {
     const requestId = Number(req.params.requestId);
@@ -673,6 +756,11 @@ const triggerRequestCleanup = async (req, res, next) => {
       action,
       triggeredBy: 'admin_manual'
     });
+
+    if (result.started) {
+      res.status(202).json({ success: true, ...result });
+      return;
+    }
 
     res.status(200).json({ success: true, ...result });
   } catch (error) {
@@ -731,6 +819,10 @@ module.exports = {
   getUserLiveResources,
   getCleanupLogs,
   getLabHistory,
+  getConsumptionReport,
   triggerRequestCleanup,
-  unblockUser
+  unblockUser,
+  unblockAllUsers,
+  blockAllUsers,
+  addUserToRequest
 };

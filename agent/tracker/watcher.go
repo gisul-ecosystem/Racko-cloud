@@ -18,15 +18,13 @@ package tracker
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"mime"
-	"mime/multipart"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,27 +100,17 @@ type Watcher struct {
 	cfg      *config.Config
 	client   *http.Client
 
-	// pending holds paths that changed since the last flush, protected by mu.
-	// Values are usnOp constants (usnOpWrite, usnOpDelete, usnOpRename).
 	mu      sync.Mutex
-	pending map[string]usnOp  // path → latest op
-	renamed map[string]string  // newPath → oldPath for renames
+	pending map[string]usnOp
+	renamed map[string]string
 
-	// usnRenameOld maps FileReferenceNumber → old path, used to correlate
-	// RenameOldName and RenameNewName USN records into a single rename event.
 	usnRenameOld map[uint64]string
 
-	// baseline used for diffing registry + env vars
 	baseline *Baseline
-
-	// lastEnvSnapshot is the last known env var state for detecting changes.
-	lastSysEnv  map[string]string
-	lastUserEnv map[string]string
 }
 
-// NewWatcher creates a Watcher. baseline may be nil if not yet captured.
 func NewWatcher(agentID string, cfg *config.Config, baseline *Baseline) *Watcher {
-	w := &Watcher{
+	return &Watcher{
 		agentID:      agentID,
 		cfg:          cfg,
 		client:       &http.Client{Timeout: 60 * time.Second},
@@ -131,15 +119,6 @@ func NewWatcher(agentID string, cfg *config.Config, baseline *Baseline) *Watcher
 		usnRenameOld: make(map[uint64]string),
 		baseline:     baseline,
 	}
-	// Seed env var snapshot from baseline so we only report deltas.
-	if baseline != nil {
-		w.lastSysEnv = envSliceToMap(baseline.SystemEnvVars)
-		w.lastUserEnv = envSliceToMap(baseline.UserEnvVars)
-	} else {
-		w.lastSysEnv = make(map[string]string)
-		w.lastUserEnv = make(map[string]string)
-	}
-	return w
 }
 
 // Start begins watching. Blocks until done is closed.
@@ -154,14 +133,8 @@ func (w *Watcher) Start(done <-chan struct{}) {
 	}()
 
 	// Flush timer — collect pending events in 5-second batches.
-	// flush() runs in its own goroutine so large file uploads never block
-	// the event loop or the USN journal reader.
 	flushTicker := time.NewTicker(5 * time.Second)
 	defer flushTicker.Stop()
-
-	// Registry + env var poll — check every 30 seconds.
-	regTicker := time.NewTicker(30 * time.Second)
-	defer regTicker.Stop()
 
 	log.Println("[tracker/watcher] Watching started")
 
@@ -173,13 +146,7 @@ func (w *Watcher) Start(done <-chan struct{}) {
 			return
 
 		case <-flushTicker.C:
-			// Run flush in a goroutine — uploads can take minutes for large files.
-			// This ensures the ticker keeps firing and USN events keep accumulating
-			// even while a previous flush batch is still uploading.
 			go w.flush()
-
-		case <-regTicker.C:
-			go w.checkRegistryAndEnv()
 		}
 	}
 }
@@ -198,8 +165,6 @@ func (w *Watcher) flush() {
 	w.pending = make(map[string]usnOp)
 	w.renamed = make(map[string]string)
 	w.mu.Unlock()
-
-	log.Printf("[tracker/watcher] flush: processing %d pending events", len(snapshot))
 
 	for path, op := range snapshot {
 		switch op {
@@ -247,11 +212,9 @@ func (w *Watcher) uploadAndRecord(path string, info os.FileInfo) {
 		return
 	}
 
-	storageRef, err := w.uploadFile(path, info.Size())
+	storageRef, err := w.uploadFile(path, info.Size(), hash)
 	if err != nil {
 		log.Printf("[tracker/watcher] Upload failed for %s: %v", path, err)
-		// Still record the activity with an empty storageRef so the activity
-		// log is complete. Clone replay will skip files with no storageRef.
 		storageRef = ""
 	}
 
@@ -274,66 +237,105 @@ func (w *Watcher) uploadAndRecord(path string, info os.FileInfo) {
 	})
 }
 
-// uploadFile streams the file to the server's file-upload endpoint which proxies
-// it to SeaweedFS. Returns the SeaweedFS file ID (storageRef).
-// Uses multipart streaming so large files don't buffer entirely in memory.
-func (w *Watcher) uploadFile(path string, sizeBytes int64) (string, error) {
+// uploadFile fetches a presigned S3 PUT URL from core-api and uses it to upload
+// the file directly to SeaweedFS — bypassing nginx entirely so there is no size limit.
+// Falls back to the legacy multipart endpoint if presigned URL fetch fails.
+func (w *Watcher) uploadFile(path string, sizeBytes int64, hash string) (string, error) {
+	mimeType := mime.TypeByExtension(filepath.Ext(path))
+	if mimeType == "" {
+		mimeType = "application/octet-stream"
+	}
+
+	// ── Step 2: Request a presigned PUT URL from core-api ─────────────────────
+	// URL-encode query params — mimeType contains '/' which would break the URL
+	uploadURL := fmt.Sprintf(
+		"%s/api/v1/agent/upload-url?sha256=%s&filename=%s&mimeType=%s",
+		w.cfg.PlatformURL,
+		hash,
+		url.QueryEscape(filepath.Base(path)),
+		url.QueryEscape(mimeType),
+	)
+
+	req, err := http.NewRequest(http.MethodGet, uploadURL, nil)
+	if err != nil {
+		return "", fmt.Errorf("build upload-url request: %w", err)
+	}
+	req.Header.Set("X-Agent-ID", w.agentID)
+
+	urlResp, err := w.client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("fetch presigned url: %w", err)
+	}
+	defer urlResp.Body.Close()
+
+	if urlResp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(urlResp.Body)
+		return "", fmt.Errorf("upload-url server %d: %s", urlResp.StatusCode, string(body))
+	}
+
+	var urlResult struct {
+		Data struct {
+			PresignedUrl string `json:"presignedUrl"`
+			StorageRef   string `json:"storageRef"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(urlResp.Body).Decode(&urlResult); err != nil {
+		return "", fmt.Errorf("decode upload-url response: %w", err)
+	}
+
+	// ── Step 3: PUT the file directly to SeaweedFS using the presigned URL ────
+	// This bypasses nginx completely — no size limit.
 	f, err := os.Open(path)
 	if err != nil {
-		return "", fmt.Errorf("open: %w", err)
+		return "", fmt.Errorf("open file: %w", err)
 	}
 	defer f.Close()
 
-	pr, pw := io.Pipe()
-	mw := multipart.NewWriter(pw)
-
-	// Write multipart in a goroutine so reading and writing happen concurrently.
-	go func() {
-		defer pw.Close()
-		defer mw.Close()
-		_ = mw.WriteField("agentId", w.agentID)
-		_ = mw.WriteField("filePath", path)
-		part, err := mw.CreateFormFile("file", filepath.Base(path))
+	// Get the actual current file size at upload time — not the size at event time.
+	// Files can grow between when the USN event fires and when the flush runs.
+	// Wait for the file size to stabilize before uploading — large files like
+	// installers (Chrome DLL etc.) may still be written when the flush runs.
+	// We poll until size is stable for 1 second before proceeding.
+	var stableSize int64
+	for attempt := 0; attempt < 10; attempt++ {
+		info1, err := os.Stat(path)
 		if err != nil {
-			pw.CloseWithError(err)
-			return
+			break
 		}
-		if _, err := io.Copy(part, f); err != nil {
-			pw.CloseWithError(err)
+		time.Sleep(500 * time.Millisecond)
+		info2, err := os.Stat(path)
+		if err != nil {
+			break
 		}
-	}()
-
-	uploadURL := w.cfg.PlatformURL + "/api/v1/agent/file-upload"
-	req, err := http.NewRequest(http.MethodPost, uploadURL, pr)
-	if err != nil {
-		return "", err
+		if info1.Size() == info2.Size() {
+			stableSize = info2.Size()
+			break
+		}
+		// File still growing — wait and retry
 	}
-	req.Header.Set("Content-Type", mw.FormDataContentType())
-	req.Header.Set("X-Agent-ID", w.agentID)
-	// Do not set Content-Length — we're streaming, length is unknown.
 
-	// Use a longer timeout for file uploads — large files may take a while.
+	putReq, err := http.NewRequest(http.MethodPut, urlResult.Data.PresignedUrl, f)
+	if err != nil {
+		return "", fmt.Errorf("build PUT request: %w", err)
+	}
+	putReq.Header.Set("Content-Type", mimeType)
+	// Use stable size from the stability check above
+	putReq.ContentLength = stableSize
+
+	// Use a longer timeout for large files
 	uploadClient := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := uploadClient.Do(req)
+	putResp, err := uploadClient.Do(putReq)
 	if err != nil {
-		return "", fmt.Errorf("http upload: %w", err)
+		return "", fmt.Errorf("PUT to S3: %w", err)
 	}
-	defer resp.Body.Close()
+	defer putResp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		body, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("server %d: %s", resp.StatusCode, string(body))
+	if putResp.StatusCode != http.StatusOK && putResp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(putResp.Body)
+		return "", fmt.Errorf("S3 PUT %d: %s", putResp.StatusCode, string(body))
 	}
 
-	var result struct {
-		Data struct {
-			StorageRef string `json:"storageRef"`
-		} `json:"data"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decode response: %w", err)
-	}
-	return result.Data.StorageRef, nil
+	return urlResult.Data.StorageRef, nil
 }
 
 // sendActivity POSTs a single activity event to the server.
@@ -363,106 +365,6 @@ func (w *Watcher) sendActivity(event ActivityEvent) {
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		b, _ := io.ReadAll(resp.Body)
 		log.Printf("[tracker/watcher] activity rejected %d: %s", resp.StatusCode, string(b))
-	}
-}
-
-// checkRegistryAndEnv polls registry keys and env vars for changes.
-// Called every 30 seconds by the reg ticker.
-func (w *Watcher) checkRegistryAndEnv() {
-	w.diffEnvVars("Machine", w.lastSysEnv)
-	w.diffEnvVars("User", w.lastUserEnv)
-	w.diffRegistry()
-}
-
-// diffEnvVars compares current env vars in `scope` against the last known snapshot,
-// and sends activity events for anything new or changed.
-func (w *Watcher) diffEnvVars(scope string, last map[string]string) {
-	current := envSliceToMap(collectEnvVars(scope))
-	for k, v := range current {
-		if lastV, ok := last[k]; !ok || lastV != v {
-			w.sendActivity(ActivityEvent{
-				AgentID:   w.agentID,
-				Type:      ActivityEnvVarChange,
-				Timestamp: time.Now().UTC(),
-				Payload:   EnvVarPayload{Scope: scope, Key: k, Value: v},
-			})
-			last[k] = v
-		}
-	}
-}
-
-// diffRegistry exports only specific high-value registry keys and records
-// changes when their content changes. Uses per-key exports (not full hive)
-// to keep payloads small — each export is a few KB, not several MB.
-func (w *Watcher) diffRegistry() {
-	// Target only the most valuable user-installed app keys.
-	// These cover 95% of what matters for clone replay:
-	//   - HKCU\Software\*  : user-installed app settings and configs
-	//   - HKLM\SOFTWARE\*  : system-wide app settings (non-Microsoft subtree only)
-	// We export at a more granular level (direct children, not the full tree)
-	// so each payload stays under 100KB.
-	regKeys := []string{
-		`HKCU\Environment`,
-		`HKCU\Software\Microsoft\Windows\CurrentVersion\Run`,
-		`HKCU\Software\Microsoft\Windows\CurrentVersion\RunOnce`,
-		`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`,
-		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Run`,
-		`HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce`,
-	}
-
-	// Also export direct children of HKCU\Software (user app configs) — one key at a time
-	// This replaces the full hive export with targeted per-app exports
-	userSoftwareKeys := runPS(`
-Get-ChildItem 'HKCU:\Software' -ErrorAction SilentlyContinue |
-  Where-Object { $_.PSChildName -notlike 'Microsoft*' -and $_.PSChildName -notlike 'Classes*' } |
-  ForEach-Object { 'HKCU\Software\' + $_.PSChildName } |
-  Select-Object -First 50 |
-  ConvertTo-Json -Compress
-`)
-	if userSoftwareKeys != "" {
-		var keys []string
-		if err := json.Unmarshal([]byte(userSoftwareKeys), &keys); err == nil {
-			regKeys = append(regKeys, keys...)
-		}
-	}
-
-	for _, key := range regKeys {
-		// Export this specific key to a temp file
-		tmpFile := `C:\Windows\Temp\racko-reg-` + strings.ReplaceAll(key, `\`, `-`) + `.reg`
-		export := runPS(fmt.Sprintf(
-			`reg export "%s" "%s" /y 2>$null; if (Test-Path '%s') { Get-Content '%s' -Raw; Remove-Item '%s' -Force } `,
-			key, tmpFile, tmpFile, tmpFile, tmpFile,
-		))
-		if export == "" {
-			continue
-		}
-
-		// Hash the export to detect changes
-		h := sha256.New()
-		h.Write([]byte(export))
-		hashNow := hex.EncodeToString(h.Sum(nil))
-
-		cacheKey := "reg:" + key
-		if lastHash, ok := w.lastSysEnv[cacheKey]; ok && lastHash == hashNow {
-			continue // unchanged
-		}
-		w.lastSysEnv[cacheKey] = hashNow
-
-		// Cap export size to 512KB per key — prevents oversized payloads from
-		// pathological registry entries (e.g. binary data stored in registry)
-		if len(export) > 512*1024 {
-			export = export[:512*1024] + "\n; [truncated]"
-		}
-
-		w.sendActivity(ActivityEvent{
-			AgentID:   w.agentID,
-			Type:      ActivityRegChange,
-			Timestamp: time.Now().UTC(),
-			Payload: RegChangePayload{
-				KeyPath:   key,
-				RegExport: export,
-			},
-		})
 	}
 }
 

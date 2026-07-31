@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { azureDiskSkuCode } from '../src/services/azurePricing.js';
+import { pickAwsPublicIpHourly } from '../src/services/awsPriceFetch.js';
+import { azureDiskSkuCode, pickAzureVmHourly } from '../src/services/azurePricing.js';
 import { computeGcpHourly } from '../src/services/gcpPricing.js';
 import { isStorageRowAnomalous, toSelectResult } from '../src/services/providerSelector.js';
 
@@ -188,4 +189,89 @@ test('azureDiskSkuCode maps exact disk sizes to LRS SKU families', () => {
   assert.equal(azureDiskSkuCode(128, 'standard_hdd'), 'S10');
   assert.equal(azureDiskSkuCode(512, 'standard_hdd'), 'S20');
   assert.equal(azureDiskSkuCode(48, 'standard_ssd'), 'E6');
+});
+
+test('pickAzureVmHourly ignores Low Priority and Cloud Services rows', () => {
+  const price = pickAzureVmHourly(
+    [
+      {
+        productName: 'Virtual Machines Dplsv5 Series',
+        meterName: 'D2pls v5 Low Priority',
+        skuName: 'Standard_D2pls_v5 Low Priority',
+        type: 'Consumption',
+        unitOfMeasure: '1 Hour',
+        retailPrice: 0.0136,
+      },
+      {
+        productName: 'Virtual Machines Dplsv5 Series',
+        meterName: 'D2pls v5',
+        skuName: 'Standard_D2pls_v5',
+        type: 'Consumption',
+        unitOfMeasure: '1 Hour',
+        retailPrice: 0.068,
+      },
+      {
+        productName: 'Dasv5 Series Cloud Services',
+        meterName: 'D2as v5',
+        skuName: 'Standard_D2as_v5',
+        type: 'Consumption',
+        unitOfMeasure: '1 Hour',
+        retailPrice: 0.213,
+      },
+    ],
+    { windows: false }
+  );
+
+  assert.equal(price, 0.068);
+});
+
+test('pickAwsPublicIpHourly prefers in-use public IPv4 over idle rows', () => {
+  const priceList = [
+    JSON.stringify({
+      product: {
+        attributes: {
+          group: 'VPCPublicIPv4Address',
+          groupDescription: 'Hourly charge for Idle Public IPv4 Addresses',
+          usagetype: 'APS3-PublicIPv4:IdleAddress',
+        },
+      },
+      terms: {
+        OnDemand: {
+          idle: {
+            priceDimensions: {
+              idleDim: {
+                unit: 'Hrs',
+                description: '$0.005 per Idle public IPv4 address per hour',
+                pricePerUnit: { USD: '0.0050000000' },
+              },
+            },
+          },
+        },
+      },
+    }),
+    JSON.stringify({
+      product: {
+        attributes: {
+          group: 'VPCPublicIPv4Address',
+          groupDescription: 'Hourly charge for In-use Public IPv4 Addresses',
+          usagetype: 'APS3-PublicIPv4:InUseAddress',
+        },
+      },
+      terms: {
+        OnDemand: {
+          inuse: {
+            priceDimensions: {
+              inuseDim: {
+                unit: 'Hrs',
+                description: '$0.005 per In-use public IPv4 address per hour',
+                pricePerUnit: { USD: '0.0050000000' },
+              },
+            },
+          },
+        },
+      },
+    }),
+  ];
+
+  assert.equal(pickAwsPublicIpHourly(priceList), 0.005);
 });
