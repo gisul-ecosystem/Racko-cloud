@@ -1,12 +1,15 @@
 import mongoose, { Document, Schema } from 'mongoose';
 
 export type IpAddressStatus = 'available' | 'reserved' | 'assigned';
+export type IpPoolType = 'public' | 'private';
 
 export interface IIpAddress extends Document {
   _id: mongoose.Types.ObjectId;
   ip: string;
   gateway: string;
   status: IpAddressStatus;
+  /** public: internet-routable pool (bridge vmbr0). private: internal-only pool on custnet1. */
+  poolType: IpPoolType;
   vmId?: string;
   reservedAt?: Date;
   assignedAt?: Date;
@@ -29,6 +32,13 @@ const ipAddressSchema = new Schema<IIpAddress>(
       type: String,
       enum: ['available', 'reserved', 'assigned'],
       default: 'available',
+      required: true,
+      index: true,
+    },
+    poolType: {
+      type: String,
+      enum: ['public', 'private'],
+      default: 'public',
       required: true,
       index: true,
     },
@@ -57,5 +67,9 @@ const ipAddressSchema = new Schema<IIpAddress>(
     },
   }
 );
+
+// Supports allocateIP()'s atomic findOneAndUpdate, which filters by status +
+// poolType and sorts by ip — keeps allocation fast as each pool grows.
+ipAddressSchema.index({ status: 1, poolType: 1, ip: 1 });
 
 export const IpAddress = mongoose.model<IIpAddress>('IpAddress', ipAddressSchema);

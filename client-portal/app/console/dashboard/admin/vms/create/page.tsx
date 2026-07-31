@@ -11,12 +11,14 @@ import {
   Cpu,
   Eye,
   EyeOff,
+  Globe,
   HardDrive,
   KeyRound,
   Layers,
   Loader2,
   Lock,
   MemoryStick,
+  Network,
   Plus,
   Server,
   Wallet,
@@ -53,8 +55,9 @@ declare global {
   }
 }
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
 type PasswordMode = 'fixed' | 'dynamic';
+type NetworkType = 'public' | 'private';
 
 const inputClass =
   'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400';
@@ -76,7 +79,7 @@ function validateName(value: string): string {
   return '';
 }
 
-/** Same 3-step Create VM wizard as admin; submits via tenant order API. */
+/** Same 4-step Create VM wizard as admin; submits via tenant order API. */
 export default function TenantCreateVmPage() {
   const router = useRouter();
   const { tenantUser } = useTenantAuth();
@@ -108,6 +111,7 @@ export default function TenantCreateVmPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [nameError, setNameError] = useState('');
   const [billingPeriod, setBillingPeriod] = useState<BillingPeriod>('monthly');
+  const [networkType, setNetworkType] = useState<NetworkType>('public');
   const [submitting, setSubmitting] = useState(false);
 
   const [wallet, setWallet] = useState<TenantWallet | null>(null);
@@ -202,6 +206,7 @@ export default function TenantCreateVmPage() {
       templateId: selectedTemplateId,
       count,
       billingPeriod,
+      networkType,
       ...(safeCpu > minCpu ? { cpuCores: safeCpu } : {}),
       ...(safeRam > minRam ? { memoryGb: safeRam } : {}),
       ...(cloneType === 'dedicated_storage' && safeDisk > minDisk ? { diskGb: safeDisk } : {}),
@@ -211,6 +216,7 @@ export default function TenantCreateVmPage() {
     templateDetails,
     count,
     billingPeriod,
+    networkType,
     safeCpu,
     safeRam,
     safeDisk,
@@ -370,7 +376,7 @@ export default function TenantCreateVmPage() {
       </div>
 
       <div className="mb-8 flex items-center gap-2">
-        {([1, 2, 3] as Step[]).map((s, idx) => (
+        {([1, 2, 3, 4] as Step[]).map((s, idx) => (
           <div key={s} className="flex items-center gap-2">
             <div
               className={`flex h-7 w-7 items-center justify-center rounded-full text-xs font-semibold transition-colors ${
@@ -381,9 +387,9 @@ export default function TenantCreateVmPage() {
               {step > s ? <Check className="h-3.5 w-3.5" /> : s}
             </div>
             <span className={`text-xs font-medium ${step === s ? 'text-gray-900' : 'text-gray-400'}`}>
-              {['Select Template', 'Configure', 'Review'][idx]}
+              {['Select Template', 'Configure', 'Network', 'Review'][idx]}
             </span>
-            {idx < 2 ? <ChevronRight className="mx-1 h-3.5 w-3.5 text-gray-300" /> : null}
+            {idx < 3 ? <ChevronRight className="mx-1 h-3.5 w-3.5 text-gray-300" /> : null}
           </div>
         ))}
       </div>
@@ -751,11 +757,91 @@ export default function TenantCreateVmPage() {
             </button>
             <button
               type="button"
+              onClick={() => setStep(3)}
+              disabled={!canProceedStep2()}
+              className={primaryBtn.className}
+              style={primaryBtn.style}
+            >
+              Next <ChevronRight className="h-4 w-4" />
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {step === 3 && templateDetails ? (
+        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+          <h2 className="mb-1 text-sm font-semibold text-gray-900">Network</h2>
+          <p className="mb-4 text-xs text-gray-500">
+            Choose how this VM connects to the network. This applies to all{' '}
+            {count > 1 ? `${count} VMs` : 'the VM'} in this batch.
+          </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setNetworkType('public')}
+              className={`rounded-xl border px-4 py-4 text-left transition-all ${
+                networkType === 'public'
+                  ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+              style={
+                networkType === 'public'
+                  ? { borderColor: accentColor, backgroundColor: `${accentColor}14` }
+                  : undefined
+              }
+            >
+              <div className="mb-1.5 flex items-center gap-2">
+                <Globe className={`h-4 w-4 ${networkType === 'public' ? 'text-blue-600' : 'text-gray-400'}`} />
+                <span className="text-sm font-semibold text-gray-900">Public IP</span>
+                <span className="rounded-full bg-green-100 px-1.5 py-0.5 text-[10px] font-medium text-green-700">
+                  Recommended
+                </span>
+              </div>
+              <p className="text-xs text-gray-500">
+                Internet-routable IP address. Accessible directly over the internet — best for
+                public-facing services.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setNetworkType('private')}
+              className={`rounded-xl border px-4 py-4 text-left transition-all ${
+                networkType === 'private'
+                  ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500'
+                  : 'border-gray-200 hover:border-gray-300'
+              }`}
+              style={
+                networkType === 'private'
+                  ? { borderColor: accentColor, backgroundColor: `${accentColor}14` }
+                  : undefined
+              }
+            >
+              <div className="mb-1.5 flex items-center gap-2">
+                <Network className={`h-4 w-4 ${networkType === 'private' ? 'text-blue-600' : 'text-gray-400'}`} />
+                <span className="text-sm font-semibold text-gray-900">Private IP</span>
+              </div>
+              <p className="text-xs text-gray-500">
+                Internal-only IP address (10.110.0.0/16). Not reachable from the internet — best
+                for backend/internal services.
+              </p>
+            </button>
+          </div>
+
+          <div className="mt-5 flex items-center justify-between pt-2">
+            <button
+              type="button"
+              onClick={() => setStep(2)}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-50"
+            >
+              <ChevronLeft className="h-4 w-4" /> Back
+            </button>
+            <button
+              type="button"
               onClick={() => {
-                setStep(3);
+                setStep(4);
                 void fetchQuote();
               }}
-              disabled={!canProceedStep2()}
               className={primaryBtn.className}
               style={primaryBtn.style}
             >
@@ -765,7 +851,7 @@ export default function TenantCreateVmPage() {
         </div>
       ) : null}
 
-      {step === 3 && templateDetails && selectedTemplate ? (
+      {step === 4 && templateDetails && selectedTemplate ? (
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <h2 className="mb-5 text-sm font-semibold text-gray-900">Review &amp; Create</h2>
 
@@ -794,6 +880,10 @@ export default function TenantCreateVmPage() {
                     : 'Dynamic (linked clone)',
               },
               { label: 'Billing', value: billingPeriod },
+              {
+                label: 'Network',
+                value: networkType === 'private' ? 'Private IP (10.110.0.0/16)' : 'Public IP',
+              },
               { label: 'Node', value: selectedTemplate.node },
               { label: 'CPU', value: `${safeCpu} vCPU` },
               { label: 'RAM', value: `${safeRam} GB` },
@@ -886,7 +976,7 @@ export default function TenantCreateVmPage() {
           <div className="flex items-center justify-between">
             <button
               type="button"
-              onClick={() => setStep(2)}
+              onClick={() => setStep(3)}
               disabled={submitting}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
             >
