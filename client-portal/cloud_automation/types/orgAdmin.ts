@@ -45,6 +45,7 @@ export interface OrgAdminRequestSummary {
   region: string | null;
   userCount: number;
   startDate: string;
+  startsAt?: string | null;
   expiryDate: string | null;
   expiresAt?: string | null;
   requestName: string | null;
@@ -109,6 +110,7 @@ export interface OrgAdminLabHistoryUserSummary {
   liveCostUsd: number;
   azureCostMtdUsd: number;
   budgetAmountUsd: number | null;
+  costCurrency?: string;
   currentResourceCount: number;
   peakResourceCount: number;
   sessionCount: number;
@@ -141,6 +143,7 @@ export interface OrgAdminLabHistory {
   requestId: number;
   expiryDate: string | null;
   labCreatedAt: string;
+  defaultCostCurrency?: string;
   hourlyRateUsd: number;
   userSummaries: OrgAdminLabHistoryUserSummary[];
   timeline: OrgAdminLabHistoryTimelineEntry[];
@@ -163,6 +166,25 @@ export interface OrgAdminLabHistory {
     limitReached: boolean;
     limitReachedAt: string | null;
   }>;
+}
+
+export interface OrgAdminConsumptionReportUserRow {
+  userId: number;
+  username: string;
+  dailyCosts: Record<string, number>;
+  total: number;
+}
+
+export interface OrgAdminConsumptionReport {
+  requestId: number;
+  currency: string;
+  period: { from: string; to: string };
+  days: string[];
+  users: OrgAdminConsumptionReportUserRow[];
+  dailyTotals: Record<string, number>;
+  grandTotal: number;
+  /** Present when Azure Cost Management was unavailable and stored spend was used. */
+  dataSource?: 'azure' | 'estimated';
 }
 
 export interface OrgAdminLiveResource {
@@ -194,6 +216,7 @@ export interface OrgAdminRequestDetail {
   status: string;
   expiryDate: string | null;
   expiresAt?: string | null;
+  startsAt?: string | null;
   enableDailyUsage: boolean;
   hasUsageWindows?: boolean;
   dailyLimitHours?: number | null;
@@ -211,6 +234,8 @@ export interface OrgAdminRequestDetail {
   cleanupEnabled?: boolean;
   cleanupIntervalHours?: number | null;
   createdAt: string;
+  accountCount?: number;
+  userCount?: number;
   projectName?: string | null;
   idMode?: 'test_ids' | 'azure_ids' | null;
   liveSummary?: OrgAdminLiveSummary | null;

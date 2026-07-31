@@ -351,6 +351,7 @@ export interface TenantOrder {
   calculatedAmount: number;
   status: TenantOrderStatus;
   billingPeriod: BillingPeriod;
+  networkType?: 'public' | 'private';
   createdBy: string;
   approvedBy: string | null;
   rejectedBy: string | null;
@@ -367,6 +368,7 @@ export interface PlaceOrderInput {
   cpuCores?: number;
   memoryGb?: number;
   diskGb?: number;
+  networkType?: 'public' | 'private';
 }
 
 export interface ApiEnvelope<T> {

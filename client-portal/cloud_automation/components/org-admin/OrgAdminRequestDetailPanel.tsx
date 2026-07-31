@@ -32,6 +32,16 @@ function toDateTimeLocalValue(date: Date): string {
   return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+function resolveCurrentStart(
+  request: OrgAdminRequestSummary,
+  detail: OrgAdminRequestDetail | null
+): Date | null {
+  const raw = detail?.startsAt || request.startsAt || request.startDate;
+  if (!raw) return null;
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
 function resolveCurrentExpiry(
   request: OrgAdminRequestSummary,
   detail: OrgAdminRequestDetail | null
@@ -61,6 +71,8 @@ interface OrgAdminRequestDetailPanelProps {
   loading: boolean;
   detailError: string | null;
   saving: boolean;
+  cleanupRunning?: boolean;
+  deletingRequest?: boolean;
   onRetry: () => void;
   onForceLogout: (userId: number) => Promise<boolean>;
   onUpdateRoles: (userId: number, roles: string[]) => Promise<boolean>;
@@ -72,6 +84,9 @@ interface OrgAdminRequestDetailPanelProps {
   onManualCleanup: (userId: number) => Promise<boolean>;
   onRequestCleanup?: () => Promise<boolean>;
   onUnblock?: (userId: number) => Promise<boolean>;
+  onUnblockAll?: () => Promise<boolean>;
+  onBlockAll?: () => Promise<boolean>;
+  onAddUser?: (count: number) => Promise<boolean>;
   onDeleteUser?: (userId: number) => Promise<boolean>;
   onDeleteRequest?: () => Promise<boolean>;
   onExtendExpiration?: (expiresAt: string) => Promise<boolean>;
@@ -91,6 +106,8 @@ export function OrgAdminRequestDetailPanel({
   loading,
   detailError,
   saving,
+  cleanupRunning = false,
+  deletingRequest = false,
   onRetry,
   onForceLogout,
   onUpdateRoles,
@@ -102,6 +119,9 @@ export function OrgAdminRequestDetailPanel({
   onManualCleanup,
   onRequestCleanup,
   onUnblock,
+  onUnblockAll,
+  onBlockAll,
+  onAddUser,
   onDeleteUser,
   onDeleteRequest,
   onExtendExpiration,
@@ -122,6 +142,11 @@ export function OrgAdminRequestDetailPanel({
 
   const currentExpiry = useMemo(
     () => resolveCurrentExpiry(request, requestDetail),
+    [request, requestDetail]
+  );
+
+  const currentStart = useMemo(
+    () => resolveCurrentStart(request, requestDetail),
     [request, requestDetail]
   );
 
@@ -225,6 +250,18 @@ export function OrgAdminRequestDetailPanel({
     { label: 'Customer', value: request.customerEmail },
     { label: 'Region', value: request.region || '—' },
     {
+      label: 'Starts',
+      value: currentStart
+        ? currentStart.toLocaleString(undefined, {
+            year: 'numeric',
+            month: 'numeric',
+            day: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+          })
+        : '—',
+    },
+    {
       label: 'Expires',
       value: currentExpiry
         ? currentExpiry.toLocaleString(undefined, {
@@ -236,7 +273,13 @@ export function OrgAdminRequestDetailPanel({
           })
         : '—',
     },
-    { label: 'Users', value: String(request.userCount) },
+    {
+      label: 'Users',
+      value:
+        requestDetail?.accountCount != null && requestDetail.accountCount > 0
+          ? `${users.length} / ${requestDetail.accountCount}`
+          : String(users.length || request.userCount),
+    },
     ...(requestDetail?.liveSummary?.activeSessions
       ? [{ label: 'Live sessions', value: String(requestDetail.liveSummary.activeSessions) }]
       : []),
@@ -341,15 +384,15 @@ export function OrgAdminRequestDetailPanel({
               <button
                 type="button"
                 onClick={() => void handleDeleteRequest()}
-                disabled={saving || sendingMail || extending}
+                disabled={deletingRequest || sendingMail || extending}
                 className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3.5 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
               >
-                {saving ? (
+                {deletingRequest ? (
                   <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 ) : (
                   <Trash2 className="h-3.5 w-3.5" />
                 )}
-                {saving ? 'Deleting from Azure...' : 'Delete Request'}
+                {deletingRequest ? 'Deleting from Azure...' : 'Delete Request'}
               </button>
             )}
           </div>
@@ -455,14 +498,19 @@ export function OrgAdminRequestDetailPanel({
                 loading={loading}
                 selectedUserId={selectedUserId}
                 saving={saving}
+                cleanupRunning={cleanupRunning}
                 isRefreshing={isRefreshing}
                 lastUpdatedAt={lastUpdatedAt}
                 hasActiveUsers={hasActiveUsers}
                 onSelect={setSelectedUserId}
                 onForceLogout={onForceLogout}
                 onUnblock={onUnblock}
+                onUnblockAll={onUnblockAll}
+                onBlockAll={onBlockAll}
+                onAddUser={onAddUser}
                 onDeleteUser={onDeleteUser}
                 onTriggerCleanup={onManualCleanup}
+                onRequestCleanup={onRequestCleanup}
                 onUpdateRoles={onUpdateRoles}
                 fetchUserMonitoring={fetchUserMonitoring}
                 onFetchAzureCost={onFetchAzureCost}
@@ -481,6 +529,7 @@ export function OrgAdminRequestDetailPanel({
               onToggleCleanup={onToggleCleanup}
               onManualCleanup={onManualCleanup}
               onRequestCleanup={onRequestCleanup}
+              cleanupRunning={cleanupRunning}
             />
           )}
 

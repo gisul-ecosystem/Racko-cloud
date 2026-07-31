@@ -199,6 +199,9 @@ export default function SuperAdminOrdersPage() {
                       <td className="px-4 py-3 text-xs text-gray-600">
                         {order.specs.cpuCores} vCPU · {order.specs.memoryGb} GB RAM ·{' '}
                         {order.specs.diskGb} GB disk
+                        <p className="mt-1 text-gray-400">
+                          {order.networkType === 'private' ? 'Private IP' : 'Public IP'}
+                        </p>
                       </td>
                       <td className="px-4 py-3 font-medium text-gray-900">
                         {formatMoney(order.calculatedAmount)}

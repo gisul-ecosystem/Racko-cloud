@@ -7,6 +7,7 @@ import { rollbackPermissionSets } from '../provisioners/aws/permissionSetProvisi
 import { rollbackAssignments } from '../provisioners/aws/accountAssignmentProvisioner.js';
 import { rollbackScpResources } from '../provisioners/aws/scpProvisioner.js';
 import { countCleanupDeleted } from '../utils/cleanupMetrics.js';
+import { computeNextDailyCleanupRunAt } from '../utils/resourceCleanupSchedule.js';
 import CleanupLog from '../models/CleanupLog.js';
 import HistorySnapshot from '../models/HistorySnapshot.js';
 
@@ -124,10 +125,22 @@ export async function runScheduledResourceCleanupForRequest(request) {
     : await cleanupAllUsers(requestId, { respectUserSettings: true });
   const deletedCount = countCleanupDeleted(results);
 
-  const intervalHours =
-    request.resourceCleanupIntervalHours || request.cleanupIntervalHours || 4;
   const now = new Date();
-  const nextRun = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
+  let nextRun;
+  let intervalHours;
+
+  if (request.resourceCleanupTime) {
+    intervalHours = 24;
+    nextRun = computeNextDailyCleanupRunAt({
+      timeHHMM: request.resourceCleanupTime,
+      timezone: request.resourceCleanupTimezone || request.timezone || 'Asia/Kolkata',
+      after: now,
+    });
+  } else {
+    intervalHours =
+      request.resourceCleanupIntervalHours || request.cleanupIntervalHours || 4;
+    nextRun = new Date(now.getTime() + intervalHours * 60 * 60 * 1000);
+  }
 
   await Request.findByIdAndUpdate(requestId, {
     resourceCleanupLastRanAt: now,
@@ -150,6 +163,36 @@ export async function runScheduledResourceCleanupForRequest(request) {
     ranAt: now,
     completedAt: now,
   });
+
+  try {
+    const { captureUserLabMetrics, recordCleanupSnapshot } = await import('./labHistoryService.js');
+    const accessType = request.accessType || 'magic_link';
+    const sourceUsers =
+      accessType === 'identity_center' ? request.identityUsers || [] : request.labRoles || [];
+    for (const user of sourceUsers) {
+      if (user.deletedAt) continue;
+      const metrics = await captureUserLabMetrics(requestId, user.userIndex);
+      const perUserDeleted = countCleanupDeleted(
+        (results || []).find((entry) => Number(entry.userIndex) === Number(user.userIndex)) || {}
+      );
+      await recordCleanupSnapshot({
+        requestId,
+        userIndex: user.userIndex,
+        triggeredBy: 'scheduler',
+        cleanupAction: action,
+        resourcesDeleted: perUserDeleted,
+        metrics: metrics
+          ? {
+              ...metrics,
+              resourceCount: Math.max(Number(metrics.resourceCount || 0), perUserDeleted),
+            }
+          : null,
+      });
+    }
+  } catch (err) {
+    console.warn(`[labExpiryCleanup] Failed to record cleanup snapshots: ${err.message}`);
+  }
+
   await HistorySnapshot.create({
     requestId,
     event: 'scheduled_cleanup',

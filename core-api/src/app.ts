@@ -54,6 +54,10 @@ import externalVmPricingRoutes from './modules/externalVmPricing/externalVmPrici
 import vmCatalogRoutes from './modules/vmCatalog/vmCatalog.routes';
 import dedicatedServerRoutes from './modules/dedicatedServer/dedicatedServer.routes';
 import adminServicesRoutes from './modules/adminServices/adminServices.routes';
+import rbacRoutes from './modules/rbac/rbac.routes';
+import platformRbacRoutes from './modules/platformRbac/platformRbac.routes';
+import tenantRbacRoutes from './modules/tenantRbac/tenantRbac.routes';
+import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboarding.routes';
 
 const app = express();
 
@@ -186,9 +190,13 @@ app.use('/api/v1/ip-pool', ipPoolRoutes);
 app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
 app.use('/api/v1/admin-billing', adminBillingRoutes);
 app.use('/api/v1/external-vm-pricing', externalVmPricingRoutes);
-app.use('/api/v1/vm-catalog', vmCatalogRoutes);
-app.use('/api/v1/dedicated-servers', dedicatedServerRoutes);
-app.use('/api/v1/admin-services', adminServicesRoutes);
+  app.use('/api/v1/vm-catalog', vmCatalogRoutes);
+  app.use('/api/v1/dedicated-servers', dedicatedServerRoutes);
+  app.use('/api/v1/admin-services', adminServicesRoutes);
+  app.use('/api/v1/rbac', rbacRoutes);
+  app.use('/api/v1/platform-rbac', platformRbacRoutes);
+  app.use('/api/v1/tenant-rbac', tenantRbacRoutes);
+app.use('/api/v1/customer-onboarding', customerOnboardingRoutes);
 
 // Start background services
 startNodeMonitoring();

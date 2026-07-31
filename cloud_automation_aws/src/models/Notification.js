@@ -14,6 +14,8 @@ const notificationSchema = new mongoose.Schema({
       'budget_renewed',
       'user_suspended',
       'user_reinstated',
+      'privileged_role_request',
+      'privileged_role_request_reviewed',
     ],
     required: true,
   },

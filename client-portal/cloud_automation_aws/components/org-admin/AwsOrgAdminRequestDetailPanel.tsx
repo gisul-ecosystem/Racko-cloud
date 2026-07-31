@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ChevronRight, Loader2, RefreshCw, Trash2 } from 'lucide-react';
+import { ChevronRight, Loader2, Mail, RefreshCw, Trash2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { formatCurrency } from '../../api/orgAdminClient';
 import type {
@@ -16,8 +16,9 @@ import { AwsOrgAdminCleanupTab } from './AwsOrgAdminCleanupTab';
 import { AwsOrgAdminUsersTable } from './AwsOrgAdminUsersTable';
 import { AwsOrgAdminHistoryTab } from './AwsOrgAdminHistoryTab';
 import { AwsCustomConfigTab } from './AwsCustomConfigTab';
+import { AwsOrgAdminPrivilegedRolesTab } from './AwsOrgAdminPrivilegedRolesTab';
 
-type DetailTab = 'users' | 'history' | 'cleanup' | 'budget' | 'custom-config';
+type DetailTab = 'users' | 'history' | 'cleanup' | 'budget' | 'custom-config' | 'privileged-roles';
 
 interface AwsOrgAdminRequestDetailPanelProps {
   request: AwsOrgAdminRequestSummary;
@@ -42,6 +43,9 @@ interface AwsOrgAdminRequestDetailPanelProps {
   onUpdatePermissions: (userIndex: number, policies: string[]) => Promise<boolean>;
   onRenewBudget: (userIndex: number, topUpAmount: number) => Promise<boolean>;
   onCleanup: (userIndex: number) => Promise<boolean>;
+  onAddUser?: (count: number) => Promise<boolean>;
+  onBlockAll?: () => Promise<boolean>;
+  onUnblockAll?: () => Promise<boolean>;
   onToggleCleanup: (userIndex: number, enabled: boolean) => Promise<boolean>;
   onRequestCleanupSettings: (
     settings: {
@@ -52,6 +56,8 @@ interface AwsOrgAdminRequestDetailPanelProps {
   ) => Promise<boolean>;
   onFetchCost: (userIndex: number) => Promise<AwsOrgAdminUserCost | null>;
   onForceLogout: (userIndex: number) => Promise<boolean>;
+  onSendPurchaseConfirmationMail?: () => Promise<boolean>;
+  onPrivilegedRolesChanged?: () => void;
   fetchUserMonitoring: (
     userIndex: number
   ) => Promise<import('../../types/orgAdmin').AwsOrgAdminMonitoringResponse | null>;
@@ -83,16 +89,22 @@ export function AwsOrgAdminRequestDetailPanel({
   onUpdatePermissions,
   onRenewBudget,
   onCleanup,
+  onAddUser,
+  onBlockAll,
+  onUnblockAll,
   onToggleCleanup,
   onRequestCleanupSettings,
   onFetchCost,
   onForceLogout,
+  onSendPurchaseConfirmationMail,
+  onPrivilegedRolesChanged,
   fetchUserMonitoring,
   lastUpdatedAt,
   isRefreshing,
   hasActiveUsers,
 }: AwsOrgAdminRequestDetailPanelProps) {
   const [syncing, setSyncing] = useState(false);
+  const [sendingMail, setSendingMail] = useState(false);
   const [sharedCost, setSharedCost] = useState<AwsOrgAdminSharedCost | null>(null);
 
   useEffect(() => {
@@ -129,6 +141,23 @@ export function AwsOrgAdminRequestDetailPanel({
       : []),
   ];
 
+  const isTestIds =
+    request.idMode === 'test_ids' || requestDetail?.idMode === 'test_ids';
+
+  async function handleSendConfirmationMail() {
+    if (!onSendPurchaseConfirmationMail) return;
+    const confirmed = window.confirm(
+      `Send purchase confirmation mail to ${request.customerEmail}? The email includes Yes/No buttons to continue with a full AWS purchase.`
+    );
+    if (!confirmed) return;
+    setSendingMail(true);
+    try {
+      await onSendPurchaseConfirmationMail();
+    } finally {
+      setSendingMail(false);
+    }
+  }
+
   async function handleSyncSpend() {
     setSyncing(true);
     try {
@@ -141,6 +170,13 @@ export function AwsOrgAdminRequestDetailPanel({
   return (
     <div className="overflow-hidden rounded-b-xl border border-t-0 border-[#B91C1C]/30 bg-white">
       <div className="border-b border-gray-100 bg-gray-50 px-6 py-4">
+        <div className="mb-3.5 flex flex-wrap items-center gap-2">
+          {isTestIds ? (
+            <span className="inline-flex rounded-full bg-amber-100 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-800 ring-1 ring-amber-200">
+              Test ID
+            </span>
+          ) : null}
+        </div>
         <div className="mb-3.5 flex flex-wrap gap-6">
           {infoItems.map((item) => (
             <div key={item.label} className="flex flex-col gap-0.5">
@@ -153,13 +189,30 @@ export function AwsOrgAdminRequestDetailPanel({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => void onFixPermissions()} disabled={saving} className="inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-50">
+          <button type="button" onClick={() => void onFixPermissions()} disabled={saving || sendingMail} className="inline-flex items-center gap-1.5 rounded-md border bg-white px-3 py-1.5 text-xs font-medium text-gray-700 disabled:opacity-50">
             <RefreshCw className={`h-3.5 w-3.5 ${saving ? 'animate-spin' : ''}`} /> Fix Permissions
           </button>
           {hasActiveUsers && <span className="rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">● Live</span>}
           {isRefreshing && <span className="text-xs text-amber-700">Refreshing…</span>}
           {lastUpdatedAt && !isRefreshing && <span className="text-xs text-gray-400">Updated {Math.max(0, Math.round((Date.now() - lastUpdatedAt.getTime()) / 1000))}s ago</span>}
-          <button type="button" disabled={saving} onClick={() => window.confirm(`Delete AWS request #${request.requestId}? This cannot be undone.`) && void onDeleteRequest()} className="ml-auto inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /> Delete Request</button>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            {isTestIds && onSendPurchaseConfirmationMail ? (
+              <button
+                type="button"
+                onClick={() => void handleSendConfirmationMail()}
+                disabled={saving || sendingMail}
+                className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-3.5 py-1.5 text-xs font-medium text-amber-900 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                {sendingMail ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Mail className="h-3.5 w-3.5" />
+                )}
+                {sendingMail ? 'Sending…' : 'Send confirmation mail'}
+              </button>
+            ) : null}
+            <button type="button" disabled={saving || sendingMail} onClick={() => window.confirm(`Delete AWS request #${request.requestId}? This removes lab resources and deletes all IAM users/roles in AWS. This cannot be undone.`) && void onDeleteRequest()} className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 disabled:opacity-50"><Trash2 className="h-3.5 w-3.5" /> Delete Request</button>
+          </div>
         </div>
 
         {request.costingMode === 'shared' && (
@@ -179,6 +232,7 @@ export function AwsOrgAdminRequestDetailPanel({
                 { id: 'cleanup' as const, label: 'Cleanup' },
                 { id: 'budget' as const, label: 'Budget' },
                 { id: 'custom-config' as const, label: 'Custom IAM Policies & Services' },
+                { id: 'privileged-roles' as const, label: 'Privileged Roles' },
               ] as const
             ).map((tab) => (
               <button
@@ -236,6 +290,10 @@ export function AwsOrgAdminRequestDetailPanel({
                 onFetchCost={onFetchCost}
                 onForceLogout={onForceLogout}
                 onCleanup={onCleanup}
+                onAddUser={onAddUser}
+                onBlockAll={onBlockAll}
+                onUnblockAll={onUnblockAll}
+                onRequestCleanup={onRequestCleanup}
                 fetchUserMonitoring={fetchUserMonitoring}
               />
             </div>
@@ -262,6 +320,14 @@ export function AwsOrgAdminRequestDetailPanel({
 
           {activeTab === 'custom-config' && (
             <AwsCustomConfigTab requestId={request.requestId} users={requestDetail.users} />
+          )}
+
+          {activeTab === 'privileged-roles' && (
+            <AwsOrgAdminPrivilegedRolesTab
+              requestId={request.requestId}
+              users={requestDetail.users}
+              onAssigned={onPrivilegedRolesChanged}
+            />
           )}
 
           {activeTab === 'budget' && (

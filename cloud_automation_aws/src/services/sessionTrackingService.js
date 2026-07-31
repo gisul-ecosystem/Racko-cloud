@@ -176,6 +176,38 @@ export async function getUserSessionStats(requestId, userIndex) {
   };
 }
 
+/** One query for all users on a request — avoids N SessionLog round-trips in org-admin detail. */
+export async function getRequestSessionStatsByUser(requestId) {
+  const sessions = await SessionLog.find({ requestId }).sort({ startedAt: -1 }).lean();
+  const byUser = new Map();
+
+  for (const session of sessions) {
+    const key = Number(session.userIndex);
+    if (!byUser.has(key)) byUser.set(key, []);
+    byUser.get(key).push(session);
+  }
+
+  const statsByUser = new Map();
+  for (const [userIndex, userSessions] of byUser.entries()) {
+    const totalMins = userSessions.reduce((sum, session) => {
+      if (session.status === 'active') {
+        return sum + getLiveSessionMins(session);
+      }
+      return sum + (session.durationMins || 0);
+    }, 0);
+    const activeSession = userSessions.find((entry) => entry.status === 'active') || null;
+    statsByUser.set(userIndex, {
+      totalSessions: userSessions.length,
+      totalMins,
+      activeSession,
+      lastSessionAt: userSessions[0]?.startedAt || null,
+      sessionHistory: userSessions.slice(0, 10),
+    });
+  }
+
+  return statsByUser;
+}
+
 export async function getActiveSessionsForRequest(requestId) {
   return SessionLog.find({ requestId, status: 'active' });
 }

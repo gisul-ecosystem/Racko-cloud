@@ -9,6 +9,7 @@ import {
   DetachUserPolicyCommand,
   DeleteUserPolicyCommand,
   ListAttachedUserPoliciesCommand,
+  ListUserPoliciesCommand,
   UpdateLoginProfileCommand,
   PutUserPolicyCommand,
   TagUserCommand,
@@ -254,6 +255,42 @@ export async function provisionIdentityUsers(request, accounts = []) {
   return users;
 }
 
+function resolveAccountIdForAddUser(request, userIndex) {
+  const accounts = (request.provisionedResources?.accounts || [])
+    .map((entry) => ({
+      userIndex: entry.userIndex,
+      accountId: entry.awsAccountId || entry.accountId,
+    }))
+    .filter((entry) => entry.accountId);
+
+  if (request.costingMode === 'per_user') {
+    const dedicated = accounts.find((entry) => Number(entry.userIndex) === Number(userIndex));
+    if (dedicated?.accountId) return dedicated.accountId;
+  }
+
+  const existing = (request.identityUsers || []).find(
+    (entry) => entry.accountId || entry.awsAccountId
+  );
+
+  return (
+    request.awsAccountId ||
+    request.provisionedResources?.targetAccountId ||
+    existing?.accountId ||
+    existing?.awsAccountId ||
+    accounts[0]?.accountId ||
+    MASTER_ACCOUNT_ID
+  );
+}
+
+/** Provision one additional Direct IAM lab user on an existing request. */
+export async function addIdentityUser(request, userIndex) {
+  const accountId = resolveAccountIdForAddUser(request, userIndex);
+  if (!accountId) {
+    throw new Error('No AWS account available to add a lab user');
+  }
+  return createIamUser(accountId, Number(userIndex), String(request._id), request);
+}
+
 export async function createIdentityCenterUsers(request, accounts = []) {
   return provisionIdentityUsers(request, accounts);
 }
@@ -279,13 +316,29 @@ export async function suspendIdentityUser(request, userIndex) {
   console.log(`[IdentityProvisioner] Suspended IAM user ${user.username}`);
 }
 
-export async function reinstateIdentityUser(request, userIndex) {
+export async function reinstateIdentityUser(request, userIndex, {
+  password: preferredPassword = null,
+  forceNewPassword = false,
+} = {}) {
   const user = request.identityUsers?.find((entry) => entry.userIndex === userIndex);
   if (!user) throw new Error(`User index ${userIndex} not found`);
 
   const accountId = user.accountId || user.awsAccountId || request.awsAccountId;
   const iamClient = await getIamClientForAccount(accountId);
-  const newPassword = generatePassword(16);
+  // Prefer existing stored password so unblock does not invalidate emailed credentials.
+  let newPassword;
+  let passwordWasGenerated = false;
+  if (forceNewPassword) {
+    newPassword = generatePassword(16);
+    passwordWasGenerated = true;
+  } else if (preferredPassword && String(preferredPassword).trim()) {
+    newPassword = String(preferredPassword).trim();
+  } else if (user.password && String(user.password).trim()) {
+    newPassword = String(user.password).trim();
+  } else {
+    newPassword = generatePassword(16);
+    passwordWasGenerated = true;
+  }
 
   try {
     await iamClient.send(
@@ -322,7 +375,7 @@ export async function reinstateIdentityUser(request, userIndex) {
   );
 
   console.log(`[IdentityProvisioner] Reinstated IAM user ${user.username}`);
-  return newPassword;
+  return { password: newPassword, passwordWasGenerated };
 }
 
 export async function deprovisionIdentityUsers(request) {
@@ -331,41 +384,60 @@ export async function deprovisionIdentityUsers(request) {
       const accountId = user.accountId || user.awsAccountId || request.awsAccountId;
       if (!accountId || !user.username) continue;
 
-      const iamClient = await getIamClientForAccount(accountId);
+      const client = await getIamClientForAccount(accountId);
 
       try {
-        await iamClient.send(
-          new DeleteUserPolicyCommand({
-            UserName: user.username,
-            PolicyName: 'RackoLabPermissions',
-          })
+        const { PolicyNames } = await client.send(
+          new ListUserPoliciesCommand({ UserName: user.username })
         );
+        for (const policyName of PolicyNames || []) {
+          try {
+            await client.send(
+              new DeleteUserPolicyCommand({
+                UserName: user.username,
+                PolicyName: policyName,
+              })
+            );
+          } catch (err) {
+            if (err.name !== 'NoSuchEntityException') {
+              console.warn(
+                `[IdentityProvisioner] Inline policy ${policyName} delete warning: ${err.message}`
+              );
+            }
+          }
+        }
       } catch (err) {
         if (err.name !== 'NoSuchEntityException') {
-          console.warn(`[IdentityProvisioner] Inline policy delete warning: ${err.message}`);
+          console.warn(`[IdentityProvisioner] List inline policies warning: ${err.message}`);
         }
       }
 
-      const { AttachedPolicies } = await iamClient.send(
-        new ListAttachedUserPoliciesCommand({ UserName: user.username })
-      );
-
-      for (const policy of AttachedPolicies || []) {
-        await iamClient.send(
-          new DetachUserPolicyCommand({
-            UserName: user.username,
-            PolicyArn: policy.PolicyArn,
-          })
+      try {
+        const { AttachedPolicies } = await client.send(
+          new ListAttachedUserPoliciesCommand({ UserName: user.username })
         );
+
+        for (const policy of AttachedPolicies || []) {
+          await client.send(
+            new DetachUserPolicyCommand({
+              UserName: user.username,
+              PolicyArn: policy.PolicyArn,
+            })
+          );
+        }
+      } catch (err) {
+        if (err.name !== 'NoSuchEntityException') {
+          console.warn(`[IdentityProvisioner] Detach managed policies warning: ${err.message}`);
+        }
       }
 
       try {
-        await iamClient.send(new DeleteLoginProfileCommand({ UserName: user.username }));
+        await client.send(new DeleteLoginProfileCommand({ UserName: user.username }));
       } catch (err) {
         if (err.name !== 'NoSuchEntityException') throw err;
       }
 
-      await iamClient.send(new DeleteUserCommand({ UserName: user.username }));
+      await client.send(new DeleteUserCommand({ UserName: user.username }));
       console.log(`[IdentityProvisioner] Deleted IAM user ${user.username}`);
     } catch (err) {
       console.error(`[IdentityProvisioner] Failed to delete user ${user.username}:`, err.message);

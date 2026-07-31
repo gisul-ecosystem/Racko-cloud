@@ -16,9 +16,12 @@ import { startResourceCleanupScheduler } from './src/schedulers/resourceCleanupS
 import { startSessionScheduler } from './src/schedulers/sessionScheduler.js';
 import { startExpiryScheduler } from './src/schedulers/expiryScheduler.js';
 import { startCostTrackingScheduler } from './src/schedulers/costTrackingScheduler.js';
+import { startPurchaseIntentScheduler } from './src/schedulers/purchaseIntentScheduler.js';
 import managePortalRoutes from './src/routes/managePortal.js';
 import orgAdminRoutes from './src/routes/orgAdmin.js';
 import notificationRoutes from './src/routes/notifications.js';
+import purchaseIntentRoutes from './src/routes/purchaseIntent.js';
+import privilegedRoleRequestRoutes from './src/routes/privilegedRoleRequests.js';
 
 const app = express();
 
@@ -31,6 +34,8 @@ app.use('/api', provisionRoutes);
 app.use('/api', managePortalRoutes);
 app.use('/api', orgAdminRoutes);
 app.use('/api', notificationRoutes);
+app.use('/api', purchaseIntentRoutes);
+app.use('/api', privilegedRoleRequestRoutes);
 
 app.all('*', (req, res) => {
   res.status(404).json({
@@ -59,7 +64,8 @@ startResourceCleanupScheduler();
 startSessionScheduler();
 startExpiryScheduler();
 startCostTrackingScheduler();
-console.log('[Schedulers] Window enforcement, usage tracking, session expiry, lab expiry, resource cleanup, and cost tracking started');
+startPurchaseIntentScheduler();
+console.log('[Schedulers] Window enforcement, usage tracking, session expiry, lab expiry, resource cleanup, cost tracking, and purchase intent started');
 
 const port = Number(process.env.PORT || 3003);
 

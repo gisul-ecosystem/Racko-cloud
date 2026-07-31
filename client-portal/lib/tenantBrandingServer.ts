@@ -39,7 +39,7 @@ export async function resolveTenantRequestHost(): Promise<string> {
 
 /**
  * Fetch public branding for SSR metadata so title/favicon are correct on first paint
- * (avoids flashing root-layout "Racko" defaults on /tenant/*).
+ * (avoids flashing root-layout "Racko" defaults on tenant workspace routes).
  */
 export async function fetchTenantBrandingForMetadata(): Promise<{
   title: string;

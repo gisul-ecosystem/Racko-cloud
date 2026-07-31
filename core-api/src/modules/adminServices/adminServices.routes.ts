@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { adminServicesController } from './adminServices.controller';
 import {
@@ -21,7 +22,7 @@ router.get('/me', requireAuth, requireRole('admin'), (req, res, next) => {
 router.get(
   '/catalog',
   requireAuth,
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   (req, res, next) => {
     adminServicesController.listCatalog(req, res, next);
   }
@@ -30,7 +31,7 @@ router.get(
 router.get(
   '/admins/:adminId',
   requireAuth,
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   validateRequest(adminIdParamSchema),
   (req, res, next) => {
     adminServicesController.listForAdmin(req, res, next);
@@ -40,7 +41,7 @@ router.get(
 router.post(
   '/admins/:adminId',
   requireAuth,
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   validateRequest(assignAdminServiceSchema),
   (req, res, next) => {
     adminServicesController.assign(req, res, next);
@@ -50,7 +51,7 @@ router.post(
 router.patch(
   '/admins/:adminId/:serviceKey',
   requireAuth,
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   validateRequest(updateAdminServiceSchema),
   (req, res, next) => {
     adminServicesController.updateStatus(req, res, next);
@@ -60,7 +61,7 @@ router.patch(
 router.delete(
   '/admins/:adminId/:serviceKey',
   requireAuth,
-  requireRole('super_admin'),
+  requirePermission('admin_users.manage'),
   validateRequest(adminServiceKeyParamSchema),
   (req, res, next) => {
     adminServicesController.remove(req, res, next);

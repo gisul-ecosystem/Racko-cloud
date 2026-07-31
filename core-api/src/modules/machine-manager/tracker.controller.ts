@@ -78,6 +78,42 @@ export class TrackerController {
   // ─── Agent: File upload ────────────────────────────────────────────────────
 
   /**
+   * GET /api/v1/agent/upload-url?sha256=<hash>&filename=<name>&mimeType=<type>
+   * Returns a presigned S3 PUT URL so the agent can upload directly to SeaweedFS.
+   * The agent PUTs the file directly to this URL, bypassing nginx entirely.
+   * Authenticated by X-Agent-ID header.
+   */
+  async getUploadUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const agentId = req.headers['x-agent-id'] as string;
+      if (!agentId) {
+        throw new ValidationError('X-Agent-ID header is required.');
+      }
+
+      const { sha256, filename, mimeType } = req.query as {
+        sha256?: string;
+        filename?: string;
+        mimeType?: string;
+      };
+
+      if (!sha256 || !filename) {
+        throw new ValidationError('sha256 and filename query parameters are required.');
+      }
+
+      const result = await trackerService.getPresignedUploadUrl(
+        agentId,
+        sha256,
+        filename,
+        mimeType ?? 'application/octet-stream'
+      );
+
+      success(res, 'Presigned upload URL generated.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
    * POST /api/v1/agent/file-upload  (multipart/form-data)
    * Agent streams a file to the server; server proxies it to SeaweedFS.
    * Returns the storageRef (fid) for the uploaded file.

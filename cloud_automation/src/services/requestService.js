@@ -8,6 +8,8 @@ const adminAccessRequestService = require('./adminAccessRequestService');
 const privilegedRoleRequestService = require('./privilegedRoleRequestService');
 const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
 const { buildExpiresAtFromParts } = require('../utils/requestExpiry');
+const { parseServiceDateTime } = require('../utils/serviceDateTime');
+const { normalizeWindowTimeForDb } = require('../utils/usageWindowTime');
 const {
   computeNextDailyCleanupRunAt,
   normalizeCleanupTime,
@@ -362,6 +364,15 @@ async function createRequest({
         ? Number(convertedFromRequestId)
         : null;
 
+    const firstUsageWindowForTz = Array.isArray(usageWindows) && usageWindows.length > 0
+      ? usageWindows[0]
+      : null;
+    const labTimezone =
+      firstUsageWindowForTz?.timezone
+      || usageSchedule?.timezone
+      || 'Asia/Kolkata';
+    const startsAt = parseServiceDateTime(startDate, labTimezone);
+
     const request =
       await client.query(
         `
@@ -374,6 +385,8 @@ async function createRequest({
           location,
 
           expiry_date,
+
+          starts_at,
 
           estimated_price,
 
@@ -451,7 +464,8 @@ async function createRequest({
           $24,
           $25,
           $26,
-          $27
+          $27,
+          $28
 
         )
 
@@ -469,6 +483,8 @@ async function createRequest({
           location,
 
           endDate,
+
+          startsAt,
 
           estimatedPrice,
 
@@ -547,8 +563,8 @@ async function createRequest({
           [
             requestId,
             window.day_of_week,
-            `${window.window_start_time}:00`,
-            `${window.window_end_time}:00`,
+            normalizeWindowTimeForDb(window.window_start_time),
+            normalizeWindowTimeForDb(window.window_end_time),
             window.timezone || 'Asia/Kolkata',
             window.daily_limit_hours ?? null
           ]
@@ -895,7 +911,22 @@ async function createRequest({
 
 
 
-async function getAllRequests({ rackoUserId, isSuperAdmin } = {}) {
+async function getAllRequests({ rackoUserId, isSuperAdmin, ownerId } = {}) {
+  const filterOwnerId = String(ownerId || '').trim();
+
+  if (isSuperAdmin && filterOwnerId) {
+    const result = await db.query(
+      `
+      SELECT *
+      FROM requests
+      WHERE racko_user_id = $1
+      ORDER BY created_at DESC
+      `,
+      [filterOwnerId]
+    );
+    return result.rows;
+  }
+
   if (isSuperAdmin) {
     const result = await db.query(
       `

@@ -100,6 +100,8 @@ const labRoleSchema = new mongoose.Schema(
     totalSessionMins: { type: Number, default: 0 },
     lastSessionAt: { type: Date },
     lastCleanupAt: { type: Date },
+    lastResourceCount: { type: Number, default: 0 },
+    peakResourceCount: { type: Number, default: 0 },
     cleanupLogs: [cleanupLogSchema],
     cleanupDisabled: { type: Boolean, default: false },
     cleanupIntervalOverride: { type: Number, default: null },
@@ -131,6 +133,8 @@ const identityUserSchema = new mongoose.Schema(
     totalSessionMins: { type: Number, default: 0 },
     lastSessionAt: { type: Date },
     lastCleanupAt: { type: Date },
+    lastResourceCount: { type: Number, default: 0 },
+    peakResourceCount: { type: Number, default: 0 },
     cleanupLogs: [cleanupLogSchema],
     cleanupDisabled: { type: Boolean, default: false },
     cleanupIntervalOverride: { type: Number, default: null },
@@ -183,7 +187,9 @@ const provisionedResourcesSchema = new mongoose.Schema(
 const requestSchema = new mongoose.Schema(
   {
     customerEmail: { type: String, required: true },
+    projectName: String,
     requestName: String,
+    idMode: { type: String, enum: ['test_ids', 'aws_ids'] },
     accountCount: { type: Number, required: true, min: 1, default: 10 },
     costingMode: { type: String, enum: ['shared', 'per_user'], default: 'shared' },
     accessType: {
@@ -201,6 +207,8 @@ const requestSchema = new mongoose.Schema(
 
     enableResourceCleanup: { type: Boolean, default: false },
     resourceCleanupIntervalHours: { type: Number, min: 1, max: 24 },
+    resourceCleanupTime: String,
+    resourceCleanupTimezone: { type: String, default: 'Asia/Kolkata' },
     resourceCleanupAction: { type: String, enum: ['delete', 'pause'], default: 'delete' },
     resourceCleanupNextRunAt: Date,
     resourceCleanupLastRanAt: Date,
@@ -214,6 +222,16 @@ const requestSchema = new mongoose.Schema(
     cleanupLogs: [cleanupLogSchema],
 
     perUserBudgetUsd: { type: Number, default: null },
+
+    purchaseIntentDueAt: Date,
+    purchaseIntentSentAt: Date,
+    purchaseIntentResponse: {
+      type: String,
+      enum: ['yes', 'no', 'converted'],
+    },
+    purchaseIntentTokenHash: String,
+    purchaseIntentRespondedAt: Date,
+    convertedFromRequestId: { type: mongoose.Schema.Types.ObjectId, ref: 'Request' },
 
     totalSpend: { type: Number, default: 0 },
     spendLastUpdated: Date,

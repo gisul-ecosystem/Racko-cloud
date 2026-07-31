@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { superAdminController } from './superAdmin.controller';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
-import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import {
   manualWalletCreditSchema,
@@ -15,7 +15,7 @@ import {
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireRole('super_admin'));
+router.use(requirePermission('white_labelling.manage'));
 
 router.get('/overview', (req, res, next) => {
   superAdminController.overview(req, res, next);

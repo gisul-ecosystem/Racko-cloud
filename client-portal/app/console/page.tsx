@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, Globe, Server, BookOpen, Wallet, Monitor, SquarePlus, HardDrive, Loader2 } from 'lucide-react';
+import { Cloud, Globe, Server, Wallet, Monitor, SquarePlus, HardDrive, Loader2, Shield } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
@@ -81,14 +81,22 @@ const services = [
     icon: Monitor,
     description: 'Install and manage software on any machine',
   },
-] as const;
+  {
+    id: 'access-control',
+    name: 'Access control',
+    href: '/console/access-control',
+    icon: Shield,
+    description: 'Manage organization roles, operators, and permissions',
+  },
+];
 
 export default function ConsolePage() {
   const { loading, hasActiveService } = useAdminServices();
 
   const visible = services.filter((service) => {
+    if (service.id === 'access-control' || service.id === 'billing') return true;
     const key = CONSOLE_TILE_SERVICE_KEY[service.id];
-    if (key === null || key === undefined) return true; // billing / unknown → show
+    if (key === null || key === undefined) return true;
     return hasActiveService(key);
   });
 

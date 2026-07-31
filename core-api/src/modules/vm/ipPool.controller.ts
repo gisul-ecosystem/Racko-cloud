@@ -1,56 +1,26 @@
 import type { Request, Response, NextFunction } from 'express';
-import { IpAddress } from './ipAddress.model';
+import { IpAddress, type IpPoolType } from './ipAddress.model';
 import { releaseIP } from './ipAllocator.service';
 import { logger } from '../../utils/logger';
 import { VM } from './vm.model';
+import { parseCidr } from './helpers/ipCidr';
 
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, ...(data !== undefined && { data }) });
 }
 
-/** Parse a CIDR string like "103.99.38.0/24" into an array of host IP strings. */
-function parseCidr(cidr: string): string[] {
-  const [networkStr, prefixStr] = cidr.split('/');
-  if (!networkStr || !prefixStr) throw new Error('Invalid CIDR format. Expected x.x.x.x/prefix.');
-
-  const prefix = parseInt(prefixStr, 10);
-  if (isNaN(prefix) || prefix < 1 || prefix > 32) throw new Error('Invalid prefix length.');
-
-  const parts = networkStr.split('.').map(Number);
-  if (parts.length !== 4 || parts.some((p) => isNaN(p) || p < 0 || p > 255)) {
-    throw new Error('Invalid IP address in CIDR.');
-  }
-
-  const networkInt =
-    ((parts[0]! << 24) | (parts[1]! << 16) | (parts[2]! << 8) | parts[3]!) >>> 0;
-
-  const totalHosts = Math.pow(2, 32 - prefix);
-  const firstHost = (networkInt + 1) >>> 0;
-  const lastHost = (networkInt + totalHosts - 2) >>> 0;
-
-  const ips: string[] = [];
-  for (let i = firstHost; i <= lastHost; i++) {
-    ips.push([
-      (i >>> 24) & 0xff,
-      (i >>> 16) & 0xff,
-      (i >>> 8) & 0xff,
-      i & 0xff,
-    ].join('.'));
-  }
-  return ips;
-}
-
 export class IpPoolController {
   /**
    * POST /api/v1/ip-pool/subnet
-   * Body: { cidr: "103.99.38.0/24", excludedIps?: ["103.99.38.1", "103.99.38.169"] }
+   * Body: { cidr: "103.99.38.0/24", excludedIps?: ["103.99.38.1", "103.99.38.169"], poolType?: "public" | "private" }
    */
   async addSubnet(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { cidr, gateway, excludedIps = [] } = req.body as {
+      const { cidr, gateway, excludedIps = [], poolType = 'public' } = req.body as {
         cidr: string;
         gateway: string;
         excludedIps?: string[];
+        poolType?: IpPoolType;
       };
 
       if (!cidr) {
@@ -59,6 +29,10 @@ export class IpPoolController {
       }
       if (!gateway) {
         res.status(400).json({ success: false, message: 'gateway is required.' });
+        return;
+      }
+      if (poolType !== 'public' && poolType !== 'private') {
+        res.status(400).json({ success: false, message: 'poolType must be "public" or "private".' });
         return;
       }
 
@@ -79,7 +53,7 @@ export class IpPoolController {
       const ops = ips.map((ip) => ({
         updateOne: {
           filter: { ip },
-          update: { $setOnInsert: { ip, gateway, status: 'available' as const } },
+          update: { $setOnInsert: { ip, gateway, status: 'available' as const, poolType } },
           upsert: true,
         },
       }));
@@ -89,6 +63,7 @@ export class IpPoolController {
       logger.info('[IPPool] Subnet added', {
         cidr,
         gateway,
+        poolType,
         total: allIps.length,
         excluded: excludedIps.length,
         inserted: result.upsertedCount,
@@ -98,6 +73,7 @@ export class IpPoolController {
       success(res, 'Subnet IPs added to pool.', {
         cidr,
         gateway,
+        poolType,
         totalGenerated: allIps.length,
         excluded: excludedIps.length,
         inserted: result.upsertedCount,
@@ -109,15 +85,19 @@ export class IpPoolController {
   }
 
   /**
-   * GET /api/v1/ip-pool/stats
+   * GET /api/v1/ip-pool/stats?poolType=private
    */
-  async getStats(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  async getStats(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const poolTypeFilter = req.query['poolType'] as string | undefined;
+      const baseFilter: Record<string, unknown> =
+        poolTypeFilter === 'public' || poolTypeFilter === 'private' ? { poolType: poolTypeFilter } : {};
+
       const [total, available, assigned, reserved] = await Promise.all([
-        IpAddress.countDocuments(),
-        IpAddress.countDocuments({ status: 'available' }),
-        IpAddress.countDocuments({ status: 'assigned' }),
-        IpAddress.countDocuments({ status: 'reserved' }),
+        IpAddress.countDocuments(baseFilter),
+        IpAddress.countDocuments({ ...baseFilter, status: 'available' }),
+        IpAddress.countDocuments({ ...baseFilter, status: 'assigned' }),
+        IpAddress.countDocuments({ ...baseFilter, status: 'reserved' }),
       ]);
 
       success(res, 'IP pool stats retrieved.', { total, available, assigned, reserved });
@@ -127,18 +107,22 @@ export class IpPoolController {
   }
 
   /**
-   * GET /api/v1/ip-pool/list?page=1&limit=50&status=assigned
+   * GET /api/v1/ip-pool/list?page=1&limit=50&status=assigned&poolType=private
    */
   async listIPs(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const page = Math.max(1, parseInt((req.query['page'] as string) ?? '1', 10));
       const limit = Math.min(100, Math.max(1, parseInt((req.query['limit'] as string) ?? '50', 10)));
       const statusFilter = req.query['status'] as string | undefined;
+      const poolTypeFilter = req.query['poolType'] as string | undefined;
       const skip = (page - 1) * limit;
 
       const filter: Record<string, unknown> = {};
       if (statusFilter && ['available', 'assigned', 'reserved'].includes(statusFilter)) {
         filter['status'] = statusFilter;
+      }
+      if (poolTypeFilter === 'public' || poolTypeFilter === 'private') {
+        filter['poolType'] = poolTypeFilter;
       }
 
       const [records, total] = await Promise.all([
