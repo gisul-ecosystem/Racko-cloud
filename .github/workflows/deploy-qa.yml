@@ -210,13 +210,13 @@ jobs:
       - name: Install agent binaries
         run: |
           set -e
-          mkdir -p "${DEPLOY_PATH}/agent/dist"
-          cp agent-artifacts/agent-linux/racko-agent \
+          sudo mkdir -p "${DEPLOY_PATH}/agent/dist"
+          sudo cp agent-artifacts/agent-linux/racko-agent \
             "${DEPLOY_PATH}/agent/dist/racko-agent"
-          chmod +x "${DEPLOY_PATH}/agent/dist/racko-agent"
-          cp agent-artifacts/agent-windows/racko-agent.exe \
+          sudo chmod +x "${DEPLOY_PATH}/agent/dist/racko-agent"
+          sudo cp agent-artifacts/agent-windows/racko-agent.exe \
             "${DEPLOY_PATH}/agent/dist/racko-agent.exe"
-          cp agent-artifacts/agent-windows/racko-agent-setup.exe \
+          sudo cp agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
           echo "Agent binaries installed to ${DEPLOY_PATH}/agent/dist/"
 
@@ -240,8 +240,8 @@ jobs:
       - name: Install compose file
         run: |
           set -e
-          mkdir -p "${DEPLOY_PATH}"
-          cp docker-compose-qa.yml "${DEPLOY_PATH}/docker-compose.yml"
+          sudo mkdir -p "${DEPLOY_PATH}"
+          sudo cp docker-compose-qa.yml "${DEPLOY_PATH}/docker-compose.yml"
           echo "docker-compose-qa.yml installed to ${DEPLOY_PATH}/docker-compose.yml"
 
       - name: Deploy (pull new images + restart)
@@ -261,16 +261,15 @@ jobs:
           sudo apt autoclean || true
           echo 'Disk usage after cleanup:'
           df -h
-          cd "${DEPLOY_PATH}"
           export DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME}"
           export IMAGE_TAG=qa
           echo 'Docker login...'
           echo "${DOCKERHUB_TOKEN}" | sudo docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
           echo 'Deploying...'
-          sudo docker compose -f docker-compose.yml down --remove-orphans
-          sudo docker compose -f docker-compose.yml pull
-          sudo docker compose -f docker-compose.yml up -d
-          sudo docker compose -f docker-compose.yml ps
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" down --remove-orphans
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" pull
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" up -d
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" ps
 
       - name: Summary
         run: |
