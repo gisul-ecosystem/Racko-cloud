@@ -8,6 +8,7 @@ import { useTemplates, useTemplateDetails } from '../../../../../hooks/useTempla
 import { createVM } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
+import { ProjectSelect } from '../../../../../components/console/ProjectSelect';
 import {
   getMyAdminWallet,
   quoteAdminVmCreation,
@@ -71,6 +72,7 @@ export default function CreateVMPage() {
   const [consolePassword, setConsolePassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [nameError, setNameError] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   // Billing
@@ -250,6 +252,10 @@ export default function CreateVMPage() {
 
   async function handleSubmit() {
     if (!selectedTemplateId || !templateDetails) return;
+    if (!projectId) {
+      addToast('error', 'Select a project for this VM.');
+      return;
+    }
 
     // Enforce sufficient balance only if pricing is configured
     if (pricingConfigured && !hasSufficientBalance) {
@@ -265,6 +271,7 @@ export default function CreateVMPage() {
         count,
         cloneType,
         passwordMode,
+        projectId,
         ...(passwordMode === 'fixed' ? { consolePassword } : {}),
         ...(cpuOverride && safeCpu > minCpu ? { cpuCores: safeCpu } : {}),
         ...(ramOverride && safeRam > minRam ? { memoryGb: safeRam } : {}),
@@ -550,6 +557,15 @@ export default function CreateVMPage() {
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
           <h2 className="text-sm font-semibold text-gray-900 mb-5">Review &amp; Create</h2>
 
+          <div className="mb-5">
+            <ProjectSelect
+              serviceKey="vm-management"
+              value={projectId}
+              onChange={setProjectId}
+              disabled={submitting}
+            />
+          </div>
+
           {/* VM details */}
           <div className="space-y-3 mb-6">
             {[
@@ -663,7 +679,7 @@ export default function CreateVMPage() {
             </button>
             <button
               onClick={() => void handleSubmit()}
-              disabled={submitting || (pricingConfigured && !hasSufficientBalance)}
+              disabled={submitting || !projectId || (pricingConfigured && !hasSufficientBalance)}
               className="inline-flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 shadow-sm">
               {submitting && <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               {count > 1 ? `Create ${count} VMs` : 'Create VM'}

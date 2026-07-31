@@ -16,6 +16,8 @@ export interface IWalletTransaction extends Document {
   idempotencyKey: string | null;
   relatedOrderId: mongoose.Types.ObjectId | null;
   relatedVmId: mongoose.Types.ObjectId | null;
+  projectId: mongoose.Types.ObjectId | null;
+  serviceKey: string | null;
   balanceAfter: number;
   createdAt: Date;
 }
@@ -74,6 +76,17 @@ const walletTransactionSchema = new Schema<IWalletTransaction>(
     relatedVmId: {
       type: Schema.Types.ObjectId,
       ref: 'VM',
+      default: null,
+      index: true,
+    },
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
+      default: null,
+      index: true,
+    },
+    serviceKey: {
+      type: String,
       default: null,
       index: true,
     },

@@ -246,6 +246,7 @@ export interface CreateVMDto {
   consolePassword?: string;          // only sent in fixed mode
   enableVirtualization?: boolean;
   softwareIds?: string[];
+  projectId?: string;
 }
 
 export interface JobVMCredential {

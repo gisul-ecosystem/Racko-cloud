@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ApiError } from '../../../../lib/apiClient';
 import { createExternalVM, type CreateExternalVMDto, type ExternalVMProtocol } from '../../../../lib/externalVmApi';
+import { ProjectSelect } from '../../../../components/console/ProjectSelect';
 import { ChevronLeft, Eye, EyeOff } from 'lucide-react';
 
 const inputClass =
@@ -21,10 +22,12 @@ export default function AddServerPage() {
   const [protocol, setProtocol] = useState<ExternalVMProtocol>('rdp');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = !!(name.trim() && ipAddress.trim() && password.trim()) && !submitting;
+  const canSubmit =
+    !!(name.trim() && ipAddress.trim() && password.trim() && projectId) && !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -35,6 +38,7 @@ export default function AddServerPage() {
         ipAddress: ipAddress.trim(),
         protocol,
         password,
+        projectId,
         ...(username.trim() && { username: username.trim() }),
       };
       await createExternalVM(dto);
@@ -127,6 +131,12 @@ export default function AddServerPage() {
               </button>
             </div>
           </div>
+          <ProjectSelect
+            serviceKey="elastic-servers"
+            value={projectId}
+            onChange={setProjectId}
+            disabled={submitting}
+          />
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-3 border-t border-gray-100 pt-5">

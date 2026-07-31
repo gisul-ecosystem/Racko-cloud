@@ -27,6 +27,8 @@ export const TENANT_PERMISSION_CATALOG: OrgPermissionDef[] = [
   { key: 'users.manage', label: 'Manage tenant users', group: 'Team' },
   { key: 'rbac.roles.write', label: 'Create / edit roles', group: 'Access control' },
   { key: 'rbac.assign', label: 'Assign roles to people', group: 'Access control' },
+  { key: 'projects.read', label: 'View projects', group: 'Projects' },
+  { key: 'projects.manage', label: 'Create & manage projects', group: 'Projects' },
 ];
 
 export const TENANT_ALL_PERMISSION_KEYS = TENANT_PERMISSION_CATALOG.map((p) => p.key);
@@ -60,6 +62,8 @@ export const TENANT_SYSTEM_ROLE_SEEDS: Array<{
       'aws.read',
       'aws.manage',
       'users.manage',
+      'projects.read',
+      'projects.manage',
     ],
   },
   {
@@ -82,6 +86,7 @@ export const TENANT_SYSTEM_ROLE_SEEDS: Array<{
       'elastic.read',
       'azure.read',
       'aws.read',
+      'projects.read',
     ],
   },
 ];

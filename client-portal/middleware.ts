@@ -44,6 +44,29 @@ function mapLegacyTenantPath(pathname: string): string | null {
   return null;
 }
 
+/** Old SA dashboard lived under /dashboard/super-admin; now /super-admin-console. */
+function mapLegacySuperAdminPath(pathname: string): string | null {
+  if (pathname === '/dashboard/super-admin' || pathname === '/dashboard/super-admin/') {
+    return '/super-admin-console';
+  }
+  if (pathname === '/dashboard/super-admin/vms' || pathname.startsWith('/dashboard/super-admin/vms/')) {
+    return `/super-admin-console/vm-management/vms${pathname.slice('/dashboard/super-admin/vms'.length)}`;
+  }
+  if (pathname === '/dashboard/super-admin/alerts' || pathname.startsWith('/dashboard/super-admin/alerts/')) {
+    return `/super-admin-console/vm-management/alerts${pathname.slice('/dashboard/super-admin/alerts'.length)}`;
+  }
+  if (pathname === '/dashboard/super-admin/software' || pathname.startsWith('/dashboard/super-admin/software/')) {
+    return `/super-admin-console/vm-management/software${pathname.slice('/dashboard/super-admin/software'.length)}`;
+  }
+  if (pathname === '/dashboard/super-admin/templates' || pathname.startsWith('/dashboard/super-admin/templates/')) {
+    return `/super-admin-console/vm-management/templates${pathname.slice('/dashboard/super-admin/templates'.length)}`;
+  }
+  if (pathname.startsWith('/dashboard/super-admin/')) {
+    return '/super-admin-console';
+  }
+  return null;
+}
+
 function getSafeInternalRedirect(raw: string | null | undefined): string | null {
   if (!raw) return null;
 
@@ -58,8 +81,10 @@ function getSafeInternalRedirect(raw: string | null | undefined): string | null 
     return null;
   }
 
-  // Rewrite legacy tenant redirects before allow-list check.
-  const mapped = mapLegacyTenantPath(value.split('?')[0] ?? value);
+  // Rewrite legacy tenant / SA dashboard redirects before allow-list check.
+  const mappedTenant = mapLegacyTenantPath(value.split('?')[0] ?? value);
+  const mappedSa = mapLegacySuperAdminPath(value.split('?')[0] ?? value);
+  const mapped = mappedTenant || mappedSa;
   if (mapped) {
     const qIndex = value.indexOf('?');
     value = qIndex >= 0 ? `${mapped}${value.slice(qIndex)}` : mapped;
@@ -83,7 +108,7 @@ function getSafeInternalRedirect(raw: string | null | undefined): string | null 
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
-  const legacy = mapLegacyTenantPath(pathname);
+  const legacy = mapLegacyTenantPath(pathname) || mapLegacySuperAdminPath(pathname);
   if (legacy) {
     const url = request.nextUrl.clone();
     url.pathname = legacy;

@@ -40,8 +40,9 @@ import type { AdminWallet, AdminWalletTransaction } from '@/types/adminBilling';
 import type { ICatalogVm } from '@/lib/vmCatalogApi';
 import type { IDedicatedServer } from '@/lib/dedicatedServerApi';
 import type { IVM } from '@/lib/vmApi';
+import { CustomerProjectsPanel } from '@/components/super-admin-console/CustomerProjectsPanel';
 
-type Tab = 'overview' | 'services' | 'billing' | 'usage' | 'team';
+type Tab = 'overview' | 'services' | 'projects' | 'billing' | 'usage' | 'team';
 
 interface CustomerProfile {
   id: string;
@@ -269,6 +270,9 @@ export default function CustomerDetailPage() {
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'overview', label: 'Overview' },
     { id: 'services', label: 'Services' },
+    ...(profile?.accountType === 'b2b' || profile?.role === 'admin'
+      ? [{ id: 'projects' as const, label: 'Projects' }]
+      : []),
     { id: 'billing', label: `Billing (${txTotal})` },
     {
       id: 'usage',
@@ -423,6 +427,15 @@ export default function CustomerDetailPage() {
                 >
                   Manage wallet / credit
                 </Link>
+                {(profile.accountType === 'b2b' || profile.role === 'admin') && (
+                  <button
+                    type="button"
+                    onClick={() => setTab('projects')}
+                    className="rounded-lg border border-gray-200 px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Manage projects
+                  </button>
+                )}
               </div>
             </div>
             <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
@@ -517,6 +530,8 @@ export default function CustomerDetailPage() {
           </table>
         </section>
       ) : null}
+
+      {tab === 'projects' ? <CustomerProjectsPanel adminId={profile.id} /> : null}
 
       {tab === 'billing' ? (
         <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">

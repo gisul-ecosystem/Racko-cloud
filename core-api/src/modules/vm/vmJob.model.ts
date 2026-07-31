@@ -38,6 +38,7 @@ export interface IVMJob extends Document {
     consoleProtocol: 'rdp' | 'ssh';
     enableVirtualization?: boolean;
     softwareIds?: mongoose.Types.ObjectId[];
+    projectId?: mongoose.Types.ObjectId;
     // Clone job extras
     sourceVmId?: mongoose.Types.ObjectId;
     sourceVmName?: string;
@@ -137,6 +138,7 @@ const vmJobSchema = new Schema<IVMJob>(
       consoleProtocol: { type: String, enum: ['rdp', 'ssh'], default: 'rdp' },
       enableVirtualization: { type: Boolean, default: false },
       softwareIds: { type: [Schema.Types.ObjectId], ref: 'Software', default: [] },
+      projectId: { type: Schema.Types.ObjectId, ref: 'Project', default: null },
       // Clone job extras
       sourceVmId: { type: Schema.Types.ObjectId, ref: 'VM', default: null },
       sourceVmName: { type: String, trim: true },

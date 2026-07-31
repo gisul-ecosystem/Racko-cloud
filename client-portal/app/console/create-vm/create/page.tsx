@@ -9,6 +9,7 @@ import {
   type IVmCatalogPlan,
   type VmCatalogCategory,
 } from '../../../../lib/vmCatalogApi';
+import { ProjectSelect } from '../../../../components/console/ProjectSelect';
 
 const OS_OPTIONS: { id: VmCatalogCategory; label: string }[] = [
   { id: 'ubuntu', label: 'Ubuntu' },
@@ -56,6 +57,8 @@ function availableBillings(plan: IVmCatalogPlan, category?: VmCatalogCategory): 
 
 export default function CreateVmPage() {
   const { api, routes, isReady } = useVmCatalogPortal();
+  const requiresProject = true;
+  const projectPortal = routes.hub === '/console' ? 'org' : 'tenant';
   const [plans, setPlans] = useState<IVmCatalogPlan[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -65,6 +68,7 @@ export default function CreateVmPage() {
   const [os, setOs] = useState<VmCatalogCategory>('ubuntu');
   const [billing, setBilling] = useState<BillingKey>('monthly');
   const [quantity, setQuantity] = useState('1');
+  const [projectId, setProjectId] = useState('');
   const [buyLoading, setBuyLoading] = useState(false);
   const [buyError, setBuyError] = useState<string | null>(null);
   const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null);
@@ -105,6 +109,7 @@ export default function CreateVmPage() {
     setOs('ubuntu');
     setBilling(cycles.includes('monthly') ? 'monthly' : cycles[0] || 'monthly');
     setQuantity('1');
+    setProjectId('');
     setBuyError(null);
     setSubmittedRequestId(null);
   }
@@ -136,6 +141,10 @@ export default function CreateVmPage() {
       setBuyError('Select a valid billing cycle for this template.');
       return;
     }
+    if (requiresProject && !projectId) {
+      setBuyError('Select a project for this purchase.');
+      return;
+    }
 
     const osLabel = OS_OPTIONS.find((o) => o.id === os)?.label || os;
 
@@ -165,6 +174,7 @@ export default function CreateVmPage() {
           total,
           billingLabel: 'GST 18%',
         },
+        ...(requiresProject ? { projectId } : {}),
       });
       setSubmittedRequestId(request._id);
     } catch (err) {
@@ -339,6 +349,16 @@ export default function CreateVmPage() {
                 />
               </div>
 
+              {requiresProject ? (
+                <ProjectSelect
+                  serviceKey="create-vm"
+                  value={projectId}
+                  onChange={setProjectId}
+                  disabled={buyLoading || !!submittedRequestId}
+                  portal={projectPortal}
+                />
+              ) : null}
+
               <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 text-sm">
                 <div className="flex justify-between text-gray-600">
                   <span>Subtotal</span>
@@ -369,7 +389,12 @@ export default function CreateVmPage() {
             <div className="border-t px-5 py-4">
               <button
                 type="button"
-                disabled={buyLoading || !!submittedRequestId || total <= 0}
+                disabled={
+                  buyLoading ||
+                  !!submittedRequestId ||
+                  total <= 0 ||
+                  (requiresProject && !projectId)
+                }
                 onClick={() => void onBuyNow()}
                 className="w-full rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
               >

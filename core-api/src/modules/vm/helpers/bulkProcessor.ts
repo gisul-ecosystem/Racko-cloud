@@ -293,6 +293,7 @@ export async function processBulkCreation(
           enableVirtualization: specs.enableVirtualization ?? false,
           softwareIds: specs.softwareIds ?? [],
           schedulePostCreateJobs: job.type === 'single_create',
+          projectId: specs.projectId,
         });
         globalIndex++;
       }
@@ -362,6 +363,7 @@ function buildVmSpecsForGoldenClone(
       softwareIds,
       softwarePreInstalled: true,
       schedulePostCreateJobs: false,
+      projectId: specs.projectId,
     });
   }
 
@@ -702,6 +704,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
       vmid,
       node: spec.node,
       adminId: spec.adminId,
+      projectId: spec.projectId,
       name: spec.vmName,
       description: spec.description,
       templateId: spec.templateId,
@@ -786,6 +789,7 @@ async function createSingleVM(spec: BulkVMSpec): Promise<mongoose.Types.ObjectId
       vmid,
       node: spec.node,
       adminId: spec.adminId,
+      projectId: spec.projectId,
       name: spec.vmName,
       description: spec.description,
       templateId: spec.templateId,

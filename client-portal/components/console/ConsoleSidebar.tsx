@@ -3,10 +3,12 @@
 import Link from 'next/link';
 import { Boxes, Cloud, LayoutGrid } from 'lucide-react';
 import { AZURE_ROUTES } from '../../cloud_automation/constants';
+import { useAdminServices } from '@/context/AdminServicesContext';
 import { useConsoleShell } from './ConsoleContext';
 
 export function ConsoleSidebar() {
   const { sidebarOpen, setSidebarOpen } = useConsoleShell();
+  const { hasActiveService } = useAdminServices();
 
   return (
     <>
@@ -38,20 +40,24 @@ export function ConsoleSidebar() {
               <LayoutGrid className="h-4 w-4 shrink-0 text-[#B91C1C]" />
               All services
             </Link>
-            <Link
-              href={AZURE_ROUTES.dashboard}
-              className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
-            >
-              <Cloud className="h-4 w-4 shrink-0 text-gray-400" />
-              Azure Services
-            </Link>
-            <Link
-              href="/console/elastic-servers"
-              className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
-            >
-              <Boxes className="h-4 w-4 shrink-0 text-gray-400" />
-              Elastic Servers
-            </Link>
+            {hasActiveService('azure') ? (
+              <Link
+                href={AZURE_ROUTES.dashboard}
+                className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+              >
+                <Cloud className="h-4 w-4 shrink-0 text-gray-400" />
+                Azure Services
+              </Link>
+            ) : null}
+            {hasActiveService('elastic-servers') ? (
+              <Link
+                href="/console/elastic-servers"
+                className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+              >
+                <Boxes className="h-4 w-4 shrink-0 text-gray-400" />
+                Elastic Servers
+              </Link>
+            ) : null}
           </nav>
         </div>
       </aside>

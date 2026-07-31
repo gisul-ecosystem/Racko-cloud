@@ -712,6 +712,9 @@ export class VMService {
         consoleProtocol,
         enableVirtualization,
         softwareIds,
+        projectId: dto.projectId
+          ? new mongoose.Types.ObjectId(dto.projectId)
+          : undefined,
       },
       jobErrors: [],
       startedAt: new Date(),

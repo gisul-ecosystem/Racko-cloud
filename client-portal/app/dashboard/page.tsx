@@ -19,7 +19,7 @@ export default function DashboardPage() {
     }
 
     if (user.role === 'super_admin') {
-      router.replace('/dashboard/super-admin');
+      router.replace('/super-admin-console');
     } else if (user.role === 'admin') {
       router.replace('/console');
     } else {

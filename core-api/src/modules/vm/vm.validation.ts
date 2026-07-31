@@ -70,6 +70,7 @@ export const createVMSchema = z.object({
       .max(20, 'Cannot select more than 20 software packages')
       .optional()
       .default([]),
+    projectId: mongoObjectId,
   }).superRefine((data, ctx) => {
     // Fixed password mode requires an explicit password.
     // Dynamic mode generates one per VM server-side, so none is needed.
