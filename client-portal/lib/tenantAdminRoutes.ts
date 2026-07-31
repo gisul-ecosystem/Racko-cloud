@@ -50,4 +50,8 @@ export const tenantConsole = {
   dedicatedServerMyServers: `${TENANT_CONSOLE}/dedicated-server/my-servers`,
   dedicatedServerConsole: (id: string) =>
     `${TENANT_CONSOLE}/dedicated-server/my-servers/${id}/console`,
+  projects: `${TENANT_CONSOLE}/projects`,
+  projectsCreate: `${TENANT_CONSOLE}/projects/create`,
+  projectsReports: `${TENANT_CONSOLE}/projects/reports`,
+  project: (id: string) => `${TENANT_CONSOLE}/projects/${id}`,
 } as const;

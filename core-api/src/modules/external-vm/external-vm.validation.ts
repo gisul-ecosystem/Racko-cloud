@@ -20,6 +20,8 @@ const externalVMBody = z.object({
     .string({ required_error: 'password is required' })
     .min(1, 'password is required')
     .max(256),
+  /** Required for platform admin console creates. */
+  projectId: mongoObjectId.optional(),
 });
 
 export const createExternalVMSchema = z.object({

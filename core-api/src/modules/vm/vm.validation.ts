@@ -70,6 +70,7 @@ export const createVMSchema = z.object({
       .max(20, 'Cannot select more than 20 software packages')
       .optional()
       .default([]),
+    projectId: mongoObjectId,
     networkType: z
       .enum(['public', 'private'], {
         invalid_type_error: 'networkType must be public or private',

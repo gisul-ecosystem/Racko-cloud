@@ -15,6 +15,7 @@ import { TenantNotification } from '../../models/tenantNotification.model';
 import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
 import { walletService } from '../wallet/wallet.service';
+import { projectsService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
@@ -342,12 +343,26 @@ class DedicatedServerService {
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);
 
+    if (!input.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const projectCtx = await projectsService.assertUsableForService({
+      projectId: input.projectId,
+      actingUserId: adminId.toString(),
+      serviceKey: 'dedicated-server',
+    });
+
     if (total > 0) {
       await adminBillingService.debitWallet(
         adminId.toString(),
         total,
         null,
-        'dedicated_server_purchase'
+        'dedicated_server_purchase',
+        {
+          projectId: projectCtx.projectId.toString(),
+          orgId: projectCtx.orgId,
+          serviceKey: 'dedicated-server',
+        }
       );
     }
 
@@ -355,6 +370,7 @@ class DedicatedServerService {
     try {
       doc = await DedicatedServerRequestModel.create({
         adminId,
+        projectId: projectCtx.projectId,
         planId: plan._id,
         planName: plan.name,
         specs: {
@@ -704,8 +720,28 @@ class DedicatedServerService {
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);
 
+    if (!input.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const projectCtx = await projectsService.assertUsableForTenantService({
+      projectId: input.projectId,
+      tenantId: tenantId.toString(),
+      serviceKey: 'dedicated-server',
+    });
+
     if (total > 0) {
-      await walletService.debitWallet(tenantId.toString(), total, 'dedicated_server_purchase');
+      await walletService.debitWallet(
+        tenantId.toString(),
+        total,
+        'dedicated_server_purchase',
+        null,
+        null,
+        null,
+        {
+          projectId: projectCtx.projectId.toString(),
+          serviceKey: 'dedicated-server',
+        }
+      );
     }
 
     let doc: IDedicatedServerRequest;
@@ -713,6 +749,7 @@ class DedicatedServerService {
       doc = await DedicatedServerRequestModel.create({
         tenantId,
         tenantUserId,
+        projectId: projectCtx.projectId,
         planId: plan._id,
         planName: plan.name,
         specs: {

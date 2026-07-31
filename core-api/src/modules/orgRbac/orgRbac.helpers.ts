@@ -28,28 +28,44 @@ export function rolePublic(doc: IOrgRbacRole) {
   };
 }
 
+function isDuplicateKeyError(err: unknown): boolean {
+  return Boolean(err && typeof err === 'object' && 'code' in err && (err as { code: number }).code === 11000);
+}
+
 export async function ensureSystemRoles(input: {
   scope: OrgRbacScope;
   orgId: string;
   seeds: Array<{ slug: string; name: string; description: string; permissions: string[] }>;
 }): Promise<void> {
+  // Always string — ObjectId orgId would bypass the unique index and create duplicates.
+  const orgId = String(input.orgId);
+
   for (const seed of input.seeds) {
-    await OrgRbacRoleModel.findOneAndUpdate(
-      { scope: input.scope, orgId: input.orgId, slug: seed.slug },
-      {
-        $setOnInsert: {
-          scope: input.scope,
-          orgId: input.orgId,
-          slug: seed.slug,
-          name: seed.name,
-          description: seed.description,
-          permissions: seed.permissions,
-          isSystem: true,
-          isActive: true,
-        },
+    const filter = { scope: input.scope, orgId, slug: seed.slug };
+    const update = {
+      $setOnInsert: {
+        scope: input.scope,
+        orgId,
+        slug: seed.slug,
+        name: seed.name,
+        description: seed.description,
+        isSystem: true,
+        isActive: true,
       },
-      { upsert: true, new: true }
-    );
+      // Merge new catalog permissions into existing system roles (e.g. projects.*).
+      // Atomic — avoids VersionError under parallel Access Control requests.
+      $addToSet: { permissions: { $each: seed.permissions } },
+    };
+
+    try {
+      await OrgRbacRoleModel.updateOne(filter, update, { upsert: true });
+    } catch (err) {
+      // Concurrent upserts can race on the unique (scope, orgId, slug) index.
+      if (!isDuplicateKeyError(err)) throw err;
+      await OrgRbacRoleModel.updateOne(filter, {
+        $addToSet: { permissions: { $each: seed.permissions } },
+      });
+    }
   }
 }
 

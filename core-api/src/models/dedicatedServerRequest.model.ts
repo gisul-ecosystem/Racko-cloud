@@ -14,6 +14,8 @@ export interface IDedicatedServerRequest extends Document {
   adminId?: mongoose.Types.ObjectId;
   tenantId?: mongoose.Types.ObjectId;
   tenantUserId?: mongoose.Types.ObjectId;
+  /** Organization project this request belongs to. */
+  projectId?: mongoose.Types.ObjectId;
   planId: mongoose.Types.ObjectId;
   planName: string;
   specs: {
@@ -49,6 +51,7 @@ const dedicatedServerRequestSchema = new Schema<IDedicatedServerRequest>(
     adminId: { type: Schema.Types.ObjectId, ref: 'User', index: true },
     tenantId: { type: Schema.Types.ObjectId, ref: 'Tenant', index: true },
     tenantUserId: { type: Schema.Types.ObjectId, ref: 'TenantUser', index: true },
+    projectId: { type: Schema.Types.ObjectId, ref: 'Project', index: true },
     planId: { type: Schema.Types.ObjectId, ref: 'DedicatedServerPlan', required: true },
     planName: { type: String, required: true, trim: true },
     specs: {

@@ -133,7 +133,11 @@ export class WalletService {
     reason: string,
     relatedOrderId: string | null = null,
     relatedVmId: string | null = null,
-    externalReference: string | null = null
+    externalReference: string | null = null,
+    attribution?: {
+      projectId?: string | null;
+      serviceKey?: string | null;
+    }
   ): Promise<{ balance: number; currency: string }> {
     if (amount <= 0) {
       throw new AppError('Amount must be positive.', 400, 'VALIDATION_ERROR');
@@ -159,6 +163,11 @@ export class WalletService {
       externalReference,
       relatedOrderId: relatedOrderId ? new mongoose.Types.ObjectId(relatedOrderId) : null,
       relatedVmId: relatedVmId ? new mongoose.Types.ObjectId(relatedVmId) : null,
+      projectId:
+        attribution?.projectId && mongoose.Types.ObjectId.isValid(attribution.projectId)
+          ? new mongoose.Types.ObjectId(attribution.projectId)
+          : null,
+      serviceKey: attribution?.serviceKey ?? null,
       balanceAfter: wallet.balance,
     });
 

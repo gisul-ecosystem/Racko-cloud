@@ -127,6 +127,7 @@ const tenantVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-vms');
 const tenantExternalVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-external-vms');
 const tenantVmCatalogProxy = createMountedCoreApiProxy('/api/v1/tenant-vm-catalog');
 const tenantDedicatedServersProxy = createMountedCoreApiProxy('/api/v1/tenant-dedicated-servers');
+const tenantProjectsProxy = createMountedCoreApiProxy('/api/v1/tenant-projects');
 const tenantRbacProxy = createMountedCoreApiProxy('/api/v1/tenant-rbac');
 
 // Role guard middleware factory
@@ -355,6 +356,31 @@ router.post('/api/v1/admin-services/admins/:adminId', authMiddleware, verifyMidd
 router.patch('/api/v1/admin-services/admins/:adminId/:serviceKey', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.delete('/api/v1/admin-services/admins/:adminId/:serviceKey', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 
+// Organization projects (org admin + super-admin on behalf of org)
+router.get('/api/v1/projects/admins/:adminId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/admins/:adminId/name-preview', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/admins/:adminId/eligible-services', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/projects/admins/:adminId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/admins/:adminId/:projectId/reports/by-service', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/admins/:adminId/:projectId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/projects/admins/:adminId/:projectId/services', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/tenants/:tenantId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/tenants/:tenantId/name-preview', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/tenants/:tenantId/eligible-services', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/projects/tenants/:tenantId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/projects/tenants/:tenantId/:projectId/services', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/projects/reports/by-project', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.get('/api/v1/projects/reports/by-service', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.get('/api/v1/projects/name-preview', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.get('/api/v1/projects/for-service/:serviceKey', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.get('/api/v1/projects', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.post('/api/v1/projects', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.get('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.patch('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.post('/api/v1/projects/:id/services', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.delete('/api/v1/projects/:id/services/:serviceKey', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.post('/api/v1/projects/:id/archive', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+
 // ─── MANAGED USERS ROUTES (admin + super_admin) ──────────────────────────────
 router.post('/api/v1/managed-users/single', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/managed-users/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -448,6 +474,7 @@ router.use('/api/v1/tenant-vms', requireTenantBearer, tenantVmsProxy);
 router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVmsProxy);
 router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProxy);
 router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
+router.use('/api/v1/tenant-projects', requireTenantBearer, tenantProjectsProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify

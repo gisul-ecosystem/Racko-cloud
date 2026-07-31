@@ -121,6 +121,8 @@ export interface CreateCatalogVmRequestDto {
     total: number;
     billingLabel?: string;
   };
+  /** Required for platform admin purchases. */
+  projectId?: string;
 }
 
 export interface IVmCatalogPlan {

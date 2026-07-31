@@ -41,7 +41,8 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     (pathname?.startsWith('/console/aws') ?? false) ||
     (pathname?.startsWith('/console/docs') ?? false) ||
     (pathname?.startsWith('/console/create-vm') ?? false) ||
-    (pathname?.startsWith('/console/dedicated-server') ?? false);
+    (pathname?.startsWith('/console/dedicated-server') ?? false) ||
+    (pathname?.startsWith('/console/projects') ?? false);
 
   useEffect(() => {
     if (isTenantArea) return;
