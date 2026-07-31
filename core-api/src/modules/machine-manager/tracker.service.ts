@@ -83,6 +83,9 @@ export async function saveBaseline(
  * The sequence number is auto-incremented per machine using MongoDB's
  * findOneAndUpdate + $inc pattern so events are always ordered correctly
  * even under concurrent writes.
+ *
+ * For file_rename events: automatically deletes the old path's S3 object
+ * to prevent storage accumulation when files are renamed multiple times.
  */
 export async function appendActivity(
   agentId: string,
@@ -93,6 +96,72 @@ export async function appendActivity(
   const machine = await MachineModel.findOne({ agentId });
   if (!machine) {
     throw new NotFoundError(`Agent not found: ${agentId}`);
+  }
+
+  // Rename deduplication: when a file is renamed, delete the old S3 object
+  // so storage doesn't accumulate with each rename. We find the most recent
+  // file_write for the old path and delete its storageRef from S3.
+  if (type === 'file_rename') {
+    const renamePayload = payload as { oldPath?: string; newPath?: string };
+    if (renamePayload.oldPath) {
+      const oldActivity = await MachineActivityModel.findOne({
+        machineId: machine._id,
+        type: 'file_write',
+        'payload.path': renamePayload.oldPath,
+      }).sort({ sequence: -1 }); // most recent first
+
+      if (oldActivity) {
+        const oldPayload = oldActivity.payload as { storageRef?: string };
+        if (oldPayload.storageRef) {
+          // Delete from S3 — best-effort, non-fatal
+          try {
+            await seaweedfsService.delete(oldPayload.storageRef);
+            logger.info('[Tracker] Deleted old S3 object on rename', {
+              oldPath: renamePayload.oldPath,
+              storageRef: oldPayload.storageRef,
+            });
+          } catch (err) {
+            logger.warn('[Tracker] Could not delete old S3 object on rename (non-fatal)', {
+              oldPath: renamePayload.oldPath,
+              storageRef: oldPayload.storageRef,
+              err,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // File write deduplication: when a file is re-uploaded (same path, new content),
+  // delete the previous S3 object so only the latest version is kept in storage.
+  if (type === 'file_write') {
+    const writePayload = payload as { path?: string; storageRef?: string };
+    if (writePayload.path) {
+      const prevActivity = await MachineActivityModel.findOne({
+        machineId: machine._id,
+        type: 'file_write',
+        'payload.path': writePayload.path,
+      }).sort({ sequence: -1 }); // most recent first
+
+      if (prevActivity) {
+        const prevPayload = prevActivity.payload as { storageRef?: string };
+        if (prevPayload.storageRef && prevPayload.storageRef !== writePayload.storageRef) {
+          try {
+            await seaweedfsService.delete(prevPayload.storageRef);
+            logger.debug('[Tracker] Deleted old S3 object on file update', {
+              path: writePayload.path,
+              oldStorageRef: prevPayload.storageRef,
+            });
+          } catch (err) {
+            logger.warn('[Tracker] Could not delete old S3 object on file update (non-fatal)', {
+              path: writePayload.path,
+              storageRef: prevPayload.storageRef,
+              err,
+            });
+          }
+        }
+      }
+    }
   }
 
   // Atomic sequence increment — stored in a small counter doc alongside activity
@@ -144,6 +213,30 @@ export async function clearActivityLog(machineId: mongoose.Types.ObjectId): Prom
     ActivityCounterModel.deleteOne({ machineId }),
   ]);
   logger.info('[Tracker] Activity log cleared', { machineId: machineId.toString() });
+}
+
+/**
+ * Generate a presigned S3 PUT URL for direct agent-to-SeaweedFS upload.
+ * The agent uses this to upload files of any size directly, bypassing nginx.
+ */
+export async function getPresignedUploadUrl(
+  agentId: string,
+  sha256: string,
+  filename: string,
+  mimeType: string
+): Promise<{ presignedUrl: string; storageRef: string }> {
+  const machine = await MachineModel.findOne({ agentId });
+  if (!machine) {
+    throw new NotFoundError(`Agent not found: ${agentId}`);
+  }
+
+  return seaweedfsService.generatePresignedPutUrl(
+    machine._id.toString(),
+    sha256,
+    filename,
+    mimeType,
+    3600 // 1 hour TTL
+  );
 }
 
 // ─── File upload / download ───────────────────────────────────────────────────

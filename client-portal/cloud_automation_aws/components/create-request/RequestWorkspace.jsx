@@ -1,8 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, FilePlus2, Server } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
@@ -13,7 +13,7 @@ import {
   linkCloudRequestWalletCharge,
   refundCloudRequestWallet,
 } from '../../../lib/cloudRequestWallet';
-import { createRequest } from '../../api/client';
+import { createRequest, getPurchaseClonePayload, listPrivilegedRoles, createPrivilegedRoleRequest } from '../../api/client';
 import { AWS_DEFAULT_REGION } from '../../constants';
 import { useAwsRoutes } from '../../../lib/cloudPortalRoutes';
 import { DEFAULT_IAM_POLICIES } from '../../config/iamPolicies';
@@ -29,7 +29,17 @@ import { getEffectivePolicies } from './PermissionsPicker';
 import { PricingSummary } from './PricingSummary';
 import { RequestForm } from './RequestForm';
 import { CreateRequestSubmitBar } from './CreateRequestSubmitBar';
-import { defaultEndDate, defaultStartDate } from '../../utils/requestForm';
+import {
+  addHoursToDateTimeLocal,
+  defaultEndDate,
+  defaultStartDate,
+  defaultTestIdsEndDate,
+  defaultTestIdsStartDate,
+  isValidCleanupTime,
+  TEST_IDS_DEFAULTS,
+  TEST_IDS_MAX_ACCOUNT_COUNT,
+} from '../../utils/requestForm';
+import { FINAL_FORM_STEP } from './RequestStepper';
 
 function durationDaysBetween(startDate, endDate) {
   if (!startDate || !endDate) return 0;
@@ -42,13 +52,26 @@ function durationDaysBetween(startDate, endDate) {
 function validateStep(step, input) {
   const errors = [];
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  const maxAccounts =
+    input.idMode === 'test_ids' ? TEST_IDS_MAX_ACCOUNT_COUNT : 50;
 
   if (step === 1) {
-    if (!emailPattern.test(input.customerEmail.trim())) {
-      errors.push('Enter a valid customer email address.');
+    if (!String(input.projectName || '').trim()) {
+      errors.push('Enter a project name.');
     }
-    if (!Number.isInteger(input.accountCount) || input.accountCount <= 0 || input.accountCount > 50) {
-      errors.push('Account count must be a positive integer between 1 and 50.');
+    if (!input.idMode) {
+      errors.push('Select AWS test_ids or AWS IDs.');
+    }
+    if (
+      !Number.isInteger(input.accountCount) ||
+      input.accountCount <= 0 ||
+      input.accountCount > maxAccounts
+    ) {
+      errors.push(
+        input.idMode === 'test_ids'
+          ? `Account count must be between 1 and ${TEST_IDS_MAX_ACCOUNT_COUNT} for test_ids.`
+          : 'Account count must be a positive integer between 1 and 50.'
+      );
     }
     if (!input.startDate || !input.endDate) {
       errors.push('Start and end dates are required.');
@@ -57,7 +80,7 @@ function validateStep(step, input) {
     }
   }
 
-  if (step === 2 && input.enableDailyUsage) {
+  if (step === 2 && input.enableDailyUsage && input.idMode !== 'test_ids') {
     if (input.usageWindows.length === 0) {
       errors.push('Enable at least one day when daily usage windows are turned on.');
     }
@@ -76,19 +99,22 @@ function validateStep(step, input) {
     }
   }
 
-  if (step === 3 && input.enableResourceCleanup) {
-    if (
-      !Number.isInteger(input.resourceCleanupIntervalHours) ||
-      input.resourceCleanupIntervalHours < 1 ||
-      input.resourceCleanupIntervalHours > 24
-    ) {
-      errors.push('Enter a resource cleanup interval between 1 and 24 hours when enabled.');
+  if (step === 3) {
+    const cleanupOn = input.idMode === 'test_ids' || input.enableResourceCleanup;
+    if (cleanupOn && !isValidCleanupTime(input.resourceCleanupTime)) {
+      errors.push('Select a daily cleanup time when resource cleanup is enabled.');
     }
   }
 
-  if (step === 4 && input.budgetEnabled) {
-    if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
-      errors.push('Budget per user must be a positive number.');
+  if (step === 4) {
+    if (input.idMode === 'test_ids') {
+      if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
+        errors.push('Test IDs require a per-user budget.');
+      }
+    } else if (input.budgetEnabled) {
+      if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
+        errors.push('Budget per user must be a positive number.');
+      }
     }
   }
 
@@ -111,7 +137,13 @@ function validateStep(step, input) {
     }
   }
 
-  if (step === 8 && !input.region) {
+  if (step === 8) {
+    if (!emailPattern.test(input.customerEmail.trim())) {
+      errors.push('Enter a valid customer email address.');
+    }
+  }
+
+  if (step === 9 && !input.region) {
     errors.push('Select an AWS region.');
   }
 
@@ -120,7 +152,7 @@ function validateStep(step, input) {
 
 function validateForm(input) {
   const errors = [];
-  for (let step = 1; step <= 8; step += 1) {
+  for (let step = 1; step <= FINAL_FORM_STEP; step += 1) {
     errors.push(...validateStep(step, input));
   }
   return errors;
@@ -128,6 +160,10 @@ function validateForm(input) {
 
 export function RequestWorkspace() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const fromTestRequest = searchParams.get('fromTestRequest');
+  const purchaseToken = searchParams.get('purchaseToken');
+  const isPurchaseConvert = Boolean(fromTestRequest && purchaseToken);
   const AWS_ROUTES = useAwsRoutes();
   const { services, servicesByCategory, loading, error, refetch } = useServiceCatalog();
 
@@ -139,10 +175,17 @@ export function RequestWorkspace() {
   const [selectedInstances, setSelectedInstances] = useState([]);
   const [permissionOverrides, setPermissionOverrides] = useState({});
   const [region, setRegion] = useState('');
+  const [projectName, setProjectName] = useState('');
+  const [idMode, setIdMode] = useState(isPurchaseConvert ? 'aws_ids' : null);
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
+  const [costingMode, setCostingMode] = useState('shared');
   const [startDate, setStartDate] = useState(defaultStartDate);
   const [endDate, setEndDate] = useState(defaultEndDate);
+  const awsIdsSnapshotRef = useRef(null);
+  const [convertedFromRequestId, setConvertedFromRequestId] = useState(null);
+  const [cloneLoading, setCloneLoading] = useState(isPurchaseConvert);
+  const [cloneError, setCloneError] = useState(null);
   const [accessType, setAccessType] = useState(() => {
     const days = durationDaysBetween(defaultStartDate, defaultEndDate);
     return days > 7 ? 'identity_center' : 'magic_link';
@@ -151,7 +194,8 @@ export function RequestWorkspace() {
   const [usageWindows, setUsageWindows] = useState([]);
   const [timezone, setTimezone] = useState('Asia/Kolkata');
   const [enableResourceCleanup, setEnableResourceCleanup] = useState(false);
-  const [resourceCleanupIntervalHours, setResourceCleanupIntervalHours] = useState(undefined);
+  const [resourceCleanupTime, setResourceCleanupTime] = useState('');
+  const [resourceCleanupTimezone, setResourceCleanupTimezone] = useState('Asia/Kolkata');
   const [budgetEnabled, setBudgetEnabled] = useState(false);
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState(undefined);
   const [submitting, setSubmitting] = useState(false);
@@ -161,6 +205,14 @@ export function RequestWorkspace() {
   const [walletCurrency, setWalletCurrency] = useState('INR');
   const [usdToInrRate, setUsdToInrRate] = useState(DEFAULT_USD_TO_INR_RATE);
   const [walletLoading, setWalletLoading] = useState(true);
+  const [privilegedRoleOpen, setPrivilegedRoleOpen] = useState(false);
+  const [privilegedRoles, setPrivilegedRoles] = useState([]);
+  const [privilegedRolesLoading, setPrivilegedRolesLoading] = useState(false);
+  const [selectedPrivilegedRole, setSelectedPrivilegedRole] = useState('');
+  const [privilegedRoleSubmitting, setPrivilegedRoleSubmitting] = useState(false);
+  const [privilegedRoleSubmitted, setPrivilegedRoleSubmitted] = useState(false);
+  const [privilegedRoleMessage, setPrivilegedRoleMessage] = useState(null);
+  const [privilegedRoleMessageType, setPrivilegedRoleMessageType] = useState(null);
 
   const durationDays = useMemo(
     () => durationDaysBetween(startDate, endDate),
@@ -186,6 +238,8 @@ export function RequestWorkspace() {
 
   const validationInput = useMemo(
     () => ({
+      projectName,
+      idMode,
       customerEmail,
       accountCount,
       startDate,
@@ -193,7 +247,8 @@ export function RequestWorkspace() {
       enableDailyUsage,
       usageWindows,
       enableResourceCleanup,
-      resourceCleanupIntervalHours,
+      resourceCleanupTime,
+      resourceCleanupTimezone,
       budgetEnabled,
       perUserBudgetUsd,
       selectedServiceIds,
@@ -203,6 +258,8 @@ export function RequestWorkspace() {
       region,
     }),
     [
+      projectName,
+      idMode,
       customerEmail,
       accountCount,
       startDate,
@@ -210,7 +267,8 @@ export function RequestWorkspace() {
       enableDailyUsage,
       usageWindows,
       enableResourceCleanup,
-      resourceCleanupIntervalHours,
+      resourceCleanupTime,
+      resourceCleanupTimezone,
       budgetEnabled,
       perUserBudgetUsd,
       selectedServiceIds,
@@ -234,8 +292,8 @@ export function RequestWorkspace() {
       accountCount,
       startDate,
       endDate,
-      usageWindows: enableDailyUsage ? usageWindows : [],
-      costingMode: 'shared',
+      usageWindows: idMode === 'test_ids' ? [] : enableDailyUsage ? usageWindows : [],
+      costingMode,
     };
   }, [
     selectedServiceIds,
@@ -245,8 +303,10 @@ export function RequestWorkspace() {
     accountCount,
     startDate,
     endDate,
+    idMode,
     enableDailyUsage,
     usageWindows,
+    costingMode,
   ]);
 
   const { estimate, loading: estimateLoading, error: estimateError } =
@@ -258,7 +318,7 @@ export function RequestWorkspace() {
     error: regionsError,
   } = useAvailableRegions(selectedServiceIds, selectedInstances);
 
-  const showFinalStepPanel = currentStep === 8;
+  const showFinalStepPanel = currentStep === FINAL_FORM_STEP;
 
   const refreshWallet = useCallback(async () => {
     setWalletLoading(true);
@@ -279,6 +339,153 @@ export function RequestWorkspace() {
   useEffect(() => {
     void refreshWallet();
   }, [refreshWallet]);
+
+  useEffect(() => {
+    if (!isPurchaseConvert || !purchaseToken) return;
+
+    let cancelled = false;
+    setCloneLoading(true);
+    setCloneError(null);
+
+    void getPurchaseClonePayload(purchaseToken)
+      .then((payload) => {
+        if (cancelled) return;
+        setConvertedFromRequestId(payload.sourceRequestId);
+        setProjectName(payload.projectName || '');
+        setIdMode('aws_ids');
+        setCustomerEmail(payload.customerEmail || '');
+        setAccountCount(payload.accountCount || 1);
+        setCostingMode(payload.costingMode || 'shared');
+        setAccessType(payload.accessType || 'magic_link');
+        setStartDate(defaultStartDate());
+        setEndDate(defaultEndDate());
+        setEnableDailyUsage(Boolean(payload.enableDailyUsage));
+        setUsageWindows(
+          (payload.usageWindows || []).map((window) => ({
+            dayOfWeek: window.dayOfWeek ?? window.day_of_week,
+            windowStartTime: window.windowStartTime || window.window_start_time || '09:00',
+            windowEndTime: window.windowEndTime || window.window_end_time || '17:00',
+            timezone: window.timezone || payload.timezone || 'Asia/Kolkata',
+            dailyLimitHours: window.dailyLimitHours ?? window.daily_limit_hours ?? undefined,
+          }))
+        );
+        setTimezone(payload.timezone || 'Asia/Kolkata');
+        setEnableResourceCleanup(Boolean(payload.resourceCleanupEnabled));
+        setResourceCleanupTime(payload.resourceCleanupTime || '');
+        setResourceCleanupTimezone(
+          payload.resourceCleanupTimezone || payload.timezone || 'Asia/Kolkata'
+        );
+        if (payload.perUserBudgetUsd != null) {
+          setBudgetEnabled(true);
+          setPerUserBudgetUsd(payload.perUserBudgetUsd);
+        }
+        setRegion(payload.region || '');
+        setSelectedServiceIds(
+          (payload.selectedServices || [])
+            .map((service) => service.serviceId)
+            .filter(Boolean)
+        );
+        setSelectedInstances(
+          (payload.selectedServices || [])
+            .filter((service) => service.instanceType)
+            .map((service) => ({
+              serviceId: service.serviceId,
+              instanceType: service.instanceType,
+            }))
+        );
+        const nextOverrides = {};
+        for (const entry of payload.permissions || []) {
+          if (entry.serviceId) {
+            nextOverrides[entry.serviceId] = entry.policies || [];
+          }
+        }
+        setPermissionOverrides(nextOverrides);
+        setMaxReachableStep(FINAL_FORM_STEP);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setCloneError(
+          err instanceof ApiError ? err.message : 'Unable to load purchase details from this link.'
+        );
+      })
+      .finally(() => {
+        if (!cancelled) setCloneLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isPurchaseConvert, purchaseToken]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadPrivilegedRoles() {
+      setPrivilegedRolesLoading(true);
+      try {
+        const roles = await listPrivilegedRoles();
+        if (!cancelled) {
+          setPrivilegedRoles(roles);
+        }
+      } catch {
+        if (!cancelled) {
+          setPrivilegedRoles([]);
+        }
+      } finally {
+        if (!cancelled) {
+          setPrivilegedRolesLoading(false);
+        }
+      }
+    }
+    void loadPrivilegedRoles();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const handleSubmitPrivilegedRoleRequest = useCallback(async () => {
+    if (!selectedPrivilegedRole) {
+      setPrivilegedRoleMessage('Select a privileged role.');
+      setPrivilegedRoleMessageType('error');
+      return;
+    }
+
+    if (!customerEmail.trim()) {
+      setPrivilegedRoleMessage('Enter a customer email first.');
+      setPrivilegedRoleMessageType('error');
+      return;
+    }
+
+    setPrivilegedRoleSubmitting(true);
+    setPrivilegedRoleMessage(null);
+    setPrivilegedRoleMessageType(null);
+    setPrivilegedRoleSubmitted(false);
+    try {
+      await createPrivilegedRoleRequest({
+        customerEmail: customerEmail.trim(),
+        awsRole: selectedPrivilegedRole,
+      });
+      setPrivilegedRoleSubmitted(true);
+      setPrivilegedRoleMessageType('success');
+      setPrivilegedRoleMessage(
+        `${selectedPrivilegedRole} was submitted for ${customerEmail.trim()}. An org admin will approve it in Lab Management.`
+      );
+    } catch (err) {
+      setPrivilegedRoleSubmitted(false);
+      setPrivilegedRoleMessageType('error');
+      setPrivilegedRoleMessage(
+        err instanceof ApiError ? err.message : 'Failed to submit privileged role request.'
+      );
+    } finally {
+      setPrivilegedRoleSubmitting(false);
+    }
+  }, [selectedPrivilegedRole, customerEmail]);
+
+  const handleSelectedPrivilegedRoleChange = useCallback((value) => {
+    setSelectedPrivilegedRole(value);
+    setPrivilegedRoleSubmitted(false);
+    setPrivilegedRoleMessage(null);
+    setPrivilegedRoleMessageType(null);
+  }, []);
 
   const handleToggleService = useCallback((serviceId) => {
     setSelectedServiceIds((current) => {
@@ -319,6 +526,90 @@ export function RequestWorkspace() {
     setRegion(nextRegion);
   }, []);
 
+  const handleIdModeChange = useCallback(
+    (mode) => {
+      if (isPurchaseConvert) return;
+      if (mode === 'test_ids') {
+        if (idMode !== 'test_ids') {
+          awsIdsSnapshotRef.current = {
+            accountCount,
+            costingMode,
+            startDate,
+            endDate,
+            enableDailyUsage,
+            usageWindows,
+            enableResourceCleanup,
+            resourceCleanupTime,
+            resourceCleanupTimezone,
+            budgetEnabled,
+            perUserBudgetUsd,
+            accessType,
+          };
+        }
+
+        setIdMode('test_ids');
+        setAccountCount(TEST_IDS_DEFAULTS.accountCount);
+        setCostingMode('per_user');
+        setStartDate(defaultTestIdsStartDate());
+        setEndDate(defaultTestIdsEndDate());
+        setEnableDailyUsage(false);
+        setUsageWindows([]);
+        setEnableResourceCleanup(true);
+        setResourceCleanupTime('');
+        setResourceCleanupTimezone('Asia/Kolkata');
+        setBudgetEnabled(true);
+        setPerUserBudgetUsd(TEST_IDS_DEFAULTS.perUserBudgetUsd);
+        setAccessType('magic_link');
+        return;
+      }
+
+      const snapshot = awsIdsSnapshotRef.current;
+      setIdMode('aws_ids');
+      setAccountCount(snapshot?.accountCount ?? 10);
+      setCostingMode(snapshot?.costingMode ?? 'shared');
+      setStartDate(snapshot?.startDate ?? defaultStartDate());
+      setEndDate(snapshot?.endDate ?? defaultEndDate());
+      setEnableDailyUsage(snapshot?.enableDailyUsage ?? false);
+      setUsageWindows(snapshot?.usageWindows ?? []);
+      setEnableResourceCleanup(snapshot?.enableResourceCleanup ?? false);
+      setResourceCleanupTime(snapshot?.resourceCleanupTime ?? '');
+      setResourceCleanupTimezone(snapshot?.resourceCleanupTimezone ?? 'Asia/Kolkata');
+      setBudgetEnabled(snapshot?.budgetEnabled ?? false);
+      setPerUserBudgetUsd(
+        snapshot?.budgetEnabled || snapshot?.costingMode === 'per_user'
+          ? snapshot?.perUserBudgetUsd
+          : undefined
+      );
+      setAccessType(snapshot?.accessType ?? 'magic_link');
+    },
+    [
+      accessType,
+      accountCount,
+      budgetEnabled,
+      costingMode,
+      enableDailyUsage,
+      enableResourceCleanup,
+      endDate,
+      idMode,
+      perUserBudgetUsd,
+      resourceCleanupTime,
+      resourceCleanupTimezone,
+      startDate,
+      usageWindows,
+      isPurchaseConvert,
+    ]
+  );
+
+  const handleStartDateChange = useCallback(
+    (value) => {
+      setStartDate(value);
+      if (idMode === 'test_ids') {
+        setEndDate(addHoursToDateTimeLocal(value, 24));
+      }
+    },
+    [idMode]
+  );
+
   useEffect(() => {
     if (!region) return;
     if (availableRegions.length === 0) return;
@@ -337,7 +628,7 @@ export function RequestWorkspace() {
     setStepErrors(errors);
     if (errors.length > 0) return;
 
-    const nextStep = Math.min(currentStep + 1, 8);
+    const nextStep = Math.min(currentStep + 1, FINAL_FORM_STEP);
     setMaxReachableStep((current) => Math.max(current, nextStep));
     setCurrentStep(nextStep);
     setStepErrors([]);
@@ -401,39 +692,59 @@ export function RequestWorkspace() {
       permissionsPayload.map((entry) => [String(entry.serviceId), entry.policies])
     );
 
-    const normalizedUsageWindows = enableDailyUsage
-      ? usageWindows.map((window) => ({
-          day_of_week: window.dayOfWeek,
-          window_start_time: window.windowStartTime,
-          window_end_time: window.windowEndTime,
-          timezone: window.timezone || timezone,
-          daily_limit_hours: window.dailyLimitHours ?? null,
-        }))
-      : [];
+    const normalizedUsageWindows =
+      idMode === 'test_ids'
+        ? []
+        : enableDailyUsage
+          ? usageWindows.map((window) => ({
+              day_of_week: window.dayOfWeek,
+              window_start_time: window.windowStartTime,
+              window_end_time: window.windowEndTime,
+              timezone: window.timezone || timezone,
+              daily_limit_hours: window.dailyLimitHours ?? null,
+            }))
+          : [];
+
+    const resolvedAccessType = idMode === 'test_ids' ? 'magic_link' : accessType;
+    const resolvedBudgetEnabled = idMode === 'test_ids' ? true : budgetEnabled;
+    const resolvedCleanupEnabled =
+      idMode === 'test_ids' ? true : enableResourceCleanup;
 
     const payload = {
+      project_name: projectName.trim(),
+      id_mode: isPurchaseConvert ? 'aws_ids' : idMode,
       customer_email: customerEmail.trim(),
       account_count: accountCount,
-      costing_mode: 'shared',
-      access_type: accessType,
+      costing_mode: costingMode,
+      access_type: resolvedAccessType,
       start_date: startDate,
       end_date: endDate,
       timezone:
         typeof Intl !== 'undefined'
           ? Intl.DateTimeFormat().resolvedOptions().timeZone
           : timezone,
-      enable_daily_usage: enableDailyUsage && normalizedUsageWindows.length > 0,
+      enable_daily_usage: idMode !== 'test_ids' && enableDailyUsage && normalizedUsageWindows.length > 0,
       usage_windows: normalizedUsageWindows,
-      enable_resource_cleanup: enableResourceCleanup,
-      resource_cleanup_interval_hours: enableResourceCleanup
-        ? resourceCleanupIntervalHours
-        : undefined,
-      per_user_budget_usd: budgetEnabled ? perUserBudgetUsd : undefined,
+      enable_resource_cleanup: resolvedCleanupEnabled,
+      ...(resolvedCleanupEnabled && isValidCleanupTime(resourceCleanupTime)
+        ? {
+            resource_cleanup_time: resourceCleanupTime.trim(),
+            resource_cleanup_timezone: resourceCleanupTimezone,
+            resource_cleanup_interval_hours: 24,
+          }
+        : {}),
+      per_user_budget_usd: resolvedBudgetEnabled ? perUserBudgetUsd : undefined,
       selected_services: selectedServicesPayload,
       selected_permissions: selectedPermissions,
       permissions: permissionsPayload,
       region,
       estimated_price: estimate?.total ?? 0,
+      ...(isPurchaseConvert && convertedFromRequestId
+        ? {
+            converted_from_request_id: convertedFromRequestId,
+            purchase_token: purchaseToken || undefined,
+          }
+        : {}),
     };
 
     setSubmitting(true);
@@ -515,10 +826,12 @@ export function RequestWorkspace() {
                   AWS automation
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
-                  Create request
+                  {isPurchaseConvert ? 'Continue purchase from test lab' : 'Create request'}
                 </h1>
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
-                  Provision AWS lab access for a customer using the service catalog.
+                  {isPurchaseConvert
+                    ? 'Services and permissions are prefilled from your test lab. Set dates, cleanup, budget, and account count, then submit.'
+                    : 'Name your lab, choose test or full AWS IDs, then configure services and send credentials by email.'}
                 </p>
               </div>
             </div>
@@ -530,15 +843,15 @@ export function RequestWorkspace() {
         </div>
       </div>
 
-      {error && !loading && <ErrorState message={error} onRetry={refetch} />}
+      {cloneError && !cloneLoading && <ErrorState message={cloneError} />}
 
-      {loading && (
+      {(loading || cloneLoading) && (
         <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
           <TableSkeleton rows={6} cols={1} embedded />
         </div>
       )}
 
-      {!loading && !error && (
+      {!loading && !cloneLoading && !error && !cloneError && (
         <div
           className={`grid grid-cols-1 gap-6 ${
             showFinalStepPanel ? 'xl:grid-cols-[minmax(0,1fr)_340px]' : ''
@@ -561,6 +874,11 @@ export function RequestWorkspace() {
               pricingRegion={pricingRegion}
               region={region}
               onRegionChange={handleRegionChange}
+              projectName={projectName}
+              onProjectNameChange={setProjectName}
+              idMode={idMode}
+              onIdModeChange={handleIdModeChange}
+              purchaseConvertMode={isPurchaseConvert}
               customerEmail={customerEmail}
               onCustomerEmailChange={setCustomerEmail}
               accountCount={accountCount}
@@ -568,7 +886,7 @@ export function RequestWorkspace() {
               accessType={accessType}
               onAccessTypeChange={setAccessType}
               startDate={startDate}
-              onStartDateChange={setStartDate}
+              onStartDateChange={handleStartDateChange}
               endDate={endDate}
               onEndDateChange={setEndDate}
               durationDays={durationDays}
@@ -580,8 +898,10 @@ export function RequestWorkspace() {
               onTimezoneChange={setTimezone}
               enableResourceCleanup={enableResourceCleanup}
               onEnableResourceCleanupChange={setEnableResourceCleanup}
-              resourceCleanupIntervalHours={resourceCleanupIntervalHours}
-              onResourceCleanupIntervalHoursChange={setResourceCleanupIntervalHours}
+              resourceCleanupTime={resourceCleanupTime}
+              onResourceCleanupTimeChange={setResourceCleanupTime}
+              resourceCleanupTimezone={resourceCleanupTimezone}
+              onResourceCleanupTimezoneChange={setResourceCleanupTimezone}
               budgetEnabled={budgetEnabled}
               onBudgetEnabledChange={setBudgetEnabled}
               perUserBudgetUsd={perUserBudgetUsd}
@@ -592,6 +912,17 @@ export function RequestWorkspace() {
               availableRegions={availableRegions}
               regionsLoading={regionsLoading}
               regionsError={regionsError}
+              privilegedRoleOpen={privilegedRoleOpen}
+              onPrivilegedRoleOpenChange={setPrivilegedRoleOpen}
+              privilegedRoles={privilegedRoles}
+              privilegedRolesLoading={privilegedRolesLoading}
+              selectedPrivilegedRole={selectedPrivilegedRole}
+              onSelectedPrivilegedRoleChange={handleSelectedPrivilegedRoleChange}
+              onSubmitPrivilegedRoleRequest={handleSubmitPrivilegedRoleRequest}
+              privilegedRoleSubmitting={privilegedRoleSubmitting}
+              privilegedRoleSubmitted={privilegedRoleSubmitted}
+              privilegedRoleMessage={privilegedRoleMessage}
+              privilegedRoleMessageType={privilegedRoleMessageType}
             />
           </div>
 

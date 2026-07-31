@@ -70,6 +70,14 @@ function rewriteAwsOrgAdminPath(path: string): string {
   return `/api/org-admin${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
 }
 
+function rewriteAwsPurchaseIntentPath(path: string): string {
+  const purchasePrefix = `${GATEWAY_PREFIX}/purchase-intent`;
+  const suffix = path.startsWith(purchasePrefix)
+    ? path.slice(purchasePrefix.length) || '/'
+    : path;
+  return `/api/purchase-intent${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
 const awsManagePortalProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_AWS_URL,
   changeOrigin: true,
@@ -121,8 +129,28 @@ const cloudAutomationAwsProxy = createProxyMiddleware({
   },
 });
 
+const awsPurchaseIntentProxy = createProxyMiddleware({
+  target: config.CLOUD_AUTOMATION_AWS_URL,
+  changeOrigin: true,
+  timeout: 0,
+  proxyTimeout: 0,
+  pathRewrite: rewriteAwsPurchaseIntentPath,
+  on: {
+    error: (_err, _req, res) => {
+      (res as Response).status(502).json({
+        success: false,
+        message: 'AWS purchase intent service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
+  },
+});
+
 /** Public AWS manage-users portal (token/JWT auth enforced by cloud_automation_aws). */
 router.use(`${GATEWAY_PREFIX}/manage`, awsManagePortalProxy);
+
+/** Public purchase-intent email links (token auth enforced by cloud_automation_aws). */
+router.use(`${GATEWAY_PREFIX}/purchase-intent`, awsPurchaseIntentProxy);
 
 /** AWS organization-admin APIs are restricted to verified super admins. */
 router.use(

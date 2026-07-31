@@ -19,12 +19,22 @@ import {
   logAuthToken,
 } from '../lib/apiClient';
 
-export type UserRole = 'super_admin' | 'admin' | 'user';
+export type UserRole = 'super_admin' | 'staff' | 'admin' | 'user';
+export type AccountType = 'legacy' | 'b2c' | 'b2b';
+export type OnboardingStatus =
+  | 'active'
+  | 'kyc_pending'
+  | 'org_details_pending'
+  | 'org_review_pending'
+  | 'org_approved'
+  | 'org_rejected';
 
 export interface AuthUser {
   id: string;
   email: string;
   role: UserRole;
+  accountType: AccountType;
+  onboardingStatus: OnboardingStatus;
   isEmailVerified: boolean;
   lastLoginAt?: string;
 }
@@ -82,6 +92,23 @@ interface RefreshResponse {
   data: {
     accessToken: string;
   };
+}
+
+function getPostLoginRoute(user: AuthUser): string {
+  if (user.accountType === 'b2c' && user.onboardingStatus === 'kyc_pending') {
+    return '/onboarding/individual-kyc';
+  }
+
+  if (
+    user.accountType === 'b2b' &&
+    ['org_details_pending', 'org_review_pending', 'org_rejected'].includes(user.onboardingStatus)
+  ) {
+    return '/onboarding/organization';
+  }
+
+  if (user.role === 'super_admin' || user.role === 'staff') return '/super-admin-console';
+  if (user.role === 'admin') return '/console';
+  return '/dashboard/user';
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -233,7 +260,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             (decoded.startsWith('/console') ||
               decoded.startsWith('/dashboard') ||
               decoded.startsWith('/super-admin-console') ||
-              decoded.startsWith('/tenant') ||
+              decoded.startsWith('/onboarding') ||
               decoded === '/request' ||
               decoded.startsWith('/status/'))
           ) {
@@ -250,14 +277,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    // Redirect based on role
-    if (user.role === 'super_admin') {
-      router.push('/super-admin-console');
-    } else if (user.role === 'admin') {
-      router.push('/console');
-    } else {
-      router.push('/dashboard/user');
-    }
+    router.push(getPostLoginRoute(user));
   }, [router, scheduleTokenRefresh]);
 
   const logout = useCallback(async (): Promise<void> => {

@@ -4,7 +4,7 @@ import { requireSuperAdmin } from '../middleware/requireSuperAdmin.js';
 
 const router = express.Router();
 
-router.use(requireSuperAdmin);
+router.use('/org-admin', requireSuperAdmin);
 
 router.get('/org-admin/requests', orgAdminController.listRequests);
 router.get('/org-admin/requests/:requestId', orgAdminController.getRequestDetail);
@@ -14,6 +14,9 @@ router.post('/org-admin/requests/:requestId/reprovision-permissions', orgAdminCo
 router.post('/org-admin/requests/:requestId/reprovision-roles', orgAdminController.reprovisionPermissions);
 router.post('/org-admin/requests/:requestId/repair-resource-permissions', orgAdminController.repairPermissions);
 router.get('/org-admin/requests/:requestId/users', orgAdminController.getRequestUsers);
+router.post('/org-admin/requests/:requestId/users', orgAdminController.addUsers);
+router.post('/org-admin/requests/:requestId/block-all', orgAdminController.blockAllUsers);
+router.post('/org-admin/requests/:requestId/unblock-all', orgAdminController.unblockAllUsers);
 router.delete('/org-admin/requests/:requestId/users/:userIndex', orgAdminController.deleteUser);
 router.patch(
   '/org-admin/requests/:requestId/users/:userIndex/permissions',
@@ -65,6 +68,11 @@ router.get(
   orgAdminController.getUserSessions
 );
 
+router.post(
+  '/org-admin/requests/:requestId/send-purchase-confirmation',
+  orgAdminController.sendPurchaseConfirmationMail
+);
+
 router.get('/org-admin/access-requests', orgAdminController.listAccessRequests);
 router.post('/org-admin/access-requests', orgAdminController.createAccessRequest);
 router.patch('/org-admin/access-requests/:id', orgAdminController.reviewAccessRequest);
@@ -105,6 +113,25 @@ router.post(
 router.delete(
   '/org-admin/requests/:requestId/custom-services/:serviceId',
   orgAdminController.removeCustomService
+);
+
+router.get('/org-admin/privileged-roles', orgAdminController.listPrivilegedAwsRoles);
+router.get('/org-admin/privileged-role-requests', orgAdminController.listPrivilegedRoleRequests);
+router.patch(
+  '/org-admin/privileged-role-requests/:id',
+  orgAdminController.reviewPrivilegedRoleRequest
+);
+router.post(
+  '/org-admin/requests/:requestId/privileged-roles/assign-all',
+  orgAdminController.assignPrivilegedRoleToAll
+);
+router.get(
+  '/org-admin/requests/:requestId/privileged-role-assignments',
+  orgAdminController.listPrivilegedRoleAssignments
+);
+router.delete(
+  '/org-admin/privileged-role-assignments/:assignmentId',
+  orgAdminController.revokePrivilegedRoleAssignment
 );
 
 export default router;

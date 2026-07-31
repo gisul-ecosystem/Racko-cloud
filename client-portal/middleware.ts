@@ -9,6 +9,41 @@ import type { NextRequest } from 'next/server';
  * Protected: /dashboard/*
  * Auth routes: /login, /register (redirect to dashboard if session exists)
  */
+function isTenantWorkspacePath(pathname: string): boolean {
+  return (
+    pathname === '/console/login' ||
+    pathname === '/console/forgot-password' ||
+    pathname === '/console/reset-password' ||
+    pathname.startsWith('/console/dashboard')
+  );
+}
+
+/** Map legacy /tenant/* URLs to /console/* equivalents. */
+function mapLegacyTenantPath(pathname: string): string | null {
+  if (pathname === '/tenant' || pathname === '/tenant/') {
+    return '/console/dashboard';
+  }
+  if (pathname === '/tenant/login' || pathname.startsWith('/tenant/login/')) {
+    return '/console/login';
+  }
+  if (pathname === '/tenant/forgot-password' || pathname.startsWith('/tenant/forgot-password/')) {
+    return '/console/forgot-password';
+  }
+  if (pathname === '/tenant/reset-password' || pathname.startsWith('/tenant/reset-password')) {
+    return `/console/reset-password${pathname.slice('/tenant/reset-password'.length)}`;
+  }
+  if (pathname === '/tenant/console' || pathname.startsWith('/tenant/console/')) {
+    return `/console/dashboard${pathname.slice('/tenant/console'.length)}`;
+  }
+  if (pathname === '/tenant/dashboard' || pathname.startsWith('/tenant/dashboard/')) {
+    return `/console/dashboard${pathname.slice('/tenant/dashboard'.length)}`;
+  }
+  if (pathname.startsWith('/tenant/')) {
+    return `/console${pathname.slice('/tenant'.length)}`;
+  }
+  return null;
+}
+
 function getSafeInternalRedirect(raw: string | null | undefined): string | null {
   if (!raw) return null;
 
@@ -23,12 +58,19 @@ function getSafeInternalRedirect(raw: string | null | undefined): string | null 
     return null;
   }
 
+  // Rewrite legacy tenant redirects before allow-list check.
+  const mapped = mapLegacyTenantPath(value.split('?')[0] ?? value);
+  if (mapped) {
+    const qIndex = value.indexOf('?');
+    value = qIndex >= 0 ? `${mapped}${value.slice(qIndex)}` : mapped;
+  }
+
   // Only allow known app areas (path + optional query/hash).
   if (
     !value.startsWith('/console') &&
     !value.startsWith('/dashboard') &&
     !value.startsWith('/super-admin-console') &&
-    !value.startsWith('/tenant') &&
+    !value.startsWith('/onboarding') &&
     value !== '/request' &&
     !value.startsWith('/status/')
   ) {
@@ -41,15 +83,24 @@ function getSafeInternalRedirect(raw: string | null | undefined): string | null 
 export function middleware(request: NextRequest) {
   const { pathname, search } = request.nextUrl;
 
+  const legacy = mapLegacyTenantPath(pathname);
+  if (legacy) {
+    const url = request.nextUrl.clone();
+    url.pathname = legacy;
+    return NextResponse.redirect(url);
+  }
+
   // Check session via refreshToken cookie presence
   const hasSession = request.cookies.has('refreshToken');
 
-  // Protect console, dashboard, and request builder routes
+  // Protect console, dashboard, and request builder routes.
+  // Tenant workspace under /console/{login,forgot-password,reset-password,dashboard} uses tenant JWT.
   if (
-    pathname.startsWith('/dashboard') ||
-    pathname.startsWith('/console') ||
-    pathname === '/request' ||
-    pathname.startsWith('/status/')
+    (pathname.startsWith('/dashboard') ||
+      pathname.startsWith('/console') ||
+      pathname === '/request' ||
+      pathname.startsWith('/status/')) &&
+    !isTenantWorkspacePath(pathname)
   ) {
     if (!hasSession) {
       const loginUrl = new URL('/login', request.url);
@@ -78,9 +129,12 @@ export const config = {
     '/dashboard/:path*',
     '/console',
     '/console/:path*',
+    '/tenant',
+    '/tenant/:path*',
     '/request',
     '/status/:path*',
     '/login',
     '/register',
+    '/onboarding/:path*',
   ],
 };

@@ -13,11 +13,18 @@ export function formatDateTime(value: string | null | undefined): string {
   });
 }
 
-export function formatCurrency(value: number | null | undefined): string {
+export function formatCurrency(
+  value: number | null | undefined,
+  currency = 'USD'
+): string {
   if (value == null || Number.isNaN(value)) return '—';
-  return new Intl.NumberFormat('en-US', {
+
+  const normalized = String(currency || 'USD').trim().toUpperCase() || 'USD';
+  const locale = normalized === 'INR' ? 'en-IN' : 'en-US';
+
+  return new Intl.NumberFormat(locale, {
     style: 'currency',
-    currency: 'USD',
+    currency: normalized,
     minimumFractionDigits: 2,
   }).format(value);
 }

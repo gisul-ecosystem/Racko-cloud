@@ -1,6 +1,4 @@
 import {
-  DeleteRoleCommand,
-  DeleteRolePolicyCommand,
   PutRolePolicyCommand,
   PutUserPolicyCommand,
 } from '@aws-sdk/client-iam';
@@ -31,8 +29,8 @@ import { syncRequestUserSpend, fetchUserSpend } from './costTrackingService.js';
 import { attachLiveUsageToUsers } from './userLiveUsageService.js';
 import { syncRecentActivityForRequest, reconcileIdleSessionsForRequest } from './awsConsoleLoginMonitor.js';
 import {
-  getUserSessionStats,
   syncActiveMagicLinkUsageSessions,
+  getRequestSessionStatsByUser,
 } from './sessionTrackingService.js';
 import {
   forceLogoutUser as forceLogoutUsageSession,
@@ -53,11 +51,16 @@ import {
   sumConsumedMinutesToday,
 } from '../utils/usageWindowAccess.js';
 import { DateTime } from 'luxon';
-import { rollbackLabRoles } from '../provisioners/aws/iamRoleProvisioner.js';
+import { rollbackLabRoles, deleteLabRoleFully } from '../provisioners/aws/iamRoleProvisioner.js';
 import {
   deprovisionIdentityUsers,
   getIamClientForAccount,
 } from '../provisioners/aws/identityProvisioner.js';
+import { rollbackPermissionSets } from '../provisioners/aws/permissionSetProvisioner.js';
+import { rollbackAssignments } from '../provisioners/aws/accountAssignmentProvisioner.js';
+import { rollbackScpResources } from '../provisioners/aws/scpProvisioner.js';
+import PrivilegedRoleAssignment from '../models/PrivilegedRoleAssignment.js';
+import PrivilegedRoleRequest from '../models/PrivilegedRoleRequest.js';
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -139,6 +142,8 @@ function mapUsersFromRequest(request, spendRecords = []) {
       currentSpend: spend?.spendUsd ?? role.currentSpend ?? 0,
       spendByService: spend?.services || [],
       lastCleanupAt: role.lastCleanupAt,
+      lastResourceCount: role.lastResourceCount || 0,
+      peakResourceCount: role.peakResourceCount || 0,
       cleanupLogs: role.cleanupLogs || [],
       cleanupDisabled: role.cleanupDisabled || false,
       cleanupIntervalOverride: role.cleanupIntervalOverride ?? null,
@@ -169,6 +174,7 @@ export async function listAllRequests({ status, region, search } = {}) {
       { customerEmail: { $regex: search, $options: 'i' } },
       { region: { $regex: search, $options: 'i' } },
       { requestName: { $regex: search, $options: 'i' } },
+      { projectName: { $regex: search, $options: 'i' } },
     ];
   }
 
@@ -177,6 +183,8 @@ export async function listAllRequests({ status, region, search } = {}) {
   return requests.map((request) => ({
     requestId: String(request._id),
     requestName: request.requestName || null,
+    projectName: request.projectName || request.requestName || null,
+    idMode: request.idMode || null,
     customerEmail: request.customerEmail,
     region: request.region,
     status: request.status,
@@ -200,32 +208,43 @@ export async function getRequestDetail(requestId) {
   if (!request) throw createError('Request not found', 404);
 
   const today = new Date().toISOString().split('T')[0];
-  const spendRecords = await UserSpend.find({ requestId, date: today });
-  await syncActiveMagicLinkUsageSessions(requestId);
+  const [spendRecords] = await Promise.all([
+    UserSpend.find({ requestId, date: today }).lean(),
+    syncActiveMagicLinkUsageSessions(requestId).catch((err) => {
+      console.warn(`[orgAdmin] Magic-link usage sync failed for ${requestId}:`, err.message);
+    }),
+  ]);
 
-  try {
-    await syncRecentActivityForRequest(String(request._id));
-    await reconcileIdleSessionsForRequest(String(request._id));
-  } catch (err) {
-    console.warn(`[orgAdmin] Usage session reconcile failed for ${requestId}:`, err.message);
-  }
+  // CloudTrail lookups are slow — do not block the detail API. Background scheduler
+  // keeps Online/Offline fresh; kick a non-blocking pass for this lab only.
+  void Promise.all([
+    syncRecentActivityForRequest(String(request._id)),
+    reconcileIdleSessionsForRequest(String(request._id)),
+  ]).catch((err) => {
+    console.warn(`[orgAdmin] Background usage reconcile failed for ${requestId}:`, err.message);
+  });
 
   const requestForUsage = await Request.findById(requestId);
   const baseUsers = mapUsersFromRequest(requestForUsage || request, spendRecords);
+  const sessionStatsByUser = await getRequestSessionStatsByUser(String(request._id));
 
-  const enrichedUsers = await Promise.all(
-    baseUsers.map(async (role) => {
-      const sessionStats = await getUserSessionStats(String(request._id), role.userIndex);
-      return {
-        ...role,
-        totalSessions: sessionStats.totalSessions,
-        totalMins: sessionStats.totalMins,
-        activeSession: sessionStats.activeSession,
-        lastSessionAt: sessionStats.lastSessionAt,
-        sessionHistory: sessionStats.sessionHistory,
-      };
-    })
-  );
+  const enrichedUsers = baseUsers.map((role) => {
+    const sessionStats = sessionStatsByUser.get(Number(role.userIndex)) || {
+      totalSessions: 0,
+      totalMins: 0,
+      activeSession: null,
+      lastSessionAt: null,
+      sessionHistory: [],
+    };
+    return {
+      ...role,
+      totalSessions: sessionStats.totalSessions,
+      totalMins: sessionStats.totalMins,
+      activeSession: sessionStats.activeSession,
+      lastSessionAt: sessionStats.lastSessionAt,
+      sessionHistory: sessionStats.sessionHistory,
+    };
+  });
 
   const { users, liveSummary } = attachLiveUsageToUsers(requestForUsage || request, enrichedUsers);
 
@@ -237,6 +256,8 @@ export async function getRequestDetail(requestId) {
   return {
     requestId: String(request._id),
     requestName: request.requestName || null,
+    projectName: request.projectName || request.requestName || null,
+    idMode: request.idMode || null,
     customerEmail: request.customerEmail,
     region: request.region,
     status: request.status,
@@ -380,7 +401,8 @@ export async function reinstateLabUser(requestId, userIndex) {
 
     const { reinstateIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
     const { sendReinstateCredentialsEmail } = await import('../provisioners/aws/emailProvisioner.js');
-    const newPassword = await reinstateIdentityUser(request, userIndex);
+    const restored = await reinstateIdentityUser(request, userIndex, { forceNewPassword: true });
+    const newPassword = restored?.password || restored;
     await sendReinstateCredentialsEmail(request, { ...user, password: newPassword }, newPassword);
   } else {
     await Request.findOneAndUpdate(
@@ -428,11 +450,7 @@ export async function deleteLabUser(requestId, userIndex) {
     });
   } else {
     try {
-      await iamClient.send(new DeleteRolePolicyCommand({
-        RoleName: user.roleName,
-        PolicyName: 'RackoLabPermissions',
-      }));
-      await iamClient.send(new DeleteRoleCommand({ RoleName: user.roleName }));
+      await deleteLabRoleFully(user.roleName);
     } catch (err) {
       console.warn(`[orgAdmin] IAM role delete warning: ${err.message}`);
     }
@@ -606,6 +624,9 @@ export async function triggerUserCleanup(requestId, userIndex, { action = 'delet
   const log = await CleanupLog.create({ requestId, userIndex, action, triggeredBy: actor });
   let results;
   try {
+    const { captureUserLabMetrics, recordCleanupSnapshot } = await import('./labHistoryService.js');
+    const metrics = await captureUserLabMetrics(requestId, userIndex);
+
     results = action === 'pause'
       ? await pauseUserResources(requestId, userIndex)
       : await cleanupUserResources(requestId, userIndex);
@@ -623,6 +644,19 @@ export async function triggerUserCleanup(requestId, userIndex, { action = 'delet
       message: `Lab ${action} ran for labuser${userIndex + 1} — ${deletedCount} resource action(s) applied`,
       requestId,
       metadata: results,
+    });
+    await recordCleanupSnapshot({
+      requestId,
+      userIndex,
+      triggeredBy: actor,
+      cleanupAction: action,
+      resourcesDeleted: deletedCount,
+      metrics: metrics
+        ? {
+            ...metrics,
+            resourceCount: Math.max(Number(metrics.resourceCount || 0), deletedCount),
+          }
+        : null,
     });
     await recordHistory(requestId, 'user_cleanup', {
       userIndex,
@@ -653,6 +687,17 @@ export async function triggerAllCleanup(requestId, { action = 'delete', actor = 
   if (!request) throw createError('Request not found', 404);
   const log = await CleanupLog.create({ requestId, action, triggeredBy: actor });
   try {
+    const { captureUserLabMetrics, recordCleanupSnapshot } = await import('./labHistoryService.js');
+    const accessType = request.accessType || 'magic_link';
+    const sourceUsers =
+      accessType === 'identity_center' ? request.identityUsers || [] : request.labRoles || [];
+    const preMetrics = [];
+    for (const user of sourceUsers) {
+      if (user.deletedAt) continue;
+      const metrics = await captureUserLabMetrics(requestId, user.userIndex);
+      if (metrics) preMetrics.push(metrics);
+    }
+
     const results = action === 'pause'
       ? await pauseAllUsers(requestId)
       : await cleanupAllUsers(requestId);
@@ -667,6 +712,24 @@ export async function triggerAllCleanup(requestId, { action = 'delete', actor = 
       resourceCleanupLastRanAt: new Date(),
       updatedAt: new Date(),
     });
+
+    for (const metrics of preMetrics) {
+      const perUserDeleted = countCleanupDeleted(
+        (results || []).find((entry) => Number(entry.userIndex) === Number(metrics.userIndex)) || {}
+      );
+      await recordCleanupSnapshot({
+        requestId,
+        userIndex: metrics.userIndex,
+        triggeredBy: actor,
+        cleanupAction: action,
+        resourcesDeleted: perUserDeleted,
+        metrics: {
+          ...metrics,
+          resourceCount: Math.max(Number(metrics.resourceCount || 0), perUserDeleted),
+        },
+      });
+    }
+
     await recordHistory(requestId, 'request_cleanup', {
       actor,
       summary:
@@ -866,15 +929,20 @@ export async function forceLogoutUser(requestId, userIndex) {
 export async function deleteRequest(requestId, { actor = 'org_admin' } = {}) {
   const request = await Request.findById(requestId);
   if (!request) throw createError('Request not found', 404);
+
+  const accessType = request.accessType || 'magic_link';
+  const labRoles = [...(request.labRoles || [])];
+  const identityUsers = [...(request.identityUsers || [])];
+  const permissionSetArns = [...(request.permissionSetArns || [])];
+  const provisionedResources = request.provisionedResources || {};
+
   const auditSnapshot = {
     customerEmail: request.customerEmail,
     requestName: request.requestName,
     region: request.region,
-    accessType: request.accessType,
-    userCount: (request.accessType === 'identity_center'
-      ? request.identityUsers
-      : request.labRoles
-    )?.length || 0,
+    accessType,
+    userCount:
+      (accessType === 'identity_center' ? identityUsers.length : labRoles.length) || 0,
     selectedServices: (request.selectedServices || []).map((service) => service.serviceName),
   };
 
@@ -887,15 +955,49 @@ export async function deleteRequest(requestId, { actor = 'org_admin' } = {}) {
     updatedAt: new Date(),
   });
 
+  let deletedCount = 0;
   try {
-    await cleanupAllUsers(requestId);
+    const resourceResults = await cleanupAllUsers(requestId);
+    deletedCount = countCleanupDeleted(resourceResults);
   } catch (err) {
     console.warn(`[orgAdmin] Resource cleanup before request deletion failed: ${err.message}`);
   }
-  if ((request.accessType || 'magic_link') === 'identity_center') {
-    await deprovisionIdentityUsers(request);
-  } else {
-    await rollbackLabRoles(request.labRoles || []);
+
+  let rolesRemoved = 0;
+  let usersRemoved = 0;
+
+  if (accessType === 'identity_center' && identityUsers.length) {
+    await deprovisionIdentityUsers({
+      ...request.toObject(),
+      identityUsers,
+      awsAccountId: request.awsAccountId,
+    });
+    usersRemoved = identityUsers.length;
+  } else if (labRoles.length) {
+    await rollbackLabRoles(labRoles);
+    rolesRemoved = labRoles.length;
+  }
+
+  if (provisionedResources.assignments?.length) {
+    try {
+      await rollbackAssignments(provisionedResources.assignments);
+    } catch (err) {
+      console.warn(`[orgAdmin] Assignment rollback failed: ${err.message}`);
+    }
+  }
+
+  if (permissionSetArns.length) {
+    try {
+      await rollbackPermissionSets(permissionSetArns);
+    } catch (err) {
+      console.warn(`[orgAdmin] Permission set rollback failed: ${err.message}`);
+    }
+  }
+
+  try {
+    await rollbackScpResources(provisionedResources);
+  } catch (err) {
+    console.warn(`[orgAdmin] SCP rollback failed: ${err.message}`);
   }
 
   await Promise.all([
@@ -903,18 +1005,28 @@ export async function deleteRequest(requestId, { actor = 'org_admin' } = {}) {
     UserSpend.deleteMany({ requestId }),
     BudgetEvent.deleteMany({ requestId }),
     AccessRequest.updateMany({ requestId }, { $set: { requestId: null } }),
+    PrivilegedRoleRequest.updateMany({ requestId }, { $set: { requestId: null } }),
+    PrivilegedRoleAssignment.deleteMany({ requestId }),
     CustomIamPolicyAssignment.updateMany(
       { requestId, active: true },
       { $set: { active: false } }
     ),
   ]);
+
   await Request.deleteOne({ _id: requestId });
   await recordHistory(requestId, 'request_deleted', {
     actor,
-    summary: `Request ${requestId} deleted`,
-    snapshot: auditSnapshot,
+    summary: `Request ${requestId} deleted — removed ${deletedCount} resource(s), ${rolesRemoved} role(s), ${usersRemoved} user(s)`,
+    snapshot: { ...auditSnapshot, deletedCount, rolesRemoved, usersRemoved },
   });
-  return { requestId, deleted: true };
+
+  return {
+    requestId,
+    deleted: true,
+    deletedCount,
+    rolesRemoved,
+    usersRemoved,
+  };
 }
 
 export async function reprovisionPermissions(requestId, { actor = 'org_admin' } = {}) {
@@ -949,6 +1061,199 @@ export async function repairPermissions(requestId, options = {}) {
   return reprovisionPermissions(requestId, options);
 }
 
+const MAX_ADD_USERS_PER_REQUEST = 50;
+
+export async function addUsersToRequest(requestId, { count = 1, actor = 'org_admin' } = {}) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+  if (request.status !== 'Completed') {
+    throw createError('Users can only be added to completed labs.', 400);
+  }
+
+  const addCount = Math.trunc(Number(count) || 0);
+  if (!Number.isInteger(addCount) || addCount < 1) {
+    throw createError('count must be a positive integer.', 400);
+  }
+  if (addCount > MAX_ADD_USERS_PER_REQUEST) {
+    throw createError(`You can add up to ${MAX_ADD_USERS_PER_REQUEST} users at a time.`, 400);
+  }
+
+  const maxProvision = Number(process.env.MAX_PROVISION_ACCOUNT_COUNT || 1000);
+  const accessType = request.accessType || 'magic_link';
+  const field = accessType === 'identity_center' ? 'identityUsers' : 'labRoles';
+  const existingUsers = (request[field] || []).filter((entry) => !entry.deletedAt);
+  const nextTotal = existingUsers.length + addCount;
+  if (nextTotal > maxProvision) {
+    throw createError(`Account count cannot exceed ${maxProvision}.`, 400);
+  }
+
+  const usedIndexes = new Set(existingUsers.map((entry) => Number(entry.userIndex)));
+  const startIndex =
+    usedIndexes.size > 0 ? Math.max(...usedIndexes) + 1 : existingUsers.length;
+  const created = [];
+
+  if (accessType === 'identity_center') {
+    const { addIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
+    for (let offset = 0; offset < addCount; offset += 1) {
+      const userIndex = startIndex + offset;
+      const user = await addIdentityUser(request, userIndex);
+      created.push(user);
+      await Request.findByIdAndUpdate(requestId, {
+        $push: { identityUsers: user },
+        $set: {
+          accountCount: Math.max(Number(request.accountCount) || 0, userIndex + 1),
+          updatedAt: new Date(),
+        },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+  } else {
+    const { createLabRole } = await import('../provisioners/aws/iamRoleProvisioner.js');
+    for (let offset = 0; offset < addCount; offset += 1) {
+      const userIndex = startIndex + offset;
+      const role = await createLabRole(request, userIndex);
+      const entry = {
+        ...role,
+        username: role.roleName,
+        suspended: false,
+        budgetExceeded: false,
+        currentSpend: 0,
+      };
+      created.push(entry);
+      await Request.findByIdAndUpdate(requestId, {
+        $push: { labRoles: entry },
+        $set: {
+          accountCount: Math.max(Number(request.accountCount) || 0, userIndex + 1),
+          updatedAt: new Date(),
+        },
+      });
+    }
+  }
+
+  const refreshed = await Request.findById(requestId);
+  try {
+    const { createManagePortalSession } = await import('./managePortalService.js');
+    const { sendCredentialsEmail } = await import('../provisioners/aws/emailProvisioner.js');
+    const portalSession = await createManagePortalSession(refreshed);
+    await sendCredentialsEmail(refreshed, {
+      awsAccountId: refreshed.awsAccountId || refreshed.provisionedResources?.targetAccountId,
+      labRoles: accessType === 'magic_link' ? created : [],
+      identityUsers: accessType === 'identity_center' ? created : [],
+      portalSession,
+      isMagicLink: accessType === 'magic_link',
+    });
+  } catch (err) {
+    console.warn(`[orgAdmin] Failed to email new user credentials: ${err.message}`);
+  }
+
+  await recordHistory(requestId, 'users_added', {
+    actor,
+    summary: `Added ${created.length} user(s)`,
+    snapshot: {
+      count: created.length,
+      usernames: created.map((entry) => entry.username || entry.roleName),
+      userIndexes: created.map((entry) => entry.userIndex),
+    },
+  });
+
+  return {
+    addedCount: created.length,
+    users: created.map((entry) => ({
+      userIndex: entry.userIndex,
+      username: entry.username || entry.roleName,
+      consoleUrl: entry.consoleUrl || null,
+    })),
+    accountCount: Math.max(Number(refreshed?.accountCount) || 0, nextTotal),
+    userCount: (refreshed?.[field] || []).filter((entry) => !entry.deletedAt).length,
+    customerEmail: refreshed?.customerEmail || request.customerEmail,
+  };
+}
+
+export async function blockAllUsers(requestId, { actor = 'org_admin' } = {}) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+
+  const accessType = request.accessType || 'magic_link';
+  const field = accessType === 'identity_center' ? 'identityUsers' : 'labRoles';
+  const users = (request[field] || []).filter((entry) => !entry.deletedAt && !entry.suspended);
+
+  let successCount = 0;
+  const failures = [];
+  for (const user of users) {
+    try {
+      await suspendLabUser(requestId, Number(user.userIndex));
+      successCount += 1;
+    } catch (err) {
+      failures.push({
+        userIndex: user.userIndex,
+        username: user.username || user.roleName,
+        error: err.message,
+      });
+    }
+  }
+
+  await recordHistory(requestId, 'all_users_blocked', {
+    actor,
+    summary: `Blocked ${successCount} of ${users.length} user(s)`,
+    snapshot: { successCount, attempted: users.length, failures },
+  });
+
+  if (users.length > 0 && successCount === 0) {
+    throw createError('Failed to block users.', 502);
+  }
+
+  return { successCount, attempted: users.length, failures };
+}
+
+export async function unblockAllUsers(
+  requestId,
+  {
+    actor = 'org_admin',
+    resetUsage = true,
+    pauseWindowEnforcement = true,
+    pauseWindowHours = 24,
+  } = {}
+) {
+  const request = await Request.findById(requestId);
+  if (!request) throw createError('Request not found', 404);
+
+  const accessType = request.accessType || 'magic_link';
+  const field = accessType === 'identity_center' ? 'identityUsers' : 'labRoles';
+  const users = (request[field] || []).filter((entry) => !entry.deletedAt);
+
+  let successCount = 0;
+  const failures = [];
+  for (const user of users) {
+    try {
+      await unblockUser(requestId, Number(user.userIndex), {
+        actor,
+        resetUsage,
+        pauseWindowEnforcement,
+        pauseWindowHours,
+      });
+      successCount += 1;
+    } catch (err) {
+      failures.push({
+        userIndex: user.userIndex,
+        username: user.username || user.roleName,
+        error: err.message,
+      });
+    }
+  }
+
+  await recordHistory(requestId, 'all_users_unblocked', {
+    actor,
+    summary: `Unblocked ${successCount} of ${users.length} user(s)`,
+    snapshot: { successCount, attempted: users.length, failures },
+  });
+
+  if (users.length > 0 && successCount === 0) {
+    throw createError('Failed to unblock users.', 502);
+  }
+
+  return { successCount, attempted: users.length, failures };
+}
+
 export async function unblockUser(requestId, userIndex, {
   actor = 'org_admin',
   resetUsage = true,
@@ -961,7 +1266,18 @@ export async function unblockUser(requestId, userIndex, {
   if (!user) throw createError('User not found', 404);
   if (user.suspended && field === 'identityUsers') {
     const { reinstateIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
-    await reinstateIdentityUser(request, Number(userIndex));
+    // Restore console login using the same password stored on the request (do not rotate).
+    await reinstateIdentityUser(request, Number(userIndex), {
+      password: user.password || null,
+      forceNewPassword: false,
+    });
+  } else if (field === 'identityUsers') {
+    // Ensure login profile exists even if suspended flag was already cleared.
+    const { reinstateIdentityUser } = await import('../provisioners/aws/identityProvisioner.js');
+    await reinstateIdentityUser(request, Number(userIndex), {
+      password: user.password || null,
+      forceNewPassword: false,
+    });
   }
 
   const pauseUntil = pauseWindowEnforcement
@@ -1046,80 +1362,10 @@ export async function getCleanupLogs(requestId, { limit = 20 } = {}) {
 }
 
 export async function getLabHistory(requestId, { userIndex = null, limit = 200 } = {}) {
-  if (!(await Request.exists({ _id: requestId }))) throw createError('Request not found', 404);
-  const query = { requestId };
-  if (userIndex !== null && userIndex !== '') query.userIndex = Number(userIndex);
-
-  const cleanupLogQuery = { requestId, status: 'success' };
-  if (userIndex !== null && userIndex !== '') cleanupLogQuery.userIndex = Number(userIndex);
-
-  const [rows, cleanupLogs] = await Promise.all([
-    HistorySnapshot.find(query)
-      .sort({ createdAt: -1 })
-      .limit(Math.min(Math.max(Number(limit) || 200, 1), 500))
-      .lean(),
-    CleanupLog.find(cleanupLogQuery)
-      .sort({ completedAt: -1, ranAt: -1 })
-      .limit(Math.min(Math.max(Number(limit) || 200, 1), 500))
-      .lean(),
-  ]);
-
-  const resolveDeletedCount = (row) => {
-    const fromSnapshot = Number(row.snapshot?.deletedCount);
-    const fromResults = countCleanupDeleted(row.snapshot?.results);
-    let best = Math.max(
-      Number.isFinite(fromSnapshot) ? fromSnapshot : 0,
-      fromResults
-    );
-
-    if (row.event === 'user_cleanup' || row.event === 'request_cleanup') {
-      const rowTime = new Date(row.createdAt).getTime();
-      const matchedLog = cleanupLogs.find((log) => {
-        const logTime = new Date(log.completedAt || log.ranAt).getTime();
-        const sameUser =
-          row.event === 'request_cleanup'
-            ? log.userIndex == null
-            : Number(log.userIndex) === Number(row.userIndex);
-        return sameUser && Math.abs(logTime - rowTime) <= 15000;
-      });
-      if (matchedLog) {
-        best = Math.max(
-          best,
-          Number(matchedLog.totalDeleted) || 0,
-          countCleanupDeleted(matchedLog.results)
-        );
-      }
-    }
-
-    return best;
-  };
-
-  return {
-    requestId: String(requestId),
-    entries: rows.map((row) => {
-      const resourcesDeleted = resolveDeletedCount(row);
-      const isCleanupEvent = row.event === 'user_cleanup' || row.event === 'request_cleanup';
-
-      return {
-        id: String(row._id),
-        type: row.event,
-        at: row.createdAt,
-        userIndex: row.userIndex,
-        title:
-          row.summary ||
-          (isCleanupEvent
-            ? resourcesDeleted > 0
-              ? `Cleanup removed ${resourcesDeleted} resource(s)`
-              : 'Cleanup completed — no matching tagged resources found'
-            : row.event.replace(/_/g, ' ')),
-        subtitle: row.actor,
-        status: row.snapshot?.status,
-        costUsd: row.snapshot?.costUsd,
-        resourcesDeleted,
-        details: row.snapshot,
-      };
-    }),
-  };
+  const { getLabHistoryForRequest } = await import('./labHistoryService.js');
+  const history = await getLabHistoryForRequest(requestId, { userIndex, limit });
+  if (!history) throw createError('Request not found', 404);
+  return history;
 }
 
 export async function listAccessRequests({ status, requestId } = {}) {

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { dedicatedServerController } from './dedicatedServer.controller';
 import {
@@ -99,14 +100,14 @@ router.post(
   }
 );
 
-/** Super-admin inbox */
-router.get('/requests/requesters', requireRole('super_admin'), (req, res, next) => {
+/** Control-plane inbox */
+router.get('/requests/requesters', requirePermission('dedicated.requests.read'), (req, res, next) => {
   dedicatedServerController.listRequesters(req, res, next);
 });
 
 router.get(
   '/requests',
-  requireRole('super_admin'),
+  requirePermission('dedicated.requests.read'),
   validateRequest(listDedicatedRequestsQuerySchema),
   (req, res, next) => {
     dedicatedServerController.listRequests(req, res, next);
@@ -115,7 +116,7 @@ router.get(
 
 router.patch(
   '/requests/:id/attach',
-  requireRole('super_admin'),
+  requirePermission('dedicated.requests.attach'),
   validateRequest(attachDedicatedRequestSchema),
   (req, res, next) => {
     dedicatedServerController.attach(req, res, next);
@@ -124,7 +125,7 @@ router.patch(
 
 router.patch(
   '/requests/:id/reject',
-  requireRole('super_admin'),
+  requirePermission('dedicated.requests.reject'),
   validateRequest(rejectDedicatedRequestSchema),
   (req, res, next) => {
     dedicatedServerController.reject(req, res, next);

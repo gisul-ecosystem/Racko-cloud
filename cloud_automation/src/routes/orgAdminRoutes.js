@@ -69,6 +69,21 @@ router.post(
   requireSuperAdmin,
   orgAdminController.unblockUser
 );
+router.post(
+  '/resource-groups/:requestId/unblock-all',
+  requireSuperAdmin,
+  orgAdminController.unblockAllUsers
+);
+router.post(
+  '/resource-groups/:requestId/block-all',
+  requireSuperAdmin,
+  orgAdminController.blockAllUsers
+);
+router.post(
+  '/resource-groups/:requestId/users',
+  requireSuperAdmin,
+  orgAdminController.addUserToRequest
+);
 router.get(
   '/resource-groups/:requestId/users/:userId/live-resources',
   requireSuperAdmin,
@@ -88,6 +103,11 @@ router.get(
   '/resource-groups/:requestId/history',
   requireSuperAdmin,
   orgAdminController.getLabHistory
+);
+router.get(
+  '/resource-groups/:requestId/consumption-report',
+  requireSuperAdmin,
+  orgAdminController.getConsumptionReport
 );
 router.post(
   '/resource-groups/:requestId/cleanup',

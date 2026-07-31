@@ -206,3 +206,29 @@ export async function updateTenantExternalVmSchedule(
     )
   );
 }
+
+export async function updateTenantExternalVmOverride(
+  id: string,
+  body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+): Promise<import('./accessSchedule').AccessSchedule> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<import('./accessSchedule').AccessSchedule>>(
+      `/api/v1/tenant-external-vms/${id}/override`,
+      { method: 'PATCH', body: JSON.stringify(body) }
+    )
+  );
+}
+
+export async function bulkUpdateTenantExternalVmOverride(
+  ids: string[],
+  body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+): Promise<{ updated: number; results: Array<{ externalVmId: string; ok: boolean; error?: string }> }> {
+  return unwrap(
+    tenantPortalRequest<
+      ApiEnvelope<{ updated: number; results: Array<{ externalVmId: string; ok: boolean; error?: string }> }>
+    >('/api/v1/tenant-external-vms/override/bulk', {
+      method: 'PATCH',
+      body: JSON.stringify({ ids, ...body }),
+    })
+  );
+}

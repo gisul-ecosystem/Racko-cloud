@@ -2,6 +2,11 @@ const { DateTime } = require('luxon');
 const db = require('../db/postgres');
 const { getConsumedMinutesToday } = require('./dailyUsageEnforcementService');
 const { computeWindowAccessState, getBlockedReasonLabel } = require('../utils/windowAccessState');
+const {
+  getTodayWindow,
+  isWithinUsageWindowTime
+} = require('../utils/usageWindowTime');
+const { evaluateCombinedLabAccess } = require('../utils/labAccess');
 
 /**
  * Returns true when the request uses request_usage_windows (new window system).
@@ -85,20 +90,7 @@ function isWithinUsageWindow(windows, at = new Date()) {
     return true;
   }
 
-  const tz = windows[0].timezone || 'Asia/Kolkata';
-  const now = DateTime.fromJSDate(at instanceof Date ? at : new Date(at)).setZone(tz);
-  const currentDay = now.weekday % 7;
-  const currentTime = now.toFormat('HH:mm:ss');
-  const todayWindow = windows.find((window) => window.day_of_week === currentDay);
-
-  if (!todayWindow) {
-    return false;
-  }
-
-  const startTime = String(todayWindow.window_start_time).slice(0, 8);
-  const endTime = String(todayWindow.window_end_time).slice(0, 8);
-
-  return currentTime >= startTime && currentTime < endTime;
+  return isWithinUsageWindowTime(windows, at);
 }
 
 function getTodayWindowConfig(windows, at = new Date()) {
@@ -108,8 +100,7 @@ function getTodayWindowConfig(windows, at = new Date()) {
 
   const tz = windows[0].timezone || 'Asia/Kolkata';
   const now = DateTime.fromJSDate(at instanceof Date ? at : new Date(at)).setZone(tz);
-  const currentDay = now.weekday % 7;
-  const todayWindow = windows.find((window) => window.day_of_week === currentDay);
+  const todayWindow = getTodayWindow(windows, at);
 
   if (!todayWindow) {
     return { timezone: tz, todayDate: now.toISODate(), todayWindow: null };
@@ -143,11 +134,33 @@ async function batchLoadDailyLimitFlags(userIds, todayDate) {
 }
 
 function evaluateWindowDailyLimitAccessSync({
+  request = null,
   windows,
   consumedMinutes,
   limitReachedInDb = false,
   at = new Date()
 }) {
+  if (request) {
+    const labAccess = evaluateCombinedLabAccess(request, windows, at);
+    if (!labAccess.allowed && labAccess.reason !== 'limit_exceeded') {
+      return {
+        allowed: false,
+        reason: labAccess.reason,
+        consumedMinutes: 0,
+        limitMinutes: null,
+        remainingMinutes: 0,
+        limitReached: false,
+        blockedForToday: true,
+        blockedReason: labAccess.blockedReason,
+        blockedReasonLabel: labAccess.blockedReasonLabel,
+        withinWindow: labAccess.withinUsageWindow === true,
+        todayWindow: getTodayWindow(windows, at),
+        timezone: windows[0]?.timezone || 'Asia/Kolkata',
+        message: labAccess.message
+      };
+    }
+  }
+
   const config = getTodayWindowConfig(windows, at);
   const withinWindow = config?.todayWindow ? isWithinUsageWindow(windows, at) : false;
   const limitMinutes =
@@ -163,11 +176,34 @@ function evaluateWindowDailyLimitAccessSync({
 }
 
 async function evaluateWindowDailyLimitAccessBatch({
+  request = null,
   userIds,
   windows,
   consumedMinutesByUser,
   at = new Date()
 }) {
+  if (request) {
+    const labAccess = evaluateCombinedLabAccess(request, windows, at);
+    if (!labAccess.allowed && labAccess.reason !== 'limit_exceeded') {
+      const blockedAccess = {
+        allowed: false,
+        reason: labAccess.reason,
+        consumedMinutes: 0,
+        limitMinutes: null,
+        remainingMinutes: 0,
+        limitReached: false,
+        blockedForToday: true,
+        blockedReason: labAccess.blockedReason,
+        blockedReasonLabel: labAccess.blockedReasonLabel,
+        withinWindow: labAccess.withinUsageWindow === true,
+        todayWindow: getTodayWindow(windows, at),
+        timezone: windows[0]?.timezone || 'Asia/Kolkata',
+        message: labAccess.message
+      };
+      return new Map(userIds.map((userId) => [Number(userId), blockedAccess]));
+    }
+  }
+
   const config = getTodayWindowConfig(windows, at);
   const limitFlags =
     config?.todayWindow && userIds.length
@@ -197,7 +233,34 @@ async function evaluateWindowDailyLimitAccessBatch({
   return accessByUser;
 }
 
-async function evaluateWindowDailyLimitAccess({ requestId, userId, windows, at = new Date() }) {
+async function evaluateWindowDailyLimitAccess({ requestId, userId, windows, request = null, at = new Date() }) {
+  if (!request && requestId) {
+    const { rows } = await db.query(
+      `SELECT starts_at, expires_at, expiry_date FROM requests WHERE id = $1 LIMIT 1`,
+      [requestId]
+    );
+    request = rows[0] || null;
+  }
+
+  const labAccess = request ? evaluateCombinedLabAccess(request, windows, at) : { allowed: true };
+  if (!labAccess.allowed && labAccess.reason !== 'limit_exceeded') {
+    return {
+      allowed: false,
+      reason: labAccess.reason,
+      consumedMinutes: 0,
+      limitMinutes: null,
+      remainingMinutes: 0,
+      limitReached: false,
+      blockedForToday: true,
+      blockedReason: labAccess.blockedReason,
+      blockedReasonLabel: labAccess.blockedReasonLabel,
+      withinWindow: labAccess.withinUsageWindow === true,
+      todayWindow: getTodayWindow(windows, at),
+      timezone: windows[0]?.timezone || 'Asia/Kolkata',
+      message: labAccess.message
+    };
+  }
+
   const config = getTodayWindowConfig(windows, at);
   const withinWindow = config?.todayWindow ? isWithinUsageWindow(windows, at) : false;
   const limitMinutes =

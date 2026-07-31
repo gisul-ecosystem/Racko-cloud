@@ -11,12 +11,14 @@ import type {
   AwsOrgAdminErrorKind,
   AwsOrgAdminMonitoringResponse,
   AwsOrgAdminCleanupLog,
+  AwsOrgAdminPrivilegedRoleRequest,
   AwsOrgAdminRequestDetail,
   AwsOrgAdminRequestSummary,
   AwsOrgAdminLabHistory,
   AwsOrgAdminSharedCost,
   AwsOrgAdminUser,
   AwsOrgAdminUserCost,
+  AwsPrivilegedRoleOption,
 } from '../types/orgAdmin';
 
 export class AwsOrgAdminError extends Error {
@@ -103,6 +105,49 @@ export async function reinstateAwsOrgUser(requestId: string, userIndex: number):
 export async function unblockAwsOrgUser(requestId: string, userIndex: number): Promise<void> {
   await orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/users/${userIndex}/unblock`, {
     method: 'POST',
+  });
+}
+
+export async function addAwsOrgUsers(
+  requestId: string,
+  count = 1
+): Promise<{
+  addedCount: number;
+  users: { userIndex: number; username: string; consoleUrl?: string | null }[];
+  accountCount: number;
+  userCount: number;
+  customerEmail?: string;
+}> {
+  return orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/users`, {
+    method: 'POST',
+    body: JSON.stringify({ count }),
+  });
+}
+
+export async function blockAllAwsOrgUsers(
+  requestId: string
+): Promise<{ successCount: number; attempted: number; failures?: unknown[] }> {
+  return orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/block-all`, {
+    method: 'POST',
+    body: JSON.stringify({}),
+  });
+}
+
+export async function unblockAllAwsOrgUsers(
+  requestId: string,
+  options: {
+    resetUsage?: boolean;
+    pauseWindowEnforcement?: boolean;
+    pauseWindowHours?: number;
+  } = {}
+): Promise<{ successCount: number; attempted: number; failures?: unknown[] }> {
+  return orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/unblock-all`, {
+    method: 'POST',
+    body: JSON.stringify({
+      resetUsage: options.resetUsage !== false,
+      pauseWindowEnforcement: options.pauseWindowEnforcement !== false,
+      pauseWindowHours: options.pauseWindowHours ?? 24,
+    }),
   });
 }
 
@@ -276,8 +321,58 @@ export async function reviewAwsOrgAccessRequest(
   });
 }
 
+export async function listAwsOrgPrivilegedRoles(): Promise<AwsPrivilegedRoleOption[]> {
+  const response = await orgAdminRequest<{ success: boolean; roles: AwsPrivilegedRoleOption[] }>(
+    '/privileged-roles'
+  );
+  return response.roles ?? [];
+}
+
+export async function listAwsOrgPrivilegedRoleRequests(
+  params: { status?: string; requestId?: string } = {}
+): Promise<AwsOrgAdminPrivilegedRoleRequest[]> {
+  const search = new URLSearchParams();
+  if (params.status) search.set('status', params.status);
+  if (params.requestId) search.set('requestId', params.requestId);
+  const query = search.toString();
+  const response = await orgAdminRequest<{
+    success: boolean;
+    requests: AwsOrgAdminPrivilegedRoleRequest[];
+  }>(`/privileged-role-requests${query ? `?${query}` : ''}`);
+  return response.requests ?? [];
+}
+
+export async function reviewAwsOrgPrivilegedRoleRequest(
+  id: string,
+  payload: { status: 'approved' | 'rejected'; reviewNotes?: string }
+): Promise<{ success: boolean; request: AwsOrgAdminPrivilegedRoleRequest }> {
+  return orgAdminRequest(`/privileged-role-requests/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function assignAwsOrgPrivilegedRoleToAllUsers(
+  requestId: string,
+  awsRole: string
+): Promise<{ success: boolean; message?: string; rolesAssigned?: number; usersProcessed?: number }> {
+  return orgAdminRequest(`/requests/${encodeURIComponent(requestId)}/privileged-roles/assign-all`, {
+    method: 'POST',
+    body: JSON.stringify({ awsRole }),
+  });
+}
+
 export async function deleteAwsOrgRequest(requestId: string): Promise<void> {
   await orgAdminRequest(`/requests/${encodeURIComponent(requestId)}`, { method: 'DELETE' });
+}
+
+export async function sendAwsOrgPurchaseConfirmationMail(
+  requestId: string
+): Promise<{ success: boolean; message?: string; recipientEmail?: string; requestId?: string }> {
+  return orgAdminRequest(
+    `/requests/${encodeURIComponent(requestId)}/send-purchase-confirmation`,
+    { method: 'POST' }
+  );
 }
 
 export async function fixAwsOrgRequestPermissions(requestId: string): Promise<void> {
@@ -315,7 +410,14 @@ export async function getAwsOrgLabHistory(
     history?: AwsOrgAdminLabHistory;
     entries?: AwsOrgAdminLabHistory['entries'];
   }>(`/requests/${encodeURIComponent(requestId)}/history${query ? `?${query}` : ''}`);
-  return response.history ?? { requestId, entries: response.entries ?? [] };
+  return (
+    response.history ?? {
+      requestId,
+      entries: response.entries ?? [],
+      userSummaries: [],
+      timeline: [],
+    }
+  );
 }
 
 export async function listAwsCustomIamPolicies(): Promise<AwsCustomIamPolicy[]> {
@@ -456,11 +558,11 @@ export function formatMinutes(value: number | null | undefined): string {
   return remainder > 0 ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
-export function formatCurrency(value: number): string {
+export function formatCurrency(value: number, currency = 'USD'): string {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
-    currency: 'USD',
+    currency: currency || 'USD',
     minimumFractionDigits: 2,
     maximumFractionDigits: 4,
-  }).format(value);
+  }).format(value || 0);
 }

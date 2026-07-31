@@ -2,8 +2,30 @@ const { ResourceManagementClient } = require('@azure/arm-resources');
 const db = require('../db/postgres');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
 const { filterResourcesForUser, expandDeploymentResources } = require('../utils/resourceOwnership');
+const { getResourceCleanupConcurrency } = require('../utils/provisionConcurrency');
 
 let armClient = null;
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  if (!items.length) {
+    return [];
+  }
+
+  const limit = Math.max(1, Math.min(concurrency, items.length));
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  const runners = Array.from({ length: limit }, async () => {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  });
+
+  await Promise.all(runners);
+  return results;
+}
 
 const getArmClient = () => {
   if (armClient) {
@@ -47,12 +69,36 @@ const API_VERSIONS = {
   'microsoft.documentdb/databaseaccounts': '2023-04-15',
   'microsoft.app/containerapps': '2023-05-01',
   'microsoft.apimanagement/service': '2022-08-01',
-  'microsoft.operationalinsights/workspaces': '2022-10-01'
+  'microsoft.operationalinsights/workspaces': '2022-10-01',
+  'microsoft.synapse/workspaces': '2021-06-01',
+  'microsoft.synapse/workspaces/bigdatapools': '2021-06-01',
+  'microsoft.synapse/workspaces/sqlpools': '2021-06-01',
+  'microsoft.synapse/workspaces/integrationruntimes': '2021-06-01',
+  'microsoft.synapse/workspaces/linkedservices': '2021-06-01',
+  'microsoft.synapse/workspaces/datasets': '2021-06-01',
+  'microsoft.synapse/workspaces/pipelines': '2021-06-01',
+  'microsoft.synapse/workspaces/triggers': '2021-06-01',
+  'microsoft.synapse/workspaces/notebooks': '2021-06-01',
+  'microsoft.synapse/workspaces/sparkconfigurations': '2021-06-01',
+  'microsoft.synapse/workspaces/kustopools': '2021-06-01',
+  'microsoft.web/connections': '2016-06-01'
 };
 
 const DELETE_ORDER = [
   'microsoft.containerservice/managedclusters',
   'microsoft.web/sites',
+  'microsoft.synapse/workspaces/bigdatapools',
+  'microsoft.synapse/workspaces/sqlpools',
+  'microsoft.synapse/workspaces/integrationruntimes',
+  'microsoft.synapse/workspaces/linkedservices',
+  'microsoft.synapse/workspaces/datasets',
+  'microsoft.synapse/workspaces/pipelines',
+  'microsoft.synapse/workspaces/triggers',
+  'microsoft.synapse/workspaces/notebooks',
+  'microsoft.synapse/workspaces/sparkconfigurations',
+  'microsoft.synapse/workspaces/kustopools',
+  'microsoft.web/connections',
+  'microsoft.synapse/workspaces',
   'microsoft.sql/servers/databases',
   'microsoft.sql/servers',
   'microsoft.dbformysql/servers',
@@ -82,13 +128,31 @@ const DELETE_ORDER = [
 
 function getApiVersion(resourceType) {
   const normalized = String(resourceType || '').toLowerCase();
-  return API_VERSIONS[normalized] || '2022-09-01';
+
+  if (API_VERSIONS[normalized]) {
+    return API_VERSIONS[normalized];
+  }
+
+  if (normalized.startsWith('microsoft.synapse/workspaces/')) {
+    return API_VERSIONS['microsoft.synapse/workspaces'];
+  }
+
+  return '2022-09-01';
 }
 
 function getDeleteOrderIndex(resourceType) {
   const normalized = String(resourceType || '').toLowerCase();
   const index = DELETE_ORDER.indexOf(normalized);
-  return index === -1 ? 999 : index;
+
+  if (index !== -1) {
+    return index;
+  }
+
+  if (normalized.startsWith('microsoft.synapse/workspaces/')) {
+    return DELETE_ORDER.indexOf('microsoft.synapse/workspaces/bigdatapools');
+  }
+
+  return 999;
 }
 
 async function listResourcesInResourceGroup(resourceGroupName) {
@@ -414,6 +478,7 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
     );
 
     const now = new Date();
+    const eligibleUsers = [];
 
     for (const user of users) {
       if (user.cleanup_disabled) {
@@ -461,58 +526,80 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
         }
       }
 
-      const rgName = user.azure_resource_group_name;
-      console.log(`[Cleanup] Processing RG: ${rgName} for user: ${user.username}`);
-      const userResult = { username: user.username, rgName, deleted: [], failed: [] };
+      eligibleUsers.push(user);
+    }
 
-      try {
-        const { captureUserLabMetrics, recordCleanupSnapshot } = require('./labHistoryService');
-        const metrics = await captureUserLabMetrics(requestId, user.id);
+    const cleanupConcurrency = getResourceCleanupConcurrency();
+    console.log(
+      `[Cleanup] Processing ${eligibleUsers.length} user resource group(s) with concurrency ${cleanupConcurrency}`
+    );
 
-        const affected = await runResourceActionForUser({
-          costingMode: request.costing_mode,
-          perUserResourceGroupName: user.azure_resource_group_name,
-          sharedResourceGroupName: request.azure_resource_group_name,
-          entraObjectId: user.azure_user_id,
-          username: user.username,
-          userNumber: user.user_number,
-          activeUserCount,
-          action: resolvedAction
-        });
+    const processedResults = await mapWithConcurrency(
+      eligibleUsers,
+      cleanupConcurrency,
+      async (user) => {
+        const rgName = user.azure_resource_group_name;
+        console.log(`[Cleanup] Processing RG: ${rgName} for user: ${user.username}`);
+        const userResult = { username: user.username, rgName, deleted: [], failed: [] };
 
-        if (metrics) {
-          await recordCleanupSnapshot({
-            requestId,
-            userId: user.id,
-            triggeredBy: 'scheduler',
-            cleanupAction: resolvedAction,
-            resourcesDeleted: affected,
-            metrics
-          }).catch((snapshotError) => {
-            console.warn(
-              `[Cleanup] History snapshot failed for user ${user.id}: ${snapshotError.message}`
-            );
+        try {
+          const { captureUserLabMetrics, recordCleanupSnapshot } = require('./labHistoryService');
+          const metrics = await captureUserLabMetrics(requestId, user.id);
+
+          const affected = await runResourceActionForUser({
+            costingMode: request.costing_mode,
+            perUserResourceGroupName: user.azure_resource_group_name,
+            sharedResourceGroupName: request.azure_resource_group_name,
+            entraObjectId: user.azure_user_id,
+            username: user.username,
+            userNumber: user.user_number,
+            activeUserCount,
+            action: resolvedAction
           });
-        }
 
-        for (const item of affected) {
-          userResult.deleted.push({
-            name: item.resourceName,
-            type: item.resourceType?.split('/').pop() || item.resourceType
-          });
-        }
+          if (metrics) {
+            await recordCleanupSnapshot({
+              requestId,
+              userId: user.id,
+              triggeredBy: 'scheduler',
+              cleanupAction: resolvedAction,
+              resourcesDeleted: affected,
+              metrics
+            }).catch((snapshotError) => {
+              console.warn(
+                `[Cleanup] History snapshot failed for user ${user.id}: ${snapshotError.message}`
+              );
+            });
+          }
 
-        allAffected.push(...affected);
-      } catch (err) {
-        console.error(`[Cleanup] Error processing RG ${rgName}:`, err.message);
-        userResult.failed.push({ error: err.message });
-        errors.push({ username: user.username, error: err.message });
+          for (const item of affected) {
+            userResult.deleted.push({
+              name: item.resourceName,
+              type: item.resourceType?.split('/').pop() || item.resourceType
+            });
+          }
+
+          console.log(
+            `[Cleanup] ${user.username}: ${resolvedAction === 'pause' ? 'paused' : 'deleted'} ${userResult.deleted.length}, failed ${userResult.failed.length}`
+          );
+
+          return { userResult, affected };
+        } catch (err) {
+          console.error(`[Cleanup] Error processing RG ${rgName}:`, err.message);
+          userResult.failed.push({ error: err.message });
+          errors.push({ username: user.username, error: err.message });
+          return { userResult, affected: [] };
+        }
+      }
+    );
+
+    for (const entry of processedResults) {
+      if (!entry) {
+        continue;
       }
 
-      userResults.push(userResult);
-      console.log(
-        `[Cleanup] ${user.username}: ${resolvedAction === 'pause' ? 'paused' : 'deleted'} ${userResult.deleted.length}, failed ${userResult.failed.length}`
-      );
+      userResults.push(entry.userResult);
+      allAffected.push(...entry.affected);
     }
   } else if (request.azure_resource_group_name) {
     const { rows: users } = await db.query(
@@ -526,6 +613,7 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
     );
 
     const now = new Date();
+    const eligibleUsers = [];
 
     for (const user of users) {
       if (user.cleanup_disabled) {
@@ -556,23 +644,37 @@ async function runResourceCleanupForRequest(requestId, actionOverride = null) {
         }
       }
 
-      console.log(`[Cleanup] Processing shared RG for user: ${user.username}`);
+      eligibleUsers.push(user);
+    }
 
-      try {
-        const affected = await runResourceActionForUser({
-          costingMode: request.costing_mode,
-          sharedResourceGroupName: request.azure_resource_group_name,
-          entraObjectId: user.azure_user_id,
-          username: user.username,
-          userNumber: user.user_number,
-          activeUserCount,
-          action: resolvedAction
-        });
-        allAffected.push(...affected);
-      } catch (err) {
-        console.error(`[Cleanup] Error processing shared RG for ${user.username}:`, err.message);
-        errors.push({ username: user.username, error: err.message });
+    const cleanupConcurrency = getResourceCleanupConcurrency();
+    const sharedResults = await mapWithConcurrency(
+      eligibleUsers,
+      cleanupConcurrency,
+      async (user) => {
+        console.log(`[Cleanup] Processing shared RG for user: ${user.username}`);
+
+        try {
+          const affected = await runResourceActionForUser({
+            costingMode: request.costing_mode,
+            sharedResourceGroupName: request.azure_resource_group_name,
+            entraObjectId: user.azure_user_id,
+            username: user.username,
+            userNumber: user.user_number,
+            activeUserCount,
+            action: resolvedAction
+          });
+          return affected;
+        } catch (err) {
+          console.error(`[Cleanup] Error processing shared RG for ${user.username}:`, err.message);
+          errors.push({ username: user.username, error: err.message });
+          return [];
+        }
       }
+    );
+
+    for (const affected of sharedResults) {
+      allAffected.push(...(affected || []));
     }
   }
 
@@ -591,5 +693,8 @@ module.exports = {
   deleteUserResourcesInSharedRG,
   runResourceActionForUser,
   runResourceCleanupForRequest,
-  executeCleanupForRequest
+  executeCleanupForRequest,
+  getApiVersion,
+  getDeleteOrderIndex,
+  sortResourcesForDeletion
 };

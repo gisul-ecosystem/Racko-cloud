@@ -109,6 +109,16 @@ export class EmailNotVerifiedError extends AppError {
   }
 }
 
+export class PasswordSetupRequiredError extends AppError {
+  constructor() {
+    super(
+      'Your account has been verified, but you must set a new password before logging in. Use the invite email or password reset flow.',
+      403,
+      'PASSWORD_SETUP_REQUIRED'
+    );
+  }
+}
+
 // ─── Proxmox infrastructure errors ───────────────────────────────────────────
 
 /**

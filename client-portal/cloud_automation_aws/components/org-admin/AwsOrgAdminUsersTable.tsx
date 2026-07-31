@@ -1,7 +1,17 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { Activity, DollarSign, ExternalLink, Loader2, LogOut, Trash2 } from 'lucide-react';
+import {
+  Activity,
+  DollarSign,
+  ExternalLink,
+  Loader2,
+  LogOut,
+  Shield,
+  ShieldOff,
+  Trash2,
+  UserPlus,
+} from 'lucide-react';
 import {
   formatCurrency,
   formatMinutes,
@@ -18,6 +28,7 @@ import type {
 import { AwsLabStatusBadge } from './AwsLabStatusBadge';
 import { AwsOrgAdminCostModal } from './AwsOrgAdminCostModal';
 import { AwsOrgAdminUserUsageModal } from './AwsOrgAdminUserUsageModal';
+import { AwsOrgAdminAddUsersModal } from './AwsOrgAdminAddUsersModal';
 
 interface AwsOrgAdminUsersTableProps {
   detail: AwsOrgAdminRequestDetail;
@@ -32,6 +43,10 @@ interface AwsOrgAdminUsersTableProps {
   onFetchCost: (userIndex: number) => Promise<AwsOrgAdminUserCost | null>;
   onForceLogout: (userIndex: number) => Promise<boolean>;
   onCleanup: (userIndex: number) => Promise<boolean>;
+  onAddUser?: (count: number) => Promise<boolean>;
+  onBlockAll?: () => Promise<boolean>;
+  onUnblockAll?: () => Promise<boolean>;
+  onRequestCleanup?: () => Promise<boolean>;
   fetchUserMonitoring: (userIndex: number) => Promise<AwsOrgAdminMonitoringResponse | null>;
 }
 
@@ -118,6 +133,10 @@ export function AwsOrgAdminUsersTable({
   onFetchCost,
   onForceLogout,
   onCleanup,
+  onAddUser,
+  onBlockAll,
+  onUnblockAll,
+  onRequestCleanup,
   fetchUserMonitoring,
 }: AwsOrgAdminUsersTableProps) {
   const [editingUserIndex, setEditingUserIndex] = useState<number | null>(null);
@@ -133,9 +152,20 @@ export function AwsOrgAdminUsersTable({
   const [statusFilter, setStatusFilter] = useState('all');
   const [page, setPage] = useState(1);
   const [expandedUserIndex, setExpandedUserIndex] = useState<number | null>(null);
+  const [showAddUsersModal, setShowAddUsersModal] = useState(false);
+  const [addingUser, setAddingUser] = useState(false);
+  const [blockingAll, setBlockingAll] = useState(false);
+  const [unblockingAll, setUnblockingAll] = useState(false);
+  const [cleanupRunning, setCleanupRunning] = useState(false);
   const pageSize = 10;
 
   const showUsageTracking = Boolean(detail.enableDailyUsage || detail.usageWindows?.length);
+  const totalLiveResources = useMemo(
+    () => detail.users.reduce((sum, user) => sum + Number(user.lastResourceCount || 0), 0),
+    [detail.users]
+  );
+  const cleanupIsPause = detail.resourceCleanupAction === 'pause';
+  const toolbarBusy = saving || addingUser || blockingAll || unblockingAll || cleanupRunning;
   const filteredUsers = useMemo(() => {
     const query = search.trim().toLowerCase();
     return detail.users.filter((user) => {
@@ -229,8 +259,104 @@ export function AwsOrgAdminUsersTable({
 
   if (!detail.users?.length) {
     return (
-      <div className="py-10 text-center text-sm text-gray-500">No provisioned users yet.</div>
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {onAddUser ? (
+            <button
+              type="button"
+              onClick={() => setShowAddUsersModal(true)}
+              disabled={toolbarBusy}
+              className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <UserPlus className="h-3.5 w-3.5" />
+              Add user (0/{detail.accountCount || 0})
+            </button>
+          ) : null}
+        </div>
+        <div className="py-10 text-center text-sm text-gray-500">No provisioned users yet.</div>
+        {showAddUsersModal && onAddUser ? (
+          <AwsOrgAdminAddUsersModal
+            usersCount={0}
+            request={detail}
+            submitting={addingUser}
+            onClose={() => setShowAddUsersModal(false)}
+            onSubmit={async (count) => {
+              setAddingUser(true);
+              try {
+                const success = await onAddUser(count);
+                if (success) setShowAddUsersModal(false);
+              } finally {
+                setAddingUser(false);
+              }
+            }}
+          />
+        ) : null}
+      </div>
     );
+  }
+
+  async function handleAddUsersSubmit(count: number) {
+    if (!onAddUser) return;
+    setAddingUser(true);
+    try {
+      const success = await onAddUser(count);
+      if (success) setShowAddUsersModal(false);
+    } finally {
+      setAddingUser(false);
+    }
+  }
+
+  async function handleCleanupAllLive() {
+    if (!onRequestCleanup) return;
+    const liveNote =
+      totalLiveResources > 0 ? `\n\nApprox. ${totalLiveResources} tracked live resource(s).` : '';
+    if (
+      !window.confirm(
+        `${cleanupIsPause ? 'Pause' : 'Delete'} all AWS lab resources for every user in this request?${liveNote}\n\nIAM users/roles are kept so users can recreate resources afterward.`
+      )
+    ) {
+      return;
+    }
+    setCleanupRunning(true);
+    try {
+      await onRequestCleanup();
+    } finally {
+      setCleanupRunning(false);
+    }
+  }
+
+  async function handleBlockAll() {
+    if (!onBlockAll) return;
+    if (
+      !window.confirm(
+        `Block all ${detail.users.length} user(s) immediately?\n\nThis suspends every lab identity and revokes active AWS console sessions.`
+      )
+    ) {
+      return;
+    }
+    setBlockingAll(true);
+    try {
+      await onBlockAll();
+    } finally {
+      setBlockingAll(false);
+    }
+  }
+
+  async function handleUnblockAll() {
+    if (!onUnblockAll) return;
+    if (
+      !window.confirm(
+        `Unblock all ${detail.users.length} user(s) immediately?\n\nThis reinstates AWS access and pauses usage-window enforcement for 24 hours. Passwords are refreshed for Direct IAM users.`
+      )
+    ) {
+      return;
+    }
+    setUnblockingAll(true);
+    try {
+      await onUnblockAll();
+    } finally {
+      setUnblockingAll(false);
+    }
   }
 
   return (
@@ -242,26 +368,101 @@ export function AwsOrgAdminUsersTable({
           : ' Spend data refreshes every minute when this panel is open.'}
       </p>
 
-      <div className="mb-4 flex flex-wrap items-center gap-3">
-        <input
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Search users, roles, accounts…"
-          className="min-w-[240px] flex-1 rounded-lg border border-gray-200 px-3 py-2 text-sm"
-        />
-        <select
-          value={statusFilter}
-          onChange={(event) => setStatusFilter(event.target.value)}
-          className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
-        >
-          <option value="all">All statuses</option>
-          <option value="active">Active</option>
-          <option value="completed">Completed</option>
-          <option value="suspended">Suspended</option>
-          <option value="expired">Expired</option>
-        </select>
-        <span className="text-xs text-gray-500">{filteredUsers.length} user(s)</span>
+      <div className="mb-4 flex flex-col gap-3 lg:flex-row lg:items-center">
+        <div className="relative min-w-0 flex-1">
+          <input
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by username, role, or account ID"
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+          />
+          <p className="mt-1 text-xs text-gray-500">
+            {detail.users.length} users total · showing {(page - 1) * pageSize + 1}–
+            {Math.min(page * pageSize, filteredUsers.length)}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+            className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
+          >
+            <option value="all">All statuses</option>
+            <option value="active">Active</option>
+            <option value="completed">Completed</option>
+            <option value="suspended">Suspended</option>
+            <option value="expired">Expired</option>
+          </select>
+          {onAddUser ? (
+            <button
+              type="button"
+              onClick={() => setShowAddUsersModal(true)}
+              disabled={toolbarBusy}
+              className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-medium text-blue-800 transition hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {addingUser ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+              {addingUser
+                ? 'Adding user…'
+                : `Add user (${detail.users.length}/${detail.accountCount || detail.users.length})`}
+            </button>
+          ) : null}
+          {onRequestCleanup ? (
+            <button
+              type="button"
+              onClick={() => void handleCleanupAllLive()}
+              disabled={toolbarBusy || detail.users.length === 0}
+              className={`inline-flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                cleanupIsPause
+                  ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  : 'border-orange-200 bg-orange-50 text-orange-800 hover:bg-orange-100'
+              }`}
+            >
+              {cleanupRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {cleanupRunning
+                ? 'Cleaning up…'
+                : totalLiveResources > 0
+                  ? `Cleanup live (${totalLiveResources})`
+                  : 'Cleanup live resources'}
+            </button>
+          ) : null}
+          {onBlockAll ? (
+            <button
+              type="button"
+              onClick={() => void handleBlockAll()}
+              disabled={toolbarBusy || detail.users.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-800 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {blockingAll ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Shield className="h-3.5 w-3.5" />}
+              {blockingAll ? 'Blocking all…' : 'Block all'}
+            </button>
+          ) : null}
+          {onUnblockAll ? (
+            <button
+              type="button"
+              onClick={() => void handleUnblockAll()}
+              disabled={toolbarBusy || detail.users.length === 0}
+              className="inline-flex items-center gap-1.5 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-1.5 text-xs font-medium text-emerald-800 transition hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {unblockingAll ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <ShieldOff className="h-3.5 w-3.5" />
+              )}
+              {unblockingAll ? 'Unblocking all…' : 'Unblock all'}
+            </button>
+          ) : null}
+        </div>
       </div>
+
+      {showAddUsersModal && onAddUser ? (
+        <AwsOrgAdminAddUsersModal
+          usersCount={detail.users.length}
+          request={detail}
+          submitting={addingUser}
+          onClose={() => setShowAddUsersModal(false)}
+          onSubmit={handleAddUsersSubmit}
+        />
+      ) : null}
 
       <div className="overflow-x-auto">
         <table className="w-full min-w-[1200px] text-left text-sm">

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { resolveTenantContext } from '../../middleware/resolveTenantContext.middleware';
-import { requireTenantAuth, requireTenantRole } from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantAuth } from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantPermission } from '../../middleware/requireOrgPermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { tenantUserController } from './tenantUser.controller';
 import {
@@ -10,12 +11,18 @@ import {
   setTenantUserActiveSchema,
   tenantUserIdParamSchema,
 } from './tenantUser.validation';
+import type { TenantAuthenticatedRequest } from '../../middleware/requireTenantAuth.middleware';
 
 const router = Router();
 
 router.use(resolveTenantContext);
 router.use(requireTenantAuth);
-router.use(requireTenantRole('tenant_admin'));
+// Tenant admins always allowed; operators need users.manage.
+router.use((req, res, next) => {
+  const role = (req as TenantAuthenticatedRequest).tenantUser?.role;
+  if (role === 'tenant_admin') return next();
+  return requireTenantPermission('users.manage')(req, res, next);
+});
 
 router.post(
   '/single',

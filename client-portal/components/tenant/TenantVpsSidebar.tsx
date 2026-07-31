@@ -25,52 +25,52 @@ export function TenantVpsSidebar({ sidebarOpen, onCloseSidebar }: TenantVpsSideb
 
   const links: ServiceNavLink[] = [
     {
-      href: '/tenant/dashboard/overview',
+      href: '/console/dashboard/overview',
       label: 'Overview',
       icon: <LayoutDashboard className="h-4 w-4" />,
       exact: true,
     },
     {
-      href: '/tenant/dashboard/vms',
+      href: '/console/dashboard/vms',
       label: 'My VMs',
       icon: <Server className="h-4 w-4" />,
       isActive: (p) =>
-        p === '/tenant/dashboard/vms' ||
-        (p.startsWith('/tenant/dashboard/vms/') &&
-          !p.startsWith('/tenant/dashboard/vms/onboard')),
+        p === '/console/dashboard/vms' ||
+        (p.startsWith('/console/dashboard/vms/') &&
+          !p.startsWith('/console/dashboard/vms/onboard')),
     },
   ];
 
   if (isAdmin) {
     links.push(
       {
-        href: '/tenant/dashboard/orders/new',
+        href: '/console/dashboard/orders/new',
         label: 'Create VM',
         icon: <Plus className="h-4 w-4" />,
         exact: true,
       },
       {
-        href: '/tenant/dashboard/orders',
+        href: '/console/dashboard/orders',
         label: 'Jobs',
         icon: <Briefcase className="h-4 w-4" />,
         isActive: (p) =>
-          p === '/tenant/dashboard/orders' ||
-          (p.startsWith('/tenant/dashboard/orders/') &&
-            !p.startsWith('/tenant/dashboard/orders/new')),
+          p === '/console/dashboard/orders' ||
+          (p.startsWith('/console/dashboard/orders/') &&
+            !p.startsWith('/console/dashboard/orders/new')),
       },
       {
-        href: '/tenant/dashboard/users',
+        href: '/console/dashboard/users',
         label: 'Users',
         icon: <Users className="h-4 w-4" />,
       },
       {
-        href: '/tenant/dashboard/vms/onboard',
+        href: '/console/dashboard/vms/onboard',
         label: 'Assign VMs',
         icon: <UserCheck className="h-4 w-4" />,
         exact: true,
       },
       {
-        href: '/tenant/dashboard/vms/onboard',
+        href: '/console/dashboard/vms/onboard',
         label: 'Bulk Assign',
         icon: <Users className="h-4 w-4" />,
         exact: true,
@@ -86,7 +86,7 @@ export function TenantVpsSidebar({ sidebarOpen, onCloseSidebar }: TenantVpsSideb
       subtitle="Virtual machines & jobs"
       links={links}
       accentColor={accentColor}
-      footerHref="/tenant/dashboard/services"
+      footerHref="/console/dashboard/services"
       footerLabel="All services"
     />
   );

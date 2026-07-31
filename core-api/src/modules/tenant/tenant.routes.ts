@@ -3,7 +3,7 @@ import { tenantController } from './tenant.controller';
 import { tenantServiceConfigController } from './tenantServiceConfig.controller';
 import { tenantVmController } from '../tenantVm/tenantVm.controller';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
-import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { tenantBrandingUpload } from '../../middleware/tenantBrandingUpload.middleware';
 import {
@@ -28,7 +28,7 @@ import {
 const router = Router();
 
 router.use(requireAuth);
-router.use(requireRole('super_admin'));
+router.use(requirePermission('white_labelling.manage'));
 
 router.post('/', validateRequest(createTenantSchema), (req, res, next) => {
   tenantController.create(req, res, next);

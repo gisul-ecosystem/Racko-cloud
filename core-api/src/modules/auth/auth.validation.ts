@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+const accountTypeSchema = z.enum(['b2c', 'b2b']).optional();
+
 const passwordSchema = z
   .string()
   .min(8, 'Password must be at least 8 characters')
@@ -18,6 +20,7 @@ export const registerSchema = z.object({
       .toLowerCase()
       .trim(),
     password: passwordSchema,
+    accountType: accountTypeSchema,
   }),
 });
 

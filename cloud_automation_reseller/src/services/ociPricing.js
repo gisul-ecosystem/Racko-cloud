@@ -3,10 +3,6 @@ import { ociSpecMap, OCI_PRICING_REGIONS, vcpuToOcpus } from '../config/specMap.
 
 const PRODUCTS_URL = 'https://apexapps.oracle.com/pls/apex/cetools/api/v1/products/';
 
-let productCache = null;
-let productCacheAt = 0;
-const CACHE_TTL_MS = 6 * 60 * 60 * 1000;
-
 function paygUsd(item) {
   const localizations =
     item.currencyCodeLocalizations ||
@@ -19,16 +15,11 @@ function paygUsd(item) {
 }
 
 async function loadProducts() {
-  if (productCache && Date.now() - productCacheAt < CACHE_TTL_MS) {
-    return productCache;
-  }
   const url = `${PRODUCTS_URL}?currencyCode=USD`;
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`OCI products API HTTP ${res.status}`);
   const data = await res.json();
-  productCache = data.items || [];
-  productCacheAt = Date.now();
-  return productCache;
+  return data.items || [];
 }
 
 function findRate(items, predicates) {

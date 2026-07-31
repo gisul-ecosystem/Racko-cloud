@@ -23,6 +23,9 @@ import {
   triggerOrgAdminCleanup,
   triggerOrgRequestCleanup,
   unblockOrgAdminUser,
+  unblockAllOrgAdminUsers,
+  blockAllOrgAdminUsers,
+  addOrgAdminUser,
   updateOrgAdminCleanupSettings,
   updateOrgAdminUserRoles,
 } from '../api/orgAdminClient';
@@ -51,6 +54,8 @@ interface UseOrgAdminPortalResult {
   accessLoading: boolean;
   privilegedRoleLoading: boolean;
   saving: boolean;
+  cleanupRunning: boolean;
+  deletingRequest: boolean;
   overviewError: string | null;
   detailError: string | null;
   actionError: string | null;
@@ -87,6 +92,9 @@ interface UseOrgAdminPortalResult {
   triggerCleanup: (userId: number) => Promise<boolean>;
   triggerRequestCleanup: () => Promise<boolean>;
   unblockUser: (userId: number, options?: { resetUsage?: boolean }) => Promise<boolean>;
+  unblockAllUsers: () => Promise<boolean>;
+  blockAllUsers: () => Promise<boolean>;
+  addUser: (count?: number) => Promise<boolean>;
   reprovisionRoles: () => Promise<boolean>;
   clearActionFeedback: () => void;
   lastUpdatedAt: Date | null;
@@ -117,6 +125,8 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const [accessLoading, setAccessLoading] = useState(false);
   const [privilegedRoleLoading, setPrivilegedRoleLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [cleanupRunning, setCleanupRunning] = useState(false);
+  const [deletingRequest, setDeletingRequest] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -355,7 +365,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const deleteRequest = useCallback(async () => {
     if (selectedRequestId == null) return false;
 
-    setSaving(true);
+    setDeletingRequest(true);
     setActionError(null);
     setActionSuccess(null);
 
@@ -393,9 +403,48 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
       handleApiError(err, 'Failed to delete request.');
       return false;
     } finally {
-      setSaving(false);
+      setDeletingRequest(false);
     }
   }, [selectedRequestId, refreshOverview, handleApiError]);
+
+  useEffect(() => {
+    if (!cleanupRunning || selectedRequestId == null) {
+      return undefined;
+    }
+
+    let active = true;
+    let polls = 0;
+    const maxPolls = 40;
+
+    const intervalId = window.setInterval(() => {
+      polls += 1;
+      void refreshDetailSilent().finally(() => {
+        if (!active) {
+          return;
+        }
+
+        const liveCount =
+          requestDetail?.liveSummary?.resourceCount ??
+          users.reduce((sum, user) => sum + (user.liveResourceCount ?? user.resourceCount ?? 0), 0);
+
+        if (liveCount === 0 || polls >= maxPolls) {
+          setCleanupRunning(false);
+          if (liveCount === 0) {
+            setActionSuccess('Cleanup finished. All live Azure resources were removed.');
+          } else {
+            setActionSuccess(
+              'Cleanup is still running in Azure. Refresh again in a minute if live counts have not dropped yet.'
+            );
+          }
+        }
+      });
+    }, 15000);
+
+    return () => {
+      active = false;
+      window.clearInterval(intervalId);
+    };
+  }, [cleanupRunning, selectedRequestId, refreshDetailSilent, requestDetail?.liveSummary?.resourceCount]);
 
   const extendExpiration = useCallback(
     async (expiresAt: string) => {
@@ -685,22 +734,32 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const triggerRequestCleanupAction = useCallback(async () => {
     if (selectedRequestId == null) return false;
 
-    setSaving(true);
+    setCleanupRunning(true);
     setActionError(null);
     setActionSuccess(null);
 
     try {
       const result = await triggerOrgRequestCleanup(selectedRequestId);
+
+      if (result.started) {
+        setActionSuccess(
+          result.message ||
+            'Cleanup started in the background. Live resource counts will refresh automatically.'
+        );
+        void refreshDetailSilent();
+        return true;
+      }
+
       const count = result.totalDeleted ?? result.deletedCount ?? 0;
       const verb = result.action === 'pause' ? 'paused' : 'deleted';
       setActionSuccess(`Cleanup completed. ${count} resource(s) ${verb}.`);
+      setCleanupRunning(false);
       await refreshDetailSilent();
       return true;
     } catch (err) {
+      setCleanupRunning(false);
       handleApiError(err, 'Failed to trigger request cleanup.');
       return false;
-    } finally {
-      setSaving(false);
     }
   }, [selectedRequestId, refreshDetailSilent, handleApiError]);
 
@@ -735,6 +794,109 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     },
     [selectedRequestId, refreshDetailSilent, handleApiError]
   );
+
+  const unblockAllUsers = useCallback(async () => {
+    if (selectedRequestId == null) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await unblockAllOrgAdminUsers(selectedRequestId, {
+        resetUsage: true,
+        pauseWindowEnforcement: true,
+      });
+      setActionSuccess(
+        `Unblocked ${result.unblockedCount} of ${result.totalUsers} user(s) immediately.` +
+          (result.failedCount > 0 ? ` ${result.failedCount} failed.` : '')
+      );
+      await refreshDetailSilent();
+      return result.failedCount === 0;
+    } catch (err) {
+      handleApiError(err, 'Failed to unblock all users.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, refreshDetailSilent, handleApiError]);
+
+  const blockAllUsers = useCallback(async () => {
+    if (selectedRequestId == null) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await blockAllOrgAdminUsers(selectedRequestId);
+      setActionSuccess(
+        `Blocked ${result.blockedCount} of ${result.totalUsers} user(s) immediately.` +
+          (result.failedCount > 0 ? ` ${result.failedCount} failed.` : '')
+      );
+      await refreshDetailSilent();
+      return result.failedCount === 0;
+    } catch (err) {
+      handleApiError(err, 'Failed to block all users.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, refreshDetailSilent, handleApiError]);
+
+  const addUser = useCallback(async (count = 1) => {
+    if (selectedRequestId == null) return false;
+
+    const normalizedCount = Math.max(1, Math.trunc(Number(count) || 1));
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await addOrgAdminUser(selectedRequestId, normalizedCount);
+
+      const emailSummary =
+        result.emailSent && result.customerEmail
+          ? ` Credentials emailed to ${result.customerEmail}.`
+          : result.emailSent
+            ? ' Credentials emailed to the customer.'
+            : '';
+      const emailFailureSummary =
+        result.emailFailures > 0
+          ? ` Credential email failed${result.emailError ? `: ${result.emailError}` : '.'}`
+          : '';
+
+      const usernames =
+        result.users.length > 0
+          ? result.users.map((user) => user.username).join(', ')
+          : result.user?.username;
+
+      setActionSuccess(
+        `Added ${result.createdCount} user${result.createdCount !== 1 ? 's' : ''}` +
+          (usernames ? `: ${usernames}` : '') +
+          ` (${result.userCount} total, account count ${result.accountCount}).` +
+          emailSummary +
+          emailFailureSummary
+      );
+
+      setRequests((current) =>
+        current.map((entry) =>
+          entry.id === selectedRequestId
+            ? { ...entry, userCount: result.userCount }
+            : entry
+        )
+      );
+
+      await refreshDetailSilent();
+      return result.createdCount > 0 && result.failedCount === 0;
+    } catch (err) {
+      handleApiError(err, 'Failed to add users.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, refreshDetailSilent, handleApiError]);
 
   const reprovisionRoles = useCallback(async () => {
     if (selectedRequestId == null) return false;
@@ -771,6 +933,8 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     accessLoading,
     privilegedRoleLoading,
     saving,
+    cleanupRunning,
+    deletingRequest,
     overviewError,
     detailError,
     actionError,
@@ -796,6 +960,9 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     triggerCleanup,
     triggerRequestCleanup: triggerRequestCleanupAction,
     unblockUser,
+    unblockAllUsers,
+    blockAllUsers,
+    addUser,
     reprovisionRoles,
     clearActionFeedback,
     lastUpdatedAt,
