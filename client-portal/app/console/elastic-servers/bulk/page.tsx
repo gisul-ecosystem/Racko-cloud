@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ApiError } from '../../../../lib/apiClient';
 import { bulkCreateExternalVMs, type CreateExternalVMDto } from '../../../../lib/externalVmApi';
+import { ProjectSelect } from '../../../../components/console/ProjectSelect';
 import { ChevronLeft } from 'lucide-react';
 
 const BULK_EXAMPLE = `[
@@ -35,6 +36,7 @@ export default function BulkImportPage() {
   const router = useRouter();
   const { toasts, addToast, dismiss } = useToast();
   const [jsonText, setJsonText] = useState(BULK_EXAMPLE);
+  const [projectId, setProjectId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleFile = (file: File) => {
@@ -58,6 +60,11 @@ export default function BulkImportPage() {
       return;
     }
 
+    if (!projectId) {
+      addToast('error', 'Select a project for these servers.');
+      return;
+    }
+
     const vms: CreateExternalVMDto[] = [];
     for (const raw of parsed as BulkEntryRaw[]) {
       const ip = raw.ipAddress ?? raw.ip;
@@ -71,6 +78,7 @@ export default function BulkImportPage() {
         ipAddress: String(ip).trim(),
         protocol: proto,
         password: String(raw.password),
+        projectId,
         ...(raw.username && { username: String(raw.username).trim() }),
       });
     }
@@ -125,6 +133,12 @@ export default function BulkImportPage() {
               className={`${inputClass} font-mono text-xs leading-relaxed`}
             />
           </div>
+          <ProjectSelect
+            serviceKey="elastic-servers"
+            value={projectId}
+            onChange={setProjectId}
+            disabled={submitting}
+          />
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-3 border-t border-gray-100 pt-5">
@@ -136,7 +150,7 @@ export default function BulkImportPage() {
           </Link>
           <button
             onClick={() => void handleSubmit()}
-            disabled={submitting}
+            disabled={submitting || !projectId}
             className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:opacity-50"
           >
             {submitting && (

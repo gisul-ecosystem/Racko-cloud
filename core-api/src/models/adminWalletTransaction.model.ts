@@ -4,7 +4,7 @@ export type AdminWalletTransactionType = 'credit' | 'debit';
 
 export interface IAdminWalletTransaction extends Document {
   _id: mongoose.Types.ObjectId;
-  userId: mongoose.Types.ObjectId;          // super_admin who owns the wallet
+  userId: mongoose.Types.ObjectId;          // wallet owner
   type: AdminWalletTransactionType;
   amount: number;
   reason:
@@ -17,6 +17,12 @@ export interface IAdminWalletTransaction extends Document {
     | 'razorpay_topup'
     | 'refund';
   relatedVmJobId: string | null;            // vm jobId / cloud request id
+  /** Organization owner userId for project cost attribution. */
+  orgId: mongoose.Types.ObjectId | null;
+  /** Project this charge belongs to (optional for legacy rows). */
+  projectId: mongoose.Types.ObjectId | null;
+  /** Admin service key for service-level reports. */
+  serviceKey: string | null;
   creditedBy: mongoose.Types.ObjectId | null; // for manual credits — who credited
   balanceAfter: number;
   createdAt: Date;
@@ -58,6 +64,23 @@ const adminWalletTransactionSchema = new Schema<IAdminWalletTransaction>(
       type: String,
       default: null,
     },
+    orgId: {
+      type: Schema.Types.ObjectId,
+      ref: 'User',
+      default: null,
+      index: true,
+    },
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
+      default: null,
+      index: true,
+    },
+    serviceKey: {
+      type: String,
+      default: null,
+      index: true,
+    },
     creditedBy: {
       type: Schema.Types.ObjectId,
       ref: 'User',
@@ -77,6 +100,8 @@ const adminWalletTransactionSchema = new Schema<IAdminWalletTransaction>(
 );
 
 adminWalletTransactionSchema.index({ userId: 1, createdAt: -1 });
+adminWalletTransactionSchema.index({ orgId: 1, projectId: 1, createdAt: -1 });
+adminWalletTransactionSchema.index({ orgId: 1, serviceKey: 1, createdAt: -1 });
 
 export const AdminWalletTransaction = mongoose.model<IAdminWalletTransaction>(
   'AdminWalletTransaction',

@@ -47,6 +47,8 @@ export const dedicatedIdParamSchema = z.object({
 export const createDedicatedRequestSchema = z.object({
   body: z.object({
     planId: mongoObjectId,
+    /** Required for platform admin requests; omitted for tenant. */
+    projectId: mongoObjectId.optional(),
     notes: z.string().max(1000).trim().optional(),
   }),
 });

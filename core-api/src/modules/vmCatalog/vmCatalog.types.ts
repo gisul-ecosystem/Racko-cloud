@@ -82,6 +82,8 @@ export interface CreateCatalogVmRequestDto {
   /** Optional; inferred from billing when omitted. */
   durationDays?: number;
   canonicalSpec?: string;
+  /** Required for platform admin purchases. */
+  projectId?: string;
 }
 
 export interface CatalogVmRequesterGroup {

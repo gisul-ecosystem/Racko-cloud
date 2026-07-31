@@ -23,7 +23,8 @@ export function TenantConsoleAuthGate({ children }: { children: React.ReactNode 
     pathname.startsWith(`${TENANT_CONSOLE}/aws`) ||
     pathname.startsWith(`${TENANT_CONSOLE}/gcp`) ||
     pathname.startsWith(`${TENANT_CONSOLE}/machine-manager`) ||
-    pathname.startsWith(`${TENANT_CONSOLE}/docs`);
+    pathname.startsWith(`${TENANT_CONSOLE}/docs`) ||
+    pathname.startsWith(`${TENANT_CONSOLE}/projects`);
 
   const isAdminMirror = pathname.startsWith(`${TENANT_CONSOLE}/admin`);
   const isHubShell =

@@ -7,6 +7,8 @@ export interface CreateExternalVMDto {
   protocol: ExternalVMProtocol;
   username?: string;
   password: string;
+  /** Required for platform admin console creates. */
+  projectId?: string;
 }
 
 /** API-facing external VM shape. Password is returned DECRYPTED for admins only. */

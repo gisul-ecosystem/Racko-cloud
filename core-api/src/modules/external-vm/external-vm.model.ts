@@ -18,6 +18,8 @@ export interface IExternalVM extends Document {
   adminId?: mongoose.Types.ObjectId;
   /** Tenant workspace owner (tenant console). Mutually exclusive with adminId. */
   tenantId?: mongoose.Types.ObjectId;
+  /** Organization project this elastic server belongs to (platform admin). */
+  projectId?: mongoose.Types.ObjectId;
   /** Tenant user who created the record (optional audit). */
   createdByTenantUserId?: mongoose.Types.ObjectId;
 
@@ -81,6 +83,12 @@ const externalVMSchema = new Schema<IExternalVM>(
     tenantId: {
       type: Schema.Types.ObjectId,
       ref: 'Tenant',
+      required: false,
+      index: true,
+    },
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
       required: false,
       index: true,
     },

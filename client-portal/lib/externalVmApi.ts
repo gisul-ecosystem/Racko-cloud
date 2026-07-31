@@ -27,6 +27,7 @@ export interface CreateExternalVMDto {
   protocol: ExternalVMProtocol;
   username?: string;
   password: string;
+  projectId?: string;
 }
 
 export interface BulkCreateExternalVMDto {

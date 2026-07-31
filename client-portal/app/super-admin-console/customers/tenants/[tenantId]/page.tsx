@@ -41,8 +41,9 @@ import { AZURE_ROUTES } from '@/cloud_automation/constants';
 import { AWS_ROUTES } from '@/cloud_automation_aws/constants';
 import { TenantStatusBadge } from '@/components/super-admin-console/white-labelling/TenantStatusBadge';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
+import { TenantProjectsPanel } from '@/components/super-admin-console/TenantProjectsPanel';
 
-type Tab = 'overview' | 'services' | 'billing' | 'orders' | 'vms' | 'cloud' | 'team';
+type Tab = 'overview' | 'services' | 'billing' | 'orders' | 'vms' | 'cloud' | 'team' | 'projects';
 
 function formatMoney(amount: number, currency = 'INR'): string {
   return new Intl.NumberFormat('en-IN', {
@@ -224,6 +225,7 @@ export default function CustomerTenantDetailPage() {
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'overview', label: 'Overview' },
     { id: 'services', label: 'Services' },
+    { id: 'projects', label: 'Projects' },
     { id: 'billing', label: `Billing (${txTotal})` },
     { id: 'orders', label: `Orders (${orders.length})` },
     { id: 'vms', label: `VMs (${vms.length})` },
@@ -437,6 +439,8 @@ export default function CustomerTenantDetailPage() {
           </table>
         </section>
       ) : null}
+
+      {tab === 'projects' ? <TenantProjectsPanel tenantId={tenant.id} /> : null}
 
       {tab === 'billing' ? (
         <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
