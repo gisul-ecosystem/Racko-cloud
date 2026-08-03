@@ -8,6 +8,7 @@ import { useTemplates, useTemplateDetails } from '../../../../../hooks/useTempla
 import { createVM } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
+import { ProjectSelect } from '../../../../../components/console/ProjectSelect';
 import {
   getMyAdminWallet,
   quoteAdminVmCreation,
@@ -20,6 +21,7 @@ import {
   Cpu, MemoryStick, HardDrive, Layers,
   KeyRound, Eye, EyeOff, Wand2, Lock,
   Wallet, AlertTriangle, Loader2, Plus, X,
+  Globe, Network,
 } from 'lucide-react';
 
 declare global {
@@ -28,8 +30,9 @@ declare global {
   }
 }
 
-type Step = 1 | 2 | 3;
+type Step = 1 | 2 | 3 | 4;
 type PasswordMode = 'fixed' | 'dynamic';
+type NetworkType = 'public' | 'private';
 
 const inputClass =
   'w-full px-3 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900 placeholder-gray-400';
@@ -71,7 +74,11 @@ export default function CreateVMPage() {
   const [consolePassword, setConsolePassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [nameError, setNameError] = useState('');
+  const [projectId, setProjectId] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  // Step 3 — Network
+  const [networkType, setNetworkType] = useState<NetworkType>('public');
 
   // Billing
   const [wallet, setWallet] = useState<AdminWallet | null>(null);
@@ -250,6 +257,10 @@ export default function CreateVMPage() {
 
   async function handleSubmit() {
     if (!selectedTemplateId || !templateDetails) return;
+    if (!projectId) {
+      addToast('error', 'Select a project for this VM.');
+      return;
+    }
 
     // Enforce sufficient balance only if pricing is configured
     if (pricingConfigured && !hasSufficientBalance) {
@@ -265,6 +276,8 @@ export default function CreateVMPage() {
         count,
         cloneType,
         passwordMode,
+        projectId,
+        networkType,
         ...(passwordMode === 'fixed' ? { consolePassword } : {}),
         ...(cpuOverride && safeCpu > minCpu ? { cpuCores: safeCpu } : {}),
         ...(ramOverride && safeRam > minRam ? { memoryGb: safeRam } : {}),
@@ -298,7 +311,7 @@ export default function CreateVMPage() {
 
       {/* Step indicator */}
       <div className="flex items-center gap-2 mb-8">
-        {([1, 2, 3] as Step[]).map((s, idx) => (
+        {([1, 2, 3, 4] as Step[]).map((s, idx) => (
           <div key={s} className="flex items-center gap-2">
             <div className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-semibold transition-colors ${
               step > s ? 'bg-blue-600 text-white' : step === s ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-400'
@@ -306,9 +319,9 @@ export default function CreateVMPage() {
               {step > s ? <Check className="w-3.5 h-3.5" /> : s}
             </div>
             <span className={`text-xs font-medium ${step === s ? 'text-gray-900' : 'text-gray-400'}`}>
-              {['Select Template', 'Configure', 'Review'][idx]}
+              {['Select Template', 'Configure', 'Network', 'Review'][idx]}
             </span>
-            {idx < 2 && <ChevronRight className="w-3.5 h-3.5 text-gray-300 mx-1" />}
+            {idx < 3 && <ChevronRight className="w-3.5 h-3.5 text-gray-300 mx-1" />}
           </div>
         ))}
       </div>
@@ -536,19 +549,84 @@ export default function CreateVMPage() {
               <ChevronLeft className="w-4 h-4" /> Back
             </button>
             <button
-              onClick={() => { setStep(3); void fetchQuote(); }}
+              onClick={() => setStep(3)}
               disabled={!canProceedStep2()}
               className="inline-flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-40 disabled:cursor-not-allowed">
+              Next <ChevronRight className="w-4 h-4" />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Step 3 — Network (Public / Private IP) */}
+      {step === 3 && templateDetails && (
+        <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6 space-y-5">
+          <h2 className="text-sm font-semibold text-gray-900">Network</h2>
+          <p className="text-xs text-gray-500 -mt-3">
+            Choose how this VM connects to the network. This applies to all {count > 1 ? `${count} VMs` : 'the VM'} in this batch.
+          </p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <button
+              type="button"
+              onClick={() => setNetworkType('public')}
+              className={`px-4 py-4 rounded-xl border text-left transition-all ${
+                networkType === 'public' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                <Globe className={`w-4 h-4 ${networkType === 'public' ? 'text-blue-600' : 'text-gray-400'}`} />
+                <span className="text-sm font-semibold text-gray-900">Public IP</span>
+                <span className="text-[10px] font-medium text-green-700 bg-green-100 rounded-full px-1.5 py-0.5">Recommended</span>
+              </div>
+              <p className="text-xs text-gray-500">
+                Internet-routable IP address. Accessible directly over the internet — best for public-facing services.
+              </p>
+            </button>
+            <button
+              type="button"
+              onClick={() => setNetworkType('private')}
+              className={`px-4 py-4 rounded-xl border text-left transition-all ${
+                networkType === 'private' ? 'border-blue-500 bg-blue-50 ring-1 ring-blue-500' : 'border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              <div className="flex items-center gap-2 mb-1.5">
+                <Network className={`w-4 h-4 ${networkType === 'private' ? 'text-blue-600' : 'text-gray-400'}`} />
+                <span className="text-sm font-semibold text-gray-900">Private IP</span>
+              </div>
+              <p className="text-xs text-gray-500">
+                Internal-only IP address (10.110.0.0/16). Not reachable from the internet — best for backend/internal services.
+              </p>
+            </button>
+          </div>
+
+          <div className="flex items-center justify-between pt-2">
+            <button onClick={() => setStep(2)}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition">
+              <ChevronLeft className="w-4 h-4" /> Back
+            </button>
+            <button
+              onClick={() => { setStep(4); void fetchQuote(); }}
+              className="inline-flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition">
               Review <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         </div>
       )}
 
-      {/* Step 3 — Review + cost summary */}
-      {step === 3 && templateDetails && selectedTemplate && (
+      {/* Step 4 — Review + cost summary */}
+      {step === 4 && templateDetails && selectedTemplate && (
         <div className="bg-white border border-gray-200 rounded-xl shadow-sm p-6">
           <h2 className="text-sm font-semibold text-gray-900 mb-5">Review &amp; Create</h2>
+
+          <div className="mb-5">
+            <ProjectSelect
+              serviceKey="vm-management"
+              value={projectId}
+              onChange={setProjectId}
+              disabled={submitting}
+            />
+          </div>
 
           {/* VM details */}
           <div className="space-y-3 mb-6">
@@ -563,6 +641,7 @@ export default function CreateVMPage() {
               { label: 'Disk', value: cloneType === 'dedicated_storage' ? `${safeDisk} GB` : 'Shared (dynamic)' },
               { label: 'Console User', value: templateDetails.defaultUsername },
               { label: 'Password', value: passwordMode === 'dynamic' ? 'Auto-generated per VM' : 'Custom (set)' },
+              { label: 'Network', value: networkType === 'public' ? 'Public IP' : 'Private IP (10.110.0.0/16)' },
               ...(description ? [{ label: 'Description', value: description }] : []),
             ].map(({ label, value }) => (
               <div key={label} className="flex items-start justify-between py-2 border-b border-gray-50 last:border-0">
@@ -657,13 +736,13 @@ export default function CreateVMPage() {
           </div>
 
           <div className="flex items-center justify-between">
-            <button onClick={() => setStep(2)} disabled={submitting}
+            <button onClick={() => setStep(3)} disabled={submitting}
               className="inline-flex items-center gap-2 px-4 py-2 text-sm text-gray-600 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 transition disabled:opacity-50">
               <ChevronLeft className="w-4 h-4" /> Back
             </button>
             <button
               onClick={() => void handleSubmit()}
-              disabled={submitting || (pricingConfigured && !hasSufficientBalance)}
+              disabled={submitting || !projectId || (pricingConfigured && !hasSufficientBalance)}
               className="inline-flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 shadow-sm">
               {submitting && <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               {count > 1 ? `Create ${count} VMs` : 'Create VM'}

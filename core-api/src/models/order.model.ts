@@ -31,6 +31,8 @@ export interface IOrder extends Document {
   rejectionReason: string | null;
   provisionJobId: string | null;
   billingPeriod: BillingPeriod;
+  /** public: internet-routable IP on vmbr0 (default). private: internal-only IP on custnet1. */
+  networkType: 'public' | 'private';
   periodStartDate: Date | null;
   periodEndDate: Date | null;
   createdAt: Date;
@@ -114,6 +116,12 @@ const orderSchema = new Schema<IOrder>(
       enum: ['monthly', 'quarterly', 'yearly'],
       required: true,
       default: 'monthly',
+    },
+    networkType: {
+      type: String,
+      enum: ['public', 'private'],
+      required: true,
+      default: 'public',
     },
     periodStartDate: {
       type: Date,

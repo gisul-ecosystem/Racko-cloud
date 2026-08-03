@@ -20,6 +20,8 @@ const externalVMBody = z.object({
     .string({ required_error: 'password is required' })
     .min(1, 'password is required')
     .max(256),
+  /** Required for platform admin console creates. */
+  projectId: mongoObjectId.optional(),
 });
 
 export const createExternalVMSchema = z.object({
@@ -92,6 +94,25 @@ export const updateExternalVmScheduleSchema = z.object({
     endTime: z.string().nullable().optional(),
     weeklySchedule: z.array(z.unknown()).nullable().optional(),
     timezone: z.string().nullable().optional(),
+  }),
+});
+
+export const updateExternalVmOverrideSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z.object({
+    accessOverride: z.boolean(),
+    accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
+});
+
+export const bulkUpdateExternalVmOverrideSchema = z.object({
+  body: z.object({
+    ids: z
+      .array(mongoObjectId)
+      .min(1, 'At least one server must be specified')
+      .max(250, 'Cannot update more than 250 servers at once'),
+    accessOverride: z.boolean(),
+    accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
   }),
 });
 

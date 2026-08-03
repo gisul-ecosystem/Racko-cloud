@@ -22,9 +22,13 @@ import {
   parseAccessScheduleInput,
   type AccessScheduleInput,
 } from '../vmAccessSchedule/accessScheduleParse';
-import { checkAccessWindow } from '../vmAccessSchedule/scheduleManager';
+import {
+  cancelSchedule,
+  checkAccessWindow,
+  unblockUserSession,
+} from '../vmAccessSchedule/scheduleManager';
 
-type PlatformActorRole = 'admin' | 'super_admin' | 'user';
+type PlatformActorRole = 'admin' | 'super_admin' | 'staff' | 'user';
 
 interface TenantExternalVmActor {
   id: string;
@@ -113,6 +117,16 @@ class ExternalVMService {
     dto: CreateExternalVMDto,
     adminId: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse> {
+    if (!dto.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const { projectsService } = await import('../projects/projects.service');
+    const projectCtx = await projectsService.assertUsableForService({
+      projectId: dto.projectId,
+      actingUserId: adminId.toString(),
+      serviceKey: 'elastic-servers',
+    });
+
     const doc = await ExternalVMModel.create({
       name: dto.name,
       ipAddress: dto.ipAddress,
@@ -120,11 +134,13 @@ class ExternalVMService {
       username: dto.username,
       password: encrypt(dto.password),
       adminId,
+      projectId: projectCtx.projectId,
     });
 
     logger.info('[ExternalVM] Added external VM', {
       externalVmId: doc._id.toString(),
       adminId: adminId.toString(),
+      projectId: projectCtx.projectId.toString(),
       protocol: doc.protocol,
     });
 
@@ -429,6 +445,16 @@ class ExternalVMService {
     tenantId: mongoose.Types.ObjectId,
     createdByTenantUserId?: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse> {
+    if (!dto.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const { projectsService } = await import('../projects/projects.service');
+    const projectCtx = await projectsService.assertUsableForTenantService({
+      projectId: dto.projectId,
+      tenantId: tenantId.toString(),
+      serviceKey: 'elastic-servers',
+    });
+
     const doc = await ExternalVMModel.create({
       name: dto.name,
       ipAddress: dto.ipAddress,
@@ -436,12 +462,14 @@ class ExternalVMService {
       username: dto.username,
       password: encrypt(dto.password),
       tenantId,
+      projectId: projectCtx.projectId,
       ...(createdByTenantUserId ? { createdByTenantUserId } : {}),
     });
 
     logger.info('[ExternalVM] Added tenant external VM', {
       externalVmId: doc._id.toString(),
       tenantId: tenantId.toString(),
+      projectId: projectCtx.projectId.toString(),
       protocol: doc.protocol,
     });
 
@@ -772,6 +800,76 @@ class ExternalVMService {
     });
 
     return toAccessScheduleView(doc);
+  }
+
+  /**
+   * Grant or revoke access override for a tenant-owned elastic server (tenant_admin).
+   * Lets the assigned user connect outside weekly / legacy schedule windows.
+   */
+  async updateTenantExternalVmOverride(
+    id: mongoose.Types.ObjectId,
+    actor: TenantExternalVmActor,
+    body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+  ): Promise<NonNullable<ExternalVMResponse['accessSchedule']>> {
+    if (actor.role !== 'tenant_admin') {
+      throw new ForbiddenError('Only tenant admins can grant access overrides.');
+    }
+
+    const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
+
+    if (body.accessOverride) {
+      doc.accessOverride = true;
+      doc.accessOverrideUntil = body.accessOverrideUntil
+        ? new Date(body.accessOverrideUntil)
+        : null;
+      cancelSchedule(doc._id.toString());
+      if (doc.assignedTenantUserId) {
+        unblockUserSession(doc.assignedTenantUserId.toString());
+      }
+    } else {
+      doc.accessOverride = false;
+      doc.accessOverrideUntil = null;
+    }
+
+    await doc.save();
+
+    logger.info('[ExternalVM] Access override updated', {
+      externalVmId: doc._id.toString(),
+      tenantId: actor.tenantId,
+      actorId: actor.id,
+      accessOverride: doc.accessOverride,
+      accessOverrideUntil: doc.accessOverrideUntil,
+    });
+
+    return toAccessScheduleView(doc);
+  }
+
+  async bulkUpdateTenantExternalVmOverride(
+    ids: mongoose.Types.ObjectId[],
+    actor: TenantExternalVmActor,
+    body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+  ): Promise<{
+    updated: number;
+    results: Array<{ externalVmId: string; ok: boolean; error?: string }>;
+  }> {
+    const results: Array<{ externalVmId: string; ok: boolean; error?: string }> = [];
+    let updated = 0;
+
+    for (const id of ids) {
+      try {
+        await this.updateTenantExternalVmOverride(id, actor, body);
+        results.push({ externalVmId: id.toString(), ok: true });
+        updated += 1;
+      } catch (err) {
+        results.push({
+          externalVmId: id.toString(),
+          ok: false,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    return { updated, results };
   }
 
   private async openGuacamole(

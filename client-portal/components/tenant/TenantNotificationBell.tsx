@@ -22,7 +22,7 @@ function formatRelativeTime(value: string) {
 
 function notificationHref(notification: TenantNotification): string | null {
   if (notification.type === 'vm_plan_expiring_soon' && notification.metadata?.vmId) {
-    return `/tenant/dashboard/plans/${notification.metadata.vmId}`;
+    return `/console/dashboard/plans/${notification.metadata.vmId}`;
   }
   return null;
 }
@@ -155,7 +155,7 @@ export function TenantNotificationBell() {
 
           <div className="border-t border-gray-100 px-4 py-2.5">
             <Link
-              href="/tenant/dashboard/notifications"
+              href="/console/dashboard/notifications"
               onClick={() => setOpen(false)}
               className="text-xs font-medium text-gray-600 hover:text-gray-900"
             >

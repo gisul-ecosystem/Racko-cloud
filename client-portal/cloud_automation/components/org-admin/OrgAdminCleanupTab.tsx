@@ -14,6 +14,7 @@ interface OrgAdminCleanupTabProps {
   onToggleCleanup: (userId: number, disabled: boolean) => Promise<boolean>;
   onManualCleanup: (userId: number) => Promise<boolean>;
   onRequestCleanup?: () => Promise<boolean>;
+  cleanupRunning?: boolean;
 }
 
 function formatTriggeredBy(triggeredBy: string): string {
@@ -33,9 +34,9 @@ export function OrgAdminCleanupTab({
   onToggleCleanup,
   onManualCleanup,
   onRequestCleanup,
+  cleanupRunning = false,
 }: OrgAdminCleanupTabProps) {
   const [busyUserId, setBusyUserId] = useState<number | null>(null);
-  const [requestCleanupRunning, setRequestCleanupRunning] = useState(false);
   const [cleanupLogs, setCleanupLogs] = useState<OrgAdminCleanupLog[]>([]);
   const [logsLoading, setLogsLoading] = useState(true);
   const [lastCleanupResult, setLastCleanupResult] = useState<string | null>(null);
@@ -108,16 +109,17 @@ export function OrgAdminCleanupTab({
       return;
     }
 
-    setRequestCleanupRunning(true);
     setLastCleanupResult(null);
     try {
       const ok = await onRequestCleanup();
       if (ok) {
-        setLastCleanupResult('Request-wide cleanup completed.');
+        setLastCleanupResult(
+          'Cleanup started in the background. Live resource counts will refresh automatically.'
+        );
         await loadCleanupLogs();
       }
     } finally {
-      setRequestCleanupRunning(false);
+      // Progress tracked via cleanupRunning from parent hook.
     }
   }
 
@@ -217,7 +219,7 @@ export function OrgAdminCleanupTab({
         {onRequestCleanup && (
           <button
             type="button"
-            disabled={saving || requestCleanupRunning}
+            disabled={saving || cleanupRunning}
             onClick={() => void handleRequestCleanup()}
             className={`inline-flex items-center gap-1.5 rounded-lg border bg-white px-3 py-1.5 text-xs font-medium transition disabled:opacity-50 ${
               isPause
@@ -225,14 +227,14 @@ export function OrgAdminCleanupTab({
                 : 'border-red-200 text-red-700 hover:bg-red-50'
             }`}
           >
-            {requestCleanupRunning ? (
+            {cleanupRunning ? (
               <Loader2 className="h-3.5 w-3.5 animate-spin" />
             ) : isPause ? (
               <Pause className="h-3.5 w-3.5" />
             ) : (
               <Trash2 className="h-3.5 w-3.5" />
             )}
-            {requestCleanupRunning ? 'Deleting resources...' : 'Run Cleanup Now'}
+            {cleanupRunning ? 'Cleaning up in background…' : 'Run Cleanup Now'}
           </button>
         )}
       </div>

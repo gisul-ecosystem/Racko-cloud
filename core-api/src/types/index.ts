@@ -1,6 +1,14 @@
 import type { Request } from 'express';
 
-export type UserRole = 'super_admin' | 'admin' | 'user';
+export type UserRole = 'super_admin' | 'staff' | 'admin' | 'user';
+export type AccountType = 'legacy' | 'b2c' | 'b2b';
+export type OnboardingStatus =
+  | 'active'
+  | 'kyc_pending'
+  | 'org_details_pending'
+  | 'org_review_pending'
+  | 'org_approved'
+  | 'org_rejected';
 
 export interface AccessTokenPayload {
   userId: string;
@@ -33,6 +41,7 @@ export interface ApiResponse<T = undefined> {
 export interface RegisterDto {
   email: string;
   password: string;
+  accountType?: AccountType;
 }
 
 export interface LoginDto {

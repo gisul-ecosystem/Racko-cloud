@@ -4,6 +4,8 @@ const { DateTime } = require('luxon');
 const db = require('../db/postgres');
 const { createGraphClient } = require('../provisioners/azure/userProvisioner');
 const { enforceDailyHourLimits } = require('../services/dailyUsageEnforcementService');
+const { evaluateCombinedLabAccess } = require('../utils/labAccess');
+const { isWithinUsageWindowTime } = require('../utils/usageWindowTime');
 
 let scheduledTask = null;
 
@@ -45,7 +47,8 @@ async function setEntraUsersEnabled(graphClient, users, enabled) {
   }
 }
 
-async function enforceWindowForRequest(requestId) {
+async function enforceWindowForRequest(requestRow) {
+  const requestId = requestRow.id;
   const { rows: windows } = await db.query(
     `
       SELECT day_of_week, window_start_time, window_end_time, timezone
@@ -59,21 +62,9 @@ async function enforceWindowForRequest(requestId) {
     return;
   }
 
-  const tz = windows[0].timezone || 'Asia/Kolkata';
-  const now = DateTime.now().setZone(tz);
-  const currentDay = now.weekday % 7;
-  const currentTime = now.toFormat('HH:mm:ss');
-  const todayWindow = windows.find((window) => window.day_of_week === currentDay);
-
-  const shouldBeUnblocked = Boolean(
-    todayWindow
-      && currentTime >= todayWindow.window_start_time
-      && currentTime < todayWindow.window_end_time
-  );
-
   const { rows: users } = await db.query(
     `
-      SELECT id, azure_user_id, azure_account_enabled, window_enforcement_paused_until
+      SELECT id, azure_user_id, azure_account_enabled, window_enforcement_paused_until, blocked_reason
       FROM azure_users
       WHERE request_id = $1
         AND azure_user_id IS NOT NULL
@@ -81,6 +72,13 @@ async function enforceWindowForRequest(requestId) {
     `,
     [requestId]
   );
+
+  if (!users.length) {
+    return;
+  }
+
+  const labAccess = evaluateCombinedLabAccess(requestRow, windows);
+  const shouldBeUnblocked = labAccess.allowed;
 
   const enforcementPausedUsers = users.filter(
     (user) =>
@@ -109,7 +107,10 @@ async function enforceWindowForRequest(requestId) {
       await db.query(
         `
           UPDATE azure_users
-          SET azure_account_enabled = TRUE
+          SET azure_account_enabled = TRUE,
+              blocked_until = NULL,
+              blocked_reason = NULL,
+              blocked_at = NULL
           WHERE id = ANY($1)
         `,
         [pausedButDisabled.map((user) => user.id)]
@@ -127,7 +128,10 @@ async function enforceWindowForRequest(requestId) {
     (user) => user.azure_account_enabled !== false && !shouldBeUnblocked
   );
   const usersToUnblock = eligibleUsers.filter(
-    (user) => user.azure_account_enabled === false && shouldBeUnblocked
+    (user) =>
+      user.azure_account_enabled === false
+      && shouldBeUnblocked
+      && user.blocked_reason !== 'admin_block'
   );
 
   if (!usersToBlock.length && !usersToUnblock.length) {
@@ -135,6 +139,7 @@ async function enforceWindowForRequest(requestId) {
   }
 
   const { graphClient } = createGraphClient();
+  const tz = windows[0].timezone || 'Asia/Kolkata';
 
   if (usersToBlock.length) {
     await setEntraUsersEnabled(graphClient, usersToBlock, false);
@@ -156,7 +161,7 @@ async function enforceWindowForRequest(requestId) {
     logEvent('info', 'users_blocked', {
       requestId,
       count: usersToBlock.length,
-      reason: 'window_closed'
+      reason: labAccess.withinServicePeriod ? 'window_closed' : labAccess.reason
     });
   }
 
@@ -194,7 +199,11 @@ async function enforceWindowForRequest(requestId) {
       await db.query(
         `
           UPDATE azure_users
-          SET azure_account_enabled = TRUE
+          SET azure_account_enabled = TRUE,
+              blocked_until = NULL,
+              blocked_reason = NULL,
+              blocked_at = NULL,
+              status = CASE WHEN status = 'Blocked' THEN 'Created' ELSE status END
           WHERE id = ANY($1)
         `,
         [eligibleToUnblock.map((user) => user.id)]
@@ -209,26 +218,45 @@ async function enforceWindowForRequest(requestId) {
       logEvent('info', 'users_unblocked', {
         requestId,
         count: eligibleToUnblock.length,
-        reason: 'window_opened_new_day'
+        reason: 'window_opened'
       });
     }
+  }
+
+  if (shouldBeUnblocked) {
+    await db.query(
+      `
+        UPDATE azure_users
+        SET status = 'Created'
+        WHERE request_id = $1
+          AND COALESCE(is_deleted, FALSE) = FALSE
+          AND status = 'Blocked'
+          AND azure_account_enabled IS NOT FALSE
+          AND COALESCE(blocked_reason, '') <> 'admin_block'
+      `,
+      [requestId]
+    );
   }
 }
 
 async function enforceUsageWindows() {
   const { rows: requests } = await db.query(
     `
-      SELECT DISTINCT pr.id
-      FROM requests pr
-      JOIN request_usage_windows ruw ON ruw.request_id = pr.id
-      WHERE pr.status = 'Completed'
-        AND COALESCE(pr.expired, FALSE) = FALSE
-        AND pr.expiry_date >= NOW()
+      SELECT
+        r.id,
+        r.starts_at,
+        r.expiry_date,
+        r.expires_at
+      FROM requests r
+      JOIN request_usage_windows ruw ON ruw.request_id = r.id
+      WHERE r.status = 'Completed'
+        AND COALESCE(r.expired, FALSE) = FALSE
+        AND (r.expires_at IS NULL OR r.expires_at >= NOW())
     `
   );
 
   for (const req of requests) {
-    await enforceWindowForRequest(req.id);
+    await enforceWindowForRequest(req);
   }
 }
 
@@ -251,5 +279,7 @@ function startWindowEnforcementScheduler() {
 }
 
 module.exports = {
-  startWindowEnforcementScheduler
+  startWindowEnforcementScheduler,
+  enforceWindowForRequest,
+  enforceUsageWindows
 };

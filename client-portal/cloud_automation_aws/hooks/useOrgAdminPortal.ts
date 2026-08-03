@@ -14,22 +14,29 @@ import {
   listAwsIamPolicies,
   listAwsOrgAccessRequests,
   listAwsOrgRequests,
+  listAwsOrgPrivilegedRoleRequests,
   reinstateAwsOrgUser,
   reviewAwsOrgAccessRequest,
+  reviewAwsOrgPrivilegedRoleRequest,
   renewAwsOrgUserBudget,
   suspendAwsOrgUser,
   syncAwsOrgRequestSpend,
   triggerAwsOrgUserCleanup,
   triggerAwsOrgAllCleanup,
   unblockAwsOrgUser,
+  addAwsOrgUsers,
+  blockAllAwsOrgUsers,
+  unblockAllAwsOrgUsers,
   updateAwsOrgCleanupSettings,
   updateAwsOrgRequestCleanupSettings,
   updateAwsOrgUserPermissions,
+  sendAwsOrgPurchaseConfirmationMail,
 } from '../api/orgAdminClient';
 import type {
   AwsIamPolicyGroup,
   AwsOrgAdminAccessRequest,
   AwsOrgAdminMonitoringResponse,
+  AwsOrgAdminPrivilegedRoleRequest,
   AwsOrgAdminRequestDetail,
   AwsOrgAdminRequestSummary,
   AwsOrgAdminUserCost,
@@ -44,9 +51,13 @@ export function useOrgAdminPortal() {
   const [requestDetail, setRequestDetail] = useState<AwsOrgAdminRequestDetail | null>(null);
   const [iamPolicies, setIamPolicies] = useState<AwsIamPolicyGroup[]>([]);
   const [accessRequests, setAccessRequests] = useState<AwsOrgAdminAccessRequest[]>([]);
+  const [privilegedRoleRequests, setPrivilegedRoleRequests] = useState<
+    AwsOrgAdminPrivilegedRoleRequest[]
+  >([]);
   const [overviewLoading, setOverviewLoading] = useState(false);
   const [detailLoading, setDetailLoading] = useState(false);
   const [accessLoading, setAccessLoading] = useState(false);
+  const [privilegedRoleLoading, setPrivilegedRoleLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [overviewError, setOverviewError] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
@@ -56,11 +67,13 @@ export function useOrgAdminPortal() {
   const [regionFilter, setRegionFilter] = useState('All');
   const [search, setSearch] = useState('');
   const [activeTab, setActiveTab] = useState<
-    'users' | 'history' | 'cleanup' | 'budget' | 'custom-config'
+    'users' | 'history' | 'cleanup' | 'budget' | 'custom-config' | 'privileged-roles'
   >('users');
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const refreshInFlightRef = useRef(false);
+  const selectedRequestIdRef = useRef<string | null>(null);
+  selectedRequestIdRef.current = selectedRequestId;
 
   const hasActiveUsers = Boolean(
     requestDetail?.users?.some(
@@ -97,23 +110,53 @@ export function useOrgAdminPortal() {
 
   const refreshDetail = useCallback(async () => {
     if (!selectedRequestId) return;
-    if (refreshInFlightRef.current) return;
 
+    const requestId = selectedRequestId;
     refreshInFlightRef.current = true;
     setDetailLoading(true);
     setIsRefreshing(true);
     setDetailError(null);
 
     try {
-      const detail = await getAwsOrgRequestDetail(selectedRequestId);
+      const detail = await getAwsOrgRequestDetail(requestId);
+      if (selectedRequestIdRef.current !== requestId) return;
       setRequestDetail(detail);
       setLastUpdatedAt(new Date());
     } catch (err) {
+      if (selectedRequestIdRef.current !== requestId) return;
       setDetailError(err instanceof AwsOrgAdminError ? err.message : 'Failed to load request detail.');
     } finally {
-      refreshInFlightRef.current = false;
-      setIsRefreshing(false);
-      setDetailLoading(false);
+      if (selectedRequestIdRef.current === requestId) {
+        refreshInFlightRef.current = false;
+        setIsRefreshing(false);
+        setDetailLoading(false);
+      }
+    }
+  }, [selectedRequestId]);
+
+  const refreshDetailSilent = useCallback(async () => {
+    if (!selectedRequestId) return;
+    if (refreshInFlightRef.current) return;
+
+    const requestId = selectedRequestId;
+    refreshInFlightRef.current = true;
+    setIsRefreshing(true);
+
+    try {
+      const detail = await getAwsOrgRequestDetail(requestId);
+      if (selectedRequestIdRef.current !== requestId) return;
+      setRequestDetail(detail);
+      setLastUpdatedAt(new Date());
+    } catch (err) {
+      if (selectedRequestIdRef.current !== requestId) return;
+      if (err instanceof AwsOrgAdminError && (err.status === 403 || err.status === 401)) {
+        setDetailError(err.message || 'Failed to load request detail.');
+      }
+    } finally {
+      if (selectedRequestIdRef.current === requestId) {
+        refreshInFlightRef.current = false;
+        setIsRefreshing(false);
+      }
     }
   }, [selectedRequestId]);
 
@@ -128,20 +171,36 @@ export function useOrgAdminPortal() {
     }
   }, []);
 
+  const refreshPrivilegedRoleRequests = useCallback(async () => {
+    setPrivilegedRoleLoading(true);
+    try {
+      setPrivilegedRoleRequests(await listAwsOrgPrivilegedRoleRequests({ status: 'pending' }));
+    } catch {
+      setPrivilegedRoleRequests([]);
+    } finally {
+      setPrivilegedRoleLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     void refreshOverview();
     void refreshAccessRequests();
+    void refreshPrivilegedRoleRequests();
     void listAwsIamPolicies()
       .then(setIamPolicies)
       .catch(() => setIamPolicies([]));
-  }, [refreshOverview, refreshAccessRequests]);
+  }, [refreshOverview, refreshAccessRequests, refreshPrivilegedRoleRequests]);
 
   useEffect(() => {
     if (selectedRequestId) {
+      setRequestDetail(null);
+      setDetailError(null);
+      setDetailLoading(true);
       void refreshDetail();
     } else {
       setRequestDetail(null);
       setDetailError(null);
+      setDetailLoading(false);
     }
   }, [selectedRequestId, refreshDetail]);
 
@@ -149,11 +208,11 @@ export function useOrgAdminPortal() {
     if (!selectedRequestId) return undefined;
 
     const intervalId = window.setInterval(() => {
-      void refreshDetail();
+      void refreshDetailSilent();
     }, hasActiveUsers ? 10_000 : 60_000);
 
     return () => window.clearInterval(intervalId);
-  }, [selectedRequestId, refreshDetail, hasActiveUsers]);
+  }, [selectedRequestId, refreshDetailSilent, hasActiveUsers]);
 
   const stats = useMemo(
     () => ({
@@ -171,7 +230,16 @@ export function useOrgAdminPortal() {
   }, [requests]);
 
   const selectRequest = useCallback((requestId: string | null) => {
-    setSelectedRequestId((current) => (current === requestId ? null : requestId));
+    setSelectedRequestId((current) => {
+      const next = current === requestId ? null : requestId;
+      if (next !== current) {
+        refreshInFlightRef.current = false;
+        setRequestDetail(null);
+        setDetailError(null);
+        if (next) setDetailLoading(true);
+      }
+      return next;
+    });
     setActiveTab('users');
     setActionError(null);
     setActionSuccess(null);
@@ -353,6 +421,40 @@ export function useOrgAdminPortal() {
     [clearActionFeedback, handleApiError, refreshAccessRequests]
   );
 
+  const handleReviewPrivilegedRole = useCallback(
+    async (id: string, status: 'approved' | 'rejected', reviewNotes?: string) => {
+      setSaving(true);
+      clearActionFeedback();
+      try {
+        const result = await reviewAwsOrgPrivilegedRoleRequest(id, { status, reviewNotes });
+        const assignedCount =
+          status === 'approved' && result.request?.rolesAssigned
+            ? ` Assigned to ${result.request.rolesAssigned} user role(s).`
+            : status === 'approved' && !result.request?.accessApplied
+              ? ' Will apply when the lab is provisioned.'
+              : '';
+        setActionSuccess(`Privileged role request ${status}.${assignedCount}`);
+        await refreshPrivilegedRoleRequests();
+        if (selectedRequestId) {
+          await refreshDetail();
+        }
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to review privileged role request.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [
+      clearActionFeedback,
+      handleApiError,
+      refreshPrivilegedRoleRequests,
+      refreshDetail,
+      selectedRequestId,
+    ]
+  );
+
   const handleDeleteRequest = useCallback(async () => {
     if (!selectedRequestId) return false;
     setSaving(true);
@@ -361,7 +463,7 @@ export function useOrgAdminPortal() {
       await deleteAwsOrgRequest(selectedRequestId);
       setSelectedRequestId(null);
       setRequestDetail(null);
-      setActionSuccess('AWS request deleted.');
+      setActionSuccess('AWS request deleted. Lab resources and IAM users/roles were removed.');
       await refreshOverview();
       return true;
     } catch (err) {
@@ -473,6 +575,77 @@ export function useOrgAdminPortal() {
     [runAction, selectedRequestId]
   );
 
+  const handleAddUser = useCallback(
+    async (count = 1) => {
+      if (!selectedRequestId) return false;
+      setSaving(true);
+      clearActionFeedback();
+      try {
+        const result = await addAwsOrgUsers(selectedRequestId, count);
+        setActionSuccess(
+          `Added ${result.addedCount} user(s)` +
+            (result.customerEmail ? ` — credentials emailed to ${result.customerEmail}` : '') +
+            ` (${result.userCount} total, account count ${result.accountCount}).`
+        );
+        await refreshDetail();
+        await refreshOverview();
+        return true;
+      } catch (err) {
+        handleApiError(err, 'Failed to add users.');
+        return false;
+      } finally {
+        setSaving(false);
+      }
+    },
+    [selectedRequestId, clearActionFeedback, refreshDetail, refreshOverview, handleApiError]
+  );
+
+  const handleBlockAll = useCallback(async () => {
+    if (!selectedRequestId) return false;
+    setSaving(true);
+    clearActionFeedback();
+    try {
+      const result = await blockAllAwsOrgUsers(selectedRequestId);
+      const failed = (result.attempted || 0) - (result.successCount || 0);
+      setActionSuccess(
+        `Blocked ${result.successCount} of ${result.attempted} user(s) immediately.` +
+          (failed > 0 ? ` ${failed} failed.` : '')
+      );
+      await refreshDetail();
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to block all users.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, clearActionFeedback, refreshDetail, handleApiError]);
+
+  const handleUnblockAll = useCallback(async () => {
+    if (!selectedRequestId) return false;
+    setSaving(true);
+    clearActionFeedback();
+    try {
+      const result = await unblockAllAwsOrgUsers(selectedRequestId, {
+        resetUsage: true,
+        pauseWindowEnforcement: true,
+        pauseWindowHours: 24,
+      });
+      const failed = (result.attempted || 0) - (result.successCount || 0);
+      setActionSuccess(
+        `Unblocked ${result.successCount} of ${result.attempted} user(s) immediately.` +
+          (failed > 0 ? ` ${failed} failed.` : '')
+      );
+      await refreshDetail();
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to unblock all users.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, clearActionFeedback, refreshDetail, handleApiError]);
+
   const fetchUserCost = useCallback(
     async (userIndex: number): Promise<AwsOrgAdminUserCost | null> => {
       if (!selectedRequestId) return null;
@@ -501,6 +674,28 @@ export function useOrgAdminPortal() {
     [runAction, selectedRequestId]
   );
 
+  const sendPurchaseConfirmationMail = useCallback(async () => {
+    if (!selectedRequestId) return false;
+
+    setSaving(true);
+    setActionError(null);
+    setActionSuccess(null);
+
+    try {
+      const result = await sendAwsOrgPurchaseConfirmationMail(selectedRequestId);
+      setActionSuccess(
+        result.message ||
+          `Confirmation mail sent${result.recipientEmail ? ` to ${result.recipientEmail}` : ''}.`
+      );
+      return true;
+    } catch (err) {
+      handleApiError(err, 'Failed to send confirmation mail.');
+      return false;
+    } finally {
+      setSaving(false);
+    }
+  }, [selectedRequestId, handleApiError]);
+
   const fetchUserMonitoring = useCallback(
     async (userIndex: number): Promise<AwsOrgAdminMonitoringResponse | null> => {
       if (!selectedRequestId) return null;
@@ -521,10 +716,18 @@ export function useOrgAdminPortal() {
     clearActionFeedback();
     void refreshOverview();
     void refreshAccessRequests();
+    void refreshPrivilegedRoleRequests();
     if (selectedRequestId) {
-      void refreshDetail();
+      void refreshDetailSilent();
     }
-  }, [clearActionFeedback, refreshOverview, refreshAccessRequests, refreshDetail, selectedRequestId]);
+  }, [
+    clearActionFeedback,
+    refreshOverview,
+    refreshAccessRequests,
+    refreshPrivilegedRoleRequests,
+    refreshDetailSilent,
+    selectedRequestId,
+  ]);
 
   return {
     requests,
@@ -532,9 +735,11 @@ export function useOrgAdminPortal() {
     requestDetail,
     iamPolicies,
     accessRequests,
+    privilegedRoleRequests,
     overviewLoading,
     detailLoading,
     accessLoading,
+    privilegedRoleLoading,
     saving,
     overviewError,
     detailError,
@@ -564,18 +769,24 @@ export function useOrgAdminPortal() {
     handleCleanup,
     handleSyncSpend,
     handleReviewAccess,
+    handleReviewPrivilegedRole,
     handleDeleteRequest,
     handleFixPermissions,
     handleRequestCleanup,
     handleToggleCleanup,
     handleRequestCleanupSettings,
     handleUnblock,
+    handleAddUser,
+    handleBlockAll,
+    handleUnblockAll,
     fetchUserCost,
     fetchSharedCost,
     handleForceLogout,
+    sendPurchaseConfirmationMail,
     fetchUserMonitoring,
     clearActionFeedback,
     refreshAccessRequests,
+    refreshPrivilegedRoleRequests,
     lastUpdatedAt,
     isRefreshing,
     hasActiveUsers,

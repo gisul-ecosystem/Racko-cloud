@@ -28,6 +28,12 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
   const router = useRouter();
   const pathname = usePathname();
 
+  const isTenantArea =
+    pathname === '/console/login' ||
+    pathname === '/console/forgot-password' ||
+    pathname === '/console/reset-password' ||
+    (pathname?.startsWith('/console/dashboard') ?? false);
+
   const usesOwnShell =
     (pathname?.startsWith('/console/elastic-servers') ?? false) ||
     (pathname?.startsWith('/console/azure') ?? false) ||
@@ -35,12 +41,25 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     (pathname?.startsWith('/console/aws') ?? false) ||
     (pathname?.startsWith('/console/docs') ?? false) ||
     (pathname?.startsWith('/console/create-vm') ?? false) ||
-    (pathname?.startsWith('/console/dedicated-server') ?? false);
+    (pathname?.startsWith('/console/dedicated-server') ?? false) ||
+    (pathname?.startsWith('/console/projects') ?? false);
 
   useEffect(() => {
+    if (isTenantArea) return;
     if (isLoading) return;
     if (!isAuthenticated || !user) {
       router.replace('/login');
+      return;
+    }
+    if (user.accountType === 'b2c' && user.onboardingStatus === 'kyc_pending') {
+      router.replace('/onboarding/individual-kyc');
+      return;
+    }
+    if (
+      user.accountType === 'b2b' &&
+      ['org_details_pending', 'org_review_pending', 'org_rejected'].includes(user.onboardingStatus)
+    ) {
+      router.replace('/onboarding/organization');
       return;
     }
 
@@ -54,7 +73,12 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
         user.role === 'super_admin' ? '/super-admin-console' : '/dashboard/user'
       );
     }
-  }, [isLoading, isAuthenticated, user, router, pathname]);
+  }, [isLoading, isAuthenticated, user, router, pathname, isTenantArea]);
+
+  // Tenant workspace (login + dashboard) — no platform console shell.
+  if (isTenantArea) {
+    return <>{children}</>;
+  }
 
   if (isLoading) {
     return (

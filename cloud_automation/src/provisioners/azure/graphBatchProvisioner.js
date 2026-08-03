@@ -178,10 +178,142 @@ const batchPatchUsers = async (graphClient, users, patchFields, context = 'user 
   return allResponses;
 };
 
+const batchEnableUsers = async (graphClient, azureUserIds, context = 'bulk enable users') => {
+  const uniqueIds = [...new Set((azureUserIds || []).filter(Boolean))];
+  const enabled = [];
+  const failed = [];
+
+  if (!uniqueIds.length) {
+    return { enabled, failed };
+  }
+
+  const chunks = chunkArray(uniqueIds, GRAPH_BATCH_SIZE);
+
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunk = chunks[chunkIndex];
+    const batchRequests = chunk.map((azureUserId) => ({
+      id: String(azureUserId),
+      method: 'PATCH',
+      url: `/users/${azureUserId}`,
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: {
+        accountEnabled: true
+      }
+    }));
+
+    try {
+      const batchResult = await executeBatchWithRetry(graphClient, batchRequests, context);
+      const responses = Array.isArray(batchResult?.responses) ? batchResult.responses : [];
+      const responseById = new Map(responses.map((response) => [String(response.id), response]));
+
+      for (const azureUserId of chunk) {
+        const response = responseById.get(String(azureUserId));
+
+        if (response && response.status >= 200 && response.status < 300) {
+          enabled.push(azureUserId);
+          continue;
+        }
+
+        failed.push({
+          azureUserId,
+          status: response?.status || null,
+          error:
+            response?.body?.error?.message ||
+            response?.body?.message ||
+            'Failed to enable Azure account'
+        });
+      }
+    } catch (error) {
+      for (const azureUserId of chunk) {
+        failed.push({
+          azureUserId,
+          status: Number(error?.statusCode || error?.status || 502),
+          error: error?.message || 'Graph batch enable failed'
+        });
+      }
+    }
+
+    if (chunkIndex < chunks.length - 1) {
+      await sleep(750);
+    }
+  }
+
+  return { enabled, failed };
+};
+
+const batchDisableUsers = async (graphClient, azureUserIds, context = 'bulk disable users') => {
+  const uniqueIds = [...new Set((azureUserIds || []).filter(Boolean))];
+  const disabled = [];
+  const failed = [];
+
+  if (!uniqueIds.length) {
+    return { disabled, failed };
+  }
+
+  const chunks = chunkArray(uniqueIds, GRAPH_BATCH_SIZE);
+
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunk = chunks[chunkIndex];
+    const batchRequests = chunk.map((azureUserId) => ({
+      id: String(azureUserId),
+      method: 'PATCH',
+      url: `/users/${azureUserId}`,
+      headers: {
+        'Content-Type': 'application/json'
+      },
+      body: {
+        accountEnabled: false
+      }
+    }));
+
+    try {
+      const batchResult = await executeBatchWithRetry(graphClient, batchRequests, context);
+      const responses = Array.isArray(batchResult?.responses) ? batchResult.responses : [];
+      const responseById = new Map(responses.map((response) => [String(response.id), response]));
+
+      for (const azureUserId of chunk) {
+        const response = responseById.get(String(azureUserId));
+
+        if (response && response.status >= 200 && response.status < 300) {
+          disabled.push(azureUserId);
+          continue;
+        }
+
+        failed.push({
+          azureUserId,
+          status: response?.status || null,
+          error:
+            response?.body?.error?.message ||
+            response?.body?.message ||
+            'Failed to disable Azure account'
+        });
+      }
+    } catch (error) {
+      for (const azureUserId of chunk) {
+        failed.push({
+          azureUserId,
+          status: Number(error?.statusCode || error?.status || 502),
+          error: error?.message || 'Graph batch disable failed'
+        });
+      }
+    }
+
+    if (chunkIndex < chunks.length - 1) {
+      await sleep(750);
+    }
+  }
+
+  return { disabled, failed };
+};
+
 module.exports = {
   GRAPH_BATCH_SIZE,
   batchAddUsersToGroups,
   batchPatchUsers,
+  batchEnableUsers,
+  batchDisableUsers,
   chunkArray,
   executeBatchWithRetry,
   isRetryableError

@@ -23,6 +23,8 @@ export interface IVM extends Document {
 
   // Ownership
   adminId: mongoose.Types.ObjectId;
+  /** Organization project this VPS belongs to. */
+  projectId?: mongoose.Types.ObjectId;
 
   // Clone tracking
   isVmClone: boolean;
@@ -54,6 +56,8 @@ export interface IVM extends Document {
   // Network
   ipAddress?: string;
   macAddress?: string;
+  /** public: internet-routable IP on vmbr0 (default). private: internal-only IP on custnet1. */
+  networkType: 'public' | 'private';
 
   // Console access (Guacamole)
   consoleUsername?: string;
@@ -130,6 +134,11 @@ const vmSchema = new Schema<IVM>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+      index: true,
+    },
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
       index: true,
     },
     isVmClone: {
@@ -211,6 +220,12 @@ const vmSchema = new Schema<IVM>(
     macAddress: {
       type: String,
       trim: true,
+    },
+    networkType: {
+      type: String,
+      enum: ['public', 'private'],
+      default: 'public',
+      required: true,
     },
     consoleUsername: {
       type: String,

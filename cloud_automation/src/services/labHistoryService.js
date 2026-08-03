@@ -225,7 +225,8 @@ async function getLabHistoryForRequest(requestId, { userId = null, limit = 200 }
         au.last_resource_count,
         au.peak_resource_count,
         COALESCE(ubs.current_spend, 0) AS azure_cost_mtd,
-        COALESCE(ubs.budget_amount, r.per_user_budget_usd) AS budget_amount
+        COALESCE(ubs.budget_amount, r.per_user_budget_usd) AS budget_amount,
+        COALESCE(ubs.currency, 'USD') AS cost_currency
       FROM azure_users au
       JOIN requests r ON r.id = au.request_id
       LEFT JOIN user_budget_spend ubs ON ubs.azure_user_id = au.id
@@ -272,6 +273,7 @@ async function getLabHistoryForRequest(requestId, { userId = null, limit = 200 }
       liveCostUsd: round4((lifetimeMinutes / 60) * hourlyRate),
       azureCostMtdUsd: round4(parseFloat(user.azure_cost_mtd || 0)),
       budgetAmountUsd: user.budget_amount != null ? Number(user.budget_amount) : null,
+      costCurrency: user.cost_currency || 'USD',
       currentResourceCount: Number(user.last_resource_count || 0),
       peakResourceCount: Number(user.peak_resource_count || 0),
       sessionCount: Number(sessionStats.rows[0]?.session_count || 0),
@@ -465,12 +467,18 @@ async function getLabHistoryForRequest(requestId, { userId = null, limit = 200 }
 
   timeline.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime());
   const trimmedTimeline = timeline.slice(0, resolvedLimit);
+  const defaultCostCurrency =
+    userSummaries.find((summary) => summary.costCurrency && summary.costCurrency !== 'USD')
+      ?.costCurrency
+    || userSummaries[0]?.costCurrency
+    || 'USD';
 
   return {
     requestId: Number(requestId),
     expiryDate: request.expiry_date,
     labCreatedAt: request.created_at,
     hourlyRateUsd: hourlyRate,
+    defaultCostCurrency,
     userSummaries,
     timeline: trimmedTimeline,
     sessions: sessionsResult.rows.map((row) => ({

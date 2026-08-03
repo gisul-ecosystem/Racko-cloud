@@ -444,14 +444,11 @@ func hashFile(path string) string {
 }
 
 // getWatchPaths returns the list of root paths the tracker watches for changes.
-// These are the same paths the watcher monitors — centralised here so baseline
-// and watcher always agree on what is in scope.
+// Only user data paths are tracked — software installation paths (Program Files,
+// ProgramData) are excluded since we only clone user files, not software.
 func getWatchPaths() []string {
 	return []string{
 		`C:\Users`,
-		`C:\Program Files`,
-		`C:\Program Files (x86)`,
-		`C:\ProgramData`,
 		`C:\tools`,
 		`C:\dev`,
 		`C:\projects`,
@@ -461,30 +458,98 @@ func getWatchPaths() []string {
 }
 
 // shouldExcludePath returns true for paths that should never be tracked —
-// OS internals, agent data, transient cache, paging files.
+// OS internals, agent data, transient cache, paging files, and Windows
+// auto-generated noise files that have no value for clone replay.
 func shouldExcludePath(path string) bool {
 	lp := strings.ToLower(path)
 	excludes := []string{
+		// Windows OS — never touch
 		`c:\windows`,
-		`c:\programdata\racko-agent`,
+		// Agent data — never track our own files
+		`c:\programdata\racko-agent`,		// Windows system-managed ProgramData
 		`c:\programdata\microsoft`,
 		`c:\programdata\windows`,
 		`c:\programdata\package cache`,
 		`c:\programdata\usoprivate`,
 		`c:\programdata\usoshared`,
 		`c:\programdata\softwareDistribution`,
-		`c:\users\default`,
+		// AppData — software stores internal data here (caches, settings, updaters).
+		// Users don't manually create content in AppData, so exclude entirely.
+		// This covers Chrome, VS Code, Office, any software vendor — no per-app rules needed.
+		`appdata`,
 		`c:\users\public`,
 		`c:\users\all users`,
+		// Windows Recent — shortcut files auto-created when user opens folders
+		// These are OS bookkeeping, not user-created content. They get rebuilt
+		// automatically on the target VM so cloning them is pointless.
+		`appdata\roaming\microsoft\windows\recent`,
+		// Jump Lists — binary cache files auto-updated by Windows
+		`appdata\roaming\microsoft\windows\recent\automaticdestinations`,
+		`appdata\roaming\microsoft\windows\recent\customdestinations`,
+		// PowerShell history — updated every command, cloning 50+ events is noise
+		`appdata\roaming\microsoft\windows\powershell\psreadline\consolehost_history.txt`,
+		// PowerShell startup profile cache — updated every time PowerShell opens
+		`appdata\local\microsoft\windows\powershell`,
+		// Edge/IE/Chrome web cache — transient binary cache files
+		`appdata\local\microsoft\windows\webcache`,
+		`appdata\local\microsoft\windows\history`,
 		`appdata\local\microsoft\windows\inetcache`,
 		`appdata\local\microsoft\windows\temporary internet files`,
+		// Edge browser internal data — cache, LevelDB, session, logs
+		// These are ephemeral browser-managed files, not user content
+		`appdata\local\microsoft\edge\user data`,
+		// Chrome browser internal data
+		`appdata\local\google\chrome\user data`,
+		// Google updater — auto-update service files, not user content
+		`appdata\local\google\update`,
+		`appdata\local\google\googleupdate`,
+		// Firefox internal data
+		`appdata\roaming\mozilla\firefox\profiles`,
+		// Icon cache — rebuilt by Windows automatically
+		`appdata\local\iconcache`,
+		`appdata\local\microsoft\windows\explorer`,
+		// Windows Notification cache
+		`appdata\local\microsoft\windows\notifications`,
+		// Windows Search cache
+		`appdata\local\microsoft\windows\caches`,
+		// Windows Timeline / Activity History — auto-managed by OS, not user content
+		`appdata\local\connecteddevicesplatform`,
+		// Windows Token Broker cache — SSO/auth tokens managed by OS
+		`appdata\local\microsoft\tokenbroker\cache`,
+		// Temp folders — transient
 		`appdata\local\temp`,
 		`appdata\locallow`,
-		`pagefile.sys`,
+		// Windows Search / IndexedDB cache files — auto-generated, not user content
+		`appdata\local\packages`,                          // all UWP package caches (TokenBroker, Search, Edge etc.)
+		// Windows Search database files — rebuilt automatically
+		`.jfm`,   // IndexedDB journal
+		`edb.chk`, // ESE database checkpoint
+		`edb.log`, // ESE transaction log
+		// Registry hive files — always locked by Windows, never readable
+		`ntuser.dat`,
+		`ntuser.dat.log`,
+		`ntuser.pol`,
+		// NTFS internal system folders — never user content
+		`$extend`,
+		`$deleted`,
+		// VMware guest tools logs — not user content
+		`c:\programdata\vmware`,
 		`hiberfil.sys`,
 		`swapfile.sys`,
+		// Office lock files
+		`~$`,
+		// Temporary files — browser downloads, partial files, system temp
 		`.tmp`,
-		`~$`, // Office lock files
+		`.crdownload`,  // Chrome/Edge partial downloads
+		`.part`,        // Firefox partial downloads
+		// Recycle bin and system restore
+		`$recycle.bin`,
+		`system volume information`,
+		`$winreagent`,
+		// Windows recovery
+		`c:\recovery`,
+		// MSI installer cache
+		`c:\config.msi`,
 	}
 	for _, ex := range excludes {
 		if strings.HasPrefix(lp, strings.ToLower(ex)) || strings.Contains(lp, strings.ToLower(ex)) {

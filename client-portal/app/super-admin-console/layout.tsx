@@ -1,12 +1,18 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
 import { useServiceShell } from '../../components/console/useServiceShell';
 import { ServiceShellLayout } from '../../components/console/ServiceShellLayout';
 import { SuperAdminConsoleSidebar } from '../../components/super-admin-console/SuperAdminConsoleSidebar';
 import { SuperAdminConsoleTopBar } from '../../components/super-admin-console/SuperAdminConsoleTopBar';
+import {
+  fetchMyRbacPermissions,
+  hasPermission,
+  type MyRbacPermissions,
+} from '@/lib/rbacApi';
+import { RbacPermissionsProvider } from '@/context/RbacPermissionsContext';
 
 const SERVICES_WITH_OWN_SHELL = [
   '/super-admin-console/vm-management',
@@ -15,6 +21,25 @@ const SERVICES_WITH_OWN_SHELL = [
   '/super-admin-console/machine-manager',
   '/super-admin-console/white-labelling',
 ];
+
+const STAFF_ROUTE_PERMISSIONS: Array<{ prefix: string; anyOf: string[] }> = [
+  { prefix: '/super-admin-console/vm-management', anyOf: ['vm_management.manage'] },
+  { prefix: '/super-admin-console/machine-manager', anyOf: ['machine_manager.manage'] },
+  { prefix: '/super-admin-console/azure', anyOf: ['azure.manage'] },
+  { prefix: '/super-admin-console/aws', anyOf: ['aws.manage'] },
+  { prefix: '/super-admin-console/white-labelling', anyOf: ['white_labelling.manage'] },
+  { prefix: '/super-admin-console/admin-users', anyOf: ['admin_users.manage'] },
+  { prefix: '/super-admin-console/customers', anyOf: ['admin_users.manage'] },
+  { prefix: '/super-admin-console/external-vm-pricing', anyOf: ['pricing.webyne.read', 'pricing.webyne.write'] },
+  { prefix: '/super-admin-console/vm-pricing-calculator', anyOf: ['pricing.calculator.read', 'pricing.webyne.read'] },
+  { prefix: '/super-admin-console/webyne-vm-requests', anyOf: ['webyne.requests.read'] },
+  { prefix: '/super-admin-console/dedicated-server-requests', anyOf: ['dedicated.requests.read'] },
+  { prefix: '/super-admin-console/access-control', anyOf: [] },
+];
+
+function isControlPlaneRole(role: string | undefined): boolean {
+  return role === 'super_admin' || role === 'staff';
+}
 
 function SuperAdminConsoleShell({ children }: { children: React.ReactNode }) {
   const { sidebarOpen, setSidebarOpen, toggleSidebar } = useServiceShell(false);
@@ -39,17 +64,59 @@ export default function SuperAdminConsoleLayout({ children }: { children: React.
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
+  const [rbac, setRbac] = useState<MyRbacPermissions | null>(null);
+  const [rbacLoading, setRbacLoading] = useState(true);
 
   const usesOwnShell = SERVICES_WITH_OWN_SHELL.some((p) => pathname?.startsWith(p) ?? false);
+  const allowed = isAuthenticated && user && isControlPlaneRole(user.role);
 
   useEffect(() => {
     if (isLoading) return;
-    if (isAuthenticated && user && user.role !== 'super_admin') {
+    if (isAuthenticated && user && !isControlPlaneRole(user.role)) {
       router.replace(user.role === 'admin' ? '/console' : '/dashboard/user');
     }
   }, [isLoading, isAuthenticated, user, router]);
 
-  if (isLoading) {
+  useEffect(() => {
+    if (!allowed) {
+      setRbac(null);
+      setRbacLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setRbacLoading(true);
+    void fetchMyRbacPermissions()
+      .then((data) => {
+        if (!cancelled) setRbac(data);
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setRbac({
+            role: user!.role,
+            permissions: [],
+            isSuperAdmin: user!.role === 'super_admin',
+          });
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRbacLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [allowed, user]);
+
+  useEffect(() => {
+    if (!allowed || !pathname || !rbac || rbac.isSuperAdmin || user?.role !== 'staff') return;
+    const match = STAFF_ROUTE_PERMISSIONS.find((r) => pathname.startsWith(r.prefix));
+    if (!match) return;
+    const ok = match.anyOf.length > 0 && match.anyOf.some((key) => hasPermission(rbac, key));
+    if (!ok) {
+      router.replace('/super-admin-console');
+    }
+  }, [allowed, pathname, rbac, router, user?.role]);
+
+  if (isLoading || (allowed && rbacLoading)) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#B91C1C] border-t-transparent" />
@@ -57,10 +124,13 @@ export default function SuperAdminConsoleLayout({ children }: { children: React.
     );
   }
 
-  if (!isAuthenticated || !user || user.role !== 'super_admin') return null;
+  if (!allowed) return null;
 
-  // Sub-services render their own shell (sidebar + topbar)
-  if (usesOwnShell) return <>{children}</>;
+  const body = usesOwnShell ? (
+    <>{children}</>
+  ) : (
+    <SuperAdminConsoleShell>{children}</SuperAdminConsoleShell>
+  );
 
-  return <SuperAdminConsoleShell>{children}</SuperAdminConsoleShell>;
+  return <RbacPermissionsProvider value={rbac}>{body}</RbacPermissionsProvider>;
 }

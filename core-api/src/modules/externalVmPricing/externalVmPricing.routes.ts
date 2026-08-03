@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
-import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { externalVmPricingController } from './externalVmPricing.controller';
 import {
@@ -14,14 +14,12 @@ router.use(requireAuth);
 
 /**
  * GET  /api/v1/external-vm-pricing/:provider
- * Readable by super_admin only (sell pricing is applied server-side for admins).
- *
  * PUT  /api/v1/external-vm-pricing/:provider
- * Writable by super_admin only.
+ * Control-plane: permission-gated (super_admin bypasses).
  */
 router.get(
   '/:provider',
-  requireRole('super_admin'),
+  requirePermission('pricing.webyne.read', 'pricing.webyne.write'),
   validateRequest(providerParamSchema),
   (req, res, next) => {
     externalVmPricingController.getConfig(req, res, next);
@@ -30,7 +28,7 @@ router.get(
 
 router.put(
   '/:provider',
-  requireRole('super_admin'),
+  requirePermission('pricing.webyne.write', 'pricing.hourly.toggle'),
   validateRequest(saveExternalVmPricingSchema),
   (req, res, next) => {
     externalVmPricingController.saveConfig(req, res, next);

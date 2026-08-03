@@ -34,31 +34,31 @@ interface NavLink {
 
 const navLinks: NavLink[] = [
   {
-    href: '/dashboard/super-admin',
+    href: '/super-admin-console',
     label: 'Cluster',
     icon: <LayoutDashboard className="w-4 h-4" />,
     roles: ['super_admin'],
   },
   {
-    href: '/dashboard/super-admin/vms',
+    href: '/super-admin-console/vm-management/vms',
     label: 'All VMs',
     icon: <MonitorCheck className="w-4 h-4" />,
     roles: ['super_admin'],
   },
   {
-    href: '/dashboard/super-admin/alerts',
+    href: '/super-admin-console/vm-management/alerts',
     label: 'Alerts',
     icon: <Bell className="w-4 h-4" />,
     roles: ['super_admin'],
   },
   {
-    href: '/dashboard/super-admin/software',
+    href: '/super-admin-console/vm-management/software',
     label: 'Software',
     icon: <Package className="w-4 h-4" />,
     roles: ['super_admin'],
   },
   {
-    href: '/dashboard/super-admin/templates',
+    href: '/super-admin-console/vm-management/templates',
     label: 'Templates',
     icon: <Layers className="w-4 h-4" />,
     roles: ['super_admin'],
@@ -82,8 +82,20 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       router.replace('/login');
       return;
     }
-    if (pathname.startsWith('/dashboard/super-admin') && user.role !== 'super_admin') {
-      router.replace('/dashboard/admin');
+    if (user.accountType === 'b2c' && user.onboardingStatus === 'kyc_pending') {
+      router.replace('/onboarding/individual-kyc');
+      return;
+    }
+    if (
+      user.accountType === 'b2b' &&
+      ['org_details_pending', 'org_review_pending', 'org_rejected'].includes(user.onboardingStatus)
+    ) {
+      router.replace('/onboarding/organization');
+      return;
+    }
+    if (pathname.startsWith('/dashboard/super-admin')) {
+      router.replace('/super-admin-console');
+      return;
     }
     if (pathname.startsWith('/dashboard/admin') && user.role === 'super_admin') {
       router.replace('/super-admin-console');
@@ -130,7 +142,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const visibleLinks = navLinks.filter((l) => l.roles.includes(user.role as 'super_admin' | 'user'));
 
   const dashboardHome =
-    user.role === 'super_admin' ? '/dashboard/super-admin' : '/dashboard/user';
+    user.role === 'super_admin' ? '/super-admin-console' : '/dashboard/user';
 
   return (
     <div className="min-h-screen bg-gray-50">

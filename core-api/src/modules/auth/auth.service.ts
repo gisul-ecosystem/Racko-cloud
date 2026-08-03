@@ -25,6 +25,7 @@ import {
   UnauthorizedError,
   AccountLockedError,
   EmailNotVerifiedError,
+  PasswordSetupRequiredError,
   RegistrationUnavailableError,
   AppError,
 } from '../../utils/errors';
@@ -100,6 +101,15 @@ export class AuthService {
     const userAgent = req.headers['user-agent'] ?? 'unknown';
     const fingerprint = generateFingerprint(req);
 
+    const accountType = data.accountType ?? 'legacy';
+    const role = accountType === 'b2c' ? 'user' : 'admin';
+    const onboardingStatus =
+      accountType === 'b2c'
+        ? 'kyc_pending'
+        : accountType === 'b2b'
+        ? 'org_details_pending'
+        : 'active';
+
     const existingUser = await User.findOne({ email: data.email });
 
     if (existingUser?.isEmailVerified) {
@@ -141,7 +151,9 @@ export class AuthService {
     const user = new User({
       email: data.email,
       password: data.password, // pre-save hook hashes with argon2id
-      role: 'admin',
+      role,
+      accountType,
+      onboardingStatus,
       isEmailVerified: false,
       emailVerificationToken: hashedToken,
       emailVerificationExpires: expiresAt,
@@ -149,14 +161,15 @@ export class AuthService {
 
     await user.save();
 
-    // New platform admins only get VM Catalog + Dedicated Server by default
-    try {
-      await adminServicesService.seedDefaultsForNewAdmin(user._id);
-    } catch (seedErr) {
-      logger.warn('[Auth] Failed to seed admin services on register', {
-        userId: user._id.toString(),
-        error: seedErr instanceof Error ? seedErr.message : String(seedErr),
-      });
+    if (role === 'admin') {
+      try {
+        await adminServicesService.seedDefaultsForNewAdmin(user._id);
+      } catch (seedErr) {
+        logger.warn('[Auth] Failed to seed admin services on register', {
+          userId: user._id.toString(),
+          error: seedErr instanceof Error ? seedErr.message : String(seedErr),
+        });
+      }
     }
 
     await sendVerificationEmail(data.email, rawToken);
@@ -202,6 +215,7 @@ export class AuthService {
       throw new AppError('Verification link is invalid or has expired.', 400, 'INVALID_TOKEN');
     }
 
+    const requiresPasswordSetup = Boolean(user.mustSetPassword);
     user.isEmailVerified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
@@ -215,7 +229,11 @@ export class AuthService {
       deviceFingerprint: fingerprint,
     });
 
-    return { message: 'Email verified successfully. You can now log in.' };
+    return {
+      message: requiresPasswordSetup
+        ? 'Email verified successfully. Now set your password from the invite email before logging in.'
+        : 'Email verified successfully. You can now log in.',
+    };
   }
 
   /**
@@ -283,6 +301,11 @@ export class AuthService {
         deviceFingerprint: fingerprint,
       });
       throw new EmailNotVerifiedError();
+    }
+
+    if (user.mustSetPassword) {
+      await verifyPassword(DUMMY_HASH, data.password);
+      throw new PasswordSetupRequiredError();
     }
 
     // Verify password
@@ -444,6 +467,8 @@ export class AuthService {
         id: user._id.toString(),
         email: user.email,
         role: user.role,
+        accountType: user.accountType,
+        onboardingStatus: user.onboardingStatus,
         isEmailVerified: user.isEmailVerified,
         lastLoginAt: user.lastLoginAt,
       },
@@ -766,6 +791,7 @@ export class AuthService {
     user.password = newPassword;
     user.passwordResetToken = undefined;
     user.passwordResetExpires = undefined;
+    user.mustSetPassword = false;
     await user.save();
 
     // Revoke all active refresh tokens for this user — forces re-login everywhere

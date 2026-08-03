@@ -3,6 +3,9 @@
 export const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition placeholder:text-gray-400 focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-2 focus:ring-[var(--cloud-accent,#B91C1C)]/20';
 
+export const inputDisabledClass =
+  'w-full cursor-not-allowed rounded-lg border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm text-gray-500 shadow-sm';
+
 export const labelClass =
   'mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500';
 

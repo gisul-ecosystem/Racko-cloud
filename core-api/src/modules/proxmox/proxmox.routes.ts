@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { proxmoxController } from './proxmox.controller';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
-import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { nodeNameParamSchema, vmQuerySchema } from './proxmox.validation';
 import { getActiveAlerts, getAlertHistory } from './proxmox.service';
@@ -15,10 +15,9 @@ function success<T>(res: Response, message: string, data?: T, statusCode = 200):
 
 const router = Router();
 
-// All proxmox routes require: valid JWT + super_admin role
-// requireAuth runs first — always
+// All proxmox routes require: valid JWT + VM management permission
 router.use(requireAuth);
-router.use(requireRole('super_admin'));
+router.use(requirePermission('vm_management.manage'));
 
 // GET /api/v1/proxmox/overview
 // Quick summary: node count, VM count, resource totals
@@ -60,10 +59,10 @@ router.get('/vms', validateRequest(vmQuerySchema), (req, res, next) => {
   proxmoxController.getAllVMs(req, res, next);
 });
 
-// ─── Alert routes (super_admin only) ─────────────────────────────────────────
+// ─── Alert routes ────────────────────────────────────────────────────────────
 
 // GET /api/v1/proxmox/alerts — active alerts
-router.get('/alerts', requireRole('super_admin'), async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/alerts', async (_req: Request, res: Response, next: NextFunction) => {
   try {
     const alerts = await getActiveAlerts();
     success(res, 'Active alerts retrieved.', { alerts, total: alerts.length });
@@ -73,7 +72,7 @@ router.get('/alerts', requireRole('super_admin'), async (_req: Request, res: Res
 });
 
 // GET /api/v1/proxmox/alerts/history — alert history
-router.get('/alerts/history', requireRole('super_admin'), async (req: Request, res: Response, next: NextFunction) => {
+router.get('/alerts/history', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const limit = Math.min(parseInt((req.query['limit'] as string) ?? '50', 10) || 50, 100);
     const alerts = await getAlertHistory(limit);

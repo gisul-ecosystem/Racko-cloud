@@ -127,7 +127,7 @@ export function TenantUserResourcesTabs() {
                       <td className="px-4 py-3 font-mono text-xs text-gray-500">{vm.ipAddress ?? '—'}</td>
                       <td className="px-4 py-3 text-right">
                         <Link
-                          href={`/tenant/dashboard/admin/vms/${vm.id}`}
+                          href={`/console/dashboard/admin/vms/${vm.id}`}
                           className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline"
                           style={accentLinkStyle}
                         >

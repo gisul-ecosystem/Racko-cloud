@@ -292,6 +292,25 @@ export async function run(requestId) {
       requestId: completedRequest._id,
     });
 
+    try {
+      const {
+        linkPrivilegedRoleRequestsToRequest,
+        fulfillLinkedApprovedPrivilegedRoleRequests,
+      } = await import('../../services/privilegedRoleService.js');
+      await linkPrivilegedRoleRequestsToRequest(
+        completedRequest._id,
+        completedRequest.customerEmail
+      );
+      await fulfillLinkedApprovedPrivilegedRoleRequests(completedRequest._id, {
+        actor: 'provisioning',
+      });
+    } catch (err) {
+      console.warn(
+        `[orchestrator] Privileged role fulfillment failed for ${requestId}:`,
+        err.message
+      );
+    }
+
     return completedRequest;
   } catch (err) {
     console.error(`[orchestrator] Failed for ${requestId}:`, err.message);

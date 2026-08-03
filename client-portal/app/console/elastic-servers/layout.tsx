@@ -21,7 +21,7 @@ export default function ElasticServersLayout({ children }: { children: React.Rea
       return;
     }
     if (user.role !== 'admin') {
-      router.replace(user.role === 'super_admin' ? '/dashboard/super-admin' : '/dashboard/user');
+      router.replace(user.role === 'super_admin' ? '/super-admin-console' : '/dashboard/user');
     }
   }, [isLoading, isAuthenticated, user, router]);
 

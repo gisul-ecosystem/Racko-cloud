@@ -13,20 +13,40 @@ import {
   registerGcpSpec,
   vcpuToOcpus,
 } from '../config/specMap.js';
+import { fetchEc2Hourly } from './awsPriceFetch.js';
+import { fetchVmHourlyUsd, fetchVmWindowsHourlyUsd } from './azurePricing.js';
 
+/** Prefer common families only as a price-tiebreaker (never for shortlist exclusion). */
 const PREFERRED_AWS_FAMILIES = [
+  't4g',
   't3',
   't3a',
+  'm8g',
+  'm7g',
+  'm6g',
+  'm7i',
+  'm7i-flex',
   'm6i',
   'm5',
-  'm7i',
+  'c8g',
+  'c7g',
+  'c6g',
+  'c7i',
+  'c7i-flex',
   'c6i',
+  'c5a',
   'c5',
+  'r8g',
+  'r7g',
+  'r6g',
+  'r7i',
   'r6i',
   'r5',
-  'g4dn',
-  'g5',
 ];
+
+/** Region used only to rank candidate SKUs by live on-demand $/hr. */
+const AWS_SKU_PRICE_REGION = 'us-east-1';
+const AZURE_SKU_PRICE_REGION = 'eastus';
 
 /** Intel families that support EC2 nested virtualization (Docker/KVM guests). */
 const NESTED_AWS_FAMILIES = [
@@ -51,19 +71,52 @@ const NESTED_AWS_FAMILIES = [
 const NESTED_AZURE_NAME_RE =
   /^Standard_(D\d+s?_v3|D\d+as_v4|D\d+ads_v5|E\d+s?_v3|E\d+as_v4|E\d+ads_v5|F\d+s_v2|F\d+)$/i;
 
+/**
+ * General-purpose Azure series for normal (non-nested) dynamic picks.
+ * Includes x86 D/E/F and ARM Ampere/Cobalt (Dps/Dpls/Eps…).
+ */
+const PREFERRED_AZURE_NAME_RE = /^Standard_(D|E|F)\d/i;
+const BURSTABLE_OR_LEGACY_AZURE_RE = /^Standard_(B|A)\d/i;
+
+function azureFamilyRank(name) {
+  const n = String(name || '');
+  if (PREFERRED_AZURE_NAME_RE.test(n)) return 0;
+  if (BURSTABLE_OR_LEGACY_AZURE_RE.test(n)) return 2;
+  return 1;
+}
+
+/**
+ * Resolve architecture preference for pricing/SKU selection.
+ * - any: true cheapest across x86 + ARM (Linux default)
+ * - x86_64: Intel/AMD only (Windows/nested default; x86-only workloads)
+ * - arm64: Graviton / Azure ARM only
+ */
+export function normalizeArchitecture(value, { category, nestedVirtualization } = {}) {
+  if (nestedVirtualization) return 'x86_64';
+  if (/windows/i.test(String(category || ''))) return 'x86_64';
+  const raw = String(
+    value ?? process.env.PRICING_ARCHITECTURE ?? 'any'
+  )
+    .trim()
+    .toLowerCase();
+  if (raw === 'arm' || raw === 'arm64' || raw === 'aarch64' || raw === 'graviton') {
+    return 'arm64';
+  }
+  if (raw === 'x86' || raw === 'x86_64' || raw === 'amd64' || raw === 'intel') {
+    return 'x86_64';
+  }
+  return 'any';
+}
+
 let azureSkuCache = null;
 let azureSkuCacheAt = 0;
 const AZURE_SKU_TTL_MS = 6 * 60 * 60 * 1000;
-
-let awsTypeCache = null;
-let awsTypeCacheAt = 0;
-const AWS_TYPE_TTL_MS = 6 * 60 * 60 * 1000;
 
 function awsFamily(instanceType) {
   return String(instanceType).split('.')[0];
 }
 
-function familyRank(instanceType, nested = false) {
+function awsFamilyRank(instanceType, nested = false) {
   const family = awsFamily(instanceType);
   const list = nested ? NESTED_AWS_FAMILIES : PREFERRED_AWS_FAMILIES;
   const idx = list.indexOf(family);
@@ -78,9 +131,43 @@ function isNestedAzureSize(name) {
   return NESTED_AZURE_NAME_RE.test(String(name || ''));
 }
 
+function matchesArchitecture(arch, preference) {
+  if (!preference || preference === 'any') return true;
+  return arch === preference;
+}
+
 /**
- * Pick smallest current-gen instance that meets vCPU + RAM, preferring common families.
- * When nestedVirtualization=true, only nested-virt-capable Intel families are considered.
+ * Fractional GPU SKUs (e.g. g6f.large) often report Gpu.Count=0 with LogicalGpuCount>0.
+ * Treat any GpuInfo / accelerator metadata as GPU-capable.
+ */
+function awsHasAccelerator(t) {
+  const gpus = t.GpuInfo?.Gpus || [];
+  if (gpus.length > 0) return true;
+  if ((t.GpuInfo?.TotalGpuMemoryInMiB || 0) > 0) return true;
+  if ((t.InferenceAcceleratorInfo?.Accelerators || []).length > 0) return true;
+  if ((t.FpgaInfo?.Fpgas || []).length > 0) return true;
+  // Family-prefix fallback for accelerator SKUs AWS may omit from GpuInfo.
+  return /^(g|p|inf|trn|dl|vt|f)\d/i.test(String(t.InstanceType || ''));
+}
+
+function awsGpuUnits(t) {
+  const gpus = t.GpuInfo?.Gpus || [];
+  let units = 0;
+  for (const g of gpus) {
+    units += Number(g.Count) || Number(g.LogicalGpuCount) || Number(g.GpuPartitionSize) || 0;
+  }
+  if (units > 0) return units;
+  return awsHasAccelerator(t) ? 1 : 0;
+}
+
+/**
+ * Pick the cheapest current-gen AWS instance that meets vCPU + RAM.
+ * Candidate list comes from DescribeInstanceTypes; ranking uses live Price List
+ * $/hr so Graviton can win when architecture allows it.
+ *
+ * Important: every exact-fit candidate is priced. Family preference is only a
+ * tiebreaker — never used to drop ARM SKUs from the shortlist (that caused
+ * non-deterministic c5a vs t4g flips).
  */
 export async function resolveAwsSku({
   vcpu,
@@ -88,11 +175,19 @@ export async function resolveAwsSku({
   diskGb,
   gpu = false,
   nestedVirtualization = false,
+  category = 'linux',
+  architecture,
 } = {}) {
   const needVcpu = Math.max(1, Number(vcpu) || 1);
   const needRam = Math.max(1, Number(ramGb) || 1);
   const disk = Math.max(8, Number(diskGb) || 50);
   const nested = Boolean(nestedVirtualization);
+  const windows = /windows/i.test(String(category || ''));
+  const os = windows ? 'Windows' : 'Linux';
+  const archPref = normalizeArchitecture(architecture, {
+    category,
+    nestedVirtualization: nested,
+  });
 
   const client = ec2ClientForRegion(awsConfig.defaultRegion || 'us-east-1');
   const types = await listAwsInstanceTypes(client);
@@ -100,9 +195,10 @@ export async function resolveAwsSku({
   const candidates = types.filter((t) => {
     if (!t.currentGeneration) return false;
     if (nested && !isNestedAwsFamily(t.instanceType)) return false;
+    if (!matchesArchitecture(t.architecture, archPref)) return false;
     if (gpu) {
-      if (!t.gpuCount || t.gpuCount < 1) return false;
-    } else if (t.gpuCount > 0) {
+      if (!t.hasAccelerator) return false;
+    } else if (t.hasAccelerator) {
       return false;
     }
     return t.vcpu >= needVcpu && t.memoryGiB >= needRam;
@@ -112,28 +208,59 @@ export async function resolveAwsSku({
     return null;
   }
 
-  candidates.sort((a, b) => {
-    const overA = a.vcpu - needVcpu + (a.memoryGiB - needRam);
-    const overB = b.vcpu - needVcpu + (b.memoryGiB - needRam);
-    if (overA !== overB) return overA - overB;
-    return familyRank(a.instanceType, nested) - familyRank(b.instanceType, nested);
-  });
+  const overage = (t) => t.vcpu - needVcpu + (t.memoryGiB - needRam);
+  const minOver = Math.min(...candidates.map(overage));
+  // Stable order, then price *all* exact/min-overage fits (no preferred-family cutoff).
+  const shortlist = candidates
+    .filter((t) => overage(t) === minOver)
+    .sort((a, b) => a.instanceType.localeCompare(b.instanceType));
 
-  const best = candidates[0];
+  const priced = await Promise.all(
+    shortlist.map(async (candidate) => {
+      try {
+        const price = await fetchEc2Hourly(
+          candidate.instanceType,
+          AWS_SKU_PRICE_REGION,
+          os
+        );
+        return { candidate, price: Number.isFinite(price) ? price : null };
+      } catch {
+        return { candidate, price: null };
+      }
+    })
+  );
+
+  let best = shortlist[0];
+  let bestPrice = Number.POSITIVE_INFINITY;
+  for (const { candidate, price } of priced) {
+    if (price == null) continue;
+    if (
+      price < bestPrice ||
+      (price === bestPrice &&
+        awsFamilyRank(candidate.instanceType, nested) <
+          awsFamilyRank(best.instanceType, nested)) ||
+      (price === bestPrice &&
+        awsFamilyRank(candidate.instanceType, nested) ===
+          awsFamilyRank(best.instanceType, nested) &&
+        candidate.instanceType.localeCompare(best.instanceType) < 0)
+    ) {
+      bestPrice = price;
+      best = candidate;
+    }
+  }
+
   return {
     instanceType: best.instanceType,
     ebsGb: disk,
     vcpu: best.vcpu,
     ramGb: best.memoryGiB,
+    architecture: best.architecture,
+    architecturePreference: archPref,
     source: nested ? 'dynamic_nested' : 'dynamic',
   };
 }
 
 async function listAwsInstanceTypes(client) {
-  if (awsTypeCache && Date.now() - awsTypeCacheAt < AWS_TYPE_TTL_MS) {
-    return awsTypeCache;
-  }
-
   const out = [];
   let nextToken;
   do {
@@ -146,27 +273,32 @@ async function listAwsInstanceTypes(client) {
     for (const t of res.InstanceTypes || []) {
       const vcpu = t.VCpuInfo?.DefaultVCpus || 0;
       const memoryMiB = t.MemoryInfo?.SizeInMiB || 0;
-      const gpuCount = (t.GpuInfo?.Gpus || []).reduce((s, g) => s + (g.Count || 0), 0);
+      const arches = t.ProcessorInfo?.SupportedArchitectures || [];
+      const architecture = arches.includes('arm64')
+        ? 'arm64'
+        : arches.includes('x86_64')
+          ? 'x86_64'
+          : arches[0] || 'x86_64';
       out.push({
         instanceType: t.InstanceType,
         vcpu,
         memoryGiB: Math.round((memoryMiB / 1024) * 10) / 10,
-        gpuCount,
+        architecture,
+        hasAccelerator: awsHasAccelerator(t),
+        gpuCount: awsGpuUnits(t),
         currentGeneration: t.CurrentGeneration !== false,
       });
     }
     nextToken = res.NextToken;
   } while (nextToken);
 
-  awsTypeCache = out;
-  awsTypeCacheAt = Date.now();
   return out;
 }
 
 /**
- * Azure: use Resource SKUs API only.
- * Nested mode excludes B-series and only allows nested-capable series.
- * No hardcoded size ladder — returns null when the live SKU list cannot resolve a match.
+ * Azure: Resource SKUs API + live Retail price ranking among exact-fit GP SKUs.
+ * Includes ARM (Dps/Dpls/Eps…) when architecture allows, so AWS Graviton vs Azure
+ * ARM comparisons are apples-to-apples.
  */
 export async function resolveAzureSku({
   vcpu,
@@ -174,11 +306,18 @@ export async function resolveAzureSku({
   diskGb,
   gpu = false,
   nestedVirtualization = false,
+  category = 'linux',
+  architecture,
 } = {}) {
   const needVcpu = Math.max(1, Number(vcpu) || 1);
   const needRam = Math.max(1, Number(ramGb) || 1);
   const disk = Math.max(8, Number(diskGb) || 50);
   const nested = Boolean(nestedVirtualization);
+  const windows = /windows/i.test(String(category || ''));
+  const archPref = normalizeArchitecture(architecture, {
+    category,
+    nestedVirtualization: nested,
+  });
 
   if (gpu) {
     return {
@@ -189,26 +328,76 @@ export async function resolveAzureSku({
   }
 
   const skus = await listAzureVmSkus();
-  const candidates = skus.filter((s) => {
+  let candidates = skus.filter((s) => {
     if (s.vcpu < needVcpu || s.memoryGb < needRam || s.gpu) return false;
+    if (!matchesArchitecture(s.architecture, archPref)) return false;
     if (nested) return isNestedAzureSize(s.name);
     return true;
   });
+  if (!nested) {
+    const preferred = candidates.filter((s) => azureFamilyRank(s.name) === 0);
+    if (preferred.length > 0) {
+      candidates = preferred;
+    } else {
+      const nonBurst = candidates.filter((s) => azureFamilyRank(s.name) < 2);
+      if (nonBurst.length > 0) candidates = nonBurst;
+    }
+  }
   if (candidates.length === 0) {
     return null;
   }
-  candidates.sort((a, b) => {
-    const overA = a.vcpu - needVcpu + (a.memoryGb - needRam);
-    const overB = b.vcpu - needVcpu + (b.memoryGb - needRam);
-    if (overA !== overB) return overA - overB;
-    return a.name.localeCompare(b.name);
-  });
-  const best = candidates[0];
+
+  const overage = (s) => s.vcpu - needVcpu + (s.memoryGb - needRam);
+  const minOver = Math.min(...candidates.map(overage));
+  const shortlist = candidates
+    .filter((s) => overage(s) === minOver)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const priceFn = windows ? fetchVmWindowsHourlyUsd : fetchVmHourlyUsd;
+  const priced = await Promise.all(
+    shortlist.map(async (candidate) => {
+      try {
+        const price = await priceFn(candidate.name, AZURE_SKU_PRICE_REGION);
+        return { candidate, price: Number.isFinite(price) ? price : null };
+      } catch {
+        return { candidate, price: null };
+      }
+    })
+  );
+
+  let best = shortlist[0];
+  let bestPrice = Number.POSITIVE_INFINITY;
+  for (const { candidate, price } of priced) {
+    if (price == null) continue;
+    if (
+      price < bestPrice ||
+      (price === bestPrice && candidate.name.localeCompare(best.name) < 0)
+    ) {
+      bestPrice = price;
+      best = candidate;
+    }
+  }
+
   return {
     vmSize: best.name,
     diskGb: disk,
+    architecture: best.architecture,
+    architecturePreference: archPref,
     source: nested ? 'dynamic_nested' : 'dynamic',
   };
+}
+
+function azureArchitectureFromSku(sku, caps) {
+  const archCap = String(
+    caps.CpuArchitectureType || caps.CPUArchitectureType || caps.ArchitectureType || ''
+  ).toLowerCase();
+  if (/arm/.test(archCap)) return 'arm64';
+  if (/x64|x86/.test(archCap)) return 'x86_64';
+  // Ampere/Cobalt series naming: D2ps_v5, D2pls_v6, E2pds_v5, …
+  if (/^Standard_[DEF]\d+[a-z]*p[a-z]*s?_v\d+/i.test(String(sku.name || ''))) {
+    return 'arm64';
+  }
+  return 'x86_64';
 }
 
 async function listAzureVmSkus() {
@@ -234,7 +423,13 @@ async function listAzureVmSkus() {
     if (!vcpu || !memoryGb) continue;
     if (!String(sku.name || '').startsWith('Standard_')) continue;
 
-    out.push({ name: sku.name, vcpu, memoryGb, gpu });
+    out.push({
+      name: sku.name,
+      vcpu,
+      memoryGb,
+      gpu,
+      architecture: azureArchitectureFromSku(sku, caps),
+    });
   }
 
   azureSkuCache = out;
@@ -345,62 +540,85 @@ export function resolveGcpSku({
 
 /**
  * Resolve + register AWS/Azure/OCI/GCP mappings for a canonical spec.
- * Uses static map when present (normal mode only); otherwise discovers dynamically.
+ * AWS and Azure resolve dynamically every time (live SKU catalogs + live price
+ * ranking). Architecture preference is honored for both.
  * Nested mode always resolves dynamically and does not pollute shared static maps.
  */
 export async function ensureSkuMappings(parts) {
-  const { canonicalSpec, vcpu, ramGb, diskGb, gpu, nestedVirtualization = false } = parts;
+  const {
+    canonicalSpec,
+    vcpu,
+    ramGb,
+    diskGb,
+    gpu,
+    nestedVirtualization = false,
+    category = 'linux',
+    architecture,
+  } = parts;
   const nested = Boolean(nestedVirtualization);
-  const result = { aws: null, azure: null, oci: null, gcp: null, errors: [] };
+  const archPref = normalizeArchitecture(architecture, {
+    category,
+    nestedVirtualization: nested,
+  });
+  const result = {
+    aws: null,
+    azure: null,
+    oci: null,
+    gcp: null,
+    errors: [],
+    architecturePreference: archPref,
+  };
 
-  if (!nested && awsSpecMap[canonicalSpec]?.instanceType) {
-    result.aws = awsSpecMap[canonicalSpec];
-  } else {
-    try {
-      const aws = await resolveAwsSku({ vcpu, ramGb, diskGb, gpu, nestedVirtualization: nested });
-      if (aws) {
-        if (!nested) {
-          registerAwsSpec(canonicalSpec, aws);
-          result.aws = awsSpecMap[canonicalSpec];
-        } else {
-          result.aws = aws;
-        }
+  try {
+    const aws = await resolveAwsSku({
+      vcpu,
+      ramGb,
+      diskGb,
+      gpu,
+      nestedVirtualization: nested,
+      category,
+      architecture: archPref,
+    });
+    if (aws) {
+      if (!nested) {
+        registerAwsSpec(canonicalSpec, aws);
+        result.aws = awsSpecMap[canonicalSpec];
       } else {
-        result.errors.push(
-          nested ? 'aws: no nested-virt matching instance type' : 'aws: no matching instance type'
-        );
+        result.aws = aws;
       }
-    } catch (err) {
-      result.errors.push(`aws: ${err instanceof Error ? err.message : String(err)}`);
+    } else {
+      result.errors.push(
+        nested ? 'aws: no nested-virt matching instance type' : 'aws: no matching instance type'
+      );
     }
+  } catch (err) {
+    result.errors.push(`aws: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  if (!nested && azureSpecMap[canonicalSpec]?.vmSize) {
-    result.azure = azureSpecMap[canonicalSpec];
-  } else {
-    try {
-      const azure = await resolveAzureSku({
-        vcpu,
-        ramGb,
-        diskGb,
-        gpu,
-        nestedVirtualization: nested,
-      });
-      if (azure) {
-        if (!nested) {
-          registerAzureSpec(canonicalSpec, azure);
-          result.azure = azureSpecMap[canonicalSpec];
-        } else {
-          result.azure = azure;
-        }
+  try {
+    const azure = await resolveAzureSku({
+      vcpu,
+      ramGb,
+      diskGb,
+      gpu,
+      nestedVirtualization: nested,
+      category,
+      architecture: archPref,
+    });
+    if (azure) {
+      if (!nested) {
+        registerAzureSpec(canonicalSpec, azure);
+        result.azure = azureSpecMap[canonicalSpec];
       } else {
-        result.errors.push(
-          nested ? 'azure: no nested-virt matching vm size' : 'azure: no matching vm size'
-        );
+        result.azure = azure;
       }
-    } catch (err) {
-      result.errors.push(`azure: ${err instanceof Error ? err.message : String(err)}`);
+    } else {
+      result.errors.push(
+        nested ? 'azure: no nested-virt matching vm size' : 'azure: no matching vm size'
+      );
     }
+  } catch (err) {
+    result.errors.push(`azure: ${err instanceof Error ? err.message : String(err)}`);
   }
 
   if (!nested && ociSpecMap[canonicalSpec]?.shape) {

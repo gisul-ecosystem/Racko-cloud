@@ -127,6 +127,9 @@ export interface CreateVMDto {
   consolePassword?: string;              // required when passwordMode === 'fixed'
   enableVirtualization?: boolean;        // Windows templates only — enable Hyper-V
   softwareIds?: string[];                // Windows templates only — software to install
+  /** Required for platform admin HTTP creates. */
+  projectId?: string;
+  networkType?: 'public' | 'private';    // public (default): vmbr0. private: custnet1 (internal only)
 }
 
 export interface VMFilters {
@@ -344,10 +347,13 @@ export interface BulkVMSpec {
   consoleProtocol: 'rdp' | 'ssh';
   enableVirtualization?: boolean;
   softwareIds?: mongoose.Types.ObjectId[];
+  networkType?: 'public' | 'private';
   /** Software already baked into golden template — mark installed, skip provisioner. */
   softwarePreInstalled?: boolean;
   /** Run Hyper-V / software queues after clone (single-VM create only). */
   schedulePostCreateJobs?: boolean;
+  /** Organization project attribution. */
+  projectId?: mongoose.Types.ObjectId;
   /** Clone-job extras — marks the resulting VM as a clone of an existing VM. */
   isVmClone?: boolean;
   sourceVmId?: mongoose.Types.ObjectId;

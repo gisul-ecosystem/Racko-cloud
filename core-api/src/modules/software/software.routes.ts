@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { softwareController } from './software.controller';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireRole } from '../../middleware/requireRole.middleware';
+import { requirePermission } from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { createSoftwareSchema, updateSoftwareSchema, softwareIdParamSchema } from './software.validation';
 
@@ -19,14 +20,14 @@ router.get(
 // GET /api/v1/software/all — all entries including inactive (super_admin only)
 router.get(
   '/all',
-  requireRole('super_admin'),
+  requirePermission('vm_management.manage'),
   (req, res, next) => softwareController.listAll(req, res, next)
 );
 
 // POST /api/v1/software
 router.post(
   '/',
-  requireRole('super_admin'),
+  requirePermission('vm_management.manage'),
   validateRequest(createSoftwareSchema),
   (req, res, next) => softwareController.create(req, res, next)
 );
@@ -34,7 +35,7 @@ router.post(
 // PATCH /api/v1/software/:softwareId
 router.patch(
   '/:softwareId',
-  requireRole('super_admin'),
+  requirePermission('vm_management.manage'),
   validateRequest(updateSoftwareSchema),
   (req, res, next) => softwareController.update(req, res, next)
 );
@@ -42,7 +43,7 @@ router.patch(
 // DELETE /api/v1/software/:softwareId
 router.delete(
   '/:softwareId',
-  requireRole('super_admin'),
+  requirePermission('vm_management.manage'),
   validateRequest(softwareIdParamSchema),
   (req, res, next) => softwareController.deactivate(req, res, next)
 );

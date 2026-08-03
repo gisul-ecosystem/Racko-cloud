@@ -202,14 +202,17 @@ async function calculatePricing(req: Request, res: Response, next: NextFunction)
   try {
     const body = req.body as CalculateVmPricingInput;
     const providers = body.providers ?? body.provider;
+    const mode = body.mode ?? 'vm';
     const data = await selectProvider({
       category: body.category,
+      mode,
       durationDays: body.durationDays,
       specs: body.specs
         ? {
             cpu: body.specs.cpu != null ? String(body.specs.cpu) : undefined,
             ram: body.specs.ram != null ? String(body.specs.ram) : undefined,
             disk: body.specs.disk != null ? String(body.specs.disk) : undefined,
+            diskType: body.specs.diskType,
           }
         : undefined,
       canonicalSpec: body.canonicalSpec,
@@ -221,8 +224,9 @@ async function calculatePricing(req: Request, res: Response, next: NextFunction)
     const usd = periodFromHourlyUsd(data.rawTotalPricePerHr);
     const inr = usdToInrPeriod(usd, fx.usdToInr);
 
-    success(res, 'VM pricing calculated.', {
+    success(res, mode === 'storage_only' ? 'Storage pricing calculated.' : 'VM pricing calculated.', {
       ...data,
+      mode: data.mode ?? mode,
       currency: data.currency || 'USD',
       usdToInr: fx.usdToInr,
       fxSource: fx.source,

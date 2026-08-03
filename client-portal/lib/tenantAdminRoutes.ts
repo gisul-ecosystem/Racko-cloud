@@ -1,6 +1,6 @@
-/** Mirrored admin paths under /tenant */
-export const TENANT_CONSOLE = '/tenant/console';
-export const TENANT_VPS = '/tenant/dashboard/admin';
+/** Tenant workspace paths under /console (no /tenant URL prefix). */
+export const TENANT_CONSOLE = '/console/dashboard';
+export const TENANT_VPS = '/console/dashboard/admin';
 
 export const tenantVps = {
   overview: TENANT_VPS,
@@ -50,4 +50,8 @@ export const tenantConsole = {
   dedicatedServerMyServers: `${TENANT_CONSOLE}/dedicated-server/my-servers`,
   dedicatedServerConsole: (id: string) =>
     `${TENANT_CONSOLE}/dedicated-server/my-servers/${id}/console`,
+  projects: `${TENANT_CONSOLE}/projects`,
+  projectsCreate: `${TENANT_CONSOLE}/projects/create`,
+  projectsReports: `${TENANT_CONSOLE}/projects/reports`,
+  project: (id: string) => `${TENANT_CONSOLE}/projects/${id}`,
 } as const;

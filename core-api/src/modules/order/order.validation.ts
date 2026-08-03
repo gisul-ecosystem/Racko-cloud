@@ -13,6 +13,7 @@ export const placeOrderBodySchema = z.object({
   memoryGb: orderSpecFields.memoryGb,
   diskGb: orderSpecFields.diskGb,
   billingPeriod: z.enum(['monthly', 'quarterly', 'yearly']).default('monthly'),
+  networkType: z.enum(['public', 'private']).optional().default('public'),
 });
 
 export const quoteOrderSchema = z.object({

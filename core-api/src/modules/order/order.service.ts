@@ -90,6 +90,7 @@ export interface PlaceOrderInput {
   memoryGb?: number;
   diskGb?: number;
   billingPeriod?: BillingPeriod;
+  networkType?: 'public' | 'private';
 }
 
 function getBillingDiscounts(pricing: Record<string, unknown>, templateId?: number): BillingDiscounts {
@@ -289,6 +290,7 @@ function toOrderPublic(order: IOrder) {
     rejectionReason: order.rejectionReason,
     provisionJobId: order.provisionJobId ?? null,
     billingPeriod: order.billingPeriod,
+    networkType: order.networkType ?? 'public',
     periodStartDate: order.periodStartDate,
     periodEndDate: order.periodEndDate,
     createdAt: order.createdAt,
@@ -554,7 +556,7 @@ export class OrderService {
     tenantUserId: string,
     input: PlaceOrderInput
   ): Promise<ReturnType<typeof toOrderPublic>> {
-    const { templateId, count, cpuCores, memoryGb, diskGb, billingPeriod = 'monthly' } = input;
+    const { templateId, count, cpuCores, memoryGb, diskGb, billingPeriod = 'monthly', networkType = 'public' } = input;
     const { amount, specs, templateName } = await this.calculateOrderCost(
       tenantId,
       templateId,
@@ -579,6 +581,7 @@ export class OrderService {
         calculatedAmount: amount,
         status: 'pending_approval',
         billingPeriod,
+        networkType,
         createdBy: new mongoose.Types.ObjectId(tenantUserId),
       });
 
@@ -597,6 +600,7 @@ export class OrderService {
       calculatedAmount: amount,
       status: 'pending_payment',
       billingPeriod,
+      networkType,
       createdBy: new mongoose.Types.ObjectId(tenantUserId),
     });
 
@@ -637,6 +641,7 @@ export class OrderService {
       cpuCores: order.specs.cpuCores,
       memoryGb: order.specs.memoryGb,
       diskGb: order.specs.diskGb,
+      networkType: order.networkType ?? 'public',
     };
 
     try {
