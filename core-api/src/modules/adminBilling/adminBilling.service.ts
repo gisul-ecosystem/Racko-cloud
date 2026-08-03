@@ -134,7 +134,12 @@ export class AdminBillingService {
       | 'azure_lab_request'
       | 'aws_lab_request'
       | 'catalog_vm_purchase'
-      | 'dedicated_server_purchase' = 'vm_creation'
+      | 'dedicated_server_purchase' = 'vm_creation',
+    attribution?: {
+      projectId?: string | null;
+      orgId?: string | null;
+      serviceKey?: string | null;
+    }
   ): Promise<AdminWalletPublic> {
     if (amount <= 0) throw new ValidationError('Amount must be positive.');
     const oid = new mongoose.Types.ObjectId(userId);
@@ -159,6 +164,15 @@ export class AdminBillingService {
       amount,
       reason,
       relatedVmJobId,
+      orgId:
+        attribution?.orgId && mongoose.Types.ObjectId.isValid(attribution.orgId)
+          ? new mongoose.Types.ObjectId(attribution.orgId)
+          : null,
+      projectId:
+        attribution?.projectId && mongoose.Types.ObjectId.isValid(attribution.projectId)
+          ? new mongoose.Types.ObjectId(attribution.projectId)
+          : null,
+      serviceKey: attribution?.serviceKey ?? null,
       creditedBy: null,
       balanceAfter: wallet.balance,
     });

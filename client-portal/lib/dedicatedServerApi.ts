@@ -141,6 +141,7 @@ export async function saveDedicatedPricingSettings(
 export async function submitDedicatedServerRequest(opts: {
   planId: string;
   notes?: string;
+  projectId?: string;
 }): Promise<IDedicatedServer> {
   const res = await apiRequest<ApiResponse<{ request: IDedicatedServer }>>(
     '/api/v1/dedicated-servers/requests',

@@ -23,6 +23,8 @@ export interface IVM extends Document {
 
   // Ownership
   adminId: mongoose.Types.ObjectId;
+  /** Organization project this VPS belongs to. */
+  projectId?: mongoose.Types.ObjectId;
 
   // Clone tracking
   isVmClone: boolean;
@@ -132,6 +134,11 @@ const vmSchema = new Schema<IVM>(
       type: Schema.Types.ObjectId,
       ref: 'User',
       required: true,
+      index: true,
+    },
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
       index: true,
     },
     isVmClone: {

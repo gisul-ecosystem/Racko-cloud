@@ -13,6 +13,7 @@ import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { ChevronLeft } from 'lucide-react';
+import { ProjectSelect } from '@/components/console/ProjectSelect';
 
 const BULK_EXAMPLE = `[
   {
@@ -42,6 +43,7 @@ export default function TenantBulkImportPage() {
   const { accentColor } = useTenantBranding();
   const { toasts, addToast, dismiss } = useToast();
   const [jsonText, setJsonText] = useState(BULK_EXAMPLE);
+  const [projectId, setProjectId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
   const handleFile = (file: File) => {
@@ -52,6 +54,11 @@ export default function TenantBulkImportPage() {
   };
 
   const handleSubmit = async () => {
+    if (!projectId) {
+      addToast('error', 'Select a project for these servers.');
+      return;
+    }
+
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonText);
@@ -78,6 +85,7 @@ export default function TenantBulkImportPage() {
         ipAddress: String(ip).trim(),
         protocol: proto,
         password: String(raw.password),
+        projectId,
         ...(raw.username && { username: String(raw.username).trim() }),
       });
     }
@@ -132,6 +140,13 @@ export default function TenantBulkImportPage() {
               className={`${inputClass} font-mono text-xs leading-relaxed`}
             />
           </div>
+          <ProjectSelect
+            serviceKey="elastic-servers"
+            value={projectId}
+            onChange={setProjectId}
+            disabled={submitting}
+            portal="tenant"
+          />
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-3 border-t border-gray-100 pt-5">
@@ -143,7 +158,7 @@ export default function TenantBulkImportPage() {
           </Link>
           <button
             onClick={() => void handleSubmit()}
-            disabled={submitting}
+            disabled={submitting || !projectId}
             className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
             style={tenantAccentButton(accentColor)}
           >

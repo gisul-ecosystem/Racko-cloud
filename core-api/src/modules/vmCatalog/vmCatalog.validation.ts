@@ -33,6 +33,8 @@ export const createCatalogVmRequestSchema = z.object({
     }),
     durationDays: z.coerce.number().int().min(1).max(3650).optional(),
     canonicalSpec: z.string().min(1).max(100).trim().optional(),
+    /** Required for platform admin purchases; omitted for tenant catalog. */
+    projectId: mongoObjectId.optional(),
   }),
 });
 

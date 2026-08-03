@@ -14,6 +14,7 @@ import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import { ChevronLeft, Eye, EyeOff } from 'lucide-react';
+import { ProjectSelect } from '@/components/console/ProjectSelect';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-2 focus:ring-[var(--cloud-accent,#B91C1C)]';
@@ -30,9 +31,11 @@ export default function TenantAddServerPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [projectId, setProjectId] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const canSubmit = !!(name.trim() && ipAddress.trim() && password.trim()) && !submitting;
+  const canSubmit =
+    !!(name.trim() && ipAddress.trim() && password.trim() && projectId) && !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -43,6 +46,7 @@ export default function TenantAddServerPage() {
         ipAddress: ipAddress.trim(),
         protocol,
         password,
+        projectId,
         ...(username.trim() && { username: username.trim() }),
       };
       await createTenantExternalVM(dto);
@@ -130,6 +134,13 @@ export default function TenantAddServerPage() {
               </button>
             </div>
           </div>
+          <ProjectSelect
+            serviceKey="elastic-servers"
+            value={projectId}
+            onChange={setProjectId}
+            disabled={submitting}
+            portal="tenant"
+          />
         </div>
 
         <div className="mt-6 flex items-center justify-end gap-3 border-t border-gray-100 pt-5">

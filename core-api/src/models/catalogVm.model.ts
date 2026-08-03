@@ -47,6 +47,8 @@ export interface ICatalogVm extends Document {
   adminId?: mongoose.Types.ObjectId;
   tenantId?: mongoose.Types.ObjectId;
   tenantUserId?: mongoose.Types.ObjectId;
+  /** Organization project this VM purchase belongs to. */
+  projectId?: mongoose.Types.ObjectId;
   provider: VmCatalogProvider;
   category: VmCatalogCategory;
   planId: string;
@@ -137,6 +139,11 @@ const catalogVmSchema = new Schema<ICatalogVm>(
     tenantUserId: {
       type: Schema.Types.ObjectId,
       ref: 'TenantUser',
+      index: true,
+    },
+    projectId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Project',
       index: true,
     },
     provider: {
