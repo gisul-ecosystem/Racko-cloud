@@ -44,7 +44,8 @@ async function createRequest({
   microsoftLicenseSkuPartNumber,
   convertedFromRequestId,
   purchaseToken,
-  rackoUserId
+  rackoUserId,
+  labPermissionMode
 }) {
 
   const client = await db.connect();
@@ -745,16 +746,22 @@ async function createRequest({
     }
 
     // Tier-automated services: instance selection drives RBAC role (overrides manual picks)
-    await applyTierRolesToAssignments(client, roleAssignments, validServiceIds, selectedInstances);
+    const strictLabRoles = String(labPermissionMode || '').toLowerCase() === 'strict';
 
-    // Ensure all auto_assign default roles (control + data plane) are included
-    await ensureAutoAssignRolesForServices(client, roleAssignments, validServiceIds);
+    if (!strictLabRoles) {
+      await applyTierRolesToAssignments(client, roleAssignments, validServiceIds, selectedInstances);
 
-    // Auto-assign dependency roles required for portal resource creation
-    await applyDependencyRolesToAssignments(client, roleAssignments, validServiceIds);
+      // Ensure all auto_assign default roles (control + data plane) are included
+      await ensureAutoAssignRolesForServices(client, roleAssignments, validServiceIds);
 
-    // Enforce AI Foundry tier-specific role sets after all auto-assign merges
-    await finalizeAiFoundryTierRoles(client, roleAssignments, validServiceIds, selectedInstances);
+      // Auto-assign dependency roles required for portal resource creation
+      await applyDependencyRolesToAssignments(client, roleAssignments, validServiceIds);
+
+      // Enforce AI Foundry tier-specific role sets after all auto-assign merges
+      await finalizeAiFoundryTierRoles(client, roleAssignments, validServiceIds, selectedInstances);
+    } else {
+      console.log(`[LAB_STRICT_ROLES] Request uses strict lab permission mode — skipping auto/dependency/tier role merges`);
+    }
 
     // Insert all role assignments into database
     for (const [sid, rolesSet] of roleAssignments.entries()) {

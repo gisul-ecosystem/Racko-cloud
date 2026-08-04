@@ -40,6 +40,8 @@ export const tenantConsole = {
   awsRequests: `${TENANT_CONSOLE}/aws/requests`,
   awsNew: `${TENANT_CONSOLE}/aws/requests/new`,
   gcp: `${TENANT_CONSOLE}/gcp`,
+  cloudLabs: `${TENANT_CONSOLE}/cloud-labs`,
+  cloudLabsAzure: `${TENANT_CONSOLE}/cloud-labs/azure`,
   docs: `${TENANT_CONSOLE}/docs`,
   createVm: `${TENANT_CONSOLE}/create-vm`,
   createVmCreate: `${TENANT_CONSOLE}/create-vm/create`,

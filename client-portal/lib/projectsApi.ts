@@ -287,6 +287,7 @@ export const PROJECT_SERVICE_LABELS: Record<AdminServiceKey, string> = {
   azure: 'Azure Lab',
   aws: 'AWS Lab',
   gcp: 'GCP Lab',
+  'cloud-labs': 'Cloud Labs',
   docs: 'Documentation',
   'machine-manager': 'Machine Manager',
 };

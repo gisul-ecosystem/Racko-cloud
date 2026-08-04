@@ -65,6 +65,7 @@ export type TenantServiceKey =
   | 'azure'
   | 'aws'
   | 'gcp'
+  | 'cloud-labs'
   | 'docs'
   | 'machine-manager';
 export type TenantServiceStatus = 'active' | 'suspended';

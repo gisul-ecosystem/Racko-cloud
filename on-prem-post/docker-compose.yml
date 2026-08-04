@@ -1,0 +1,33 @@
+# Production Postgres only (Mongo left untouched).
+#
+# Usage on 103.99.38.223:
+#   sudo systemctl stop postgresql && sudo systemctl disable postgresql
+#   cd ~/on-prem-post
+#   docker compose up -d
+#   docker ps
+
+services:
+  postgres:
+    image: postgres:17
+    container_name: racko-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: racko
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-Supriya@1212123}
+      POSTGRES_DB: racko
+    ports:
+      - "0.0.0.0:5432:5432"
+    volumes:
+      - racko_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U racko -d racko"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    command:
+      - postgres
+      - -c
+      - listen_addresses=*
+
+volumes:
+  racko_pgdata:

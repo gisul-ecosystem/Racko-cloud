@@ -110,33 +110,55 @@ export async function fetchProvisionSnapshotServer(
   const headers = await getServerAuthHeaders();
   const prefix = CLOUD_AUTOMATION_API_PREFIX;
 
-  const [requestResponse, provisionResponse, servicesResponse, usersResponse, rolesResponse, credentialsResponse] =
-    await Promise.allSettled([
-      gatewayRequest<{ success: boolean; data?: ProvisionSnapshot['request'] }>(
-        `${prefix}/requests/${requestId}`,
-        headers
-      ),
-      gatewayRequest<{ success: boolean; status?: string; resourceGroup?: string | null }>(
-        `${prefix}/provision/request/${requestId}`,
-        headers
-      ),
-      gatewayRequest<{ success: boolean; resources?: ProvisionSnapshot['services']['resources']; count?: number }>(
-        `${prefix}/provision/request/${requestId}/services`,
-        headers
-      ),
-      gatewayRequest<{ success: boolean; users?: ProvisionSnapshot['users']['users'] }>(
-        `${prefix}/provision/request/${requestId}/users`,
-        headers
-      ),
-      gatewayRequest<{ success: boolean; roles?: ProvisionSnapshot['roles']['roles'] }>(
-        `${prefix}/provision/request/${requestId}/roles`,
-        headers
-      ),
-      gatewayRequest<{ success: boolean; deliveryStatus?: string | null }>(
-        `${prefix}/provision/request/${requestId}/credentials`,
-        headers
-      ),
-    ]);
+  const [
+    requestResponse,
+    provisionResponse,
+    servicesResponse,
+    usersResponse,
+    rolesResponse,
+    fabricResponse,
+    credentialsResponse,
+  ] = await Promise.allSettled([
+    gatewayRequest<{ success: boolean; data?: ProvisionSnapshot['request'] }>(
+      `${prefix}/requests/${requestId}`,
+      headers
+    ),
+    gatewayRequest<{ success: boolean; status?: string; resourceGroup?: string | null }>(
+      `${prefix}/provision/request/${requestId}`,
+      headers
+    ),
+    gatewayRequest<{ success: boolean; resources?: ProvisionSnapshot['services']['resources']; count?: number }>(
+      `${prefix}/provision/request/${requestId}/services`,
+      headers
+    ),
+    gatewayRequest<{ success: boolean; users?: ProvisionSnapshot['users']['users'] }>(
+      `${prefix}/provision/request/${requestId}/users`,
+      headers
+    ),
+    gatewayRequest<{ success: boolean; roles?: ProvisionSnapshot['roles']['roles'] }>(
+      `${prefix}/provision/request/${requestId}/roles`,
+      headers
+    ),
+    gatewayRequest<{
+      success: boolean;
+      required?: boolean;
+      complete?: boolean;
+      status?: string;
+      workspaceId?: string | null;
+      capacityId?: string | null;
+      workspaceName?: string | null;
+      workspaceRole?: string | null;
+      onelakePermissions?: string | null;
+      items?: unknown[];
+      roleAssignments?: unknown[];
+      certTag?: string | null;
+      errorMessage?: string | null;
+    }>(`${prefix}/provision/request/${requestId}/fabric`, headers),
+    gatewayRequest<{ success: boolean; deliveryStatus?: string | null }>(
+      `${prefix}/provision/request/${requestId}/credentials`,
+      headers
+    ),
+  ]);
 
   const request =
     requestResponse.status === 'fulfilled' ? (requestResponse.value.data ?? null) : null;
@@ -160,6 +182,23 @@ export async function fetchProvisionSnapshotServer(
     rolesResponse.status === 'fulfilled' && Array.isArray(rolesResponse.value.roles)
       ? rolesResponse.value.roles
       : [];
+  const fabricRaw =
+    fabricResponse.status === 'fulfilled'
+      ? fabricResponse.value
+      : {
+          required: false,
+          complete: true,
+          status: 'skipped' as string | null,
+          workspaceId: null as string | null,
+          capacityId: null as string | null,
+          workspaceName: null as string | null,
+          workspaceRole: null as string | null,
+          onelakePermissions: null as string | null,
+          items: [] as unknown[],
+          roleAssignments: [] as unknown[],
+          certTag: null as string | null,
+          errorMessage: null as string | null,
+        };
   const credentials =
     credentialsResponse.status === 'fulfilled'
       ? { deliveryStatus: credentialsResponse.value.deliveryStatus ?? null }
@@ -179,6 +218,22 @@ export async function fetchProvisionSnapshotServer(
     roles: {
       roles,
       count: roles.length,
+    },
+    fabric: {
+      required: fabricRaw.required === true,
+      complete: fabricRaw.required === true ? fabricRaw.complete === true : true,
+      status: fabricRaw.status ?? null,
+      workspaceId: fabricRaw.workspaceId ?? null,
+      capacityId: fabricRaw.capacityId ?? null,
+      workspaceName: fabricRaw.workspaceName ?? null,
+      workspaceRole: fabricRaw.workspaceRole ?? null,
+      onelakePermissions: fabricRaw.onelakePermissions ?? null,
+      items: Array.isArray(fabricRaw.items) ? fabricRaw.items : [],
+      roleAssignments: Array.isArray(fabricRaw.roleAssignments)
+        ? fabricRaw.roleAssignments
+        : [],
+      certTag: fabricRaw.certTag ?? null,
+      errorMessage: fabricRaw.errorMessage ?? null,
     },
     credentials,
     fetchedAt: new Date().toISOString(),
