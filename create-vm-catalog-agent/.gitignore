@@ -1,9 +1,0 @@
-# Secrets / runtime
-.env
-.env.local
-catalog-storage-state.json
-
-# Dependencies / OS
-node_modules/
-*.log
-.DS_Store

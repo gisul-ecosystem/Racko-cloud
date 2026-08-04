@@ -7,6 +7,8 @@ const envSchema = z.object({
   // MongoDB
   MONGODB_URI: z.string().min(1, 'MONGODB_URI is required'),
   MONGODB_DB_NAME: z.string().min(1, 'MONGODB_DB_NAME is required'),
+  /** Absolute path inside the container to the Mongo CA PEM (on-prem TLS). */
+  MONGODB_TLS_CA_FILE: z.string().optional(),
   MONGODB_DNS_SERVERS: z
     .string()
     .optional()
