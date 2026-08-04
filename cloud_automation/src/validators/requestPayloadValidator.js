@@ -34,8 +34,11 @@ const allowedRequestFields = new Set([
   'microsoftLicenseSkuId',
   'microsoftLicenseSkuPartNumber',
   'convertedFromRequestId',
-  'purchaseToken'
+  'purchaseToken',
+  'labPermissionMode'
 ]);
+
+const allowedLabPermissionModes = new Set(['strict', 'standard']);
 
 const timePattern = /^\d{2}:\d{2}$/;
 
@@ -123,6 +126,15 @@ const validateRequestPayload = (body) => {
   if (purchaseToken !== undefined && purchaseToken !== null) {
     if (typeof purchaseToken !== 'string' || purchaseToken.trim().length === 0) {
       throw new AppError('purchaseToken must be a non-empty string when provided.', 400);
+    }
+  }
+
+  if (body.labPermissionMode !== undefined && body.labPermissionMode !== null) {
+    if (
+      typeof body.labPermissionMode !== 'string'
+      || !allowedLabPermissionModes.has(body.labPermissionMode)
+    ) {
+      throw new AppError("labPermissionMode must be 'strict' or 'standard' when provided.", 400);
     }
   }
 

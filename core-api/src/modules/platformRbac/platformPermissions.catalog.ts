@@ -12,6 +12,7 @@ export type PlatformServiceEntitlementKey =
   | 'azure'
   | 'aws'
   | 'gcp'
+  | 'cloud-labs'
   | 'docs'
   | 'machine-manager';
 
@@ -35,6 +36,8 @@ export const PLATFORM_PERMISSION_CATALOG: OrgPermissionDef[] = [
   { key: 'aws.manage', label: 'Create & manage AWS labs', group: 'AWS' },
   { key: 'gcp.read', label: 'View GCP services', group: 'GCP' },
   { key: 'gcp.manage', label: 'Manage GCP services', group: 'GCP' },
+  { key: 'cloud_labs.read', label: 'View Cloud Labs', group: 'Cloud Labs' },
+  { key: 'cloud_labs.manage', label: 'Create & manage Cloud Labs', group: 'Cloud Labs' },
   { key: 'machine_manager.manage', label: 'Use machine manager', group: 'Machine Manager' },
   { key: 'docs.read', label: 'View documentation', group: 'Docs' },
   { key: 'team.manage', label: 'Manage team users', group: 'Team' },
@@ -60,6 +63,7 @@ const SERVICE_PERMISSION_KEYS: Record<PlatformServiceEntitlementKey, string[]> =
   azure: ['azure.read', 'azure.manage'],
   aws: ['aws.read', 'aws.manage'],
   gcp: ['gcp.read', 'gcp.manage'],
+  'cloud-labs': ['cloud_labs.read', 'cloud_labs.manage'],
   docs: ['docs.read'],
   'machine-manager': ['machine_manager.manage'],
 };
@@ -90,6 +94,8 @@ export const PLATFORM_SYSTEM_ROLE_SEEDS: Array<{
       'azure.manage',
       'aws.read',
       'aws.manage',
+      'cloud_labs.read',
+      'cloud_labs.manage',
       'machine_manager.manage',
       'docs.read',
       'team.manage',
@@ -115,6 +121,7 @@ export const PLATFORM_SYSTEM_ROLE_SEEDS: Array<{
       'azure.read',
       'aws.read',
       'gcp.read',
+      'cloud_labs.read',
       'docs.read',
     ],
   },

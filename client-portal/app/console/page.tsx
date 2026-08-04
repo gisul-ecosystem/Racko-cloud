@@ -1,11 +1,12 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, Globe, Server, Wallet, Monitor, SquarePlus, HardDrive, Loader2, Shield } from 'lucide-react';
+import { Cloud, FlaskConical, Globe, Server, Wallet, Monitor, SquarePlus, HardDrive, Loader2, Shield } from 'lucide-react';
 import { RecentResourcesTable } from '../../components/console/RecentResourcesTable';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
 import { GCP_ROUTES, GCP_SERVICE } from '../../cloud_automation_gcp/constants';
+import { CLOUD_LABS_ROUTES, CLOUD_LABS_SERVICE } from '../../cloud_automation_training/constants';
 import { useAdminServices } from '@/context/AdminServicesContext';
 import { CONSOLE_TILE_SERVICE_KEY } from '@/lib/adminServicesApi';
 
@@ -44,6 +45,13 @@ const services = [
     href: '/console/elastic-servers',
     icon: Globe,
     description: 'Connect to external servers from any provider via secure browser console',
+  },
+  {
+    id: CLOUD_LABS_SERVICE.id,
+    name: CLOUD_LABS_SERVICE.name,
+    href: CLOUD_LABS_ROUTES.hub,
+    icon: FlaskConical,
+    description: CLOUD_LABS_SERVICE.description,
   },
   {
     id: AZURE_SERVICE.id,

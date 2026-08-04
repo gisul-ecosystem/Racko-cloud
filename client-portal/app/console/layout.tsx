@@ -37,6 +37,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
   const usesOwnShell =
     (pathname?.startsWith('/console/elastic-servers') ?? false) ||
     (pathname?.startsWith('/console/azure') ?? false) ||
+    (pathname?.startsWith('/console/cloud-labs/azure') ?? false) ||
     (pathname?.startsWith('/console/machine-manager') ?? false) ||
     (pathname?.startsWith('/console/aws') ?? false) ||
     (pathname?.startsWith('/console/docs') ?? false) ||
@@ -62,7 +63,9 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
       return;
     }
 
-    const isAzureConsolePath = pathname?.startsWith('/console/azure') ?? false;
+    const isAzureConsolePath =
+      (pathname?.startsWith('/console/azure') ?? false) ||
+      (pathname?.startsWith('/console/cloud-labs') ?? false);
     const roleAllowed =
       user.role === 'admin' ||
       (user.role === 'super_admin' && isAzureConsolePath);
@@ -87,7 +90,9 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     );
   }
 
-  const isAzureConsolePath = pathname?.startsWith('/console/azure') ?? false;
+  const isAzureConsolePath =
+    (pathname?.startsWith('/console/azure') ?? false) ||
+    (pathname?.startsWith('/console/cloud-labs') ?? false);
   const roleAllowed =
     Boolean(user) &&
     (user!.role === 'admin' ||

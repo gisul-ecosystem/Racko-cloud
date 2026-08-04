@@ -7,6 +7,7 @@ import {
   BookOpen,
   Boxes,
   Cloud,
+  FlaskConical,
   Globe,
   HardDrive,
   Loader2,
@@ -64,6 +65,13 @@ const SERVICE_TILES: Array<{
     href: tenantConsole.elastic,
     icon: Boxes,
     description: 'Connect to external servers from any provider via secure browser console',
+  },
+  {
+    serviceKey: 'cloud-labs',
+    name: 'Cloud Labs',
+    href: tenantConsole.cloudLabs,
+    icon: FlaskConical,
+    description: 'Hands-on lab environments — Azure Labs first, more clouds next.',
   },
   {
     serviceKey: 'azure',

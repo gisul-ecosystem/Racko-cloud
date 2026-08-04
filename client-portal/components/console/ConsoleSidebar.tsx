@@ -1,8 +1,9 @@
 'use client';
 
 import Link from 'next/link';
-import { Boxes, Cloud, LayoutGrid } from 'lucide-react';
+import { Boxes, Cloud, FlaskConical, LayoutGrid } from 'lucide-react';
 import { AZURE_ROUTES } from '../../cloud_automation/constants';
+import { CLOUD_LABS_ROUTES } from '../../cloud_automation_training/constants';
 import { useConsoleShell } from './ConsoleContext';
 
 export function ConsoleSidebar() {
@@ -37,6 +38,13 @@ export function ConsoleSidebar() {
             >
               <LayoutGrid className="h-4 w-4 shrink-0 text-[#B91C1C]" />
               All services
+            </Link>
+            <Link
+              href={CLOUD_LABS_ROUTES.hub}
+              className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-600 transition-colors hover:bg-gray-50 hover:text-gray-900"
+            >
+              <FlaskConical className="h-4 w-4 shrink-0 text-gray-400" />
+              Cloud Labs
             </Link>
             <Link
               href={AZURE_ROUTES.dashboard}
