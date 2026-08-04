@@ -246,6 +246,8 @@ export interface CreateVMDto {
   consolePassword?: string;          // only sent in fixed mode
   enableVirtualization?: boolean;
   softwareIds?: string[];
+  projectId?: string;
+  networkType?: 'public' | 'private'; // public (default): internet-routable. private: internal-only (custnet1)
 }
 
 export interface JobVMCredential {

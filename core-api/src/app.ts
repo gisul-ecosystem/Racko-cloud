@@ -58,6 +58,8 @@ import rbacRoutes from './modules/rbac/rbac.routes';
 import platformRbacRoutes from './modules/platformRbac/platformRbac.routes';
 import tenantRbacRoutes from './modules/tenantRbac/tenantRbac.routes';
 import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboarding.routes';
+import projectsRoutes from './modules/projects/projects.routes';
+import tenantProjectsRoutes from './modules/projects/tenantProjects.routes';
 
 const app = express();
 
@@ -173,6 +175,7 @@ app.use('/api/v1/tenant-vms', tenantVmRoutes);
 app.use('/api/v1/tenant-external-vms', tenantExternalVmRoutes);
 app.use('/api/v1/tenant-vm-catalog', tenantVmCatalogRoutes);
 app.use('/api/v1/tenant-dedicated-servers', tenantDedicatedServerRoutes);
+app.use('/api/v1/tenant-projects', tenantProjectsRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -193,6 +196,7 @@ app.use('/api/v1/external-vm-pricing', externalVmPricingRoutes);
   app.use('/api/v1/vm-catalog', vmCatalogRoutes);
   app.use('/api/v1/dedicated-servers', dedicatedServerRoutes);
   app.use('/api/v1/admin-services', adminServicesRoutes);
+  app.use('/api/v1/projects', projectsRoutes);
   app.use('/api/v1/rbac', rbacRoutes);
   app.use('/api/v1/platform-rbac', platformRbacRoutes);
   app.use('/api/v1/tenant-rbac', tenantRbacRoutes);

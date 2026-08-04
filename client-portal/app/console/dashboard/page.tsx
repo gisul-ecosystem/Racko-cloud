@@ -8,6 +8,7 @@ import {
   Boxes,
   Cloud,
   FlaskConical,
+  FolderKanban,
   Globe,
   HardDrive,
   Loader2,
@@ -25,12 +26,19 @@ import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
 const SERVICE_TILES: Array<{
-  serviceKey: TenantServiceKey | 'billing';
+  serviceKey: TenantServiceKey | 'billing' | 'projects';
   name: string;
   href: string;
   description: string;
   icon: typeof Server;
 }> = [
+  {
+    serviceKey: 'projects',
+    name: 'Projects',
+    href: tenantConsole.projects,
+    icon: FolderKanban,
+    description: 'Create client projects to group resources and track costs',
+  },
   {
     serviceKey: 'vm-management',
     name: 'VPS Hosting',
@@ -124,7 +132,7 @@ export default function TenantConsolePage() {
   }, [router, tenantUser?.role]);
 
   const tiles = SERVICE_TILES.filter((tile) => {
-    if (tile.serviceKey === 'billing') return isAdmin;
+    if (tile.serviceKey === 'billing' || tile.serviceKey === 'projects') return isAdmin;
     return hasActiveService(tile.serviceKey);
   });
 

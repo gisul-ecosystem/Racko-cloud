@@ -454,8 +454,21 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 		}
 	}
 
-	// Apply exclusion filter
-	if shouldExcludePath(fullPath) {
+	// ── Two-layer filter (allowlist-first) ──────────────────────────────────
+	//
+	// Layer 1 — Allowlist (primary gate, O(n) prefix check):
+	//   Discard immediately if the path is outside the watched roots.
+	//   This single check eliminates ALL of C:\Program Files, C:\Windows,
+	//   C:\ProgramData, and every other non-user path — including every file
+	//   written during a software install — before any further processing.
+	//
+	// Layer 2 — Denylist within scope (secondary filter):
+	//   Only runs when the path is inside a watched root. Removes OS-managed
+	//   noise inside C:\Users (AppData, caches, lock files, partial downloads).
+	if !isInWatchScope(fullPath) {
+		return
+	}
+	if shouldExcludeWithinScope(fullPath) {
 		return
 	}
 

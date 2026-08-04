@@ -443,9 +443,18 @@ func hashFile(path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// getWatchPaths returns the list of root paths the tracker watches for changes.
-// Only user data paths are tracked — software installation paths (Program Files,
-// ProgramData) are excluded since we only clone user files, not software.
+// getWatchPaths returns the allowlisted root paths the tracker watches for changes.
+//
+// ALLOWLIST-FIRST DESIGN: Only paths explicitly listed here are ever tracked.
+// The USN journal watcher uses this list as a primary gate — any file event
+// whose path does not start with one of these roots is discarded immediately,
+// before the denylist is even consulted. This means C:\Program Files,
+// C:\ProgramData, C:\Windows and everything else outside these roots is
+// silently ignored regardless of what software installs or what Windows does.
+//
+// To add a new tracked location, add it here. The denylist (shouldExcludeWithinScope)
+// only needs to handle noise inside these paths — it never needs to mention
+// Program Files or OS paths again.
 func getWatchPaths() []string {
 	return []string{
 		`C:\Users`,
@@ -457,104 +466,110 @@ func getWatchPaths() []string {
 	}
 }
 
-// shouldExcludePath returns true for paths that should never be tracked —
-// OS internals, agent data, transient cache, paging files, and Windows
-// auto-generated noise files that have no value for clone replay.
-func shouldExcludePath(path string) bool {
+// isInWatchScope returns true when path falls under one of the allowlisted
+// watch roots. This is the PRIMARY filter — it must be checked before
+// shouldExcludeWithinScope. Files outside the watch scope are never tracked
+// regardless of the denylist.
+//
+// Uses case-insensitive prefix matching. The separator check (path[len(root)]
+// is '\' or path == root exactly) prevents false positives like
+// C:\UsersBackup matching the C:\Users root.
+func isInWatchScope(path string) bool {
 	lp := strings.ToLower(path)
-	excludes := []string{
-		// Windows OS — never touch
-		`c:\windows`,
-		// Agent data — never track our own files
-		`c:\programdata\racko-agent`,		// Windows system-managed ProgramData
-		`c:\programdata\microsoft`,
-		`c:\programdata\windows`,
-		`c:\programdata\package cache`,
-		`c:\programdata\usoprivate`,
-		`c:\programdata\usoshared`,
-		`c:\programdata\softwareDistribution`,
-		// AppData — software stores internal data here (caches, settings, updaters).
-		// Users don't manually create content in AppData, so exclude entirely.
-		// This covers Chrome, VS Code, Office, any software vendor — no per-app rules needed.
-		`appdata`,
-		`c:\users\public`,
-		`c:\users\all users`,
-		// Windows Recent — shortcut files auto-created when user opens folders
-		// These are OS bookkeeping, not user-created content. They get rebuilt
-		// automatically on the target VM so cloning them is pointless.
-		`appdata\roaming\microsoft\windows\recent`,
-		// Jump Lists — binary cache files auto-updated by Windows
-		`appdata\roaming\microsoft\windows\recent\automaticdestinations`,
-		`appdata\roaming\microsoft\windows\recent\customdestinations`,
-		// PowerShell history — updated every command, cloning 50+ events is noise
-		`appdata\roaming\microsoft\windows\powershell\psreadline\consolehost_history.txt`,
-		// PowerShell startup profile cache — updated every time PowerShell opens
-		`appdata\local\microsoft\windows\powershell`,
-		// Edge/IE/Chrome web cache — transient binary cache files
-		`appdata\local\microsoft\windows\webcache`,
-		`appdata\local\microsoft\windows\history`,
-		`appdata\local\microsoft\windows\inetcache`,
-		`appdata\local\microsoft\windows\temporary internet files`,
-		// Edge browser internal data — cache, LevelDB, session, logs
-		// These are ephemeral browser-managed files, not user content
-		`appdata\local\microsoft\edge\user data`,
-		// Chrome browser internal data
-		`appdata\local\google\chrome\user data`,
-		// Google updater — auto-update service files, not user content
-		`appdata\local\google\update`,
-		`appdata\local\google\googleupdate`,
-		// Firefox internal data
-		`appdata\roaming\mozilla\firefox\profiles`,
-		// Icon cache — rebuilt by Windows automatically
-		`appdata\local\iconcache`,
-		`appdata\local\microsoft\windows\explorer`,
-		// Windows Notification cache
-		`appdata\local\microsoft\windows\notifications`,
-		// Windows Search cache
-		`appdata\local\microsoft\windows\caches`,
-		// Windows Timeline / Activity History — auto-managed by OS, not user content
-		`appdata\local\connecteddevicesplatform`,
-		// Windows Token Broker cache — SSO/auth tokens managed by OS
-		`appdata\local\microsoft\tokenbroker\cache`,
-		// Temp folders — transient
-		`appdata\local\temp`,
-		`appdata\locallow`,
-		// Windows Search / IndexedDB cache files — auto-generated, not user content
-		`appdata\local\packages`,                          // all UWP package caches (TokenBroker, Search, Edge etc.)
-		// Windows Search database files — rebuilt automatically
-		`.jfm`,   // IndexedDB journal
-		`edb.chk`, // ESE database checkpoint
-		`edb.log`, // ESE transaction log
-		// Registry hive files — always locked by Windows, never readable
-		`ntuser.dat`,
-		`ntuser.dat.log`,
-		`ntuser.pol`,
-		// NTFS internal system folders — never user content
-		`$extend`,
-		`$deleted`,
-		// VMware guest tools logs — not user content
-		`c:\programdata\vmware`,
-		`hiberfil.sys`,
-		`swapfile.sys`,
-		// Office lock files
-		`~$`,
-		// Temporary files — browser downloads, partial files, system temp
-		`.tmp`,
-		`.crdownload`,  // Chrome/Edge partial downloads
-		`.part`,        // Firefox partial downloads
-		// Recycle bin and system restore
-		`$recycle.bin`,
-		`system volume information`,
-		`$winreagent`,
-		// Windows recovery
-		`c:\recovery`,
-		// MSI installer cache
-		`c:\config.msi`,
-	}
-	for _, ex := range excludes {
-		if strings.HasPrefix(lp, strings.ToLower(ex)) || strings.Contains(lp, strings.ToLower(ex)) {
+	for _, root := range getWatchPaths() {
+		lr := strings.ToLower(root)
+		if lp == lr {
+			return true
+		}
+		// Must be a proper sub-path: root\ prefix, not just a string prefix match
+		if strings.HasPrefix(lp, lr+`\`) {
 			return true
 		}
 	}
 	return false
+}
+
+// shouldExcludeWithinScope returns true for paths that are inside the watch
+// scope but should still be ignored — OS-managed noise, caches, lock files,
+// and transient files that have no value for clone replay.
+//
+// IMPORTANT: This function is only called AFTER isInWatchScope returns true.
+// It must never need to mention C:\Program Files, C:\Windows, C:\ProgramData,
+// or any path outside the watch roots — those are handled by the allowlist.
+func shouldExcludeWithinScope(path string) bool {
+	lp := strings.ToLower(path)
+
+	// ── Excluded subtrees (prefix match) ──────────────────────────────────────
+
+	excludePrefixes := []string{
+		// Public / shared user profiles — not a real user's content
+		`c:\users\public\`,
+		`c:\users\all users\`,
+		`c:\users\default\`,
+		`c:\users\default user\`,
+
+		// AppData entirely — software stores internal data here (caches, settings,
+		// updaters, logs). Users don't manually create content in AppData.
+		// This single rule covers Chrome, VS Code, Office, every vendor — no
+		// per-app exclusion rules needed.
+		`\appdata\`,
+
+		// Agent data — never track our own files
+		`c:\programdata\racko-agent\`,
+	}
+
+	for _, prefix := range excludePrefixes {
+		if strings.HasPrefix(lp, prefix) || strings.Contains(lp, prefix) {
+			return true
+		}
+	}
+
+	// ── Excluded file suffixes / name fragments (noise files) ─────────────────
+
+	excludeFragments := []string{
+		// Registry hive files — always locked by Windows, never readable
+		`ntuser.dat`,
+		`ntuser.dat.log`,
+		`ntuser.pol`,
+		// NTFS system entries
+		`$extend`,
+		`$deleted`,
+		`$recycle.bin`,
+		`system volume information`,
+		// Office lock files (~ prefix, e.g. ~$document.docx)
+		`~$`,
+		// Partial / temporary download files
+		`.tmp`,
+		`.crdownload`, // Chrome/Edge partial downloads
+		`.part`,       // Firefox partial downloads
+		// ESE / IndexedDB internal files (search index etc.)
+		`.jfm`,
+		`edb.chk`,
+		`edb.log`,
+		// Paging / hibernation — never user content
+		`hiberfil.sys`,
+		`swapfile.sys`,
+		`pagefile.sys`,
+	}
+
+	for _, frag := range excludeFragments {
+		if strings.Contains(lp, frag) {
+			return true
+		}
+	}
+
+	return false
+}
+
+// shouldExcludePath is the legacy entry point kept for callers in baseline.go
+// (collectUserFiles walk). It applies both the scope check and the within-scope
+// denylist so the baseline file scan stays consistent with the live watcher.
+//
+// New code (USN watcher) should call isInWatchScope + shouldExcludeWithinScope
+// directly for clarity and early-exit efficiency.
+func shouldExcludePath(path string) bool {
+	if !isInWatchScope(path) {
+		return true // outside allowlist → exclude
+	}
+	return shouldExcludeWithinScope(path)
 }

@@ -29,7 +29,11 @@ export interface DedicatedServerPortalApi {
   fetchPlans: () => Promise<IDedicatedPlan[]>;
   fetchServers: () => Promise<IDedicatedServer[]>;
   fetchServer: (id: string) => Promise<IDedicatedServer>;
-  submitRequest: (opts: { planId: string; notes?: string }) => Promise<IDedicatedServer>;
+  submitRequest: (opts: {
+    planId: string;
+    notes?: string;
+    projectId?: string;
+  }) => Promise<IDedicatedServer>;
   getConsole: (
     id: string,
     dimensions?: { width?: number; height?: number }

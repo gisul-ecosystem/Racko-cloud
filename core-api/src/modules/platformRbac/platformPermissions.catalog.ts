@@ -43,6 +43,8 @@ export const PLATFORM_PERMISSION_CATALOG: OrgPermissionDef[] = [
   { key: 'team.manage', label: 'Manage team users', group: 'Team' },
   { key: 'rbac.roles.write', label: 'Create / edit roles', group: 'Access control' },
   { key: 'rbac.assign', label: 'Assign roles to people', group: 'Access control' },
+  { key: 'projects.read', label: 'View projects', group: 'Projects' },
+  { key: 'projects.manage', label: 'Create & manage projects', group: 'Projects' },
 ];
 
 export const PLATFORM_ALL_PERMISSION_KEYS = PLATFORM_PERMISSION_CATALOG.map((p) => p.key);
@@ -53,6 +55,8 @@ const ALWAYS_ALLOWED_PLATFORM_PERMISSION_KEYS = [
   'billing.topup',
   'rbac.roles.write',
   'rbac.assign',
+  'projects.read',
+  'projects.manage',
 ] as const;
 
 const SERVICE_PERMISSION_KEYS: Record<PlatformServiceEntitlementKey, string[]> = {
@@ -99,6 +103,8 @@ export const PLATFORM_SYSTEM_ROLE_SEEDS: Array<{
       'machine_manager.manage',
       'docs.read',
       'team.manage',
+      'projects.read',
+      'projects.manage',
     ],
   },
   {
@@ -123,6 +129,7 @@ export const PLATFORM_SYSTEM_ROLE_SEEDS: Array<{
       'gcp.read',
       'cloud_labs.read',
       'docs.read',
+      'projects.read',
     ],
   },
 ];

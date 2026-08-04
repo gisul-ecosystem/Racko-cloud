@@ -117,6 +117,16 @@ class ExternalVMService {
     dto: CreateExternalVMDto,
     adminId: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse> {
+    if (!dto.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const { projectsService } = await import('../projects/projects.service');
+    const projectCtx = await projectsService.assertUsableForService({
+      projectId: dto.projectId,
+      actingUserId: adminId.toString(),
+      serviceKey: 'elastic-servers',
+    });
+
     const doc = await ExternalVMModel.create({
       name: dto.name,
       ipAddress: dto.ipAddress,
@@ -124,11 +134,13 @@ class ExternalVMService {
       username: dto.username,
       password: encrypt(dto.password),
       adminId,
+      projectId: projectCtx.projectId,
     });
 
     logger.info('[ExternalVM] Added external VM', {
       externalVmId: doc._id.toString(),
       adminId: adminId.toString(),
+      projectId: projectCtx.projectId.toString(),
       protocol: doc.protocol,
     });
 
@@ -433,6 +445,16 @@ class ExternalVMService {
     tenantId: mongoose.Types.ObjectId,
     createdByTenantUserId?: mongoose.Types.ObjectId
   ): Promise<ExternalVMResponse> {
+    if (!dto.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const { projectsService } = await import('../projects/projects.service');
+    const projectCtx = await projectsService.assertUsableForTenantService({
+      projectId: dto.projectId,
+      tenantId: tenantId.toString(),
+      serviceKey: 'elastic-servers',
+    });
+
     const doc = await ExternalVMModel.create({
       name: dto.name,
       ipAddress: dto.ipAddress,
@@ -440,12 +462,14 @@ class ExternalVMService {
       username: dto.username,
       password: encrypt(dto.password),
       tenantId,
+      projectId: projectCtx.projectId,
       ...(createdByTenantUserId ? { createdByTenantUserId } : {}),
     });
 
     logger.info('[ExternalVM] Added tenant external VM', {
       externalVmId: doc._id.toString(),
       tenantId: tenantId.toString(),
+      projectId: projectCtx.projectId.toString(),
       protocol: doc.protocol,
     });
 

@@ -12,6 +12,7 @@ import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
 import { walletService } from '../wallet/wallet.service';
 import { externalVmPricingService } from '../externalVmPricing/externalVmPricing.service';
+import { projectsService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
@@ -385,18 +386,33 @@ class VmCatalogService {
       Boolean(selection.autoProvisioned) && isAutoCloudProvider(selection.provider);
     const provider = autoProvisioned ? selection.provider : 'webyne';
 
+    if (!dto.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const projectCtx = await projectsService.assertUsableForService({
+      projectId: dto.projectId,
+      actingUserId: adminId.toString(),
+      serviceKey: 'create-vm',
+    });
+
     // Debit wallet first — fails with INSUFFICIENT_BALANCE if too low.
     await adminBillingService.debitWallet(
       adminId.toString(),
       total,
       null,
-      'catalog_vm_purchase'
+      'catalog_vm_purchase',
+      {
+        projectId: projectCtx.projectId.toString(),
+        orgId: projectCtx.orgId,
+        serviceKey: 'create-vm',
+      }
     );
 
     let doc: ICatalogVm;
     try {
       doc = await CatalogVmModel.create({
         adminId,
+        projectId: projectCtx.projectId,
         provider,
         category: dto.category,
         planId: plan._id.toString(),
@@ -1437,13 +1453,34 @@ class VmCatalogService {
       throw new ValidationError('Invalid purchase total.');
     }
 
-    await walletService.debitWallet(tenantId.toString(), total, 'catalog_vm_purchase');
+    if (!dto.projectId) {
+      throw new ValidationError('projectId is required.');
+    }
+    const projectCtx = await projectsService.assertUsableForTenantService({
+      projectId: dto.projectId,
+      tenantId: tenantId.toString(),
+      serviceKey: 'create-vm',
+    });
+
+    await walletService.debitWallet(
+      tenantId.toString(),
+      total,
+      'catalog_vm_purchase',
+      null,
+      null,
+      null,
+      {
+        projectId: projectCtx.projectId.toString(),
+        serviceKey: 'create-vm',
+      }
+    );
 
     let doc: ICatalogVm;
     try {
       doc = await CatalogVmModel.create({
         tenantId,
         tenantUserId,
+        projectId: projectCtx.projectId,
         provider: 'webyne',
         category: dto.category,
         planId: plan._id.toString(),
