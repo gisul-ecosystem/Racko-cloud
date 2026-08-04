@@ -66,16 +66,28 @@ type ServiceEntry struct {
 
 // Baseline is the full snapshot of the VM state at agent install time.
 type Baseline struct {
-	AgentID          string               `json:"agentId"`
-	CapturedAt       time.Time            `json:"capturedAt"`
-	InstalledApps    []InstalledApp       `json:"installedApps"`
-	Files            []FileEntry          `json:"files"`
-	SystemEnvVars    []EnvVar             `json:"systemEnvVars"`
-	UserEnvVars      []EnvVar             `json:"userEnvVars"`
-	ScheduledTasks   []ScheduledTaskEntry `json:"scheduledTasks"`
-	Services         []ServiceEntry       `json:"services"`
-	ProgramFolders   []string             `json:"programFolders"`
-	ProgramDataFolders []string           `json:"programDataFolders"`
+	AgentID            string               `json:"agentId"`
+	CapturedAt         time.Time            `json:"capturedAt"`
+	InstalledApps      []InstalledApp       `json:"installedApps"`
+	Files              []FileEntry          `json:"files"`
+	SystemEnvVars      []EnvVar             `json:"systemEnvVars"`
+	UserEnvVars        []EnvVar             `json:"userEnvVars"`
+	ScheduledTasks     []ScheduledTaskEntry `json:"scheduledTasks"`
+	Services           []ServiceEntry       `json:"services"`
+	ProgramFolders     []string             `json:"programFolders"`
+	ProgramDataFolders []string             `json:"programDataFolders"`
+
+	// DriveRootFolders records the top-level folder names that existed on each
+	// fixed drive at baseline time. Used by isInWatchScope to distinguish
+	// pre-existing system/software folders (should not track) from folders the
+	// user created after install (should track).
+	//
+	// Key: lowercase drive root e.g. "c:\", "d:\"
+	// Value: lowercase top-level folder names e.g. ["windows", "program files", "users"]
+	//
+	// Any top-level folder NOT in this map at runtime was created by the user
+	// after baseline → automatically included in watch scope regardless of drive.
+	DriveRootFolders map[string][]string `json:"driveRootFolders"`
 }
 
 // baselineFilePath returns the local path where the baseline is persisted.
@@ -122,6 +134,16 @@ func CaptureAndUpload(agentID string, cfg *config.Config) error {
 	b.ProgramFolders = collectTopLevelFolders(`C:\Program Files`)
 	b.ProgramFolders = append(b.ProgramFolders, collectTopLevelFolders(`C:\Program Files (x86)`)...)
 	b.ProgramDataFolders = collectTopLevelFolders(`C:\ProgramData`)
+
+	// Capture top-level folders on every fixed drive — used by isInWatchScope
+	// to distinguish pre-existing system folders from user-created ones.
+	b.DriveRootFolders = collectDriveRootFolders()
+	totalDriveFolders := 0
+	for _, folders := range b.DriveRootFolders {
+		totalDriveFolders += len(folders)
+	}
+	log.Printf("[tracker/baseline] Collected drive root folders: %d entries across %d drives",
+		totalDriveFolders, len(b.DriveRootFolders))
 
 	// Save locally first — survives server downtime
 	if err := saveBaseline(b); err != nil {
@@ -443,50 +465,130 @@ func hashFile(path string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// getWatchPaths returns the allowlisted root paths the tracker watches for changes.
+// getWatchPaths returns the well-known user content roots that are always
+// tracked regardless of baseline state. These are the standard Windows user
+// profile folders that exist on every machine and always contain user content.
 //
-// ALLOWLIST-FIRST DESIGN: Only paths explicitly listed here are ever tracked.
-// The USN journal watcher uses this list as a primary gate — any file event
-// whose path does not start with one of these roots is discarded immediately,
-// before the denylist is even consulted. This means C:\Program Files,
-// C:\ProgramData, C:\Windows and everything else outside these roots is
-// silently ignored regardless of what software installs or what Windows does.
-//
-// To add a new tracked location, add it here. The denylist (shouldExcludeWithinScope)
-// only needs to handle noise inside these paths — it never needs to mention
-// Program Files or OS paths again.
+// NOTE: This is now a secondary fast-path. The primary scope decision for
+// arbitrary paths (e.g. C:\myproject, D:\data) is made by isInWatchScope
+// using baseline-diff logic — no hardcoding needed for those.
 func getWatchPaths() []string {
 	return []string{
 		`C:\Users`,
-		`C:\tools`,
-		`C:\dev`,
-		`C:\projects`,
-		`C:\workspace`,
-		`C:\src`,
 	}
 }
 
-// isInWatchScope returns true when path falls under one of the allowlisted
-// watch roots. This is the PRIMARY filter — it must be checked before
-// shouldExcludeWithinScope. Files outside the watch scope are never tracked
-// regardless of the denylist.
+// collectDriveRootFolders snapshots the top-level folder names on every fixed
+// drive at baseline time. The result is stored in Baseline.DriveRootFolders
+// and used at runtime by isInWatchScope to identify user-created folders.
 //
-// Uses case-insensitive prefix matching. The separator check (path[len(root)]
-// is '\' or path == root exactly) prevents false positives like
-// C:\UsersBackup matching the C:\Users root.
-func isInWatchScope(path string) bool {
-	lp := strings.ToLower(path)
-	for _, root := range getWatchPaths() {
-		lr := strings.ToLower(root)
-		if lp == lr {
-			return true
+// Key: lowercase drive root e.g. "c:\", "d:\"
+// Value: lowercase top-level folder names e.g. ["windows", "program files"]
+func collectDriveRootFolders() map[string][]string {
+	drives := getLocalDrives()
+	result := make(map[string][]string, len(drives))
+	for _, drive := range drives {
+		dr := strings.ToLower(drive)
+		entries, err := os.ReadDir(drive)
+		if err != nil {
+			log.Printf("[tracker/baseline] Could not read drive root %s: %v", drive, err)
+			result[dr] = []string{}
+			continue
 		}
-		// Must be a proper sub-path: root\ prefix, not just a string prefix match
-		if strings.HasPrefix(lp, lr+`\`) {
-			return true
+		var names []string
+		for _, e := range entries {
+			if e.IsDir() {
+				names = append(names, strings.ToLower(e.Name()))
+			}
+		}
+		result[dr] = names
+		log.Printf("[tracker/baseline] Drive %s has %d top-level folders at baseline", drive, len(names))
+	}
+	return result
+}
+
+// isInWatchScope is the PRIMARY filter for all USN events.
+// It uses a two-stage decision to determine if a path should be tracked:
+//
+// Stage 1 — Static well-known user roots (fast path):
+//   C:\Users\* is always tracked (standard user profile folders).
+//
+// Stage 2 — Baseline-diff for everything else (dynamic, drive-agnostic):
+//   For any path on any drive, extract the top-level folder under the drive root.
+//   If that top-level folder was NOT present in the baseline snapshot, the user
+//   created it after install — track everything inside it.
+//   If it WAS present at baseline, it's a pre-existing system/software folder
+//   — ignore it entirely.
+//
+// This approach requires zero hardcoding. It works for C:\, D:\, E:\ and any
+// future drive automatically. New software installs to existing folders are
+// ignored. User-created folders anywhere are tracked immediately.
+func isInWatchScope(path string) bool {
+	return isInWatchScopeWithBaseline(path, nil)
+}
+
+// isInWatchScopeWithBaseline is the full implementation — watcher.go calls
+// this variant directly, passing the loaded baseline for efficient lookups.
+// isInWatchScope (above) is kept as a zero-arg convenience for the baseline
+// walk in collectUserFiles, where no baseline is available yet.
+func isInWatchScopeWithBaseline(path string, baseline *Baseline) bool {
+	lp := strings.ToLower(path)
+
+	// ── Stage 1: Static well-known user roots ─────────────────────────────────
+	// C:\Users\* is always a user content location. Fast O(1) check.
+	if strings.HasPrefix(lp, `c:\users\`) {
+		return true
+	}
+
+	// ── Stage 2: Baseline-diff — dynamic folder scope ─────────────────────────
+	// Extract drive root (e.g. "c:\") and top-level folder name (e.g. "myproject")
+	// from the path. Pattern: <letter>:\<topFolder>\...
+	if len(lp) < 4 || lp[1] != ':' || lp[2] != '\\' {
+		return false // not a valid absolute Windows path
+	}
+	driveRoot := lp[:3]         // e.g. "c:\"
+	rest := lp[3:]              // e.g. "myproject\subdir\file.txt"
+	slashIdx := strings.Index(rest, `\`)
+	var topFolder string
+	if slashIdx == -1 {
+		topFolder = rest // path IS the top-level entry (e.g. "c:\file.txt")
+	} else {
+		topFolder = rest[:slashIdx] // e.g. "myproject"
+	}
+	if topFolder == "" {
+		return false
+	}
+
+	if baseline == nil || baseline.DriveRootFolders == nil {
+		// No baseline available (first-run baseline capture) — fall back to
+		// conservative static list so we don't track system folders during setup.
+		staticRoots := []string{`c:\tools\`, `c:\dev\`, `c:\projects\`, `c:\workspace\`, `c:\src\`}
+		for _, r := range staticRoots {
+			if strings.HasPrefix(lp, r) {
+				return true
+			}
+		}
+		return false
+	}
+
+	// Check if this top-level folder existed at baseline time.
+	baselineFolders, driveKnown := baseline.DriveRootFolders[driveRoot]
+	if !driveKnown {
+		// Drive wasn't present at baseline (e.g. a new USB drive added later).
+		// Treat the entire drive as user content — track everything on it.
+		return true
+	}
+
+	for _, bf := range baselineFolders {
+		if bf == topFolder {
+			// This folder existed at baseline → pre-existing system/software folder
+			// → NOT user-created → do not track.
+			return false
 		}
 	}
-	return false
+
+	// Top-level folder was NOT in baseline → user created it after install → track.
+	return true
 }
 
 // shouldExcludeWithinScope returns true for paths that are inside the watch
@@ -565,11 +667,11 @@ func shouldExcludeWithinScope(path string) bool {
 // (collectUserFiles walk). It applies both the scope check and the within-scope
 // denylist so the baseline file scan stays consistent with the live watcher.
 //
-// New code (USN watcher) should call isInWatchScope + shouldExcludeWithinScope
-// directly for clarity and early-exit efficiency.
+// New code (USN watcher) should call isInWatchScopeWithBaseline +
+// shouldExcludeWithinScope directly for clarity and early-exit efficiency.
 func shouldExcludePath(path string) bool {
 	if !isInWatchScope(path) {
-		return true // outside allowlist → exclude
+		return true // outside scope → exclude
 	}
 	return shouldExcludeWithinScope(path)
 }
