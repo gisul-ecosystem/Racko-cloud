@@ -7,13 +7,17 @@
  * All VM activity files (file_write events during change tracking) are stored
  * in the `racko-vm-activity` bucket and retrieved during clone replay.
  *
- * Object key format: <machineId>/<pathHash>/<sha256>/<filename>
+ * Object key format: <machineId>/<pathHash>_<sha256>_<safeFilename>
  *
- * pathHash is the first 16 hex chars of SHA256(filePath) — it scopes each
- * unique file location to its own S3 prefix so two files with the same name
- * and content at different paths (e.g. Desktop\1000mb.txt vs Downloads\1000mb.txt)
- * always get distinct object keys and never overwrite each other.
- * The sha256 component is kept for content-level deduplication within the same path.
+ * Flat single-level key under the machineId prefix. No sub-folders means
+ * no directory placeholder objects are created by SeaweedFS, so deleting
+ * a file object leaves nothing behind. On machine reset, a single
+ * ListObjectsV2 + DeleteObjects call with the machineId prefix cleans
+ * everything up in one shot.
+ *
+ * pathHash = first 16 hex chars of SHA256(filePath) — scopes the key to
+ * the specific file location so two files with the same name and content
+ * at different paths never share a key.
  */
 
 import {
@@ -87,14 +91,14 @@ class SeaweedFSService {
     mimeType: string,
     filePath?: string
   ): Promise<UploadResult> {
-    // Build a unique, collision-free object key.
-    // pathHash scopes the key to the specific file location so two files with
-    // identical content and filename at different paths never share an S3 key.
+    // Flat key: machineId/<pathHash>_<sha256>_<safeFilename>
+    // Single level under machineId — no sub-folder placeholders created,
+    // so delete leaves nothing behind and reset bulk-delete is one prefix scan.
     const safeFilename = filename.replace(/[^a-zA-Z0-9._\-]/g, '_');
     const pathHash = filePath
       ? createHash('sha256').update(filePath.toLowerCase()).digest('hex').slice(0, 16)
-      : sha256.slice(0, 16); // fallback: use content hash prefix (legacy path, no collision risk)
-    const key = `${machineId}/${pathHash}/${sha256}/${safeFilename}`;
+      : sha256.slice(0, 16);
+    const key = `${machineId}/${pathHash}_${sha256}_${safeFilename}`;
 
     logger.debug('[SeaweedFS] Uploading file', {
       bucket: this.bucket,
@@ -190,12 +194,11 @@ class SeaweedFSService {
     filePath?: string
   ): Promise<{ presignedUrl: string; storageRef: string }> {
     const safeFilename = filename.replace(/[^a-zA-Z0-9._\-]/g, '_');
-    // pathHash ensures files at different locations with the same name/content
-    // get distinct S3 keys and never overwrite each other.
+    // Flat key: machineId/<pathHash>_<sha256>_<safeFilename>
     const pathHash = filePath
       ? createHash('sha256').update(filePath.toLowerCase()).digest('hex').slice(0, 16)
       : sha256.slice(0, 16);
-    const storageRef = `${machineId}/${pathHash}/${sha256}/${safeFilename}`;
+    const storageRef = `${machineId}/${pathHash}_${sha256}_${safeFilename}`;
 
     const command = new PutObjectCommand({
       Bucket:      this.bucket,
