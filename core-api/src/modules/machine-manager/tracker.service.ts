@@ -223,7 +223,8 @@ export async function getPresignedUploadUrl(
   agentId: string,
   sha256: string,
   filename: string,
-  mimeType: string
+  mimeType: string,
+  filePath?: string
 ): Promise<{ presignedUrl: string; storageRef: string }> {
   const machine = await MachineModel.findOne({ agentId });
   if (!machine) {
@@ -235,7 +236,8 @@ export async function getPresignedUploadUrl(
     sha256,
     filename,
     mimeType,
-    3600 // 1 hour TTL
+    3600, // 1 hour TTL
+    filePath
   );
 }
 
@@ -276,7 +278,8 @@ export async function uploadFile(
     machine._id.toString(),
     hashSegment,
     filename,
-    mimeType
+    mimeType,
+    filePath  // pass full path so S3 key is unique per location
   );
 
   logger.info('[Tracker] File uploaded to SeaweedFS', {

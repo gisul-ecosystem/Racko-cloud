@@ -7,8 +7,13 @@
  * All VM activity files (file_write events during change tracking) are stored
  * in the `racko-vm-activity` bucket and retrieved during clone replay.
  *
- * Object key format: <machineId>/<sha256>/<filename>
- * This ensures deduplication per machine and easy cleanup on reset.
+ * Object key format: <machineId>/<pathHash>/<sha256>/<filename>
+ *
+ * pathHash is the first 16 hex chars of SHA256(filePath) — it scopes each
+ * unique file location to its own S3 prefix so two files with the same name
+ * and content at different paths (e.g. Desktop\1000mb.txt vs Downloads\1000mb.txt)
+ * always get distinct object keys and never overwrite each other.
+ * The sha256 component is kept for content-level deduplication within the same path.
  */
 
 import {
@@ -18,6 +23,7 @@ import {
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
+import { createHash } from 'crypto';
 import { Readable } from 'stream';
 import { config } from '../config';
 import { logger } from '../utils/logger';
@@ -61,24 +67,34 @@ class SeaweedFSService {
    * Upload a file buffer to SeaweedFS via S3 PutObject.
    *
    * The storageRef returned is the S3 object key.
-   * Key format: <machineId>/<sha256>/<filename>
+   * Key format: <machineId>/<pathHash>/<sha256>/<filename>
+   *
+   * pathHash = first 16 hex chars of SHA256(filePath) — ensures files at
+   * different paths with the same name/content get unique S3 keys.
    *
    * @param buffer      File content as a Buffer (already read from multer)
    * @param machineId   Owning machine ID — used as the key prefix for organisation
-   * @param sha256      SHA256 hash of the file — used for deduplication in the key
+   * @param sha256      SHA256 hash of the file — used for content deduplication within same path
    * @param filename    Original filename
    * @param mimeType    MIME type of the file
+   * @param filePath    Full file path on the agent machine — used to scope the key per location
    */
   async upload(
     buffer: Buffer,
     machineId: string,
     sha256: string,
     filename: string,
-    mimeType: string
+    mimeType: string,
+    filePath?: string
   ): Promise<UploadResult> {
-    // Build a deterministic, collision-free object key
+    // Build a unique, collision-free object key.
+    // pathHash scopes the key to the specific file location so two files with
+    // identical content and filename at different paths never share an S3 key.
     const safeFilename = filename.replace(/[^a-zA-Z0-9._\-]/g, '_');
-    const key = `${machineId}/${sha256}/${safeFilename}`;
+    const pathHash = filePath
+      ? createHash('sha256').update(filePath.toLowerCase()).digest('hex').slice(0, 16)
+      : sha256.slice(0, 16); // fallback: use content hash prefix (legacy path, no collision risk)
+    const key = `${machineId}/${pathHash}/${sha256}/${safeFilename}`;
 
     logger.debug('[SeaweedFS] Uploading file', {
       bucket: this.bucket,
@@ -158,10 +174,11 @@ class SeaweedFSService {
    * bypassing nginx and core-api entirely — no size limit, no memory pressure.
    *
    * @param machineId   Owning machine ID (used as key prefix)
-   * @param sha256      SHA256 hash of the file (used for dedup in the key)
+   * @param sha256      SHA256 hash of the file (used for content dedup within same path)
    * @param filename    Original filename
    * @param mimeType    MIME type of the file
    * @param ttlSeconds  How long the URL is valid (default: 1 hour)
+   * @param filePath    Full file path on the agent machine — scopes key per location
    * @returns           { presignedUrl, storageRef }
    */
   async generatePresignedPutUrl(
@@ -169,10 +186,16 @@ class SeaweedFSService {
     sha256: string,
     filename: string,
     mimeType: string,
-    ttlSeconds = 3600
+    ttlSeconds = 3600,
+    filePath?: string
   ): Promise<{ presignedUrl: string; storageRef: string }> {
     const safeFilename = filename.replace(/[^a-zA-Z0-9._\-]/g, '_');
-    const storageRef = `${machineId}/${sha256}/${safeFilename}`;
+    // pathHash ensures files at different locations with the same name/content
+    // get distinct S3 keys and never overwrite each other.
+    const pathHash = filePath
+      ? createHash('sha256').update(filePath.toLowerCase()).digest('hex').slice(0, 16)
+      : sha256.slice(0, 16);
+    const storageRef = `${machineId}/${pathHash}/${sha256}/${safeFilename}`;
 
     const command = new PutObjectCommand({
       Bucket:      this.bucket,
