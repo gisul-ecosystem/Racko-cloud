@@ -107,6 +107,22 @@ jobs:
       - name: Push cloud-automation-reseller image
         run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:qa
 
+  build-cloud-automation-training:
+    name: Build & Push cloud-automation-training
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build cloud-automation-training image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:qa -f cloud_automation_training/Dockerfile cloud_automation_training/
+
+      - name: Push cloud-automation-training image
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:qa
+
   build-client-portal:
     name: Build & Push client-portal
     runs-on: ubuntu-latest
@@ -229,6 +245,7 @@ jobs:
       - build-cloud-automation
       - build-cloud-automation-aws
       - build-cloud-automation-reseller
+      - build-cloud-automation-training
       - build-client-portal
       - build-create-vm-catalog-agent
       - deploy-agent
