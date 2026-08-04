@@ -180,15 +180,16 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
           go build -ldflags "${{ matrix.ldflags }}" -o dist/${{ matrix.output }} .
 
-      - name: Compute checksum (Linux)
+      - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
         working-directory: agent
         shell: bash
         run: |
-          sha256sum dist/racko-agent | awk '{print "AGENT_CHECKSUM_LINUX=" $1}' >> $GITHUB_STEP_SUMMARY
-          echo "Linux binary SHA256: $(sha256sum dist/racko-agent | awk '{print $1}')"
+          CHECKSUM=$(sha256sum dist/racko-agent | awk '{print $1}')
+          echo "AGENT_CHECKSUM_LINUX=$CHECKSUM" >> $GITHUB_STEP_SUMMARY
+          echo "$CHECKSUM" > dist/checksum-linux.txt
 
-      - name: Compute checksum (Windows)
+      - name: Compute and save checksum (Windows)
         if: matrix.platform == 'windows'
         working-directory: agent
         shell: pwsh
@@ -196,6 +197,7 @@ jobs:
           $hash = (Get-FileHash dist/racko-agent.exe -Algorithm SHA256).Hash.ToLower()
           Write-Host "Windows binary SHA256: $hash"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "AGENT_CHECKSUM_WINDOWS=$hash"
+          Set-Content -Path dist/checksum-windows.txt -Value $hash
 
       - name: Build Windows installer (Windows only)
         if: matrix.platform == 'windows'
@@ -211,6 +213,7 @@ jobs:
           name: agent-${{ matrix.platform }}
           path: |
             agent/dist/${{ matrix.output }}
+            agent/dist/checksum-${{ matrix.platform }}.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
           retention-days: 1
 
@@ -236,6 +239,30 @@ jobs:
           sudo cp agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
           echo "Agent binaries installed to ${DEPLOY_PATH}/agent/dist/"
+
+      - name: Update agent version and checksums in server .env
+        run: |
+          set -e
+          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt)
+          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt)
+          AGENT_VERSION="${{ github.sha }}"
+          ENV_FILE="${DEPLOY_PATH}/core-api/.env"
+
+          echo "Updating core-api .env: AGENT_VERSION=$AGENT_VERSION"
+
+          update_env() {
+            KEY=$1; VALUE=$2
+            if grep -q "^${KEY}=" "${ENV_FILE}" 2>/dev/null; then
+              sudo sed -i "s|^${KEY}=.*|${KEY}=${VALUE}|" "${ENV_FILE}"
+            else
+              echo "${KEY}=${VALUE}" | sudo tee -a "${ENV_FILE}" > /dev/null
+            fi
+          }
+
+          update_env "AGENT_VERSION"          "${AGENT_VERSION}"
+          update_env "AGENT_CHECKSUM_WINDOWS" "${CHECKSUM_WINDOWS}"
+          update_env "AGENT_CHECKSUM_LINUX"   "${CHECKSUM_LINUX}"
+          echo "core-api/.env updated with new agent version and checksums"
 
   deploy:
     name: Deploy to Production
