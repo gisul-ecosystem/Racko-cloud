@@ -132,10 +132,42 @@ export async function appendActivity(
     }
   }
 
+  // File delete: remove the S3 object for the deleted file so storage doesn't
+  // accumulate with files the user has explicitly removed. Finds the most recent
+  // file_write activity for this path and deletes its storageRef from S3.
+  if (type === 'file_delete') {
+    const deletePayload = payload as { path?: string };
+    if (deletePayload.path) {
+      const prevActivity = await MachineActivityModel.findOne({
+        machineId: machine._id,
+        type: 'file_write',
+        'payload.path': deletePayload.path,
+      }).sort({ sequence: -1 }); // most recent first
+
+      if (prevActivity) {
+        const prevPayload = prevActivity.payload as { storageRef?: string };
+        if (prevPayload.storageRef) {
+          try {
+            await seaweedfsService.delete(prevPayload.storageRef);
+            logger.info('[Tracker] Deleted S3 object on file delete', {
+              path: deletePayload.path,
+              storageRef: prevPayload.storageRef,
+            });
+          } catch (err) {
+            logger.warn('[Tracker] Could not delete S3 object on file delete (non-fatal)', {
+              path: deletePayload.path,
+              storageRef: prevPayload.storageRef,
+              err,
+            });
+          }
+        }
+      }
+    }
+  }
+
   // File write deduplication: when a file is re-uploaded (same path, new content),
   // delete the previous S3 object so only the latest version is kept in storage.
-  if (type === 'file_write') {
-    const writePayload = payload as { path?: string; storageRef?: string };
+  if (type === 'file_write') {    const writePayload = payload as { path?: string; storageRef?: string };
     if (writePayload.path) {
       const prevActivity = await MachineActivityModel.findOne({
         machineId: machine._id,
