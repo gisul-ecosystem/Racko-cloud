@@ -489,8 +489,9 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   /** POST /api/v1/agent/heartbeat */
   async agentHeartbeat(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      await machineManagerService.handleHeartbeat(req.body as AgentHeartbeatInput);
-      success(res, 'Heartbeat received.');
+      const updateInfo = await machineManagerService.handleHeartbeat(req.body as AgentHeartbeatInput);
+      // Include update info in response data so agent can self-update on next heartbeat tick
+      success(res, 'Heartbeat received.', updateInfo ?? undefined);
     } catch (err) {
       next(err);
     }

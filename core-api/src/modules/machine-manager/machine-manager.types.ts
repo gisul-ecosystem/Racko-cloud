@@ -81,6 +81,7 @@ export interface AgentJobResultDto {
 export interface AgentHeartbeatDto {
   agentId: string;
   status: string;
+  version?: string;
   specs?: {
     hostname?: string;
     osVersion?: string;
@@ -88,4 +89,10 @@ export interface AgentHeartbeatDto {
     ramGb?: number;
     diskGb?: number;
   };
+}
+
+export interface HeartbeatUpdateInfo {
+  updateAvailable: boolean;
+  latestVersion: string;
+  checksum: string;
 }

@@ -422,7 +422,7 @@ class MachineManagerService {
     });
   }
 
-  async handleHeartbeat(dto: AgentHeartbeatDto): Promise<void> {
+  async handleHeartbeat(dto: AgentHeartbeatDto): Promise<import('./machine-manager.types').HeartbeatUpdateInfo | null> {
     const machine = await MachineModel.findOne({ agentId: dto.agentId });
     if (!machine) throw new NotFoundError('Agent not found.');
 
@@ -442,6 +442,10 @@ class MachineManagerService {
         diskGb:    dto.specs.diskGb,
       };
     }
+    // Store the agent version so admins can see which version each machine runs
+    if (dto.version) {
+      (machine as any).agentVersion = dto.version;
+    }
     await machine.save();
 
     // Emit agent_connected SSE event if this machine is part of an active push session
@@ -459,6 +463,38 @@ class MachineManagerService {
         }
       }
     }
+
+    // ── Auto-update check ─────────────────────────────────────────────────────
+    // Compare the agent's reported version against the published version in config.
+    // If the agent is outdated, tell it to update via the heartbeat response.
+    const { config } = await import('../../config');
+    const publishedVersion = config.AGENT_VERSION;
+
+    if (publishedVersion && dto.version && dto.version !== publishedVersion) {
+      const isOutdated = isVersionOutdated(dto.version, publishedVersion);
+      if (isOutdated) {
+        logger.info('[MachineManager] Agent outdated — sending update signal', {
+          agentId: dto.agentId,
+          currentVersion: dto.version,
+          latestVersion: publishedVersion,
+        });
+
+        // Pick the right checksum based on machine OS
+        let checksum = '';
+        const os = machine.os?.toLowerCase() ?? '';
+        if (os === 'windows') checksum = config.AGENT_CHECKSUM_WINDOWS ?? '';
+        else if (os === 'linux') checksum = config.AGENT_CHECKSUM_LINUX ?? '';
+        else if (os === 'macos') checksum = config.AGENT_CHECKSUM_DARWIN ?? '';
+
+        return {
+          updateAvailable: true,
+          latestVersion: publishedVersion,
+          checksum,
+        };
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -706,3 +742,29 @@ class MachineManagerService {
 }
 
 export const machineManagerService = new MachineManagerService();
+
+// ─── Version comparison helper ────────────────────────────────────────────────
+
+/**
+ * Returns true when agentVersion is strictly older than publishedVersion.
+ * Compares semver-style strings: "1.2.3" < "1.3.0" → true.
+ * Non-semver strings (e.g. "dev") are treated as outdated so dev builds
+ * always get updated when a proper version is published.
+ */
+function isVersionOutdated(agentVersion: string, publishedVersion: string): boolean {
+  const parse = (v: string): number[] =>
+    v.split('.').map((p) => parseInt(p, 10)).filter((n) => !isNaN(n));
+
+  const av = parse(agentVersion);
+  const pv = parse(publishedVersion);
+
+  if (av.length === 0) return true; // unparseable (e.g. "dev") → treat as outdated
+
+  for (let i = 0; i < Math.max(av.length, pv.length); i++) {
+    const a = av[i] ?? 0;
+    const p = pv[i] ?? 0;
+    if (a < p) return true;
+    if (a > p) return false;
+  }
+  return false; // equal versions
+}

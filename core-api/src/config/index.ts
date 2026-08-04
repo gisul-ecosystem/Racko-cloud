@@ -222,6 +222,18 @@ const envSchema = z.object({
   SEAWEEDFS_ACCESS_KEY: z.string().min(1, 'SEAWEEDFS_ACCESS_KEY is required'),
   SEAWEEDFS_SECRET_KEY: z.string().min(1, 'SEAWEEDFS_SECRET_KEY is required'),
   SEAWEEDFS_BUCKET:     z.string().min(1, 'SEAWEEDFS_BUCKET is required').default('racko-vm-activity'),
+
+  // Agent auto-update
+  // AGENT_VERSION is the current published version (e.g. "1.4.2").
+  // Agents whose heartbeat reports a lower version will be instructed to update.
+  // Set to empty string to disable auto-update entirely.
+  AGENT_VERSION: z.string().default(''),
+  // SHA256 hex checksum of the current Windows agent binary.
+  // Computed after each build: sha256sum agent/dist/racko-agent.exe
+  // If empty, agents will skip checksum verification (not recommended for prod).
+  AGENT_CHECKSUM_WINDOWS: z.string().default(''),
+  AGENT_CHECKSUM_LINUX:   z.string().default(''),
+  AGENT_CHECKSUM_DARWIN:  z.string().default(''),
 });
 
 const parsed = envSchema.safeParse(process.env);
