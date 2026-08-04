@@ -171,13 +171,13 @@ jobs:
             output: racko-agent
             goos: linux
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai'
+            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai -X github.com/racko-ai/agent/config.Version=${{ github.sha }}'
           - os: windows-latest
             platform: windows
             output: racko-agent.exe
             goos: windows
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai -H windowsgui'
+            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai -X github.com/racko-ai/agent/config.Version=${{ github.sha }} -H windowsgui'
             ldflags_url: 'https://api-qa.racko.ai'
 
     steps:
@@ -195,6 +195,23 @@ jobs:
         run: |
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
           go build -ldflags "${{ matrix.ldflags }}" -o dist/${{ matrix.output }} .
+
+      - name: Compute checksum (Linux)
+        if: matrix.platform == 'linux'
+        working-directory: agent
+        shell: bash
+        run: |
+          sha256sum dist/racko-agent | awk '{print "AGENT_CHECKSUM_LINUX=" $1}' >> $GITHUB_STEP_SUMMARY
+          echo "Linux binary SHA256: $(sha256sum dist/racko-agent | awk '{print $1}')"
+
+      - name: Compute checksum (Windows)
+        if: matrix.platform == 'windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/racko-agent.exe -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Windows binary SHA256: $hash"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "AGENT_CHECKSUM_WINDOWS=$hash"
 
       - name: Build Windows installer (Windows only)
         if: matrix.platform == 'windows'

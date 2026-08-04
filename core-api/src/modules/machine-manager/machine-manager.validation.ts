@@ -110,6 +110,7 @@ export const agentHeartbeatSchema = z.object({
   body: z.object({
     agentId: z.string({ required_error: 'agentId is required' }).min(1),
     status: z.string().min(1).max(32),
+    version: z.string().optional(),
     specs: z.object({
       hostname:  z.string().optional(),
       osVersion: z.string().optional(),

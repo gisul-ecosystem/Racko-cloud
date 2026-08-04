@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/updater"
 )
 
 type MachineSpecs struct {
@@ -24,7 +25,20 @@ type MachineSpecs struct {
 type heartbeatRequest struct {
 	AgentID string       `json:"agentId"`
 	Status  string       `json:"status"`
+	Version string       `json:"version"`
 	Specs   MachineSpecs `json:"specs"`
+}
+
+// heartbeatResponse is the parsed server response to a heartbeat.
+// The server may include update info when a newer agent version is available.
+type heartbeatResponse struct {
+	// UpdateAvailable is set to true when the server has a newer agent version.
+	UpdateAvailable bool   `json:"updateAvailable"`
+	// LatestVersion is the version string the agent should update to.
+	LatestVersion   string `json:"latestVersion"`
+	// Checksum is the expected SHA256 hex string of the new binary.
+	// Empty string means the server did not provide one — checksum is skipped.
+	Checksum        string `json:"checksum"`
 }
 
 // Start sends a heartbeat to the platform every 30 seconds including machine specs.
@@ -36,7 +50,7 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}, cancel func
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("[heartbeat] Started — sending every %s", interval)
+	log.Printf("[heartbeat] Started — sending every %s (version=%s)", interval, config.Version)
 
 	for {
 		select {
@@ -44,14 +58,14 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}, cancel func
 			log.Println("[heartbeat] Stopping.")
 			return
 		case <-ticker.C:
-			if err := sendHeartbeat(client, cfg.PlatformURL, agentID, cancel); err != nil {
+			if err := sendHeartbeat(client, cfg, agentID, cancel); err != nil {
 				log.Printf("[heartbeat] Failed: %v", err)
 			}
 		}
 	}
 }
 
-func sendHeartbeat(client *http.Client, platformURL, agentID string, cancel func()) error {
+func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, cancel func()) error {
 	specs := collectSpecs()
 	log.Printf("[heartbeat] Specs collected — hostname=%s osVersion=%s cpuCores=%d ramGb=%.1f diskGb=%.1f",
 		specs.Hostname, specs.OSVersion, specs.CPUCores, specs.RAMGB, specs.DiskGB)
@@ -59,6 +73,7 @@ func sendHeartbeat(client *http.Client, platformURL, agentID string, cancel func
 	payload := heartbeatRequest{
 		AgentID: agentID,
 		Status:  "online",
+		Version: config.Version,
 		Specs:   specs,
 	}
 	body, err := json.Marshal(payload)
@@ -68,7 +83,7 @@ func sendHeartbeat(client *http.Client, platformURL, agentID string, cancel func
 
 	log.Printf("[heartbeat] Sending payload: %s", string(body))
 
-	resp, err := client.Post(platformURL+"/api/v1/agent/heartbeat", "application/json", bytes.NewReader(body))
+	resp, err := client.Post(cfg.PlatformURL+"/api/v1/agent/heartbeat", "application/json", bytes.NewReader(body))
 	if err != nil {
 		return fmt.Errorf("http post: %w", err)
 	}
@@ -85,6 +100,20 @@ func sendHeartbeat(client *http.Client, platformURL, agentID string, cancel func
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+	}
+
+	// Parse response to check for update availability
+	var hbResp struct {
+		Data heartbeatResponse `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&hbResp); err == nil {
+		if hbResp.Data.UpdateAvailable {
+			log.Printf("[heartbeat] Update available — current=%s latest=%s — triggering self-update",
+				config.Version, hbResp.Data.LatestVersion)
+			// Run update in a goroutine so heartbeat returns cleanly.
+			// The updater will cancel goroutines and exit when done.
+			go updater.Update(cfg, hbResp.Data.Checksum, cancel)
+		}
 	}
 
 	log.Printf("[heartbeat] %s — ok", time.Now().Format(time.RFC3339))
