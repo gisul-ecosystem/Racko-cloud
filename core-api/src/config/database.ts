@@ -1,4 +1,5 @@
 import dns from 'node:dns';
+import fs from 'node:fs';
 import mongoose from 'mongoose';
 import { config } from './index';
 import { logger } from '../utils/logger';
@@ -17,6 +18,17 @@ const MONGODB_OPTIONS: mongoose.ConnectOptions = {
   connectTimeoutMS: 10000,
   heartbeatFrequencyMS: 10000,
 };
+
+if (config.MONGODB_TLS_CA_FILE) {
+  if (!fs.existsSync(config.MONGODB_TLS_CA_FILE)) {
+    logger.error('MONGODB_TLS_CA_FILE not found', { path: config.MONGODB_TLS_CA_FILE });
+    process.exit(1);
+  }
+  MONGODB_OPTIONS.tls = true;
+  MONGODB_OPTIONS.tlsCAFile = config.MONGODB_TLS_CA_FILE;
+  // Prefer validating with the provided CA (do not use tlsAllowInvalidCertificates).
+  logger.info('MongoDB TLS enabled with custom CA', { caFile: config.MONGODB_TLS_CA_FILE });
+}
 
 export async function connectDatabase(): Promise<void> {
   try {

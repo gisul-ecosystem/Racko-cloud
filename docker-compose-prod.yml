@@ -25,6 +25,8 @@ services:
     volumes:
       - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
+      # On-prem Mongo CA (optional). Set MONGODB_TLS_CA_FILE=/certs/mongo-ca.crt in core-api/.env
+      - /opt/racko/certs:/certs:ro
     # Internal only — reachable via docker network / localhost for ops
     ports:
       - "127.0.0.1:${CORE_API_PORT:-8001}:8001"
