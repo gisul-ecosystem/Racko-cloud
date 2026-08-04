@@ -20,7 +20,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"time"
@@ -29,8 +28,16 @@ import (
 )
 
 // Update downloads the new binary, verifies its checksum, replaces the current
-// binary, and restarts the service. Runs in a goroutine — agent exits at the end
-// so the service manager brings up the new version.
+// binary, and exits. The Windows Service Control Manager automatically restarts
+// the service with the new binary.
+//
+// Why no sc.exe stop/start:
+//   This code runs INSIDE the Windows service. Calling "sc stop RackoAgent"
+//   from within the service itself causes a deadlock — the SCM waits for the
+//   process to exit before completing the stop, but the process is waiting for
+//   sc.exe to return. Instead, we replace the binary on disk (Windows allows
+//   replacing a running exe file), then call os.Exit(0). The SCM detects the
+//   unexpected exit and restarts the service — which now loads the new binary.
 //
 // platformURL  — base URL to download from (GET /api/v1/agent/binary/<os>)
 // expectedSHA  — hex-encoded SHA256 that the server provided; empty = skip check
@@ -64,9 +71,12 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 		log.Printf("[updater] Download failed: %v — aborting", err)
 		return
 	}
+	// Clean up temp file on any error path
+	downloaded := true
 	defer func() {
-		// Always clean up temp file regardless of outcome
-		_ = os.Remove(tmpPath)
+		if downloaded {
+			_ = os.Remove(tmpPath)
+		}
 	}()
 
 	// ── Step 3: verify checksum ───────────────────────────────────────────────
@@ -86,50 +96,43 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 	}
 
 	// ── Step 4: stop all goroutines ───────────────────────────────────────────
+	// Cancel heartbeat, watcher, poller etc. so they don't interfere.
 	log.Printf("[updater] Stopping agent goroutines before binary replacement")
 	if cancel != nil {
 		cancel()
 	}
-	time.Sleep(1 * time.Second) // let goroutines wind down
+	time.Sleep(1 * time.Second) // let goroutines observe cancel and wind down
 
-	// ── Step 5: stop the service ──────────────────────────────────────────────
-	log.Printf("[updater] Stopping RackoAgent service")
-	stopCmd := exec.Command("sc.exe", "stop", "RackoAgent")
-	if out, err := stopCmd.CombinedOutput(); err != nil {
-		log.Printf("[updater] sc stop returned: %v — %s (continuing)", err, string(out))
-	}
-	time.Sleep(2 * time.Second) // wait for service to stop
-
-	// ── Step 6: replace binary ────────────────────────────────────────────────
-	// Back up current binary first so we can roll back on failure.
+	// ── Step 5: replace binary on disk ───────────────────────────────────────
+	// Windows allows renaming/replacing a running exe file — the OS keeps the
+	// old inode open for the running process while the new file takes its place.
+	// Back up current binary first so we can restore if rename fails.
 	_ = os.Remove(bakPath)
 	if err := os.Rename(exe, bakPath); err != nil {
-		log.Printf("[updater] Could not back up current binary: %v — attempting sc start to recover", err)
-		_ = exec.Command("sc.exe", "start", "RackoAgent").Run()
+		log.Printf("[updater] Could not back up current binary: %v — aborting (service unchanged)", err)
 		return
 	}
 
 	if err := os.Rename(tmpPath, exe); err != nil {
 		log.Printf("[updater] Could not replace binary: %v — rolling back", err)
-		// Roll back: restore the backup
 		if rbErr := os.Rename(bakPath, exe); rbErr != nil {
-			log.Printf("[updater] Rollback also failed: %v — service may need manual restart", rbErr)
+			log.Printf("[updater] Rollback also failed: %v — service may need manual repair", rbErr)
 		}
-		_ = exec.Command("sc.exe", "start", "RackoAgent").Run()
 		return
 	}
+	downloaded = false // tmpPath was moved to exe, no need to remove it
 
 	// Remove backup on success
 	_ = os.Remove(bakPath)
 	log.Printf("[updater] Binary replaced successfully")
 
-	// ── Step 7: start service ─────────────────────────────────────────────────
-	log.Printf("[updater] Starting RackoAgent service with new binary")
-	if out, err := exec.Command("sc.exe", "start", "RackoAgent").CombinedOutput(); err != nil {
-		log.Printf("[updater] sc start returned: %v — %s", err, string(out))
-	}
-
-	log.Printf("[updater] Update complete — new agent process started, exiting old process")
+	// ── Step 6: exit — SCM restarts the service with the new binary ──────────
+	// The Windows Service Control Manager is configured to restart the service
+	// on unexpected exit (SC_ACTION_RESTART). When we exit here the SCM detects
+	// the exit, waits the configured restart delay, then starts a fresh process
+	// from the same binary path — which now contains the new version.
+	// No sc.exe stop/start needed — and avoids the self-stop deadlock.
+	log.Printf("[updater] Update complete — exiting so SCM restarts with new binary")
 	os.Exit(0)
 }
 
