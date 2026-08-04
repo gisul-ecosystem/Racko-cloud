@@ -298,3 +298,4 @@ jobs:
           echo "Azure service:  http://localhost:3002"
           echo "AWS service:    http://localhost:3003"
           echo "Reseller svc:   http://localhost:3005"
+          echo "Training svc:  http://localhost:3006"
