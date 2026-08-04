@@ -454,18 +454,20 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 		}
 	}
 
-	// ── Two-layer filter (allowlist-first) ──────────────────────────────────
+	// ── Two-layer filter (baseline-diff first, denylist second) ──────────────
 	//
-	// Layer 1 — Allowlist (primary gate, O(n) prefix check):
-	//   Discard immediately if the path is outside the watched roots.
-	//   This single check eliminates ALL of C:\Program Files, C:\Windows,
-	//   C:\ProgramData, and every other non-user path — including every file
-	//   written during a software install — before any further processing.
+	// Layer 1 — Baseline-diff scope check (primary gate):
+	//   Uses the loaded baseline to distinguish pre-existing system/software
+	//   folders from folders the user created after install.
+	//   - C:\Users\* → always in scope (fast path, no baseline lookup needed)
+	//   - Top-level folder NOT in baseline → user created → in scope
+	//   - Top-level folder IN baseline → pre-existing system/software → out of scope
+	//   Works for every drive (C:\, D:\, E:\...) with zero hardcoding.
 	//
 	// Layer 2 — Denylist within scope (secondary filter):
-	//   Only runs when the path is inside a watched root. Removes OS-managed
-	//   noise inside C:\Users (AppData, caches, lock files, partial downloads).
-	if !isInWatchScope(fullPath) {
+	//   Only runs on paths that passed Layer 1. Removes OS-managed noise
+	//   inside tracked roots (AppData, caches, lock files, partial downloads).
+	if !isInWatchScopeWithBaseline(fullPath, w.baseline) {
 		return
 	}
 	if shouldExcludeWithinScope(fullPath) {
