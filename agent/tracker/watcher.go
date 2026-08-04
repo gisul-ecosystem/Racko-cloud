@@ -166,6 +166,8 @@ func (w *Watcher) flush() {
 	w.renamed = make(map[string]string)
 	w.mu.Unlock()
 
+	log.Printf("[tracker/watcher] flush: processing %d pending events (%d renames)", len(snapshot), len(renames))
+
 	for path, op := range snapshot {
 		switch op {
 		case usnOpDelete:
