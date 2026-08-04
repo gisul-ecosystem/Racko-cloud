@@ -10,6 +10,7 @@ import type {
 
 export interface StepCompletionOverrides {
   services?: boolean;
+  fabric?: boolean;
   credentials?: boolean;
 }
 
@@ -117,6 +118,26 @@ export function isRolesStepComplete(snapshot: ProvisionSnapshot): boolean {
   return (snapshot.roles?.count ?? snapshot.roles?.roles?.length ?? 0) > 0;
 }
 
+export function isFabricStepComplete(
+  snapshot: ProvisionSnapshot,
+  overrides: StepCompletionOverrides
+): boolean {
+  if (!isRolesStepComplete(snapshot)) {
+    return false;
+  }
+
+  if (overrides.fabric === true) {
+    return true;
+  }
+
+  // Non-lab Azure requests skip Fabric.
+  if (!snapshot.fabric || snapshot.fabric.required !== true) {
+    return true;
+  }
+
+  return snapshot.fabric.complete === true;
+}
+
 export function isCredentialStepComplete(
   snapshot: ProvisionSnapshot,
   overrides: StepCompletionOverrides
@@ -133,6 +154,7 @@ export function getStepCompletionMap(
     services: isServicesStepComplete(snapshot, overrides),
     users: isUsersStepComplete(snapshot),
     roles: isRolesStepComplete(snapshot),
+    fabric: isFabricStepComplete(snapshot, overrides),
     credentials: isCredentialStepComplete(snapshot, overrides),
   };
 }
@@ -172,10 +194,13 @@ export function deriveStepStates(
   stepErrors: Partial<Record<ProvisionStepKey, string>> = {}
 ): ProvisionStepState[] {
   const completion = getStepCompletionMap(snapshot, overrides);
+  const visibleSteps = PROVISION_STEPS.filter(
+    (step) => step.key !== 'fabric' || snapshot.fabric?.required === true
+  );
 
   let activeAssigned = false;
 
-  return PROVISION_STEPS.map((step) => {
+  return visibleSteps.map((step) => {
     const isComplete = completion[step.key];
     const error = stepErrors[step.key] ?? null;
 
@@ -195,12 +220,17 @@ export function deriveStepStates(
         || snapshot.request?.microsoftLicenseSkuId
     );
 
+    const fabricLabel =
+      step.key === 'fabric' && snapshot.fabric?.certTag
+        ? `Fabric ${snapshot.fabric.certTag} Workspace & Permissions`
+        : step.label;
+
     return {
       key: step.key,
       label:
         step.key === 'users' && hasLicense
           ? 'Creating Users & Assigning License'
-          : step.label,
+          : fabricLabel,
       status,
       error,
     };

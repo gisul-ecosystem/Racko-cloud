@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../lib/apiClient';
 import {
   fetchProvisionSnapshot,
+  provisionFabric,
   provisionResourceGroup,
   provisionRoles,
   provisionServices,
@@ -58,6 +59,7 @@ const STEP_ACTIONS: Record<ProvisionStepKey, (requestId: number) => Promise<unkn
   services: provisionServices,
   users: provisionUsers,
   roles: provisionRoles,
+  fabric: provisionFabric,
   credentials: sendProvisionCredentials,
 };
 
@@ -67,6 +69,7 @@ const EMPTY_SNAPSHOT: ProvisionSnapshot = {
   services: { resources: [], count: 0 },
   users: { users: [], count: 0 },
   roles: { roles: [], count: 0 },
+  fabric: { required: false, complete: true, status: 'skipped' },
   credentials: null,
   fetchedAt: new Date().toISOString(),
 };
@@ -187,7 +190,11 @@ export function useProvisionStatus({
           'complete' in stepResult &&
           stepResult.complete === false;
 
-        if (nextStep === 'credentials' || (nextStep === 'services' && !partialProgress)) {
+        if (
+          nextStep === 'credentials' ||
+          nextStep === 'fabric' ||
+          (nextStep === 'services' && !partialProgress)
+        ) {
           const nextOverrides = { ...overridesRef.current, [nextStep]: true };
           overridesRef.current = nextOverrides;
           setOverrides(nextOverrides);

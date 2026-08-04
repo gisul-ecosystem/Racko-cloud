@@ -1,17 +1,19 @@
 # GitHub secrets (Settings → Secrets and variables → Actions):
 #   DOCKERHUB_USERNAME   — Docker Hub username
 #   DOCKERHUB_TOKEN      — Docker Hub access token (read/write)
-#   VM_HOST_PROD         — VM public IP or hostname
-#   VM_USER_PROD         — SSH user (e.g. ubuntu)
-#   VM_SSH_KEY_PROD      — Private SSH key for the VM user
+#
+# Deploy runs on the self-hosted runner on the production VM:
+#   name:   racko-prod
+#   labels: self-hosted, linux, racko-prod
+#   work:   _work
 #
 # Service env files live on the VM under /opt/racko/<service>/.env
 # (e.g. cloud-automation/.env, cloud_automation_reseller/.env) — not in GitHub secrets.
 # client-portal bakes NEXT_PUBLIC_GATEWAY_URL to the public API (e.g. https://api.racko.ai).
-# Nginx must proxy /api/ → :8000 on racko.ai and each tenant domain
-# (proxy_read_timeout >= 300s).
+# Nginx must proxy /api/ → 127.0.0.1:8000 on racko.ai and each tenant domain
+# (proxy_read_timeout >= 300s). Only 80/443 should be public; app ports bind to localhost.
 
-name: Build & Deploy Production via SSH
+name: Build & Deploy Production
 
 on:
   push:
@@ -22,6 +24,7 @@ env:
   DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
   DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
   IMAGE_TAG: production
+  DEPLOY_PATH: /opt/racko
 
 jobs:
   build-core-api:
@@ -103,6 +106,22 @@ jobs:
 
       - name: Push cloud-automation-reseller image
         run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:production
+
+  build-cloud-automation-training:
+    name: Build & Push cloud-automation-training
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build cloud-automation-training image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:production -f cloud_automation_training/Dockerfile cloud_automation_training/
+
+      - name: Push cloud-automation-training image
+        run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:production
 
   build-client-portal:
     name: Build & Push client-portal
@@ -195,113 +214,89 @@ jobs:
           retention-days: 1
 
   deploy-agent:
-    name: Deploy Agent Binaries to VM
-    runs-on: ubuntu-latest
+    name: Deploy Agent Binaries
+    runs-on: [self-hosted, linux, racko-prod]
     needs: build-agent
-    env:
-      VM_HOST: ${{ secrets.VM_HOST_PROD }}
-      VM_USER: ${{ secrets.VM_USER_PROD }}
-      VM_SSH_KEY: ${{ secrets.VM_SSH_KEY_PROD }}
-      DEPLOY_PATH: /opt/racko
     steps:
       - name: Download all agent artifacts
         uses: actions/download-artifact@v4
         with:
           path: agent-artifacts
 
-      - name: Setup SSH key
+      - name: Install agent binaries
         run: |
-          mkdir -p ~/.ssh
-          echo "${VM_SSH_KEY}" > ~/.ssh/vm_key
-          chmod 600 ~/.ssh/vm_key
-          ssh-keyscan -H "${VM_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
-
-      - name: Upload agent binaries to VM
-        run: |
-          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" \
-            "mkdir -p ${DEPLOY_PATH}/agent/dist"
-          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
-            agent-artifacts/agent-linux/racko-agent \
-            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent"
-          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
-            agent-artifacts/agent-windows/racko-agent.exe \
-            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent.exe"
-          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
-            agent-artifacts/agent-windows/racko-agent-setup.exe \
-            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
-          echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
+          set -e
+          sudo mkdir -p "${DEPLOY_PATH}/agent/dist"
+          sudo cp agent-artifacts/agent-linux/racko-agent \
+            "${DEPLOY_PATH}/agent/dist/racko-agent"
+          sudo chmod +x "${DEPLOY_PATH}/agent/dist/racko-agent"
+          sudo cp agent-artifacts/agent-windows/racko-agent.exe \
+            "${DEPLOY_PATH}/agent/dist/racko-agent.exe"
+          sudo cp agent-artifacts/agent-windows/racko-agent-setup.exe \
+            "${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
+          echo "Agent binaries installed to ${DEPLOY_PATH}/agent/dist/"
 
   deploy:
-    name: Deploy to Production VM
-    runs-on: ubuntu-latest
+    name: Deploy to Production
+    runs-on: [self-hosted, linux, racko-prod]
     needs:
       - build-core-api
       - build-cloud-gateway
       - build-cloud-automation
       - build-cloud-automation-aws
       - build-cloud-automation-reseller
+      - build-cloud-automation-training
       - build-client-portal
       - build-create-vm-catalog-agent
       - deploy-agent
-
-    env:
-      VM_HOST: ${{ secrets.VM_HOST_PROD }}
-      VM_USER: ${{ secrets.VM_USER_PROD }}
-      VM_SSH_KEY: ${{ secrets.VM_SSH_KEY_PROD }}
-      DEPLOY_PATH: /opt/racko
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup SSH key
+      - name: Install compose file
         run: |
-          mkdir -p ~/.ssh
-          echo "${VM_SSH_KEY}" > ~/.ssh/vm_key
-          chmod 600 ~/.ssh/vm_key
-          ssh-keyscan -H "${VM_HOST}" >> ~/.ssh/known_hosts 2>/dev/null
+          set -e
+          sudo mkdir -p "${DEPLOY_PATH}"
+          sudo cp docker-compose-prod.yml "${DEPLOY_PATH}/docker-compose.yml"
+          echo "docker-compose-prod.yml installed to ${DEPLOY_PATH}/docker-compose.yml"
 
-      - name: Upload files to VM
+      - name: Deploy (pull new images + restart)
         run: |
-          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" "mkdir -p ${DEPLOY_PATH}"
-          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no docker-compose-prod.yml "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/docker-compose.yml"
-          echo "docker-compose-prod.yml uploaded to ${DEPLOY_PATH}"
-
-      - name: Deploy on VM (pull new images + restart)
-        run: |
-          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" \
-            "set -e; \
-             echo 'Cleaning up Docker system...'; \
-             sudo docker system prune -a --volumes -f; \
-             sudo docker container prune -f; \
-             sudo docker image prune -a -f; \
-             sudo docker volume prune -f; \
-             echo 'Cleaning Docker logs...'; \
-             sudo find /var/lib/docker/containers -name '*.log' -delete; \
-             echo 'Cleaning journal logs...'; \
-             sudo journalctl --vacuum-size=100M; \
-             echo 'Cleaning apt cache...'; \
-             sudo apt clean; \
-             sudo apt autoclean; \
-             echo 'Disk usage after cleanup:'; \
-             df -h; \
-             cd ${DEPLOY_PATH}; \
-             export DOCKERHUB_USERNAME='${DOCKERHUB_USERNAME}'; \
-             export IMAGE_TAG='production'; \
-             echo 'Docker login...'; \
-             echo '${DOCKERHUB_TOKEN}' | sudo docker login -u '${DOCKERHUB_USERNAME}' --password-stdin; \
-             echo 'Deploying...'; \
-             sudo docker compose -f docker-compose.yml down --remove-orphans; \
-             sudo docker compose -f docker-compose.yml pull; \
-             sudo docker compose -f docker-compose.yml up -d; \
-             sudo docker compose -f docker-compose.yml ps"
+          set -e
+          echo 'Cleaning up Docker system...'
+          sudo docker system prune -a --volumes -f
+          sudo docker container prune -f
+          sudo docker image prune -a -f
+          sudo docker volume prune -f
+          echo 'Cleaning Docker logs...'
+          sudo find /var/lib/docker/containers -name '*.log' -delete || true
+          echo 'Cleaning journal logs...'
+          sudo journalctl --vacuum-size=100M || true
+          echo 'Cleaning apt cache...'
+          sudo apt clean || true
+          sudo apt autoclean || true
+          echo 'Disk usage after cleanup:'
+          df -h
+          export DOCKERHUB_USERNAME="${DOCKERHUB_USERNAME}"
+          export IMAGE_TAG=production
+          echo 'Docker login...'
+          echo "${DOCKERHUB_TOKEN}" | sudo docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
+          echo 'Deploying...'
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" down --remove-orphans
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" pull
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" up -d
+          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" ps
 
       - name: Summary
         run: |
           echo "Build & Deploy Production Complete!"
-          echo "Client portal:  http://${VM_HOST}:3000"
-          echo "Cloud gateway:  http://${VM_HOST}:8000"
-          echo "Core API:       http://${VM_HOST}:8001"
-          echo "Azure service:  http://${VM_HOST}:3002"
-          echo "AWS service:    http://${VM_HOST}:3003"
-          echo "Reseller svc:   http://${VM_HOST}:3005"
+          echo "Deploy path: ${DEPLOY_PATH}"
+          echo "Public entry: https via nginx on 80/443 only"
+          echo "Client portal (local):  http://127.0.0.1:3000"
+          echo "Cloud gateway (local):  http://127.0.0.1:8000"
+          echo "Core API (local):       http://127.0.0.1:8001"
+          echo "Azure service (local):  http://127.0.0.1:3002"
+          echo "AWS service (local):    http://127.0.0.1:3003"
+          echo "Reseller svc (local):   http://127.0.0.1:3005"
+          echo "Training svc (local):  http://127.0.0.1:3006"

@@ -1,3 +1,11 @@
+# Production stack — app ports are bound to 127.0.0.1 only (not public).
+# Public entry must be host nginx/CDN on 80/443 only, e.g.:
+#   racko.ai / tenant domains  → 127.0.0.1:3000  (client-portal)
+#   api.racko.ai /api/         → 127.0.0.1:8000  (cloud-gateway)
+# Do not open 3000/8000/8001/3002/3003/3005/3006/3789 on the firewall.
+#
+# Service env files live under /opt/racko/<service>/.env
+
 version: '3.9'
 
 services:
@@ -19,8 +27,9 @@ services:
       - ./agent/dist:/agent/dist:ro
       # On-prem Mongo CA (optional). Set MONGODB_TLS_CA_FILE=/certs/mongo-ca.crt in core-api/.env
       - /opt/racko/certs:/certs:ro
+    # Internal only — reachable via docker network / localhost for ops
     ports:
-      - "${CORE_API_PORT:-8001}:8001"
+      - "127.0.0.1:${CORE_API_PORT:-8001}:8001"
     depends_on:
       - create-vm-catalog-agent
       - cloud-automation-reseller
@@ -51,7 +60,7 @@ services:
       SIGNIN_STALE_SESSION_MINUTES: ${SIGNIN_STALE_SESSION_MINUTES:-90}
       SIGNIN_MONITOR_LOOKBACK_MINUTES: ${SIGNIN_MONITOR_LOOKBACK_MINUTES:-180}
     ports:
-      - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
+      - "127.0.0.1:${CLOUD_AUTOMATION_PORT:-3002}:3002"
     networks:
       - racko-network
     restart: unless-stopped
@@ -63,7 +72,7 @@ services:
     environment:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
     ports:
-      - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
+      - "127.0.0.1:${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
     networks:
       - racko-network
     restart: unless-stopped
@@ -76,7 +85,20 @@ services:
       PORT: ${CLOUD_AUTOMATION_RESELLER_PORT:-3005}
       NODE_ENV: production
     ports:
-      - "${CLOUD_AUTOMATION_RESELLER_PORT:-3005}:3005"
+      - "127.0.0.1:${CLOUD_AUTOMATION_RESELLER_PORT:-3005}:3005"
+    networks:
+      - racko-network
+    restart: unless-stopped
+
+  cloud-automation-training:
+    image: gisuldocker/racko-cloud-automation-training:production
+    env_file:
+      - cloud_automation_training/.env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_TRAINING_PORT:-3006}
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:${CLOUD_AUTOMATION_TRAINING_PORT:-3006}:3006"
     networks:
       - racko-network
     restart: unless-stopped
@@ -88,12 +110,14 @@ services:
     environment:
       PORT: ${GATEWAY_PORT:-8000}
       JWT_ACCESS_EXPIRES_IN: ${GATEWAY_JWT_ACCESS_EXPIRES_IN:-15m}
+      CLOUD_AUTOMATION_TRAINING_URL: http://cloud-automation-training:3006
     depends_on:
       - core-api
       - cloud-automation
       - cloud-automation-aws
+      - cloud-automation-training
     ports:
-      - "${GATEWAY_PORT:-8000}:8000"
+      - "127.0.0.1:${GATEWAY_PORT:-8000}:8000"
     networks:
       - racko-network
     restart: unless-stopped
@@ -111,7 +135,7 @@ services:
       - cloud-gateway
       - create-vm-catalog-agent
     ports:
-      - "${CLIENT_PORTAL_PORT:-3000}:3000"
+      - "127.0.0.1:${CLIENT_PORTAL_PORT:-3000}:3000"
     networks:
       - racko-network
     restart: unless-stopped
@@ -126,7 +150,7 @@ services:
       HOSTNAME: 0.0.0.0
       SKIP_CATALOG_AGENT_WARMUP: ${SKIP_CATALOG_AGENT_WARMUP:-false}
     ports:
-      - "${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
+      - "127.0.0.1:${CREATE_VM_CATALOG_AGENT_PORT:-3789}:3789"
     volumes:
       - ./create-vm-catalog-agent/state:/app/state:rw
     networks:
