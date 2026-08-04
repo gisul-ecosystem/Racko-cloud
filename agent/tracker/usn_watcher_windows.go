@@ -421,6 +421,12 @@ func (w *Watcher) watchVolumeUSN(drive string, done <-chan struct{}) {
 
 // processUSNRecord handles a single USN record — resolves the path and feeds
 // it into the watcher's pending map.
+//
+// Windows "delete" via Explorer = rename to $Recycle.Bin, not a true FileDelete.
+// We handle this by:
+//   1. RenameOldName: always resolve via parentRef+filename (file hasn't moved yet
+//      at journal write time, but may have by poll time — parent dir is stable).
+//   2. RenameNewName into $Recycle.Bin: treat as a delete of the original path.
 func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle windows.Handle, drive string) {
 	// Extract the filename from the record (UTF-16, follows the struct).
 	nameOffset := rec.FileNameOffset
@@ -438,33 +444,89 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 		return
 	}
 
-	log.Printf("[tracker/usn] Record: file=%q reason=0x%08X fileRef=%d drive=%s",
-		fileName, rec.Reason, rec.FileReferenceNumber, drive)
+	isRenameOld := rec.Reason&usnReasonRenameOldName != 0
+	isRenameNew := rec.Reason&usnReasonRenameNewName != 0
+	isDelete    := rec.Reason&usnReasonFileDelete != 0
+	isDir       := rec.FileAttributes&fileAttributeDirectory != 0
 
-	// Try to resolve the full path from the file reference number.
-	fullPath, err := fileRefToPath(volHandle, rec.FileReferenceNumber)
-	if err != nil {
-		log.Printf("[tracker/usn] fileRefToPath FAILED for file=%q fileRef=%d: %v", fileName, rec.FileReferenceNumber, err)
-		// For deleted/renamed-away files, fall back to parent ref + filename.
-		if rec.Reason&(usnReasonFileDelete|usnReasonRenameOldName) != 0 {
-			parentPath, perr := fileRefToPath(volHandle, rec.ParentFileReferenceNumber)
-			if perr == nil {
-				fullPath = filepath.Join(parentPath, fileName)
-				log.Printf("[tracker/usn] Fallback path resolved: %s", fullPath)
-			} else {
-				log.Printf("[tracker/usn] Fallback parentRef also FAILED for file=%q parentRef=%d: %v — dropping event",
-					fileName, rec.ParentFileReferenceNumber, perr)
-				return // can't determine path — skip
-			}
-		} else {
-			log.Printf("[tracker/usn] Non-delete event with unresolvable path for file=%q — dropping", fileName)
+	// ── Path resolution ───────────────────────────────────────────────────────
+	//
+	// For RenameOldName: ALWAYS use parentRef+filename.
+	// fileRefToPath on the file ref resolves the *current* location which may
+	// already be $Recycle.Bin by the time the 2s poll runs. The parent
+	// directory has not moved, so parentRef is stable and gives us the
+	// original pre-move path reliably.
+	//
+	// For all other events: try fileRefToPath first, fall back to parentRef+filename.
+	var fullPath string
+
+	if isRenameOld {
+		parentPath, perr := fileRefToPath(volHandle, rec.ParentFileReferenceNumber)
+		if perr != nil {
+			log.Printf("[tracker/usn] RenameOld: parentRef resolve FAILED file=%q: %v — dropping", fileName, perr)
 			return
 		}
+		fullPath = filepath.Join(parentPath, fileName)
+		log.Printf("[tracker/usn] RenameOld via parentRef: %s", fullPath)
 	} else {
-		log.Printf("[tracker/usn] Path resolved: %s", fullPath)
+		var err error
+		fullPath, err = fileRefToPath(volHandle, rec.FileReferenceNumber)
+		if err != nil {
+			// For delete events fall back to parentRef+filename
+			if isDelete || isRenameNew {
+				parentPath, perr := fileRefToPath(volHandle, rec.ParentFileReferenceNumber)
+				if perr != nil {
+					log.Printf("[tracker/usn] fileRefToPath+parentRef both FAILED file=%q: %v — dropping", fileName, perr)
+					return
+				}
+				fullPath = filepath.Join(parentPath, fileName)
+				log.Printf("[tracker/usn] Fallback parentRef path: %s", fullPath)
+			} else {
+				log.Printf("[tracker/usn] fileRefToPath FAILED file=%q reason=0x%08X: %v — dropping", fileName, rec.Reason, err)
+				return
+			}
+		}
 	}
 
-	// ── Two-layer filter (baseline-diff first, denylist second) ──────────────
+	// ── Recycle Bin detection ─────────────────────────────────────────────────
+	// When a RenameNewName resolves into $Recycle.Bin, the user deleted the file
+	// via Explorer. Convert this to a delete of the original path (stored in
+	// usnRenameOld from the paired RenameOldName event).
+	isRecycleBin := strings.Contains(strings.ToLower(fullPath), `$recycle.bin`)
+
+	if isRenameNew && isRecycleBin {
+		w.mu.Lock()
+		originalPath, had := w.usnRenameOld[rec.FileReferenceNumber]
+		if had {
+			delete(w.usnRenameOld, rec.FileReferenceNumber)
+		}
+		w.mu.Unlock()
+
+		if !had || originalPath == "" {
+			log.Printf("[tracker/usn] RecycleBin move but no RenameOld stored for fileRef=%d — dropping", rec.FileReferenceNumber)
+			return
+		}
+
+		log.Printf("[tracker/usn] RecycleBin delete detected — treating as file_delete: %s", originalPath)
+
+		// Apply scope filter on the original path
+		if !isInWatchScopeWithBaseline(originalPath, w.baseline) || shouldExcludeWithinScope(originalPath) {
+			log.Printf("[tracker/usn] RecycleBin delete out of scope — dropping: %s", originalPath)
+			return
+		}
+
+		if !isDir {
+			w.mu.Lock()
+			if existing, ok := w.pending[originalPath]; !ok || existing != usnOpWrite {
+				w.pending[originalPath] = usnOpDelete
+				log.Printf("[tracker/usn] QUEUED delete (via RecycleBin): %s", originalPath)
+			}
+			w.mu.Unlock()
+		}
+		return
+	}
+
+	// ── Two-layer scope filter ────────────────────────────────────────────────
 	if !isInWatchScopeWithBaseline(fullPath, w.baseline) {
 		log.Printf("[tracker/usn] Out of scope — dropping: %s", fullPath)
 		return
@@ -474,42 +536,47 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 		return
 	}
 
-	// Skip directories — we only track file content
-	isDir := rec.FileAttributes&fileAttributeDirectory != 0
 	if isDir {
-		log.Printf("[tracker/usn] Directory — skipping: %s", fullPath)
-	} else {
-		log.Printf("[tracker/usn] QUEUING path=%s reason=0x%08X", fullPath, rec.Reason)
+		// Directories themselves are not tracked — but we do store RenameOld
+		// for directories so a folder moved to Recycle Bin is handled above.
+		if isRenameOld {
+			w.mu.Lock()
+			w.usnRenameOld[rec.FileReferenceNumber] = fullPath
+			w.mu.Unlock()
+			log.Printf("[tracker/usn] RenameOld stored (dir): %s", fullPath)
+		}
+		return
 	}
+
+	log.Printf("[tracker/usn] QUEUING path=%s reason=0x%08X", fullPath, rec.Reason)
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
 	switch {
 	case rec.Reason&(usnReasonFileCreate|usnReasonDataExtend|usnReasonDataOverwrite|usnReasonDataTruncation|usnReasonNamedDataExtend) != 0:
-		if !isDir {
-			w.pending[fullPath] = usnOpWrite
+		w.pending[fullPath] = usnOpWrite
+
+	case isDelete:
+		if existing, ok := w.pending[fullPath]; !ok || existing != usnOpWrite {
+			w.pending[fullPath] = usnOpDelete
 		}
 
-	case rec.Reason&usnReasonFileDelete != 0:
-		if !isDir {
-			if existing, ok := w.pending[fullPath]; !ok || existing != usnOpWrite {
-				w.pending[fullPath] = usnOpDelete
-			}
-		}
-
-	case rec.Reason&usnReasonRenameOldName != 0:
+	case isRenameOld:
+		// Store original path so RenameNew (or RecycleBin move) can reference it.
 		w.usnRenameOld[rec.FileReferenceNumber] = fullPath
 
-	case rec.Reason&usnReasonRenameNewName != 0:
-		if !isDir {
-			if oldPath, ok := w.usnRenameOld[rec.FileReferenceNumber]; ok {
-				w.renamed[fullPath] = oldPath
-				delete(w.usnRenameOld, rec.FileReferenceNumber)
-				w.pending[oldPath] = usnOpRename
-			} else {
-				w.pending[fullPath] = usnOpWrite
-			}
+	case isRenameNew:
+		// Normal rename within tracked scope (not Recycle Bin — handled above).
+		if oldPath, ok := w.usnRenameOld[rec.FileReferenceNumber]; ok {
+			w.renamed[fullPath] = oldPath
+			delete(w.usnRenameOld, rec.FileReferenceNumber)
+			w.pending[oldPath] = usnOpRename
+			log.Printf("[tracker/usn] QUEUED rename: %s → %s", oldPath, fullPath)
+		} else {
+			// No paired RenameOld seen — treat as a new write (file moved in from
+			// outside tracked scope).
+			w.pending[fullPath] = usnOpWrite
 		}
 	}
 }
