@@ -192,15 +192,16 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
           go build -ldflags "${{ matrix.ldflags }}" -o dist/${{ matrix.output }} .
 
-      - name: Compute checksum (Linux)
+      - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
         working-directory: agent
         shell: bash
         run: |
-          sha256sum dist/racko-agent | awk '{print "AGENT_CHECKSUM_LINUX=" $1}' >> $GITHUB_STEP_SUMMARY
-          echo "Linux binary SHA256: $(sha256sum dist/racko-agent | awk '{print $1}')"
+          CHECKSUM=$(sha256sum dist/racko-agent | awk '{print $1}')
+          echo "AGENT_CHECKSUM_LINUX=$CHECKSUM" >> $GITHUB_STEP_SUMMARY
+          echo "$CHECKSUM" > dist/checksum-linux.txt
 
-      - name: Compute checksum (Windows)
+      - name: Compute and save checksum (Windows)
         if: matrix.platform == 'windows'
         working-directory: agent
         shell: pwsh
@@ -208,6 +209,7 @@ jobs:
           $hash = (Get-FileHash dist/racko-agent.exe -Algorithm SHA256).Hash.ToLower()
           Write-Host "Windows binary SHA256: $hash"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "AGENT_CHECKSUM_WINDOWS=$hash"
+          Set-Content -Path dist/checksum-windows.txt -Value $hash
 
       - name: Build Windows installer (Windows only)
         if: matrix.platform == 'windows'
@@ -223,6 +225,7 @@ jobs:
           name: agent-${{ matrix.platform }}
           path: |
             agent/dist/${{ matrix.output }}
+            agent/dist/checksum-${{ matrix.platform }}.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
           retention-days: 1
 
@@ -252,20 +255,42 @@ jobs:
         run: |
           ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" \
             "mkdir -p ${DEPLOY_PATH}/agent/dist"
-          # Linux
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-linux/racko-agent \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent"
-          # Windows binary
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-windows/racko-agent.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent.exe"
-          # Windows installer
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
-          # macOS binary removed — not needed
           echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
+
+      - name: Update agent version and checksums in server .env
+        run: |
+          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt)
+          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt)
+          AGENT_VERSION="${{ github.sha }}"
+
+          echo "Updating core-api .env: AGENT_VERSION=$AGENT_VERSION"
+
+          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" "
+            ENV_FILE=${DEPLOY_PATH}/core-api/.env
+
+            update_env() {
+              KEY=\$1; VALUE=\$2
+              if grep -q \"^\${KEY}=\" \"\${ENV_FILE}\" 2>/dev/null; then
+                sed -i \"s|^\${KEY}=.*|\${KEY}=\${VALUE}|\" \"\${ENV_FILE}\"
+              else
+                echo \"\${KEY}=\${VALUE}\" >> \"\${ENV_FILE}\"
+              fi
+            }
+
+            update_env 'AGENT_VERSION'          '${AGENT_VERSION}'
+            update_env 'AGENT_CHECKSUM_WINDOWS' '${CHECKSUM_WINDOWS}'
+            update_env 'AGENT_CHECKSUM_LINUX'   '${CHECKSUM_LINUX}'
+            echo 'core-api/.env updated'
+          "
 
   deploy:
     name: Deploy to UAT VM
