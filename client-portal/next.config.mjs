@@ -11,6 +11,11 @@ const gatewayUrl = (
 // Applied to every route served by Next.js.
 // TLS 1.0/1.1 (F8) must be disabled in Cloudflare dashboard:
 //   SSL/TLS → Edge Certificates → Minimum TLS Version → TLS 1.2
+
+// 'unsafe-eval' is needed in dev mode only — webpack hot-reload (react-refresh)
+// uses eval() internally. Production builds do not use eval.
+const isDev = process.env.NODE_ENV === "development";
+
 const securityHeaders = [
   // F1 — HSTS: force HTTPS for 1 year, include subdomains, allow preload list
   {
@@ -18,13 +23,14 @@ const securityHeaders = [
     value: "max-age=31536000; includeSubDomains; preload",
   },
   // F2 — CSP: restrict resource loading to same origin; block framing
-  // Note: 'unsafe-inline' is included for styles because Next.js injects
-  // inline styles for critical CSS. Tighten with nonces in a future iteration.
+  // Note: 'unsafe-inline' is required for Next.js inline styles/scripts.
   {
     key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com",
+      isDev
+        ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://checkout.razorpay.com"
+        : "script-src 'self' 'unsafe-inline' https://checkout.razorpay.com",
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
