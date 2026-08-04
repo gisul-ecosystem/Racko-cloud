@@ -1,6 +1,6 @@
 'use client';
 
-import { RequestStatusView } from '../../../../../../cloud_automation/components/create-request/RequestStatusView';
+import { RequestStatusView } from '@/cloud_automation/components/create-request/RequestStatusView';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 
 interface PageProps {
