@@ -139,39 +139,87 @@ export async function appendActivity(
     }
   }
 
-  // File delete: remove the S3 object for the deleted file so storage doesn't
-  // accumulate with files the user has explicitly removed. Finds the most recent
-  // file_write activity for this path and deletes its storageRef from S3.
+  // File delete: remove S3 objects for the deleted path.
+  //
+  // Two cases handled:
+  //
+  // 1. Direct file delete — exact path match finds one file_write record →
+  //    delete its single S3 object.
+  //
+  // 2. Folder delete — Windows sends a delete event for the top-level folder
+  //    path (e.g. "Desktop\folder1"), not for each file inside it. An exact
+  //    match finds nothing. We then do a prefix query to find ALL file_write
+  //    records whose path starts with "Desktop\folder1\" and delete every
+  //    one of their S3 objects. This handles arbitrarily deep nesting.
   if (type === 'file_delete') {
     const deletePayload = payload as { path?: string };
     if (deletePayload.path) {
-      const prevActivity = await MachineActivityModel.findOne({
+      const deletePath = deletePayload.path;
+
+      // ── Case 1: exact match (direct file delete) ──────────────────────────
+      const exactMatch = await MachineActivityModel.findOne({
         machineId: machine._id,
         type: 'file_write',
-        'payload.path': deletePayload.path,
-      }).sort({ sequence: -1 }); // most recent first
+        'payload.path': deletePath,
+      }).sort({ sequence: -1 });
 
-      if (prevActivity) {
-        const prevPayload = prevActivity.payload as { storageRef?: string };
-        if (prevPayload.storageRef) {
+      if (exactMatch) {
+        const p = exactMatch.payload as { storageRef?: string };
+        if (p.storageRef) {
           try {
-            await seaweedfsService.delete(prevPayload.storageRef);
+            await seaweedfsService.delete(p.storageRef);
             logger.info('[Tracker] Deleted S3 object on file delete', {
-              path: deletePayload.path,
-              storageRef: prevPayload.storageRef,
+              path: deletePath,
+              storageRef: p.storageRef,
             });
           } catch (err) {
             logger.warn('[Tracker] Could not delete S3 object on file delete (non-fatal)', {
-              path: deletePayload.path,
-              storageRef: prevPayload.storageRef,
-              err,
+              path: deletePath, storageRef: p.storageRef, err,
             });
           }
-        } else {
-          logger.warn('[Tracker] file_delete: previous file_write has no storageRef', { path: deletePayload.path });
         }
       } else {
-        logger.warn('[Tracker] file_delete: no previous file_write found in activity log', { path: deletePayload.path });
+        // ── Case 2: prefix match (folder delete) ────────────────────────────
+        // Find all file_write records whose path is inside the deleted folder.
+        // Use a case-insensitive regex anchored to the folder path + separator.
+        // Escape backslashes for regex: "C:\Users\folder1" → "C:\\Users\\folder1\\"
+        const escapedPrefix = deletePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const prefixRegex = new RegExp(`^${escapedPrefix}\\\\`, 'i');
+
+        const childActivities = await MachineActivityModel.find({
+          machineId: machine._id,
+          type: 'file_write',
+          'payload.path': { $regex: prefixRegex },
+        });
+
+        if (childActivities.length > 0) {
+          logger.info('[Tracker] Folder delete — deleting S3 objects for all files inside', {
+            folderPath: deletePath,
+            fileCount: childActivities.length,
+          });
+
+          await Promise.all(
+            childActivities.map(async (act) => {
+              const p = act.payload as { storageRef?: string; path?: string };
+              if (!p.storageRef) return;
+              try {
+                await seaweedfsService.delete(p.storageRef);
+                logger.debug('[Tracker] Deleted S3 object (folder delete)', {
+                  path: p.path,
+                  storageRef: p.storageRef,
+                });
+              } catch (err) {
+                logger.warn('[Tracker] Could not delete S3 object (folder delete, non-fatal)', {
+                  path: p.path, storageRef: p.storageRef, err,
+                });
+              }
+            })
+          );
+        } else {
+          logger.warn('[Tracker] file_delete: no matching file_write records found (exact or prefix)', {
+            path: deletePath,
+          });
+        }
       }
     }
   }
