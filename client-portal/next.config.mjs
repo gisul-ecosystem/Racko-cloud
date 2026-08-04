@@ -28,7 +28,7 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      "connect-src 'self'",
+      "connect-src 'self' https://api-dev.racko.ai https://api-qa.racko.ai https://api-uat.racko.ai https://api.racko.ai wss://api-dev.racko.ai wss://api-qa.racko.ai wss://api-uat.racko.ai wss://api.racko.ai https://storage.gisul.co.in",
       // Guacamole VM console domains across all environments — iframes load from these.
       // frame-ancestors 'none' blocks THIS page from being embedded elsewhere (anti-clickjack).
       "frame-src 'self' https://guac.racko.ai https://dev-guac.racko.ai https://qa-guac.racko.ai https://uat-guac.racko.ai",
