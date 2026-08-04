@@ -98,6 +98,13 @@ export async function appendActivity(
     throw new NotFoundError(`Agent not found: ${agentId}`);
   }
 
+  logger.info('[Tracker] appendActivity received', {
+    agentId,
+    machineId: machine._id.toString(),
+    type,
+    payloadSummary: JSON.stringify(payload).slice(0, 200),
+  });
+
   // Rename deduplication: when a file is renamed, delete the old S3 object
   // so storage doesn't accumulate with each rename. We find the most recent
   // file_write for the old path and delete its storageRef from S3.
@@ -160,7 +167,11 @@ export async function appendActivity(
               err,
             });
           }
+        } else {
+          logger.warn('[Tracker] file_delete: previous file_write has no storageRef', { path: deletePayload.path });
         }
+      } else {
+        logger.warn('[Tracker] file_delete: no previous file_write found in activity log', { path: deletePayload.path });
       }
     }
   }

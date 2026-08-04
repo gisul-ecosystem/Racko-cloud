@@ -438,44 +438,49 @@ func (w *Watcher) processUSNRecord(rec *usnRecordV2, data []byte, volHandle wind
 		return
 	}
 
+	log.Printf("[tracker/usn] Record: file=%q reason=0x%08X fileRef=%d drive=%s",
+		fileName, rec.Reason, rec.FileReferenceNumber, drive)
+
 	// Try to resolve the full path from the file reference number.
 	fullPath, err := fileRefToPath(volHandle, rec.FileReferenceNumber)
 	if err != nil {
+		log.Printf("[tracker/usn] fileRefToPath FAILED for file=%q fileRef=%d: %v", fileName, rec.FileReferenceNumber, err)
 		// For deleted/renamed-away files, fall back to parent ref + filename.
 		if rec.Reason&(usnReasonFileDelete|usnReasonRenameOldName) != 0 {
 			parentPath, perr := fileRefToPath(volHandle, rec.ParentFileReferenceNumber)
 			if perr == nil {
 				fullPath = filepath.Join(parentPath, fileName)
+				log.Printf("[tracker/usn] Fallback path resolved: %s", fullPath)
 			} else {
+				log.Printf("[tracker/usn] Fallback parentRef also FAILED for file=%q parentRef=%d: %v — dropping event",
+					fileName, rec.ParentFileReferenceNumber, perr)
 				return // can't determine path — skip
 			}
 		} else {
+			log.Printf("[tracker/usn] Non-delete event with unresolvable path for file=%q — dropping", fileName)
 			return
 		}
+	} else {
+		log.Printf("[tracker/usn] Path resolved: %s", fullPath)
 	}
 
 	// ── Two-layer filter (baseline-diff first, denylist second) ──────────────
-	//
-	// Layer 1 — Baseline-diff scope check (primary gate):
-	//   Uses the loaded baseline to distinguish pre-existing system/software
-	//   folders from folders the user created after install.
-	//   - C:\Users\* → always in scope (fast path, no baseline lookup needed)
-	//   - Top-level folder NOT in baseline → user created → in scope
-	//   - Top-level folder IN baseline → pre-existing system/software → out of scope
-	//   Works for every drive (C:\, D:\, E:\...) with zero hardcoding.
-	//
-	// Layer 2 — Denylist within scope (secondary filter):
-	//   Only runs on paths that passed Layer 1. Removes OS-managed noise
-	//   inside tracked roots (AppData, caches, lock files, partial downloads).
 	if !isInWatchScopeWithBaseline(fullPath, w.baseline) {
+		log.Printf("[tracker/usn] Out of scope — dropping: %s", fullPath)
 		return
 	}
 	if shouldExcludeWithinScope(fullPath) {
+		log.Printf("[tracker/usn] Excluded within scope — dropping: %s", fullPath)
 		return
 	}
 
 	// Skip directories — we only track file content
 	isDir := rec.FileAttributes&fileAttributeDirectory != 0
+	if isDir {
+		log.Printf("[tracker/usn] Directory — skipping: %s", fullPath)
+	} else {
+		log.Printf("[tracker/usn] QUEUING path=%s reason=0x%08X", fullPath, rec.Reason)
+	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()
