@@ -299,3 +299,4 @@ jobs:
           echo "Azure service (local):  http://127.0.0.1:3002"
           echo "AWS service (local):    http://127.0.0.1:3003"
           echo "Reseller svc (local):   http://127.0.0.1:3005"
+          echo "Training svc (local):  http://127.0.0.1:3006"

@@ -325,3 +325,4 @@ jobs:
           echo "Azure service:  http://${VM_HOST}:3002"
           echo "AWS service:    http://${VM_HOST}:3003"
           echo "Reseller svc:   http://${VM_HOST}:3005"
+          echo "Training svc:  http://${VM_HOST}:3006"
