@@ -272,7 +272,7 @@ export async function sendEmailWithRetry({ to, subject, html }) {
   const status = getResendConfigStatus();
   if (!status.configured) {
     console.log(
-      `[emailProvisioner] Resend not configured (missing: ${status.missingVars.join(', ')}) — email not sent`
+      `[emailProvisioner] Email not configured (missing: ${status.missingVars.join(', ')}) — email not sent`
     );
     return { sent: false, mode: 'console' };
   }
@@ -330,7 +330,7 @@ export async function sendCredentialsEmail(request, context) {
 
   if (!status.configured) {
     console.log(
-      `[emailProvisioner] Resend not configured (missing: ${status.missingVars.join(', ')})`
+      `[emailProvisioner] Email not configured (missing: ${status.missingVars.join(', ')})`
     );
     console.log(`Portal URL: ${portalUrl}`);
     console.log(`Portal login: ${portalSession.username} / ${portalSession.password}`);
