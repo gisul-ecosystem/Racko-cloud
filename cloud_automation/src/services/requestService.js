@@ -15,6 +15,7 @@ const {
   normalizeCleanupTime,
   normalizeCleanupTimezone
 } = require('../utils/resourceCleanupSchedule');
+const { convertUsdToInr, getUsdToInrRate } = require('../utils/usdToInr');
 
 async function createRequest({
   customerEmail,
@@ -320,6 +321,26 @@ async function createRequest({
       perUserBudgetUsd !== undefined && perUserBudgetUsd !== null && perUserBudgetUsd !== ''
         ? Number(perUserBudgetUsd)
         : null;
+    // UI collects USD; Azure Cost Management returns INR for this subscription.
+    // Store the INR amount so super-admin tracking and Azure budgets match spend.
+    const resolvedPerUserBudgetInr =
+      resolvedPerUserBudgetUsd != null &&
+      Number.isFinite(resolvedPerUserBudgetUsd) &&
+      resolvedPerUserBudgetUsd > 0
+        ? convertUsdToInr(resolvedPerUserBudgetUsd)
+        : null;
+
+    if (resolvedPerUserBudgetInr != null) {
+      console.log(
+        JSON.stringify({
+          event: 'per_user_budget_converted_usd_to_inr',
+          service: 'request-service',
+          budgetUsd: resolvedPerUserBudgetUsd,
+          budgetInr: resolvedPerUserBudgetInr,
+          usdToInrRate: getUsdToInrRate()
+        })
+      );
+    }
     const resolvedNextCleanupAt =
       resolvedCleanupEnabled && resolvedCleanupIntervalHours
         ? new Date(Date.now() + resolvedCleanupIntervalHours * 60 * 60 * 1000).toISOString()
@@ -418,7 +439,7 @@ async function createRequest({
 
           resolvedNextCleanupAt,
 
-          resolvedPerUserBudgetUsd,
+          resolvedPerUserBudgetInr,
 
           resolvedResourceCleanupEnabled,
 

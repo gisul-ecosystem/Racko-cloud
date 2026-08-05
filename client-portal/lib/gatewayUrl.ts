@@ -96,6 +96,26 @@ export function isPlatformHost(hostname?: string): boolean {
 }
 
 /**
+ * Manage portal (/manage-users) tenant chrome is host-based only.
+ * Platform domains and localhost (admin app) always stay Racko — even when
+ * NEXT_PUBLIC_TENANT_DEV_DOMAIN is set for tenant dashboard work.
+ * Real tenant hostnames (e.g. labs.kanonkode.com) get tenant branding.
+ */
+export function shouldUseTenantManagePortalBranding(hostname?: string): boolean {
+  const host =
+    hostname !== undefined
+      ? normalizeHost(hostname)
+      : typeof window !== 'undefined'
+        ? normalizeHost(window.location.hostname)
+        : '';
+
+  if (!host) return false;
+  if (isPlatformHost(host)) return false;
+  if (isLocalDevHost(host)) return false;
+  return true;
+}
+
+/**
  * Gateway base URL for API calls.
  * Browser: same origin (Next.js rewrites /api → cloud-gateway) so HttpOnly cookies work.
  * Server: direct gateway URL (Docker internal network when GATEWAY_INTERNAL_URL is set).

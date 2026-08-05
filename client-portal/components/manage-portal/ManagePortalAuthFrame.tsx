@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { PLATFORM_CLOUD_ACCENT } from '@/lib/cloudAccent';
+import { shouldUseTenantManagePortalBranding } from '@/lib/gatewayUrl';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
 
 interface ManagePortalAuthFrameProps {
@@ -14,8 +15,8 @@ interface ManagePortalAuthFrameProps {
 }
 
 /**
- * Login chrome for manage portal — tenant branding when host resolves,
- * Racko fallback on platform domains (no blocking "tenant not found").
+ * Login chrome for manage portal.
+ * Tenant branding only on real tenant hostnames; platform/admin + localhost → Racko.
  */
 export function ManagePortalAuthFrame({
   children,
@@ -34,11 +35,14 @@ export function ManagePortalAuthFrame({
     loading,
   } = useTenantBranding();
 
-  const isTenant = !tenantNotFound;
+  const isTenantHost = shouldUseTenantManagePortalBranding();
+  const isTenant = isTenantHost && !tenantNotFound;
   const accent = isTenant ? accentColor : PLATFORM_CLOUD_ACCENT;
   const secondary = isTenant ? secondaryColor : '#7f1d1d';
-  const name = isTenant ? portalName : 'Racko Cloud';
+  const name = isTenant ? portalName : 'Racko';
   const showLogo = isTenant && Boolean(logoSrc);
+  // Don't spin forever waiting for tenant branding on platform/admin hosts.
+  const showLoading = isTenantHost && loading;
 
   return (
     <div className="flex min-h-screen">
@@ -46,9 +50,10 @@ export function ManagePortalAuthFrame({
         className="relative hidden overflow-hidden lg:flex lg:w-[42%] lg:max-w-xl lg:flex-col xl:max-w-2xl"
         style={{
           backgroundColor: '#0a0f1e',
-          backgroundImage: isTenant && heroSrc
-            ? `linear-gradient(to bottom right, rgba(10,15,30,0.88), rgba(10,15,30,0.8)), url(${heroSrc})`
-            : undefined,
+          backgroundImage:
+            isTenant && heroSrc
+              ? `linear-gradient(to bottom right, rgba(10,15,30,0.88), rgba(10,15,30,0.8)), url(${heroSrc})`
+              : undefined,
           backgroundSize: 'cover',
           backgroundPosition: 'center',
         }}
@@ -81,7 +86,7 @@ export function ManagePortalAuthFrame({
       <div className="flex flex-1 items-center justify-center bg-[#f3f4f6] px-6 py-12">
         <div className="w-full max-w-md">
           <div className="rounded-2xl bg-white p-8 shadow-sm ring-1 ring-gray-100">
-            {loading ? (
+            {showLoading ? (
               <div className="flex justify-center py-16">
                 <Loader2 className="h-8 w-8 animate-spin text-gray-400" />
               </div>
@@ -119,7 +124,7 @@ export function ManagePortalAuthFrame({
             )}
           </div>
 
-          {isTenant && branding.supportEmail && !loading ? (
+          {isTenant && branding.supportEmail && !showLoading ? (
             <p className="mt-4 text-center text-xs text-gray-500">
               Need help?{' '}
               <a
@@ -128,6 +133,13 @@ export function ManagePortalAuthFrame({
                 style={{ color: accent }}
               >
                 {branding.supportEmail}
+              </a>
+            </p>
+          ) : !isTenant && !showLoading ? (
+            <p className="mt-4 text-center text-xs text-gray-500">
+              Need help?{' '}
+              <a href="mailto:info@racko.ai" className="hover:underline" style={{ color: accent }}>
+                info@racko.ai
               </a>
             </p>
           ) : null}
@@ -139,14 +151,15 @@ export function ManagePortalAuthFrame({
 
 export function useManagePortalBrand() {
   const { logoSrc, portalName, accentColor, tenantNotFound, loading } = useTenantBranding();
-  const isTenant = !tenantNotFound;
+  const isTenantHost = shouldUseTenantManagePortalBranding();
+  const isTenant = isTenantHost && !tenantNotFound;
   const accent = isTenant ? accentColor : PLATFORM_CLOUD_ACCENT;
   return {
-    loading,
+    loading: isTenantHost && loading,
     isTenant,
     accent,
     accentSoft: hexToRgba(accent, 0.1),
-    portalName: isTenant ? portalName : 'Racko Cloud',
+    portalName: isTenant ? portalName : 'Racko',
     logoSrc: isTenant ? logoSrc : '',
   };
 }
