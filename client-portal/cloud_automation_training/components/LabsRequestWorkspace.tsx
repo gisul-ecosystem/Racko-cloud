@@ -228,6 +228,14 @@ export function LabsRequestWorkspace() {
   const cheapestLocationId = useMemo(() => pickCheapestLocation(locations), [locations]);
   const isCheapestLocationSelected =
     Boolean(location) && location === cheapestLocationId;
+  const locationSelectionKey = useMemo(
+    () =>
+      locationSelectedInstances
+        .map((entry) => `${entry.serviceId}:${entry.instanceOption}`)
+        .sort()
+        .join('|'),
+    [locationSelectedInstances]
+  );
 
   useEffect(() => {
     setSelectedInstances([]);
@@ -242,7 +250,21 @@ export function LabsRequestWorkspace() {
     }
 
     const stillValid = locations.some((entry) => entry.arm_region_name === location);
-    if (stillValid) return;
+    if (!stillValid) {
+      const preferred = String(selectedLab?.region || '')
+        .trim()
+        .toLowerCase();
+      if (preferred && locations.some((entry) => entry.arm_region_name === preferred)) {
+        setLocation(preferred);
+        return;
+      }
+      setLocation(pickCheapestLocation(locations));
+    }
+  }, [locations, location, selectedLab?.region]);
+
+  // When lab resources change, force region to cheapest/preferred among the new intersection.
+  useEffect(() => {
+    if (!locationSelectionKey || locations.length === 0) return;
 
     const preferred = String(selectedLab?.region || '')
       .trim()
@@ -251,9 +273,9 @@ export function LabsRequestWorkspace() {
       setLocation(preferred);
       return;
     }
-
     setLocation(pickCheapestLocation(locations));
-  }, [locations, location, selectedLab?.region]);
+    setChangeLocationOpen(false);
+  }, [locationSelectionKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pricingPayload = useMemo<PricingEstimatePayload | null>(() => {
     if (!provisionBundle || provisionBundle.serviceIds.length === 0) return null;
