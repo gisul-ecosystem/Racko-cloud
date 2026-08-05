@@ -272,8 +272,9 @@ function normalizePayload(payload) {
   };
 }
 
-export const createRequest = async (payload, userId) => {
+export const createRequest = async (payload, userId, options = {}) => {
   const input = normalizePayload(payload);
+  const portalBaseUrl = String(options.portalBaseUrl || '').trim().replace(/\/+$/, '') || undefined;
 
   if (!isValidEmail(input.customerEmail)) {
     throw validationError('customer_email must be a valid email address');
@@ -471,6 +472,7 @@ export const createRequest = async (payload, userId) => {
     estimatedPrice,
     status: 'Pending',
     createdBy: userId || undefined,
+    portalBaseUrl: portalBaseUrl || undefined,
     updatedAt: new Date(),
   });
 
