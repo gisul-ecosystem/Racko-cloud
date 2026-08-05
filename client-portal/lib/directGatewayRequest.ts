@@ -1,8 +1,16 @@
 'use client';
 
 import { ApiError, getAccessToken, setAccessToken, clearAccessToken, SESSION_EXPIRED_EVENT } from '@/lib/apiClient';
-import { getDirectGatewayBaseUrl, getGatewayBaseUrl } from '@/lib/gatewayUrl';
-import { getTenantAccessToken } from '@/lib/tenantPortalApiClient';
+import {
+  getDirectGatewayBaseUrl,
+  getGatewayBaseUrl,
+  getTenantGatewayIdentityHeaders,
+} from '@/lib/gatewayUrl';
+import {
+  clearTenantAccessToken,
+  emitTenantSessionExpired,
+  getTenantAccessToken,
+} from '@/lib/tenantPortalApiClient';
 import { isTenantPortalClient } from '@/lib/portalClient';
 
 type RequestOptions = RequestInit & { skipAuth?: boolean };
@@ -36,29 +44,32 @@ export async function directGatewayRequest<T>(
   options: RequestOptions = {}
 ): Promise<T> {
   const { skipAuth = false, ...fetchOptions } = options;
+  const isTenant = isTenantPortalClient();
+  const gatewayBase = getDirectGatewayBaseUrl();
   const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(isTenant ? getTenantGatewayIdentityHeaders(gatewayBase) : {}),
     ...(fetchOptions.headers as Record<string, string>),
   };
 
   if (!skipAuth) {
-    const token = isTenantPortalClient() ? getTenantAccessToken() : getAccessToken();
+    const token = isTenant ? getTenantAccessToken() : getAccessToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
   }
 
-  const url = `${getDirectGatewayBaseUrl()}${fullPath}`;
+  const url = `${gatewayBase}${fullPath}`;
   let res = await fetch(url, {
     ...fetchOptions,
     headers,
-    credentials: 'include',
+    credentials: isTenant ? 'omit' : 'include',
     cache: 'no-store',
   });
 
   // Match apiRequest: refresh once on 401 for platform sessions, then retry.
-  if (res.status === 401 && !skipAuth && !isTenantPortalClient()) {
+  if (res.status === 401 && !skipAuth && !isTenant) {
     const newToken = await refreshPlatformAccessToken();
     if (newToken) {
       headers['Authorization'] = `Bearer ${newToken}`;
@@ -76,9 +87,14 @@ export async function directGatewayRequest<T>(
     }
   }
 
+  if (res.status === 401 && !skipAuth && isTenant) {
+    clearTenantAccessToken();
+    emitTenantSessionExpired();
+  }
+
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new ApiError(data.message || `Request failed (${res.status}).`, res.status);
+    const data = (await res.json().catch(() => ({}))) as { message?: string; code?: string };
+    throw new ApiError(data.message || `Request failed (${res.status}).`, res.status, data.code);
   }
 
   return res.json() as Promise<T>;

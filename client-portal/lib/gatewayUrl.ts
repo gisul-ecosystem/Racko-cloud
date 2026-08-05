@@ -42,7 +42,40 @@ export function getTenantDomainHeaders(): Record<string, string> {
   const devDomain = getTenantDevDomain();
   if (!devDomain) return {};
 
-  return { 'X-Tenant-Domain': devDomain };
+  return {
+    'X-Tenant-Domain': devDomain,
+    // Prefer forwarded host so resolve works even when gateway NODE_ENV=production.
+    'X-Forwarded-Host': devDomain,
+  };
+}
+
+/**
+ * Identity headers for tenant cloud calls when the gateway Host is not the
+ * tenant domain (e.g. direct provision calls to localhost:8000).
+ */
+export function getTenantGatewayIdentityHeaders(gatewayBaseUrl?: string): Record<string, string> {
+  if (typeof window === 'undefined') return {};
+
+  const pageHost = normalizeHost(window.location.hostname);
+  const tenantHost =
+    isLocalDevHost(pageHost) && getTenantDevDomain() ? getTenantDevDomain()! : pageHost;
+
+  const headers: Record<string, string> = { ...getTenantDomainHeaders() };
+
+  let gatewayHost = '';
+  try {
+    gatewayHost = normalizeHost(new URL(gatewayBaseUrl ?? getDirectGatewayBaseUrl()).hostname);
+  } catch {
+    return headers;
+  }
+
+  // Cross-origin / direct gateway: forward the portal's tenant host for resolve.
+  if (gatewayHost && gatewayHost !== pageHost) {
+    headers['X-Forwarded-Host'] = tenantHost;
+    headers['X-Tenant-Domain'] = tenantHost;
+  }
+
+  return headers;
 }
 
 export function isLocalDevHost(hostname: string): boolean {

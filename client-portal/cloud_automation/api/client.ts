@@ -1,7 +1,8 @@
 import { cloudAutomationRequest, getAzureCloudApiPrefix } from '../../lib/cloudAutomationRequest';
 import { ApiError, getAccessToken } from '../../lib/apiClient';
 import { getTenantAccessToken } from '../../lib/tenantPortalApiClient';
-import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
+import { getGatewayBaseUrl, getTenantGatewayIdentityHeaders } from '../../lib/gatewayUrl';
+import { isTenantPortalClient } from '../../lib/portalClient';
 import type {
   AdminAccessRequestPayload,
   AvailableInstance,
@@ -344,13 +345,18 @@ export async function sendProvisionCredentials(requestId: number): Promise<Provi
 
 /** GET /api/provision/request/:id/credentials/spreadsheet */
 export async function downloadCredentialSpreadsheet(requestId: number): Promise<void> {
+  const isTenant = isTenantPortalClient();
   const token = getTenantAccessToken() || getAccessToken();
+  const gatewayBase = getGatewayBaseUrl();
   const response = await fetch(
-    `${getGatewayBaseUrl()}${getAzureCloudApiPrefix()}/provision/request/${requestId}/credentials/spreadsheet`,
+    `${gatewayBase}${getAzureCloudApiPrefix()}/provision/request/${requestId}/credentials/spreadsheet`,
     {
       method: 'GET',
-      credentials: getTenantAccessToken() ? 'omit' : 'include',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: isTenant ? 'omit' : 'include',
+      headers: {
+        ...(isTenant ? getTenantGatewayIdentityHeaders(gatewayBase) : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       cache: 'no-store',
     }
   );
