@@ -184,6 +184,8 @@ export interface CreateRequestPayload {
   microsoftLicenseSkuPartNumber?: string;
   convertedFromRequestId?: number;
   purchaseToken?: string;
+  /** Cloud Labs: strict = only selectedRoles (e.g. DP-900 read-only). */
+  labPermissionMode?: 'strict' | 'standard';
 }
 
 export interface CreateRequestResponse {

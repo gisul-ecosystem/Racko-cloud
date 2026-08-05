@@ -151,6 +151,7 @@ function validateForm(input: {
   resourceCleanupAction?: 'delete' | 'pause';
   perUserBudgetUsd?: number;
   costingMode?: CostingMode;
+  labsMode?: boolean;
 }): string[] {
   const errors: string[] = [];
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -174,7 +175,7 @@ function validateForm(input: {
   }
 
   if (input.serviceIds.length === 0) {
-    errors.push('Select at least one service.');
+    errors.push(input.labsMode ? 'Select at least one lab.' : 'Select at least one service.');
   }
 
   if (!input.location.trim()) {
@@ -192,7 +193,9 @@ function validateForm(input: {
     if (service?.supports_instances) {
       const hasInstance = input.selectedInstances.some((entry) => entry.serviceId === serviceId);
       if (!hasInstance) {
-        errors.push(`Select an instance for ${service.service_name || service.name}.`);
+        errors.push(
+          `Select an instance for ${service.service_name || service.name}.`
+        );
       }
     }
   }
@@ -205,7 +208,9 @@ function validateForm(input: {
   for (const serviceId of servicesRequiringRoles) {
     if (!servicesWithRoles.has(serviceId)) {
       const service = input.catalog.services.find((entry) => entry.id === serviceId);
-      errors.push(`Assign at least one role for ${service?.service_name || service?.name || serviceId}.`);
+      errors.push(
+        `Assign at least one role for ${service?.service_name || service?.name || serviceId}.`
+      );
     }
   }
 
@@ -225,7 +230,7 @@ function validateForm(input: {
     }
   }
 
-  if (input.costingMode === 'per_user' && input.perUserBudgetUsd !== undefined) {
+  if (!input.labsMode && input.costingMode === 'per_user' && input.perUserBudgetUsd !== undefined) {
     if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
       errors.push('Budget per user must be a positive number.');
     }
@@ -234,7 +239,7 @@ function validateForm(input: {
   return errors;
 }
 
-export function RequestWorkspace() {
+export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromTestRequest = searchParams.get('fromTestRequest');
@@ -582,6 +587,7 @@ export function RequestWorkspace() {
       resourceCleanupAction,
       perUserBudgetUsd,
       costingMode,
+      labsMode,
     });
 
     setValidationErrors(errors);
@@ -589,24 +595,26 @@ export function RequestWorkspace() {
 
     if (errors.length > 0) return;
 
-    if (totalPrice == null) {
-      setSubmitError('Complete the form to calculate an estimate before creating the request.');
-      return;
-    }
-
-    const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate) ?? 0;
-
-    if (totalPrice > 0) {
-      if (walletBalance == null) {
-        setSubmitError('Unable to load your wallet balance.');
+    if (!labsMode) {
+      if (totalPrice == null) {
+        setSubmitError('Complete the form to calculate an estimate before creating the request.');
         return;
       }
 
-      if (walletBalance < estimatedInr) {
-        setSubmitError(
-          `Insufficient wallet balance. This request needs ${formatInr(estimatedInr)} but your wallet has ${formatInr(walletBalance)}.`
-        );
-        return;
+      const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate) ?? 0;
+
+      if (totalPrice > 0) {
+        if (walletBalance == null) {
+          setSubmitError('Unable to load your wallet balance.');
+          return;
+        }
+
+        if (walletBalance < estimatedInr) {
+          setSubmitError(
+            `Insufficient wallet balance. This request needs ${formatInr(estimatedInr)} but your wallet has ${formatInr(walletBalance)}.`
+          );
+          return;
+        }
       }
     }
 
@@ -614,7 +622,7 @@ export function RequestWorkspace() {
     let chargedInr: number | null = null;
 
     try {
-      if (totalPrice > 0) {
+      if (!labsMode && totalPrice != null && totalPrice > 0) {
         const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure');
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
@@ -631,7 +639,7 @@ export function RequestWorkspace() {
           serviceIds: selectedServiceIds,
           selectedRoles,
           selectedInstances,
-          costingMode,
+          costingMode: labsMode ? 'shared' : costingMode,
           projectName: projectName.trim(),
           idMode: isPurchaseConvert ? 'azure_ids' : idMode ?? undefined,
           ...(isPurchaseConvert && convertedFromRequestId
@@ -658,7 +666,7 @@ export function RequestWorkspace() {
                   : {}),
               }
             : {}),
-          ...(costingMode === 'per_user' && perUserBudgetUsd !== undefined
+          ...(!labsMode && costingMode === 'per_user' && perUserBudgetUsd !== undefined
             ? { perUserBudgetUsd }
             : {}),
           ...(idMode !== 'test_ids' && usageWindows.length > 0
@@ -843,24 +851,35 @@ export function RequestWorkspace() {
 
     return [
       { label: 'Details', done: detailsDone },
-      { label: 'Services', done: servicesDone },
+      { label: labsMode ? 'Labs' : 'Services', done: servicesDone },
       { label: 'Email', done: emailDone },
       { label: 'Region', done: regionDone },
     ];
-  }, [projectName, accountCount, startDate, endDate, idMode, selectedServiceIds, customerEmail, location]);
+  }, [
+    projectName,
+    accountCount,
+    startDate,
+    endDate,
+    idMode,
+    selectedServiceIds,
+    customerEmail,
+    location,
+    labsMode,
+  ]);
 
   const submitBarProps = {
     submitting,
     submitError,
-    totalPrice,
+    totalPrice: labsMode ? null : totalPrice,
     currency: pricing?.currency,
     onSubmit: handleSubmit,
     walletBalance,
     walletCurrency,
-    estimatedInr,
+    estimatedInr: labsMode ? null : estimatedInr,
     usdToInrRate,
     walletLoading,
-    insufficientBalance,
+    insufficientBalance: labsMode ? false : insufficientBalance,
+    labsMode,
   };
 
   return (
@@ -905,7 +924,7 @@ export function RequestWorkspace() {
                   className="text-xs font-semibold uppercase tracking-wider"
                   style={{ color: accent }}
                 >
-                  Azure automation
+                  {labsMode ? 'Azure Labs' : 'Azure automation'}
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
                   {isPurchaseConvert ? 'Continue purchase from test lab' : 'Create request'}
@@ -913,7 +932,9 @@ export function RequestWorkspace() {
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
                   {isPurchaseConvert
                     ? 'Services, permissions, and license are copied from your test IDs. Set dates, timing, cleanup, budget, and account count, then pay from your wallet.'
-                    : 'Provision Azure lab access for a customer using the service catalog.'}
+                    : labsMode
+                      ? 'Provision an Azure training lab — select labs, instances, and permissions (no costing steps).'
+                      : 'Provision Azure lab access for a customer using the service catalog.'}
                 </p>
               </div>
             </div>
@@ -1074,9 +1095,11 @@ export function RequestWorkspace() {
               privilegedRoleMessage={privilegedRoleMessage}
               privilegedRoleMessageType={privilegedRoleMessageType}
               validationErrors={validationErrors}
+              labsMode={labsMode}
             />
 
             <div className="space-y-4 xl:hidden">
+              {!labsMode ? (
               <PricingSummary
                 totalPrice={totalPrice}
                 currency={pricing?.currency}
@@ -1091,6 +1114,7 @@ export function RequestWorkspace() {
                 loading={pricingLoading}
                 error={pricingError}
               />
+              ) : null}
 
               <CreateRequestSubmitBar {...submitBarProps} />
             </div>
@@ -1098,6 +1122,7 @@ export function RequestWorkspace() {
 
           <aside className="hidden xl:block">
             <div className="sticky top-20 space-y-4">
+              {!labsMode ? (
               <PricingSummary
                 totalPrice={totalPrice}
                 currency={pricing?.currency}
@@ -1112,6 +1137,7 @@ export function RequestWorkspace() {
                 loading={pricingLoading}
                 error={pricingError}
               />
+              ) : null}
 
               <CreateRequestSubmitBar {...submitBarProps} compact />
             </div>

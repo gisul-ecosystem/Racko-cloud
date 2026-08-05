@@ -40,6 +40,8 @@ export const tenantConsole = {
   awsRequests: `${TENANT_CONSOLE}/aws/requests`,
   awsNew: `${TENANT_CONSOLE}/aws/requests/new`,
   gcp: `${TENANT_CONSOLE}/gcp`,
+  cloudLabs: `${TENANT_CONSOLE}/cloud-labs`,
+  cloudLabsAzure: `${TENANT_CONSOLE}/cloud-labs/azure`,
   docs: `${TENANT_CONSOLE}/docs`,
   createVm: `${TENANT_CONSOLE}/create-vm`,
   createVmCreate: `${TENANT_CONSOLE}/create-vm/create`,
@@ -54,4 +56,5 @@ export const tenantConsole = {
   projectsCreate: `${TENANT_CONSOLE}/projects/create`,
   projectsReports: `${TENANT_CONSOLE}/projects/reports`,
   project: (id: string) => `${TENANT_CONSOLE}/projects/${id}`,
+  accessControl: `${TENANT_CONSOLE}/access-control`,
 } as const;

@@ -8,6 +8,7 @@ export const ADMIN_SERVICE_KEYS = [
   'azure',
   'aws',
   'gcp',
+  'cloud-labs',
   'docs',
   'machine-manager',
 ] as const;
@@ -92,6 +93,7 @@ export const CONSOLE_TILE_SERVICE_KEY: Record<string, AdminServiceKey | null> = 
   azure: 'azure',
   aws: 'aws',
   gcp: 'gcp',
+  'cloud-labs': 'cloud-labs',
   docs: 'docs',
   'machine-manager': 'machine-manager',
 };

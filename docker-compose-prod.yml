@@ -2,7 +2,7 @@
 # Public entry must be host nginx/CDN on 80/443 only, e.g.:
 #   racko.ai / tenant domains  → 127.0.0.1:3000  (client-portal)
 #   api.racko.ai /api/         → 127.0.0.1:8000  (cloud-gateway)
-# Do not open 3000/8000/8001/3002/3003/3005/3789 on the firewall.
+# Do not open 3000/8000/8001/3002/3003/3005/3006/3789 on the firewall.
 #
 # Service env files live under /opt/racko/<service>/.env
 
@@ -25,6 +25,8 @@ services:
     volumes:
       - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
+      # On-prem Mongo CA (optional). Set MONGODB_TLS_CA_FILE=/certs/mongo-ca.crt in core-api/.env
+      - /opt/racko/certs:/certs:ro
     # Internal only — reachable via docker network / localhost for ops
     ports:
       - "127.0.0.1:${CORE_API_PORT:-8001}:8001"
@@ -88,6 +90,19 @@ services:
       - racko-network
     restart: unless-stopped
 
+  cloud-automation-training:
+    image: gisuldocker/racko-cloud-automation-training:production
+    env_file:
+      - cloud_automation_training/.env
+    environment:
+      PORT: ${CLOUD_AUTOMATION_TRAINING_PORT:-3006}
+      NODE_ENV: production
+    ports:
+      - "127.0.0.1:${CLOUD_AUTOMATION_TRAINING_PORT:-3006}:3006"
+    networks:
+      - racko-network
+    restart: unless-stopped
+
   cloud-gateway:
     image: gisuldocker/racko-cloud-gateway:production
     env_file:
@@ -95,10 +110,12 @@ services:
     environment:
       PORT: ${GATEWAY_PORT:-8000}
       JWT_ACCESS_EXPIRES_IN: ${GATEWAY_JWT_ACCESS_EXPIRES_IN:-15m}
+      CLOUD_AUTOMATION_TRAINING_URL: http://cloud-automation-training:3006
     depends_on:
       - core-api
       - cloud-automation
       - cloud-automation-aws
+      - cloud-automation-training
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8000}:8000"
     networks:

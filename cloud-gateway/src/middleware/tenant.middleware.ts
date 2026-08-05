@@ -41,12 +41,9 @@ function resolveHost(req: Request): string | null {
 
   if (!normalized) return null;
 
-  // Local dev: frontend sends X-Tenant-Domain when NEXT_PUBLIC_TENANT_DEV_DOMAIN is set
-  if (
-    config.NODE_ENV === 'development' &&
-    isLocalGatewayHost(normalized) &&
-    headerToString(req.headers['x-tenant-domain'])
-  ) {
+  // Local / loopback gateway: honor X-Tenant-Domain so tenant portals can
+  // call localhost:8000 without DNS mapping (dev and docker alike).
+  if (isLocalGatewayHost(normalized) && headerToString(req.headers['x-tenant-domain'])) {
     const override = headerToString(req.headers['x-tenant-domain'])!
       .replace(/:\d+$/, '')
       .toLowerCase()

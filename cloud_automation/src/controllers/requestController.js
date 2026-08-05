@@ -79,7 +79,11 @@ const createRequest = async (req, res, next) => {
           ? Number(req.body.convertedFromRequestId)
           : undefined,
       purchaseToken:
-        typeof req.body.purchaseToken === 'string' ? req.body.purchaseToken.trim() : undefined
+        typeof req.body.purchaseToken === 'string' ? req.body.purchaseToken.trim() : undefined,
+      labPermissionMode:
+        req.body.labPermissionMode === 'strict' || req.body.labPermissionMode === 'standard'
+          ? req.body.labPermissionMode
+          : undefined
     };
 
     const result = await requestService.createRequest({

@@ -16,6 +16,25 @@ const gatewayUrl = (
 // uses eval() internally. Production builds do not use eval.
 const isDev = process.env.NODE_ENV === "development";
 
+// Long-running provision calls hit the gateway directly (bypass Next rewrites).
+// Allow that origin in connect-src so CSP does not surface as "Failed to fetch".
+const directGatewayConnectSrc = (() => {
+  const browserGatewayUrl = (
+    process.env.NEXT_PUBLIC_GATEWAY_URL ||
+    "http://localhost:8000"
+  ).replace(/\/$/, "");
+
+  try {
+    const url = new URL(browserGatewayUrl);
+    if (url.hostname === "localhost" || url.hostname === "127.0.0.1") {
+      return `${url.origin} ${url.protocol === "https:" ? "wss" : "ws"}://${url.host}`;
+    }
+  } catch {
+    // ignore invalid NEXT_PUBLIC_GATEWAY_URL
+  }
+  return "";
+})();
+
 const securityHeaders = [
   // F1 — HSTS: force HTTPS for 1 year, include subdomains, allow preload list
   {
@@ -34,7 +53,15 @@ const securityHeaders = [
       "style-src 'self' 'unsafe-inline'",
       "img-src 'self' data: blob: https:",
       "font-src 'self' data:",
-      "connect-src 'self' https://api-dev.racko.ai https://api-qa.racko.ai https://api-uat.racko.ai https://api.racko.ai wss://api-dev.racko.ai wss://api-qa.racko.ai wss://api-uat.racko.ai wss://api.racko.ai https://storage.gisul.co.in",
+      [
+        "connect-src 'self'",
+        "https://api-dev.racko.ai https://api-qa.racko.ai https://api-uat.racko.ai https://api.racko.ai",
+        "wss://api-dev.racko.ai wss://api-qa.racko.ai wss://api-uat.racko.ai wss://api.racko.ai",
+        "https://storage.gisul.co.in",
+        directGatewayConnectSrc,
+      ]
+        .filter(Boolean)
+        .join(" "),
       // Guacamole VM console domains across all environments — iframes load from these.
       // frame-ancestors 'none' blocks THIS page from being embedded elsewhere (anti-clickjack).
       "frame-src 'self' https://guac.racko.ai https://dev-guac.racko.ai https://qa-guac.racko.ai https://uat-guac.racko.ai",
