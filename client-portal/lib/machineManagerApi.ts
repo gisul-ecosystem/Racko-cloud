@@ -236,8 +236,22 @@ export function openPushStatusStream(
   sessionId: string,
   streamToken: string
 ): EventSource {
-  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
-  return new EventSource(url, { withCredentials: true });
+  const baseUrl = getSseGatewayBaseUrl();
+  const url = `${baseUrl}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
+  console.log(`[SSE][Push][${new Date().toISOString()}] Opening EventSource`, {
+    sessionId,
+    baseUrl,
+    fullUrl: url,
+    windowOrigin: typeof window !== 'undefined' ? window.location.origin : 'SSR',
+    NEXT_PUBLIC_GATEWAY_URL: process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'NOT_SET',
+  });
+  const es = new EventSource(url, { withCredentials: true });
+  console.log(`[SSE][Push][${new Date().toISOString()}] EventSource created`, {
+    sessionId,
+    readyState: es.readyState,
+    url,
+  });
+  return es;
 }
 
 // ─── Enrollment Key API ───────────────────────────────────────────────────────
@@ -305,7 +319,15 @@ export function openResetStatusStream(
   sessionId: string,
   streamToken: string
 ): EventSource {
-  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+  const baseUrl = getSseGatewayBaseUrl();
+  const url = `${baseUrl}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+  console.log(`[SSE][Reset][${new Date().toISOString()}] Opening EventSource`, {
+    sessionId,
+    baseUrl,
+    fullUrl: url,
+    windowOrigin: typeof window !== 'undefined' ? window.location.origin : 'SSR',
+    NEXT_PUBLIC_GATEWAY_URL: process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'NOT_SET',
+  });
   return new EventSource(url, { withCredentials: true });
 }
 
@@ -351,6 +373,14 @@ export function openCloneStatusStream(
   sessionId: string,
   streamTicket: string
 ): EventSource {
-  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/clone-stream/${sessionId}?ticket=${streamTicket}`;
+  const baseUrl = getSseGatewayBaseUrl();
+  const url = `${baseUrl}/api/v1/machines/clone-stream/${sessionId}?ticket=${streamTicket}`;
+  console.log(`[SSE][Clone][${new Date().toISOString()}] Opening EventSource`, {
+    sessionId,
+    baseUrl,
+    fullUrl: url,
+    windowOrigin: typeof window !== 'undefined' ? window.location.origin : 'SSR',
+    NEXT_PUBLIC_GATEWAY_URL: process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'NOT_SET',
+  });
   return new EventSource(url, { withCredentials: true });
 }

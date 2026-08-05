@@ -507,11 +507,6 @@ export function LabsRequestWorkspace() {
     setSubmitError(null);
     if (errors.length > 0 || !selectedLab) return;
 
-    if (!rackoProjectId) {
-      setSubmitError('Select a Racko project / client before creating the request.');
-      return;
-    }
-
     setSubmitting(true);
     try {
       const serviceCatalog = catalog ?? (await getServices());
@@ -728,9 +723,6 @@ export function LabsRequestWorkspace() {
                         portal={isTenantPortal ? 'tenant' : 'org'}
                         disabled={submitting}
                       />
-                      <p className="mt-1.5 text-xs text-gray-500">
-                        Lab spend is tracked against this project in Reports.
-                      </p>
                     </div>
                     <div className="sm:col-span-2">
                       <label className={labelClass} htmlFor="projectName">
