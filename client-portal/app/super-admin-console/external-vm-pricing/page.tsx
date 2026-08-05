@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cloud, HardDrive } from 'lucide-react';
+import { Cloud, HardDrive, Users } from 'lucide-react';
 
 const providers = [
   {
@@ -17,6 +17,13 @@ const providers = [
     href: '/super-admin-console/external-vm-pricing/dedicated-server',
     icon: HardDrive,
     description: 'Bare-metal catalog, setup fees, and sell multiplier',
+  },
+  {
+    id: 'account-overrides',
+    name: 'Account pricing',
+    href: '/super-admin-console/external-vm-pricing/account-overrides',
+    icon: Users,
+    description: 'Custom sell prices per organization or tenant',
   },
 ] as const;
 

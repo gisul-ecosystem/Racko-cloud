@@ -11,7 +11,7 @@ import { TenantNotification } from '../../models/tenantNotification.model';
 import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
 import { walletService } from '../wallet/wallet.service';
-import { externalVmPricingService } from '../externalVmPricing/externalVmPricing.service';
+import { accountVmPricingService } from '../accountVmPricing/accountVmPricing.service';
 import { projectsService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
@@ -329,24 +329,30 @@ class VmCatalogService {
       throw new ValidationError('Invalid billing cycle.');
     }
 
-    const pricingCfgEarly = await externalVmPricingService.getByProvider('webyne');
-    if (billing === 'hourly' && !pricingCfgEarly.hourlyEnabled) {
-      throw new ValidationError('Hourly billing is not available.');
-    }
-
     const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
     if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
       throw new ValidationError('Selected billing cycle is not priced for this template.');
     }
 
-    const pricingCfg = pricingCfgEarly;
+    const adminUser = await User.findById(adminId).select('role orgOwnerId').lean();
+    const orgId = adminUser
+      ? accountVmPricingService.resolveOrgIdFromUser({
+          _id: adminUser._id,
+          role: adminUser.role,
+          orgOwnerId: adminUser.orgOwnerId,
+        })
+      : null;
     const priceBucket = catalogPricingBucket(dto.category);
-    const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
-    const multiplier =
-      Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
+    const resolved = await accountVmPricingService.resolveWebyneUnitPrice({
+      account: orgId ? { scopeType: 'organization', orgId } : null,
+      category: priceBucket,
+      planId: plan._id.toString(),
+      period: billing as (typeof BILLING_PERIODS)[number],
+      baseUnit,
+    });
 
     const quantity = Math.max(1, Math.floor(Number(dto.quantity) || 1));
-    const unitPrice = roundMoney(baseUnit * multiplier);
+    const unitPrice = resolved.unitPrice;
     const subtotal = roundMoney(unitPrice * quantity);
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);
@@ -1427,24 +1433,22 @@ class VmCatalogService {
       throw new ValidationError('Invalid billing cycle.');
     }
 
-    const pricingCfgEarly = await externalVmPricingService.getByProvider('webyne');
-    if (billing === 'hourly' && !pricingCfgEarly.hourlyEnabled) {
-      throw new ValidationError('Hourly billing is not available.');
-    }
-
     const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
     if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
       throw new ValidationError('Selected billing cycle is not priced for this template.');
     }
 
-    const pricingCfg = pricingCfgEarly;
     const priceBucket = catalogPricingBucket(dto.category);
-    const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
-    const multiplier =
-      Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
+    const resolved = await accountVmPricingService.resolveWebyneUnitPrice({
+      account: { scopeType: 'tenant', tenantId: tenantId.toString() },
+      category: priceBucket,
+      planId: plan._id.toString(),
+      period: billing as (typeof BILLING_PERIODS)[number],
+      baseUnit,
+    });
 
     const quantity = Math.max(1, Math.floor(Number(dto.quantity) || 1));
-    const unitPrice = roundMoney(baseUnit * multiplier);
+    const unitPrice = resolved.unitPrice;
     const subtotal = roundMoney(unitPrice * quantity);
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);

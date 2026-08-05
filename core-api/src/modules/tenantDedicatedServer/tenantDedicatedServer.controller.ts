@@ -9,9 +9,17 @@ function success<T>(res: Response, message: string, data: T, statusCode = 200): 
 }
 
 export const tenantDedicatedServerController = {
-  async listPlans(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listPlans(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const plans = await dedicatedServerService.listPlans({ activeOnly: true, applySellPrice: true });
+      const authReq = req as TenantAuthenticatedRequest;
+      const plans = await dedicatedServerService.listPlans({
+        activeOnly: true,
+        applySellPrice: true,
+        account: {
+          scopeType: 'tenant',
+          tenantId: authReq.tenantUser.tenantId,
+        },
+      });
       success(res, 'Dedicated server plans retrieved.', { plans, total: plans.length });
     } catch (err) {
       next(err);
