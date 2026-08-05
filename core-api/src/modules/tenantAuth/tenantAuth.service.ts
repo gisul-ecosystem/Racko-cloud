@@ -119,12 +119,17 @@ export class TenantAuthService {
   }
 
   /**
-   * Verify invite/email token. Enumeration-safe message for invalid tokens.
+   * Verify invite/email token. When mustSetPassword, mints a reset token for the
+   * client to redirect straight to set-password (no separate link in the invite email).
    */
   async verifyEmail(
     tenantId: string,
     dto: TenantVerifyEmailInput
-  ): Promise<{ message: string }> {
+  ): Promise<{
+    message: string;
+    requiresPasswordSetup: boolean;
+    resetToken?: string;
+  }> {
     const hashedToken = hashToken(dto.token);
 
     const tenantUser = await TenantUser.findOne({
@@ -141,12 +146,22 @@ export class TenantAuthService {
     tenantUser.isEmailVerified = true;
     tenantUser.emailVerificationTokenHash = null;
     tenantUser.emailVerificationExpiresAt = null;
+
+    let resetToken: string | undefined;
+    if (requiresPasswordSetup) {
+      resetToken = generateSecureToken(32);
+      tenantUser.resetTokenHash = hashToken(resetToken);
+      tenantUser.resetTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    }
+
     await tenantUser.save();
 
     return {
       message: requiresPasswordSetup
-        ? 'Email verified successfully. Now set your password from the invite email before logging in.'
+        ? 'Email verified. Continue to set your password.'
         : 'Email verified successfully. You can now log in.',
+      requiresPasswordSetup,
+      ...(resetToken ? { resetToken } : {}),
     };
   }
 

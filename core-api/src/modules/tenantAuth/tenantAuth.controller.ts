@@ -67,7 +67,10 @@ export class TenantAuthController {
       }
 
       const result = await tenantAuthService.verifyEmail(tenantId, req.body);
-      success(res, result.message, {});
+      success(res, result.message, {
+        requiresPasswordSetup: result.requiresPasswordSetup,
+        ...(result.resetToken ? { resetToken: result.resetToken } : {}),
+      });
     } catch (error) {
       if (error instanceof TenantAuthError) {
         tenantAuthFail(res, error);

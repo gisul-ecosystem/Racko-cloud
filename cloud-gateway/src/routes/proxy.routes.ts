@@ -243,7 +243,41 @@ const sseProxy = createProxyMiddleware({
   proxyTimeout: 0,
   selfHandleResponse: false,
   on: {
-    error: proxyOnHandlers.error,
+    proxyReq: (_proxyReq: unknown, req: unknown) => {
+      const r = req as Request;
+      logger.info('[SSE][Gateway] SSE proxy request forwarded to core-api', {
+        path: r.path,
+        url: r.url,
+        method: r.method,
+        target: config.CORE_API_URL,
+        acceptHeader: r.headers['accept'] ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    },
+    proxyRes: (proxyRes: unknown, req: unknown) => {
+      const r = req as Request;
+      const pr = proxyRes as import('http').IncomingMessage;
+      logger.info('[SSE][Gateway] SSE proxy response received from core-api', {
+        path: r.path,
+        statusCode: pr.statusCode ?? null,
+        contentType: pr.headers['content-type'] ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    },
+    error: (err: unknown, req: unknown, res: unknown) => {
+      const e = err as Error;
+      const r = req as Request;
+      logger.error('[SSE][Gateway] SSE proxy error', {
+        path: r?.path ?? 'unknown',
+        error: e.message,
+        timestamp: new Date().toISOString(),
+      });
+      (res as Response).status(502).json({
+        success: false,
+        message: 'Service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
   },
 });
 router.get('/api/v1/admin-vm-templates/:templateId/stream', sseProxy);
@@ -434,6 +468,15 @@ router.post('/api/v1/machines/:id/clone-to/:targetId', authMiddleware, verifyMid
 router.post('/api/v1/machines/clone-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 // SSE stream for clone status — NO gateway auth. core-api validates the ?ticket= internally.
 router.get('/api/v1/machines/clone-stream/:sessionId', sseProxy);
+
+// ─── VM HOST LEASES (Excel inventory — super admin / staff) ───────────────────
+router.post('/api/v1/vm-host-leases/upload', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/vm-host-leases', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/vm-host-leases', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.patch('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.delete('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);

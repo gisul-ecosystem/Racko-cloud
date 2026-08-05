@@ -8,6 +8,10 @@ import { buildLoginAlertTemplate, type LoginAlertTemplateData } from './template
 import { buildAccountLockedTemplate, type AccountLockedTemplateData } from './templates/accountLocked';
 import { buildPasswordResetTemplate } from './templates/passwordReset';
 import { buildStaffInviteTemplate } from './templates/staffInvite';
+import {
+  buildVmHostLeaseExpiryTemplate,
+  type VmHostLeaseExpiryTemplateData,
+} from './templates/vmHostLeaseExpiry';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
@@ -269,13 +273,12 @@ export async function sendTenantPasswordResetEmail(input: {
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
 }
 
-/** Tenant console admin/operator invite (white-labeled). */
+/** Tenant console operator invite (white-labeled). */
 export async function sendTenantOperatorInviteEmail(input: {
   to: string;
   email: string;
   tempPassword: string;
   verifyToken: string;
-  resetToken: string;
   tenant: TenantEmailContext;
   inviteKind?: 'admin' | 'operator';
 }): Promise<void> {
@@ -284,15 +287,10 @@ export async function sendTenantOperatorInviteEmail(input: {
     input.tenant,
     `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
   );
-  const resetUrl = tenantPortalUrl(
-    input.tenant,
-    `/console/reset-password?token=${encodeURIComponent(input.resetToken)}`
-  );
   const template = buildTenantOperatorInviteTemplate({
     email: input.email,
     tempPassword: input.tempPassword,
     verifyUrl,
-    resetUrl,
     brand,
     inviteKind: input.inviteKind,
   });
@@ -316,4 +314,16 @@ export async function sendTenantVerificationEmail(input: {
     verifyUrl,
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
+}
+
+export async function sendVmHostLeaseExpiryEmail(input: {
+  to: string;
+  leases: VmHostLeaseExpiryTemplateData['leases'];
+  warningDays: number;
+}): Promise<void> {
+  const template = buildVmHostLeaseExpiryTemplate({
+    leases: input.leases,
+    warningDays: input.warningDays,
+  });
+  await sendEmail({ to: input.to, ...template });
 }

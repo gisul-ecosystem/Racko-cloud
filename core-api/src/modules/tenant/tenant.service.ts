@@ -246,7 +246,6 @@ export class TenantService {
 
     const passwordHash = await hashPassword(dto.password);
     const rawVerifyToken = generateSecureToken(32);
-    const rawResetToken = generateSecureToken(32);
     const inviteExpiresAt = new Date(Date.now() + CONSOLE_INVITE_TOKEN_TTL_MS);
 
     const tenantAdmin = await TenantUser.create({
@@ -259,8 +258,6 @@ export class TenantService {
       mustSetPassword: true,
       emailVerificationTokenHash: hashToken(rawVerifyToken),
       emailVerificationExpiresAt: inviteExpiresAt,
-      resetTokenHash: hashToken(rawResetToken),
-      resetTokenExpiresAt: inviteExpiresAt,
       createdBy: null,
     });
 
@@ -270,7 +267,6 @@ export class TenantService {
         email: tenantAdmin.email,
         tempPassword: dto.password,
         verifyToken: rawVerifyToken,
-        resetToken: rawResetToken,
         inviteKind: 'admin',
         tenant: {
           name: tenant.name,

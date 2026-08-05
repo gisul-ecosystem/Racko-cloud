@@ -205,16 +205,4 @@ func downloadBinary(platformURL, destPath string) (actualSHA string, err error) 
 	return computed, nil
 }
 
-func sha256File(path string) (string, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(h.Sum(nil)), nil
-}
+// ─── end of updater.go ────────────────────────────────────────────────────────
