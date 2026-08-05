@@ -157,10 +157,112 @@ interface ConsolePollOptions {
 }
 
 /**
+ * Windows guests don't always apply the static IP Proxmox hands them via
+ * cloud-init's ipconfig0 — cloudbase-init is inconsistent about re-running
+ * network config on clones (some base templates carry over a NIC config
+ * baked in at capture time), so the clone can boot with a stale/wrong
+ * address instead of the freshly-allocated custnet1 address. This is a
+ * one-shot guest-exec fallback for PRIVATE Windows VMs only: force the
+ * primary "Up" adapter onto the assigned static IP/gateway/DNS via
+ * PowerShell networking cmdlets.
+ *
+ * Idempotent — skips re-adding the IP if it's already correct, and only
+ * removes addresses that don't match, so calling it more than once is safe.
+ * Best-effort only — never throws. A failure here must not block the
+ * console-readiness poll from continuing to retry.
+ */
+async function fixPrivateNetworkGuestIp(
+  node: string,
+  vmid: number,
+  assignedIp: string,
+  gateway: string
+): Promise<void> {
+  try {
+    const prefixLength = 16; // custnet1 is a flat /16 — see bulkProcessor.ts ipconfig0
+    const mtu = 1400; // custnet1/VXLAN carries 1450 — 1400 leaves headroom and matches net0's mtu=1400
+    const command =
+      `$ip='${assignedIp}'; $gw='${gateway}'; $prefix=${prefixLength}; $mtu=${mtu}; ` +
+      "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1; " +
+      'if ($adapter) { ' +
+      "Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne $ip } | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue; " +
+      "Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue; " +
+      'if (-not (Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -IPAddress $ip -ErrorAction SilentlyContinue)) { New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $ip -PrefixLength $prefix -DefaultGateway $gw -ErrorAction SilentlyContinue | Out-Null }; ' +
+      "Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ('8.8.8.8') -ErrorAction SilentlyContinue; " +
+      // Same adapter selected above — the guacd RDP graphics pipeline times out over the
+      // 1450-byte custnet1/VXLAN path without this, even though the IP itself is reachable.
+      "netsh interface ipv4 set subinterface \"$($adapter.Name)\" mtu=$mtu store=persistent | Out-Null " +
+      '};';
+
+    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
+      command: 'powershell.exe',
+      args: ['-Command', command],
+    });
+    logger.info('[VMConsolePoll] Private-network guest IP + MTU fixup executed', {
+      node,
+      vmid,
+      assignedIp,
+      gateway,
+      mtu,
+    });
+  } catch (err) {
+    logger.warn('[VMConsolePoll] Private-network guest IP + MTU fixup failed — continuing anyway', {
+      node,
+      vmid,
+      assignedIp,
+      gateway,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Cloned accounts can inherit an expired-password or "must change password
+ * at next logon" flag from the template's local account policy, which
+ * silently fails RDP logins with "Your credentials did not work" even
+ * though the account is otherwise unlocked. Idempotent — safe to re-run.
+ * Best-effort only — never throws.
+ */
+async function fixWindowsPasswordPolicy(node: string, vmid: number, username: string): Promise<void> {
+  try {
+    const safeUsername = username.replace(/["'$`]/g, '');
+    const command =
+      `Set-LocalUser -Name '${safeUsername}' -PasswordNeverExpires $true -ErrorAction SilentlyContinue; ` +
+      `net user "${safeUsername}" /logonpasswordchg:no`;
+
+    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
+      command: 'powershell.exe',
+      args: ['-Command', command],
+    });
+    logger.info('[VMConsolePoll] Windows password-policy fixup executed', {
+      node,
+      vmid,
+      username: safeUsername,
+    });
+  } catch (err) {
+    logger.warn('[VMConsolePoll] Windows password-policy fixup failed — continuing anyway', {
+      node,
+      vmid,
+      username,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
  * Fresh Windows templates often ship with the built-in Administrator account
- * disabled/expired and NLA-only RDP, which silently blocks Guacamole logins.
- * Runs a one-shot guest-exec PowerShell fixup via the Proxmox QEMU agent so
- * every new Windows VM is RDP-ready without manual intervention.
+ * disabled/expired, RDP not enabled (fDenyTSConnections=1), the "Remote
+ * Desktop" firewall group off, and NLA-only auth — any one of which silently
+ * blocks Guacamole logins. Runs a one-shot guest-exec PowerShell fixup via
+ * the Proxmox QEMU agent so every new Windows VM is RDP-ready without manual
+ * intervention.
+ *
+ * NOTE: this deliberately does NOT touch fEnableWddmDriver — disabling the
+ * WDDM graphics driver requires a reboot to take effect and must be baked
+ * into the template itself, not applied as a runtime/no-reboot fixup here.
+ *
+ * Idempotent — every statement is a no-op if already applied, so it's safe
+ * to call more than once (e.g. both mid-poll on the private-IP path and
+ * again once consoleReady flips true).
  *
  * Best-effort only — never throws. A failure here must not block consoleReady
  * or any other part of the boot flow (guest agent may not support exec on all
@@ -172,7 +274,7 @@ async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
       command: 'powershell.exe',
       args: [
         '-Command',
-        "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0; $nlm = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'{DCB00C01-570F-4A9B-8D69-199FDBA5723B}')); $nlm.GetNetworkConnections() | ForEach-Object { $_.GetNetwork().SetCategory(1) };",
+        "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0; $nlm = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'{DCB00C01-570F-4A9B-8D69-199FDBA5723B}')); $nlm.GetNetworkConnections() | ForEach-Object { $_.GetNetwork().SetCategory(1) };",
       ],
     });
     logger.info('[VMConsolePoll] Windows RDP access fixup executed', { node, vmid });
@@ -201,13 +303,20 @@ async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
  * ipconfig0 on a /16), so we deliberately verify the assigned address actually
  * came up rather than assuming cloud-init succeeded — an exact match, never a
  * prefix check, so a stray address on the same subnet can't false-positive.
+ * If the assigned IP hasn't shown up by the second attempt and the VM is a
+ * Windows/RDP guest, we force-apply the full set of no-reboot console
+ * prerequisites via guest-exec (cloudbase-init doesn't always re-run network
+ * config on clones, and the IP alone isn't enough for Guacamole to connect):
+ * fixPrivateNetworkGuestIp() (static IP + same-adapter MTU), then
+ * fixWindowsRdpAccess() (RDP enabled/firewall/NLA/admin unlock), then
+ * fixWindowsPasswordPolicy() (no forced password-change/expiry surprises).
  *
  * All Proxmox/agent errors are swallowed and retried — this never throws and
  * never blocks the caller (the start API responds immediately; readiness
  * resolves in the background).
  */
 async function startIpPolling(
-  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress' | 'consoleProtocol' | 'networkType'>,
+  vm: Pick<IVM, '_id' | 'node' | 'vmid' | 'ipAddress' | 'consoleProtocol' | 'networkType' | 'consoleUsername'>,
   trigger = 'unknown',
   options: ConsolePollOptions = {}
 ): Promise<void> {
@@ -282,6 +391,21 @@ async function startIpPolling(
           assignedIp: vm.ipAddress,
           allIpv4Seen: seenIps,
         });
+
+        // Give cloud-init one natural attempt (the initial wait + one retry
+        // interval), then force the remaining no-reboot console prerequisites
+        // via guest-exec — cloudbase-init on Windows is known to skip
+        // re-applying ipconfig0 on some base templates, and testing showed
+        // the IP alone isn't sufficient for Guacamole to actually connect.
+        // fEnableWddmDriver is deliberately NOT touched here — it requires a
+        // reboot and must be set in the template, not fixed at runtime.
+        if (vm.consoleProtocol === 'rdp' && vm.ipAddress && attempt === 2) {
+          await fixPrivateNetworkGuestIp(node, vmid, vm.ipAddress, config.PRIVATE_POOL_GATEWAY); // IP + same-adapter MTU
+          await fixWindowsRdpAccess(node, vmid); // RDP enabled + firewall + NLA + admin unlocked
+          if (vm.consoleUsername) {
+            await fixWindowsPasswordPolicy(node, vmid, vm.consoleUsername); // no "credentials expired" surprises
+          }
+        }
       } else {
         // Guest agent responded (and, for private VMs, the assigned IP was
         // confirmed) — VM is booted and ready.
