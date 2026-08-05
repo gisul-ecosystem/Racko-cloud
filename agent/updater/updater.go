@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/racko-ai/agent/config"
@@ -84,6 +85,9 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 	// Windows file-system read-after-write race that would occur if we re-opened
 	// the file to hash it separately.
 	if expectedSHA != "" {
+		// Trim any whitespace/newlines that might have been introduced during
+		// CI artifact file reads or environment variable interpolation.
+		expectedSHA = strings.TrimSpace(expectedSHA)
 		log.Printf("[updater] Checksum: expected=%s got=%s", expectedSHA, inFlightSHA)
 		if inFlightSHA != expectedSHA {
 			log.Printf("[updater] Checksum MISMATCH — aborting")
