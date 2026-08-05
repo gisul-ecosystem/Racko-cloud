@@ -162,8 +162,19 @@ export class MachineManagerController {
         res.status(400).json({ success: false, message: 'sessionId required.' });
         return;
       }
+      logger.info('[PushStream] Stream ticket requested', {
+        sessionId,
+        userId,
+        timestamp: new Date().toISOString(),
+      });
       const { issuePushStreamTicket } = await import('./push.streamTicket');
       const ticket = issuePushStreamTicket(sessionId, userId);
+      logger.info('[PushStream] Stream ticket issued — browser must open SSE stream within 2 minutes', {
+        sessionId,
+        userId,
+        expiresIn: ticket.expiresIn,
+        issuedAt: new Date().toISOString(),
+      });
       success(res, 'Push stream ticket issued.', ticket);
     } catch (err) {
       next(err);
@@ -202,14 +213,36 @@ export class MachineManagerController {
 
     const { pushSessionEmitter } = await import('./push.events');
 
+    const streamOpenedAt = Date.now();
+    logger.info('[PushStream] SSE listener registered', {
+      sessionId,
+      streamOpenedAt: new Date(streamOpenedAt).toISOString(),
+      listenerCountBefore: pushSessionEmitter.listenerCount(sessionId),
+    });
+
     const listener = (event: object) => {
+      const latencyMs = Date.now() - streamOpenedAt;
+      logger.info('[PushStream] SSE event delivered to browser', {
+        sessionId,
+        event,
+        streamOpenMs: latencyMs,
+      });
       send(event);
     };
 
     pushSessionEmitter.on(sessionId, listener);
 
+    logger.info('[PushStream] SSE listener registered successfully', {
+      sessionId,
+      listenerCountAfter: pushSessionEmitter.listenerCount(sessionId),
+    });
+
     // Cleanup when client disconnects
     req.on('close', () => {
+      logger.info('[PushStream] SSE stream closed by client', {
+        sessionId,
+        streamDurationMs: Date.now() - streamOpenedAt,
+      });
       pushSessionEmitter.removeListener(sessionId, listener);
       machineManagerService.removePushSession(sessionId);
     });
