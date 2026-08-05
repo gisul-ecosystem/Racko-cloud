@@ -274,9 +274,9 @@ export async function sendTenantOperatorInviteEmail(input: {
   to: string;
   email: string;
   tempPassword: string;
-  verifyToken: string;
-  resetToken: string;
   tenant: TenantEmailContext;
+  verifyToken?: string;
+  resetToken?: string;
   inviteKind?: 'admin' | 'operator';
 }): Promise<void> {
   const brand = resolveTenantEmailBrand(input.tenant);
