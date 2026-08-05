@@ -30,8 +30,6 @@ type ServiceTile = {
   badgeKey?: 'webyne' | 'dedicated';
   /** Any of these permissions unlocks the tile for staff. Super admin always sees all. */
   anyOf?: string[];
-  /** Only super_admin (Access Control management in v1). */
-  superAdminOnly?: boolean;
 };
 
 const services: ServiceTile[] = [
@@ -132,7 +130,7 @@ const services: ServiceTile[] = [
     href: '/super-admin-console/access-control',
     icon: Shield,
     description: 'Roles and staff permissions for the Super Admin dashboard',
-    superAdminOnly: true,
+    anyOf: ['rbac.assign', 'rbac.roles.write'],
   },
 ];
 
@@ -146,7 +144,6 @@ export default function SuperAdminConsolePage() {
     const isSa = user?.role === 'super_admin' || rbac?.isSuperAdmin;
     if (isSa) return services;
     return services.filter((s) => {
-      if (s.superAdminOnly) return false;
       if (!s.anyOf || s.anyOf.length === 0) return false;
       return s.anyOf.some((key) => hasPermission(rbac, key));
     });

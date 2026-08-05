@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import { z } from 'zod';
+import { AlertCircle, MailWarning } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
 import { ApiError } from '../../../lib/apiClient';
 import { apiRequest } from '../../../lib/apiClient';
@@ -34,7 +35,8 @@ export default function LoginPage() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [lockedUntil, setLockedUntil] = useState<string | null>(null);
-  const [resendSent, setResendSent] = useState(false);
+  const [resendState, setResendState] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
+  const [resendMessage, setResendMessage] = useState<string | null>(null);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -85,16 +87,24 @@ export default function LoginPage() {
       setErrors({ general: 'Enter your email address first.' });
       return;
     }
+    setResendState('sending');
+    setResendMessage(null);
     try {
-      await apiRequest<ResendResponse>('/api/v1/auth/register', {
+      const response = await apiRequest<ResendResponse>('/api/v1/auth/resend-verification', {
         method: 'POST',
-        body: JSON.stringify({ email, password: 'placeholder_not_used' }),
+        body: JSON.stringify({ email }),
         skipAuth: true,
       });
-    } catch {
-      // Intentionally silent — same generic response
+      setResendState('sent');
+      setResendMessage(response?.message ?? 'Verification email sent. Check your inbox.');
+    } catch (err) {
+      setResendState('failed');
+      setResendMessage(
+        err instanceof ApiError
+          ? err.message
+          : 'Could not send the verification email. Please try again in a moment.'
+      );
     }
-    setResendSent(true);
   }
 
   return (
@@ -170,22 +180,44 @@ export default function LoginPage() {
                   ? 'bg-yellow-900/30 border border-yellow-700 text-yellow-300'
                   : 'bg-red-900/30 border border-red-700 text-red-300'
               }`}>
-                <p>{errors.general}</p>
+                <div className="flex items-start gap-2">
+                  {errorCode === 'EMAIL_NOT_VERIFIED' ? (
+                    <MailWarning className="mt-0.5 h-4 w-4 shrink-0" />
+                  ) : (
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                  )}
+                  <div>
+                    {errorCode === 'EMAIL_NOT_VERIFIED' ? (
+                      <p className="mb-1 font-semibold">Email verification required</p>
+                    ) : null}
+                    <p>{errors.general}</p>
+                  </div>
+                </div>
                 {errorCode === 'ACCOUNT_LOCKED' && lockedUntil && (
                   <p className="text-xs mt-1 text-purple-400">Auto-unlocks at {lockedUntil}</p>
                 )}
                 {errorCode === 'EMAIL_NOT_VERIFIED' && (
                   <div className="mt-2">
-                    {resendSent ? (
-                      <p className="text-xs text-green-400">Verification email sent. Check your inbox.</p>
+                    {resendState === 'sent' ? (
+                      <p className="text-xs text-green-400">{resendMessage}</p>
                     ) : (
-                      <button
-                        type="button"
-                        onClick={handleResendVerification}
-                        className="text-xs text-yellow-400 underline hover:text-yellow-300"
-                      >
-                        Resend verification email
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleResendVerification}
+                          disabled={resendState === 'sending'}
+                          className="text-xs text-yellow-400 underline hover:text-yellow-300 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          {resendState === 'sending'
+                            ? 'Sending...'
+                            : resendState === 'failed'
+                            ? 'Try again'
+                            : 'Resend verification email'}
+                        </button>
+                        {resendState === 'failed' && resendMessage && (
+                          <p className="text-xs text-red-400 mt-1">{resendMessage}</p>
+                        )}
+                      </>
                     )}
                   </div>
                 )}

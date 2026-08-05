@@ -19,9 +19,9 @@ import {
   tenantPortalUrl,
   type TenantEmailContext,
 } from './templates/emailBrand';
- 
+
 const resend = config.RESEND_EMAIL_ENABLED ? new Resend(config.RESEND_API_KEY) : null;
- 
+
 const INLINE_EMAIL_IMAGES = [
   { cid: 'racko-logo', filename: 'racko-logo.png' },
   { cid: 'email-mail-check', filename: 'mail-check.png' },
@@ -29,11 +29,11 @@ const INLINE_EMAIL_IMAGES = [
   { cid: 'email-alert-check', filename: 'alert-check.png' },
   { cid: 'email-lock-check', filename: 'lock-check.png' },
 ] as const;
- 
+
 let inlineImageCache:
   | Array<{ cid: string; filename: string; content: string; mimeType: string }>
   | null = null;
- 
+
 function getInlineEmailImages() {
   if (inlineImageCache) return inlineImageCache;
   inlineImageCache = INLINE_EMAIL_IMAGES.map(({ cid, filename }) => ({
@@ -44,7 +44,7 @@ function getInlineEmailImages() {
   }));
   return inlineImageCache;
 }
- 
+
 /** Only attach CIDs actually referenced in the HTML — unused ones show up as Gmail attachments. */
 function getInlineImagesForHtml(html: string) {
   const used = new Set<string>();
@@ -55,7 +55,7 @@ function getInlineImagesForHtml(html: string) {
   }
   return getInlineEmailImages().filter((image) => used.has(image.cid));
 }
- 
+
 interface EmailOptions {
   to: string;
   subject: string;
@@ -64,7 +64,7 @@ interface EmailOptions {
   /** Overrides EMAIL_FROM_NAME (e.g. tenant portal name). */
   fromName?: string;
 }
- 
+
 function formatResendError(error: unknown): string {
   if (!error) return 'Unknown Resend error';
   if (typeof error === 'string') return error;
@@ -79,12 +79,12 @@ function formatResendError(error: unknown): string {
   }
   return String(error);
 }
- 
+
 async function sendViaResend(options: EmailOptions): Promise<string | null> {
   if (!resend) {
     throw new Error('Resend email provider is not enabled.');
   }
- 
+
   const fromName = options.fromName?.trim() || config.EMAIL_FROM_NAME;
   const { data, error } = await resend.emails.send({
     from: `${fromName} <${config.EMAIL_FROM_ADDRESS}>`,
@@ -99,20 +99,20 @@ async function sendViaResend(options: EmailOptions): Promise<string | null> {
       contentType: image.mimeType,
     })),
   });
- 
+
   // Resend returns { data, error } and does not throw for API failures.
   if (error) {
     throw new Error(formatResendError(error));
   }
- 
+
   return data?.id ?? null;
 }
- 
+
 function zeptoAuthorizationHeader(): string {
   const token = config.ZOHO_ZEPTOMAIL_TOKEN.trim();
   return /^zoho-enczapikey\s+/i.test(token) ? token : `Zoho-enczapikey ${token}`;
 }
- 
+
 async function sendViaZoho(options: EmailOptions): Promise<string | null> {
   const fromName = options.fromName?.trim() || config.EMAIL_FROM_NAME;
   const response = await fetch(config.ZOHO_ZEPTOMAIL_API_URL, {
@@ -145,14 +145,14 @@ async function sendViaZoho(options: EmailOptions): Promise<string | null> {
       })),
     }),
   });
- 
+
   const responseBody = await response.text();
   if (!response.ok) {
     throw new Error(
       `ZeptoMail request failed (${response.status}): ${responseBody.slice(0, 500)}`
     );
   }
- 
+
   if (!responseBody) return null;
   try {
     const parsed = JSON.parse(responseBody) as {
@@ -164,15 +164,15 @@ async function sendViaZoho(options: EmailOptions): Promise<string | null> {
     return null;
   }
 }
- 
+
 async function sendEmail(options: EmailOptions): Promise<void> {
   const provider = config.ZOHO_EMAIL_ENABLED ? 'zoho_zeptomail' : 'resend';
- 
+
   try {
     const messageId = config.ZOHO_EMAIL_ENABLED
       ? await sendViaZoho(options)
       : await sendViaResend(options);
- 
+
     logger.info('Email sent', {
       provider,
       to: options.to,
@@ -190,7 +190,7 @@ async function sendEmail(options: EmailOptions): Promise<void> {
     });
   }
 }
- 
+
 export async function sendPlainEmail(options: {
   to: string;
   subject: string;
@@ -200,7 +200,7 @@ export async function sendPlainEmail(options: {
 }): Promise<void> {
   await sendEmail(options);
 }
- 
+
 export async function sendVerificationEmail(
   to: string,
   rawToken: string,
@@ -209,7 +209,7 @@ export async function sendVerificationEmail(
   const template = buildVerifyEmailTemplate({ rawToken, brand });
   await sendEmail({ to, ...template, fromName: brand?.name });
 }
- 
+
 export async function sendLoginAlertEmail(
   to: string,
   data: Omit<LoginAlertTemplateData, 'platformName'>
@@ -217,7 +217,7 @@ export async function sendLoginAlertEmail(
   const template = buildLoginAlertTemplate(data);
   await sendEmail({ to, ...template, fromName: data.brand?.name });
 }
- 
+
 export async function sendAccountLockedEmail(
   to: string,
   data: Omit<AccountLockedTemplateData, 'platformName'>
@@ -225,7 +225,7 @@ export async function sendAccountLockedEmail(
   const template = buildAccountLockedTemplate(data);
   await sendEmail({ to, ...template, fromName: data.brand?.name });
 }
- 
+
 export async function sendPasswordResetEmail(
   to: string,
   rawToken: string,
@@ -234,7 +234,7 @@ export async function sendPasswordResetEmail(
   const template = buildPasswordResetTemplate({ rawToken, brand });
   await sendEmail({ to, ...template, fromName: brand?.name });
 }
- 
+
 export async function sendStaffInviteEmail(input: {
   to: string;
   email: string;
@@ -252,7 +252,7 @@ export async function sendStaffInviteEmail(input: {
   });
   await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
 }
- 
+
 /** Tenant portal password reset (white-labeled). */
 export async function sendTenantPasswordResetEmail(input: {
   to: string;
@@ -272,8 +272,8 @@ export async function sendTenantPasswordResetEmail(input: {
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
 }
- 
-/** Tenant console admin/operator invite (white-labeled). */
+
+/** Tenant console operator invite (white-labeled). */
 export async function sendTenantOperatorInviteEmail(input: {
   to: string;
   email: string;
@@ -284,16 +284,33 @@ export async function sendTenantOperatorInviteEmail(input: {
   inviteKind?: 'admin' | 'operator';
 }): Promise<void> {
   const brand = resolveTenantEmailBrand(input.tenant);
-  const loginUrl = tenantPortalUrl(input.tenant, '/console/login');
+  
+  // Generate verify and reset URLs for the tenant operator
+  const verifyUrl = input.verifyToken 
+    ? tenantPortalUrl(
+        input.tenant,
+        `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
+      )
+    : tenantPortalUrl(input.tenant, '/console/verify-email');
+    
+  const resetUrl = input.resetToken
+    ? tenantPortalUrl(
+        input.tenant,
+        `/console/reset-password?token=${encodeURIComponent(input.resetToken)}`
+      )
+    : tenantPortalUrl(input.tenant, '/console/reset-password');
+    
   const template = buildTenantOperatorInviteTemplate({
     email: input.email,
     tempPassword: input.tempPassword,
-    loginUrl,
+    verifyUrl,
+    resetUrl,
     brand,
+    inviteKind: input.inviteKind,
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
 }
- 
+
 /** Resend verification for tenant console invite (white-labeled). */
 export async function sendTenantVerificationEmail(input: {
   to: string;
@@ -312,8 +329,7 @@ export async function sendTenantVerificationEmail(input: {
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
 }
- 
- 
+
 export async function sendVmHostLeaseExpiryEmail(input: {
   to: string;
   leases: VmHostLeaseExpiryTemplateData['leases'];

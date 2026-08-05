@@ -24,6 +24,7 @@ ENV AGENT_CHECKSUM_DARWIN=$AGENT_CHECKSUM_DARWIN
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 apiuser \
   && mkdir -p /data/tenant-assets && chown -R apiuser:nodejs /data/tenant-assets
 COPY --from=builder /app/dist ./dist
+COPY --from=builder /app/src/utils/email/assets ./dist/utils/email/assets
 COPY --from=builder /app/node_modules ./node_modules
 COPY package.json ./
 # Copy reset script — served at GET /api/v1/agent/reset-script

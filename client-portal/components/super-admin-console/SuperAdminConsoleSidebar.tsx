@@ -2,10 +2,19 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutGrid, MonitorCheck, Cloud, Palette, Server, Shield, Users } from 'lucide-react';
+import {
+  LayoutDashboard,
+  LayoutGrid,
+  MonitorCheck,
+  Cloud,
+  Palette,
+  Server,
+  Shield,
+  Users,
+} from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useRbacPermissions } from '@/context/RbacPermissionsContext';
-import { hasPermission } from '@/lib/rbacApi';
+import { hasPermission, SUPER_ADMIN_OVERVIEW_PATH } from '@/lib/rbacApi';
 
 interface SuperAdminConsoleSidebarProps {
   sidebarOpen: boolean;
@@ -13,7 +22,19 @@ interface SuperAdminConsoleSidebarProps {
 }
 
 const navItems = [
-  { href: '/super-admin-console', label: 'All services', icon: LayoutGrid, exact: true },
+  {
+    href: SUPER_ADMIN_OVERVIEW_PATH,
+    label: 'Overview',
+    icon: LayoutDashboard,
+    exact: true,
+    anyOf: ['overview.read'] as string[],
+  },
+  {
+    href: '/super-admin-console',
+    label: 'All services',
+    icon: LayoutGrid,
+    exact: true,
+  },
   {
     href: '/super-admin-console/vm-management',
     label: 'VM Management',
@@ -54,7 +75,7 @@ const navItems = [
     label: 'Access control',
     icon: Shield,
     exact: false,
-    superAdminOnly: true as const,
+    anyOf: ['rbac.assign', 'rbac.roles.write'] as string[],
   },
 ];
 
@@ -65,11 +86,13 @@ export function SuperAdminConsoleSidebar({
   const pathname = usePathname();
   const { user } = useAuth();
   const rbac = useRbacPermissions();
-  const items = navItems.filter(
-    (item) =>
-      (!item.superAdminOnly || user?.role === 'super_admin') &&
-      (!item.anyOf || user?.role === 'super_admin' || item.anyOf.some((key) => hasPermission(rbac, key)))
-  );
+
+  const items = navItems.filter((item) => {
+    if (item.anyOf && user?.role !== 'super_admin' && !item.anyOf.some((key) => hasPermission(rbac, key))) {
+      return false;
+    }
+    return true;
+  });
 
   return (
     <>

@@ -1,5 +1,5 @@
-import { config } from '../../../config';
 import type { ITenantBranding } from '../../../models/tenant.model';
+import { getAppBaseUrl } from '../../requestContext';
 import { defaultPlatformBrand, type EmailBrand } from './brandedLayout';
 
 export interface TenantEmailContext {
@@ -10,7 +10,7 @@ export interface TenantEmailContext {
 
 function absoluteOriginFromDomain(domain: string): string {
   const trimmed = domain.trim().replace(/\/$/, '');
-  if (!trimmed) return config.FRONTEND_URL.replace(/\/$/, '');
+  if (!trimmed) return getAppBaseUrl();
   if (/^https?:\/\//i.test(trimmed)) return trimmed;
   // Local / IP hosts stay http; public domains use https.
   const isLocal =
@@ -18,6 +18,24 @@ function absoluteOriginFromDomain(domain: string): string {
     /^127\./.test(trimmed) ||
     /^\[::1\]/.test(trimmed);
   return `${isLocal ? 'http' : 'https'}://${trimmed}`;
+}
+
+/** localhost / loopback / private LAN portal — cannot reach a tenant's public domain. */
+function isDevOrigin(origin: string): boolean {
+  let host: string;
+  try {
+    host = new URL(origin).hostname.toLowerCase();
+  } catch {
+    return false;
+  }
+  return (
+    host === 'localhost' ||
+    host === '::1' ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[01])\./.test(host)
+  );
 }
 
 function resolveLogoUrl(logoUrl: string | undefined, websiteUrl: string): string | undefined {
@@ -60,7 +78,12 @@ export function resolveTenantEmailBrand(tenant: TenantEmailContext): EmailBrand 
 }
 
 export function tenantPortalUrl(tenant: TenantEmailContext, path: string): string {
-  const base = absoluteOriginFromDomain(tenant.domain);
   const normalized = path.startsWith('/') ? path : `/${path}`;
+  // Invites sent from a dev portal must stay on that origin; the tenant's public
+  // domain has no DNS/route locally, so those links would be dead on arrival.
+  const requestOrigin = getAppBaseUrl();
+  const base = isDevOrigin(requestOrigin)
+    ? requestOrigin
+    : absoluteOriginFromDomain(tenant.domain);
   return `${base}${normalized}`;
 }

@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { ArrowRight, Check, Loader2, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import type { AdminServiceKey } from '@/lib/adminServicesApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
@@ -85,7 +86,7 @@ export default function TenantCreateProjectPage() {
       ]);
       setPreviewName(preview.name);
       setName(preview.name);
-      setAvailable(services.filter((k) => k !== 'docs'));
+      setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to prepare create form.');
     } finally {

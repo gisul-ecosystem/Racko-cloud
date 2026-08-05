@@ -30,6 +30,7 @@ export function TenantConsoleAuthGate({ children }: { children: React.ReactNode 
   const isHubShell =
     pathname === TENANT_CONSOLE ||
     pathname === `${TENANT_CONSOLE}/` ||
+    pathname.startsWith(`${TENANT_CONSOLE}/overview`) ||
     pathname.startsWith(`${TENANT_CONSOLE}/access-control`);
 
   useEffect(() => {

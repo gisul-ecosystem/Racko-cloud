@@ -21,6 +21,7 @@ export const tenantVps = {
 
 export const tenantConsole = {
   hub: TENANT_CONSOLE,
+  overview: `${TENANT_CONSOLE}/overview`,
   elastic: `${TENANT_CONSOLE}/elastic-servers`,
   elasticOverview: `${TENANT_CONSOLE}/elastic-servers/overview`,
   elasticAdd: `${TENANT_CONSOLE}/elastic-servers/add`,

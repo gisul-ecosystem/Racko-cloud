@@ -137,3 +137,12 @@ export async function inviteTenantOperator(input: {
   );
   return data.user;
 }
+
+export async function deleteTenantOperator(userId: string): Promise<{ email: string }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ email: string }>>(
+      `/api/v1/tenant-rbac/people/${userId}`,
+      { method: 'DELETE' }
+    )
+  );
+}

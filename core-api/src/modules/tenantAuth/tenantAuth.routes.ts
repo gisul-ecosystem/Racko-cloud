@@ -6,7 +6,9 @@ import { validateRequest } from '../../middleware/validate.middleware';
 import {
   tenantForgotPasswordSchema,
   tenantLoginSchema,
+  tenantResendVerificationSchema,
   tenantResetPasswordSchema,
+  tenantVerifyEmailSchema,
 } from './tenantAuth.validation';
 
 const router = Router();
@@ -14,6 +16,18 @@ const router = Router();
 router.post('/login', validateRequest(tenantLoginSchema), (req, res, next) => {
   tenantAuthController.login(req, res, next);
 });
+
+router.post('/verify-email', validateRequest(tenantVerifyEmailSchema), (req, res, next) => {
+  tenantAuthController.verifyEmail(req, res, next);
+});
+
+router.post(
+  '/resend-verification',
+  validateRequest(tenantResendVerificationSchema),
+  (req, res, next) => {
+    tenantAuthController.resendVerification(req, res, next);
+  }
+);
 
 router.get('/access-check', resolveTenantContext, requireTenantAuth, (req, res, next) => {
   tenantAuthController.accessCheck(req, res, next);

@@ -105,8 +105,18 @@ ACCOUNT_CREATION_TIMEOUT_MS=1200000
 ACCOUNT_CREATION_POLL_MS=15000
 ACCOUNT_CREATION_MAX_RETRIES=5
 
-# Email (Resend — same as Azure)
+# Transactional email provider (enable exactly one)
+RESEND_EMAIL_ENABLED=false
+ZOHO_EMAIL_ENABLED=true
+
+# Resend
 RESEND_API_KEY=
+
+# Zoho ZeptoMail
+ZOHO_ZEPTOMAIL_TOKEN=
+ZOHO_ZEPTOMAIL_API_URL=https://api.zeptomail.in/v1.1/email
+
+# Shared verified sender identity
 EMAIL_FROM_ADDRESS=info@racko.ai
 EMAIL_FROM_NAME=Racko
 CLIENT_PORTAL_URL=http://localhost:3000

@@ -18,6 +18,17 @@ export class AuthController {
     }
   }
 
+  async resendVerification(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email } = req.body as { email: string };
+      await authService.resendVerification(email, req);
+      // Always the same response — prevents email enumeration
+      success(res, 'If that account exists and is not verified yet, a new verification link has been sent.');
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async verifyEmail(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { token } = req.body as { token: string };

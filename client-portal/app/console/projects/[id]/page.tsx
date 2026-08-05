@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Loader2, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import { fetchMyAdminServices, type AdminServiceKey } from '@/lib/adminServicesApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   addProjectServices,
   archiveProject,
@@ -161,7 +162,10 @@ export default function ProjectDetailPage() {
       setDescription(p.description || '');
       setAvailable(
         services
-          .filter((s) => s.status === 'active' && s.serviceKey !== 'docs')
+          .filter(
+            (s) =>
+              s.status === 'active' && s.serviceKey !== 'docs' && !isServiceHiddenFromUi(s.serviceKey)
+          )
           .map((s) => s.serviceKey)
       );
       setCostRows(costs);
@@ -180,6 +184,11 @@ export default function ProjectDetailPage() {
     if (!project) return [];
     return available.filter((k) => !project.enabledServices.includes(k));
   }, [available, project]);
+
+  const visibleServices = useMemo(
+    () => (project?.enabledServices ?? []).filter((k) => !isServiceHiddenFromUi(k)),
+    [project]
+  );
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -335,14 +344,14 @@ export default function ProjectDetailPage() {
           )}
         </div>
 
-        {project.enabledServices.length === 0 ? (
+        {visibleServices.length === 0 ? (
           <div className="rounded-xl border border-dashed border-gray-200 bg-white px-6 py-10 text-center text-sm text-gray-500">
             No services enabled yet.{' '}
             {!archived && 'Use the “Add service” panel below to assign one.'}
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {project.enabledServices.map((key) => (
+            {visibleServices.map((key) => (
               <ServiceCard
                 key={key}
                 serviceKey={key}

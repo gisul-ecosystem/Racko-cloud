@@ -6,6 +6,7 @@ import {
   loginFailedRateLimiter,
   registerRateLimiter,
   verifyEmailRateLimiter,
+  resendVerificationRateLimiter,
 } from '../middleware/rateLimit.middleware';
 import { loginSlowDown } from '../middleware/slowDown.middleware';
 import { config } from '../config';
@@ -129,6 +130,7 @@ const tenantVmCatalogProxy = createMountedCoreApiProxy('/api/v1/tenant-vm-catalo
 const tenantDedicatedServersProxy = createMountedCoreApiProxy('/api/v1/tenant-dedicated-servers');
 const tenantProjectsProxy = createMountedCoreApiProxy('/api/v1/tenant-projects');
 const tenantRbacProxy = createMountedCoreApiProxy('/api/v1/tenant-rbac');
+const tenantOverviewProxy = createMountedCoreApiProxy('/api/v1/tenant-overview');
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -145,6 +147,7 @@ function requireRole(...roles: string[]) {
 router.post('/api/v1/auth/register', registerRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/login', loginFailedRateLimiter, loginSlowDown, coreApiProxy);
 router.post('/api/v1/auth/verify-email', verifyEmailRateLimiter, coreApiProxy);
+router.post('/api/v1/auth/resend-verification', resendVerificationRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/refresh', coreApiProxy);
 router.post('/api/v1/auth/logout', coreApiProxy);
 router.post('/api/v1/auth/forgot-password', coreApiProxy);
@@ -279,14 +282,16 @@ router.delete('/api/v1/account-vm-pricing/:provider/overrides/:scopeType/:accoun
 
 // ─── CONTROL-PLANE RBAC ──────────────────────────────────────────────────────
 router.get('/api/v1/rbac/me', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
-router.get('/api/v1/rbac/permissions', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
-router.get('/api/v1/rbac/roles', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
-router.post('/api/v1/rbac/roles', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
-router.patch('/api/v1/rbac/roles/:id', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
-router.get('/api/v1/rbac/people', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
-router.put('/api/v1/rbac/people/:userId/roles', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
-router.post('/api/v1/rbac/people/staff', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
-router.get('/api/v1/rbac/audit', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
+// Fine-grained Access Control checks live in core-api (rbac.assign / rbac.roles.write).
+router.get('/api/v1/rbac/permissions', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/rbac/roles', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/rbac/roles', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.patch('/api/v1/rbac/roles/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/rbac/people', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.put('/api/v1/rbac/people/:userId/roles', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/rbac/people/staff', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.delete('/api/v1/rbac/people/:userId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/rbac/audit', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 
 // ─── PLATFORM ADMIN ORG RBAC ─────────────────────────────────────────────────
 router.get('/api/v1/platform-rbac/me', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
@@ -466,6 +471,18 @@ router.get('/api/v1/agent/clone-manifest', coreApiProxy);
 router.post('/api/v1/agent/clone-install', coreApiProxy);
 // ─── TENANT PUBLIC ROUTES (host → x-tenant-id; no platform JWT) ───────────────
 router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
+router.post(
+  '/api/v1/tenant-auth/verify-email',
+  injectTenantHeader,
+  verifyEmailRateLimiter,
+  coreApiProxy
+);
+router.post(
+  '/api/v1/tenant-auth/resend-verification',
+  injectTenantHeader,
+  resendVerificationRateLimiter,
+  coreApiProxy
+);
 router.post('/api/v1/tenant-auth/forgot-password', injectTenantHeader, coreApiProxy);
 router.post('/api/v1/tenant-auth/reset-password', injectTenantHeader, coreApiProxy);
 // access-check requires tenant Bearer token — injectTenantHeader sets x-tenant-id from host
@@ -491,6 +508,7 @@ router.use('/api/v1/tenant-external-vms', requireTenantBearer, tenantExternalVms
 router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProxy);
 router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
 router.use('/api/v1/tenant-projects', requireTenantBearer, tenantProjectsProxy);
+router.use('/api/v1/tenant-overview', requireTenantBearer, tenantOverviewProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
