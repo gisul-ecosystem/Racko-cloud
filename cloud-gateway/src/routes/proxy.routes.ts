@@ -434,6 +434,15 @@ router.post('/api/v1/machines/:id/clone-to/:targetId', authMiddleware, verifyMid
 router.post('/api/v1/machines/clone-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 // SSE stream for clone status — NO gateway auth. core-api validates the ?ticket= internally.
 router.get('/api/v1/machines/clone-stream/:sessionId', sseProxy);
+
+// ─── VM HOST LEASES (Excel inventory — super admin / staff) ───────────────────
+router.post('/api/v1/vm-host-leases/upload', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/vm-host-leases', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/vm-host-leases', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.patch('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.delete('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);

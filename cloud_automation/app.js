@@ -179,10 +179,10 @@ const startServer = () => {
 
     const emailStatus = getResendConfigStatus();
     if (emailStatus.configured) {
-      console.log('Resend email delivery is configured.');
+      console.log(`Transactional email delivery is configured (${emailStatus.provider}).`);
     } else {
       console.warn(
-        `Resend email delivery is NOT configured. Missing: ${emailStatus.missingVars.join(', ')}`
+        `Transactional email delivery is NOT configured. Missing: ${emailStatus.missingVars.join(', ')}`
       );
     }
 
