@@ -45,8 +45,15 @@ import {
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { PROJECT_SERVICE_META } from '@/lib/projectServiceMeta';
+import {
+  hexToRgba,
+  tenantAccentButton,
+  tenantAccentSelectedBox,
+  tenantAccentText,
+} from '@/lib/tenantAccentStyles';
 
 const PAGE_SIZE = 4;
+const ORG_ACCENT = '#B91C1C';
 
 const AVATAR_COLORS = [
   'bg-violet-100 text-violet-700',
@@ -140,8 +147,21 @@ function projectInitials(name: string): string {
   return name.slice(0, 2).toUpperCase() || 'PR';
 }
 
-export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
+export function ProjectsListView({
+  portal,
+  accentColor,
+}: {
+  portal: ProjectsPortal;
+  /** Tenant brand/branch primary color. Org defaults to Racko red. */
+  accentColor?: string;
+}) {
   const api = useMemo(() => (portal === 'tenant' ? tenantAdapter() : orgAdapter()), [portal]);
+  const accent = accentColor?.trim() || ORG_ACCENT;
+  const accentSoft = hexToRgba(accent, 0.1);
+  const accentSofter = hexToRgba(accent, 0.05);
+  const accentFocus = {
+    ['--tw-ring-color' as string]: hexToRgba(accent, 0.15),
+  } as React.CSSProperties;
 
   const [showAll, setShowAll] = useState(false);
   const [projects, setProjects] = useState<OrgProject[]>([]);
@@ -384,7 +404,8 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
         <button
           type="button"
           onClick={() => void openCreateModal()}
-          className="inline-flex items-center justify-center gap-2 rounded-xl bg-[#B91C1C] px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#991B1B]"
+          className="inline-flex items-center justify-center gap-2 rounded-xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+          style={tenantAccentButton(accent)}
         >
           <Plus className="h-4 w-4" />
           Create Project
@@ -399,7 +420,7 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
 
       {loading ? (
         <div className="flex justify-center py-20">
-          <Loader2 className="h-8 w-8 animate-spin text-[#B91C1C]" />
+          <Loader2 className="h-8 w-8 animate-spin" style={{ color: accent }} />
         </div>
       ) : (
         <>
@@ -440,7 +461,19 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                     value={query}
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Search projects by name or description..."
-                    className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2.5 pl-10 pr-3 text-sm text-gray-900 outline-none transition focus:border-[#B91C1C] focus:bg-white focus:ring-2 focus:ring-[#B91C1C]/15"
+                    className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2.5 pl-10 pr-3 text-sm text-gray-900 outline-none transition focus:bg-white focus:ring-2"
+                    style={
+                      {
+                        ...accentFocus,
+                        borderColor: undefined,
+                      } as React.CSSProperties
+                    }
+                    onFocus={(e) => {
+                      e.currentTarget.style.borderColor = accent;
+                    }}
+                    onBlur={(e) => {
+                      e.currentTarget.style.borderColor = '';
+                    }}
                   />
                 </div>
                 <label className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs text-gray-600">
@@ -519,7 +552,10 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                               );
                             })}
                             {project.enabledServices.length > serviceTags.length && (
-                              <span className="rounded-md bg-red-50 px-2 py-1 text-[11px] font-medium text-red-600">
+                              <span
+                                className="rounded-md px-2 py-1 text-[11px] font-medium"
+                                style={{ backgroundColor: accentSoft, color: accent }}
+                              >
                                 +{project.enabledServices.length - serviceTags.length}
                               </span>
                             )}
@@ -579,9 +615,10 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                         onClick={() => setPage(n)}
                         className={`inline-flex h-8 min-w-8 items-center justify-center rounded-lg px-2 text-xs font-semibold transition ${
                           n === currentPage
-                            ? 'bg-[#B91C1C] text-white'
+                            ? 'text-white'
                             : 'border border-gray-200 text-gray-600 hover:bg-gray-50'
                         }`}
+                        style={n === currentPage ? tenantAccentButton(accent) : undefined}
                       >
                         {n}
                       </button>
@@ -611,7 +648,8 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                   </div>
                   <Link
                     href={api.reportsHref}
-                    className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C] hover:underline"
+                    className="inline-flex items-center gap-1 text-xs font-semibold hover:underline"
+                    style={tenantAccentText(accent)}
                   >
                     View reports <ArrowRight className="h-3.5 w-3.5" />
                   </Link>
@@ -621,9 +659,24 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                   <button
                     type="button"
                     onClick={() => void openCreateModal()}
-                    className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed border-red-200 bg-red-50/20 px-5 text-center transition hover:border-[#B91C1C] hover:bg-red-50/50"
+                    className="flex min-h-56 flex-col items-center justify-center rounded-xl border border-dashed px-5 text-center transition hover:opacity-95"
+                    style={{
+                      borderColor: hexToRgba(accent, 0.35),
+                      backgroundColor: accentSofter,
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.borderColor = accent;
+                      e.currentTarget.style.backgroundColor = accentSoft;
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.borderColor = hexToRgba(accent, 0.35);
+                      e.currentTarget.style.backgroundColor = accentSofter;
+                    }}
                   >
-                    <span className="flex h-12 w-12 items-center justify-center rounded-full border border-red-200 bg-white text-[#B91C1C] shadow-sm">
+                    <span
+                      className="flex h-12 w-12 items-center justify-center rounded-full border bg-white shadow-sm"
+                      style={{ borderColor: hexToRgba(accent, 0.35), color: accent }}
+                    >
                       <Plus className="h-6 w-6" />
                     </span>
                     <span className="mt-3 text-sm font-semibold text-gray-900">New Project</span>
@@ -685,7 +738,10 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                             </span>
                           ))}
                           {extraServices > 0 && (
-                            <span className="rounded-full bg-red-50 px-2.5 py-1 text-[10px] font-medium text-red-600">
+                            <span
+                              className="rounded-full px-2.5 py-1 text-[10px] font-medium"
+                              style={{ backgroundColor: accentSoft, color: accent }}
+                            >
                               +{extraServices}
                             </span>
                           )}
@@ -697,7 +753,20 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                           </span>
                           <Link
                             href={api.projectHref(project.id)}
-                            className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-[#B91C1C] transition hover:bg-[#B91C1C] hover:text-white"
+                            className="inline-flex items-center gap-1 rounded-lg border px-3 py-2 text-xs font-semibold transition hover:text-white"
+                            style={{
+                              borderColor: hexToRgba(accent, 0.35),
+                              backgroundColor: accentSoft,
+                              color: accent,
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = accent;
+                              e.currentTarget.style.color = '#fff';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = accentSoft;
+                              e.currentTarget.style.color = accent;
+                            }}
                           >
                             Open Project <ArrowRight className="h-3 w-3" />
                           </Link>
@@ -712,7 +781,8 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                     <button
                       type="button"
                       onClick={openAllView}
-                      className="text-xs font-semibold text-[#B91C1C] hover:underline"
+                      className="text-xs font-semibold hover:underline"
+                      style={tenantAccentText(accent)}
                     >
                       View all {activeProjects.length} projects
                     </button>
@@ -761,7 +831,8 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                     <h2 className="text-sm font-semibold text-gray-900">Tracking Health</h2>
                     <Link
                       href={api.reportsHref}
-                      className="text-xs font-semibold text-[#B91C1C] hover:underline"
+                      className="text-xs font-semibold hover:underline"
+                      style={tenantAccentText(accent)}
                     >
                       View reports
                     </Link>
@@ -848,7 +919,10 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
           <div className="w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
             <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                <p
+                  className="text-xs font-semibold uppercase tracking-wider"
+                  style={tenantAccentText(accent)}
+                >
                   {modalStep === 'info'
                     ? 'Step 1 of 2'
                     : modalStep === 'services'
@@ -886,7 +960,7 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
 
             {modalLoading ? (
               <div className="flex min-h-72 items-center justify-center">
-                <Loader2 className="h-8 w-8 animate-spin text-[#B91C1C]" />
+                <Loader2 className="h-8 w-8 animate-spin" style={{ color: accent }} />
               </div>
             ) : modalStep === 'info' ? (
               <form onSubmit={continueToServices}>
@@ -908,7 +982,14 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                           value={projectName}
                           onChange={(event) => setProjectName(event.target.value)}
                           required
-                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-2 focus:ring-[#B91C1C]/15"
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
                         />
                         <p className="mt-1 text-[11px] text-gray-400">
                           A unique name to identify your project.
@@ -923,7 +1004,14 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                           onChange={(event) => setClientName(event.target.value)}
                           required
                           placeholder="e.g. Acme Corp"
-                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-2 focus:ring-[#B91C1C]/15"
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
                         />
                         <p className="mt-1 text-[11px] text-gray-400">
                           The client this project belongs to.
@@ -945,7 +1033,14 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                         onChange={(event) => setDescription(event.target.value.slice(0, 500))}
                         rows={4}
                         placeholder="Describe the purpose and workloads for this project."
-                        className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-2 focus:ring-[#B91C1C]/15"
+                        className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                        style={accentFocus}
+                        onFocus={(e) => {
+                          e.currentTarget.style.borderColor = accent;
+                        }}
+                        onBlur={(e) => {
+                          e.currentTarget.style.borderColor = '';
+                        }}
                       />
                     </div>
                   </div>
@@ -962,7 +1057,8 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                   <button
                     type="submit"
                     disabled={!projectName.trim() || !clientName.trim()}
-                    className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    style={tenantAccentButton(accent)}
                   >
                     Continue to Services
                     <ArrowRight className="h-4 w-4" />
@@ -1009,7 +1105,10 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                         </p>
                       </div>
                       {selectedServices.length > 0 && (
-                        <span className="rounded-full bg-[#B91C1C] px-3 py-1 text-xs font-semibold text-white">
+                        <span
+                          className="rounded-full px-3 py-1 text-xs font-semibold text-white"
+                          style={tenantAccentButton(accent)}
+                        >
                           {selectedServices.length} selected
                         </span>
                       )}
@@ -1031,9 +1130,10 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                               onClick={() => toggleService(serviceKey)}
                               className={`relative flex min-h-28 flex-col rounded-xl border-2 p-3 text-left transition ${
                                 selected
-                                  ? 'border-[#B91C1C] bg-red-50/40 shadow-sm'
+                                  ? 'shadow-sm'
                                   : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
                               }`}
+                              style={selected ? tenantAccentSelectedBox(accent) : undefined}
                             >
                               <span
                                 className={`flex h-8 w-8 items-center justify-center rounded-lg ${meta.iconBg} ${meta.iconColor}`}
@@ -1041,7 +1141,10 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                                 {meta.icon}
                               </span>
                               {selected && (
-                                <span className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full bg-[#B91C1C] text-white">
+                                <span
+                                  className="absolute right-3 top-3 flex h-5 w-5 items-center justify-center rounded-full text-white"
+                                  style={tenantAccentButton(accent)}
+                                >
                                   <Check className="h-3 w-3" strokeWidth={3} />
                                 </span>
                               )}
@@ -1075,7 +1178,8 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                     type="button"
                     onClick={() => void finishCreateProject()}
                     disabled={modalSaving || selectedServices.length === 0}
-                    className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:cursor-not-allowed disabled:opacity-50"
+                    className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+                    style={tenantAccentButton(accent)}
                   >
                     {modalSaving ? (
                       <Loader2 className="h-4 w-4 animate-spin" />
@@ -1111,7 +1215,8 @@ export function ProjectsListView({ portal }: { portal: ProjectsPortal }) {
                   <button
                     type="button"
                     onClick={closeCreateModal}
-                    className="rounded-lg bg-[#B91C1C] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B]"
+                    className="rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90"
+                    style={tenantAccentButton(accent)}
                   >
                     Done
                   </button>
