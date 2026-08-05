@@ -621,17 +621,12 @@ class MachineManagerService {
             accountToken: machine.accountToken,
           }).then((result) => {
             const elapsedMs = Date.now() - pushStartTime;
-            const listenerCount = (async () => {
-              const { pushSessionEmitter } = await import('./push.events');
-              return pushSessionEmitter.listenerCount(sessionId);
-            })();
             logger.info('[MachineManager] Push attempt completed — emitting push_result', {
               sessionId,
               machineId: machine._id,
               machineName: machine.name,
               success: result.success,
               elapsedMs,
-              sseStreamOpen: 'check next log for listener count',
             });
             emitPushEvent(sessionId, {
               type: 'push_result',
