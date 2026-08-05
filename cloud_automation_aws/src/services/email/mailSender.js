@@ -31,21 +31,43 @@ export function isRetryableEmailError(error) {
   );
 }
 
+const normalizeAttachments = (attachments = []) =>
+  (Array.isArray(attachments) ? attachments : [])
+    .filter(Boolean)
+    .map((attachment) => {
+      const filename = attachment.filename || attachment.name || 'attachment';
+      let content = attachment.content;
+
+      if (Buffer.isBuffer(content)) {
+        content = content.toString('base64');
+      } else if (typeof content === 'string' && attachment.encoding !== 'base64') {
+        content = Buffer.from(content).toString('base64');
+      }
+
+      return {
+        filename,
+        content
+      };
+    })
+    .filter((attachment) => attachment.content);
+
 /**
- * Send email via Resend with retries (same provider as Azure cloud_automation).
+ * Send email via Resend with retries (supports Excel/DOCX attachments like Azure).
  */
-export async function sendMailWithRetry({ to, subject, html, text }) {
+export async function sendMailWithRetry({ to, subject, html, text, attachments = [] }) {
   if (!to) {
     throw new Error('Email recipient (to) is required.');
   }
 
   const { client, from } = getResendClient();
+  const normalizedAttachments = normalizeAttachments(attachments);
   const payload = {
     from: cachedFrom || from,
     to: Array.isArray(to) ? to : [to],
     subject,
     html,
     ...(text ? { text } : {}),
+    ...(normalizedAttachments.length ? { attachments: normalizedAttachments } : {})
   };
 
   let lastError;
@@ -65,7 +87,7 @@ export async function sendMailWithRetry({ to, subject, html, text }) {
         attempt,
         accepted: payload.to,
         sent: true,
-        mode: 'resend',
+        mode: 'resend'
       };
     } catch (error) {
       lastError = error;
