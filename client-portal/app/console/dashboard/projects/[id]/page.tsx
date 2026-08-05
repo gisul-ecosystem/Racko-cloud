@@ -6,6 +6,7 @@ import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Loader2, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import type { AdminServiceKey } from '@/lib/adminServicesApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   addTenantProjectServices,
   archiveTenantProject,
@@ -161,7 +162,7 @@ export default function TenantProjectDetailPage() {
       setName(p.name);
       setClientName(p.clientName);
       setDescription(p.description || '');
-      setAvailable(services.filter((k) => k !== 'docs'));
+      setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
       setCostRows(costs);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load project.');
@@ -178,6 +179,11 @@ export default function TenantProjectDetailPage() {
     if (!project) return [];
     return available.filter((k) => !project.enabledServices.includes(k));
   }, [available, project]);
+
+  const visibleServices = useMemo(
+    () => (project?.enabledServices ?? []).filter((k) => !isServiceHiddenFromUi(k)),
+    [project]
+  );
 
   async function handleSave(e: React.FormEvent) {
     e.preventDefault();
@@ -333,14 +339,14 @@ export default function TenantProjectDetailPage() {
           )}
         </div>
 
-        {project.enabledServices.length === 0 ? (
+        {visibleServices.length === 0 ? (
           <div className="rounded-xl border border-dashed border-gray-200 bg-white px-6 py-10 text-center text-sm text-gray-500">
             No services enabled yet.{' '}
             {!archived && 'Use the “Add service” panel below to assign one.'}
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {project.enabledServices.map((key) => (
+            {visibleServices.map((key) => (
               <ServiceCard
                 key={key}
                 serviceKey={key}

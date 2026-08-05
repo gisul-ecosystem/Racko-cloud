@@ -18,7 +18,9 @@ import {
 } from 'lucide-react';
 import { ErrorState } from '../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../components/dashboard/LoadingSkeleton';
+import { ProjectSelect } from '../../components/console/ProjectSelect';
 import { ApiError } from '../../lib/apiClient';
+import { useIsTenantPortal } from '../../lib/portalMode';
 import { useAzureRoutes } from '../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../lib/cloudAccent';
 import { hexToRgba, tenantAccentButton } from '../../lib/tenantAccentStyles';
@@ -144,6 +146,7 @@ export function LabsRequestWorkspace() {
   const routes = useAzureRoutes();
   const accent = useCloudAccentColor();
   const soft = hexToRgba(accent, 0.1);
+  const isTenantPortal = useIsTenantPortal();
 
   const [labs, setLabs] = useState<LabTemplate[]>([]);
   const [catalog, setCatalog] = useState<ServiceCatalogResponse | null>(null);
@@ -156,6 +159,7 @@ export function LabsRequestWorkspace() {
   const [changeLocationOpen, setChangeLocationOpen] = useState(false);
 
   const [projectName, setProjectName] = useState('');
+  const [rackoProjectId, setRackoProjectId] = useState('');
   const [idMode, setIdMode] = useState<AzureIdMode | null>(null);
   const [costingMode, setCostingMode] = useState<CostingMode>('shared');
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
@@ -503,6 +507,11 @@ export function LabsRequestWorkspace() {
     setSubmitError(null);
     if (errors.length > 0 || !selectedLab) return;
 
+    if (!rackoProjectId) {
+      setSubmitError('Select a Racko project / client before creating the request.');
+      return;
+    }
+
     setSubmitting(true);
     try {
       const serviceCatalog = catalog ?? (await getServices());
@@ -534,6 +543,7 @@ export function LabsRequestWorkspace() {
         selectedInstances: bundle.selectedInstances,
         costingMode,
         projectName: labProjectName,
+        projectId: rackoProjectId || undefined,
         idMode: idMode ?? undefined,
         labPermissionMode: bundle.labPermissionMode,
         resourceCleanupEnabled,
@@ -710,6 +720,18 @@ export function LabsRequestWorkspace() {
                     soft={soft}
                   />
                   <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <ProjectSelect
+                        serviceKey="cloud-labs"
+                        value={rackoProjectId}
+                        onChange={setRackoProjectId}
+                        portal={isTenantPortal ? 'tenant' : 'org'}
+                        disabled={submitting}
+                      />
+                      <p className="mt-1.5 text-xs text-gray-500">
+                        Lab spend is tracked against this project in Reports.
+                      </p>
+                    </div>
                     <div className="sm:col-span-2">
                       <label className={labelClass} htmlFor="projectName">
                         Project name
