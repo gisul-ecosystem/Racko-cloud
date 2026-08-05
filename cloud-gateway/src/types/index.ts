@@ -12,6 +12,7 @@ export interface TenantContext {
   id: string;
   slug: string;
   status: string;
+  domain?: string;
   ipAccessMode: 'all' | 'restricted';
   allowedIps: string[];
 }
@@ -38,6 +39,7 @@ export interface TenantResolveResponse {
   id: string;
   slug: string;
   status: string;
+  domain?: string;
   ipAccessMode: 'all' | 'restricted';
   allowedIps: string[];
 }

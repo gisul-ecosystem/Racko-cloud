@@ -3,6 +3,7 @@ const requestService = require('../services/requestService');
 const cleanupService = require('../services/cleanupService');
 const { getMaxDailyLimitMinutes } = require('../utils/usageSchedule');
 const { validateRequestPayload } = require('../validators/requestPayloadValidator');
+const { resolvePortalBaseUrlFromRequestHeaders } = require('../utils/frontendUrl');
 
 const validateRequestId = (requestId) => {
   if (!/^\d+$/.test(requestId)) {
@@ -88,7 +89,8 @@ const createRequest = async (req, res, next) => {
 
     const result = await requestService.createRequest({
       ...payload,
-      rackoUserId: req.rackoUser?.userId
+      rackoUserId: req.rackoUser?.userId,
+      portalBaseUrl: resolvePortalBaseUrlFromRequestHeaders(req.headers)
     });
 
     res.status(201).json({

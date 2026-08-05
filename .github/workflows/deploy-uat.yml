@@ -26,15 +26,29 @@ jobs:
   build-core-api:
     name: Build & Push core-api
     runs-on: ubuntu-latest
+    needs: build-agent
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Download agent checksum artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: agent-artifacts
 
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
 
       - name: Build core-api image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:uat -f core-api/Dockerfile core-api/
+        run: |
+          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt)
+          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt)
+          docker build \
+            --build-arg AGENT_VERSION=${{ github.sha }} \
+            --build-arg AGENT_CHECKSUM_WINDOWS=$CHECKSUM_WINDOWS \
+            --build-arg AGENT_CHECKSUM_LINUX=$CHECKSUM_LINUX \
+            -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:uat \
+            -f core-api/Dockerfile core-api/
 
       - name: Push core-api image
         run: docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:uat
@@ -265,32 +279,6 @@ jobs:
             agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
           echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
-
-      - name: Update agent version and checksums in server .env
-        run: |
-          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt)
-          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt)
-          AGENT_VERSION="${{ github.sha }}"
-
-          echo "Updating core-api .env: AGENT_VERSION=$AGENT_VERSION"
-
-          ssh -i ~/.ssh/vm_key -o StrictHostKeyChecking=no "${VM_USER}@${VM_HOST}" "
-            ENV_FILE=${DEPLOY_PATH}/core-api/.env
-
-            update_env() {
-              KEY=\$1; VALUE=\$2
-              if grep -q \"^\${KEY}=\" \"\${ENV_FILE}\" 2>/dev/null; then
-                sed -i \"s|^\${KEY}=.*|\${KEY}=\${VALUE}|\" \"\${ENV_FILE}\"
-              else
-                echo \"\${KEY}=\${VALUE}\" >> \"\${ENV_FILE}\"
-              fi
-            }
-
-            update_env 'AGENT_VERSION'          '${AGENT_VERSION}'
-            update_env 'AGENT_CHECKSUM_WINDOWS' '${CHECKSUM_WINDOWS}'
-            update_env 'AGENT_CHECKSUM_LINUX'   '${CHECKSUM_LINUX}'
-            echo 'core-api/.env updated'
-          "
 
   deploy:
     name: Deploy to UAT VM

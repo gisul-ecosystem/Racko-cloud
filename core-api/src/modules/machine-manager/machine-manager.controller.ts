@@ -364,6 +364,10 @@ export class MachineManagerController {
 
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="${entry.name}"`);
+      // Prevent Cloudflare and any intermediate proxy from compressing the binary.
+      // Compression changes the bytes on disk, causing SHA256 checksum mismatches
+      // when the agent verifies the downloaded file against the expected hash.
+      res.setHeader('Cache-Control', 'no-transform');
       fs.createReadStream(binaryPath).pipe(res);
     } catch (err) {
       next(err);
