@@ -240,7 +240,36 @@ const sseProxy = createProxyMiddleware({
   proxyTimeout: 0,
   selfHandleResponse: false,
   on: {
-    error: proxyOnHandlers.error,
+    proxyReq: (_proxyReq: import('http').ClientRequest, req: Request) => {
+      logger.info('[SSE][Gateway] SSE proxy request forwarded to core-api', {
+        path: req.path,
+        url: req.url,
+        method: req.method,
+        target: config.CORE_API_URL,
+        acceptHeader: req.headers['accept'] ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    },
+    proxyRes: (proxyRes: import('http').IncomingMessage, req: Request) => {
+      logger.info('[SSE][Gateway] SSE proxy response received from core-api', {
+        path: req.path,
+        statusCode: proxyRes.statusCode ?? null,
+        contentType: proxyRes.headers['content-type'] ?? null,
+        timestamp: new Date().toISOString(),
+      });
+    },
+    error: (err: Error, req: unknown, res: unknown) => {
+      logger.error('[SSE][Gateway] SSE proxy error', {
+        path: (req as Request).path ?? 'unknown',
+        error: err.message,
+        timestamp: new Date().toISOString(),
+      });
+      (res as Response).status(502).json({
+        success: false,
+        message: 'Service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
   },
 });
 router.get('/api/v1/admin-vm-templates/:templateId/stream', sseProxy);
