@@ -225,17 +225,21 @@ export class VmHostLeaseService {
 
     if (query.search) {
       const q = query.search.trim();
-      filter.$or = [
-        { ipAddress: { $regex: q, $options: 'i' } },
-        { provider: { $regex: q, $options: 'i' } },
-        { assignedTo: { $regex: q, $options: 'i' } },
-      ];
+      
+      // Check if search is an IP address (contains dots)
+      if (q.includes('.')) {
+        // Exact match for IP address for better performance
+        filter.ipAddress = q;
+      } else {
+        // Use text search for provider and assignedTo
+        filter.$text = { $search: q };
+      }
     }
 
     const skip = (query.page - 1) * query.limit;
     const [items, total] = await Promise.all([
       VmHostLeaseModel.find(filter)
-        .sort({ dueDate: 1, createdAt: -1 })
+        .sort(query.search && !query.search.includes('.') ? { score: { $meta: 'textScore' } } : { dueDate: 1, createdAt: -1 })
         .skip(skip)
         .limit(query.limit),
       VmHostLeaseModel.countDocuments(filter),
