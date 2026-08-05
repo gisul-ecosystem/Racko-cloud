@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { getAvailableLocations } from '../api/client';
 import { ApiError } from '../../lib/apiClient';
 import type { AvailableLocation } from '../types/catalog';
@@ -13,22 +13,34 @@ interface UseAvailableLocationsResult {
 }
 
 const MAX_ATTEMPTS = 2;
-const RETRY_DELAY_MS = 1500;
+const RETRY_DELAY_MS = 800;
+const DEBOUNCE_MS = 150;
 
 async function fetchLocationsWithRetry(
   serviceIds: number[],
-  instanceSelections?: string
+  instanceSelections?: string,
+  signal?: AbortSignal
 ): Promise<AvailableLocation[]> {
   let lastError: unknown;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    if (signal?.aborted) {
+      throw new DOMException('Aborted', 'AbortError');
+    }
+
     try {
       return await getAvailableLocations(serviceIds, instanceSelections);
     } catch (error) {
       lastError = error;
+      if (signal?.aborted) {
+        throw new DOMException('Aborted', 'AbortError');
+      }
+
       const shouldRetry =
         attempt < MAX_ATTEMPTS &&
-        (error instanceof ApiError ? error.status >= 500 || error.status === 503 : true);
+        (error instanceof ApiError
+          ? error.status >= 500 || error.status === 0 || error.status === 503
+          : true);
 
       if (!shouldRetry) {
         break;
@@ -48,17 +60,22 @@ export function useAvailableLocations(
   const [locations, setLocations] = useState<AvailableLocation[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const requestIdRef = useRef(0);
 
   const serviceKey = serviceIds.join(',');
   const instanceKey = buildInstanceSelectionsParam(selectedInstances) ?? '';
 
   useEffect(() => {
     if (serviceIds.length === 0) {
+      requestIdRef.current += 1;
       setLocations([]);
       setError(null);
+      setLoading(false);
       return;
     }
 
+    const requestId = ++requestIdRef.current;
+    const abortController = new AbortController();
     setLoading(true);
     setError(null);
 
@@ -66,25 +83,37 @@ export function useAvailableLocations(
       void (async () => {
         try {
           const instanceSelections = instanceKey || undefined;
-          const result = await fetchLocationsWithRetry(serviceIds, instanceSelections);
+          const result = await fetchLocationsWithRetry(
+            serviceIds,
+            instanceSelections,
+            abortController.signal
+          );
+          if (requestIdRef.current !== requestId) return;
           setLocations(result);
+          setError(null);
         } catch (err) {
+          if (requestIdRef.current !== requestId) return;
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+
           setLocations([]);
           setError(
             err instanceof ApiError
-              ? err.status >= 500
-                ? 'Failed to load regions. Azure may still be checking VM availability — try again in a moment.'
+              ? err.status >= 500 || err.status === 0
+                ? 'Failed to load regions for the selected instance. Try again in a moment.'
                 : err.message
-              : 'Failed to load regions. Azure may still be checking VM availability — try again in a moment.'
+              : 'Failed to load regions for the selected instance. Try again in a moment.'
           );
         } finally {
-          setLoading(false);
+          if (requestIdRef.current === requestId) {
+            setLoading(false);
+          }
         }
       })();
-    }, 300);
+    }, DEBOUNCE_MS);
 
     return () => {
       window.clearTimeout(timer);
+      abortController.abort();
     };
   }, [serviceIds, serviceKey, instanceKey]);
 

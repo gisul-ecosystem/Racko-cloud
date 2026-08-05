@@ -1,10 +1,14 @@
 const crypto = require('crypto');
 const { AuthorizationManagementClient } = require('@azure/arm-authorization');
 const { createAzureCredential, validateAzureEnv } = require('../../config/azure');
-const AppError = require('../../utils/AppError');
 
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
 const MAX_ATTEMPTS = 3;
+const ROLE_DEFINITION_CACHE_TTL_MS = 30 * 60 * 1000;
+
+/** Per-subscription map of normalized roleName → definition (or null if not found). */
+const roleDefinitionCacheBySubscription = new Map();
+const roleDefinitionInflightByKey = new Map();
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -24,6 +28,16 @@ const logAzureRoleEvent = (level, event, details = {}) => {
     return;
   }
 
+  // High-volume / expected under load — keep out of default console noise.
+  if (
+    event === 'azure_role_assign_retry' ||
+    event === 'key_vault_permissions_assigned' ||
+    event === 'resource_scoped_role_assigned' ||
+    event === 'resource_scoped_permissions_no_resources'
+  ) {
+    return;
+  }
+
   console.log(message);
 };
 
@@ -38,6 +52,8 @@ const isRetryableError = (error) => {
 };
 
 const normalizeRoleName = (value) => String(value || '').trim().toLowerCase();
+
+const escapeODataString = (value) => String(value || '').replace(/'/g, "''");
 
 const createAuthorizationClient = () => {
   const azureConfig = validateAzureEnv();
@@ -69,16 +85,86 @@ const roleAssignmentIdFromSeed = (seed) => {
   ].join('-');
 };
 
-const findMatchingRoleDefinition = async (authorizationClient, scope, roleName) => {
-  const targetRoleName = normalizeRoleName(roleName);
+const extractSubscriptionId = (scope) => {
+  const match = String(scope || '').match(/^\/subscriptions\/([^/]+)/i);
+  return match?.[1] || null;
+};
 
-  for await (const roleDefinition of authorizationClient.roleDefinitions.list(scope)) {
-    if (normalizeRoleName(roleDefinition.roleName) === targetRoleName) {
-      return roleDefinition;
-    }
+const getOrCreateSubscriptionCache = (subscriptionId) => {
+  const existing = roleDefinitionCacheBySubscription.get(subscriptionId);
+  if (existing && existing.expiresAt > Date.now()) {
+    return existing;
   }
 
-  return null;
+  const fresh = {
+    map: new Map(),
+    expiresAt: Date.now() + ROLE_DEFINITION_CACHE_TTL_MS
+  };
+  roleDefinitionCacheBySubscription.set(subscriptionId, fresh);
+  return fresh;
+};
+
+/**
+ * Resolve one role definition by name using an OData filter (1 result), not a full list.
+ * Cached per subscription for 30 minutes — critical for 48–500 user Assigning Access.
+ */
+const findMatchingRoleDefinition = async (authorizationClient, scope, roleName) => {
+  const subscriptionId = extractSubscriptionId(scope);
+  const normalized = normalizeRoleName(roleName);
+  if (!subscriptionId || !normalized) {
+    return null;
+  }
+
+  const cache = getOrCreateSubscriptionCache(subscriptionId);
+  if (cache.map.has(normalized)) {
+    return cache.map.get(normalized);
+  }
+
+  const inflightKey = `${subscriptionId}:${normalized}`;
+  const existingInflight = roleDefinitionInflightByKey.get(inflightKey);
+  if (existingInflight) {
+    return existingInflight;
+  }
+
+  const loadPromise = (async () => {
+    const listScope = `/subscriptions/${subscriptionId}`;
+    const filter = `roleName eq '${escapeODataString(String(roleName).trim())}'`;
+    let match = null;
+
+    for await (const roleDefinition of authorizationClient.roleDefinitions.list(listScope, {
+      filter
+    })) {
+      if (normalizeRoleName(roleDefinition.roleName) === normalized) {
+        match = roleDefinition;
+        break;
+      }
+    }
+
+    cache.map.set(normalized, match);
+    return match;
+  })();
+
+  roleDefinitionInflightByKey.set(inflightKey, loadPromise);
+
+  try {
+    return await loadPromise;
+  } finally {
+    roleDefinitionInflightByKey.delete(inflightKey);
+  }
+};
+
+/**
+ * Warm cache for many role names in parallel (filtered lookups).
+ */
+const loadRoleDefinitionsForSubscription = async (authorizationClient, subscriptionId, roleNames = []) => {
+  const names = [...new Set((roleNames || []).map((n) => String(n || '').trim()).filter(Boolean))];
+  const scope = `/subscriptions/${subscriptionId}`;
+
+  await Promise.all(
+    names.map((roleName) => findMatchingRoleDefinition(authorizationClient, scope, roleName))
+  );
+
+  return getOrCreateSubscriptionCache(subscriptionId).map;
 };
 
 const createRoleAssignmentWithRetry = async (
@@ -96,11 +182,19 @@ const createRoleAssignmentWithRetry = async (
     } catch (error) {
       lastError = error;
 
+      // Already exists — treat as success without retry noise.
+      if (
+        Number(error?.statusCode || error?.status) === 409 ||
+        String(error?.code || '').toLowerCase() === 'roleassignmentexists'
+      ) {
+        return null;
+      }
+
       if (attempt === MAX_ATTEMPTS || !isRetryableError(error)) {
         throw error;
       }
 
-      const delayMs = 500 * 2 ** (attempt - 1);
+      const delayMs = 400 * 2 ** (attempt - 1);
 
       logAzureRoleEvent('info', 'azure_role_assign_retry', {
         requestId,
@@ -141,6 +235,7 @@ module.exports = {
   createRoleAssignmentWithRetry,
   findMatchingRoleDefinition,
   getExistingAzureAssignment,
+  loadRoleDefinitionsForSubscription,
   logAzureRoleEvent,
   roleAssignmentIdFromSeed
 };

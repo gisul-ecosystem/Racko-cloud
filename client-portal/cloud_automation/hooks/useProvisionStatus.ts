@@ -174,9 +174,6 @@ export function useProvisionStatus({
           ?.label ?? nextStep;
 
       orchestratingRef.current = true;
-      appendEvent(
-        createOrchestrationEvent(`${stepLabel} — orchestration started.`, 'info', nextStep)
-      );
 
       let shouldChainNextStep = false;
       let refreshedSnapshot: ProvisionSnapshot | null = null;
@@ -211,10 +208,16 @@ export function useProvisionStatus({
             'remaining' in stepResult && typeof stepResult.remaining === 'number'
               ? stepResult.remaining
               : null;
+          const rolesAssigned =
+            'rolesAssigned' in stepResult && typeof stepResult.rolesAssigned === 'number'
+              ? stepResult.rolesAssigned
+              : null;
           appendEvent(
             createOrchestrationEvent(
               remaining != null
-                ? `${stepLabel} — batch complete, ${remaining} remaining. Continuing…`
+                ? rolesAssigned != null
+                  ? `${stepLabel} — assigned ${rolesAssigned}, ${remaining} left…`
+                  : `${stepLabel} — ${remaining} remaining…`
                 : `${stepLabel} — batch complete. Continuing…`,
               'info',
               nextStep

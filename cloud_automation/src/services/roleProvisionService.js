@@ -19,7 +19,7 @@ const { assignResourceScopedPermissions, RESOURCE_SCOPED_SCANNED_ROLE } = requir
 const {
   getRoleProvisionConcurrency,
   getRoleProvisionBatchSize,
-  getProvisionStepTimeBudgetMs,
+  getRoleProvisionTimeBudgetMs,
   getResourceScopedUserBatchSize
 } = require('../utils/provisionConcurrency');
 
@@ -94,9 +94,6 @@ const augmentRolesWithDependencies = async (client, roles, requestId) => {
       entraGroupId: null,
       assignmentMode: 'rbac'
     });
-    console.log(
-      `[roleProvision] Adding dependency role "${dep.role}" for ${dep.serviceName} — ${dep.reason}`
-    );
   }
 
   return augmented;
@@ -383,7 +380,8 @@ const getRoleProvisionStatus = async (requestId) => {
 
 // ─── Main ───────────────────────────────────────────────────────────────────
 
-const CONCURRENCY_LIMIT = getRoleProvisionConcurrency();
+// Concurrency is read per call so .env changes apply after process restart.
+const getConcurrencyLimit = () => getRoleProvisionConcurrency();
 
 const runConcurrent = async (tasks, limit) => {
   const results = [];
@@ -501,7 +499,7 @@ const assignAcrPullAtRegistryScope = async ({
     });
   }
 
-  const acrResults = await runConcurrent(acrTasks, CONCURRENCY_LIMIT);
+  const acrResults = await runConcurrent(acrTasks, getConcurrencyLimit());
   for (const result of acrResults) {
     if (result.status === 'fulfilled' && result.value) {
       pendingDbInserts.push(result.value);
@@ -720,20 +718,20 @@ const provisionRolesForRequest = async (requestId) => {
     }
 
     const startedAt = Date.now();
-    const timeBudgetMs = getProvisionStepTimeBudgetMs();
+    const timeBudgetMs = getRoleProvisionTimeBudgetMs();
     const batchSize = getRoleProvisionBatchSize();
     let batchAssigned = 0;
     const pendingDbInserts = [...groupDbInserts];
 
-    // With no time budget: one HTTP request = one RBAC batch (proxy-safe for large labs).
-    // With a time budget: keep assigning until the budget expires, then return complete:false.
+    // Pack as many RBAC batches as fit in the time budget (default ~55s).
+    // Budget 0 = one batch per HTTP call (proxy-safe fallback).
     let processedBatch = false;
     while (
       rbacTasks.length > 0 &&
       (timeBudgetMs === 0 ? !processedBatch : Date.now() - startedAt < timeBudgetMs)
     ) {
       const batch = rbacTasks.splice(0, batchSize);
-      const rbacResults = await runConcurrent(batch, CONCURRENCY_LIMIT);
+      const rbacResults = await runConcurrent(batch, getConcurrencyLimit());
 
       const batchInserts = [];
       for (const result of rbacResults) {
@@ -749,6 +747,18 @@ const provisionRolesForRequest = async (requestId) => {
         pendingDbInserts.push(...batchInserts);
         batchAssigned += batchInserts.length;
       }
+
+      console.log(
+        JSON.stringify({
+          event: 'role_provision_batch',
+          requestId,
+          assignedInBatch: batchInserts.length,
+          totalAssignedThisCall: batchAssigned,
+          remaining: rbacTasks.length,
+          elapsedMs: Date.now() - startedAt,
+          timeBudgetMs
+        })
+      );
 
       processedBatch = true;
     }

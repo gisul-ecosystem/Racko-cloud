@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ArrowRight,
@@ -22,7 +23,10 @@ import { useAzureRoutes } from '../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../lib/cloudAccent';
 import { useIsTenantPortal } from '../../lib/portalMode';
 import { hexToRgba, tenantAccentButton } from '../../lib/tenantAccentStyles';
+import { fetchProjects, type OrgProject } from '../../lib/projectsApi';
+import { fetchTenantProjects } from '../../lib/tenantProjectsApi';
 import { useProvisioningRequests } from '../../cloud_automation/hooks/useProvisioningRequests';
+import type { ProvisioningRequest } from '../../cloud_automation/types';
 import { RequestStatusBadge } from '../../cloud_automation/components/RequestStatusBadge';
 import { RACKO_BTN_SECONDARY } from '../../cloud_automation/components/cloudButtonStyles';
 import {
@@ -130,6 +134,8 @@ function CompletionBar({ rate, accent }: { rate: number; accent: string }) {
 
 export function AzureLabsDashboardHome() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const filterProjectId = searchParams?.get('projectId')?.trim() || null;
   const auth = useOptionalAuth();
   const isTenantPortal = useIsTenantPortal();
   const accent = useCloudAccentColor();
@@ -137,8 +143,41 @@ export function AzureLabsDashboardHome() {
   const isAuthenticated = isTenantPortal || (auth?.isAuthenticated ?? false);
   const routes = useAzureRoutes();
   const { requests, stats, loading, error, refetch } = useProvisioningRequests(isAuthenticated);
+  const [projectsById, setProjectsById] = useState<Map<string, OrgProject>>(new Map());
 
-  const recentRequests = requests.slice(0, 10);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setProjectsById(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = isTenantPortal ? await fetchTenantProjects() : await fetchProjects();
+        if (cancelled) return;
+        setProjectsById(new Map(list.map((p) => [p.id, p])));
+      } catch {
+        if (!cancelled) setProjectsById(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, isTenantPortal]);
+
+  const getRackoProjectId = (request: ProvisioningRequest): string | null => {
+    const raw = request.projectId ?? request.project_id;
+    if (!raw) return null;
+    return String(raw).trim() || null;
+  };
+
+  const filteredRequests = useMemo(() => {
+    if (!filterProjectId) return requests;
+    return requests.filter((r) => getRackoProjectId(r) === filterProjectId);
+  }, [requests, filterProjectId]);
+
+  const recentRequests = filteredRequests.slice(0, 10);
+  const filterProject = filterProjectId ? projectsById.get(filterProjectId) : null;
   const completionRate =
     stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
 
@@ -285,10 +324,23 @@ export function AzureLabsDashboardHome() {
                   <p className="mt-0.5 text-xs text-gray-400">
                     {loading
                       ? 'Loading…'
-                      : `${requests.length} total · click a row to view details`}
+                      : `${filteredRequests.length} total · click a row to view details`}
                   </p>
+                  {filterProjectId ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2">
+                      <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100">
+                        Project · {filterProject?.name || filterProjectId}
+                      </span>
+                      <Link
+                        href={routes.dashboard}
+                        className="text-xs font-semibold text-gray-500 underline transition hover:text-gray-700"
+                      >
+                        Clear filter
+                      </Link>
+                    </div>
+                  ) : null}
                 </div>
-                {!loading && requests.length > 0 ? (
+                {!loading && filteredRequests.length > 0 ? (
                   <Link
                     href={routes.createRequest}
                     className="inline-flex items-center gap-1 text-sm font-semibold transition hover:opacity-80"
@@ -335,6 +387,9 @@ export function AzureLabsDashboardHome() {
                           ID
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Project
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           Customer
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
@@ -354,6 +409,10 @@ export function AzureLabsDashboardHome() {
                     <tbody className="divide-y divide-gray-50">
                       {recentRequests.map((request) => {
                         const createdAt = getCreatedAt(request);
+                        const rackoProjectId = getRackoProjectId(request);
+                        const project = rackoProjectId
+                          ? projectsById.get(rackoProjectId)
+                          : undefined;
 
                         return (
                           <tr
@@ -369,6 +428,28 @@ export function AzureLabsDashboardHome() {
                           >
                             <td className="px-6 py-3.5 font-mono text-xs font-medium text-gray-600">
                               #{request.id}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {rackoProjectId && project ? (
+                                <span
+                                  className="inline-flex max-w-[10rem] truncate rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100"
+                                  title={
+                                    project.clientName
+                                      ? `${project.name} · ${project.clientName}`
+                                      : project.name
+                                  }
+                                >
+                                  {project.name}
+                                </span>
+                              ) : rackoProjectId ? (
+                                <span className="inline-flex max-w-[10rem] truncate rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100">
+                                  Project
+                                </span>
+                              ) : (
+                                <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-500">
+                                  Unassigned
+                                </span>
+                              )}
                             </td>
                             <td className="px-4 py-3.5 text-gray-900">
                               <span title={getCustomerEmail(request)}>

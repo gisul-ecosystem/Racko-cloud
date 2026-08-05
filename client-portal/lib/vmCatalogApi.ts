@@ -73,6 +73,10 @@ export interface ICatalogVm {
   rejectionReason?: string;
   reviewedBy?: string;
   reviewedAt?: string;
+  /** Organization/tenant project this purchase belongs to. */
+  projectId?: string;
+  projectName?: string;
+  clientName?: string;
   createdAt: string;
   updatedAt: string;
 }

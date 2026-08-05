@@ -15,6 +15,7 @@ const {
   normalizeCleanupTime,
   normalizeCleanupTimezone
 } = require('../utils/resourceCleanupSchedule');
+const { convertUsdToInr, getUsdToInrRate } = require('../utils/usdToInr');
 
 async function createRequest({
   customerEmail,
@@ -39,6 +40,7 @@ async function createRequest({
   resourceCleanupAction,
   usageWindows,
   projectName,
+  projectId,
   idMode,
   microsoftLicenseSkuId,
   microsoftLicenseSkuPartNumber,
@@ -54,6 +56,11 @@ async function createRequest({
   try {
 
     await client.query('BEGIN');
+
+    await client.query(`
+      ALTER TABLE requests
+        ADD COLUMN IF NOT EXISTS project_id TEXT
+    `);
 
     assertProvisionableLocation(location);
 
@@ -236,8 +243,18 @@ async function createRequest({
       );
 
       if (filtered.length !== instancesToValidate.length) {
+        const allowedIds = new Set(
+          filtered.map((entry) => Number(entry.serviceId ?? entry.service_id))
+        );
+        const unavailable = instancesToValidate
+          .filter((entry) => !allowedIds.has(Number(entry.serviceId)))
+          .map((entry) => entry.option_name)
+          .filter(Boolean);
+
         throw new AppError(
-          'One or more selected instance sizes are not available in the chosen region. Pick another region or instance size.',
+          unavailable.length > 0
+            ? `Instance size(s) not available in ${normalizedLocation}: ${unavailable.join(', ')}. Choose another region or instance.`
+            : 'One or more selected instance sizes are not available in the chosen region. Pick another region or instance size.',
           400
         );
       }
@@ -310,6 +327,26 @@ async function createRequest({
       perUserBudgetUsd !== undefined && perUserBudgetUsd !== null && perUserBudgetUsd !== ''
         ? Number(perUserBudgetUsd)
         : null;
+    // UI collects USD; Azure Cost Management returns INR for this subscription.
+    // Store the INR amount so super-admin tracking and Azure budgets match spend.
+    const resolvedPerUserBudgetInr =
+      resolvedPerUserBudgetUsd != null &&
+      Number.isFinite(resolvedPerUserBudgetUsd) &&
+      resolvedPerUserBudgetUsd > 0
+        ? convertUsdToInr(resolvedPerUserBudgetUsd)
+        : null;
+
+    if (resolvedPerUserBudgetInr != null) {
+      console.log(
+        JSON.stringify({
+          event: 'per_user_budget_converted_usd_to_inr',
+          service: 'request-service',
+          budgetUsd: resolvedPerUserBudgetUsd,
+          budgetInr: resolvedPerUserBudgetInr,
+          usdToInrRate: getUsdToInrRate()
+        })
+      );
+    }
     const resolvedNextCleanupAt =
       resolvedCleanupEnabled && resolvedCleanupIntervalHours
         ? new Date(Date.now() + resolvedCleanupIntervalHours * 60 * 60 * 1000).toISOString()
@@ -347,6 +384,8 @@ async function createRequest({
       resourceCleanupAction === 'pause' ? 'pause' : 'delete';
     const resolvedProjectName =
       typeof projectName === 'string' && projectName.trim() ? projectName.trim() : null;
+    const resolvedProjectId =
+      typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
     const resolvedIdMode =
       idMode === 'test_ids' || idMode === 'azure_ids' ? idMode : null;
     const resolvedMicrosoftLicenseSkuId =
@@ -408,7 +447,7 @@ async function createRequest({
 
           resolvedNextCleanupAt,
 
-          resolvedPerUserBudgetUsd,
+          resolvedPerUserBudgetInr,
 
           resolvedResourceCleanupEnabled,
 
@@ -423,6 +462,8 @@ async function createRequest({
           resolvedResourceCleanupTimezone,
 
           resolvedProjectName,
+
+          resolvedProjectId,
 
           resolvedIdMode,
 
@@ -464,6 +505,7 @@ async function createRequest({
           resource_cleanup_time,
           resource_cleanup_timezone,
           project_name,
+          project_id,
           id_mode,
           microsoft_license_sku_id,
           microsoft_license_sku_part_number,
@@ -473,7 +515,7 @@ async function createRequest({
         VALUES(
           $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
           $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-          $21, $22, $23, $24, $25, $26, $27, $28
+          $21, $22, $23, $24, $25, $26, $27, $28, $29
         )
         RETURNING
         id,

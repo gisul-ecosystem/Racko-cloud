@@ -23,6 +23,7 @@ import {
   type AdminAssignedService,
   type AdminServiceCatalogItem,
 } from '@/lib/adminServicesApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import { fetchCatalogVmRequests, formatCatalogVmStatus } from '@/lib/vmCatalogApi';
 import {
   fetchDedicatedRequests,
@@ -229,8 +230,8 @@ export default function CustomerDetailPage() {
       setWallet(walletData);
       setTransactions(txData.transactions);
       setTxTotal(txData.total);
-      setServices(servicesData.services);
-      setCatalog(servicesData.catalog);
+      setServices(servicesData.services.filter((s) => !isServiceHiddenFromUi(s.serviceKey)));
+      setCatalog(servicesData.catalog.filter((item) => !isServiceHiddenFromUi(item.serviceKey)));
       setCatalogRequests(catalogReqs);
       setDedicatedRequests(dedicatedReqs);
       setVms(allVms.filter((vm) => vm.adminId === customerId));

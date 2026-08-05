@@ -30,6 +30,7 @@ const allowedRequestFields = new Set([
   'resourceCleanupAction',
   'usageWindows',
   'projectName',
+  'projectId',
   'idMode',
   'microsoftLicenseSkuId',
   'microsoftLicenseSkuPartNumber',
@@ -68,6 +69,7 @@ const validateRequestPayload = (body) => {
     resourceCleanupAction,
     usageWindows,
     projectName,
+    projectId,
     idMode,
     microsoftLicenseSkuId,
     microsoftLicenseSkuPartNumber,
@@ -90,6 +92,12 @@ const validateRequestPayload = (body) => {
 
     if (projectName.trim().length > 120) {
       throw new AppError('projectName must be 120 characters or fewer.', 400);
+    }
+  }
+
+  if (projectId !== undefined && projectId !== null) {
+    if (typeof projectId !== 'string' || !/^[a-fA-F0-9]{24}$/.test(projectId.trim())) {
+      throw new AppError('projectId must be a 24-character hex id when provided.', 400);
     }
   }
 

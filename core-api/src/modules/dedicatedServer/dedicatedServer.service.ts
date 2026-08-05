@@ -87,6 +87,7 @@ class DedicatedServerService {
       ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
       ...(doc.tenantUserId ? { tenantUserId: doc.tenantUserId.toString() } : {}),
       ...(opts?.adminEmail ? { adminEmail: opts.adminEmail } : {}),
+      ...(doc.projectId ? { projectId: doc.projectId.toString() } : {}),
       planId: doc.planId.toString(),
       planName: doc.planName,
       specs: doc.specs,
