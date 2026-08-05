@@ -432,68 +432,14 @@ async function createRequest({
 
           resolvedPurchaseIntentDueAt,
 
-          resolvedConvertedFromRequestId,
-
-          resolvedPortalBaseUrl
+          resolvedConvertedFromRequestId
 
         ];
 
-    let request;
-    try {
-      request = await client.query(
-        `
-        INSERT INTO requests(
-          customer_email,
-          account_count,
-          location,
-          expiry_date,
-          starts_at,
-          estimated_price,
-          status,
-          enable_daily_usage,
-          daily_limit_minutes,
-          usage_schedule,
-          costing_mode,
-          racko_user_id,
-          cleanup_enabled,
-          cleanup_interval_hours,
-          next_cleanup_at,
-          per_user_budget_usd,
-          resource_cleanup_enabled,
-          resource_cleanup_interval_hours,
-          resource_cleanup_next_run_at,
-          resource_cleanup_action,
-          resource_cleanup_time,
-          resource_cleanup_timezone,
-          project_name,
-          id_mode,
-          microsoft_license_sku_id,
-          microsoft_license_sku_part_number,
-          purchase_intent_due_at,
-          converted_from_request_id,
-          portal_base_url
-        )
-        VALUES(
-          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-          $21, $22, $23, $24, $25, $26, $27, $28, $29
-        )
-        RETURNING
-        id,
-        estimated_price,
-        costing_mode
-        `,
-        insertParams
-      );
-    } catch (error) {
-      const message = String(error?.message || '');
-      if (!message.includes('portal_base_url')) {
-        throw error;
-      }
-
-      // Migration not applied yet — still create the request; tenant links resolve via racko_user_id.
-      request = await client.query(
-        `
+    // Insert without portal_base_url so create works even if migration is not applied.
+    // Tenant email links still resolve via racko_user_id → core-api tenant domain.
+    const request = await client.query(
+      `
         INSERT INTO requests(
           customer_email,
           account_count,
@@ -533,15 +479,37 @@ async function createRequest({
         id,
         estimated_price,
         costing_mode
-        `,
-        insertParams.slice(0, 28)
-      );
+      `,
+      insertParams
+    );
+
+    const requestId = request.rows[0].id;
+
+    if (resolvedPortalBaseUrl) {
+      try {
+        await client.query('SAVEPOINT portal_base_url_update');
+        await client.query(
+          `
+            UPDATE requests
+            SET portal_base_url = $2
+            WHERE id = $1
+          `,
+          [requestId, resolvedPortalBaseUrl]
+        );
+        await client.query('RELEASE SAVEPOINT portal_base_url_update');
+      } catch (error) {
+        try {
+          await client.query('ROLLBACK TO SAVEPOINT portal_base_url_update');
+        } catch {
+          // ignore
+        }
+        const message = String(error?.message || '');
+        if (!message.includes('portal_base_url')) {
+          throw error;
+        }
+        // Column missing until migration — ignore; racko_user_id lookup covers emails.
+      }
     }
-
-
-
-    const requestId =
-      request.rows[0].id;
 
     if (Array.isArray(usageWindows) && usageWindows.length > 0) {
       for (const window of usageWindows) {

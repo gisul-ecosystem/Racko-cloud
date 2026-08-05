@@ -107,7 +107,7 @@ export default function AwsUserAccountView({
                   href={user.consoleUrl}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#a01717]"
+                  className="inline-flex items-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[color-mix(in_srgb,var(--cloud-accent,#B91C1C)_88%,black)]"
                 >
                   <ExternalLink className="h-4 w-4" />
                   Open AWS Console
