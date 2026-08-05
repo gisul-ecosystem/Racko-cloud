@@ -6,7 +6,7 @@ import { formatRolesForInput, parseRolesInput } from '../../api/managePortalClie
 import type { ManagePortalUser } from '../../types/managePortal';
 
 const textareaClass =
-  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
+  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition focus:border-[var(--cloud-accent,#B91C1C)] focus:outline-none focus:ring-1 focus:ring-[var(--cloud-accent,#B91C1C)]';
 
 interface ManageUserEditorProps {
   user: ManagePortalUser | null;
@@ -100,7 +100,7 @@ export function ManageUserEditor({ user, saving, onSaveRoles, onDelete }: Manage
             type="button"
             onClick={handleSave}
             disabled={saving}
-            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex flex-1 items-center justify-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2 text-sm font-medium text-white transition hover:bg-[color-mix(in_srgb,var(--cloud-accent,#B91C1C)_88%,black)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
             Save Roles

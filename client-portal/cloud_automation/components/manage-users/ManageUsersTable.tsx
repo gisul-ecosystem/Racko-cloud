@@ -134,7 +134,7 @@ export function ManageUsersTable({
                   key={user.id}
                   onClick={() => onSelect(user.id)}
                   className={`cursor-pointer border-b border-gray-50 transition hover:bg-gray-50 ${
-                    selected ? 'bg-red-50/60' : ''
+                    selected ? 'bg-[var(--cloud-accent-soft,rgba(185,28,28,0.1))]' : ''
                   }`}
                 >
                   <td className="px-4 py-3 font-medium text-gray-900">{user.username}</td>
@@ -153,7 +153,7 @@ export function ManageUsersTable({
                       type="button"
                       onClick={(event) => void handleConsoleLaunch(event, user)}
                       disabled={launching || launchingUserId != null}
-                      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:border-[#B91C1C]/30 hover:bg-red-50 hover:text-[#B91C1C] disabled:cursor-not-allowed disabled:opacity-50"
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:border-[var(--cloud-accent,#B91C1C)]/30 hover:bg-[var(--cloud-accent-soft,rgba(185,28,28,0.1))] hover:text-[var(--cloud-accent,#B91C1C)] disabled:cursor-not-allowed disabled:opacity-50"
                       title="Open Azure Portal sign-in for this user"
                     >
                       {launching ? (

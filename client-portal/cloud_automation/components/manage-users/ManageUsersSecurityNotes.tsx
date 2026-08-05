@@ -6,7 +6,7 @@ export function ManageUsersSecurityNotes() {
   return (
     <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
       <div className="mb-3 flex items-center gap-2">
-        <Shield className="h-4 w-4 text-[#B91C1C]" />
+        <Shield className="h-4 w-4 text-[var(--cloud-accent,#B91C1C)]" />
         <h3 className="text-sm font-semibold text-gray-900">Security Notes</h3>
       </div>
       <ul className="space-y-2 text-sm text-gray-600">
