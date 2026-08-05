@@ -162,19 +162,8 @@ export class MachineManagerController {
         res.status(400).json({ success: false, message: 'sessionId required.' });
         return;
       }
-      logger.info('[PushStream] Stream ticket requested', {
-        sessionId,
-        userId,
-        timestamp: new Date().toISOString(),
-      });
       const { issuePushStreamTicket } = await import('./push.streamTicket');
       const ticket = issuePushStreamTicket(sessionId, userId);
-      logger.info('[PushStream] Stream ticket issued — browser must open SSE stream within 2 minutes', {
-        sessionId,
-        userId,
-        expiresIn: ticket.expiresIn,
-        issuedAt: new Date().toISOString(),
-      });
       success(res, 'Push stream ticket issued.', ticket);
     } catch (err) {
       next(err);
@@ -191,23 +180,9 @@ export class MachineManagerController {
     const rawToken = req.query['streamToken'];
     const streamToken = typeof rawToken === 'string' ? rawToken : '';
 
-    logger.info('[SSE][Push] Stream connection attempt', {
-      sessionId,
-      hasToken: !!streamToken,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'] ?? null,
-      acceptHeader: req.headers['accept'] ?? null,
-      timestamp: new Date().toISOString(),
-    });
-
     const { consumePushStreamTicket } = await import('./push.streamTicket');
     const ticket = streamToken ? consumePushStreamTicket(streamToken, sessionId) : null;
     if (!ticket) {
-      logger.warn('[SSE][Push] Stream rejected — invalid or expired ticket', {
-        sessionId,
-        hasToken: !!streamToken,
-        timestamp: new Date().toISOString(),
-      });
       res.status(401).json({ success: false, message: 'Unauthorized.' });
       return;
     }
@@ -227,62 +202,16 @@ export class MachineManagerController {
 
     const { pushSessionEmitter } = await import('./push.events');
 
-    const streamOpenedAt = Date.now();
-    logger.info('[PushStream] SSE listener registered', {
-      sessionId,
-      streamOpenedAt: new Date(streamOpenedAt).toISOString(),
-      listenerCountBefore: pushSessionEmitter.listenerCount(sessionId),
-    });
-
     const listener = (event: object) => {
-      const latencyMs = Date.now() - streamOpenedAt;
-      logger.info('[PushStream] SSE event delivered to browser', {
-        sessionId,
-        event,
-        streamOpenMs: latencyMs,
-      });
       send(event);
     };
 
     pushSessionEmitter.on(sessionId, listener);
 
-    logger.info('[PushStream] SSE listener registered successfully', {
-      sessionId,
-      listenerCountAfter: pushSessionEmitter.listenerCount(sessionId),
-    });
-
     // Cleanup when client disconnects
     req.on('close', () => {
-      logger.info('[PushStream] SSE stream closed by client', {
-        sessionId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
       pushSessionEmitter.removeListener(sessionId, listener);
       machineManagerService.removePushSession(sessionId);
-    });
-
-    req.on('error', (err) => {
-      logger.error('[PushStream] SSE stream request error', {
-        sessionId,
-        error: err.message,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
-    });
-
-    res.on('close', () => {
-      logger.info('[PushStream] SSE response closed', {
-        sessionId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-        writableEnded: res.writableEnded,
-      });
-    });
-
-    res.on('error', (err) => {
-      logger.error('[PushStream] SSE response error', {
-        sessionId,
-        error: err.message,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
     });
   }
 
@@ -619,42 +548,18 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     const jobId = req.params['id'] as string;
     const rawToken = req.query['streamToken'];
     const streamToken = typeof rawToken === 'string' ? rawToken : '';
-
-    logger.info('[SSE][Jobs] Stream connection attempt', {
-      jobId,
-      hasToken: !!streamToken,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'] ?? null,
-      timestamp: new Date().toISOString(),
-    });
-
     const ticket = streamToken ? consumeJobStreamTicket(streamToken, jobId) : null;
 
     if (!ticket) {
-      logger.warn('[SSE][Jobs] Stream rejected — invalid or expired ticket', {
-        jobId,
-        hasToken: !!streamToken,
-        timestamp: new Date().toISOString(),
-      });
       res.status(401).json({ success: false, message: 'Unauthorized.' });
       return;
     }
 
     const job = await JobModel.findById(jobId);
     if (!job || job.adminId.toString() !== ticket.userId) {
-      logger.warn('[SSE][Jobs] Stream rejected — job not found or ownership mismatch', {
-        jobId,
-        timestamp: new Date().toISOString(),
-      });
       res.status(404).json({ success: false, message: 'Job not found.' });
       return;
     }
-
-    logger.info('[SSE][Jobs] Stream authenticated — opening SSE connection', {
-      jobId,
-      jobStatus: job.status,
-      timestamp: new Date().toISOString(),
-    });
 
     // SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
@@ -663,12 +568,6 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    logger.info('[SSE][Jobs] Headers flushed — stream is live', {
-      jobId,
-      timestamp: new Date().toISOString(),
-    });
-
-    const streamOpenedAt = Date.now();
     const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
     // Send current state immediately
@@ -676,29 +575,15 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
 
     // If already terminal, close immediately
     if (job.status === 'success' || job.status === 'failed') {
-      logger.info('[SSE][Jobs] Job already terminal — closing stream immediately', {
-        jobId,
-        status: job.status,
-      });
       res.end();
       return;
     }
 
     // Subscribe to live updates
     const listener = (event: object) => {
-      logger.info('[SSE][Jobs] Event delivered to browser', {
-        jobId,
-        event,
-        streamOpenMs: Date.now() - streamOpenedAt,
-      });
       send(event);
       const e = event as { status: string };
       if (e.status === 'success' || e.status === 'failed') {
-        logger.info('[SSE][Jobs] Job reached terminal state — closing stream', {
-          jobId,
-          status: e.status,
-          streamDurationMs: Date.now() - streamOpenedAt,
-        });
         jobStatusEmitter.removeListener(jobId, listener);
         res.end();
       }
@@ -706,34 +591,8 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
 
     jobStatusEmitter.on(jobId, listener);
 
-    logger.info('[SSE][Jobs] Listener registered', {
-      jobId,
-      listenerCount: jobStatusEmitter.listenerCount(jobId),
-      timestamp: new Date().toISOString(),
-    });
-
     req.on('close', () => {
-      logger.info('[SSE][Jobs] Stream closed by client', {
-        jobId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
       jobStatusEmitter.removeListener(jobId, listener);
-    });
-
-    res.on('close', () => {
-      logger.info('[SSE][Jobs] Response closed', {
-        jobId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-        writableEnded: res.writableEnded,
-      });
-    });
-
-    res.on('error', (err) => {
-      logger.error('[SSE][Jobs] Response error', {
-        jobId,
-        error: err.message,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
     });
   }
   /**
@@ -790,30 +649,14 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     const rawToken = req.query['streamToken'];
     const streamToken = typeof rawToken === 'string' ? rawToken : '';
 
-    logger.info('[SSE][Reset] Stream connection attempt', {
-      sessionId,
-      hasToken: !!streamToken,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'] ?? null,
-      timestamp: new Date().toISOString(),
-    });
-
     const { consumeResetStreamTicket } = await import('./reset.streamTicket');
     const ticket = streamToken ? consumeResetStreamTicket(streamToken, sessionId) : null;
     if (!ticket) {
-      logger.warn('[SSE][Reset] Stream rejected — invalid or expired ticket', {
-        sessionId,
-        hasToken: !!streamToken,
-        timestamp: new Date().toISOString(),
-      });
       res.status(401).json({ success: false, message: 'Unauthorized.' });
       return;
     }
 
-    logger.info('[SSE][Reset] Stream authenticated — opening SSE connection', {
-      sessionId,
-      timestamp: new Date().toISOString(),
-    });
+    logger.info('[ResetStream] SSE stream opened', { sessionId });
 
     // SSE headers
     res.setHeader('Content-Type', 'text/event-stream');
@@ -822,11 +665,6 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    logger.info('[SSE][Reset] Headers flushed — stream is live', {
-      sessionId,
-      timestamp: new Date().toISOString(),
-    });
-
     const send = (data: object) => res.write(`data: ${JSON.stringify(data)}\n\n`);
 
     // Confirm stream is alive
@@ -834,46 +672,12 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
 
     const { resetSessionEmitter } = await import('./reset.events');
 
-    const streamOpenedAt = Date.now();
-    const listener = (event: object) => {
-      logger.info('[SSE][Reset] Event delivered to browser', {
-        sessionId,
-        event,
-        streamOpenMs: Date.now() - streamOpenedAt,
-      });
-      send(event);
-    };
+    const listener = (event: object) => send(event);
     resetSessionEmitter.on(sessionId, listener);
 
-    logger.info('[SSE][Reset] Listener registered', {
-      sessionId,
-      listenerCount: resetSessionEmitter.listenerCount(sessionId),
-      timestamp: new Date().toISOString(),
-    });
-
     req.on('close', () => {
-      logger.info('[SSE][Reset] Stream closed by client', {
-        sessionId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
       resetSessionEmitter.removeListener(sessionId, listener);
       machineManagerService.removeResetSession(sessionId);
-    });
-
-    res.on('close', () => {
-      logger.info('[SSE][Reset] Response closed', {
-        sessionId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-        writableEnded: res.writableEnded,
-      });
-    });
-
-    res.on('error', (err) => {
-      logger.error('[SSE][Reset] Response error', {
-        sessionId,
-        error: err.message,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
     });
   }
 
