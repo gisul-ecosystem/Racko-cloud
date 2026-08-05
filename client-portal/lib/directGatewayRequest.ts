@@ -15,6 +15,25 @@ import { isTenantPortalClient } from '@/lib/portalClient';
 
 type RequestOptions = RequestInit & { skipAuth?: boolean };
 
+const PROVISION_NETWORK_RETRIES = 2;
+
+function isProvisionNetworkFailure(error: unknown): boolean {
+  if (!(error instanceof TypeError)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('failed to fetch') ||
+    message.includes('networkerror') ||
+    message.includes('load failed')
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function refreshPlatformAccessToken(): Promise<string | null> {
   try {
     const res = await fetch(`${getGatewayBaseUrl()}/api/v1/auth/refresh`, {
@@ -61,12 +80,40 @@ export async function directGatewayRequest<T>(
   }
 
   const url = `${gatewayBase}${fullPath}`;
-  let res = await fetch(url, {
-    ...fetchOptions,
-    headers,
-    credentials: isTenant ? 'omit' : 'include',
-    cache: 'no-store',
-  });
+  const isProvisionCall = fullPath.includes('/provision/request/');
+  const maxAttempts = isProvisionCall ? PROVISION_NETWORK_RETRIES + 1 : 1;
+
+  let res: Response | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      res = await fetch(url, {
+        ...fetchOptions,
+        headers,
+        credentials: isTenant ? 'omit' : 'include',
+        cache: 'no-store',
+      });
+      break;
+    } catch (error) {
+      if (!isProvisionNetworkFailure(error) || attempt >= maxAttempts) {
+        throw new ApiError(
+          'The provisioning request was interrupted before the server responded. This usually means a network or proxy timeout — click Retry step to continue.',
+          0,
+          'NETWORK_ERROR'
+        );
+      }
+
+      await sleep(1500 * attempt);
+    }
+  }
+
+  if (!res) {
+    throw new ApiError(
+      'The provisioning request was interrupted before the server responded. Click Retry step to continue.',
+      0,
+      'NETWORK_ERROR'
+    );
+  }
 
   // Match apiRequest: refresh once on 401 for platform sessions, then retry.
   if (res.status === 401 && !skipAuth && !isTenant) {

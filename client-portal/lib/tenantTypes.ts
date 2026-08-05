@@ -46,11 +46,7 @@ export const PLATFORM_SERVICE_CATALOG: Array<{
     name: 'AWS Services',
     description: 'AWS access management, provisioning, and lab environments.',
   },
-  {
-    key: 'gcp',
-    name: 'GCP Services',
-    description: 'Google Cloud access management, provisioning, and lab environments.',
-  },
+  // GCP is temporarily hidden from UI until automation is ready (see lib/hiddenServices.ts).
   {
     key: 'docs',
     name: 'Documentation',

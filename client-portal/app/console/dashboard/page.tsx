@@ -9,7 +9,6 @@ import {
   Cloud,
   FlaskConical,
   FolderKanban,
-  Globe,
   HardDrive,
   Loader2,
   Monitor,
@@ -24,6 +23,7 @@ import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
@@ -98,13 +98,6 @@ const SERVICE_TILES: Array<{
     description: 'AWS access management, provisioning, and lab environments.',
   },
   {
-    serviceKey: 'gcp',
-    name: 'GCP Services',
-    href: tenantConsole.gcp,
-    icon: Globe,
-    description: 'Google Cloud access management, provisioning, and lab environments.',
-  },
-  {
     serviceKey: 'docs',
     name: 'Documentation',
     href: tenantConsole.docs,
@@ -143,6 +136,7 @@ export default function TenantConsolePage() {
   }, [router, tenantUser?.role, isConsoleStaff, rbacLoading]);
 
   const tiles = SERVICE_TILES.filter((tile) => {
+    if (isServiceHiddenFromUi(tile.serviceKey)) return false;
     if (tile.serviceKey === 'billing') {
       return hasPermission('wallet.read', 'wallet.topup');
     }
