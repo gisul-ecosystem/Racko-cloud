@@ -30,11 +30,15 @@ export class TenantRbacController {
   getMyPermissions = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const ctx = getTenantCtx(req);
-      const permissions = await tenantRbacService.getEffectivePermissions(ctx);
+      const [permissions, flags] = await Promise.all([
+        tenantRbacService.getEffectivePermissions(ctx),
+        tenantRbacService.getSubjectFlags(ctx.tenantId, ctx.subjectId),
+      ]);
       success(res, 'Tenant permissions retrieved.', {
         role: ctx.role,
         tenantId: ctx.tenantId,
         isTenantAdmin: ctx.isTenantAdmin,
+        isConsoleOperator: ctx.isTenantAdmin || flags.isConsoleOperator,
         permissions: [...permissions],
       });
     } catch (err) {

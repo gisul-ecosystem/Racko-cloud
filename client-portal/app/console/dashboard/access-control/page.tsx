@@ -27,6 +27,8 @@ export default function TenantAccessControlPage() {
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
   const [isTenantAdmin, setIsTenantAdmin] = useState(false);
+  const [canWriteRoles, setCanWriteRoles] = useState(false);
+  const [canAssign, setCanAssign] = useState(false);
 
   const [catalog, setCatalog] = useState<OrgRbacPermissionDef[]>([]);
   const [roles, setRoles] = useState<OrgRbacRole[]>([]);
@@ -70,6 +72,10 @@ export default function TenantAccessControlPage() {
         fetchTenantRbacPeople(),
       ]);
       setIsTenantAdmin(me.isTenantAdmin);
+      setCanWriteRoles(
+        me.isTenantAdmin || me.permissions.includes('rbac.roles.write')
+      );
+      setCanAssign(me.isTenantAdmin || me.permissions.includes('rbac.assign'));
       setCatalog(perms);
       setRoles(roleList);
       setPeople(peopleList);
@@ -205,7 +211,7 @@ export default function TenantAccessControlPage() {
         </div>
       ) : tab === 'roles' ? (
         <div className="space-y-4">
-          {(isTenantAdmin) && (
+          {(canWriteRoles) && (
             <div className="flex justify-end">
               <button
                 type="button"
@@ -318,19 +324,21 @@ export default function TenantAccessControlPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-700">{role.permissions.length}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingRole(role);
-                          setCreatingRole(false);
-                          setRoleName(role.name);
-                          setRoleDescription(role.description);
-                          setRolePerms([...role.permissions]);
-                        }}
-                        className="text-xs font-medium text-[#B91C1C] hover:underline"
-                      >
-                        Edit
-                      </button>
+                      {canWriteRoles ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingRole(role);
+                            setCreatingRole(false);
+                            setRoleName(role.name);
+                            setRoleDescription(role.description);
+                            setRolePerms([...role.permissions]);
+                          }}
+                          className="text-xs font-medium text-[#B91C1C] hover:underline"
+                        >
+                          Edit
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -340,7 +348,7 @@ export default function TenantAccessControlPage() {
         </div>
       ) : (
         <div className="space-y-4">
-          {isTenantAdmin ? (
+          {canAssign ? (
             <div className="flex justify-end">
               <button
                 type="button"
@@ -486,7 +494,7 @@ export default function TenantAccessControlPage() {
                     <td className="px-4 py-3 text-right">
                       {person.isTenantAdmin ? (
                         <span className="text-xs text-gray-400">Full access</span>
-                      ) : (
+                      ) : canAssign ? (
                         <button
                           type="button"
                           onClick={() => {
@@ -497,7 +505,7 @@ export default function TenantAccessControlPage() {
                         >
                           Assign roles
                         </button>
-                      )}
+                      ) : null}
                     </td>
                   </tr>
                 ))}

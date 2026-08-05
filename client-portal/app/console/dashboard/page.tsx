@@ -22,6 +22,7 @@ import { TenantRecentResources } from '@/components/tenant/TenantRecentResources
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
 import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
@@ -131,26 +132,30 @@ export default function TenantConsolePage() {
   const { tenantUser } = useTenantAuth();
   const { accentColor, portalName } = useTenantBranding();
   const { loading, hasActiveService } = useTenantServices();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { loading: rbacLoading, isConsoleStaff, hasPermission, isTenantAdmin } = useTenantRbac();
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_user') {
+    if (rbacLoading) return;
+    // Elastic end-users only — console operators stay on the hub.
+    if (tenantUser?.role === 'tenant_user' && !isConsoleStaff) {
       router.replace(tenantVps.vms);
     }
-  }, [router, tenantUser?.role]);
+  }, [router, tenantUser?.role, isConsoleStaff, rbacLoading]);
 
   const tiles = SERVICE_TILES.filter((tile) => {
-    if (
-      tile.serviceKey === 'billing' ||
-      tile.serviceKey === 'projects' ||
-      tile.serviceKey === 'access-control'
-    ) {
-      return isAdmin;
+    if (tile.serviceKey === 'billing') {
+      return hasPermission('wallet.read', 'wallet.topup');
+    }
+    if (tile.serviceKey === 'projects') {
+      return hasPermission('projects.read', 'projects.manage');
+    }
+    if (tile.serviceKey === 'access-control') {
+      return isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
     }
     return hasActiveService(tile.serviceKey);
   });
 
-  if (loading || tenantUser?.role === 'tenant_user') {
+  if (loading || rbacLoading || (tenantUser?.role === 'tenant_user' && !isConsoleStaff)) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
         <Loader2 className="h-7 w-7 animate-spin" style={{ color: accentColor }} />

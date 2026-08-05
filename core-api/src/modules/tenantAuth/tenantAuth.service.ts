@@ -23,6 +23,8 @@ export interface TenantUserPublic {
   email: string;
   role: 'tenant_admin' | 'tenant_user';
   tenantId: string;
+  /** True for Access-control invited operators (and always for tenant_admin). */
+  isConsoleOperator: boolean;
 }
 
 function signTenantAccessToken(payload: TenantTokenPayload): string {
@@ -65,8 +67,11 @@ export class TenantAuthService {
       throw new TenantAuthError('INVALID_CREDENTIALS', 401);
     }
 
-    // End-user access window gate (assigned tenant VMs with schedule)
-    if (tenantUser.role === 'tenant_user') {
+    const isConsoleOperator =
+      tenantUser.role === 'tenant_admin' || Boolean(tenantUser.isConsoleOperator);
+
+    // End-user access window gate — not applied to console operators.
+    if (tenantUser.role === 'tenant_user' && !tenantUser.isConsoleOperator) {
       const {
         assertTenantUserAssignedVmsAccessible,
       } = await import('../vmAccessSchedule/scheduleManager');
@@ -94,6 +99,7 @@ export class TenantAuthService {
         email: tenantUser.email,
         role: tenantUser.role,
         tenantId: tenantUser.tenantId.toString(),
+        isConsoleOperator,
       },
     };
   }
