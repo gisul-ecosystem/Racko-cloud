@@ -64,7 +64,7 @@ const securityHeaders = [
         .join(" "),
       // Guacamole VM console domains across all environments — iframes load from these.
       // frame-ancestors 'none' blocks THIS page from being embedded elsewhere (anti-clickjack).
-      "frame-src 'self' https://guac.racko.ai https://dev-guac.racko.ai https://qa-guac.racko.ai https://uat-guac.racko.ai",
+      "frame-src 'self' https://guac.racko.ai https://guac-dev.racko.ai https://guac-qa.racko.ai https://guac-uat.racko.ai",
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",
