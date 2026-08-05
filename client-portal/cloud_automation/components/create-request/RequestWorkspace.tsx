@@ -646,11 +646,6 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
 
     if (errors.length > 0) return;
 
-    if (!rackoProjectId) {
-      setSubmitError('Select a Racko project / client before creating the request.');
-      return;
-    }
-
     if (!labsMode) {
       if (totalPrice == null) {
         setSubmitError('Complete the form to calculate an estimate before creating the request.');
@@ -680,7 +675,7 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
     try {
       if (!labsMode && totalPrice != null && totalPrice > 0) {
         const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure', {
-          projectId: rackoProjectId,
+          projectId: rackoProjectId || undefined,
           serviceKey: projectServiceKey === 'cloud-labs' ? 'cloud-labs' : 'azure',
         });
         chargedInr = charge.chargedInr;
@@ -1075,7 +1070,8 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
                 Cost attribution
               </p>
               <p className="mb-3 text-sm text-gray-500">
-                Charges stay on your main wallet and are tracked on this project in Reports.
+                Charges stay on your main wallet. Optionally assign a project so spend appears in
+                Reports.
               </p>
               <ProjectSelect
                 serviceKey={projectServiceKey}

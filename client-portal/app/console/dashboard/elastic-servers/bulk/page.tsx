@@ -54,11 +54,6 @@ export default function TenantBulkImportPage() {
   };
 
   const handleSubmit = async () => {
-    if (!projectId) {
-      addToast('error', 'Select a project for these servers.');
-      return;
-    }
-
     let parsed: unknown;
     try {
       parsed = JSON.parse(jsonText);
@@ -85,7 +80,7 @@ export default function TenantBulkImportPage() {
         ipAddress: String(ip).trim(),
         protocol: proto,
         password: String(raw.password),
-        projectId,
+        ...(projectId ? { projectId } : {}),
         ...(raw.username && { username: String(raw.username).trim() }),
       });
     }
@@ -158,7 +153,7 @@ export default function TenantBulkImportPage() {
           </Link>
           <button
             onClick={() => void handleSubmit()}
-            disabled={submitting || !projectId}
+            disabled={submitting}
             className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 disabled:opacity-50"
             style={tenantAccentButton(accentColor)}
           >
