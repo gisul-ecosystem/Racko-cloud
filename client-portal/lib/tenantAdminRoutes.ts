@@ -56,4 +56,5 @@ export const tenantConsole = {
   projectsCreate: `${TENANT_CONSOLE}/projects/create`,
   projectsReports: `${TENANT_CONSOLE}/projects/reports`,
   project: (id: string) => `${TENANT_CONSOLE}/projects/${id}`,
+  accessControl: `${TENANT_CONSOLE}/access-control`,
 } as const;

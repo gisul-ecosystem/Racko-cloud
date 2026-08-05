@@ -138,6 +138,27 @@ export class TenantRbacController {
       next(err);
     }
   };
+
+  inviteOperator = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const ctx = getTenantCtx(req);
+      if (!ctx.isTenantAdmin) {
+        const perms = await tenantRbacService.getEffectivePermissions(ctx);
+        if (!perms.has('rbac.assign')) {
+          throw new ForbiddenError('Insufficient permissions.');
+        }
+      }
+      const body = req.body as {
+        email: string;
+        temporaryPassword: string;
+        roleIds: string[];
+      };
+      const user = await tenantRbacService.inviteOperator(ctx.tenantId, body, ctx.subjectId);
+      success(res, 'Operator invited.', { user }, 201);
+    } catch (err) {
+      next(err);
+    }
+  };
 }
 
 export const tenantRbacController = new TenantRbacController();

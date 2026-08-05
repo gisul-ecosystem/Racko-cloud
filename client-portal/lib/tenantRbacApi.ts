@@ -122,3 +122,17 @@ export async function setTenantRbacUserRoles(
   );
   return data.roleIds;
 }
+
+export async function inviteTenantOperator(input: {
+  email: string;
+  temporaryPassword: string;
+  roleIds: string[];
+}): Promise<{ _id: string; email: string; role: string }> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ user: { _id: string; email: string; role: string } }>>(
+      '/api/v1/tenant-rbac/people/operators',
+      { method: 'POST', body: JSON.stringify(input) }
+    )
+  );
+  return data.user;
+}
