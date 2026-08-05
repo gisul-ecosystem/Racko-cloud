@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import { fetchMyAdminServices, type AdminServiceKey } from '@/lib/adminServicesApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createProject,
   fetchProject,
@@ -194,7 +195,12 @@ function ProjectsPageInner() {
       setProjectName(preview.name);
       setAvailableServices(
         services
-          .filter((service) => service.status === 'active' && service.serviceKey !== 'docs')
+          .filter(
+            (service) =>
+              service.status === 'active'
+              && service.serviceKey !== 'docs'
+              && !isServiceHiddenFromUi(service.serviceKey)
+          )
           .map((service) => service.serviceKey)
       );
     } catch (err) {
