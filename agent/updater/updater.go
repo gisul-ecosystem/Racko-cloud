@@ -20,6 +20,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -129,12 +130,22 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 	_ = os.Remove(bakPath)
 	log.Printf("[updater] Binary replaced successfully")
 
-	// ── Step 6: exit — SCM restarts the service with the new binary ──────────
-	// The Windows Service Control Manager is configured to restart the service
-	// on unexpected exit (SC_ACTION_RESTART). When we exit here the SCM detects
-	// the exit, waits the configured restart delay, then starts a fresh process
-	// from the same binary path — which now contains the new version.
-	// No sc.exe stop/start needed — and avoids the self-stop deadlock.
+	// ── Step 6: ensure SCM failure actions are set, then exit ────────────────
+	// Ensure the Windows SCM is configured to auto-restart this service on exit.
+	// This is idempotent — safe to run on every update.
+	// Required for VMs installed via push (not the Inno Setup installer) which
+	// don't have failure actions configured by default.
+	if out, err := exec.Command("sc.exe",
+		"failure", "RackoAgent",
+		"reset=", "86400",
+		"actions=", "restart/5000/restart/10000/restart/30000",
+	).CombinedOutput(); err != nil {
+		log.Printf("[updater] sc failure config returned: %v — %s (non-fatal)", err, string(out))
+	} else {
+		log.Printf("[updater] SCM failure actions configured for auto-restart")
+	}
+
+	// Exit — SCM detects the exit and restarts with the new binary.
 	log.Printf("[updater] Update complete — exiting so SCM restarts with new binary")
 	os.Exit(0)
 }
