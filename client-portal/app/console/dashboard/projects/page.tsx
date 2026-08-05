@@ -1,7 +1,9 @@
 'use client';
 
 import { ProjectsListView } from '@/components/console/ProjectsListView';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 
 export default function TenantProjectsListPage() {
-  return <ProjectsListView portal="tenant" />;
+  const { accentColor } = useTenantBranding();
+  return <ProjectsListView portal="tenant" accentColor={accentColor} />;
 }
