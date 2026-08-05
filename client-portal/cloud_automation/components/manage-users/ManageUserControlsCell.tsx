@@ -260,7 +260,7 @@ export function ManageUserControlsCell({
               </button>
               <button
                 type="button"
-                className="rounded-lg bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
+                className="rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                 disabled={!topUpAmount || busy}
                 onClick={() => void handleRenewBudget()}
               >
@@ -319,7 +319,7 @@ export function ManageUserControlsCell({
               </button>
               <button
                 type="button"
-                className="rounded-lg bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
+                className="rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                 disabled={busy}
                 onClick={() => void handleSaveCleanupInterval(false)}
               >
