@@ -292,6 +292,7 @@ jobs:
 
   deploy:
     name: Deploy to UAT VM
+    if: false
     runs-on: ubuntu-latest
     needs:
       - build-core-api
