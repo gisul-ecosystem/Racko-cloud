@@ -38,6 +38,9 @@ export interface IDedicatedServer {
   tenantId?: string;
   tenantUserId?: string;
   adminEmail?: string;
+  projectId?: string;
+  projectName?: string;
+  clientName?: string;
   planId: string;
   planName: string;
   specs: { cpu: string; ram: string; disk: string; location?: string };

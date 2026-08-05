@@ -3,7 +3,6 @@
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../../context/AuthContext';
-import { ProjectsSidebar } from '../../../components/console/ProjectsSidebar';
 import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar';
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
@@ -11,7 +10,7 @@ import { useServiceShell } from '../../../components/console/useServiceShell';
 export default function ProjectsLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
-  const { sidebarOpen, setSidebarOpen, toggleSidebar } = useServiceShell(true);
+  const { setSidebarOpen } = useServiceShell(false);
 
   useEffect(() => {
     if (isLoading) return;
@@ -36,16 +35,12 @@ export default function ProjectsLayout({ children }: { children: React.ReactNode
 
   return (
     <ServiceShellLayout
-      sidebarOpen={sidebarOpen}
+      sidebarOpen={false}
       sidebar={
-        <ProjectsSidebar
-          sidebarOpen={sidebarOpen}
-          onCloseSidebar={() => setSidebarOpen(false)}
-        />
+        null
       }
       topBar={
         <RackoGlobalTopBar
-          onToggleSidebar={toggleSidebar}
           title="Projects"
         />
       }

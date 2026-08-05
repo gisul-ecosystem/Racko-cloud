@@ -14,6 +14,10 @@ export interface CatalogVmResponse {
   tenantId?: string;
   tenantUserId?: string;
   adminEmail?: string;
+  /** Organization/tenant project this purchase belongs to. */
+  projectId?: string;
+  projectName?: string;
+  clientName?: string;
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
   category: VmCatalogCategory;

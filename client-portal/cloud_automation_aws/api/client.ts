@@ -186,6 +186,9 @@ export async function calculatePricingEstimate(
 export interface AwsCreateRequestPayload {
   projectName?: string;
   project_name?: string;
+  /** Racko organization/tenant project id. */
+  projectId?: string;
+  project_id?: string;
   idMode?: 'test_ids' | 'aws_ids';
   id_mode?: 'test_ids' | 'aws_ids';
   customerEmail?: string;
@@ -355,6 +358,12 @@ export interface AwsRequest {
   _id: string;
   customer_email?: string;
   customerEmail?: string;
+  /** Lab label typed at create time (not the Racko project). */
+  projectName?: string;
+  project_name?: string;
+  /** Racko org/tenant project id when attributed. */
+  projectId?: string | null;
+  project_id?: string | null;
   status: 'Pending' | 'Provisioning' | 'Completed' | 'Failed' | 'Expired' | string;
   estimated_price?: number;
   estimatedPrice?: number;

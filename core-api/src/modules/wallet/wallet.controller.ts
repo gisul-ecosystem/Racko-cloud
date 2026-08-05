@@ -23,12 +23,32 @@ export class WalletController {
       const authReq = req as TenantAuthenticatedRequest;
       const page = Number(req.query['page'] ?? 1);
       const limit = Number(req.query['limit'] ?? 20);
+      const projectId = String(req.query['projectId'] ?? '').trim();
+      const serviceKey = String(req.query['serviceKey'] ?? '').trim();
       const result = await walletService.listTransactions(
         authReq.tenantUser.tenantId,
         page,
-        limit
+        limit,
+        {
+          ...(projectId ? { projectId } : {}),
+          ...(serviceKey ? { serviceKey } : {}),
+        }
       );
       success(res, 'Wallet transactions retrieved.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async getTransaction(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const { txId } = req.params as { txId: string };
+      const transaction = await walletService.getTransaction(
+        authReq.tenantUser.tenantId,
+        txId
+      );
+      success(res, 'Wallet transaction retrieved.', { transaction });
     } catch (error) {
       next(error);
     }
@@ -48,16 +68,22 @@ export class WalletController {
   async chargeCloudRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as TenantAuthenticatedRequest;
-      const { amountUsd, relatedRequestId, provider } = req.body as {
+      const { amountUsd, relatedRequestId, provider, projectId, serviceKey } = req.body as {
         amountUsd: number;
         relatedRequestId?: string | null;
         provider?: 'azure' | 'aws';
+        projectId?: string;
+        serviceKey?: 'azure' | 'aws' | 'cloud-labs';
       };
       const result = await walletService.chargeCloudRequest(
         authReq.tenantUser.tenantId,
         amountUsd,
         relatedRequestId ?? null,
-        provider ?? 'azure'
+        provider ?? 'azure',
+        {
+          projectId: projectId ?? null,
+          serviceKey: serviceKey ?? null,
+        }
       );
       success(res, 'Wallet charged for cloud lab request.', result);
     } catch (error) {

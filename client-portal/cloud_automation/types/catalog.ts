@@ -179,6 +179,9 @@ export interface CreateRequestPayload {
   usageWindows?: UsageWindow[];
   perUserBudgetUsd?: number;
   projectName?: string;
+  /** Racko organization/tenant project id. */
+  projectId?: string;
+  project_id?: string;
   idMode?: AzureIdMode;
   microsoftLicenseSkuId?: string;
   microsoftLicenseSkuPartNumber?: string;
