@@ -142,11 +142,23 @@ func downloadBinary(platformURL, destPath string) error {
 	url := platformURL + "/api/v1/agent/binary/windows"
 	client := &http.Client{Timeout: 10 * time.Minute} // large binary, generous timeout
 
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("build request: %w", err)
+	}
+	// Explicitly disable Accept-Encoding to prevent any proxy/CDN from
+	// compressing the binary in transit. Go's http.Client adds Accept-Encoding:gzip
+	// by default; disabling it ensures we receive raw bytes identical to what CI built.
+	req.Header.Set("Accept-Encoding", "identity")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("http get: %w", err)
 	}
 	defer resp.Body.Close()
+
+	log.Printf("[updater] Download response: status=%d content-encoding=%q content-length=%d",
+		resp.StatusCode, resp.Header.Get("Content-Encoding"), resp.ContentLength)
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("server returned %d", resp.StatusCode)
@@ -156,11 +168,35 @@ func downloadBinary(platformURL, destPath string) error {
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	written, err := io.Copy(f, resp.Body)
+	// Explicitly close and sync before returning — do not rely on defer
+	// to ensure all bytes are flushed to disk before sha256File reads it.
+	syncErr := f.Sync()
+	closeErr := f.Close()
+
+	if err != nil {
 		return fmt.Errorf("write binary: %w", err)
 	}
+	if syncErr != nil {
+		log.Printf("[updater] Warning: file sync failed: %v", syncErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("close file: %w", closeErr)
+	}
+
+	log.Printf("[updater] Download complete: wrote %d bytes to %s", written, destPath)
+
+	// Verify file size on disk matches what we wrote
+	info, err := os.Stat(destPath)
+	if err != nil {
+		return fmt.Errorf("stat after write: %w", err)
+	}
+	log.Printf("[updater] File size on disk: %d bytes (wrote %d bytes)", info.Size(), written)
+	if info.Size() != written {
+		return fmt.Errorf("size mismatch: wrote %d but disk shows %d", written, info.Size())
+	}
+
 	return nil
 }
 
