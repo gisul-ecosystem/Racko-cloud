@@ -7,6 +7,7 @@ import {
   createTenantRoleSchema,
   updateTenantRoleSchema,
   setTenantUserRolesSchema,
+  inviteTenantOperatorSchema,
 } from './tenantRbac.validation';
 
 const router = Router();
@@ -43,6 +44,14 @@ router.put(
   validateRequest(setTenantUserRolesSchema),
   (req, res, next) => {
     tenantRbacController.setUserRoles(req, res, next);
+  }
+);
+
+router.post(
+  '/people/operators',
+  validateRequest(inviteTenantOperatorSchema),
+  (req, res, next) => {
+    tenantRbacController.inviteOperator(req, res, next);
   }
 );
 

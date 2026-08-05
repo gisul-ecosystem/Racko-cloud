@@ -75,7 +75,7 @@ const SHORTCUTS: Array<{
 const ADMIN_LINKS = [
   {
     label: 'Access control',
-    href: `${TENANT_CONSOLE}/access-control`,
+    href: tenantConsole.accessControl,
     icon: <Shield className="h-4 w-4 shrink-0" />,
   },
 ];

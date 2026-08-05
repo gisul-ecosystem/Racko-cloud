@@ -1,0 +1,60 @@
+INSERT INTO fabric_lab_templates (
+  name,
+  cert_tag,
+  provisioner_type,
+  capacity_sku,
+  capacity_billing_mode,
+  capacity_hourly_cost_usd,
+  capacity_paused_when_idle,
+  workspace_items,
+  workspace_role,
+  onelake_permissions,
+  duration_hours,
+  budget_cap_usd,
+  storage_estimate_gb,
+  active
+)
+VALUES
+(
+  'Fabric Analytics Engineer Associate',
+  'DP-600',
+  'fabric',
+  'F2',
+  'payg',
+  0.36,
+  true,
+  '["Lakehouse","Semantic models","Power BI"]'::jsonb,
+  'Contributor',
+  'read-write',
+  40,
+  50.00,
+  5,
+  true
+),
+(
+  'Fabric Data Engineer Associate',
+  'DP-700',
+  'fabric',
+  'F2',
+  'payg',
+  0.36,
+  true,
+  '["Lakehouse","Warehouse","Eventstream/Eventhouse","OneLake"]'::jsonb,
+  'Contributor',
+  'read-write',
+  40,
+  50.00,
+  5,
+  true
+)
+ON CONFLICT (cert_tag) DO UPDATE SET
+  name = EXCLUDED.name,
+  workspace_items = EXCLUDED.workspace_items,
+  workspace_role = EXCLUDED.workspace_role,
+  onelake_permissions = EXCLUDED.onelake_permissions,
+  capacity_hourly_cost_usd = EXCLUDED.capacity_hourly_cost_usd,
+  duration_hours = EXCLUDED.duration_hours,
+  budget_cap_usd = EXCLUDED.budget_cap_usd,
+  storage_estimate_gb = EXCLUDED.storage_estimate_gb,
+  active = true,
+  updated_at = now();

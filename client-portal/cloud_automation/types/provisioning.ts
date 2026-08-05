@@ -5,6 +5,7 @@ export type ProvisionStepKey =
   | 'services'
   | 'users'
   | 'roles'
+  | 'fabric'
   | 'credentials';
 
 export type ProvisionStepStatus = 'pending' | 'active' | 'complete' | 'failed';
@@ -19,6 +20,7 @@ export const PROVISION_STEPS: ProvisionStepDefinition[] = [
   { key: 'services', label: 'Setting Instance Policies' },
   { key: 'users', label: 'Users Creating' },
   { key: 'roles', label: 'Assigning Access' },
+  { key: 'fabric', label: 'Fabric Workspace & Permissions' },
   { key: 'credentials', label: 'Sending Access Link' },
 ];
 
@@ -82,6 +84,20 @@ export interface ProvisionSnapshot {
     count: number;
     complete?: boolean;
     remaining?: number;
+  };
+  fabric: {
+    required: boolean;
+    complete: boolean;
+    status?: string | null;
+    workspaceId?: string | null;
+    capacityId?: string | null;
+    workspaceName?: string | null;
+    workspaceRole?: string | null;
+    onelakePermissions?: string | null;
+    items?: unknown[];
+    roleAssignments?: unknown[];
+    certTag?: string | null;
+    errorMessage?: string | null;
   };
   credentials: CredentialDelivery | null;
   fetchedAt: string;

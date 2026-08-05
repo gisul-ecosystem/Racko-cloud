@@ -1,19 +1,5 @@
-import nodemailer from 'nodemailer';
-
-function buildTransport() {
-  const host = process.env.SMTP_HOST;
-  if (!host) return null;
-
-  return nodemailer.createTransport({
-    host,
-    port: Number(process.env.SMTP_PORT || 587),
-    secure: process.env.SMTP_SECURE === 'true',
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
-}
+import { getResendConfigStatus } from '../../services/email/resendEnv.js';
+import { sendMailWithRetry } from '../../services/email/mailSender.js';
 
 function buildRequiredTagsSection({ request, labRoles = [], identityUsers = [] }) {
   const requestId = String(request._id);
@@ -264,56 +250,16 @@ function buildReinstateCredentialsEmail({ request, user, newPassword }) {
 </html>`;
 }
 
-const MAX_EMAIL_ATTEMPTS = 3;
-
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-function isRetryableEmailError(error) {
-  const statusCode = Number(error?.statusCode || error?.responseCode || error?.status);
-  const errorCode = String(error?.code || '').toUpperCase();
-
-  return (
-    [421, 450, 451, 452, 454, 455, 500, 502, 503, 504].includes(statusCode) ||
-    ['ETIMEDOUT', 'ECONNRESET', 'ESOCKET', 'EAUTH', 'ECONNECTION'].includes(errorCode)
-  );
-}
-
-async function sendEmail({ to, subject, html }) {
-  const transport = buildTransport();
-  if (!transport) {
-    console.log('[emailProvisioner] SMTP not configured — email not sent');
+export async function sendEmailWithRetry({ to, subject, html }) {
+  const status = getResendConfigStatus();
+  if (!status.configured) {
+    console.log(
+      `[emailProvisioner] Resend not configured (missing: ${status.missingVars.join(', ')}) — email not sent`
+    );
     return { sent: false, mode: 'console' };
   }
 
-  await transport.verify();
-  await transport.sendMail({
-    from: `"Racko Cloud" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-    to,
-    subject,
-    html,
-  });
-
-  return { sent: true, mode: 'smtp' };
-}
-
-export async function sendEmailWithRetry({ to, subject, html }) {
-  let lastError;
-
-  for (let attempt = 1; attempt <= MAX_EMAIL_ATTEMPTS; attempt += 1) {
-    try {
-      return await sendEmail({ to, subject, html });
-    } catch (error) {
-      lastError = error;
-
-      if (attempt === MAX_EMAIL_ATTEMPTS || !isRetryableEmailError(error)) {
-        throw error;
-      }
-
-      await sleep(500 * 2 ** (attempt - 1));
-    }
-  }
-
-  throw lastError;
+  return sendMailWithRetry({ to, subject, html });
 }
 
 export async function sendReinstateCredentialsEmail(request, user, newPassword) {
@@ -321,12 +267,14 @@ export async function sendReinstateCredentialsEmail(request, user, newPassword) 
   const recipient = String(request.customerEmail).trim();
 
   try {
-    const result = await sendEmail({
+    const result = await sendEmailWithRetry({
       to: recipient,
       subject: `AWS Lab Access Restored — ${user.username}`,
       html,
     });
-    console.log(`[emailProvisioner] Reinstate email sent to ${recipient}`);
+    if (result?.sent) {
+      console.log(`[emailProvisioner] Reinstate email sent to ${recipient}`);
+    }
     return result;
   } catch (err) {
     console.error('[emailProvisioner] Reinstate email failed:', err.message);
@@ -356,10 +304,12 @@ export async function sendCredentialsEmail(request, context) {
       });
 
   const recipient = String(request.customerEmail).trim();
-  const transport = buildTransport();
+  const status = getResendConfigStatus();
 
-  if (!transport) {
-    console.log('[emailProvisioner] SMTP not configured');
+  if (!status.configured) {
+    console.log(
+      `[emailProvisioner] Resend not configured (missing: ${status.missingVars.join(', ')})`
+    );
     console.log(`Portal URL: ${portalUrl}`);
     console.log(`Portal login: ${portalSession.username} / ${portalSession.password}`);
     if (!isMagicLink) {
@@ -371,21 +321,17 @@ export async function sendCredentialsEmail(request, context) {
   }
 
   try {
-    await transport.verify();
+    const result = await sendMailWithRetry({
+      to: recipient,
+      subject: `✅ AWS Lab Access Ready — ${isMagicLink ? 'Magic Link' : 'Direct IAM'} Access`,
+      html,
+    });
+    console.log(`[emailProvisioner] Email sent to ${recipient}`);
+    return result;
   } catch (err) {
-    console.error('[emailProvisioner] SMTP verify failed:', err.message);
+    console.error('[emailProvisioner] Resend send failed:', err.message);
     return { sent: false, mode: 'console', error: err.message };
   }
-
-  await transport.sendMail({
-    from: `"Racko Cloud" <${process.env.SMTP_FROM || process.env.SMTP_USER}>`,
-    to: recipient,
-    subject: `✅ AWS Lab Access Ready — ${isMagicLink ? 'Magic Link' : 'Direct IAM'} Access`,
-    html,
-  });
-
-  console.log(`[emailProvisioner] Email sent to ${recipient}`);
-  return { sent: true, mode: 'smtp' };
 }
 
 // Backward-compatible export for tests
