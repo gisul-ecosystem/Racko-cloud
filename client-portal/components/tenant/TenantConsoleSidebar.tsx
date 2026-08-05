@@ -3,9 +3,9 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { Boxes, Cloud, HardDrive, LayoutGrid, Monitor, PlusCircle, Server, Shield, Wallet } from 'lucide-react';
-import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
 import { TENANT_CONSOLE, tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
@@ -82,15 +82,17 @@ const ADMIN_LINKS = [
 
 export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantConsoleSidebarProps) {
   const pathname = usePathname() ?? '';
-  const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const { hasActiveService } = useTenantServices();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { isTenantAdmin, hasPermission } = useTenantRbac();
 
   const links = SHORTCUTS.filter((l) => {
-    if (l.serviceKey === 'billing') return isAdmin;
+    if (l.serviceKey === 'billing') return hasPermission('wallet.read', 'wallet.topup');
     return hasActiveService(l.serviceKey);
   });
+
+  const showAccessControl =
+    isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
 
   const hubActive = pathname === TENANT_CONSOLE || pathname === `${TENANT_CONSOLE}/`;
 
@@ -159,7 +161,7 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
               );
             })}
 
-            {isAdmin
+            {showAccessControl
               ? ADMIN_LINKS.map((link) => {
                   const isActive =
                     pathname === link.href || pathname.startsWith(`${link.href}/`);

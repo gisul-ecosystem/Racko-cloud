@@ -8,6 +8,11 @@ export interface ITenantUser extends Document {
   email: string;
   passwordHash: string;
   role: TenantUserRole;
+  /**
+   * Console operator (invited via Access control). Distinct from elastic end-users
+   * who share role `tenant_user` but are not console staff.
+   */
+  isConsoleOperator: boolean;
   isActive: boolean;
   isEmailVerified: boolean;
   resetTokenHash: string | null;
@@ -40,6 +45,11 @@ const tenantUserSchema = new Schema<ITenantUser>(
       type: String,
       enum: ['tenant_admin', 'tenant_user'],
       required: true,
+    },
+    isConsoleOperator: {
+      type: Boolean,
+      default: false,
+      index: true,
     },
     isActive: {
       type: Boolean,

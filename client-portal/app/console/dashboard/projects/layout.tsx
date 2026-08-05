@@ -2,11 +2,12 @@
 
 import { BarChart3, FolderKanban, Plus } from 'lucide-react';
 import { TenantServiceShell } from '@/components/tenant/TenantServiceShell';
-import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import type { ServiceNavLink } from '@/components/console/ServiceNavSidebar';
 import { useRouter } from 'next/navigation';
 import { useEffect } from 'react';
+import { useTenantAuth } from '@/context/TenantAuthContext';
 
 const links: ServiceNavLink[] = [
   {
@@ -31,20 +32,22 @@ const links: ServiceNavLink[] = [
 
 export default function TenantProjectsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { tenantUser, isLoading, isAuthenticated } = useTenantAuth();
+  const { isLoading, isAuthenticated } = useTenantAuth();
+  const { loading: rbacLoading, hasPermission } = useTenantRbac();
+  const canAccess = hasPermission('projects.read', 'projects.manage');
 
   useEffect(() => {
-    if (isLoading) return;
+    if (isLoading || rbacLoading) return;
     if (!isAuthenticated) {
       router.replace('/console/login');
       return;
     }
-    if (tenantUser?.role !== 'tenant_admin') {
+    if (!canAccess) {
       router.replace(tenantConsole.hub);
     }
-  }, [isLoading, isAuthenticated, tenantUser, router]);
+  }, [isLoading, rbacLoading, isAuthenticated, canAccess, router]);
 
-  if (isLoading || !isAuthenticated || tenantUser?.role !== 'tenant_admin') {
+  if (isLoading || rbacLoading || !isAuthenticated || !canAccess) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
         <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#B91C1C] border-t-transparent" />

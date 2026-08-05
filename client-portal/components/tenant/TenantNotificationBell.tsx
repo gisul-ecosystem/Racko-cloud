@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { AlertCircle, Bell, Info, Loader2 } from 'lucide-react';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { useTenantNotifications } from '@/hooks/useTenantNotifications';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 import type { TenantNotification } from '@/types/tenantPortal';
@@ -60,13 +61,13 @@ function NotificationItem({
 }
 
 export function TenantNotificationBell() {
-  const { isAuthenticated, tenantUser } = useTenantAuth();
+  const { isAuthenticated } = useTenantAuth();
   const { accentColor } = useTenantBranding();
+  const { isConsoleStaff } = useTenantRbac();
   const router = useRouter();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
   const { notifications, unreadCount, loading, error, markRead } = useTenantNotifications(
     isAuthenticated,
-    isAdmin
+    isConsoleStaff
   );
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -89,7 +90,7 @@ export function TenantNotificationBell() {
     };
   }, [open]);
 
-  if (!isAdmin) return null;
+  if (!isConsoleStaff) return null;
 
   async function handleOpenNotification(notification: TenantNotification) {
     if (!notification.read) {
