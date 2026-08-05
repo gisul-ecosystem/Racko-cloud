@@ -240,28 +240,33 @@ const sseProxy = createProxyMiddleware({
   proxyTimeout: 0,
   selfHandleResponse: false,
   on: {
-    proxyReq: (_proxyReq: import('http').ClientRequest, req: Request) => {
+    proxyReq: (_proxyReq: unknown, req: unknown) => {
+      const r = req as Request;
       logger.info('[SSE][Gateway] SSE proxy request forwarded to core-api', {
-        path: req.path,
-        url: req.url,
-        method: req.method,
+        path: r.path,
+        url: r.url,
+        method: r.method,
         target: config.CORE_API_URL,
-        acceptHeader: req.headers['accept'] ?? null,
+        acceptHeader: r.headers['accept'] ?? null,
         timestamp: new Date().toISOString(),
       });
     },
-    proxyRes: (proxyRes: import('http').IncomingMessage, req: Request) => {
+    proxyRes: (proxyRes: unknown, req: unknown) => {
+      const r = req as Request;
+      const pr = proxyRes as import('http').IncomingMessage;
       logger.info('[SSE][Gateway] SSE proxy response received from core-api', {
-        path: req.path,
-        statusCode: proxyRes.statusCode ?? null,
-        contentType: proxyRes.headers['content-type'] ?? null,
+        path: r.path,
+        statusCode: pr.statusCode ?? null,
+        contentType: pr.headers['content-type'] ?? null,
         timestamp: new Date().toISOString(),
       });
     },
-    error: (err: Error, req: unknown, res: unknown) => {
+    error: (err: unknown, req: unknown, res: unknown) => {
+      const e = err as Error;
+      const r = req as Request;
       logger.error('[SSE][Gateway] SSE proxy error', {
-        path: (req as Request).path ?? 'unknown',
-        error: err.message,
+        path: r?.path ?? 'unknown',
+        error: e.message,
         timestamp: new Date().toISOString(),
       });
       (res as Response).status(502).json({
