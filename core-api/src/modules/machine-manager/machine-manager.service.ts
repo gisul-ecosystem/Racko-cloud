@@ -482,9 +482,9 @@ class MachineManagerService {
         // Pick the right checksum based on machine OS
         let checksum = '';
         const os = machine.os?.toLowerCase() ?? '';
-        if (os === 'windows') checksum = config.AGENT_CHECKSUM_WINDOWS ?? '';
-        else if (os === 'linux') checksum = config.AGENT_CHECKSUM_LINUX ?? '';
-        else if (os === 'macos') checksum = config.AGENT_CHECKSUM_DARWIN ?? '';
+        if (os === 'windows') checksum = (config.AGENT_CHECKSUM_WINDOWS ?? '').trim();
+        else if (os === 'linux') checksum = (config.AGENT_CHECKSUM_LINUX ?? '').trim();
+        else if (os === 'macos') checksum = (config.AGENT_CHECKSUM_DARWIN ?? '').trim();
 
         return {
           updateAvailable: true,
