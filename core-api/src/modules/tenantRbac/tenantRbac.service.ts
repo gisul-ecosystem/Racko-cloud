@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { TenantUser } from '../../models/tenantUser.model';
+import { Tenant } from '../../models/tenant.model';
 import { OrgRbacAssignmentModel } from '../../models/orgRbacAssignment.model';
 import {
   NotFoundError,
@@ -8,6 +9,7 @@ import {
   ConflictError,
 } from '../../utils/errors';
 import { hashPassword } from '../../utils/argon2';
+import { sendTenantOperatorInviteEmail } from '../../utils/email/sender';
 import {
   TENANT_PERMISSION_CATALOG,
   TENANT_ALL_PERMISSION_KEYS,
@@ -291,6 +293,24 @@ class TenantRbacService {
     });
 
     await this.setUserRoles(tenantId, user._id.toString(), input.roleIds, actorId);
+
+    const tenant = await Tenant.findById(tenantId).select('name domain branding').lean();
+    if (tenant) {
+      try {
+        await sendTenantOperatorInviteEmail({
+          to: email,
+          email,
+          tempPassword: input.temporaryPassword,
+          tenant: {
+            name: tenant.name,
+            domain: tenant.domain,
+            branding: tenant.branding,
+          },
+        });
+      } catch {
+        // Invite email is best-effort; account still created.
+      }
+    }
 
     return {
       _id: user._id.toString(),
