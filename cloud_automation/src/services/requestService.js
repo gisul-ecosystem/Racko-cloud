@@ -236,8 +236,18 @@ async function createRequest({
       );
 
       if (filtered.length !== instancesToValidate.length) {
+        const allowedIds = new Set(
+          filtered.map((entry) => Number(entry.serviceId ?? entry.service_id))
+        );
+        const unavailable = instancesToValidate
+          .filter((entry) => !allowedIds.has(Number(entry.serviceId)))
+          .map((entry) => entry.option_name)
+          .filter(Boolean);
+
         throw new AppError(
-          'One or more selected instance sizes are not available in the chosen region. Pick another region or instance size.',
+          unavailable.length > 0
+            ? `Instance size(s) not available in ${normalizedLocation}: ${unavailable.join(', ')}. Choose another region or instance.`
+            : 'One or more selected instance sizes are not available in the chosen region. Pick another region or instance size.',
           400
         );
       }
