@@ -1,5 +1,6 @@
 import { getResendConfigStatus } from '../../services/email/resendEnv.js';
 import { sendMailWithRetry } from '../../services/email/mailSender.js';
+import { resolvePortalBaseUrl } from '../../utils/portalUrl.js';
 
 function buildRequiredTagsSection({ request, labRoles = [], identityUsers = [] }) {
   const requestId = String(request._id);
@@ -292,7 +293,11 @@ export async function sendCredentialsEmail(request, context) {
   } = context;
 
   const allowedServices = (request.selectedServices || []).map((entry) => entry.serviceName);
-  const portalUrl = `${process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'}/manage-users/aws?token=${portalSession.token}`;
+  const portalBase = await resolvePortalBaseUrl({
+    portalBaseUrl: request.portalBaseUrl,
+    ownerId: request.createdBy,
+  });
+  const portalUrl = `${portalBase}/manage-users/aws?token=${portalSession.token}`;
 
   const html = isMagicLink
     ? buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsAccountId, allowedServices })
@@ -335,9 +340,13 @@ export async function sendCredentialsEmail(request, context) {
 }
 
 // Backward-compatible export for tests
-export function buildCredentialsEmailHtml(props) {
+export async function buildCredentialsEmailHtml(props) {
+  const portalBase = await resolvePortalBaseUrl({
+    portalBaseUrl: props.request?.portalBaseUrl,
+    ownerId: props.request?.createdBy,
+  });
   return buildMagicLinkEmail({
     ...props,
-    portalUrl: `${process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'}/manage-users/aws?token=${props.portalSession.token}`,
+    portalUrl: `${portalBase}/manage-users/aws?token=${props.portalSession.token}`,
   });
 }
