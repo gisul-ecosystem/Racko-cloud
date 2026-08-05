@@ -15,7 +15,6 @@ export interface TenantOperatorInviteTemplateData {
   email: string;
   tempPassword: string;
   verifyUrl: string;
-  resetUrl: string;
   brand: EmailBrand;
   inviteKind?: TenantConsoleInviteKind;
 }
@@ -30,8 +29,8 @@ export function buildTenantOperatorInviteTemplate(data: TenantOperatorInviteTemp
   const inviteKind = data.inviteKind ?? 'operator';
   const bodyHtml =
     inviteKind === 'admin'
-      ? `<p style="margin:0;">A Super Admin has created a tenant admin account for you on <strong style="color:#111827;">${escapeHtml(brand.name)}</strong>. First verify your email, then set your own password before signing in.</p>`
-      : `<p style="margin:0;">You've been invited as a console operator on <strong style="color:#111827;">${escapeHtml(brand.name)}</strong>. First verify your email, then set your own password before signing in.</p>`;
+      ? `<p style="margin:0;">A Super Admin has created a tenant admin account for you on <strong style="color:#111827;">${escapeHtml(brand.name)}</strong>. Verify your email — you'll set your own password next, then you can sign in.</p>`
+      : `<p style="margin:0;">You've been invited as a console operator on <strong style="color:#111827;">${escapeHtml(brand.name)}</strong>. Verify your email — you'll set your own password next, then you can sign in.</p>`;
 
   const detailsHtml = `
     <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;text-align:left;">
@@ -49,12 +48,6 @@ export function buildTenantOperatorInviteTemplate(data: TenantOperatorInviteTemp
       </tr>
     </table>`;
 
-  const afterCtaHtml = `
-    <p style="margin:0 0 10px;font-size:13px;color:#6b7280;line-height:1.5;">
-      After verifying your email, complete setup by creating your own password.
-    </p>
-    <a href="${escapeHtml(data.resetUrl)}" style="display:inline-block;padding:11px 22px;border:1px solid ${brand.primaryColor};border-radius:9px;color:${brand.primaryColor};font-size:14px;font-weight:600;text-decoration:none;">Set Your Password →</a>`;
-
   return buildBrandedEmail(brand, {
     subject: `You're invited to ${brand.name}`,
     headline: "You're invited",
@@ -62,8 +55,7 @@ export function buildTenantOperatorInviteTemplate(data: TenantOperatorInviteTemp
     ctaLabel: 'Verify Email Address',
     ctaUrl: data.verifyUrl,
     detailsHtml,
-    afterCtaHtml,
-    expiryText: 'Verification and password links expire in 7 days.',
+    expiryText: 'This verification link expires in 7 days.',
     noticeTitle: "Didn't expect this invite?",
     noticeBody: 'You can safely ignore this email.',
     hero: 'invite',

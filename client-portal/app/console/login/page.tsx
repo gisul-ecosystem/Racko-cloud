@@ -184,7 +184,7 @@ export default function ConsoleTenantLoginPage() {
             ) : null}
             {errorCode === 'PASSWORD_SETUP_REQUIRED' ? (
               <p className="mt-2 text-sm text-gray-600">
-                Open the “Set Your Password” link from your invite email, or use{' '}
+                Finish setup with the link from your invite email (verify first), or use{' '}
                 <Link href="/console/forgot-password" className={TENANT_AUTH_LINK}>
                   forgot password
                 </Link>

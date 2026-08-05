@@ -275,7 +275,6 @@ export async function sendTenantOperatorInviteEmail(input: {
   email: string;
   tempPassword: string;
   verifyToken: string;
-  resetToken: string;
   tenant: TenantEmailContext;
   inviteKind?: 'admin' | 'operator';
 }): Promise<void> {
@@ -284,15 +283,10 @@ export async function sendTenantOperatorInviteEmail(input: {
     input.tenant,
     `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
   );
-  const resetUrl = tenantPortalUrl(
-    input.tenant,
-    `/console/reset-password?token=${encodeURIComponent(input.resetToken)}`
-  );
   const template = buildTenantOperatorInviteTemplate({
     email: input.email,
     tempPassword: input.tempPassword,
     verifyUrl,
-    resetUrl,
     brand,
     inviteKind: input.inviteKind,
   });
