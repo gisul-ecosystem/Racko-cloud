@@ -9,6 +9,7 @@ import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { PlanStatusBadge } from '@/components/tenant/PlanStatusBadge';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { listTenantPlans } from '@/lib/tenantPortalApi';
 import {
   formatBillingPeriod,
@@ -37,16 +38,19 @@ function rowHighlightClass(plan: TenantPlan): string {
 
 export default function TenantPlansPage() {
   const { tenantUser } = useTenantAuth();
+  const { loading: rbacLoading, hasPermission, isConsoleStaff } = useTenantRbac();
   const router = useRouter();
   const [plans, setPlans] = useState<TenantPlan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const canView = isConsoleStaff && hasPermission('orders.read', 'wallet.read');
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_user') {
+    if (rbacLoading) return;
+    if (tenantUser?.role === 'tenant_user' && !isConsoleStaff) {
       router.replace('/console/dashboard');
     }
-  }, [tenantUser, router]);
+  }, [tenantUser, router, rbacLoading, isConsoleStaff]);
 
   const load = async () => {
     setLoading(true);
@@ -62,10 +66,10 @@ export default function TenantPlansPage() {
   };
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_admin') void load();
-  }, [tenantUser]);
+    if (!rbacLoading && canView) void load();
+  }, [rbacLoading, canView]);
 
-  if (tenantUser?.role !== 'tenant_admin') return null;
+  if (rbacLoading || !canView) return null;
 
   if (loading) return <TableSkeleton rows={5} cols={7} />;
 

@@ -12,6 +12,8 @@ export interface TenantPortalUser {
   email: string;
   role: TenantUserRole;
   tenantId: string;
+  /** Invited Access-control operator (or tenant_admin). */
+  isConsoleOperator?: boolean;
 }
 
 export interface TenantUserProfile {

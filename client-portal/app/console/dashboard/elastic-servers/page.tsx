@@ -4,6 +4,7 @@ import { useState, useCallback, useMemo, useEffect } from 'react';
 import Link from 'next/link';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { useExternalVMs } from '@/hooks/useExternalVMs';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -53,7 +54,8 @@ function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
 export default function TenantMyServersPage() {
   const { isAuthenticated, tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { isConsoleStaff, hasPermission } = useTenantRbac();
+  const isAdmin = isConsoleStaff && hasPermission('elastic.manage', 'elastic.read');
   const listFn = useCallback(() => fetchTenantExternalVMs(), []);
   const { vms, loading, error, refetch } = useExternalVMs(isAuthenticated, listFn);
   const { toasts, addToast, dismiss } = useToast();
