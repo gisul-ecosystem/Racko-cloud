@@ -1,4 +1,5 @@
 import { config } from '../../../config';
+import { getAppBaseUrl } from '../../requestContext';
 import { buildBrandedEmail, type EmailBrand } from './brandedLayout';
 import { resolvePlatformEmailBrand } from './emailBrand';
 
@@ -25,7 +26,7 @@ export function buildAccountLockedTemplate(data: AccountLockedTemplateData): {
 } {
   const brand = data.brand ?? resolvePlatformEmailBrand();
   const supportUrl =
-    data.supportUrl ?? `${config.FRONTEND_URL.replace(/\/$/, '')}/company/contact`;
+    data.supportUrl ?? `${getAppBaseUrl()}/company/contact`;
   const formattedUnlockTime = data.lockedUntil.toUTCString();
   const minutesRemaining = Math.max(
     1,

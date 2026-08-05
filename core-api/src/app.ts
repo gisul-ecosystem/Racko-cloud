@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { allowedOrigins, config } from './config';
 import { logger } from './utils/logger';
 import { sanitizeInput } from './middleware/sanitize.middleware';
+import { requestContext } from './middleware/requestContext.middleware';
 import { globalErrorHandler, notFoundHandler } from './middleware/error.middleware';
 import authRoutes from './modules/auth/auth.routes';
 import userRoutes from './modules/user/user.routes';
@@ -61,6 +62,7 @@ import tenantRbacRoutes from './modules/tenantRbac/tenantRbac.routes';
 import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboarding.routes';
 import projectsRoutes from './modules/projects/projects.routes';
 import tenantProjectsRoutes from './modules/projects/tenantProjects.routes';
+import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes';
 
 const app = express();
 
@@ -71,6 +73,9 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', requestId);
   next();
 });
+
+// 1b. Request context — makes the caller's portal origin available to services
+app.use(requestContext);
 
 // 2. Helmet — all security headers 
 app.use(
@@ -177,6 +182,7 @@ app.use('/api/v1/tenant-external-vms', tenantExternalVmRoutes);
 app.use('/api/v1/tenant-vm-catalog', tenantVmCatalogRoutes);
 app.use('/api/v1/tenant-dedicated-servers', tenantDedicatedServerRoutes);
 app.use('/api/v1/tenant-projects', tenantProjectsRoutes);
+app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);

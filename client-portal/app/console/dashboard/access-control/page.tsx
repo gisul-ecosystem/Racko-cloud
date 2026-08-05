@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, Plus, Shield, Users } from 'lucide-react';
+import { ArrowLeft, Loader2, Plus, Shield, Trash2, Users } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 import {
   createTenantRbacRole,
+  deleteTenantOperator,
   fetchMyTenantRbac,
   fetchTenantRbacCatalog,
   fetchTenantRbacPeople,
@@ -50,6 +52,8 @@ export default function TenantAccessControlPage() {
   const [invitePassword, setInvitePassword] = useState('');
   const [inviteRoleIds, setInviteRoleIds] = useState<string[]>([]);
   const [savingInvite, setSavingInvite] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TenantRbacPerson | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const groups = useMemo(() => {
     const map = new Map<string, OrgRbacPermissionDef[]>();
@@ -149,7 +153,9 @@ export default function TenantAccessControlPage() {
         temporaryPassword: invitePassword,
         roleIds: inviteRoleIds,
       });
-      setFlash(`Operator invited: ${inviteEmail}.`);
+      setFlash(
+        `Operator invited: ${inviteEmail}. They must verify email and set a password before signing in.`
+      );
       setShowInvite(false);
       setInviteEmail('');
       setInvitePassword('');
@@ -162,10 +168,39 @@ export default function TenantAccessControlPage() {
     }
   }
 
+  async function confirmDeleteOperator() {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget._id);
+    setError(null);
+    try {
+      await deleteTenantOperator(deleteTarget._id);
+      setFlash(`Deleted ${deleteTarget.email}.`);
+      if (assignPerson?._id === deleteTarget._id) setAssignPerson(null);
+      setDeleteTarget(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete operator.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const showRoleForm = creatingRole || Boolean(editingRole);
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-6 p-6 lg:p-8">
+      <ConfirmModal
+        open={Boolean(deleteTarget)}
+        title={deleteTarget ? `Delete operator ${deleteTarget.email}?` : 'Delete operator'}
+        description="This removes their console access and cannot be undone. You can invite the same email again later."
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        loading={Boolean(deleteTarget && deletingId === deleteTarget._id)}
+        onConfirm={() => void confirmDeleteOperator()}
+        onCancel={() => {
+          if (!deletingId) setDeleteTarget(null);
+        }}
+      />
       <div>
         <Link
           href={TENANT_CONSOLE}
@@ -378,10 +413,14 @@ export default function TenantAccessControlPage() {
                 type="text"
                 value={invitePassword}
                 onChange={(e) => setInvitePassword(e.target.value)}
-                placeholder="Temporary password"
+                placeholder="Temporary password (sent in invite email)"
                 minLength={8}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
               />
+              <p className="text-xs text-gray-500">
+                An invite email is sent with verify and set-password links. The operator cannot sign
+                in until both steps are complete.
+              </p>
               <div className="flex flex-wrap gap-2">
                 {roles.map((role) => (
                   <label
@@ -495,16 +534,31 @@ export default function TenantAccessControlPage() {
                       {person.isTenantAdmin ? (
                         <span className="text-xs text-gray-400">Full access</span>
                       ) : canAssign ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAssignPerson(person);
-                            setAssignRoleIds([...person.roleIds]);
-                          }}
-                          className="text-xs font-medium text-[#B91C1C] hover:underline"
-                        >
-                          Assign roles
-                        </button>
+                        <div className="inline-flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAssignPerson(person);
+                              setAssignRoleIds([...person.roleIds]);
+                            }}
+                            className="text-xs font-medium text-[#B91C1C] hover:underline"
+                          >
+                            Assign roles
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingId === person._id}
+                            onClick={() => setDeleteTarget(person)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 disabled:opacity-50"
+                          >
+                            {deletingId === person._id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                            Delete
+                          </button>
+                        </div>
                       ) : null}
                     </td>
                   </tr>

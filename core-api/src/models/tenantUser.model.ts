@@ -15,6 +15,11 @@ export interface ITenantUser extends Document {
   isConsoleOperator: boolean;
   isActive: boolean;
   isEmailVerified: boolean;
+  /** Console invite / verify flow — hashed token from invite email. */
+  emailVerificationTokenHash: string | null;
+  emailVerificationExpiresAt: Date | null;
+  /** True until invitee sets their own password via reset link. */
+  mustSetPassword: boolean;
   resetTokenHash: string | null;
   resetTokenExpiresAt: Date | null;
   createdBy: mongoose.Types.ObjectId | null;
@@ -58,6 +63,19 @@ const tenantUserSchema = new Schema<ITenantUser>(
     isEmailVerified: {
       type: Boolean,
       default: true,
+    },
+    emailVerificationTokenHash: {
+      type: String,
+      default: null,
+      select: false,
+    },
+    emailVerificationExpiresAt: {
+      type: Date,
+      default: null,
+    },
+    mustSetPassword: {
+      type: Boolean,
+      default: false,
     },
     resetTokenHash: {
       type: String,

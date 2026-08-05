@@ -1,5 +1,5 @@
 import type { TenantPortalUser, TenantUserRole } from '@/types/tenantPortal';
-import { TENANT_CONSOLE, tenantVps } from '@/lib/tenantAdminRoutes';
+import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 
 /** Default landing page after tenant login. */
 export function getTenantDefaultDashboardPath(
@@ -13,7 +13,8 @@ export function getTenantDefaultDashboardPath(
   if (role === 'tenant_user' && !isOperator) {
     return tenantVps.vms;
   }
-  return TENANT_CONSOLE;
+  // Tenant admins and console operators land on the business Overview.
+  return tenantConsole.overview;
 }
 
 /** End-user VM/server views under the admin mirror (not admin-only create/restricted routes). */

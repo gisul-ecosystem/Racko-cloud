@@ -197,6 +197,52 @@ export class AuthService {
   }
 
   /**
+   * Resend the verification link for an account that has not verified yet.
+   * Never reveals whether the address exists or is already verified.
+   */
+  async resendVerification(email: string, req: Request): Promise<void> {
+    const ip = getClientIp(req);
+    const userAgent = req.headers['user-agent'] ?? 'unknown';
+    const fingerprint = generateFingerprint(req);
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user || user.isEmailVerified || !user.isActive) {
+      await AuditLog.create({
+        event: 'EMAIL_VERIFICATION_SENT',
+        ipAddress: ip,
+        userAgent,
+        deviceFingerprint: fingerprint,
+        metadata: {
+          email: normalizedEmail,
+          reason: 'resend_skipped',
+          skipped: !user ? 'user_not_found' : user.isEmailVerified ? 'already_verified' : 'inactive',
+        },
+      });
+      return;
+    }
+
+    const rawToken = generateSecureToken(32);
+    user.emailVerificationToken = hashToken(rawToken);
+    user.emailVerificationExpires = new Date(
+      Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
+    );
+    await user.save();
+
+    await sendVerificationEmail(user.email, rawToken);
+
+    await AuditLog.create({
+      userId: user._id,
+      event: 'EMAIL_VERIFICATION_SENT',
+      ipAddress: ip,
+      userAgent,
+      deviceFingerprint: fingerprint,
+      metadata: { email: normalizedEmail, reason: 'resend_requested' },
+    });
+  }
+
+  /**
    * Verify email with token from email link.
    */
   async verifyEmail(token: string, req: Request): Promise<{ message: string }> {

@@ -1,11 +1,12 @@
 import { config } from '../../../config';
+import { getAppBaseUrl } from '../../requestContext';
 import { buildBrandedEmail, type EmailBrand } from './brandedLayout';
 import { resolvePlatformEmailBrand } from './emailBrand';
 
 export interface VerifyEmailTemplateData {
   rawToken: string;
   brand?: EmailBrand;
-  /** Override verify URL (tenant portals). Defaults to platform FRONTEND_URL. */
+  /** Override verify URL (tenant portals). Defaults to the caller's portal origin. */
   verifyUrl?: string;
 }
 
@@ -16,7 +17,7 @@ export function buildVerifyEmailTemplate(data: VerifyEmailTemplateData): {
 } {
   const brand = data.brand ?? resolvePlatformEmailBrand();
   const verifyUrl =
-    data.verifyUrl ?? `${config.FRONTEND_URL.replace(/\/$/, '')}/verify-email?token=${data.rawToken}`;
+    data.verifyUrl ?? `${getAppBaseUrl()}/verify-email?token=${data.rawToken}`;
   const expiryHours = config.EMAIL_VERIFICATION_EXPIRES_HOURS;
 
   return buildBrandedEmail(brand, {
