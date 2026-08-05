@@ -47,5 +47,9 @@ const vmHostLeaseSchema = new Schema<IVmHostLease>(
 );
 
 vmHostLeaseSchema.index({ deleted: 1, dueDate: 1 });
+vmHostLeaseSchema.index({ ipAddress: 1, deleted: 1 });
+vmHostLeaseSchema.index({ provider: 1, deleted: 1 });
+vmHostLeaseSchema.index({ assignedTo: 1, deleted: 1 });
+vmHostLeaseSchema.index({ ipAddress: 'text', provider: 'text', assignedTo: 'text' });
 
 export const VmHostLeaseModel = mongoose.model<IVmHostLease>('VmHostLease', vmHostLeaseSchema);
