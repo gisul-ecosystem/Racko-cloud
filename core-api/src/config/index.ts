@@ -224,13 +224,12 @@ const envSchema = z.object({
   SEAWEEDFS_BUCKET:     z.string().min(1, 'SEAWEEDFS_BUCKET is required').default('racko-vm-activity'),
 
   // Agent auto-update
-  // AGENT_VERSION is the current published version (e.g. "1.4.2").
-  // Agents whose heartbeat reports a lower version will be instructed to update.
-  // Set to empty string to disable auto-update entirely.
+  // AGENT_VERSION is the current published version baked into the Docker image
+  // at build time via --build-arg. Agents whose heartbeat reports a different
+  // version will be instructed to update automatically.
+  // Empty string disables auto-update entirely.
   AGENT_VERSION: z.string().default(''),
-  // SHA256 hex checksum of the current Windows agent binary.
-  // Computed after each build: sha256sum agent/dist/racko-agent.exe
-  // If empty, agents will skip checksum verification (not recommended for prod).
+  // SHA256 hex checksums of the agent binaries — also baked in at build time.
   AGENT_CHECKSUM_WINDOWS: z.string().default(''),
   AGENT_CHECKSUM_LINUX:   z.string().default(''),
   AGENT_CHECKSUM_DARWIN:  z.string().default(''),
