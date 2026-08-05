@@ -15,6 +15,7 @@ export interface IOrganizationAccessRequest extends Document {
   companyName: string;
   companyWebsite?: string;
   phone?: string;
+  officeNumber?: string;
   designation?: string;
   companySize?: string;
   registeredAddress?: string;
@@ -37,6 +38,7 @@ const organizationAccessRequestSchema = new Schema<IOrganizationAccessRequest>(
     companyName: { type: String, required: true, trim: true },
     companyWebsite: { type: String, trim: true },
     phone: { type: String, trim: true },
+    officeNumber: { type: String, trim: true },
     designation: { type: String, trim: true },
     companySize: { type: String, trim: true },
     registeredAddress: { type: String, trim: true },
