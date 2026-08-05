@@ -84,7 +84,7 @@ export default function ManagePortalLogin({
             required
             disabled={missingToken || loading}
             className={inputClass}
-            style={{ ['--tw-ring-color' as string]: accent }}
+            style={{ '--tw-ring-color': accent }}
             placeholder="admin-xxxx or rackolab1-xxxxxx"
           />
         </div>
@@ -101,7 +101,7 @@ export default function ManagePortalLogin({
             required
             disabled={missingToken || loading}
             className={inputClass}
-            style={{ ['--tw-ring-color' as string]: accent }}
+            style={{ '--tw-ring-color': accent }}
             placeholder="From your email"
           />
         </div>
