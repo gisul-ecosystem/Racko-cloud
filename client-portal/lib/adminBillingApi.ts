@@ -2,6 +2,7 @@ import { apiRequest } from './apiClient';
 import type {
   AdminPricingConfig,
   AdminWallet,
+  AdminWalletTransaction,
   AdminWalletTransactionsResult,
   AdminVmQuote,
   AdminQuoteInput,
@@ -67,13 +68,28 @@ export async function getAdminWalletTransactionsByUserId(
 
 export async function getMyAdminWalletTransactions(
   page = 1,
-  limit = 20
+  limit = 20,
+  filters?: { projectId?: string; serviceKey?: string }
 ): Promise<AdminWalletTransactionsResult> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (filters?.projectId) params.set('projectId', filters.projectId);
+  if (filters?.serviceKey) params.set('serviceKey', filters.serviceKey);
   return unwrap(
     apiRequest<ApiEnvelope<AdminWalletTransactionsResult>>(
-      `/api/v1/admin-billing/wallet/me/transactions?page=${page}&limit=${limit}`
+      `/api/v1/admin-billing/wallet/me/transactions?${params.toString()}`
     )
   );
+}
+
+export async function getMyAdminWalletTransaction(
+  txId: string
+): Promise<AdminWalletTransaction> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ transaction: AdminWalletTransaction }>>(
+      `/api/v1/admin-billing/wallet/me/transactions/${encodeURIComponent(txId)}`
+    )
+  );
+  return data.transaction;
 }
 
 export async function creditAdminWallet(
@@ -125,7 +141,11 @@ export async function createAdminWalletTopup(amount: number): Promise<AdminTopup
 export async function chargeAdminWalletForCloudRequest(
   amountUsd: number,
   relatedRequestId?: string | null,
-  provider: 'azure' | 'aws' = 'azure'
+  provider: 'azure' | 'aws' = 'azure',
+  attribution?: {
+    projectId?: string | null;
+    serviceKey?: 'azure' | 'aws' | 'cloud-labs' | null;
+  }
 ): Promise<AdminCloudChargeResult> {
   return unwrap(
     apiRequest<ApiEnvelope<AdminCloudChargeResult>>(
@@ -136,6 +156,8 @@ export async function chargeAdminWalletForCloudRequest(
           amountUsd,
           provider,
           ...(relatedRequestId ? { relatedRequestId } : {}),
+          ...(attribution?.projectId ? { projectId: attribution.projectId } : {}),
+          ...(attribution?.serviceKey ? { serviceKey: attribution.serviceKey } : {}),
         }),
       }
     )

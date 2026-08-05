@@ -39,6 +39,7 @@ async function createRequest({
   resourceCleanupAction,
   usageWindows,
   projectName,
+  projectId,
   idMode,
   microsoftLicenseSkuId,
   microsoftLicenseSkuPartNumber,
@@ -53,6 +54,11 @@ async function createRequest({
   try {
 
     await client.query('BEGIN');
+
+    await client.query(`
+      ALTER TABLE requests
+        ADD COLUMN IF NOT EXISTS project_id TEXT
+    `);
 
     assertProvisionableLocation(location);
 
@@ -345,6 +351,8 @@ async function createRequest({
       resourceCleanupAction === 'pause' ? 'pause' : 'delete';
     const resolvedProjectName =
       typeof projectName === 'string' && projectName.trim() ? projectName.trim() : null;
+    const resolvedProjectId =
+      typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
     const resolvedIdMode =
       idMode === 'test_ids' || idMode === 'azure_ids' ? idMode : null;
     const resolvedMicrosoftLicenseSkuId =
@@ -425,6 +433,8 @@ async function createRequest({
 
           project_name,
 
+          project_id,
+
           id_mode,
 
           microsoft_license_sku_id,
@@ -466,7 +476,8 @@ async function createRequest({
           $25,
           $26,
           $27,
-          $28
+          $28,
+          $29
 
         )
 
@@ -522,6 +533,8 @@ async function createRequest({
           resolvedResourceCleanupTimezone,
 
           resolvedProjectName,
+
+          resolvedProjectId,
 
           resolvedIdMode,
 

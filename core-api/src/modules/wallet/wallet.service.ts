@@ -4,7 +4,9 @@ import {
   WalletTransaction,
   type WalletTransactionSource,
 } from '../../models/walletTransaction.model';
-import { AppError } from '../../utils/errors';
+import type { AdminServiceKey } from '../../constants/adminServiceCatalog';
+import { AppError, NotFoundError } from '../../utils/errors';
+import { projectsService } from '../projects/projects.service';
 
 export interface CreditWalletOptions {
   relatedOrderId?: string | null;
@@ -178,7 +180,11 @@ export class WalletService {
     tenantId: string,
     amountUsd: number,
     relatedRequestId: string | null = null,
-    provider: 'azure' | 'aws' = 'azure'
+    provider: 'azure' | 'aws' = 'azure',
+    attribution?: {
+      projectId?: string | null;
+      serviceKey?: AdminServiceKey | null;
+    }
   ): Promise<{
     balance: number;
     currency: string;
@@ -189,6 +195,19 @@ export class WalletService {
   }> {
     if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
       throw new AppError('Estimated amount must be a positive number.', 400, 'VALIDATION_ERROR');
+    }
+
+    const serviceKey: AdminServiceKey =
+      attribution?.serviceKey || (provider === 'aws' ? 'aws' : 'azure');
+    let projectId: string | null = attribution?.projectId ?? null;
+
+    if (projectId) {
+      const usable = await projectsService.assertUsableForTenantService({
+        projectId,
+        tenantId,
+        serviceKey,
+      });
+      projectId = usable.projectId.toString();
     }
 
     const usdToInrRate = this.getUsdToInrRate();
@@ -203,7 +222,11 @@ export class WalletService {
       reason,
       null,
       null,
-      externalReference
+      externalReference,
+      {
+        projectId,
+        serviceKey,
+      }
     );
 
     return {
@@ -256,7 +279,8 @@ export class WalletService {
   async listTransactions(
     tenantId: string,
     page = 1,
-    limit = 20
+    limit = 20,
+    filters?: { projectId?: string; serviceKey?: string }
   ): Promise<{
     transactions: Array<{
       id: string;
@@ -268,6 +292,8 @@ export class WalletService {
       relatedOrderId: string | null;
       relatedVmId: string | null;
       balanceAfter: number;
+      projectId: string | null;
+      serviceKey: string | null;
       createdAt: Date;
     }>;
     total: number;
@@ -279,13 +305,21 @@ export class WalletService {
     const safeLimit = Math.min(Math.max(1, limit), 100);
     const skip = (safePage - 1) * safeLimit;
 
+    const query: Record<string, unknown> = { tenantId: tenantObjectId };
+    if (filters?.projectId && mongoose.Types.ObjectId.isValid(filters.projectId)) {
+      query['projectId'] = new mongoose.Types.ObjectId(filters.projectId);
+    }
+    if (filters?.serviceKey) {
+      query['serviceKey'] = filters.serviceKey;
+    }
+
     const [rows, total] = await Promise.all([
-      WalletTransaction.find({ tenantId: tenantObjectId })
+      WalletTransaction.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(safeLimit)
         .lean(),
-      WalletTransaction.countDocuments({ tenantId: tenantObjectId }),
+      WalletTransaction.countDocuments(query),
     ]);
 
     return {
@@ -299,11 +333,55 @@ export class WalletService {
         relatedOrderId: row.relatedOrderId ? row.relatedOrderId.toString() : null,
         relatedVmId: row.relatedVmId ? row.relatedVmId.toString() : null,
         balanceAfter: row.balanceAfter,
+        projectId: row.projectId ? row.projectId.toString() : null,
+        serviceKey: row.serviceKey ?? null,
         createdAt: row.createdAt,
       })),
       total,
       page: safePage,
       limit: safeLimit,
+    };
+  }
+
+  async getTransaction(
+    tenantId: string,
+    transactionId: string
+  ): Promise<{
+    id: string;
+    type: string;
+    amount: number;
+    reason: string;
+    source: WalletTransactionSource;
+    externalReference: string | null;
+    relatedOrderId: string | null;
+    relatedVmId: string | null;
+    balanceAfter: number;
+    projectId: string | null;
+    serviceKey: string | null;
+    createdAt: Date;
+  }> {
+    if (!mongoose.Types.ObjectId.isValid(transactionId)) {
+      throw new NotFoundError('Transaction not found.');
+    }
+    const row = await WalletTransaction.findOne({
+      _id: new mongoose.Types.ObjectId(transactionId),
+      tenantId: new mongoose.Types.ObjectId(tenantId),
+    }).lean();
+    if (!row) throw new NotFoundError('Transaction not found.');
+
+    return {
+      id: row._id.toString(),
+      type: row.type,
+      amount: row.amount,
+      reason: row.reason,
+      source: row.source ?? 'system',
+      externalReference: row.externalReference ?? null,
+      relatedOrderId: row.relatedOrderId ? row.relatedOrderId.toString() : null,
+      relatedVmId: row.relatedVmId ? row.relatedVmId.toString() : null,
+      balanceAfter: row.balanceAfter,
+      projectId: row.projectId ? row.projectId.toString() : null,
+      serviceKey: row.serviceKey ?? null,
+      createdAt: row.createdAt,
     };
   }
 }

@@ -59,6 +59,10 @@ router.get('/wallet/me/transactions', (req, res, next) => {
   adminBillingController.listMyTransactions(req, res, next);
 });
 
+router.get('/wallet/me/transactions/:txId', (req, res, next) => {
+  adminBillingController.getMyTransaction(req, res, next);
+});
+
 // POST /api/v1/admin-billing/wallet/me/topup  — self top-up via Razorpay
 router.post(
   '/wallet/me/topup',

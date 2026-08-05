@@ -4,12 +4,12 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 
-/** Create flow lives in the projects dashboard popup. */
-export default function CreateProjectRedirectPage() {
+/** Soft redirect — All Projects lives on /console/projects?view=all (same data, no remount). */
+export default function AllProjectsRedirectPage() {
   const router = useRouter();
 
   useEffect(() => {
-    router.replace('/console/projects');
+    router.replace('/console/projects?view=all');
   }, [router]);
 
   return (

@@ -23,6 +23,9 @@ import {
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../../lib/cloudAccent';
 import { hexToRgba } from '../../../lib/tenantAccentStyles';
+import { ProjectSelect } from '@/components/console/ProjectSelect';
+import { useIsTenantPortal } from '@/lib/portalMode';
+import type { AdminServiceKey } from '@/lib/adminServicesApi';
 import { useAvailableLocations } from '../../hooks/useAvailableLocations';
 import { useMicrosoftLicenses } from '../../hooks/useMicrosoftLicenses';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
@@ -248,6 +251,8 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
   const AZURE_ROUTES = useAzureRoutes();
   const accent = useCloudAccentColor();
   const soft = hexToRgba(accent, 0.1);
+  const isTenantPortal = useIsTenantPortal();
+  const projectServiceKey: AdminServiceKey = labsMode ? 'cloud-labs' : 'azure';
   const { catalog, loading: catalogLoading, error: catalogError, refetch } = useServiceCatalog();
 
   const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([]);
@@ -255,6 +260,7 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
   const [manualRoles, setManualRoles] = useState<Record<number, string[]>>({});
   const [location, setLocation] = useState('');
   const [projectName, setProjectName] = useState('');
+  const [rackoProjectId, setRackoProjectId] = useState('');
   const [idMode, setIdMode] = useState<AzureIdMode | null>(null);
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
@@ -595,6 +601,11 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
 
     if (errors.length > 0) return;
 
+    if (!rackoProjectId) {
+      setSubmitError('Select a Racko project / client before creating the request.');
+      return;
+    }
+
     if (!labsMode) {
       if (totalPrice == null) {
         setSubmitError('Complete the form to calculate an estimate before creating the request.');
@@ -623,7 +634,10 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
 
     try {
       if (!labsMode && totalPrice != null && totalPrice > 0) {
-        const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure');
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure', {
+          projectId: rackoProjectId,
+          serviceKey: projectServiceKey === 'cloud-labs' ? 'cloud-labs' : 'azure',
+        });
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
         setUsdToInrRate(charge.usdToInrRate);
@@ -641,6 +655,7 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
           selectedInstances,
           costingMode: labsMode ? 'shared' : costingMode,
           projectName: projectName.trim(),
+          projectId: rackoProjectId || undefined,
           idMode: isPurchaseConvert ? 'azure_ids' : idMode ?? undefined,
           ...(isPurchaseConvert && convertedFromRequestId
             ? {
@@ -1010,6 +1025,21 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="min-w-0 space-y-6">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Cost attribution
+              </p>
+              <p className="mb-3 text-sm text-gray-500">
+                Charges stay on your main wallet and are tracked on this project in Reports.
+              </p>
+              <ProjectSelect
+                serviceKey={projectServiceKey}
+                value={rackoProjectId}
+                onChange={setRackoProjectId}
+                portal={isTenantPortal ? 'tenant' : 'org'}
+                disabled={submitting}
+              />
+            </div>
             <RequestForm
               catalog={catalog}
               selectedServiceIds={selectedServiceIds}

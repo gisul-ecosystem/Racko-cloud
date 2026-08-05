@@ -9,7 +9,7 @@ import { NotificationBell as GlobalNotificationBell } from './NotificationBell';
 import CloudAutomationNotificationBell from '../shared/NotificationBell';
 
 interface RackoGlobalTopBarProps {
-  onToggleSidebar: () => void;
+  onToggleSidebar?: () => void;
   title: string;
   subtitle?: string;
   showSearch?: boolean;
@@ -69,15 +69,16 @@ export function RackoGlobalTopBar({
   return (
     <header className="sticky top-0 z-10 border-b border-gray-200 bg-white">
       <div className="flex h-16 items-center gap-3 px-4 sm:gap-4 sm:px-6">
-        {/* Sidebar toggle */}
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          aria-label="Toggle sidebar"
-          className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
-        >
-          <Menu className="h-5 w-5" />
-        </button>
+        {onToggleSidebar && (
+          <button
+            type="button"
+            onClick={onToggleSidebar}
+            aria-label="Toggle sidebar"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 transition hover:bg-gray-100 hover:text-gray-900"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+        )}
 
         {/* Logo */}
         <Link

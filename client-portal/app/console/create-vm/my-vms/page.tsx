@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useVmCatalogVms } from '../../../../hooks/useVmCatalogVms';
 import { useVmCatalogPortal } from '../../../../context/VmCatalogPortalContext';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
@@ -14,7 +14,7 @@ import {
   type VmCatalogCategory,
 } from '../../../../lib/vmCatalogApi';
 import { ChevronDown, ChevronUp, Monitor, Plus, Server } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('en-US', {
@@ -104,6 +104,13 @@ export default function MyVmsPage() {
   const { vms, loading, error, refetch } = useVmCatalogVms();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const filterProjectId = searchParams?.get('projectId')?.trim() || null;
+
+  const visibleVms = useMemo(() => {
+    if (!filterProjectId) return vms;
+    return vms.filter((vm) => vm.projectId === filterProjectId);
+  }, [vms, filterProjectId]);
 
   return (
     <div className="max-w-screen-xl">
@@ -113,6 +120,19 @@ export default function MyVmsPage() {
           <p className="mt-0.5 text-sm text-gray-500">
             VMs and purchase requests for your account
           </p>
+          {filterProjectId ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <span className="inline-flex rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100">
+                Filtered by project
+              </span>
+              <Link
+                href={routes.myVms}
+                className="text-xs font-semibold text-gray-500 underline-offset-2 hover:text-gray-800 hover:underline"
+              >
+                Clear filter
+              </Link>
+            </div>
+          ) : null}
         </div>
         <Link
           href={routes.create}
@@ -128,18 +148,26 @@ export default function MyVmsPage() {
       {!error && (
         <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
           {loading ? (
-            <TableSkeleton rows={6} cols={6} embedded />
-          ) : vms.length === 0 ? (
+            <TableSkeleton rows={6} cols={8} embedded />
+          ) : visibleVms.length === 0 ? (
             <div className="p-12 text-center">
               <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100">
                 <Server className="h-6 w-6 text-gray-400" />
               </div>
-              <p className="text-sm font-medium text-gray-500">No VMs yet</p>
+              <p className="text-sm font-medium text-gray-500">
+                {filterProjectId ? 'No VMs for this project' : 'No VMs yet'}
+              </p>
               <p className="mt-1 text-xs text-gray-400">
-                When you submit a catalog request, it will show up here.
+                {filterProjectId
+                  ? 'Create a VM from this project’s Use service flow to see it here.'
+                  : 'When you submit a catalog request, it will show up here.'}
               </p>
               <Link
-                href={routes.create}
+                href={
+                  filterProjectId
+                    ? `${routes.create}?projectId=${encodeURIComponent(filterProjectId)}`
+                    : routes.create
+                }
                 className="mt-4 inline-flex items-center gap-2 text-sm font-medium text-[#B91C1C] hover:text-[#a01717]"
               >
                 <Plus className="h-4 w-4" />
@@ -153,6 +181,9 @@ export default function MyVmsPage() {
                   <tr className="border-b border-gray-100 bg-gray-50">
                     <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Plan
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Project
                     </th>
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Category
@@ -175,7 +206,7 @@ export default function MyVmsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {vms.map((vm, index) => {
+                  {visibleVms.map((vm, index) => {
                     const isActive = vm.status === 'active';
                     const isExpanded = expandedId === vm._id;
                     return (
@@ -241,6 +272,24 @@ function FragmentRow({
           </div>
         </td>
         <td className="px-4 py-3.5">
+          {vm.projectId && vm.projectName ? (
+            <span
+              className="inline-flex max-w-[12rem] truncate rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100"
+              title={
+                vm.clientName
+                  ? `${vm.projectName} · ${vm.clientName}`
+                  : vm.projectName
+              }
+            >
+              {vm.projectName}
+            </span>
+          ) : (
+            <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-500">
+              Unassigned
+            </span>
+          )}
+        </td>
+        <td className="px-4 py-3.5">
           <CategoryBadge category={vm.category} />
         </td>
         <td className="px-4 py-3.5 text-gray-600">{vm.template.label}</td>
@@ -288,7 +337,7 @@ function FragmentRow({
       </tr>
       {isActive && isExpanded ? (
         <tr className="border-b border-green-100 bg-green-50/40">
-          <td colSpan={7} className="px-6 py-4">
+          <td colSpan={8} className="px-6 py-4">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-green-800">
               Connection details
             </p>

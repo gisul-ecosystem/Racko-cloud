@@ -82,6 +82,8 @@ export interface TenantWalletTransaction {
   reason: string;
   relatedOrderId: string | null;
   balanceAfter: number;
+  projectId?: string | null;
+  serviceKey?: string | null;
   createdAt: string;
 }
 

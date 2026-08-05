@@ -5,6 +5,7 @@ import {
   type VmCatalogStatus,
 } from '../../models/catalogVm.model';
 import { VmCatalogPlan } from '../../models/vmCatalogPlan.model';
+import { ProjectModel } from '../../models/project.model';
 import { User } from '../../models/user.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { TenantNotification } from '../../models/tenantNotification.model';
@@ -91,6 +92,8 @@ class VmCatalogService {
       forAdmin?: boolean;
       /** Customer-facing plan label (Cloud VPS - N); overrides stored Webyne planName. */
       displayPlanName?: string;
+      projectName?: string;
+      clientName?: string;
       role?: CatalogVmCallerRole;
     }
   ): CatalogVmResponse {
@@ -108,6 +111,9 @@ class VmCatalogService {
       ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
       ...(doc.tenantUserId ? { tenantUserId: doc.tenantUserId.toString() } : {}),
       ...(opts?.adminEmail ? { adminEmail: opts.adminEmail } : {}),
+      ...(doc.projectId ? { projectId: doc.projectId.toString() } : {}),
+      ...(opts?.projectName ? { projectName: opts.projectName } : {}),
+      ...(opts?.clientName ? { clientName: opts.clientName } : {}),
       provider: doc.provider,
       category: doc.category,
       planId: doc.planId,
@@ -188,19 +194,54 @@ class VmCatalogService {
     return map;
   }
 
+  private async resolveProjectLabels(
+    docs: Array<{ projectId?: mongoose.Types.ObjectId | null }>
+  ): Promise<Map<string, { projectName: string; clientName: string }>> {
+    const ids = [
+      ...new Set(
+        docs
+          .map((d) => d.projectId?.toString())
+          .filter((id): id is string => Boolean(id) && mongoose.Types.ObjectId.isValid(id!))
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+
+    const projects = await ProjectModel.find({
+      _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select('name clientName')
+      .lean();
+
+    const map = new Map<string, { projectName: string; clientName: string }>();
+    for (const project of projects) {
+      map.set(project._id.toString(), {
+        projectName: project.name,
+        clientName: project.clientName,
+      });
+    }
+    return map;
+  }
+
   private async toCustomerResponses(
     docs: ICatalogVm[],
     opts?: { adminEmail?: string; includeSecrets?: boolean }
   ): Promise<CatalogVmResponse[]> {
-    const names = await this.resolveCustomerPlanNames(docs);
-    return docs.map((doc) =>
-      this.toResponse(doc, {
+    const [names, projects] = await Promise.all([
+      this.resolveCustomerPlanNames(docs),
+      this.resolveProjectLabels(docs),
+    ]);
+    return docs.map((doc) => {
+      const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      return this.toResponse(doc, {
         ...opts,
         forAdmin: true,
         role: 'admin',
         displayPlanName: names.get(doc.planId),
-      })
-    );
+        ...(project
+          ? { projectName: project.projectName, clientName: project.clientName }
+          : {}),
+      });
+    });
   }
 
   private async toCustomerResponse(
@@ -508,7 +549,7 @@ class VmCatalogService {
           region: doc.region,
         });
 
-        return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
+        return this.toCustomerResponse(doc, { adminEmail: admin.email });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         doc.status = 'failed';
@@ -547,7 +588,7 @@ class VmCatalogService {
           error: message,
         });
 
-        return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
+        return this.toCustomerResponse(doc, { adminEmail: admin.email });
       }
     }
 
@@ -914,14 +955,19 @@ class VmCatalogService {
       .select('email')
       .lean();
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+    const projects = await this.resolveProjectLabels(docs);
 
-    return docs.map((doc) =>
-      this.toResponse(doc, {
+    return docs.map((doc) => {
+      const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      return this.toResponse(doc, {
         adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
         includeSecrets: true,
         role: 'super_admin',
-      })
-    );
+        ...(project
+          ? { projectName: project.projectName, clientName: project.clientName }
+          : {}),
+      });
+    });
   }
 
   /**
