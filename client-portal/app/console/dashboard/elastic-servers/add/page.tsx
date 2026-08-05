@@ -35,7 +35,7 @@ export default function TenantAddServerPage() {
   const [submitting, setSubmitting] = useState(false);
 
   const canSubmit =
-    !!(name.trim() && ipAddress.trim() && password.trim() && projectId) && !submitting;
+    !!(name.trim() && ipAddress.trim() && password.trim()) && !submitting;
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -46,7 +46,7 @@ export default function TenantAddServerPage() {
         ipAddress: ipAddress.trim(),
         protocol,
         password,
-        projectId,
+        ...(projectId ? { projectId } : {}),
         ...(username.trim() && { username: username.trim() }),
       };
       await createTenantExternalVM(dto);
