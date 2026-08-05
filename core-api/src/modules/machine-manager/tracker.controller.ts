@@ -340,30 +340,12 @@ export class TrackerController {
     const sessionId = req.params['sessionId'] as string;
     const ticket    = req.query['ticket'] as string;
 
-    logger.info('[SSE][Clone] Stream connection attempt', {
-      sessionId,
-      hasTicket: !!ticket,
-      ip: req.ip,
-      userAgent: req.headers['user-agent'] ?? null,
-      timestamp: new Date().toISOString(),
-    });
-
     const { consumeCloneStreamTicket } = await import('./clone.streamTicket');
     const entry = consumeCloneStreamTicket(ticket);
     if (!entry || entry.sessionId !== sessionId) {
-      logger.warn('[SSE][Clone] Stream rejected — invalid or expired ticket', {
-        sessionId,
-        hasTicket: !!ticket,
-        timestamp: new Date().toISOString(),
-      });
       res.status(401).json({ success: false, message: 'Invalid or expired stream ticket.' });
       return;
     }
-
-    logger.info('[SSE][Clone] Stream authenticated — opening SSE connection', {
-      sessionId,
-      timestamp: new Date().toISOString(),
-    });
 
     res.setHeader('Content-Type',  'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
@@ -371,74 +353,30 @@ export class TrackerController {
     res.setHeader('X-Accel-Buffering', 'no');
     res.flushHeaders();
 
-    logger.info('[SSE][Clone] Headers flushed — stream is live', {
-      sessionId,
-      timestamp: new Date().toISOString(),
-    });
-
-    const streamOpenedAt = Date.now();
-
     const send = (data: unknown): void => {
       res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 
     const onEvent = (event: unknown): void => {
-      logger.info('[SSE][Clone] Event delivered to browser', {
-        sessionId,
-        event,
-        streamOpenMs: Date.now() - streamOpenedAt,
-      });
       send(event);
       const e = event as { type?: string; success?: boolean };
       if (e.type === 'clone_complete') {
         cloneSessionEmitter.off(sessionId, onEvent);
-        logger.info('[SSE][Clone] Clone complete — closing stream', {
-          sessionId,
-          streamDurationMs: Date.now() - streamOpenedAt,
-        });
         res.end();
       }
     };
 
     cloneSessionEmitter.on(sessionId, onEvent);
 
-    logger.info('[SSE][Clone] Listener registered', {
-      sessionId,
-      listenerCount: cloneSessionEmitter.listenerCount(sessionId),
-      timestamp: new Date().toISOString(),
-    });
-
+    // Auto-cleanup if client disconnects
     req.on('close', () => {
-      logger.info('[SSE][Clone] Stream closed by client', {
-        sessionId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
       cloneSessionEmitter.off(sessionId, onEvent);
-    });
-
-    res.on('close', () => {
-      logger.info('[SSE][Clone] Response closed', {
-        sessionId,
-        streamDurationMs: Date.now() - streamOpenedAt,
-        writableEnded: res.writableEnded,
-      });
-    });
-
-    res.on('error', (err) => {
-      logger.error('[SSE][Clone] Response error', {
-        sessionId,
-        error: err.message,
-        streamDurationMs: Date.now() - streamOpenedAt,
-      });
     });
 
     // Safety timeout — 30 minutes max for a clone session
     setTimeout(() => {
       cloneSessionEmitter.off(sessionId, onEvent);
-      if (!res.writableEnded) {
-        logger.warn('[SSE][Clone] Stream timed out after 30 minutes', { sessionId });
-        res.end();
-      }
+      if (!res.writableEnded) res.end();
     }, 30 * 60 * 1000);
   }
 }

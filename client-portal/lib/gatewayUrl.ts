@@ -166,7 +166,35 @@ export function getDirectGatewayBaseUrl(): string {
   return getServerGatewayBaseUrl();
 }
 
-/** Alias for SSE streams and other long-lived direct gateway connections. */
+/** Alias for SSE streams and other long-lived direct gateway connections.
+ * SSE must bypass the Next.js proxy — Next.js buffers HTTP responses and
+ * cannot stream SSE. We always call the public API gateway URL directly.
+ *
+ * Resolution order:
+ *  1. NEXT_PUBLIC_GATEWAY_URL if set and not Docker-internal
+ *  2. Same origin with /api paths going directly to nginx → gateway (api-dev.racko.ai etc)
+ *     via the nginx proxy_pass which DOES support streaming (proxy_buffering off on SSE paths).
+ *
+ * In practice on dev.racko.ai: NEXT_PUBLIC_GATEWAY_URL is not set in docker-compose,
+ * so this falls back to same origin. The nginx `api-dev.racko.ai` block proxies /api
+ * to core-api with streaming support, which is correct.
+ * The key difference from regular requests: SSE paths are EXCLUDED from the Next.js
+ * rewrite rule (next.config.mjs), so they bypass Next.js buffering entirely and go
+ * directly to nginx → core-api.
+ */
 export function getSseGatewayBaseUrl(): string {
-  return getDirectGatewayBaseUrl();
+  if (typeof window === 'undefined') return getServerGatewayBaseUrl();
+
+  // Use NEXT_PUBLIC_GATEWAY_URL if it is a real public URL (not Docker-internal)
+  const configured = process.env['NEXT_PUBLIC_GATEWAY_URL']?.trim();
+  if (configured) {
+    const url = stripTrailingSlash(configured);
+    const host = (() => { try { return new URL(url).hostname.toLowerCase(); } catch { return ''; } })();
+    const isDockerInternal = host === 'cloud-gateway' || host.endsWith('.internal') || (host.endsWith('.local') && host.includes('gateway'));
+    if (!isDockerInternal) return url;
+  }
+
+  // Production fallback: same origin — SSE paths are excluded from Next.js rewrites
+  // so these requests go directly to nginx which streams them correctly.
+  return stripTrailingSlash(window.location.origin);
 }
