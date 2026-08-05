@@ -45,9 +45,9 @@ jobs:
 
       - name: Build core-api image
         run: |
-          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt)
-          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt)
-          AGENT_VERSION=$(cat agent-artifacts/agent-linux/agent-version.txt)
+          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt | tr -d '[:space:]')
+          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt | tr -d '[:space:]')
+          AGENT_VERSION=$(cat agent-artifacts/agent-linux/agent-version.txt | tr -d '[:space:]')
           docker build \
             --build-arg AGENT_VERSION=$AGENT_VERSION \
             --build-arg AGENT_CHECKSUM_WINDOWS=$CHECKSUM_WINDOWS \
