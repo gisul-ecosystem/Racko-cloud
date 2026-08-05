@@ -136,7 +136,7 @@ const envSchema = z.object({
     .default('3600000'),
 
   // VM host leases (Excel inventory) — email SUPER_ADMIN_EMAIL this many days before endDate
-  VM_HOST_LEASE_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('7'),
+  VM_HOST_LEASE_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('5'),
   VM_HOST_LEASE_WARNING_CHECK_INTERVAL_MS: z
     .string()
     .regex(/^\d+$/)
