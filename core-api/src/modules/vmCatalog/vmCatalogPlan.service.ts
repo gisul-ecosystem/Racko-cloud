@@ -4,7 +4,10 @@ import {
   type IVmCatalogPlan,
 } from '../../models/vmCatalogPlan.model';
 import type { ExternalVmPricingCategory } from '../../models/externalVmPricingConfig.model';
-import { externalVmPricingService } from '../externalVmPricing/externalVmPricing.service';
+import {
+  accountVmPricingService,
+  type AccountPricingContext,
+} from '../accountVmPricing/accountVmPricing.service';
 import { NotFoundError } from '../../utils/errors';
 import type {
   CreateVmCatalogPlanInput,
@@ -86,16 +89,30 @@ function applySellMultiplier(
   return roundMoney(Number(base) * m);
 }
 
+function absoluteOrMultiplier(
+  base: number | null | undefined,
+  multiplier: number,
+  absolute: number | null | undefined
+): number | null {
+  if (absolute != null && Number.isFinite(Number(absolute)) && Number(absolute) >= 0) {
+    return roundMoney(Number(absolute));
+  }
+  return applySellMultiplier(base, multiplier);
+}
+
 function sellPricesForPlan(
   plan: VmCatalogPlanPublic,
   multiplier: number,
-  hourlyEnabled: boolean
+  hourlyEnabled: boolean,
+  planOverride?: Partial<Record<BillingPeriod, number | null>>
 ): VmCatalogPeriodPrices {
   return {
-    hourly: hourlyEnabled ? applySellMultiplier(plan.hourly, multiplier) : null,
-    monthly: applySellMultiplier(plan.monthly, multiplier),
-    quarterly: applySellMultiplier(plan.quarterly, multiplier),
-    yearly: applySellMultiplier(plan.yearly, multiplier),
+    hourly: hourlyEnabled
+      ? absoluteOrMultiplier(plan.hourly, multiplier, planOverride?.hourly)
+      : null,
+    monthly: absoluteOrMultiplier(plan.monthly, multiplier, planOverride?.monthly),
+    quarterly: absoluteOrMultiplier(plan.quarterly, multiplier, planOverride?.quarterly),
+    yearly: absoluteOrMultiplier(plan.yearly, multiplier, planOverride?.yearly),
   };
 }
 
@@ -125,6 +142,8 @@ class VmCatalogPlanService {
     applySellPrice?: boolean;
     /** When true, `name` becomes Cloud VPS - {sno}; real name is in `providerName`. */
     forCustomer?: boolean;
+    /** When set, apply per-account Webyne overrides on top of global defaults. */
+    account?: AccountPricingContext | null;
   }): Promise<VmCatalogPlanPublic[]> {
     const filter = opts?.activeOnly ? { isActive: true } : {};
     const docs = await VmCatalogPlan.find(filter).sort({ sortOrder: 1, createdAt: 1 });
@@ -140,21 +159,21 @@ class VmCatalogPlanService {
 
     if (!opts?.applySellPrice) return plans;
 
-    const pricingCfg = await externalVmPricingService.getByProvider('webyne');
-    const hourlyEnabled = Boolean(pricingCfg.hourlyEnabled);
+    const displayCfg = await accountVmPricingService.resolveWebyneDisplayConfig(
+      opts.account ?? null
+    );
     return plans.map((plan) => {
+      const planOverride = displayCfg.planOverrides[plan._id];
       const sellPricesByCategory = {} as Record<
         ExternalVmPricingCategory,
         VmCatalogPeriodPrices
       >;
       for (const category of CATEGORIES) {
-        const multiplierRaw = Number(pricingCfg.categories[category]?.multiplier);
-        const multiplier =
-          Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
         sellPricesByCategory[category] = sellPricesForPlan(
           plan,
-          multiplier,
-          hourlyEnabled
+          displayCfg.multipliers[category],
+          displayCfg.hourlyEnabled,
+          planOverride
         );
       }
       const display = sellPricesByCategory.linux;
@@ -165,7 +184,7 @@ class VmCatalogPlanService {
         quarterly: display.quarterly,
         yearly: display.yearly,
         sellPricesByCategory,
-        hourlyEnabled,
+        hourlyEnabled: displayCfg.hourlyEnabled,
       };
     });
   }

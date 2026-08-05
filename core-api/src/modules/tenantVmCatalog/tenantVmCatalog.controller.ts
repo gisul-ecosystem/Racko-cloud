@@ -10,12 +10,17 @@ function success<T>(res: Response, message: string, data: T, statusCode = 200): 
 }
 
 export const tenantVmCatalogController = {
-  async listPlans(_req: Request, res: Response, next: NextFunction): Promise<void> {
+  async listPlans(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
+      const authReq = req as TenantAuthenticatedRequest;
       const plans = await vmCatalogPlanService.list({
         activeOnly: true,
         applySellPrice: true,
         forCustomer: true,
+        account: {
+          scopeType: 'tenant',
+          tenantId: authReq.tenantUser.tenantId,
+        },
       });
       success(res, 'VM catalog plans retrieved.', { plans, total: plans.length });
     } catch (err) {
