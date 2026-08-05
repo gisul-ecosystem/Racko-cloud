@@ -50,7 +50,7 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}, cancel func
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
-	log.Printf("[heartbeat] Started — sending every %s (version=%s)", interval, config.Version)
+	log.Printf("[heartbeat] Started — sending every %s (version=%s) [v4-scm-auto-restart]", interval, config.Version)
 
 	for {
 		select {
