@@ -163,11 +163,19 @@ interface ConsolePollOptions {
  * baked in at capture time), so the clone can boot with a stale/wrong
  * address instead of the freshly-allocated custnet1 address. This is a
  * one-shot guest-exec fallback for PRIVATE Windows VMs only: force the
- * primary "Up" adapter onto the assigned static IP/gateway/DNS via
- * PowerShell networking cmdlets.
+ * primary "Up" adapter (named "Ethernet" on these templates) onto the
+ * assigned static IP/gateway/DNS/MTU via `netsh`.
  *
- * Idempotent — skips re-adding the IP if it's already correct, and only
- * removes addresses that don't match, so calling it more than once is safe.
+ * Deliberately uses `netsh interface ipv4 set address ... static` rather
+ * than New-NetIPAddress/Remove-NetIPAddress: on a guest that already has a
+ * default-gateway route (always true here), New-NetIPAddress -DefaultGateway
+ * throws "Instance DefaultGateway already exists" (Win32 error 87) — Remove
+ * succeeds, New fails, and the adapter is left with NO IPv4 address at all,
+ * which is worse than the original mismatch. `netsh set address` replaces
+ * the address + gateway atomically in one call and is naturally idempotent
+ * (re-running with the same values is a no-op), so no "only if not already
+ * set" guard is needed.
+ *
  * Best-effort only — never throws. A failure here must not block the
  * console-readiness poll from continuing to retry.
  */
@@ -178,16 +186,14 @@ async function fixPrivateNetworkGuestIp(
   gateway: string
 ): Promise<void> {
   try {
-    const prefixLength = 16; // custnet1 is a flat /16 — see bulkProcessor.ts ipconfig0
+    const subnetMask = '255.255.0.0'; // custnet1 is a flat /16 — see bulkProcessor.ts ipconfig0
     const mtu = 1400; // custnet1/VXLAN carries 1450 — 1400 leaves headroom and matches net0's mtu=1400
     const command =
-      `$ip='${assignedIp}'; $gw='${gateway}'; $prefix=${prefixLength}; $mtu=${mtu}; ` +
+      `$ip='${assignedIp}'; $gw='${gateway}'; $mask='${subnetMask}'; $mtu=${mtu}; ` +
       "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1; " +
       'if ($adapter) { ' +
-      "Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -ne $ip } | Remove-NetIPAddress -Confirm:$false -ErrorAction SilentlyContinue; " +
-      "Get-NetRoute -InterfaceIndex $adapter.ifIndex -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue | Remove-NetRoute -Confirm:$false -ErrorAction SilentlyContinue; " +
-      'if (-not (Get-NetIPAddress -InterfaceIndex $adapter.ifIndex -AddressFamily IPv4 -IPAddress $ip -ErrorAction SilentlyContinue)) { New-NetIPAddress -InterfaceIndex $adapter.ifIndex -IPAddress $ip -PrefixLength $prefix -DefaultGateway $gw -ErrorAction SilentlyContinue | Out-Null }; ' +
-      "Set-DnsClientServerAddress -InterfaceIndex $adapter.ifIndex -ServerAddresses ('8.8.8.8') -ErrorAction SilentlyContinue; " +
+      "netsh interface ipv4 set address name=\"$($adapter.Name)\" static $ip $mask $gw | Out-Null; " +
+      "netsh interface ipv4 set dns name=\"$($adapter.Name)\" static 8.8.8.8 | Out-Null; " +
       // Same adapter selected above — the guacd RDP graphics pipeline times out over the
       // 1450-byte custnet1/VXLAN path without this, even though the IP itself is reachable.
       "netsh interface ipv4 set subinterface \"$($adapter.Name)\" mtu=$mtu store=persistent | Out-Null " +
@@ -197,7 +203,7 @@ async function fixPrivateNetworkGuestIp(
       command: 'powershell.exe',
       args: ['-Command', command],
     });
-    logger.info('[VMConsolePoll] Private-network guest IP + MTU fixup executed', {
+    logger.info('[VMConsolePoll] Private-network guest IP + MTU fixup executed (netsh)', {
       node,
       vmid,
       assignedIp,
