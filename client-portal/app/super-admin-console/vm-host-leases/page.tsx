@@ -207,9 +207,9 @@ export default function VmHostLeasesPage() {
     <div className="mx-auto max-w-screen-xl space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">VM Host Leases</h1>
+          <h1 className="text-2xl font-bold text-gray-900">VM Inventory</h1>
           <p className="mt-1 text-sm text-gray-500">
-            Upload Excel sheets of leased hosts. Expected columns: Provider, IP Address, Description, Invoice Date, Due Date, VM Username, VM Password.
+            Upload Excel sheets of VM inventory. Expected columns: Provider, IP Address, Description, Invoice Date, Due Date, VM Username, VM Password.
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -242,7 +242,7 @@ export default function VmHostLeasesPage() {
       </div>
 
       <div className="grid gap-4 sm:grid-cols-3">
-        <OverviewStatCard label="Total leases" value={stats.total} icon={FileSpreadsheet} accent="red" />
+        <OverviewStatCard label="Total inventory" value={stats.total} icon={FileSpreadsheet} accent="red" />
         <OverviewStatCard
           label="Due ≤ 7 days"
           value={stats.dueSoon}
@@ -255,7 +255,7 @@ export default function VmHostLeasesPage() {
       <div className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-gray-900">Lease inventory</h2>
+            <h2 className="text-sm font-semibold text-gray-900">Inventory</h2>
             <p className="text-xs text-gray-500">
               Expected columns: Provider, IP Address, Description, Invoice Date, Due Date, VM Username, VM Password
             </p>
@@ -301,7 +301,7 @@ export default function VmHostLeasesPage() {
         ) : leases.length === 0 ? (
           <div className="rounded-lg border border-dashed border-gray-200 bg-gray-50 px-6 py-12 text-center">
             <FileSpreadsheet className="mx-auto h-10 w-10 text-gray-300" />
-            <p className="mt-3 text-sm font-medium text-gray-700">No leases yet</p>
+            <p className="mt-3 text-sm font-medium text-gray-700">No inventory yet</p>
             <p className="mt-1 text-xs text-gray-500">Upload an Excel sheet to populate this list.</p>
           </div>
         ) : (
