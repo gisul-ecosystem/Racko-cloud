@@ -15,6 +15,7 @@ import {
   Monitor,
   PlusCircle,
   Server,
+  Shield,
   Wallet,
 } from 'lucide-react';
 import { TenantRecentResources } from '@/components/tenant/TenantRecentResources';
@@ -26,7 +27,7 @@ import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
 const SERVICE_TILES: Array<{
-  serviceKey: TenantServiceKey | 'billing' | 'projects';
+  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control';
   name: string;
   href: string;
   description: string;
@@ -116,6 +117,13 @@ const SERVICE_TILES: Array<{
     icon: Monitor,
     description: 'Install and manage software on any machine',
   },
+  {
+    serviceKey: 'access-control',
+    name: 'Access control',
+    href: tenantConsole.accessControl,
+    icon: Shield,
+    description: 'Manage roles, operators, and permissions for this workspace',
+  },
 ];
 
 export default function TenantConsolePage() {
@@ -132,7 +140,13 @@ export default function TenantConsolePage() {
   }, [router, tenantUser?.role]);
 
   const tiles = SERVICE_TILES.filter((tile) => {
-    if (tile.serviceKey === 'billing' || tile.serviceKey === 'projects') return isAdmin;
+    if (
+      tile.serviceKey === 'billing' ||
+      tile.serviceKey === 'projects' ||
+      tile.serviceKey === 'access-control'
+    ) {
+      return isAdmin;
+    }
     return hasActiveService(tile.serviceKey);
   });
 

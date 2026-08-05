@@ -1,5 +1,13 @@
+import mongoose from 'mongoose';
 import { TenantUser } from '../../models/tenantUser.model';
-import { NotFoundError, ValidationError, ForbiddenError } from '../../utils/errors';
+import { OrgRbacAssignmentModel } from '../../models/orgRbacAssignment.model';
+import {
+  NotFoundError,
+  ValidationError,
+  ForbiddenError,
+  ConflictError,
+} from '../../utils/errors';
+import { hashPassword } from '../../utils/argon2';
 import {
   TENANT_PERMISSION_CATALOG,
   TENANT_ALL_PERMISSION_KEYS,
@@ -121,7 +129,26 @@ class TenantRbacService {
 
   async listPeople(tenantId: string) {
     await this.ensureTenantRoles(tenantId);
-    const people = await TenantUser.find({ tenantId })
+
+    // Access control is for console operators only — not elastic-server end-users.
+    // Include tenant admins and tenant_users who already have RBAC role assignments.
+    const assignedSubjectIds = await OrgRbacAssignmentModel.distinct('subjectId', {
+      scope: 'tenant',
+      orgId: tenantId,
+    });
+    const assignedObjectIds = assignedSubjectIds
+      .filter((id): id is string => typeof id === 'string' && mongoose.isValidObjectId(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const people = await TenantUser.find({
+      tenantId,
+      $or: [
+        { role: 'tenant_admin' },
+        ...(assignedObjectIds.length > 0
+          ? [{ role: 'tenant_user', _id: { $in: assignedObjectIds } }]
+          : []),
+      ],
+    })
       .select('_id email role isActive')
       .sort({ role: 1, email: 1 })
       .lean();
@@ -181,6 +208,43 @@ class TenantRbacService {
     });
     this.clearCache(tenantId, subjectId);
     return saved;
+  }
+
+  async inviteOperator(
+    tenantId: string,
+    input: { email: string; temporaryPassword: string; roleIds: string[] },
+    actorId: string
+  ) {
+    const email = input.email.toLowerCase().trim();
+    const existing = await TenantUser.findOne({ tenantId, email }).select('_id').lean();
+    if (existing) throw new ConflictError('Email already in use.');
+
+    if (!input.temporaryPassword || input.temporaryPassword.length < 8) {
+      throw new ValidationError('Temporary password must be at least 8 characters.');
+    }
+    if (!input.roleIds?.length) {
+      throw new ValidationError('Select at least one role for the operator.');
+    }
+
+    await this.ensureTenantRoles(tenantId);
+
+    const user = await TenantUser.create({
+      tenantId: new mongoose.Types.ObjectId(tenantId),
+      email,
+      passwordHash: await hashPassword(input.temporaryPassword),
+      role: 'tenant_user',
+      isActive: true,
+      isEmailVerified: true,
+      createdBy: new mongoose.Types.ObjectId(actorId),
+    });
+
+    await this.setUserRoles(tenantId, user._id.toString(), input.roleIds, actorId);
+
+    return {
+      _id: user._id.toString(),
+      email: user.email,
+      role: user.role,
+    };
   }
 }
 

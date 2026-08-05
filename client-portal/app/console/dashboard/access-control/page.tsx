@@ -11,6 +11,7 @@ import {
   fetchTenantRbacCatalog,
   fetchTenantRbacPeople,
   fetchTenantRbacRoles,
+  inviteTenantOperator,
   setTenantRbacUserRoles,
   updateTenantRbacRole,
   type OrgRbacPermissionDef,
@@ -41,6 +42,12 @@ export default function TenantAccessControlPage() {
   const [assignPerson, setAssignPerson] = useState<TenantRbacPerson | null>(null);
   const [assignRoleIds, setAssignRoleIds] = useState<string[]>([]);
   const [savingAssign, setSavingAssign] = useState(false);
+
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [invitePassword, setInvitePassword] = useState('');
+  const [inviteRoleIds, setInviteRoleIds] = useState<string[]>([]);
+  const [savingInvite, setSavingInvite] = useState(false);
 
   const groups = useMemo(() => {
     const map = new Map<string, OrgRbacPermissionDef[]>();
@@ -109,6 +116,7 @@ export default function TenantAccessControlPage() {
     e.preventDefault();
     if (!assignPerson) return;
     setSavingAssign(true);
+    setError(null);
     try {
       await setTenantRbacUserRoles(assignPerson._id, assignRoleIds);
       setFlash(`Roles updated for ${assignPerson.email}.`);
@@ -118,6 +126,33 @@ export default function TenantAccessControlPage() {
       setError(err instanceof ApiError ? err.message : 'Failed to assign roles.');
     } finally {
       setSavingAssign(false);
+    }
+  }
+
+  async function saveInvite(e: React.FormEvent) {
+    e.preventDefault();
+    if (inviteRoleIds.length === 0) {
+      setError('Select at least one role for the operator.');
+      return;
+    }
+    setSavingInvite(true);
+    setError(null);
+    try {
+      await inviteTenantOperator({
+        email: inviteEmail,
+        temporaryPassword: invitePassword,
+        roleIds: inviteRoleIds,
+      });
+      setFlash(`Operator invited: ${inviteEmail}.`);
+      setShowInvite(false);
+      setInviteEmail('');
+      setInvitePassword('');
+      setInviteRoleIds([]);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to invite operator.');
+    } finally {
+      setSavingInvite(false);
     }
   }
 
@@ -134,7 +169,7 @@ export default function TenantAccessControlPage() {
         </Link>
         <h1 className="text-2xl font-bold text-gray-900">Access control</h1>
         <p className="mt-0.5 text-sm text-gray-500">
-          Manage roles and permissions for tenant users in this workspace.
+          Grant staff controlled access to the tenant console.
         </p>
       </div>
 
@@ -305,6 +340,80 @@ export default function TenantAccessControlPage() {
         </div>
       ) : (
         <div className="space-y-4">
+          {isTenantAdmin ? (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowInvite(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white"
+              >
+                <Plus className="h-4 w-4" /> Invite operator
+              </button>
+            </div>
+          ) : null}
+
+          {showInvite ? (
+            <form
+              onSubmit={(e) => void saveInvite(e)}
+              className="space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
+            >
+              <input
+                required
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="Operator email"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              />
+              <input
+                required
+                type="text"
+                value={invitePassword}
+                onChange={(e) => setInvitePassword(e.target.value)}
+                placeholder="Temporary password"
+                minLength={8}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              />
+              <div className="flex flex-wrap gap-2">
+                {roles.map((role) => (
+                  <label
+                    key={role._id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-2.5 py-1 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={inviteRoleIds.includes(role._id)}
+                      onChange={() =>
+                        setInviteRoleIds((prev) =>
+                          prev.includes(role._id)
+                            ? prev.filter((id) => id !== role._id)
+                            : [...prev, role._id]
+                        )
+                      }
+                    />
+                    {role.name}
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={savingInvite}
+                  className="rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {savingInvite ? 'Inviting…' : 'Send invite'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowInvite(false)}
+                  className="rounded-lg border border-gray-200 px-3.5 py-2 text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : null}
+
           {assignPerson ? (
             <form
               onSubmit={(e) => void saveAssign(e)}
@@ -368,14 +477,16 @@ export default function TenantAccessControlPage() {
                     <td className="px-5 py-3">
                       <p className="font-medium text-gray-900">{person.email}</p>
                       <p className="text-xs text-gray-500">
-                        {person.isTenantAdmin ? 'Tenant admin' : person.role}
+                        {person.isTenantAdmin ? 'Tenant admin' : 'Operator'}
                       </p>
                     </td>
                     <td className="px-4 py-3 text-gray-700">
                       {person.roleNames.join(', ') || '—'}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {!person.isTenantAdmin ? (
+                      {person.isTenantAdmin ? (
+                        <span className="text-xs text-gray-400">Full access</span>
+                      ) : (
                         <button
                           type="button"
                           onClick={() => {
@@ -386,7 +497,7 @@ export default function TenantAccessControlPage() {
                         >
                           Assign roles
                         </button>
-                      ) : null}
+                      )}
                     </td>
                   </tr>
                 ))}
