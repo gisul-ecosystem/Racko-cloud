@@ -124,6 +124,14 @@ const envSchema = z.object({
     .transform(Number)
     .default('3600000'),
 
+  // VM host leases (Excel inventory) — email SUPER_ADMIN_EMAIL this many days before endDate
+  VM_HOST_LEASE_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('7'),
+  VM_HOST_LEASE_WARNING_CHECK_INTERVAL_MS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('3600000'),
+
   // Software installation (Windows guests — Chocolatey)
   SOFTWARE_QMP_RETRY_DELAY_MS: z.string().regex(/^\d+$/).transform(Number).default('45000'),
   SOFTWARE_VM_START_TIMEOUT_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),

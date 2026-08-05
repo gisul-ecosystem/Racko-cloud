@@ -12,6 +12,11 @@ export const PERMISSION_CATALOG: PermissionDef[] = [
   // VM management / cluster control
   { key: 'vm_management.manage', label: 'Manage VM management dashboard', group: 'VM Management' },
   { key: 'machine_manager.manage', label: 'Manage machine manager', group: 'Machine Manager' },
+  {
+    key: 'vm_host_leases.manage',
+    label: 'Manage VM host leases (Excel inventory)',
+    group: 'VM Host Leases',
+  },
   { key: 'admin_users.manage', label: 'Manage admin users & services', group: 'Admin Users' },
 
   // Webyne VM requests
@@ -103,6 +108,7 @@ export const SYSTEM_ROLE_SEEDS: Array<{
     permissions: [
       'vm_management.manage',
       'machine_manager.manage',
+      'vm_host_leases.manage',
       'admin_users.manage',
       'white_labelling.manage',
       'azure.manage',

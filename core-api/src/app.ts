@@ -46,6 +46,8 @@ import tenantDedicatedServerRoutes from './modules/tenantDedicatedServer/tenantD
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
+import { startVmHostLeaseExpiryWarningScheduler } from './modules/vmHostLeases/vmHostLeaseExpiryScheduler';
+import vmHostLeaseRoutes from './modules/vmHostLeases/vmHostLease.routes';
 import { rescheduleFromDb } from './modules/vmAccessSchedule/scheduleManager';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
@@ -188,6 +190,7 @@ app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/admin-vm-templates', adminVmTemplateRoutes);
 app.use('/api/v1/machines', machineRouter);
 app.use('/api/v1/agent', agentRouter);
+app.use('/api/v1/vm-host-leases', vmHostLeaseRoutes);
 app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 app.use('/api/v1/ip-pool', ipPoolRoutes);
 app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
@@ -210,6 +213,7 @@ startVmAutomationScheduler();
 startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
 startCatalogVmExpiryScheduler();
+startVmHostLeaseExpiryWarningScheduler();
 void rescheduleFromDb().catch((err) => {
   logger.error('[accessSchedule] rescheduleFromDb failed', {
     error: err instanceof Error ? err.message : String(err),

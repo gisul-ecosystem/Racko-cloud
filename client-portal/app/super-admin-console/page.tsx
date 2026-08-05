@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import {
   Cloud,
   ClipboardList,
   Calculator,
+  FileSpreadsheet,
   IndianRupee,
   Monitor,
   MonitorCheck,
@@ -14,6 +14,7 @@ import {
   Shield,
   Users,
 } from 'lucide-react';
+import { ServiceTileCard } from '@/components/super-admin-console/ServiceTileCard';
 import { fetchCatalogVmRequesters } from '@/lib/vmCatalogApi';
 import { fetchDedicatedRequesters } from '@/lib/dedicatedServerApi';
 import { useAuth } from '@/context/AuthContext';
@@ -101,6 +102,14 @@ const services: ServiceTile[] = [
     anyOf: ['machine_manager.manage'],
   },
   {
+    id: 'vm-host-leases',
+    name: 'VM Host Leases',
+    href: '/super-admin-console/vm-host-leases',
+    icon: FileSpreadsheet,
+    description: 'Upload Excel inventory of leased VM hosts and track expiry dates',
+    anyOf: ['vm_host_leases.manage'],
+  },
+  {
     id: 'white-labelling',
     name: 'White Labelling Service',
     href: '/super-admin-console/white-labelling',
@@ -185,7 +194,6 @@ export default function SuperAdminConsolePage() {
         ) : (
           <div className="flex flex-wrap justify-center gap-6">
             {visibleServices.map((service) => {
-              const Icon = service.icon;
               const badgeCount =
                 service.badgeKey === 'webyne'
                   ? webynePendingCount
@@ -194,27 +202,14 @@ export default function SuperAdminConsolePage() {
                     : 0;
 
               return (
-                <Link
+                <ServiceTileCard
                   key={service.id}
                   href={service.href}
-                  className="group relative flex h-[200px] w-[200px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-5 text-center shadow-sm transition hover:border-[#B91C1C] hover:shadow-md"
-                >
-                  {badgeCount > 0 ? (
-                    <span
-                      className="absolute right-3 top-3 flex h-5 min-w-5 items-center justify-center rounded-full bg-[#B91C1C] px-1.5 text-[11px] font-bold text-white"
-                      aria-label={`${badgeCount} pending`}
-                    >
-                      {badgeCount > 99 ? '99+' : badgeCount}
-                    </span>
-                  ) : null}
-                  <div className="relative mb-3 flex h-14 w-14 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C] transition group-hover:bg-[#B91C1C] group-hover:text-white">
-                    <Icon className="h-7 w-7" />
-                  </div>
-                  <span className="text-sm font-medium text-gray-900">{service.name}</span>
-                  <span className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-gray-500">
-                    {service.description}
-                  </span>
-                </Link>
+                  name={service.name}
+                  description={service.description}
+                  icon={service.icon}
+                  badgeCount={badgeCount}
+                />
               );
             })}
           </div>

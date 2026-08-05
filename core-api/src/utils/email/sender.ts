@@ -6,6 +6,10 @@ import { buildLoginAlertTemplate, type LoginAlertTemplateData } from './template
 import { buildAccountLockedTemplate, type AccountLockedTemplateData } from './templates/accountLocked';
 import { buildPasswordResetTemplate } from './templates/passwordReset';
 import { buildStaffInviteTemplate } from './templates/staffInvite';
+import {
+  buildVmHostLeaseExpiryTemplate,
+  type VmHostLeaseExpiryTemplateData,
+} from './templates/vmHostLeaseExpiry';
 
 const resend = new Resend(config.RESEND_API_KEY);
 
@@ -108,6 +112,18 @@ export async function sendStaffInviteEmail(input: {
     tempPassword: input.tempPassword,
     verifyToken: input.verifyToken,
     resetToken: input.resetToken,
+  });
+  await sendEmail({ to: input.to, ...template });
+}
+
+export async function sendVmHostLeaseExpiryEmail(input: {
+  to: string;
+  leases: VmHostLeaseExpiryTemplateData['leases'];
+  warningDays: number;
+}): Promise<void> {
+  const template = buildVmHostLeaseExpiryTemplate({
+    leases: input.leases,
+    warningDays: input.warningDays,
   });
   await sendEmail({ to: input.to, ...template });
 }
