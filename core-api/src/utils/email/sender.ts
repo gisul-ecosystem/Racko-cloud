@@ -8,6 +8,10 @@ import { buildLoginAlertTemplate, type LoginAlertTemplateData } from './template
 import { buildAccountLockedTemplate, type AccountLockedTemplateData } from './templates/accountLocked';
 import { buildPasswordResetTemplate } from './templates/passwordReset';
 import { buildStaffInviteTemplate } from './templates/staffInvite';
+import {
+  buildVmHostLeaseExpiryTemplate,
+  type VmHostLeaseExpiryTemplateData,
+} from './templates/vmHostLeaseExpiry';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
@@ -269,25 +273,33 @@ export async function sendTenantPasswordResetEmail(input: {
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
 }
 
-/** Tenant console admin/operator invite (white-labeled). */
+/** Tenant console operator invite (white-labeled). */
 export async function sendTenantOperatorInviteEmail(input: {
   to: string;
   email: string;
   tempPassword: string;
-  verifyToken: string;
-  resetToken: string;
   tenant: TenantEmailContext;
+  verifyToken?: string;
+  resetToken?: string;
   inviteKind?: 'admin' | 'operator';
 }): Promise<void> {
   const brand = resolveTenantEmailBrand(input.tenant);
-  const verifyUrl = tenantPortalUrl(
-    input.tenant,
-    `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
-  );
-  const resetUrl = tenantPortalUrl(
-    input.tenant,
-    `/console/reset-password?token=${encodeURIComponent(input.resetToken)}`
-  );
+  
+  // Generate verify and reset URLs for the tenant operator
+  const verifyUrl = input.verifyToken 
+    ? tenantPortalUrl(
+        input.tenant,
+        `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
+      )
+    : tenantPortalUrl(input.tenant, '/console/verify-email');
+    
+  const resetUrl = input.resetToken
+    ? tenantPortalUrl(
+        input.tenant,
+        `/console/reset-password?token=${encodeURIComponent(input.resetToken)}`
+      )
+    : tenantPortalUrl(input.tenant, '/console/reset-password');
+    
   const template = buildTenantOperatorInviteTemplate({
     email: input.email,
     tempPassword: input.tempPassword,
@@ -316,4 +328,16 @@ export async function sendTenantVerificationEmail(input: {
     verifyUrl,
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
+}
+
+export async function sendVmHostLeaseExpiryEmail(input: {
+  to: string;
+  leases: VmHostLeaseExpiryTemplateData['leases'];
+  warningDays: number;
+}): Promise<void> {
+  const template = buildVmHostLeaseExpiryTemplate({
+    leases: input.leases,
+    warningDays: input.warningDays,
+  });
+  await sendEmail({ to: input.to, ...template });
 }
