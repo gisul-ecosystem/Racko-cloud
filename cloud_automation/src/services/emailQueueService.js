@@ -188,11 +188,10 @@ const processEmailJob = async (jobId, callbacks = {}) => {
         const requestId = parseCredentialDeliveryRequestId(job.related_id);
         if (requestId) {
           try {
-            const { buildCredentialSpreadsheetAttachment } = require('./credentialService');
-            const attachment = await buildCredentialSpreadsheetAttachment(requestId);
-            mailOptions.attachments = [attachment];
+            const { buildCredentialEmailAttachments } = require('./credentialService');
+            mailOptions.attachments = await buildCredentialEmailAttachments(requestId);
           } catch (attachmentError) {
-            logEmailQueueEvent('error', 'credential_spreadsheet_attachment_failed', {
+            logEmailQueueEvent('error', 'credential_email_attachments_failed', {
               jobId,
               requestId,
               message: attachmentError?.message
