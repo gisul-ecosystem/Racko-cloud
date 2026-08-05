@@ -60,6 +60,21 @@ export async function tenantResetPassword(token: string, newPassword: string): P
   );
 }
 
+export async function tenantVerifyEmail(token: string): Promise<{ message: string }> {
+  const res = await tenantPortalRequest<ApiEnvelope<Record<string, never>> & { message: string }>(
+    '/api/v1/tenant-auth/verify-email',
+    { method: 'POST', body: JSON.stringify({ token }), skipAuth: true }
+  );
+  return { message: res.message };
+}
+
+export async function tenantResendVerification(email: string): Promise<void> {
+  await tenantPortalRequest<ApiEnvelope<Record<string, never>>>(
+    '/api/v1/tenant-auth/resend-verification',
+    { method: 'POST', body: JSON.stringify({ email }), skipAuth: true }
+  );
+}
+
 export async function getTenantBranding(): Promise<{
   tenantId: string;
   branding: TenantBranding;

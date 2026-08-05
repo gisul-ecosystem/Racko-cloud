@@ -1,4 +1,4 @@
-import { config } from '../../../config';
+import { getAppBaseUrl } from '../../requestContext';
 import { buildBrandedEmail, type EmailBrand } from './brandedLayout';
 import { resolvePlatformEmailBrand } from './emailBrand';
 
@@ -26,7 +26,7 @@ export function buildLoginAlertTemplate(data: LoginAlertTemplateData): {
 } {
   const brand = data.brand ?? resolvePlatformEmailBrand();
   const dashboardUrl =
-    data.dashboardUrl ?? `${config.FRONTEND_URL.replace(/\/$/, '')}/dashboard`;
+    data.dashboardUrl ?? `${getAppBaseUrl()}/dashboard`;
   const formattedTime = data.timestamp.toUTCString();
 
   const detailsHtml = `

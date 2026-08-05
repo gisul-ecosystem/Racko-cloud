@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, Cloud, HardDrive, LayoutGrid, Monitor, PlusCircle, Server, Shield, Wallet } from 'lucide-react';
+import { Boxes, Cloud, HardDrive, LayoutDashboard, LayoutGrid, Monitor, PlusCircle, Server, Shield, Wallet } from 'lucide-react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
@@ -91,10 +91,13 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
     return hasActiveService(l.serviceKey);
   });
 
+  const showOverview = isTenantAdmin || hasPermission('overview.read');
   const showAccessControl =
     isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
 
   const hubActive = pathname === TENANT_CONSOLE || pathname === `${TENANT_CONSOLE}/`;
+  const overviewActive =
+    pathname === tenantConsole.overview || pathname.startsWith(`${tenantConsole.overview}/`);
 
   return (
     <>
@@ -119,10 +122,31 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
           </div>
 
           <nav className="flex-1 overflow-y-auto p-3">
+            {showOverview ? (
+              <Link
+                href={tenantConsole.overview}
+                onClick={() => closeIfMobile(onCloseSidebar)}
+                className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+                style={
+                  overviewActive
+                    ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
+                    : undefined
+                }
+              >
+                <LayoutDashboard
+                  className="h-4 w-4 shrink-0"
+                  style={{ color: overviewActive ? accentColor : undefined }}
+                />
+                <span className={overviewActive ? '' : 'text-gray-600'}>Overview</span>
+              </Link>
+            ) : null}
+
             <Link
               href={TENANT_CONSOLE}
               onClick={() => closeIfMobile(onCloseSidebar)}
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                showOverview ? 'mt-0.5' : ''
+              }`}
               style={
                 hubActive
                   ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }

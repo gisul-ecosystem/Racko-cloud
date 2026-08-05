@@ -1,4 +1,6 @@
 import { Resend } from 'resend';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 import { config } from '../../config';
 import { logger } from '../logger';
 import { buildVerifyEmailTemplate } from './templates/verifyEmail';
@@ -15,6 +17,40 @@ import {
 } from './templates/emailBrand';
 
 const resend = config.RESEND_EMAIL_ENABLED ? new Resend(config.RESEND_API_KEY) : null;
+
+const INLINE_EMAIL_IMAGES = [
+  { cid: 'racko-logo', filename: 'racko-logo.png' },
+  { cid: 'email-mail-check', filename: 'mail-check.png' },
+  { cid: 'email-key-check', filename: 'key-check.png' },
+  { cid: 'email-alert-check', filename: 'alert-check.png' },
+  { cid: 'email-lock-check', filename: 'lock-check.png' },
+] as const;
+
+let inlineImageCache:
+  | Array<{ cid: string; filename: string; content: string; mimeType: string }>
+  | null = null;
+
+function getInlineEmailImages() {
+  if (inlineImageCache) return inlineImageCache;
+  inlineImageCache = INLINE_EMAIL_IMAGES.map(({ cid, filename }) => ({
+    cid,
+    filename,
+    content: readFileSync(join(__dirname, 'assets', filename)).toString('base64'),
+    mimeType: 'image/png',
+  }));
+  return inlineImageCache;
+}
+
+/** Only attach CIDs actually referenced in the HTML — unused ones show up as Gmail attachments. */
+function getInlineImagesForHtml(html: string) {
+  const used = new Set<string>();
+  const re = /cid:([a-zA-Z0-9_-]+)/gi;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(html)) !== null) {
+    used.add(match[1]);
+  }
+  return getInlineEmailImages().filter((image) => used.has(image.cid));
+}
 
 interface EmailOptions {
   to: string;
@@ -52,6 +88,12 @@ async function sendViaResend(options: EmailOptions): Promise<string | null> {
     subject: options.subject,
     html: options.html,
     text: options.text,
+    attachments: getInlineImagesForHtml(options.html).map((image) => ({
+      filename: image.filename,
+      content: image.content,
+      contentId: image.cid,
+      contentType: image.mimeType,
+    })),
   });
 
   // Resend returns { data, error } and does not throw for API failures.
@@ -91,6 +133,12 @@ async function sendViaZoho(options: EmailOptions): Promise<string | null> {
       subject: options.subject,
       htmlbody: options.html,
       textbody: options.text,
+      inline_images: getInlineImagesForHtml(options.html).map((image) => ({
+        content: image.content,
+        mime_type: image.mimeType,
+        name: image.filename,
+        cid: image.cid,
+      })),
     }),
   });
 
@@ -221,20 +269,51 @@ export async function sendTenantPasswordResetEmail(input: {
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
 }
 
-/** Tenant console operator invite (white-labeled). */
+/** Tenant console admin/operator invite (white-labeled). */
 export async function sendTenantOperatorInviteEmail(input: {
   to: string;
   email: string;
   tempPassword: string;
+  verifyToken: string;
+  resetToken: string;
   tenant: TenantEmailContext;
+  inviteKind?: 'admin' | 'operator';
 }): Promise<void> {
   const brand = resolveTenantEmailBrand(input.tenant);
-  const loginUrl = tenantPortalUrl(input.tenant, '/console/login');
+  const verifyUrl = tenantPortalUrl(
+    input.tenant,
+    `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
+  );
+  const resetUrl = tenantPortalUrl(
+    input.tenant,
+    `/console/reset-password?token=${encodeURIComponent(input.resetToken)}`
+  );
   const template = buildTenantOperatorInviteTemplate({
     email: input.email,
     tempPassword: input.tempPassword,
-    loginUrl,
+    verifyUrl,
+    resetUrl,
     brand,
+    inviteKind: input.inviteKind,
+  });
+  await sendEmail({ to: input.to, ...template, fromName: brand.name });
+}
+
+/** Resend verification for tenant console invite (white-labeled). */
+export async function sendTenantVerificationEmail(input: {
+  to: string;
+  rawToken: string;
+  tenant: TenantEmailContext;
+}): Promise<void> {
+  const brand = resolveTenantEmailBrand(input.tenant);
+  const verifyUrl = tenantPortalUrl(
+    input.tenant,
+    `/console/verify-email?token=${encodeURIComponent(input.rawToken)}`
+  );
+  const template = buildVerifyEmailTemplate({
+    rawToken: input.rawToken,
+    brand,
+    verifyUrl,
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
 }

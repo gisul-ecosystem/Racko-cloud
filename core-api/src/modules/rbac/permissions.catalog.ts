@@ -40,6 +40,9 @@ export const PERMISSION_CATALOG: PermissionDef[] = [
   // Access control (staff management)
   { key: 'rbac.roles.write', label: 'Create / edit roles', group: 'Access control' },
   { key: 'rbac.assign', label: 'Assign roles to people', group: 'Access control' },
+
+  // Executive overview (internal slug ceo — display name is Executive)
+  { key: 'overview.read', label: 'View business overview dashboard', group: 'Overview' },
 ];
 
 export const ALL_PERMISSION_KEYS = PERMISSION_CATALOG.map((p) => p.key) as readonly string[];
@@ -111,5 +114,13 @@ export const SYSTEM_ROLE_SEEDS: Array<{
       'dedicated.requests.attach',
       'dedicated.requests.reject',
     ],
+  },
+  {
+    slug: 'ceo',
+    name: 'Executive',
+    description:
+      'Full Super Admin service access; Overview is the post-login home.',
+    // Keep in sync with the full catalog — Executive gets every control-plane permission.
+    permissions: [...ALL_PERMISSION_KEYS],
   },
 ];

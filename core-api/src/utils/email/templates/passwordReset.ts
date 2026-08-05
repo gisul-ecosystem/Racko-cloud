@@ -1,11 +1,11 @@
-import { config } from '../../../config';
+import { getAppBaseUrl } from '../../requestContext';
 import { buildBrandedEmail, type EmailBrand } from './brandedLayout';
 import { resolvePlatformEmailBrand } from './emailBrand';
 
 export interface PasswordResetTemplateData {
   rawToken: string;
   brand?: EmailBrand;
-  /** Override reset URL (tenant portals). Defaults to platform FRONTEND_URL. */
+  /** Override reset URL (tenant portals). Defaults to the caller's portal origin. */
   resetUrl?: string;
   /** Human-readable expiry, e.g. "1 minute" or "1 hour". */
   expiryLabel?: string;
@@ -18,8 +18,7 @@ export function buildPasswordResetTemplate(data: PasswordResetTemplateData): {
 } {
   const brand = data.brand ?? resolvePlatformEmailBrand();
   const resetUrl =
-    data.resetUrl ??
-    `${config.FRONTEND_URL.replace(/\/$/, '')}/reset-password?token=${data.rawToken}`;
+    data.resetUrl ?? `${getAppBaseUrl()}/reset-password?token=${data.rawToken}`;
   const expiryLabel = data.expiryLabel ?? '1 minute';
 
   return buildBrandedEmail(brand, {

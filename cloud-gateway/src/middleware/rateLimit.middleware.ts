@@ -65,6 +65,20 @@ export const verifyEmailRateLimiter = rateLimit({
 });
 
 /**
+ * Resend-verification rate limiter — IP-based, counts every request.
+ * The endpoint always answers 2xx to avoid email enumeration, so successful
+ * requests must consume the bucket or the mailbox could be flooded.
+ */
+export const resendVerificationRateLimiter = rateLimit({
+  windowMs: config.RATE_LIMIT_WINDOW_MS,
+  max: config.RATE_LIMIT_RESEND_VERIFICATION_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: RATE_LIMITED_RESPONSE,
+  handler: createRateLimitHandler('Resend verification'),
+});
+
+/**
  * Authenticated routes rate limiter — user ID-based.
  * Each user gets their own independent bucket regardless of shared IP.
  * Falls back to IP if user ID cannot be extracted.

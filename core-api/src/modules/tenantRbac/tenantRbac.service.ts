@@ -9,12 +9,16 @@ import {
   ConflictError,
 } from '../../utils/errors';
 import { hashPassword } from '../../utils/argon2';
+import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { sendTenantOperatorInviteEmail } from '../../utils/email/sender';
+import { TenantServiceConfig } from '../../models/tenantServiceConfig.model';
+import type { ServiceKey } from '../../constants/serviceCatalog';
 import {
-  TENANT_PERMISSION_CATALOG,
   TENANT_ALL_PERMISSION_KEYS,
   TENANT_SYSTEM_ROLE_SEEDS,
   isTenantPermission,
+  tenantPermissionCatalogFor,
+  tenantPermissionKeysFor,
 } from './tenantPermissions.catalog';
 import {
   ensureSystemRoles,
@@ -26,8 +30,14 @@ import {
   listSubjectRoleIds,
 } from '../orgRbac/orgRbac.helpers';
 
+function isValidObjectId(id: string): boolean {
+  return mongoose.Types.ObjectId.isValid(id) && String(new mongoose.Types.ObjectId(id)) === id;
+}
+
 const permissionCache = new Map<string, { keys: Set<string>; expiresAt: number }>();
+const allowedKeysCache = new Map<string, { keys: Set<string>; expiresAt: number }>();
 const CACHE_TTL_MS = 30_000;
+const CONSOLE_INVITE_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function assertTenantPermissions(keys: string[]): string[] {
   const invalid = keys.filter((k) => !isTenantPermission(k));
@@ -35,6 +45,20 @@ function assertTenantPermissions(keys: string[]): string[] {
     throw new ValidationError(`Unknown permission(s): ${invalid.join(', ')}`);
   }
   return [...new Set(keys)];
+}
+
+/** Reject permissions for services the platform has not assigned to this tenant. */
+function assertPermissionsFor(allowed: ReadonlySet<string>) {
+  return (keys: string[]): string[] => {
+    const unique = assertTenantPermissions(keys);
+    const unavailable = unique.filter((k) => !allowed.has(k));
+    if (unavailable.length > 0) {
+      throw new ValidationError(
+        `Permission(s) not available for this tenant's services: ${unavailable.join(', ')}`
+      );
+    }
+    return unique;
+  };
 }
 
 function cacheKey(tenantId: string, subjectId: string): string {
@@ -48,29 +72,70 @@ class TenantRbacService {
       return;
     }
     if (tenantId) {
+      allowedKeysCache.delete(String(tenantId));
       for (const key of permissionCache.keys()) {
         if (key.startsWith(`tenant:${tenantId}:`)) permissionCache.delete(key);
       }
       return;
     }
+    allowedKeysCache.clear();
     permissionCache.clear();
   }
 
-  listPermissionCatalog() {
-    return TENANT_PERMISSION_CATALOG;
+  /** Service keys the platform has assigned to this tenant and left active. */
+  async getActiveServiceKeys(tenantId: string): Promise<Set<ServiceKey>> {
+    const configs = await TenantServiceConfig.find({
+      tenantId: new mongoose.Types.ObjectId(String(tenantId)),
+      status: 'active',
+    })
+      .select('serviceKey')
+      .lean();
+    return new Set(configs.map((c) => c.serviceKey));
+  }
+
+  /** Permission keys this tenant may grant, given its active services. */
+  async getAllowedPermissionKeys(tenantId: string): Promise<Set<string>> {
+    const key = String(tenantId);
+    const cached = allowedKeysCache.get(key);
+    if (cached && cached.expiresAt > Date.now()) {
+      return new Set(cached.keys);
+    }
+
+    const active = await this.getActiveServiceKeys(tenantId);
+    const keys = new Set(tenantPermissionKeysFor(active));
+    allowedKeysCache.set(key, { keys, expiresAt: Date.now() + CACHE_TTL_MS });
+    return new Set(keys);
+  }
+
+  async listPermissionCatalog(tenantId: string) {
+    const active = await this.getActiveServiceKeys(tenantId);
+    return tenantPermissionCatalogFor(active);
   }
 
   async ensureTenantRoles(tenantId: string): Promise<void> {
+    const allowed = await this.getAllowedPermissionKeys(tenantId);
     await ensureSystemRoles({
       scope: 'tenant',
       orgId: tenantId,
-      seeds: TENANT_SYSTEM_ROLE_SEEDS,
+      // Built-in roles must not hand out services the tenant does not have.
+      seeds: TENANT_SYSTEM_ROLE_SEEDS.map((seed) => ({
+        ...seed,
+        permissions: seed.permissions.filter((p) => allowed.has(p)),
+      })),
     });
   }
 
   async listRoles(tenantId: string) {
     await this.ensureTenantRoles(tenantId);
-    return listOrgRoles('tenant', tenantId);
+    const [roles, allowed] = await Promise.all([
+      listOrgRoles('tenant', tenantId),
+      this.getAllowedPermissionKeys(tenantId),
+    ]);
+    // Hide permissions belonging to services this tenant no longer has.
+    return roles.map((role) => ({
+      ...role,
+      permissions: role.permissions.filter((p) => allowed.has(p)),
+    }));
   }
 
   async createRole(
@@ -78,6 +143,7 @@ class TenantRbacService {
     input: { name: string; description?: string; permissions: string[] },
     actorId: string
   ) {
+    const allowed = await this.getAllowedPermissionKeys(tenantId);
     return createOrgRole({
       scope: 'tenant',
       orgId: tenantId,
@@ -85,7 +151,7 @@ class TenantRbacService {
       description: input.description,
       permissions: input.permissions,
       createdBy: actorId,
-      assertPermissions: assertTenantPermissions,
+      assertPermissions: assertPermissionsFor(allowed),
     });
   }
 
@@ -94,12 +160,13 @@ class TenantRbacService {
     roleId: string,
     input: { name?: string; description?: string; permissions?: string[]; isActive?: boolean }
   ) {
+    const allowed = await this.getAllowedPermissionKeys(tenantId);
     const updated = await updateOrgRole({
       scope: 'tenant',
       orgId: tenantId,
       roleId,
       ...input,
-      assertPermissions: assertTenantPermissions,
+      assertPermissions: assertPermissionsFor(allowed),
     });
     this.clearCache(tenantId);
     return updated;
@@ -110,21 +177,26 @@ class TenantRbacService {
     subjectId: string;
     isTenantAdmin: boolean;
   }): Promise<Set<string>> {
+    const allowed = await this.getAllowedPermissionKeys(input.tenantId);
+
     if (input.isTenantAdmin) {
-      return new Set(TENANT_ALL_PERMISSION_KEYS);
+      return allowed;
     }
 
     const key = cacheKey(input.tenantId, input.subjectId);
     const cached = permissionCache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
-      return new Set(cached.keys);
+      return new Set([...cached.keys].filter((k) => allowed.has(k)));
     }
 
-    const perms = await getSubjectPermissionSet({
+    const granted = await getSubjectPermissionSet({
       scope: 'tenant',
       orgId: String(input.tenantId),
       subjectId: String(input.subjectId),
     });
+    // A suspended / removed service revokes its permissions immediately, even
+    // if roles still list them.
+    const perms = new Set([...granted].filter((k) => allowed.has(k)));
     // Console operators always retain console.access so they can reach the hub
     // even if all roles were cleared (admin can re-assign from Access control).
     const subject = await TenantUser.findOne({
@@ -207,14 +279,17 @@ class TenantRbacService {
     });
     const roles = await this.listRoles(tenantId);
     const roleNameById = new Map(roles.map((r) => [r._id, r.name]));
+    const allowed = await this.getAllowedPermissionKeys(tenantId);
 
     return people.map((p) => {
       const id = p._id.toString();
       const isAdmin = p.role === 'tenant_admin';
       const roleIds = isAdmin ? [] : roleIdsBySubject.get(id) || [];
-      const permissions = isAdmin
-        ? [...TENANT_ALL_PERMISSION_KEYS]
-        : roles.filter((r) => roleIds.includes(r._id)).flatMap((r) => r.permissions);
+      const permissions = (
+        isAdmin
+          ? [...TENANT_ALL_PERMISSION_KEYS]
+          : roles.filter((r) => roleIds.includes(r._id)).flatMap((r) => r.permissions)
+      ).filter((k) => allowed.has(k));
 
       return {
         _id: id,
@@ -281,6 +356,10 @@ class TenantRbacService {
 
     await this.ensureTenantRoles(tenantId);
 
+    const rawVerifyToken = generateSecureToken(32);
+    const rawResetToken = generateSecureToken(32);
+    const inviteExpiresAt = new Date(Date.now() + CONSOLE_INVITE_TOKEN_TTL_MS);
+
     const user = await TenantUser.create({
       tenantId: new mongoose.Types.ObjectId(tenantId),
       email,
@@ -288,7 +367,12 @@ class TenantRbacService {
       role: 'tenant_user',
       isConsoleOperator: true,
       isActive: true,
-      isEmailVerified: true,
+      isEmailVerified: false,
+      mustSetPassword: true,
+      emailVerificationTokenHash: hashToken(rawVerifyToken),
+      emailVerificationExpiresAt: inviteExpiresAt,
+      resetTokenHash: hashToken(rawResetToken),
+      resetTokenExpiresAt: inviteExpiresAt,
       createdBy: new mongoose.Types.ObjectId(actorId),
     });
 
@@ -301,6 +385,9 @@ class TenantRbacService {
           to: email,
           email,
           tempPassword: input.temporaryPassword,
+          verifyToken: rawVerifyToken,
+          resetToken: rawResetToken,
+          inviteKind: 'operator',
           tenant: {
             name: tenant.name,
             domain: tenant.domain,
@@ -317,6 +404,45 @@ class TenantRbacService {
       email: user.email,
       role: user.role,
     };
+  }
+
+  /**
+   * Removes a console operator: clears RBAC assignments and deletes the user.
+   * Tenant admins cannot be deleted here (managed from Super Admin).
+   */
+  async deleteOperator(
+    tenantId: string,
+    userId: string,
+    actorId: string
+  ): Promise<{ email: string }> {
+    if (!isValidObjectId(userId)) {
+      throw new ValidationError('Invalid user id.');
+    }
+    if (userId === actorId) {
+      throw new ValidationError('You cannot delete your own account.');
+    }
+
+    const user = await TenantUser.findOne({ _id: userId, tenantId });
+    if (!user) throw new NotFoundError('Operator not found.');
+    if (user.role === 'tenant_admin') {
+      throw new ValidationError(
+        'Tenant admin accounts cannot be deleted from Access control.'
+      );
+    }
+    if (!user.isConsoleOperator) {
+      throw new ValidationError('Only console operators can be deleted from Access control.');
+    }
+
+    const email = user.email;
+    await OrgRbacAssignmentModel.deleteMany({
+      scope: 'tenant',
+      orgId: String(tenantId),
+      subjectId: userId,
+    });
+    await TenantUser.deleteOne({ _id: user._id, tenantId });
+    this.clearCache(tenantId, userId);
+
+    return { email };
   }
 }
 

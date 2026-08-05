@@ -9,7 +9,9 @@ import { SuperAdminConsoleSidebar } from '../../components/super-admin-console/S
 import { SuperAdminConsoleTopBar } from '../../components/super-admin-console/SuperAdminConsoleTopBar';
 import {
   fetchMyRbacPermissions,
+  hasExecutiveHomeRole,
   hasPermission,
+  SUPER_ADMIN_OVERVIEW_PATH,
   type MyRbacPermissions,
 } from '@/lib/rbacApi';
 import { RbacPermissionsProvider } from '@/context/RbacPermissionsContext';
@@ -23,6 +25,7 @@ const SERVICES_WITH_OWN_SHELL = [
 ];
 
 const STAFF_ROUTE_PERMISSIONS: Array<{ prefix: string; anyOf: string[] }> = [
+  { prefix: SUPER_ADMIN_OVERVIEW_PATH, anyOf: ['overview.read'] },
   { prefix: '/super-admin-console/vm-management', anyOf: ['vm_management.manage'] },
   { prefix: '/super-admin-console/machine-manager', anyOf: ['machine_manager.manage'] },
   { prefix: '/super-admin-console/azure', anyOf: ['azure.manage'] },
@@ -34,11 +37,15 @@ const STAFF_ROUTE_PERMISSIONS: Array<{ prefix: string; anyOf: string[] }> = [
   { prefix: '/super-admin-console/vm-pricing-calculator', anyOf: ['pricing.calculator.read', 'pricing.webyne.read'] },
   { prefix: '/super-admin-console/webyne-vm-requests', anyOf: ['webyne.requests.read'] },
   { prefix: '/super-admin-console/dedicated-server-requests', anyOf: ['dedicated.requests.read'] },
-  { prefix: '/super-admin-console/access-control', anyOf: [] },
+  { prefix: '/super-admin-console/access-control', anyOf: ['rbac.assign', 'rbac.roles.write'] },
 ];
 
 function isControlPlaneRole(role: string | undefined): boolean {
   return role === 'super_admin' || role === 'staff';
+}
+
+function staffHomePath(rbac: MyRbacPermissions): string {
+  return hasExecutiveHomeRole(rbac) ? SUPER_ADMIN_OVERVIEW_PATH : '/super-admin-console';
 }
 
 function SuperAdminConsoleShell({ children }: { children: React.ReactNode }) {
@@ -94,6 +101,7 @@ export default function SuperAdminConsoleLayout({ children }: { children: React.
           setRbac({
             role: user!.role,
             permissions: [],
+            roleSlugs: [],
             isSuperAdmin: user!.role === 'super_admin',
           });
         }
@@ -112,7 +120,7 @@ export default function SuperAdminConsoleLayout({ children }: { children: React.
     if (!match) return;
     const ok = match.anyOf.length > 0 && match.anyOf.some((key) => hasPermission(rbac, key));
     if (!ok) {
-      router.replace('/super-admin-console');
+      router.replace(staffHomePath(rbac));
     }
   }, [allowed, pathname, rbac, router, user?.role]);
 

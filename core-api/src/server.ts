@@ -9,6 +9,10 @@ async function bootstrap(): Promise<void> {
   // Connect to MongoDB
   await connectDatabase();
 
+  // Keep built-in RBAC role seeds (e.g. Executive) in sync with the catalog.
+  const { rbacService } = await import('./modules/rbac/rbac.service');
+  await rbacService.ensureSystemRoles();
+
   // Start background cron to reclaim stale IP reservations
   startIpCleanupCron();
 

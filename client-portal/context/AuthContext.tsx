@@ -18,6 +18,11 @@ import {
   tryRestoreSession,
   logAuthToken,
 } from '../lib/apiClient';
+import {
+  fetchMyRbacPermissions,
+  hasExecutiveHomeRole,
+  SUPER_ADMIN_OVERVIEW_PATH,
+} from '../lib/rbacApi';
 
 export type UserRole = 'super_admin' | 'staff' | 'admin' | 'user';
 export type AccountType = 'legacy' | 'b2c' | 'b2b';
@@ -109,6 +114,21 @@ function getPostLoginRoute(user: AuthUser): string {
   if (user.role === 'super_admin' || user.role === 'staff') return '/super-admin-console';
   if (user.role === 'admin') return '/console';
   return '/dashboard/user';
+}
+
+async function resolveControlPlaneHome(user: AuthUser): Promise<string> {
+  if (user.role !== 'staff') {
+    return getPostLoginRoute(user);
+  }
+  try {
+    const rbac = await fetchMyRbacPermissions();
+    if (hasExecutiveHomeRole(rbac)) {
+      return SUPER_ADMIN_OVERVIEW_PATH;
+    }
+  } catch {
+    // Fall through to default hub
+  }
+  return getPostLoginRoute(user);
 }
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
@@ -277,7 +297,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    router.push(getPostLoginRoute(user));
+    router.push(await resolveControlPlaneHome(user));
   }, [router, scheduleTokenRefresh]);
 
   const logout = useCallback(async (): Promise<void> => {

@@ -14,6 +14,8 @@ import { CatalogVmModel } from '../../models/catalogVm.model';
 import { VM } from '../vm/vm.model';
 import { ExternalVMModel } from '../external-vm/external-vm.model';
 import { hashPassword } from '../../utils/argon2';
+import { generateSecureToken, hashToken } from '../../utils/crypto';
+import { sendTenantOperatorInviteEmail } from '../../utils/email/sender';
 import {
   ConflictError,
   NotFoundError,
@@ -26,6 +28,8 @@ import type {
   UpdateTenantInput,
   UpdateTenantIpAccessInput,
 } from './tenant.validation';
+
+const CONSOLE_INVITE_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function isMongoDuplicateKeyError(error: unknown): boolean {
   return (
@@ -87,6 +91,8 @@ export interface TenantAdminPublic {
   email: string;
   role: 'tenant_admin';
   tenantId: string;
+  isActive?: boolean;
+  isEmailVerified?: boolean;
   createdAt: Date;
 }
 
@@ -239,6 +245,9 @@ export class TenantService {
     }
 
     const passwordHash = await hashPassword(dto.password);
+    const rawVerifyToken = generateSecureToken(32);
+    const rawResetToken = generateSecureToken(32);
+    const inviteExpiresAt = new Date(Date.now() + CONSOLE_INVITE_TOKEN_TTL_MS);
 
     const tenantAdmin = await TenantUser.create({
       tenantId: tenant._id,
@@ -246,15 +255,44 @@ export class TenantService {
       passwordHash,
       role: 'tenant_admin',
       isActive: true,
-      isEmailVerified: true,
+      isEmailVerified: false,
+      mustSetPassword: true,
+      emailVerificationTokenHash: hashToken(rawVerifyToken),
+      emailVerificationExpiresAt: inviteExpiresAt,
+      resetTokenHash: hashToken(rawResetToken),
+      resetTokenExpiresAt: inviteExpiresAt,
       createdBy: null,
     });
+
+    try {
+      await sendTenantOperatorInviteEmail({
+        to: tenantAdmin.email,
+        email: tenantAdmin.email,
+        tempPassword: dto.password,
+        verifyToken: rawVerifyToken,
+        resetToken: rawResetToken,
+        inviteKind: 'admin',
+        tenant: {
+          name: tenant.name,
+          domain: tenant.domain,
+          branding: tenant.branding,
+        },
+      });
+    } catch (err) {
+      logger.warn('Failed to send tenant admin invite email', {
+        tenantId: tenant._id.toString(),
+        email: tenantAdmin.email,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
 
     return {
       id: tenantAdmin._id.toString(),
       email: tenantAdmin.email,
       role: 'tenant_admin',
       tenantId: tenant._id.toString(),
+      isActive: tenantAdmin.isActive,
+      isEmailVerified: tenantAdmin.isEmailVerified,
       createdAt: tenantAdmin.createdAt,
     };
   }

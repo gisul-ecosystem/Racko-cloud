@@ -1,4 +1,5 @@
 import { config } from '../../../config';
+import { getAppBaseUrl } from '../../requestContext';
 
 export interface EmailBrand {
   /** Display name in header / footer (tenant portal name or platform). */
@@ -7,6 +8,8 @@ export interface EmailBrand {
   /** Optional soft tint; falls back to a translucent primary. */
   secondaryColor?: string;
   logoUrl?: string;
+  /** Show the brand name beside the logo (used for the Racko icon wordmark). */
+  showNameWithLogo?: boolean;
   /** Absolute site URL used for footer + relative assets. */
   websiteUrl: string;
   /** Footer label, e.g. www.example.com */
@@ -25,11 +28,13 @@ export interface BrandedEmailContent {
   noticeBody?: string;
   /** Optional block under body (credentials table, login details, etc.). */
   detailsHtml?: string;
+  /** Optional secondary action shown after the primary CTA. */
+  afterCtaHtml?: string;
   hero: 'verify' | 'reset' | 'invite' | 'alert' | 'locked';
 }
 
 export function defaultPlatformBrand(): EmailBrand {
-  const websiteUrl = config.FRONTEND_URL.replace(/\/$/, '');
+  const websiteUrl = getAppBaseUrl();
   let websiteLabel = websiteUrl;
   try {
     websiteLabel = new URL(websiteUrl).host;
@@ -39,6 +44,8 @@ export function defaultPlatformBrand(): EmailBrand {
   return {
     name: config.EMAIL_FROM_NAME,
     primaryColor: '#B91C1C',
+    logoUrl: 'cid:racko-logo',
+    showNameWithLogo: true,
     websiteUrl,
     websiteLabel,
   };
@@ -62,26 +69,21 @@ function escapeHtml(value: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function heroIconHtml(hero: BrandedEmailContent['hero'], primary: string, soft: string): string {
-  // Inline SVG keeps the envelope/lock look consistent across clients (closer to the design mock).
+function heroIconHtml(hero: BrandedEmailContent['hero']): string {
+  // CID-embedded PNGs use Lucide geometry and work in clients that strip SVG.
   const icons: Record<BrandedEmailContent['hero'], string> = {
-    verify: `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h13A1.5 1.5 0 0 1 20 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5v-11Z" stroke="${primary}" stroke-width="1.8"/><path d="m5 7 7 5 7-5" stroke="${primary}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-    reset: `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 10V8a4 4 0 1 1 8 0v2" stroke="${primary}" stroke-width="1.8" stroke-linecap="round"/><rect x="5" y="10" width="14" height="10" rx="2" stroke="${primary}" stroke-width="1.8"/><circle cx="12" cy="15" r="1.5" fill="${primary}"/></svg>`,
-    invite: `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 6.5A1.5 1.5 0 0 1 5.5 5h13A1.5 1.5 0 0 1 20 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5v-11Z" stroke="${primary}" stroke-width="1.8"/><path d="m5 7 7 5 7-5" stroke="${primary}" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-    alert: `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 3 21 20H3L12 3Z" stroke="${primary}" stroke-width="1.8" stroke-linejoin="round"/><path d="M12 10v4" stroke="${primary}" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1" fill="${primary}"/></svg>`,
-    locked: `<svg width="36" height="36" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 10V8a4 4 0 1 1 8 0v2" stroke="${primary}" stroke-width="1.8" stroke-linecap="round"/><rect x="5" y="10" width="14" height="10" rx="2" stroke="${primary}" stroke-width="1.8"/></svg>`,
+    verify: 'cid:email-mail-check',
+    reset: 'cid:email-key-check',
+    invite: 'cid:email-mail-check',
+    alert: 'cid:email-alert-check',
+    locked: 'cid:email-lock-check',
   };
-  const glyph = icons[hero] ?? icons.verify;
+  const iconSrc = icons[hero] ?? icons.verify;
   return `
-              <table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto 8px;">
+              <table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto 12px;">
                 <tr>
-                  <td align="center" style="width:88px;height:88px;border-radius:999px;background:${soft};vertical-align:middle;">
-                    <div style="line-height:0;">${glyph}</div>
-                  </td>
-                </tr>
-                <tr>
-                  <td align="right" style="padding-top:0;height:0;line-height:0;font-size:0;">
-                    <div style="display:inline-block;margin-top:-22px;margin-right:2px;width:26px;height:26px;border-radius:999px;background:${primary};color:#ffffff;font-size:14px;line-height:26px;text-align:center;font-weight:700;">✓</div>
+                  <td align="center">
+                    <img src="${iconSrc}" alt="" width="104" height="112" style="display:block;width:104px;height:112px;border:0;" />
                   </td>
                 </tr>
               </table>`;
@@ -96,7 +98,6 @@ export function buildBrandedEmail(
   content: BrandedEmailContent
 ): { subject: string; html: string; text: string } {
   const primary = brand.primaryColor || '#B91C1C';
-  const soft = brand.secondaryColor?.trim() || softPrimary(primary, 0.12);
   const softStrong = softPrimary(primary, 0.18);
   const name = escapeHtml(brand.name);
   const websiteLabel = escapeHtml(brand.websiteLabel);
@@ -110,7 +111,9 @@ export function buildBrandedEmail(
   );
 
   const logoBlock = brand.logoUrl
-    ? `<img src="${escapeHtml(brand.logoUrl)}" alt="${name}" width="160" style="display:block;margin:0 auto;max-width:160px;height:auto;border:0;" />`
+    ? brand.showNameWithLogo
+      ? `<table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto;"><tr><td style="vertical-align:middle;padding-right:12px;"><img src="${escapeHtml(brand.logoUrl)}" alt="" width="58" height="58" style="display:block;width:58px;height:58px;border:0;" /></td><td style="vertical-align:middle;font-size:34px;font-weight:800;color:#111111;letter-spacing:-1px;">${name}</td></tr></table>`
+      : `<img src="${escapeHtml(brand.logoUrl)}" alt="${name}" width="160" style="display:block;margin:0 auto;max-width:160px;max-height:64px;height:auto;border:0;" />`
     : `<p style="margin:0;font-size:22px;font-weight:700;color:#111827;letter-spacing:-0.3px;">${name}</p>`;
 
   const expiryBlock = content.expiryText
@@ -126,26 +129,33 @@ export function buildBrandedEmail(
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>${headline}</title>
+  <style>
+    @media only screen and (max-width: 600px) {
+      .email-outer { padding: 16px 8px !important; }
+      .email-pad { padding-left: 22px !important; padding-right: 22px !important; }
+      .email-title { font-size: 23px !important; }
+    }
+  </style>
 </head>
 <body style="margin:0;padding:0;background-color:#f3f4f6;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:#f3f4f6;padding:40px 16px;">
+  <table class="email-outer" width="100%" cellpadding="0" cellspacing="0" role="presentation" style="background-color:#f3f4f6;padding:40px 16px;">
     <tr>
       <td align="center">
         <table width="560" cellpadding="0" cellspacing="0" role="presentation" style="max-width:560px;width:100%;background:#ffffff;border-radius:16px;overflow:hidden;border:1px solid #e5e7eb;">
           <tr>
-            <td style="padding:28px 36px 20px;text-align:center;">
+            <td class="email-pad" style="padding:28px 36px 20px;text-align:center;">
               ${logoBlock}
             </td>
           </tr>
           <tr>
-            <td style="padding:0 36px;">
+            <td class="email-pad" style="padding:0 36px;">
               <div style="height:1px;background:#e5e7eb;line-height:1px;font-size:1px;">&nbsp;</div>
             </td>
           </tr>
           <tr>
-            <td style="padding:32px 36px 8px;text-align:center;">
-              ${heroIconHtml(content.hero, primary, soft)}
-              <p style="margin:8px 0 12px;font-size:26px;font-weight:700;color:#111827;letter-spacing:-0.4px;">${headline}</p>
+            <td class="email-pad" style="padding:32px 36px 8px;text-align:center;">
+              ${heroIconHtml(content.hero)}
+              <p class="email-title" style="margin:8px 0 12px;font-size:26px;font-weight:700;color:#111827;letter-spacing:-0.4px;">${headline}</p>
               <div style="margin:0 0 24px;font-size:15px;color:#6b7280;line-height:1.65;text-align:center;">${content.bodyHtml}</div>
               ${content.detailsHtml ? `<div style="margin:0 0 24px;text-align:left;">${content.detailsHtml}</div>` : ''}
               <table cellpadding="0" cellspacing="0" role="presentation" style="margin:0 auto 28px;">
@@ -155,15 +165,16 @@ export function buildBrandedEmail(
                   </td>
                 </tr>
               </table>
+              ${content.afterCtaHtml ? `<div style="margin:-8px 0 28px;text-align:center;">${content.afterCtaHtml}</div>` : ''}
             </td>
           </tr>
           <tr>
-            <td style="padding:0 36px 8px;">
+            <td class="email-pad" style="padding:0 36px 8px;">
               <div style="height:1px;background:#e5e7eb;line-height:1px;font-size:1px;">&nbsp;</div>
             </td>
           </tr>
           <tr>
-            <td style="padding:20px 36px 8px;">
+            <td class="email-pad" style="padding:20px 36px 8px;">
               <p style="margin:0 0 10px;font-size:13px;color:#9ca3af;">🔗 ${fallbackHint}</p>
               <div style="padding:12px 14px;border-radius:10px;background:#f9fafb;border:1px solid ${primary};">
                 <a href="${ctaUrl}" style="font-size:12px;color:${primary};word-break:break-all;text-decoration:none;line-height:1.5;">${ctaUrl}</a>
@@ -172,7 +183,7 @@ export function buildBrandedEmail(
             </td>
           </tr>
           <tr>
-            <td style="padding:24px 36px 32px;">
+            <td class="email-pad" style="padding:24px 36px 32px;">
               <div style="padding:18px 16px;border-radius:12px;background:${softStrong};text-align:center;">
                 <p style="margin:0 0 6px;font-size:14px;font-weight:700;color:#111827;">🛡 ${escapeHtml(noticeTitle)}</p>
                 <p style="margin:0 0 14px;font-size:13px;color:#6b7280;">${escapeHtml(noticeBody)}</p>

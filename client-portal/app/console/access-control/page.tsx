@@ -137,7 +137,9 @@ export default function PlatformAccessControlPage() {
         temporaryPassword: invitePassword,
         roleIds: inviteRoleIds,
       });
-      setFlash('Operator invited.');
+      setFlash(
+        'Operator invited. They must verify email and set a password before signing in.'
+      );
       setShowInvite(false);
       setInviteEmail('');
       setInvitePassword('');
@@ -363,10 +365,14 @@ export default function PlatformAccessControlPage() {
                 type="text"
                 value={invitePassword}
                 onChange={(e) => setInvitePassword(e.target.value)}
-                placeholder="Temporary password"
+                placeholder="Temporary password (sent in invite email)"
                 minLength={8}
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
               />
+              <p className="text-xs text-gray-500">
+                An invite email is sent with verify and set-password links. The operator cannot sign
+                in until both steps are complete.
+              </p>
               <div className="flex flex-wrap gap-2">
                 {roles.map((role) => (
                   <label

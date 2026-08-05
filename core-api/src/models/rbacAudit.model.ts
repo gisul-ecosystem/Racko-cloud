@@ -5,7 +5,8 @@ export type RbacAuditAction =
   | 'role_updated'
   | 'role_deactivated'
   | 'assignment_set'
-  | 'staff_created';
+  | 'staff_created'
+  | 'staff_deleted';
 
 export interface IRbacAudit extends Document {
   _id: mongoose.Types.ObjectId;
@@ -24,7 +25,14 @@ const rbacAuditSchema = new Schema<IRbacAudit>(
     action: {
       type: String,
       required: true,
-      enum: ['role_created', 'role_updated', 'role_deactivated', 'assignment_set', 'staff_created'],
+      enum: [
+        'role_created',
+        'role_updated',
+        'role_deactivated',
+        'assignment_set',
+        'staff_created',
+        'staff_deleted',
+      ],
     },
     targetType: { type: String, required: true, enum: ['role', 'user'] },
     targetId: { type: String, required: true },

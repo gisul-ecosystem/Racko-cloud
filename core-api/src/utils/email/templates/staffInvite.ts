@@ -1,4 +1,4 @@
-import { config } from '../../../config';
+import { getAppBaseUrl } from '../../requestContext';
 import { buildBrandedEmail, type EmailBrand } from './brandedLayout';
 import { resolvePlatformEmailBrand } from './emailBrand';
 
@@ -26,25 +26,31 @@ export function buildStaffInviteTemplate(data: StaffInviteTemplateData): {
   text: string;
 } {
   const brand = data.brand ?? resolvePlatformEmailBrand();
-  const base = config.FRONTEND_URL.replace(/\/$/, '');
+  const base = getAppBaseUrl();
   const verifyUrl = data.verifyUrl ?? `${base}/verify-email?token=${data.verifyToken}`;
   const resetUrl = data.resetUrl ?? `${base}/reset-password?token=${data.resetToken}`;
 
   const detailsHtml = `
     <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;text-align:left;">
       <tr style="background:#f9fafb;">
-        <td style="padding:12px 16px;font-size:13px;color:#6b7280;width:40%;border-bottom:1px solid #e5e7eb;">Sign-in email</td>
-        <td style="padding:12px 16px;font-size:13px;color:#111827;font-weight:600;border-bottom:1px solid #e5e7eb;">${escapeHtml(data.email)}</td>
+        <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
+          <p style="margin:0 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;">Sign-in email</p>
+          <p style="margin:0;font-size:14px;color:#111827;font-weight:600;word-break:break-all;">${escapeHtml(data.email)}</p>
+        </td>
       </tr>
       <tr>
-        <td style="padding:12px 16px;font-size:13px;color:#6b7280;">Temporary password</td>
-        <td style="padding:12px 16px;font-size:13px;color:#111827;font-weight:600;">${escapeHtml(data.tempPassword)}</td>
+        <td style="padding:14px 16px;">
+          <p style="margin:0 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;">Temporary password</p>
+          <p style="margin:0;font-family:Consolas,Monaco,monospace;font-size:15px;color:#111827;font-weight:700;">${escapeHtml(data.tempPassword)}</p>
+        </td>
       </tr>
-    </table>
-    <p style="margin:16px 0 0;font-size:13px;color:#6b7280;line-height:1.5;text-align:left;">
-      After verifying, set your own password:
-      <a href="${escapeHtml(resetUrl)}" style="color:${brand.primaryColor};word-break:break-all;">${escapeHtml(resetUrl)}</a>
-    </p>`;
+    </table>`;
+
+  const afterCtaHtml = `
+    <p style="margin:0 0 10px;font-size:13px;color:#6b7280;line-height:1.5;">
+      After verifying your email, complete setup by creating your own password.
+    </p>
+    <a href="${escapeHtml(resetUrl)}" style="display:inline-block;padding:11px 22px;border:1px solid ${brand.primaryColor};border-radius:9px;color:${brand.primaryColor};font-size:14px;font-weight:600;text-decoration:none;">Set Your Password →</a>`;
 
   return buildBrandedEmail(brand, {
     subject: `You're invited to ${brand.name}`,
@@ -53,6 +59,7 @@ export function buildStaffInviteTemplate(data: StaffInviteTemplateData): {
     ctaLabel: 'Verify Email Address',
     ctaUrl: verifyUrl,
     detailsHtml,
+    afterCtaHtml,
     expiryText: 'Verification and password links expire in 7 days.',
     noticeTitle: "Didn't expect this invite?",
     noticeBody: 'You can safely ignore this email.',

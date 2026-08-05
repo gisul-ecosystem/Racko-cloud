@@ -32,6 +32,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     pathname === '/console/login' ||
     pathname === '/console/forgot-password' ||
     pathname === '/console/reset-password' ||
+    pathname === '/console/verify-email' ||
     (pathname?.startsWith('/console/dashboard') ?? false);
 
   const usesOwnShell =
