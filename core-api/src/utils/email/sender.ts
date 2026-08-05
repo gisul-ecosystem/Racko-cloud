@@ -8,6 +8,10 @@ import { buildLoginAlertTemplate, type LoginAlertTemplateData } from './template
 import { buildAccountLockedTemplate, type AccountLockedTemplateData } from './templates/accountLocked';
 import { buildPasswordResetTemplate } from './templates/passwordReset';
 import { buildStaffInviteTemplate } from './templates/staffInvite';
+import {
+  buildVmHostLeaseExpiryTemplate,
+  type VmHostLeaseExpiryTemplateData,
+} from './templates/vmHostLeaseExpiry';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
@@ -310,3 +314,14 @@ export async function sendTenantVerificationEmail(input: {
 }
  
  
+export async function sendVmHostLeaseExpiryEmail(input: {
+  to: string;
+  leases: VmHostLeaseExpiryTemplateData['leases'];
+  warningDays: number;
+}): Promise<void> {
+  const template = buildVmHostLeaseExpiryTemplate({
+    leases: input.leases,
+    warningDays: input.warningDays,
+  });
+  await sendEmail({ to: input.to, ...template });
+}
