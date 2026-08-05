@@ -26,7 +26,6 @@ import (
 
 	"github.com/racko-ai/agent/config"
 )
-
 // Update downloads the new binary, verifies its checksum, replaces the current
 // binary, and exits. The Windows Service Control Manager automatically restarts
 // the service with the new binary.
@@ -67,7 +66,8 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 
 	// ── Step 2: download new binary ───────────────────────────────────────────
 	log.Printf("[updater] Downloading new binary from %s", cfg.PlatformURL)
-	if err := downloadBinary(cfg.PlatformURL, tmpPath); err != nil {
+	inFlightSHA, err := downloadBinary(cfg.PlatformURL, tmpPath)
+	if err != nil {
 		log.Printf("[updater] Download failed: %v — aborting", err)
 		return
 	}
@@ -80,17 +80,16 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 	}()
 
 	// ── Step 3: verify checksum ───────────────────────────────────────────────
+	// Use the SHA computed during download (via io.TeeReader) — this avoids any
+	// Windows file-system read-after-write race that would occur if we re-opened
+	// the file to hash it separately.
 	if expectedSHA != "" {
-		actualSHA, err := sha256File(tmpPath)
-		if err != nil {
-			log.Printf("[updater] Checksum read failed: %v — aborting", err)
+		log.Printf("[updater] Checksum: expected=%s got=%s", expectedSHA, inFlightSHA)
+		if inFlightSHA != expectedSHA {
+			log.Printf("[updater] Checksum MISMATCH — aborting")
 			return
 		}
-		if actualSHA != expectedSHA {
-			log.Printf("[updater] Checksum MISMATCH — expected=%s got=%s — aborting", expectedSHA, actualSHA)
-			return
-		}
-		log.Printf("[updater] Checksum verified: %s", actualSHA)
+		log.Printf("[updater] Checksum verified OK")
 	} else {
 		log.Printf("[updater] No checksum provided — skipping verification")
 	}
@@ -138,22 +137,19 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-func downloadBinary(platformURL, destPath string) error {
+func downloadBinary(platformURL, destPath string) (actualSHA string, err error) {
 	url := platformURL + "/api/v1/agent/binary/windows"
-	client := &http.Client{Timeout: 10 * time.Minute} // large binary, generous timeout
+	client := &http.Client{Timeout: 10 * time.Minute}
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return fmt.Errorf("build request: %w", err)
+	req, reqErr := http.NewRequest(http.MethodGet, url, nil)
+	if reqErr != nil {
+		return "", fmt.Errorf("build request: %w", reqErr)
 	}
-	// Explicitly disable Accept-Encoding to prevent any proxy/CDN from
-	// compressing the binary in transit. Go's http.Client adds Accept-Encoding:gzip
-	// by default; disabling it ensures we receive raw bytes identical to what CI built.
 	req.Header.Set("Accept-Encoding", "identity")
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("http get: %w", err)
+	resp, respErr := client.Do(req)
+	if respErr != nil {
+		return "", fmt.Errorf("http get: %w", respErr)
 	}
 	defer resp.Body.Close()
 
@@ -161,43 +157,37 @@ func downloadBinary(platformURL, destPath string) error {
 		resp.StatusCode, resp.Header.Get("Content-Encoding"), resp.ContentLength)
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
+		return "", fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 
-	f, err := os.Create(destPath)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+	f, createErr := os.Create(destPath)
+	if createErr != nil {
+		return "", fmt.Errorf("create temp file: %w", createErr)
 	}
 
-	written, err := io.Copy(f, resp.Body)
-	// Explicitly close and sync before returning — do not rely on defer
-	// to ensure all bytes are flushed to disk before sha256File reads it.
+	// Hash during download — avoids file system read-after-write race on Windows.
+	// io.TeeReader streams bytes to both the hasher and the file simultaneously.
+	h := sha256.New()
+	tee := io.TeeReader(resp.Body, h)
+
+	written, copyErr := io.Copy(f, tee)
+
 	syncErr := f.Sync()
 	closeErr := f.Close()
 
-	if err != nil {
-		return fmt.Errorf("write binary: %w", err)
+	if copyErr != nil {
+		return "", fmt.Errorf("write binary: %w", copyErr)
 	}
 	if syncErr != nil {
 		log.Printf("[updater] Warning: file sync failed: %v", syncErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("close file: %w", closeErr)
+		return "", fmt.Errorf("close file: %w", closeErr)
 	}
 
-	log.Printf("[updater] Download complete: wrote %d bytes to %s", written, destPath)
-
-	// Verify file size on disk matches what we wrote
-	info, err := os.Stat(destPath)
-	if err != nil {
-		return fmt.Errorf("stat after write: %w", err)
-	}
-	log.Printf("[updater] File size on disk: %d bytes (wrote %d bytes)", info.Size(), written)
-	if info.Size() != written {
-		return fmt.Errorf("size mismatch: wrote %d but disk shows %d", written, info.Size())
-	}
-
-	return nil
+	computed := hex.EncodeToString(h.Sum(nil))
+	log.Printf("[updater] Download complete: wrote %d bytes, in-flight SHA256=%s", written, computed)
+	return computed, nil
 }
 
 func sha256File(path string) (string, error) {
