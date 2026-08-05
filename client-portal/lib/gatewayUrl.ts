@@ -109,38 +109,38 @@ export function getGatewayBaseUrl(): string {
 
 /**
  * Direct gateway URL for long-running browser requests.
- * Bypasses Next.js rewrites, which can reset sockets on slow provision calls.
- * Never use Docker-internal hostnames from the browser.
+ * Local dev: bypass Next.js rewrites and call localhost:8000 directly.
+ * Deployed portals: prefer same-origin (/api → nginx → gateway) so instance-policy
+ * and other slow provision steps are not cut off by CDN timeouts on api-* subdomains.
  */
 export function getDirectGatewayBaseUrl(): string {
   if (typeof window !== 'undefined') {
-    const configured = process.env['NEXT_PUBLIC_GATEWAY_URL']?.trim();
-    if (configured) {
-      const url = stripTrailingSlash(configured);
-      const host = (() => {
-        try {
-          return new URL(url).hostname.toLowerCase();
-        } catch {
-          return '';
-        }
-      })();
-
-      const isDockerInternal =
-        host === 'cloud-gateway' ||
-        host.endsWith('.internal') ||
-        (host.endsWith('.local') && host.includes('gateway'));
-
-      if (!isDockerInternal) {
-        return url;
-      }
-    }
+    const pageOrigin = stripTrailingSlash(window.location.origin);
 
     if (isLocalDevHost(window.location.hostname)) {
       return DEFAULT_GATEWAY;
     }
 
-    // Production fallback: same public origin (nginx should proxy /api → gateway).
-    return stripTrailingSlash(window.location.origin);
+    const configured = process.env['NEXT_PUBLIC_GATEWAY_URL']?.trim();
+    if (configured) {
+      try {
+        const configuredHost = normalizeHost(new URL(configured).hostname);
+        const pageHost = normalizeHost(window.location.hostname);
+
+        const isDockerInternal =
+          configuredHost === 'cloud-gateway' ||
+          configuredHost.endsWith('.internal') ||
+          (configuredHost.endsWith('.local') && configuredHost.includes('gateway'));
+
+        if (!isDockerInternal && configuredHost === pageHost) {
+          return stripTrailingSlash(configured);
+        }
+      } catch {
+        // fall through to same-origin
+      }
+    }
+
+    return pageOrigin;
   }
 
   return getServerGatewayBaseUrl();

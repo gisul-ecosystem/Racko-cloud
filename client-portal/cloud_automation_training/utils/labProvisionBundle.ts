@@ -113,13 +113,19 @@ function resolveInstanceOption(
 /**
  * Map a Cloud Labs template to Azure catalog services/roles for provisioning
  * (RG → services → users → roles → manage-portal credential email).
+ * Pass locationOverride when the UI picked an available region (same as Azure create).
  */
 export function buildLabProvisionBundle(
   lab: LabTemplate,
   catalog: ServiceCatalogResponse,
-  selectedInstanceLabels: string[] = []
+  selectedInstanceLabels: string[] = [],
+  locationOverride?: string | null
 ): LabProvisionBundle {
-  const location = String(lab.region || 'eastus').trim().toLowerCase() || 'eastus';
+  const templateRegion = String(lab.region || 'eastus').trim().toLowerCase() || 'eastus';
+  const override = String(locationOverride || '')
+    .trim()
+    .toLowerCase();
+  const location = override || templateRegion;
   const wanted: LabServiceSpec[] = [];
 
   if (lab.kind === 'fabric') {
