@@ -36,6 +36,8 @@ export interface ProvisionStatusSnapshot {
   steps: ProvisionStep[];
   awsAccountId?: string | null;
   credentialsSent?: boolean;
+  spreadsheetAvailable?: boolean;
+  guideAvailable?: boolean;
   failureReason?: string | null;
   logs?: ProvisionLogEntry[];
 }

@@ -49,7 +49,7 @@ export class WalletService {
     if (Number.isFinite(configured) && configured > 0) {
       return configured;
     }
-    return 86;
+    return 95.12;
   }
 
   usdToInr(amountUsd: number): number {

@@ -1,10 +1,8 @@
 import { z } from 'zod';
 import { Router } from 'express';
 import { resolveTenantContext } from '../../middleware/resolveTenantContext.middleware';
-import {
-  requireTenantAuth,
-  requireTenantRole,
-} from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantAuth } from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantPermission } from '../../middleware/requireOrgPermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { walletController } from './wallet.controller';
 
@@ -51,10 +49,15 @@ const router = Router();
 router.use(resolveTenantContext);
 router.use(requireTenantAuth);
 
-router.get('/', (req, res, next) => walletController.getWallet(req, res, next));
+router.get(
+  '/',
+  requireTenantPermission('wallet.read'),
+  (req, res, next) => walletController.getWallet(req, res, next)
+);
 
 router.get(
   '/transactions',
+  requireTenantPermission('wallet.read'),
   validateRequest(listTransactionsSchema),
   (req, res, next) => walletController.listTransactions(req, res, next)
 );
@@ -65,28 +68,28 @@ router.get('/transactions/:txId', (req, res, next) =>
 
 router.post(
   '/topup',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('wallet.topup'),
   validateRequest(topupSchema),
   (req, res, next) => walletController.createTopup(req, res, next)
 );
 
 router.post(
   '/charge-cloud-request',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('wallet.topup', 'azure.manage', 'aws.manage'),
   validateRequest(chargeCloudRequestSchema),
   (req, res, next) => walletController.chargeCloudRequest(req, res, next)
 );
 
 router.post(
   '/refund-cloud-request',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('wallet.topup', 'azure.manage', 'aws.manage'),
   validateRequest(refundCloudRequestSchema),
   (req, res, next) => walletController.refundCloudRequest(req, res, next)
 );
 
 router.post(
   '/link-cloud-request',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('wallet.topup', 'azure.manage', 'aws.manage'),
   validateRequest(linkCloudRequestSchema),
   (req, res, next) => walletController.linkCloudRequest(req, res, next)
 );

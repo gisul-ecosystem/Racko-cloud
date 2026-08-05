@@ -142,6 +142,8 @@ function validateForm(input: {
   customerEmail: string;
   accountCount: number;
   location: string;
+  availableLocations?: Array<{ arm_region_name: string }>;
+  locationsLoading?: boolean;
   serviceIds: number[];
   selectedRoles: SelectedRole[];
   selectedInstances: SelectedInstance[];
@@ -183,6 +185,24 @@ function validateForm(input: {
 
   if (!input.location.trim()) {
     errors.push('Select a region.');
+  } else if (input.locationsLoading) {
+    errors.push('Wait for available regions to finish loading.');
+  } else if (
+    Array.isArray(input.availableLocations) &&
+    input.availableLocations.length > 0 &&
+    !input.availableLocations.some((entry) => entry.arm_region_name === input.location.trim())
+  ) {
+    errors.push(
+      'Selected region is not available for the chosen instance size(s). Pick a region from the available list.'
+    );
+  } else if (
+    Array.isArray(input.availableLocations) &&
+    input.availableLocations.length === 0 &&
+    input.selectedInstances.length > 0
+  ) {
+    errors.push(
+      'No regions support all selected instance sizes. Change one or more instance options.'
+    );
   }
 
   if (!input.startDate || !input.endDate) {
@@ -259,6 +279,7 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
   const [selectedInstances, setSelectedInstances] = useState<SelectedInstance[]>([]);
   const [manualRoles, setManualRoles] = useState<Record<number, string[]>>({});
   const [location, setLocation] = useState('');
+  const locationManualRef = useRef(false);
   const [projectName, setProjectName] = useState('');
   const [rackoProjectId, setRackoProjectId] = useState('');
   const [idMode, setIdMode] = useState<AzureIdMode | null>(null);
@@ -324,6 +345,40 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
     selectedServiceIds,
     selectedInstances
   );
+
+  const selectedInstanceKey = useMemo(
+    () =>
+      selectedInstances
+        .map((entry) => `${entry.serviceId}:${entry.instanceOption}`)
+        .sort()
+        .join('|'),
+    [selectedInstances]
+  );
+
+  useEffect(() => {
+    // New service/instance mix → allow cheapest auto-select again.
+    locationManualRef.current = false;
+  }, [selectedServiceIds.join(','), selectedInstanceKey]);
+
+  useEffect(() => {
+    if (locations.length === 0) {
+      if (location) setLocation('');
+      return;
+    }
+
+    const stillValid = locations.some((entry) => entry.arm_region_name === location);
+    if (!stillValid || !locationManualRef.current) {
+      const nextLocation = pickCheapestLocation(locations);
+      if (nextLocation && nextLocation !== location) {
+        setLocation(nextLocation);
+      }
+    }
+  }, [locations, location]);
+
+  const handleLocationChange = useCallback((nextLocation: string) => {
+    locationManualRef.current = true;
+    setLocation(nextLocation);
+  }, []);
   const {
     licenses,
     loading: licensesLoading,
@@ -431,18 +486,6 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
       setResourceCleanupAction('delete');
     }
   }, [pauseCleanupAvailable, resourceCleanupAction]);
-
-  useEffect(() => {
-    if (locations.length === 0) {
-      if (location) setLocation('');
-      return;
-    }
-
-    const stillValid = locations.some((entry) => entry.arm_region_name === location);
-    if (!stillValid) {
-      setLocation(pickCheapestLocation(locations));
-    }
-  }, [locations, location]);
 
   const pricingPayload = useMemo<PricingEstimatePayload | null>(() => {
     if (!catalog || selectedServiceIds.length === 0 || !location) return null;
@@ -581,6 +624,8 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
       customerEmail,
       accountCount,
       location,
+      availableLocations: locations,
+      locationsLoading,
       serviceIds: selectedServiceIds,
       selectedRoles,
       selectedInstances,
@@ -1045,7 +1090,7 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
               selectedServiceIds={selectedServiceIds}
               onToggleService={handleToggleService}
               location={location}
-              onLocationChange={setLocation}
+              onLocationChange={handleLocationChange}
               locations={locations}
               locationsLoading={locationsLoading}
               locationsError={locationsError}

@@ -2,7 +2,6 @@
 
 import {
   Briefcase,
-  Clock,
   LayoutDashboard,
   Layers,
   Plus,
@@ -12,8 +11,8 @@ import {
   Users,
 } from 'lucide-react';
 import { ServiceNavSidebar, type ServiceNavLink } from '@/components/console/ServiceNavSidebar';
-import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { TENANT_CONSOLE, tenantVps } from '@/lib/tenantAdminRoutes';
 
 interface TenantVpsAdminSidebarProps {
@@ -26,11 +25,12 @@ export function TenantVpsAdminSidebar({
   sidebarOpen,
   onCloseSidebar,
 }: TenantVpsAdminSidebarProps) {
-  const { tenantUser } = useTenantAuth();
   const { accentColor, portalName } = useTenantBranding();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { isConsoleStaff, hasPermission } = useTenantRbac();
+  const canManageVms = hasPermission('vms.manage', 'vms.assign', 'vms.read');
+  const showAdminNav = isConsoleStaff && canManageVms;
 
-  const links: ServiceNavLink[] = isAdmin
+  const links: ServiceNavLink[] = showAdminNav
     ? [
         {
           href: tenantVps.overview,
@@ -58,65 +58,65 @@ export function TenantVpsAdminSidebar({
         },
       ];
 
-  if (isAdmin) {
-    links.push(
-      {
+  if (showAdminNav) {
+    if (hasPermission('vms.manage', 'orders.create')) {
+      links.push({
         href: tenantVps.createVm,
         label: 'Create VM',
         icon: <Plus className="h-4 w-4" />,
         exact: true,
-      },
-      {
-        href: tenantVps.jobs,
-        label: 'Jobs',
-        icon: <Briefcase className="h-4 w-4" />,
-        isActive: (p) => p === tenantVps.jobs || p.startsWith(`${tenantVps.jobs}/`),
-      },
-      // TODO: Automation feature is temporarily disabled — will be re-enabled once fixed
-      // {
-      //   href: tenantVps.automation,
-      //   label: 'Automation',
-      //   icon: <Clock className="h-4 w-4" />,
-      // },
-      {
-        href: tenantVps.templates,
-        label: 'My Templates',
-        icon: <Layers className="h-4 w-4" />,
-      },
-      {
+      });
+    }
+    links.push({
+      href: tenantVps.jobs,
+      label: 'Jobs',
+      icon: <Briefcase className="h-4 w-4" />,
+      isActive: (p) => p === tenantVps.jobs || p.startsWith(`${tenantVps.jobs}/`),
+    });
+    links.push({
+      href: tenantVps.templates,
+      label: 'My Templates',
+      icon: <Layers className="h-4 w-4" />,
+    });
+    if (hasPermission('users.manage')) {
+      links.push({
         href: tenantVps.users,
         label: 'Users',
         icon: <Users className="h-4 w-4" />,
-      },
-      {
-        href: tenantVps.assignVms,
-        label: 'Assign VMs',
-        icon: <UserCheck className="h-4 w-4" />,
-        exact: true,
-      },
-      {
-        href: tenantVps.bulkAssign,
-        label: 'Bulk Assign',
-        icon: <Users className="h-4 w-4" />,
-        exact: true,
-      },
-      {
-        href: tenantVps.restricted,
-        label: 'Restricted VMs',
-        icon: <Shield className="h-4 w-4" />,
-      }
-    );
+      });
+    }
+    if (hasPermission('vms.assign')) {
+      links.push(
+        {
+          href: tenantVps.assignVms,
+          label: 'Assign VMs',
+          icon: <UserCheck className="h-4 w-4" />,
+          exact: true,
+        },
+        {
+          href: tenantVps.bulkAssign,
+          label: 'Bulk Assign',
+          icon: <Users className="h-4 w-4" />,
+          exact: true,
+        }
+      );
+    }
+    links.push({
+      href: tenantVps.restricted,
+      label: 'Restricted VMs',
+      icon: <Shield className="h-4 w-4" />,
+    });
   }
 
   return (
     <ServiceNavSidebar
       sidebarOpen={sidebarOpen}
       onCloseSidebar={onCloseSidebar}
-      title={isAdmin ? 'VPS Hosting' : portalName || 'My VMs'}
-      subtitle={isAdmin ? 'Virtual machines & jobs' : 'Assigned resources'}
+      title={showAdminNav ? 'VPS Hosting' : portalName || 'My VMs'}
+      subtitle={showAdminNav ? 'Virtual machines & jobs' : 'Assigned resources'}
       links={links}
       accentColor={accentColor}
-      footerHref={isAdmin ? TENANT_CONSOLE : undefined}
+      footerHref={isConsoleStaff ? TENANT_CONSOLE : undefined}
       footerLabel="All services"
     />
   );

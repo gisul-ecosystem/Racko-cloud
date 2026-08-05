@@ -5,6 +5,7 @@ import { TenantUser } from '../../models/tenantUser.model';
 import { hashPassword, verifyPassword } from '../../utils/argon2';
 import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { config } from '../../config';
+import { sendTenantPasswordResetEmail } from '../../utils/email/sender';
 import type {
   TenantForgotPasswordInput,
   TenantLoginInput,
@@ -23,6 +24,8 @@ export interface TenantUserPublic {
   email: string;
   role: 'tenant_admin' | 'tenant_user';
   tenantId: string;
+  /** True for Access-control invited operators (and always for tenant_admin). */
+  isConsoleOperator: boolean;
 }
 
 function signTenantAccessToken(payload: TenantTokenPayload): string {
@@ -30,14 +33,6 @@ function signTenantAccessToken(payload: TenantTokenPayload): string {
     expiresIn: config.JWT_TENANT_ACCESS_EXPIRES_IN as jwt.SignOptions['expiresIn'],
     algorithm: 'HS256',
   });
-}
-
-// TODO: Wire real email delivery (SendGrid or equivalent) for tenant password resets.
-export function sendTenantPasswordResetEmail(
-  tenantUser: { email: string },
-  rawToken: string
-): void {
-  console.log('[STUB] Password reset token for', tenantUser.email, ':', rawToken);
 }
 
 export class TenantAuthService {
@@ -65,8 +60,11 @@ export class TenantAuthService {
       throw new TenantAuthError('INVALID_CREDENTIALS', 401);
     }
 
-    // End-user access window gate (assigned tenant VMs with schedule)
-    if (tenantUser.role === 'tenant_user') {
+    const isConsoleOperator =
+      tenantUser.role === 'tenant_admin' || Boolean(tenantUser.isConsoleOperator);
+
+    // End-user access window gate — not applied to console operators.
+    if (tenantUser.role === 'tenant_user' && !tenantUser.isConsoleOperator) {
       const {
         assertTenantUserAssignedVmsAccessible,
       } = await import('../vmAccessSchedule/scheduleManager');
@@ -94,6 +92,7 @@ export class TenantAuthService {
         email: tenantUser.email,
         role: tenantUser.role,
         tenantId: tenantUser.tenantId.toString(),
+        isConsoleOperator,
       },
     };
   }
@@ -113,7 +112,18 @@ export class TenantAuthService {
     tenantUser.resetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
     await tenantUser.save();
 
-    sendTenantPasswordResetEmail(tenantUser, rawToken);
+    const tenant = await Tenant.findById(tenantId).select('name domain branding').lean();
+    if (tenant) {
+      await sendTenantPasswordResetEmail({
+        to: tenantUser.email,
+        rawToken,
+        tenant: {
+          name: tenant.name,
+          domain: tenant.domain,
+          branding: tenant.branding,
+        },
+      });
+    }
   }
 
   async resetPassword(tenantId: string, dto: TenantResetPasswordInput): Promise<void> {

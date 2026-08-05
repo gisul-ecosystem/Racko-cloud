@@ -1,5 +1,6 @@
 import mongoose from 'mongoose';
 import { TenantUser } from '../../models/tenantUser.model';
+import { Tenant } from '../../models/tenant.model';
 import { OrgRbacAssignmentModel } from '../../models/orgRbacAssignment.model';
 import {
   NotFoundError,
@@ -8,6 +9,7 @@ import {
   ConflictError,
 } from '../../utils/errors';
 import { hashPassword } from '../../utils/argon2';
+import { sendTenantOperatorInviteEmail } from '../../utils/email/sender';
 import {
   TENANT_PERMISSION_CATALOG,
   TENANT_ALL_PERMISSION_KEYS,
@@ -120,43 +122,87 @@ class TenantRbacService {
 
     const perms = await getSubjectPermissionSet({
       scope: 'tenant',
-      orgId: input.tenantId,
-      subjectId: input.subjectId,
+      orgId: String(input.tenantId),
+      subjectId: String(input.subjectId),
     });
+    // Console operators always retain console.access so they can reach the hub
+    // even if all roles were cleared (admin can re-assign from Access control).
+    const subject = await TenantUser.findOne({
+      _id: input.subjectId,
+      tenantId: input.tenantId,
+    })
+      .select('isConsoleOperator')
+      .lean();
+    if (subject?.isConsoleOperator) {
+      perms.add('console.access');
+    }
     permissionCache.set(key, { keys: perms, expiresAt: Date.now() + CACHE_TTL_MS });
     return perms;
+  }
+
+  async getSubjectFlags(tenantId: string, subjectId: string): Promise<{
+    isConsoleOperator: boolean;
+  }> {
+    const subject = await TenantUser.findOne({ _id: subjectId, tenantId })
+      .select('role isConsoleOperator')
+      .lean();
+    if (!subject) return { isConsoleOperator: false };
+    if (subject.role === 'tenant_admin') return { isConsoleOperator: true };
+    if (subject.isConsoleOperator) return { isConsoleOperator: true };
+
+    // Backfill older invited operators that only have RBAC assignments.
+    const hasAssignment = await OrgRbacAssignmentModel.exists({
+      scope: 'tenant',
+      orgId: String(tenantId),
+      subjectId: String(subjectId),
+    });
+    if (hasAssignment) {
+      await TenantUser.updateOne(
+        { _id: subjectId, tenantId },
+        { $set: { isConsoleOperator: true } }
+      );
+      return { isConsoleOperator: true };
+    }
+    return { isConsoleOperator: false };
   }
 
   async listPeople(tenantId: string) {
     await this.ensureTenantRoles(tenantId);
 
-    // Access control is for console operators only — not elastic-server end-users.
-    // Include tenant admins and tenant_users who already have RBAC role assignments.
+    // Backfill: anyone with RBAC assignments is a console operator.
     const assignedSubjectIds = await OrgRbacAssignmentModel.distinct('subjectId', {
       scope: 'tenant',
-      orgId: tenantId,
+      orgId: String(tenantId),
     });
     const assignedObjectIds = assignedSubjectIds
-      .filter((id): id is string => typeof id === 'string' && mongoose.isValidObjectId(id))
+      .map((id) => String(id))
+      .filter((id) => mongoose.isValidObjectId(id))
       .map((id) => new mongoose.Types.ObjectId(id));
+    if (assignedObjectIds.length > 0) {
+      await TenantUser.updateMany(
+        {
+          tenantId,
+          role: 'tenant_user',
+          _id: { $in: assignedObjectIds },
+          isConsoleOperator: { $ne: true },
+        },
+        { $set: { isConsoleOperator: true } }
+      );
+    }
 
+    // Access control people = tenant admins + console operators (not elastic end-users).
     const people = await TenantUser.find({
       tenantId,
-      $or: [
-        { role: 'tenant_admin' },
-        ...(assignedObjectIds.length > 0
-          ? [{ role: 'tenant_user', _id: { $in: assignedObjectIds } }]
-          : []),
-      ],
+      $or: [{ role: 'tenant_admin' }, { isConsoleOperator: true }],
     })
-      .select('_id email role isActive')
+      .select('_id email role isActive isConsoleOperator')
       .sort({ role: 1, email: 1 })
       .lean();
 
     const subjectIds = people.map((p) => p._id.toString());
     const roleIdsBySubject = await listSubjectRoleIds({
       scope: 'tenant',
-      orgId: tenantId,
+      orgId: String(tenantId),
       subjectIds,
     });
     const roles = await this.listRoles(tenantId);
@@ -176,6 +222,7 @@ class TenantRbacService {
         role: p.role,
         isActive: Boolean(p.isActive),
         isTenantAdmin: isAdmin,
+        isConsoleOperator: isAdmin || Boolean(p.isConsoleOperator),
         roleIds,
         roleNames: isAdmin
           ? ['Tenant admin']
@@ -201,11 +248,17 @@ class TenantRbacService {
 
     const saved = await setSubjectRoles({
       scope: 'tenant',
-      orgId: tenantId,
-      subjectId,
+      orgId: String(tenantId),
+      subjectId: String(subjectId),
       roleIds,
       assignedBy: actorId,
     });
+    if (roleIds.length > 0) {
+      await TenantUser.updateOne(
+        { _id: subjectId, tenantId },
+        { $set: { isConsoleOperator: true } }
+      );
+    }
     this.clearCache(tenantId, subjectId);
     return saved;
   }
@@ -233,12 +286,31 @@ class TenantRbacService {
       email,
       passwordHash: await hashPassword(input.temporaryPassword),
       role: 'tenant_user',
+      isConsoleOperator: true,
       isActive: true,
       isEmailVerified: true,
       createdBy: new mongoose.Types.ObjectId(actorId),
     });
 
     await this.setUserRoles(tenantId, user._id.toString(), input.roleIds, actorId);
+
+    const tenant = await Tenant.findById(tenantId).select('name domain branding').lean();
+    if (tenant) {
+      try {
+        await sendTenantOperatorInviteEmail({
+          to: email,
+          email,
+          tempPassword: input.temporaryPassword,
+          tenant: {
+            name: tenant.name,
+            domain: tenant.domain,
+            branding: tenant.branding,
+          },
+        });
+      } catch {
+        // Invite email is best-effort; account still created.
+      }
+    }
 
     return {
       _id: user._id.toString(),

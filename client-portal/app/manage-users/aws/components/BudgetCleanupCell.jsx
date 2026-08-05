@@ -102,7 +102,7 @@ export default function BudgetCleanupCell({
             <div className="mb-0.5 h-1 overflow-hidden rounded bg-gray-200">
               <div
                 className={`h-full rounded transition-[width] duration-300 ${
-                  spend >= budget ? 'bg-[#B91C1C]' : spend >= budget * 0.8 ? 'bg-amber-500' : 'bg-green-600'
+                  spend >= budget ? 'bg-[var(--cloud-accent,#B91C1C)]' : spend >= budget * 0.8 ? 'bg-amber-500' : 'bg-green-600'
                 }`}
                 style={{ width: `${budgetPct}%` }}
               />
@@ -115,7 +115,7 @@ export default function BudgetCleanupCell({
           </div>
 
           {user.budgetExceeded && (
-            <div className="mt-1.5 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-[#B91C1C]">
+            <div className="mt-1.5 rounded border border-red-200 bg-red-50 px-2 py-1 text-[11px] text-[var(--cloud-accent,#B91C1C)]">
               ⚠️ Budget exceeded — user suspended
             </div>
           )}

@@ -1,5 +1,9 @@
 import { z } from 'zod';
- 
+
+const booleanFlag = z
+  .enum(['true', 'false'])
+  .transform((value) => value === 'true');
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   PORT: z.string().regex(/^\d+$/).transform(Number).default('8001'),
@@ -33,8 +37,15 @@ const envSchema = z.object({
   ARGON2_TIME_COST: z.string().regex(/^\d+$/).transform(Number).default('3'),
   ARGON2_PARALLELISM: z.string().regex(/^\d+$/).transform(Number).default('4'),
 
-  // Email (Resend)
-  RESEND_API_KEY: z.string().min(1, 'RESEND_API_KEY is required'),
+  // Transactional email provider (exactly one must be enabled)
+  RESEND_EMAIL_ENABLED: booleanFlag.default('true'),
+  ZOHO_EMAIL_ENABLED: booleanFlag.default('false'),
+  RESEND_API_KEY: z.string().optional().default(''),
+  ZOHO_ZEPTOMAIL_TOKEN: z.string().optional().default(''),
+  ZOHO_ZEPTOMAIL_API_URL: z
+    .string()
+    .url('ZOHO_ZEPTOMAIL_API_URL must be a valid URL')
+    .default('https://api.zeptomail.com/v1.1/email'),
   EMAIL_FROM_ADDRESS: z.string().email('EMAIL_FROM_ADDRESS must be a valid email'),
   EMAIL_FROM_NAME: z.string().min(1, 'EMAIL_FROM_NAME is required'),
 
@@ -235,6 +246,31 @@ const envSchema = z.object({
   AGENT_CHECKSUM_WINDOWS: z.string().default(''),
   AGENT_CHECKSUM_LINUX:   z.string().default(''),
   AGENT_CHECKSUM_DARWIN:  z.string().default(''),
+}).superRefine((env, ctx) => {
+  if (env.RESEND_EMAIL_ENABLED === env.ZOHO_EMAIL_ENABLED) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RESEND_EMAIL_ENABLED'],
+      message:
+        'Enable exactly one email provider: RESEND_EMAIL_ENABLED or ZOHO_EMAIL_ENABLED.',
+    });
+  }
+
+  if (env.RESEND_EMAIL_ENABLED && !env.RESEND_API_KEY.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RESEND_API_KEY'],
+      message: 'RESEND_API_KEY is required when RESEND_EMAIL_ENABLED=true.',
+    });
+  }
+
+  if (env.ZOHO_EMAIL_ENABLED && !env.ZOHO_ZEPTOMAIL_TOKEN.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ZOHO_ZEPTOMAIL_TOKEN'],
+      message: 'ZOHO_ZEPTOMAIL_TOKEN is required when ZOHO_EMAIL_ENABLED=true.',
+    });
+  }
 });
 
 const parsed = envSchema.safeParse(process.env);

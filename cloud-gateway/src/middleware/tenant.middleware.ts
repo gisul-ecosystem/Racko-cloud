@@ -76,6 +76,7 @@ async function fetchTenantFromCoreApi(
       id: response.data.id,
       slug: response.data.slug,
       status: response.data.status,
+      domain: response.data.domain || '',
       ipAccessMode: response.data.ipAccessMode ?? 'all',
       allowedIps: response.data.allowedIps ?? [],
     };

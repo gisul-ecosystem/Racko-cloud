@@ -1,5 +1,8 @@
-import { cloudAutomationRequest } from '../../lib/cloudAutomationRequest';
-import { ApiError } from '../../lib/apiClient';
+import { cloudAutomationRequest, getAwsCloudApiPrefix } from '../../lib/cloudAutomationRequest';
+import { ApiError, getAccessToken } from '../../lib/apiClient';
+import { getTenantAccessToken } from '../../lib/tenantPortalApiClient';
+import { getGatewayBaseUrl, getTenantGatewayIdentityHeaders } from '../../lib/gatewayUrl';
+import { isTenantPortalClient } from '../../lib/portalClient';
 
 type ApiResponse<T> = {
   success: boolean;
@@ -444,6 +447,8 @@ export interface AwsProvisionStatusResponse {
   perUserAccess?: boolean;
   costingMode?: 'shared' | 'per_user';
   credentialsSent?: boolean;
+  spreadsheetAvailable?: boolean;
+  guideAvailable?: boolean;
   failureReason?: string | null;
   logs?: Array<{
     step: number;
@@ -465,6 +470,76 @@ export async function getProvisionStatus(requestId: string): Promise<AwsProvisio
 
 export async function retryProvision(requestId: string): Promise<{ success: boolean; status: string }> {
   return awsRequest(awsPath(`/provision/request/${requestId}/retry`), { method: 'POST' });
+}
+
+async function downloadAwsBinaryFile(
+  requestId: string,
+  relativePath: string,
+  fallbackFilename: string,
+  errorFallback: string
+): Promise<void> {
+  const isTenant = isTenantPortalClient();
+  const token = getTenantAccessToken() || getAccessToken();
+  const gatewayBase = getGatewayBaseUrl();
+  const response = await fetch(
+    `${gatewayBase}${getAwsCloudApiPrefix()}/provision/request/${requestId}/${relativePath}`,
+    {
+      method: 'GET',
+      credentials: isTenant ? 'omit' : 'include',
+      headers: {
+        ...(isTenant ? getTenantGatewayIdentityHeaders(gatewayBase) : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      cache: 'no-store',
+    }
+  );
+
+  if (!response.ok) {
+    let message = errorFallback;
+    try {
+      const payload = (await response.json()) as { message?: string };
+      if (payload?.message) {
+        message = payload.message;
+      }
+    } catch {
+      // ignore parse errors
+    }
+    throw new Error(message);
+  }
+
+  const blob = await response.blob();
+  const disposition = response.headers.get('content-disposition') || '';
+  const filenameMatch = disposition.match(/filename="([^"]+)"/i);
+  const filename = filenameMatch?.[1] || fallbackFilename;
+
+  const objectUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = objectUrl;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  URL.revokeObjectURL(objectUrl);
+}
+
+/** GET /api/provision/request/:id/credentials/spreadsheet */
+export async function downloadCredentialSpreadsheet(requestId: string): Promise<void> {
+  return downloadAwsBinaryFile(
+    requestId,
+    'credentials/spreadsheet',
+    `aws-lab-credentials-request-${requestId}.xlsx`,
+    'Failed to download credential spreadsheet.'
+  );
+}
+
+/** GET /api/provision/request/:id/credentials/guide */
+export async function downloadLabAccessGuide(requestId: string): Promise<void> {
+  return downloadAwsBinaryFile(
+    requestId,
+    'credentials/guide',
+    `AWS-Lab-Access-Guide-request-${requestId}.docx`,
+    'Failed to download AWS lab access guide.'
+  );
 }
 
 export interface AwsUserSpendRecord {

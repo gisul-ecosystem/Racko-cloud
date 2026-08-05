@@ -45,10 +45,11 @@ jobs:
 
       - name: Build core-api image
         run: |
-          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt)
-          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt)
+          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt | tr -d '[:space:]')
+          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt | tr -d '[:space:]')
+          AGENT_VERSION=$(cat agent-artifacts/agent-linux/agent-version.txt | tr -d '[:space:]')
           docker build \
-            --build-arg AGENT_VERSION=${{ github.sha }} \
+            --build-arg AGENT_VERSION=$AGENT_VERSION \
             --build-arg AGENT_CHECKSUM_WINDOWS=$CHECKSUM_WINDOWS \
             --build-arg AGENT_CHECKSUM_LINUX=$CHECKSUM_LINUX \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:qa \
@@ -185,14 +186,11 @@ jobs:
             output: racko-agent
             goos: linux
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai -X github.com/racko-ai/agent/config.Version=${{ github.sha }}'
           - os: windows-latest
             platform: windows
             output: racko-agent.exe
             goos: windows
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai -X github.com/racko-ai/agent/config.Version=${{ github.sha }} -H windowsgui'
-            ldflags_url: 'https://api-qa.racko.ai'
 
     steps:
       - name: Checkout
@@ -203,12 +201,22 @@ jobs:
         with:
           go-version-file: agent/go.mod
 
+      - name: Read agent version
+        id: agent-version
+        shell: bash
+        working-directory: agent
+        run: echo "VERSION=$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
       - name: Build agent binary
         working-directory: agent
         shell: bash
         run: |
+          LDFLAGS="-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-qa.racko.ai -X github.com/racko-ai/agent/config.Version=${{ steps.agent-version.outputs.VERSION }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            LDFLAGS="$LDFLAGS -H windowsgui"
+          fi
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-          go build -ldflags "${{ matrix.ldflags }}" -o dist/${{ matrix.output }} .
+          go build -ldflags "$LDFLAGS" -o dist/${{ matrix.output }} .
 
       - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
@@ -218,6 +226,7 @@ jobs:
           CHECKSUM=$(sha256sum dist/racko-agent | awk '{print $1}')
           echo "AGENT_CHECKSUM_LINUX=$CHECKSUM" >> $GITHUB_STEP_SUMMARY
           echo "$CHECKSUM" > dist/checksum-linux.txt
+          cp VERSION dist/agent-version.txt
 
       - name: Compute and save checksum (Windows)
         if: matrix.platform == 'windows'
@@ -235,7 +244,7 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DPlatformURL=${{ matrix.ldflags_url }}" "installer\racko-agent-setup.iss"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DPlatformURL=https://api-qa.racko.ai" "installer\racko-agent-setup.iss"
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
@@ -244,6 +253,7 @@ jobs:
           path: |
             agent/dist/${{ matrix.output }}
             agent/dist/checksum-${{ matrix.platform }}.txt
+            agent/dist/agent-version.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
           retention-days: 1
 

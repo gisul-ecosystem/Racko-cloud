@@ -25,8 +25,8 @@ import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { VMStatusBadge, UsageBar } from '@/components/dashboard/VMStatusBadge';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
-import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { ApiError } from '@/lib/apiClient';
 import { tenantAccentButton, hexToRgba } from '@/lib/tenantAccentStyles';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
@@ -107,11 +107,12 @@ function PageNotice({
 export function TenantVmDetailView() {
   const params = useParams<{ vmId: string }>();
   const vmId = params.vmId;
-  const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const { toasts, addToast, dismiss } = useToast();
+  const { isConsoleStaff, hasPermission } = useTenantRbac();
 
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const isAdmin =
+    isConsoleStaff && hasPermission('vms.manage', 'vms.assign', 'vms.read');
 
   const [details, setDetails] = useState<TenantVmDetails | null>(null);
   const [liveStatus, setLiveStatus] = useState<TenantVmLiveStatus | null>(null);

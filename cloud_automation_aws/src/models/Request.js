@@ -296,6 +296,8 @@ const requestSchema = new mongoose.Schema(
     failureReason: String,
 
     createdBy: { type: String },
+    /** Public portal origin for emailed manage/purchase links (tenant domain when applicable). */
+    portalBaseUrl: { type: String },
 
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },

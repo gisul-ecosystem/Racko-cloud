@@ -32,6 +32,11 @@ function shouldBypassNextProxy(path: string, method?: string): boolean {
     return httpMethod === 'POST' || httpMethod === 'GET';
   }
 
+  // VM SKU region lookups call Azure and can exceed Next rewrite idle limits.
+  if (normalized.includes('/services/available-locations')) {
+    return httpMethod === 'GET' || httpMethod === 'POST';
+  }
+
   return false;
 }
 

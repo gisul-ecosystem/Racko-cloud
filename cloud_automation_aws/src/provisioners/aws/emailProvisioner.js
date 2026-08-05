@@ -1,5 +1,18 @@
 import { getResendConfigStatus } from '../../services/email/resendEnv.js';
 import { sendMailWithRetry } from '../../services/email/mailSender.js';
+import { buildAwsCredentialAttachments } from '../../services/email/credentialAttachmentService.js';
+import { resolvePortalBaseUrl } from '../../utils/portalUrl.js';
+
+function buildAttachmentsNotice() {
+  return `
+      <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:16px;margin-bottom:24px;">
+        <h3 style="color:#0f172a;margin:0 0 8px;font-size:14px;">Attachments included</h3>
+        <ul style="margin:0;padding-left:18px;font-size:13px;color:#374151;line-height:1.8;">
+          <li><strong>Excel spreadsheet</strong> — all lab users, passwords/roles, and a Required Tags sheet for distribution.</li>
+          <li><strong>Word guide (DOCX)</strong> — step-by-step Manage Portal + AWS Console access, plus how to apply Racko tags.</li>
+        </ul>
+      </div>`;
+}
 
 function buildRequiredTagsSection({ request, labRoles = [], identityUsers = [] }) {
   const requestId = String(request._id);
@@ -111,6 +124,8 @@ function buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsA
         </div>
       </div>
 
+      ${buildAttachmentsNotice()}
+
       <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:20px;margin-bottom:24px;">
         <h3 style="color:#166534;margin:0 0 12px;font-size:14px;">How to give users access</h3>
         <ol style="margin:0;padding-left:20px;font-size:13px;color:#374151;line-height:2.2;">
@@ -120,6 +135,7 @@ function buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsA
           <li>Copy the magic link and share with that lab user</li>
           <li>Lab user clicks link → directly into AWS console (no password)</li>
           <li>Links expire after 12 hours — regenerate as needed</li>
+          <li>When creating resources, apply the required tags from the Excel / Word guide</li>
         </ol>
       </div>
 
@@ -176,7 +192,9 @@ function buildIdentityCenterEmail({ request, identityUsers, portalSession, porta
   <div style="padding:24px;border:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
     <p>Your AWS lab environment has been provisioned with ${identityUsers.length} user account(s).
     Each user can log in directly using the credentials below —
-    no additional setup or MFA required.</p>
+    no additional setup or MFA required. An Excel user list and a Word access/tags guide are attached.</p>
+
+    ${buildAttachmentsNotice()}
 
     <table style="width:100%;border-collapse:collapse;margin:20px 0;">
       <thead>
@@ -292,7 +310,11 @@ export async function sendCredentialsEmail(request, context) {
   } = context;
 
   const allowedServices = (request.selectedServices || []).map((entry) => entry.serviceName);
-  const portalUrl = `${process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'}/manage-users/aws?token=${portalSession.token}`;
+  const portalBase = await resolvePortalBaseUrl({
+    portalBaseUrl: request.portalBaseUrl,
+    ownerId: request.createdBy,
+  });
+  const portalUrl = `${portalBase}/manage-users/aws?token=${portalSession.token}`;
 
   const html = isMagicLink
     ? buildMagicLinkEmail({ request, labRoles, portalSession, portalUrl, awsAccountId, allowedServices })
@@ -321,12 +343,26 @@ export async function sendCredentialsEmail(request, context) {
   }
 
   try {
+    const attachments = await buildAwsCredentialAttachments(request, {
+      awsAccountId,
+      labRoles,
+      identityUsers,
+      portalSession,
+      portalUrl,
+      isMagicLink,
+      accessType: request.accessType,
+      allowedServices
+    });
+
     const result = await sendMailWithRetry({
       to: recipient,
       subject: `✅ AWS Lab Access Ready — ${isMagicLink ? 'Magic Link' : 'Direct IAM'} Access`,
       html,
+      attachments
     });
-    console.log(`[emailProvisioner] Email sent to ${recipient}`);
+    console.log(
+      `[emailProvisioner] Email sent to ${recipient} with ${attachments.length} attachment(s)`
+    );
     return result;
   } catch (err) {
     console.error('[emailProvisioner] Resend send failed:', err.message);
@@ -335,9 +371,13 @@ export async function sendCredentialsEmail(request, context) {
 }
 
 // Backward-compatible export for tests
-export function buildCredentialsEmailHtml(props) {
+export async function buildCredentialsEmailHtml(props) {
+  const portalBase = await resolvePortalBaseUrl({
+    portalBaseUrl: props.request?.portalBaseUrl,
+    ownerId: props.request?.createdBy,
+  });
   return buildMagicLinkEmail({
     ...props,
-    portalUrl: `${process.env.CLIENT_PORTAL_URL || 'http://localhost:3000'}/manage-users/aws?token=${props.portalSession.token}`,
+    portalUrl: `${portalBase}/manage-users/aws?token=${props.portalSession.token}`,
   });
 }

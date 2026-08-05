@@ -33,6 +33,7 @@ export interface MyTenantRbac {
   role: string;
   tenantId: string;
   isTenantAdmin: boolean;
+  isConsoleOperator?: boolean;
   permissions: string[];
 }
 

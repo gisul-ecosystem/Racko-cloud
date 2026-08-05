@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { resolveTenantContext } from '../../middleware/resolveTenantContext.middleware';
-import { requireTenantAuth, requireTenantRole } from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantAuth } from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantPermission } from '../../middleware/requireOrgPermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import {
   createExternalVMSchema,
@@ -23,88 +24,88 @@ router.use(requireTenantAuth);
 
 router.get(
   '/assign/available',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   (req, res, next) => tenantExternalVmController.getAvailable(req, res, next)
 );
 
 router.get(
   '/assign/counts',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   (req, res, next) => tenantExternalVmController.getAssignedCounts(req, res, next)
 );
 
 router.get(
   '/assign/user/:userId',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(userIdParamSchema),
   (req, res, next) => tenantExternalVmController.getAssignedForUser(req, res, next)
 );
 
 router.post(
   '/assign',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(assignExternalVMsSchema),
   (req, res, next) => tenantExternalVmController.assign(req, res, next)
 );
 
 router.post(
   '/assign/bulk',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(bulkAssignExternalPairsSchema),
   (req, res, next) => tenantExternalVmController.bulkAssignOneToOne(req, res, next)
 );
 
 router.get(
   '/assign/jobs/:jobId',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   (req, res, next) => tenantExternalVmController.getBulkAssignJobStatus(req, res, next)
 );
 
 router.delete(
   '/assign/:id',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(externalVMIdParamSchema),
   (req, res, next) => tenantExternalVmController.unassign(req, res, next)
 );
 
 router.patch(
   '/:id/schedule',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(updateExternalVmScheduleSchema),
   (req, res, next) => tenantExternalVmController.updateSchedule(req, res, next)
 );
 
 router.patch(
   '/override/bulk',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(bulkUpdateExternalVmOverrideSchema),
   (req, res, next) => tenantExternalVmController.bulkUpdateOverride(req, res, next)
 );
 
 router.patch(
   '/:id/override',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(updateExternalVmOverrideSchema),
   (req, res, next) => tenantExternalVmController.updateOverride(req, res, next)
 );
 
 router.post(
   '/bulk',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(bulkCreateExternalVMSchema),
   (req, res, next) => tenantExternalVmController.bulkCreate(req, res, next)
 );
 
 router.delete(
   '/bulk',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(bulkDeleteExternalVMSchema),
   (req, res, next) => tenantExternalVmController.bulkRemove(req, res, next)
 );
 
 router.post(
   '/',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(createExternalVMSchema),
   (req, res, next) => tenantExternalVmController.create(req, res, next)
 );
@@ -125,7 +126,7 @@ router.get(
 
 router.delete(
   '/:id',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('elastic.manage'),
   validateRequest(externalVMIdParamSchema),
   (req, res, next) => tenantExternalVmController.remove(req, res, next)
 );
