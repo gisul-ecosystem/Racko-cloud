@@ -43,6 +43,7 @@
     "@aws-sdk/client-sso-admin": "^3.840.0",
     "@aws-sdk/client-sts": "^3.840.0",
     "adm-zip": "^0.5.18",
+    "docx": "^9.7.1",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "jsonwebtoken": "^9.0.3",
@@ -51,6 +52,7 @@
     "node-cron": "^4.2.0",
     "nodemon": "^3.1.10",
     "resend": "^4.8.0",
-    "uuid": "^14.0.1"
+    "uuid": "^14.0.1",
+    "xlsx": "^0.18.5"
   }
 }

@@ -20,13 +20,14 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/racko-ai/agent/config"
 )
-
 // Update downloads the new binary, verifies its checksum, replaces the current
 // binary, and exits. The Windows Service Control Manager automatically restarts
 // the service with the new binary.
@@ -67,7 +68,8 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 
 	// ── Step 2: download new binary ───────────────────────────────────────────
 	log.Printf("[updater] Downloading new binary from %s", cfg.PlatformURL)
-	if err := downloadBinary(cfg.PlatformURL, tmpPath); err != nil {
+	inFlightSHA, err := downloadBinary(cfg.PlatformURL, tmpPath)
+	if err != nil {
 		log.Printf("[updater] Download failed: %v — aborting", err)
 		return
 	}
@@ -80,17 +82,19 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 	}()
 
 	// ── Step 3: verify checksum ───────────────────────────────────────────────
+	// Use the SHA computed during download (via io.TeeReader) — this avoids any
+	// Windows file-system read-after-write race that would occur if we re-opened
+	// the file to hash it separately.
 	if expectedSHA != "" {
-		actualSHA, err := sha256File(tmpPath)
-		if err != nil {
-			log.Printf("[updater] Checksum read failed: %v — aborting", err)
+		// Trim any whitespace/newlines that might have been introduced during
+		// CI artifact file reads or environment variable interpolation.
+		expectedSHA = strings.TrimSpace(expectedSHA)
+		log.Printf("[updater] Checksum: expected=%s got=%s", expectedSHA, inFlightSHA)
+		if inFlightSHA != expectedSHA {
+			log.Printf("[updater] Checksum MISMATCH — aborting")
 			return
 		}
-		if actualSHA != expectedSHA {
-			log.Printf("[updater] Checksum MISMATCH — expected=%s got=%s — aborting", expectedSHA, actualSHA)
-			return
-		}
-		log.Printf("[updater] Checksum verified: %s", actualSHA)
+		log.Printf("[updater] Checksum verified OK")
 	} else {
 		log.Printf("[updater] No checksum provided — skipping verification")
 	}
@@ -126,42 +130,79 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 	_ = os.Remove(bakPath)
 	log.Printf("[updater] Binary replaced successfully")
 
-	// ── Step 6: exit — SCM restarts the service with the new binary ──────────
-	// The Windows Service Control Manager is configured to restart the service
-	// on unexpected exit (SC_ACTION_RESTART). When we exit here the SCM detects
-	// the exit, waits the configured restart delay, then starts a fresh process
-	// from the same binary path — which now contains the new version.
-	// No sc.exe stop/start needed — and avoids the self-stop deadlock.
+	// ── Step 6: ensure SCM failure actions are set, then exit ────────────────
+	// Ensure the Windows SCM is configured to auto-restart this service on exit.
+	// This is idempotent — safe to run on every update.
+	// Required for VMs installed via push (not the Inno Setup installer) which
+	// don't have failure actions configured by default.
+	if out, err := exec.Command("sc.exe",
+		"failure", "RackoAgent",
+		"reset=", "86400",
+		"actions=", "restart/5000/restart/10000/restart/30000",
+	).CombinedOutput(); err != nil {
+		log.Printf("[updater] sc failure config returned: %v — %s (non-fatal)", err, string(out))
+	} else {
+		log.Printf("[updater] SCM failure actions configured for auto-restart")
+	}
+
+	// Exit — SCM detects the exit and restarts with the new binary.
 	log.Printf("[updater] Update complete — exiting so SCM restarts with new binary")
 	os.Exit(0)
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-func downloadBinary(platformURL, destPath string) error {
+func downloadBinary(platformURL, destPath string) (actualSHA string, err error) {
 	url := platformURL + "/api/v1/agent/binary/windows"
-	client := &http.Client{Timeout: 10 * time.Minute} // large binary, generous timeout
+	client := &http.Client{Timeout: 10 * time.Minute}
 
-	resp, err := client.Get(url)
-	if err != nil {
-		return fmt.Errorf("http get: %w", err)
+	req, reqErr := http.NewRequest(http.MethodGet, url, nil)
+	if reqErr != nil {
+		return "", fmt.Errorf("build request: %w", reqErr)
+	}
+	req.Header.Set("Accept-Encoding", "identity")
+
+	resp, respErr := client.Do(req)
+	if respErr != nil {
+		return "", fmt.Errorf("http get: %w", respErr)
 	}
 	defer resp.Body.Close()
 
+	log.Printf("[updater] Download response: status=%d content-encoding=%q content-length=%d",
+		resp.StatusCode, resp.Header.Get("Content-Encoding"), resp.ContentLength)
+
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
+		return "", fmt.Errorf("server returned %d", resp.StatusCode)
 	}
 
-	f, err := os.Create(destPath)
-	if err != nil {
-		return fmt.Errorf("create temp file: %w", err)
+	f, createErr := os.Create(destPath)
+	if createErr != nil {
+		return "", fmt.Errorf("create temp file: %w", createErr)
 	}
-	defer f.Close()
 
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		return fmt.Errorf("write binary: %w", err)
+	// Hash during download — avoids file system read-after-write race on Windows.
+	// io.TeeReader streams bytes to both the hasher and the file simultaneously.
+	h := sha256.New()
+	tee := io.TeeReader(resp.Body, h)
+
+	written, copyErr := io.Copy(f, tee)
+
+	syncErr := f.Sync()
+	closeErr := f.Close()
+
+	if copyErr != nil {
+		return "", fmt.Errorf("write binary: %w", copyErr)
 	}
-	return nil
+	if syncErr != nil {
+		log.Printf("[updater] Warning: file sync failed: %v", syncErr)
+	}
+	if closeErr != nil {
+		return "", fmt.Errorf("close file: %w", closeErr)
+	}
+
+	computed := hex.EncodeToString(h.Sum(nil))
+	log.Printf("[updater] Download complete: wrote %d bytes, in-flight SHA256=%s", written, computed)
+	return computed, nil
 }
 
 func sha256File(path string) (string, error) {

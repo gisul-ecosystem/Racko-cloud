@@ -270,6 +270,13 @@ router.delete('/api/v1/external-vms/:id', authMiddleware, verifyMiddleware, requ
 router.get('/api/v1/external-vm-pricing/:provider', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.put('/api/v1/external-vm-pricing/:provider', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 
+// ─── ACCOUNT VM PRICING OVERRIDES (per org / tenant) ──────────────────────────
+router.get('/api/v1/account-vm-pricing/accounts', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/account-vm-pricing/:provider/overrides', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/account-vm-pricing/:provider/overrides/:scopeType/:accountId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.put('/api/v1/account-vm-pricing/:provider/overrides/:scopeType/:accountId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+router.delete('/api/v1/account-vm-pricing/:provider/overrides/:scopeType/:accountId', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
+
 // ─── CONTROL-PLANE RBAC ──────────────────────────────────────────────────────
 router.get('/api/v1/rbac/me', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/rbac/permissions', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);

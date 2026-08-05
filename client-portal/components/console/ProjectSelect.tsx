@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { Loader2 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
@@ -18,6 +18,7 @@ export function ProjectSelect({
   disabled,
   required = true,
   portal = 'org',
+  seedFromQuery = true,
 }: {
   serviceKey: AdminServiceKey;
   value: string;
@@ -26,12 +27,15 @@ export function ProjectSelect({
   required?: boolean;
   /** Platform org console vs white-label tenant console */
   portal?: 'org' | 'tenant';
+  /** When true, preselect `?projectId=` from the URL once projects load. */
+  seedFromQuery?: boolean;
 }) {
   const [projects, setProjects] = useState<OrgProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const seededRef = useRef(false);
   const createHref =
-    portal === 'tenant' ? '/console/dashboard/projects/create' : '/console/projects/create';
+    portal === 'tenant' ? '/console/dashboard/projects/create' : '/console/projects';
 
   useEffect(() => {
     let cancelled = false;
@@ -56,6 +60,16 @@ export function ProjectSelect({
       cancelled = true;
     };
   }, [serviceKey, portal]);
+
+  useEffect(() => {
+    if (!seedFromQuery || seededRef.current || loading || value) return;
+    if (typeof window === 'undefined') return;
+    const fromQuery = new URLSearchParams(window.location.search).get('projectId');
+    if (fromQuery && projects.some((p) => p.id === fromQuery)) {
+      seededRef.current = true;
+      onChange(fromQuery);
+    }
+  }, [seedFromQuery, loading, value, projects, onChange]);
 
   if (loading) {
     return (

@@ -113,8 +113,15 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
   }, [logout]);
 
   // Poll access-check ~60s so forced logout after schedule expiry is reflected
+  // (end-users only — console operators are not schedule-gated).
   useEffect(() => {
-    if (!state.isAuthenticated || state.tenantUser?.role !== 'tenant_user') return;
+    if (
+      !state.isAuthenticated ||
+      state.tenantUser?.role !== 'tenant_user' ||
+      state.tenantUser?.isConsoleOperator
+    ) {
+      return;
+    }
 
     const tick = async () => {
       try {
@@ -129,7 +136,12 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
     void tick();
     const id = window.setInterval(() => void tick(), 60_000);
     return () => window.clearInterval(id);
-  }, [state.isAuthenticated, state.tenantUser?.role, logout]);
+  }, [
+    state.isAuthenticated,
+    state.tenantUser?.role,
+    state.tenantUser?.isConsoleOperator,
+    logout,
+  ]);
 
   const login = useCallback(
     async (email: string, password: string) => {
@@ -141,7 +153,7 @@ export function TenantAuthProvider({ children }: { children: React.ReactNode }) 
           isLoading: false,
           isAuthenticated: true,
         });
-        router.push(getTenantDefaultDashboardPath(tenantUser.role));
+        router.push(getTenantDefaultDashboardPath(tenantUser.role, tenantUser));
       } catch (err) {
         if (err instanceof ApiError) throw err;
         throw new ApiError('Login failed.', 500);

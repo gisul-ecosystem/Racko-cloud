@@ -482,9 +482,9 @@ class MachineManagerService {
         // Pick the right checksum based on machine OS
         let checksum = '';
         const os = machine.os?.toLowerCase() ?? '';
-        if (os === 'windows') checksum = config.AGENT_CHECKSUM_WINDOWS ?? '';
-        else if (os === 'linux') checksum = config.AGENT_CHECKSUM_LINUX ?? '';
-        else if (os === 'macos') checksum = config.AGENT_CHECKSUM_DARWIN ?? '';
+        if (os === 'windows') checksum = (config.AGENT_CHECKSUM_WINDOWS ?? '').trim();
+        else if (os === 'linux') checksum = (config.AGENT_CHECKSUM_LINUX ?? '').trim();
+        else if (os === 'macos') checksum = (config.AGENT_CHECKSUM_DARWIN ?? '').trim();
 
         return {
           updateAvailable: true,
@@ -746,25 +746,16 @@ export const machineManagerService = new MachineManagerService();
 // ─── Version comparison helper ────────────────────────────────────────────────
 
 /**
- * Returns true when agentVersion is strictly older than publishedVersion.
- * Compares semver-style strings: "1.2.3" < "1.3.0" → true.
- * Non-semver strings (e.g. "dev") are treated as outdated so dev builds
- * always get updated when a proper version is published.
+ * Returns true when agentVersion differs from publishedVersion.
+ *
+ * The version strings are git SHAs (e.g. "cc6b4450719406c1...") injected at
+ * build time via --ldflags. A SHA is not semver — any difference means the
+ * agent is outdated and should update. Simple string inequality is correct.
+ *
+ * "dev" is treated as outdated when a real version is published, so development
+ * builds always get updated when deployed alongside a versioned binary.
  */
 function isVersionOutdated(agentVersion: string, publishedVersion: string): boolean {
-  const parse = (v: string): number[] =>
-    v.split('.').map((p) => parseInt(p, 10)).filter((n) => !isNaN(n));
-
-  const av = parse(agentVersion);
-  const pv = parse(publishedVersion);
-
-  if (av.length === 0) return true; // unparseable (e.g. "dev") → treat as outdated
-
-  for (let i = 0; i < Math.max(av.length, pv.length); i++) {
-    const a = av[i] ?? 0;
-    const p = pv[i] ?? 0;
-    if (a < p) return true;
-    if (a > p) return false;
-  }
-  return false; // equal versions
+  if (!agentVersion || agentVersion === 'dev') return true;
+  return agentVersion !== publishedVersion;
 }

@@ -6,12 +6,12 @@ const parsePositiveInt = (value, fallback) => {
 // Defaults tuned for ~500–1000 user labs with multi-service selection.
 // Keep PROVISION_STEP_TIME_BUDGET_MS=0 so each HTTP call does one batch (proxy-safe).
 const getBulkProvisionConcurrency = () =>
-  parsePositiveInt(process.env.BULK_PROVISION_CONCURRENCY, 40);
+  parsePositiveInt(process.env.BULK_PROVISION_CONCURRENCY, 50);
 
 const getRoleProvisionConcurrency = () =>
   parsePositiveInt(
     process.env.ROLE_PROVISION_CONCURRENCY || process.env.BULK_PROVISION_CONCURRENCY,
-    40
+    60
   );
 
 const getServiceProvisionConcurrency = () =>
@@ -24,7 +24,7 @@ const getResourceGroupBatchSize = () =>
   parsePositiveInt(process.env.RESOURCE_GROUP_BATCH_SIZE, 50);
 
 const getRoleProvisionBatchSize = () =>
-  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 50);
+  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 120);
 
 const getUserProvisionBatchSize = () =>
   parsePositiveInt(process.env.USER_PROVISION_BATCH_SIZE, 50);
@@ -44,7 +44,7 @@ const getBudgetProvisionBatchSize = () =>
 const getResourceScopedUserBatchSize = () =>
   parsePositiveInt(
     process.env.RESOURCE_SCOPED_USER_BATCH_SIZE || process.env.ROLE_PROVISION_BATCH_SIZE,
-    50
+    80
   );
 
 const getProvisionStepTimeBudgetMs = () => {
@@ -59,6 +59,32 @@ const getProvisionStepTimeBudgetMs = () => {
   }
 
   return Math.floor(parsed);
+};
+
+/**
+ * Role assignment packs many RBAC calls into one HTTP request.
+ * Default 55s keeps nginx (300s) happy while finishing 48–500 user labs faster.
+ * Set ROLE_PROVISION_TIME_BUDGET_MS=0 to force one batch per request.
+ */
+const getRoleProvisionTimeBudgetMs = () => {
+  const raw = process.env.ROLE_PROVISION_TIME_BUDGET_MS;
+  if (raw === '0') {
+    return 0;
+  }
+
+  if (raw != null && String(raw).trim() !== '') {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.floor(parsed);
+    }
+  }
+
+  const shared = getProvisionStepTimeBudgetMs();
+  if (shared > 0) {
+    return shared;
+  }
+
+  return 55_000;
 };
 
 const getMaxProvisionAccountCount = () =>
@@ -87,6 +113,7 @@ module.exports = {
   getBudgetProvisionBatchSize,
   getResourceScopedUserBatchSize,
   getProvisionStepTimeBudgetMs,
+  getRoleProvisionTimeBudgetMs,
   getMaxProvisionAccountCount,
   getDeleteAzureConcurrency,
   getResourceCleanupConcurrency

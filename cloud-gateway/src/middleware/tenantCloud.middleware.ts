@@ -94,5 +94,11 @@ export function injectTenantCloudUserHeaders(req: Request, _res: Response, next:
   req.headers['x-user-id'] = `tenant:${tenantId}`;
   req.headers['x-user-role'] = 'tenant_admin';
   req.headers['x-tenant-id'] = String(tenantId);
+
+  const tenantDomain = String(authReq.tenantContext?.domain || '').trim().toLowerCase();
+  if (tenantDomain) {
+    req.headers['x-tenant-domain'] = tenantDomain;
+  }
+
   next();
 }

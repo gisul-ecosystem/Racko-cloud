@@ -1855,10 +1855,29 @@ const listRequests = async () => {
 };
 
 const renewUserBudget = async ({ requestId, userId, topUpAmount, adminEmail }) => {
-  const amount = parseFloat(topUpAmount);
+  const amountUsd = parseFloat(topUpAmount);
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    throw new AppError('topUpAmount must be positive.', 400);
+  }
+
+  // Top-ups are entered in USD in the UI; convert to INR to match Azure spend.
+  const { convertUsdToInr, getUsdToInrRate } = require('../utils/usdToInr');
+  const amount = convertUsdToInr(amountUsd);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new AppError('topUpAmount must be positive.', 400);
   }
+
+  console.log(
+    JSON.stringify({
+      event: 'budget_topup_converted_usd_to_inr',
+      service: 'org-admin-service',
+      requestId,
+      userId,
+      topUpUsd: amountUsd,
+      topUpInr: amount,
+      usdToInrRate: getUsdToInrRate()
+    })
+  );
 
   const { rows } = await db.query(
     `

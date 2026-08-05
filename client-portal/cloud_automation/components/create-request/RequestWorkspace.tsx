@@ -23,6 +23,9 @@ import {
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../../lib/cloudAccent';
 import { hexToRgba } from '../../../lib/tenantAccentStyles';
+import { ProjectSelect } from '@/components/console/ProjectSelect';
+import { useIsTenantPortal } from '@/lib/portalMode';
+import type { AdminServiceKey } from '@/lib/adminServicesApi';
 import { useAvailableLocations } from '../../hooks/useAvailableLocations';
 import { useMicrosoftLicenses } from '../../hooks/useMicrosoftLicenses';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
@@ -139,6 +142,8 @@ function validateForm(input: {
   customerEmail: string;
   accountCount: number;
   location: string;
+  availableLocations?: Array<{ arm_region_name: string }>;
+  locationsLoading?: boolean;
   serviceIds: number[];
   selectedRoles: SelectedRole[];
   selectedInstances: SelectedInstance[];
@@ -180,6 +185,24 @@ function validateForm(input: {
 
   if (!input.location.trim()) {
     errors.push('Select a region.');
+  } else if (input.locationsLoading) {
+    errors.push('Wait for available regions to finish loading.');
+  } else if (
+    Array.isArray(input.availableLocations) &&
+    input.availableLocations.length > 0 &&
+    !input.availableLocations.some((entry) => entry.arm_region_name === input.location.trim())
+  ) {
+    errors.push(
+      'Selected region is not available for the chosen instance size(s). Pick a region from the available list.'
+    );
+  } else if (
+    Array.isArray(input.availableLocations) &&
+    input.availableLocations.length === 0 &&
+    input.selectedInstances.length > 0
+  ) {
+    errors.push(
+      'No regions support all selected instance sizes. Change one or more instance options.'
+    );
   }
 
   if (!input.startDate || !input.endDate) {
@@ -248,13 +271,17 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
   const AZURE_ROUTES = useAzureRoutes();
   const accent = useCloudAccentColor();
   const soft = hexToRgba(accent, 0.1);
+  const isTenantPortal = useIsTenantPortal();
+  const projectServiceKey: AdminServiceKey = labsMode ? 'cloud-labs' : 'azure';
   const { catalog, loading: catalogLoading, error: catalogError, refetch } = useServiceCatalog();
 
   const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([]);
   const [selectedInstances, setSelectedInstances] = useState<SelectedInstance[]>([]);
   const [manualRoles, setManualRoles] = useState<Record<number, string[]>>({});
   const [location, setLocation] = useState('');
+  const locationManualRef = useRef(false);
   const [projectName, setProjectName] = useState('');
+  const [rackoProjectId, setRackoProjectId] = useState('');
   const [idMode, setIdMode] = useState<AzureIdMode | null>(null);
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
@@ -318,6 +345,40 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
     selectedServiceIds,
     selectedInstances
   );
+
+  const selectedInstanceKey = useMemo(
+    () =>
+      selectedInstances
+        .map((entry) => `${entry.serviceId}:${entry.instanceOption}`)
+        .sort()
+        .join('|'),
+    [selectedInstances]
+  );
+
+  useEffect(() => {
+    // New service/instance mix → allow cheapest auto-select again.
+    locationManualRef.current = false;
+  }, [selectedServiceIds.join(','), selectedInstanceKey]);
+
+  useEffect(() => {
+    if (locations.length === 0) {
+      if (location) setLocation('');
+      return;
+    }
+
+    const stillValid = locations.some((entry) => entry.arm_region_name === location);
+    if (!stillValid || !locationManualRef.current) {
+      const nextLocation = pickCheapestLocation(locations);
+      if (nextLocation && nextLocation !== location) {
+        setLocation(nextLocation);
+      }
+    }
+  }, [locations, location]);
+
+  const handleLocationChange = useCallback((nextLocation: string) => {
+    locationManualRef.current = true;
+    setLocation(nextLocation);
+  }, []);
   const {
     licenses,
     loading: licensesLoading,
@@ -425,18 +486,6 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
       setResourceCleanupAction('delete');
     }
   }, [pauseCleanupAvailable, resourceCleanupAction]);
-
-  useEffect(() => {
-    if (locations.length === 0) {
-      if (location) setLocation('');
-      return;
-    }
-
-    const stillValid = locations.some((entry) => entry.arm_region_name === location);
-    if (!stillValid) {
-      setLocation(pickCheapestLocation(locations));
-    }
-  }, [locations, location]);
 
   const pricingPayload = useMemo<PricingEstimatePayload | null>(() => {
     if (!catalog || selectedServiceIds.length === 0 || !location) return null;
@@ -575,6 +624,8 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
       customerEmail,
       accountCount,
       location,
+      availableLocations: locations,
+      locationsLoading,
       serviceIds: selectedServiceIds,
       selectedRoles,
       selectedInstances,
@@ -594,6 +645,11 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
     setSubmitError(null);
 
     if (errors.length > 0) return;
+
+    if (!rackoProjectId) {
+      setSubmitError('Select a Racko project / client before creating the request.');
+      return;
+    }
 
     if (!labsMode) {
       if (totalPrice == null) {
@@ -623,7 +679,10 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
 
     try {
       if (!labsMode && totalPrice != null && totalPrice > 0) {
-        const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure');
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure', {
+          projectId: rackoProjectId,
+          serviceKey: projectServiceKey === 'cloud-labs' ? 'cloud-labs' : 'azure',
+        });
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
         setUsdToInrRate(charge.usdToInrRate);
@@ -641,6 +700,7 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
           selectedInstances,
           costingMode: labsMode ? 'shared' : costingMode,
           projectName: projectName.trim(),
+          projectId: rackoProjectId || undefined,
           idMode: isPurchaseConvert ? 'azure_ids' : idMode ?? undefined,
           ...(isPurchaseConvert && convertedFromRequestId
             ? {
@@ -1010,12 +1070,27 @@ export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="min-w-0 space-y-6">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Cost attribution
+              </p>
+              <p className="mb-3 text-sm text-gray-500">
+                Charges stay on your main wallet and are tracked on this project in Reports.
+              </p>
+              <ProjectSelect
+                serviceKey={projectServiceKey}
+                value={rackoProjectId}
+                onChange={setRackoProjectId}
+                portal={isTenantPortal ? 'tenant' : 'org'}
+                disabled={submitting}
+              />
+            </div>
             <RequestForm
               catalog={catalog}
               selectedServiceIds={selectedServiceIds}
               onToggleService={handleToggleService}
               location={location}
-              onLocationChange={setLocation}
+              onLocationChange={handleLocationChange}
               locations={locations}
               locationsLoading={locationsLoading}
               locationsError={locationsError}

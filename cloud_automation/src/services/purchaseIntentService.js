@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const db = require('../db/postgres');
 const AppError = require('../utils/AppError');
-const { resolveFrontendBaseUrl } = require('../utils/frontendUrl');
+const { resolvePortalBaseUrl } = require('../utils/frontendUrl');
 const { sendMailWithRetry } = require('./email/mailSender');
 const { resolveLicenseDisplayName } = require('../utils/microsoftLicenseNames');
 
@@ -84,7 +84,8 @@ const listDuePurchaseIntentRequests = async () => {
         customer_email,
         account_count,
         project_name,
-        location
+        location,
+        racko_user_id
       FROM requests
       WHERE id_mode = 'test_ids'
         AND purchase_intent_due_at IS NOT NULL
@@ -107,7 +108,10 @@ const sendPurchaseIntentEmailForRequest = async (request, { force = false } = {}
   const requestId = Number(request.id);
   const rawToken = crypto.randomUUID();
   const tokenHash = hashToken(rawToken);
-  const baseUrl = resolveFrontendBaseUrl();
+  const baseUrl = await resolvePortalBaseUrl({
+    portalBaseUrl: request.portal_base_url || null,
+    ownerId: request.racko_user_id
+  });
   const yesUrl = `${baseUrl}/console/azure/requests/new?fromTestRequest=${requestId}&purchaseToken=${encodeURIComponent(rawToken)}`;
   const noUrl = `${baseUrl}/console/azure/purchase-response?token=${encodeURIComponent(rawToken)}&response=no`;
 
@@ -176,7 +180,8 @@ const sendPurchaseIntentEmailByRequestId = async (requestId, { force = true } = 
         project_name,
         location,
         id_mode,
-        purchase_intent_response
+        purchase_intent_response,
+        racko_user_id
       FROM requests
       WHERE id = $1
     `,

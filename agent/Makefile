@@ -8,27 +8,27 @@ BINARY_MAC     = dist/racko-agent-mac
 # Template build (bake enrollmentKey):
 #   make build-windows PLATFORM_URL=https://api.racko.ai ENROLLMENT_KEY=<key>
 #
-# Version is baked into every build so the server can compare and trigger auto-update.
-# Bump VERSION before each release:
-#   make build-all VERSION=1.4.2 PLATFORM_URL=...
-#
-# After building, compute the checksum and set it in core-api .env:
-#   sha256sum dist/racko-agent.exe   → AGENT_CHECKSUM_WINDOWS
-#   sha256sum dist/racko-agent       → AGENT_CHECKSUM_LINUX
-#   sha256sum dist/racko-agent-mac   → AGENT_CHECKSUM_DARWIN
-# Also set AGENT_VERSION=1.4.2 in core-api .env to trigger auto-update rollout.
+# VERSION is read from the VERSION file — bump it manually when agent code changes.
+# CI reads VERSION automatically via this Makefile.
+# To release a new agent version:
+#   1. Edit agent/VERSION (e.g. 1.0.1)
+#   2. Push — CI builds new binaries, bakes new version into core-api image
+#   3. All connected agents update themselves within 30 seconds
 
 PLATFORM_URL   ?=
 ACCOUNT_TOKEN  ?=
 ENROLLMENT_KEY ?=
-VERSION        ?= dev
+VERSION        := $(shell cat VERSION 2>/dev/null | tr -d '[:space:]')
 
 LDFLAGS = -X github.com/racko-ai/agent/config.LDPlatformURL=$(PLATFORM_URL) \
           -X github.com/racko-ai/agent/config.LDAccountToken=$(ACCOUNT_TOKEN) \
           -X github.com/racko-ai/agent/config.LDEnrollmentKey=$(ENROLLMENT_KEY) \
           -X github.com/racko-ai/agent/config.Version=$(VERSION)
 
-.PHONY: build-windows build-linux build-mac build-all clean checksums
+.PHONY: build-windows build-linux build-mac build-all clean checksums version
+
+version:
+	@cat VERSION
 
 build-windows:
 	GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BINARY_WINDOWS) .
@@ -41,7 +41,7 @@ build-mac:
 
 build-all: build-windows build-linux build-mac
 
-# Print SHA256 checksums for all binaries — copy these into core-api .env
+# Print SHA256 checksums for all binaries — these are automatically picked up by CI
 checksums:
 	@echo "AGENT_VERSION=$(VERSION)"
 	@sha256sum $(BINARY_WINDOWS) | awk '{print "AGENT_CHECKSUM_WINDOWS=" $$1}'

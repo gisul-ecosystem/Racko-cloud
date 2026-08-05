@@ -2,6 +2,10 @@ import { Router } from 'express';
 import { retry, start, syncRolePolicies } from '../services/provisioningService.js';
 import { getStatus } from '../services/provisionStatusService.js';
 import { getRequestById } from '../services/requestService.js';
+import {
+  downloadCredentialSpreadsheetForRequest,
+  downloadLabAccessGuideForRequest
+} from '../services/credentialExportService.js';
 
 const router = Router();
 
@@ -14,6 +18,13 @@ function getRackoActor(req) {
 
 async function assertOwnedRequest(req, requestId) {
   await getRequestById(requestId, getRackoActor(req));
+}
+
+function sendBinaryFile(res, { filename, buffer, contentType }) {
+  res.setHeader('Content-Type', contentType);
+  res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+  res.setHeader('Content-Length', Buffer.byteLength(buffer));
+  res.send(Buffer.from(buffer));
 }
 
 router.post('/provision/request/:id/start', async (req, res, next) => {
@@ -50,6 +61,26 @@ router.post('/provision/request/:id/sync-policies', async (req, res, next) => {
   try {
     const result = await syncRolePolicies(req.params.id);
     res.json({ success: true, ...result });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/provision/request/:id/credentials/spreadsheet', async (req, res, next) => {
+  try {
+    await assertOwnedRequest(req, req.params.id);
+    const file = await downloadCredentialSpreadsheetForRequest(req.params.id);
+    sendBinaryFile(res, file);
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get('/provision/request/:id/credentials/guide', async (req, res, next) => {
+  try {
+    await assertOwnedRequest(req, req.params.id);
+    const file = await downloadLabAccessGuideForRequest(req.params.id);
+    sendBinaryFile(res, file);
   } catch (err) {
     next(err);
   }

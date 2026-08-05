@@ -199,6 +199,7 @@ export function deriveStepStates(
   );
 
   let activeAssigned = false;
+  let blockedByFailure = false;
 
   return visibleSteps.map((step) => {
     const isComplete = completion[step.key];
@@ -208,9 +209,10 @@ export function deriveStepStates(
 
     if (error) {
       status = 'failed';
+      blockedByFailure = true;
     } else if (isComplete) {
       status = 'complete';
-    } else if (!activeAssigned) {
+    } else if (!activeAssigned && !blockedByFailure) {
       status = 'active';
       activeAssigned = true;
     }

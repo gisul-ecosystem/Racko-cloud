@@ -23,6 +23,7 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { ApiError } from '@/lib/apiClient';
 import {
   formatAccessScheduleDigest,
@@ -65,7 +66,9 @@ export function TenantVmListView() {
   const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const { toasts, addToast, dismiss } = useToast();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { isConsoleStaff, hasPermission } = useTenantRbac();
+  const isAdmin =
+    isConsoleStaff && hasPermission('vms.manage', 'vms.assign', 'vms.read');
 
   const [vms, setVms] = useState<TenantVmSummary[]>([]);
   const [loading, setLoading] = useState(true);

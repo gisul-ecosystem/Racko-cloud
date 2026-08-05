@@ -268,12 +268,14 @@ const recordCleanupLog = async (client, { requestId, eventName, logLevel, messag
 };
 
 const getRequestContext = async (requestId) => {
-  const query = `
+  const queryWithPortal = `
     SELECT
       r.id,
       r.customer_email,
       r.expiry_date,
       r.status,
+      r.racko_user_id,
+      r.portal_base_url,
       COUNT(u.id) AS user_count
     FROM requests r
     LEFT JOIN azure_users u
@@ -284,7 +286,33 @@ const getRequestContext = async (requestId) => {
     LIMIT 1
   `;
 
-  const result = await db.query(query, [requestId]);
+  const queryFallback = `
+    SELECT
+      r.id,
+      r.customer_email,
+      r.expiry_date,
+      r.status,
+      r.racko_user_id,
+      COUNT(u.id) AS user_count
+    FROM requests r
+    LEFT JOIN azure_users u
+      ON u.request_id = r.id
+      AND COALESCE(u.is_deleted, false) = false
+    WHERE r.id = $1
+    GROUP BY r.id
+    LIMIT 1
+  `;
+
+  let result;
+  try {
+    result = await db.query(queryWithPortal, [requestId]);
+  } catch (error) {
+    const message = String(error?.message || '');
+    if (!message.includes('portal_base_url')) {
+      throw error;
+    }
+    result = await db.query(queryFallback, [requestId]);
+  }
 
   if (!result.rows.length) {
     return null;
@@ -548,8 +576,13 @@ const resolveFrontendBaseUrl = () => {
   return baseUrl;
 };
 
-const buildManageUrl = (token) => {
-  const baseUrl = resolveFrontendBaseUrl();
+const buildManageUrl = async (token, request = null) => {
+  const { resolvePortalBaseUrl } = require('../utils/frontendUrl');
+  const baseUrl = await resolvePortalBaseUrl({
+    portalBaseUrl: request?.portal_base_url,
+    ownerId: request?.racko_user_id
+  }).catch(() => resolveFrontendBaseUrl());
+
   return `${baseUrl}/manage-users?token=${encodeURIComponent(token)}`;
 };
 
@@ -670,7 +703,7 @@ const issueAccessPortalTokenForRequest = async (requestId) => {
     });
   }
 
-  const manageUrl = buildManageUrl(rawToken);
+  const manageUrl = await buildManageUrl(rawToken, request);
 
   logManagePortalEvent('info', 'portal_token_issued', {
     requestId,
@@ -1989,10 +2022,27 @@ const renewUserBudget = async (sessionToken, userId, topUpAmount) => {
   const session = await requireSession(sessionToken);
   assertAdminPortalSession(session);
 
-  const amount = parseFloat(topUpAmount);
+  const amountUsd = parseFloat(topUpAmount);
+  if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
+    throw new AppError('topUpAmount must be positive.', 400);
+  }
+
+  const { convertUsdToInr, getUsdToInrRate } = require('../utils/usdToInr');
+  const amount = convertUsdToInr(amountUsd);
   if (!Number.isFinite(amount) || amount <= 0) {
     throw new AppError('topUpAmount must be positive.', 400);
   }
+
+  console.log(
+    JSON.stringify({
+      event: 'budget_topup_converted_usd_to_inr',
+      service: 'manage-portal-service',
+      userId,
+      topUpUsd: amountUsd,
+      topUpInr: amount,
+      usdToInrRate: getUsdToInrRate()
+    })
+  );
 
   const { rows } = await db.query(
     `
