@@ -24,11 +24,22 @@ export const pushSessionEmitter = new PushSessionEmitter();
 pushSessionEmitter.setMaxListeners(200);
 
 export function emitPushEvent(sessionId: string, event: PushSessionEvent): void {
+  const listenerCount = pushSessionEmitter.listenerCount(sessionId);
   logger.info('[SSE][Push] Emitting push event', {
     sessionId,
     type: event.type,
     machineId: event.machineId,
     success: event.success,
+    activeListeners: listenerCount,
+    willBeDropped: listenerCount === 0,
+    timestamp: new Date().toISOString(),
   });
+  if (listenerCount === 0) {
+    logger.warn('[SSE][Push] NO LISTENERS on session — event will be LOST (SSE stream not yet open or already closed)', {
+      sessionId,
+      type: event.type,
+      machineId: event.machineId,
+    });
+  }
   pushSessionEmitter.emit(sessionId, event);
 }

@@ -42,30 +42,51 @@ export async function ensureSystemRoles(input: {
 
   for (const seed of input.seeds) {
     const filter = { scope: input.scope, orgId, slug: seed.slug };
-    const update = {
-      $setOnInsert: {
-        scope: input.scope,
-        orgId,
-        slug: seed.slug,
-        name: seed.name,
-        description: seed.description,
-        isSystem: true,
-        isActive: true,
-      },
-      // Merge new catalog permissions into existing system roles (e.g. projects.*).
-      // Atomic — avoids VersionError under parallel Access Control requests.
-      $addToSet: { permissions: { $each: seed.permissions } },
-    };
+    const existing = await OrgRbacRoleModel.findOne(filter)
+      .select('seededPermissions')
+      .lean();
 
-    try {
-      await OrgRbacRoleModel.updateOne(filter, update, { upsert: true });
-    } catch (err) {
-      // Concurrent upserts can race on the unique (scope, orgId, slug) index.
-      if (!isDuplicateKeyError(err)) throw err;
-      await OrgRbacRoleModel.updateOne(filter, {
-        $addToSet: { permissions: { $each: seed.permissions } },
-      });
+    if (!existing) {
+      try {
+        await OrgRbacRoleModel.updateOne(
+          filter,
+          {
+            $setOnInsert: {
+              scope: input.scope,
+              orgId,
+              slug: seed.slug,
+              name: seed.name,
+              description: seed.description,
+              permissions: seed.permissions,
+              seededPermissions: seed.permissions,
+              isSystem: true,
+              isActive: true,
+            },
+          },
+          { upsert: true }
+        );
+      } catch (err) {
+        // Concurrent upserts can race on the unique (scope, orgId, slug) index.
+        if (!isDuplicateKeyError(err)) throw err;
+      }
+      continue;
     }
+
+    // Roles predating seed tracking adopt the current seed as their baseline, so
+    // permissions an admin deliberately removed are not silently re-granted.
+    const seenBefore = existing.seededPermissions;
+    const alreadySeeded = new Set(seenBefore ?? seed.permissions);
+    const newlySeeded = seed.permissions.filter((p) => !alreadySeeded.has(p));
+
+    const addToSet: Record<string, { $each: string[] }> = {
+      seededPermissions: { $each: seed.permissions },
+    };
+    // Only permissions new to the catalog merge into existing system roles.
+    if (newlySeeded.length > 0) {
+      addToSet['permissions'] = { $each: newlySeeded };
+    }
+
+    await OrgRbacRoleModel.updateOne(filter, { $addToSet: addToSet });
   }
 }
 

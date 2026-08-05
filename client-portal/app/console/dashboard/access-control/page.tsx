@@ -418,8 +418,8 @@ export default function TenantAccessControlPage() {
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
               />
               <p className="text-xs text-gray-500">
-                An invite email is sent with verify and set-password links. The operator cannot sign
-                in until both steps are complete.
+                An invite email is sent with a verify link. After verifying, they set a password
+                before signing in.
               </p>
               <div className="flex flex-wrap gap-2">
                 {roles.map((role) => (

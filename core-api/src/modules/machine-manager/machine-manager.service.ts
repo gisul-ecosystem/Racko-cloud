@@ -602,6 +602,14 @@ class MachineManagerService {
     void (async () => {
       let completedCount = 0;
       const totalCount = machines.length;
+      const pushStartTime = Date.now();
+      logger.info('[MachineManager] Starting background WinRM/SSH push', {
+        sessionId,
+        totalMachines: totalCount,
+        machineIds: machines.map((m) => m._id),
+        startedAt: new Date().toISOString(),
+        warning: 'SSE stream must be open before push_result events fire',
+      });
       await Promise.all(
         machines.map((machine, i) =>
           vmPushService.pushAgent({
@@ -612,6 +620,14 @@ class MachineManagerService {
             password: vms[i].password,
             accountToken: machine.accountToken,
           }).then((result) => {
+            const elapsedMs = Date.now() - pushStartTime;
+            logger.info('[MachineManager] Push attempt completed — emitting push_result', {
+              sessionId,
+              machineId: machine._id,
+              machineName: machine.name,
+              success: result.success,
+              elapsedMs,
+            });
             emitPushEvent(sessionId, {
               type: 'push_result',
               machineId: machine._id,
@@ -620,7 +636,7 @@ class MachineManagerService {
             });
             completedCount++;
             if (completedCount === totalCount) {
-              logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
+              logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount, totalElapsedMs: Date.now() - pushStartTime });
             }
             return result;
           })
