@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { TenantAuthFrame } from '@/components/tenant/TenantAuthFrame';
 import {
@@ -18,6 +18,7 @@ import { ApiError } from '@/lib/apiClient';
 type VerifyState = 'loading' | 'success' | 'error';
 
 function VerifyEmailForm() {
+  const router = useRouter();
   const { accentColor, tenantNotFound, loading: brandingLoading } = useTenantBranding();
   const searchParams = useSearchParams();
   const token = searchParams.get('token') ?? '';
@@ -40,10 +41,17 @@ function VerifyEmailForm() {
     async function verify() {
       try {
         const res = await tenantVerifyEmail(token);
-        if (!cancelled) {
-          setState('success');
-          setMessage(res.message);
+        if (cancelled) return;
+
+        if (res.requiresPasswordSetup && res.resetToken) {
+          router.replace(
+            `/console/reset-password?token=${encodeURIComponent(res.resetToken)}`
+          );
+          return;
         }
+
+        setState('success');
+        setMessage(res.message);
       } catch (err) {
         if (!cancelled) {
           setState('error');
@@ -58,7 +66,7 @@ function VerifyEmailForm() {
     return () => {
       cancelled = true;
     };
-  }, [token]);
+  }, [token, router]);
 
   async function handleResend(e: React.FormEvent) {
     e.preventDefault();
@@ -163,7 +171,7 @@ export default function TenantVerifyEmailPage() {
     <TenantAuthFrame
       eyebrow="VERIFY"
       title="Verify your email"
-      description="Confirm your invite so you can set a password and access the tenant console."
+      description="Confirm your invite — you'll set a password next if this is a new account."
     >
       <Suspense
         fallback={

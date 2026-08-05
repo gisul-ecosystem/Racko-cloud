@@ -357,7 +357,6 @@ class TenantRbacService {
     await this.ensureTenantRoles(tenantId);
 
     const rawVerifyToken = generateSecureToken(32);
-    const rawResetToken = generateSecureToken(32);
     const inviteExpiresAt = new Date(Date.now() + CONSOLE_INVITE_TOKEN_TTL_MS);
 
     const user = await TenantUser.create({
@@ -371,8 +370,6 @@ class TenantRbacService {
       mustSetPassword: true,
       emailVerificationTokenHash: hashToken(rawVerifyToken),
       emailVerificationExpiresAt: inviteExpiresAt,
-      resetTokenHash: hashToken(rawResetToken),
-      resetTokenExpiresAt: inviteExpiresAt,
       createdBy: new mongoose.Types.ObjectId(actorId),
     });
 
@@ -386,7 +383,6 @@ class TenantRbacService {
           email,
           tempPassword: input.temporaryPassword,
           verifyToken: rawVerifyToken,
-          resetToken: rawResetToken,
           inviteKind: 'operator',
           tenant: {
             name: tenant.name,

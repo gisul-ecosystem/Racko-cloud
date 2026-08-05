@@ -278,33 +278,19 @@ export async function sendTenantOperatorInviteEmail(input: {
   to: string;
   email: string;
   tempPassword: string;
+  verifyToken: string;
   tenant: TenantEmailContext;
-  verifyToken?: string;
-  resetToken?: string;
   inviteKind?: 'admin' | 'operator';
 }): Promise<void> {
   const brand = resolveTenantEmailBrand(input.tenant);
-  
-  // Generate verify and reset URLs for the tenant operator
-  const verifyUrl = input.verifyToken 
-    ? tenantPortalUrl(
-        input.tenant,
-        `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
-      )
-    : tenantPortalUrl(input.tenant, '/console/verify-email');
-    
-  const resetUrl = input.resetToken
-    ? tenantPortalUrl(
-        input.tenant,
-        `/console/reset-password?token=${encodeURIComponent(input.resetToken)}`
-      )
-    : tenantPortalUrl(input.tenant, '/console/reset-password');
-    
+  const verifyUrl = tenantPortalUrl(
+    input.tenant,
+    `/console/verify-email?token=${encodeURIComponent(input.verifyToken)}`
+  );
   const template = buildTenantOperatorInviteTemplate({
     email: input.email,
     tempPassword: input.tempPassword,
     verifyUrl,
-    resetUrl,
     brand,
     inviteKind: input.inviteKind,
   });
