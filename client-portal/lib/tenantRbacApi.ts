@@ -1,5 +1,14 @@
 import { tenantPortalRequest } from './tenantPortalApiClient';
 
+/** Fired after roles/assignments change so other tabs refresh effective permissions. */
+export const TENANT_RBAC_CHANGED_EVENT = 'racko:tenant_rbac_changed';
+
+export function emitTenantRbacChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(TENANT_RBAC_CHANGED_EVENT));
+  }
+}
+
 export interface OrgRbacPermissionDef {
   key: string;
   label: string;
@@ -33,6 +42,7 @@ export interface MyTenantRbac {
   role: string;
   tenantId: string;
   isTenantAdmin: boolean;
+  isConsoleOperator?: boolean;
   permissions: string[];
 }
 
@@ -135,4 +145,13 @@ export async function inviteTenantOperator(input: {
     )
   );
   return data.user;
+}
+
+export async function deleteTenantOperator(userId: string): Promise<{ email: string }> {
+  return unwrap(
+    tenantPortalRequest<ApiEnvelope<{ email: string }>>(
+      `/api/v1/tenant-rbac/people/${userId}`,
+      { method: 'DELETE' }
+    )
+  );
 }

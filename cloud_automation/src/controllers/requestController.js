@@ -3,6 +3,7 @@ const requestService = require('../services/requestService');
 const cleanupService = require('../services/cleanupService');
 const { getMaxDailyLimitMinutes } = require('../utils/usageSchedule');
 const { validateRequestPayload } = require('../validators/requestPayloadValidator');
+const { resolvePortalBaseUrlFromRequestHeaders } = require('../utils/frontendUrl');
 
 const validateRequestId = (requestId) => {
   if (!/^\d+$/.test(requestId)) {
@@ -62,6 +63,12 @@ const createRequest = async (req, res, next) => {
       usageWindows: Array.isArray(req.body.usageWindows) ? req.body.usageWindows : undefined,
       projectName:
         typeof req.body.projectName === 'string' ? req.body.projectName.trim() : undefined,
+      projectId:
+        typeof req.body.projectId === 'string'
+          ? req.body.projectId.trim()
+          : typeof req.body.project_id === 'string'
+            ? req.body.project_id.trim()
+            : undefined,
       idMode:
         req.body.idMode === 'test_ids' || req.body.idMode === 'azure_ids'
           ? req.body.idMode
@@ -88,7 +95,8 @@ const createRequest = async (req, res, next) => {
 
     const result = await requestService.createRequest({
       ...payload,
-      rackoUserId: req.rackoUser?.userId
+      rackoUserId: req.rackoUser?.userId,
+      portalBaseUrl: resolvePortalBaseUrlFromRequestHeaders(req.headers)
     });
 
     res.status(201).json({

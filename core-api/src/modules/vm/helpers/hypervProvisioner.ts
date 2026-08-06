@@ -6,12 +6,8 @@ import { pollTask } from './taskPoller';
 import { VM } from '../vm.model';
 import { VMEvent } from '../vmEvent.model';
 import type { HyperVStatus } from '../vm.types';
-import {
-  HYPERV_STATE_SCRIPT,
-  decodeAgentOutput,
-  parseHyperVState,
-  isProcessExited,
-} from './hypervGuestOutput';
+import { HYPERV_STATE_SCRIPT, parseHyperVState } from './hypervGuestOutput';
+import { runGuestPowerShellOnce } from './guestAgentExec';
 import { classifyHyperVError } from './hypervErrors';
 import { updateHyperVStatus } from './hypervStatus';
 
@@ -20,13 +16,6 @@ import { updateHyperVStatus } from './hypervStatus';
  *
  * Linear flow: start VM → wait for guest agent → enable feature → reboot → verify
  */
-
-interface AgentExecStatus {
-  exited?: number | boolean;
-  exitcode?: number;
-  'out-data'?: string;
-  'err-data'?: string;
-}
 
 /**
  * Hyper-V is a Windows-only feature. Match real Proxmox Windows ostypes
@@ -202,7 +191,6 @@ async function runPowerShell(
   label: string,
   vmObjectId?: mongoose.Types.ObjectId
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script];
   const deadline = Date.now() + config.HYPERV_EXEC_DEADLINE_MS;
   let lastError = 'no result from guest agent';
   let attempt = 0;
@@ -231,21 +219,21 @@ async function runPowerShell(
       break;
     }
 
-    let pid: number;
     try {
-      const start = await proxmoxClient.post<{ data: { pid: number } }>(
-        `/nodes/${node}/qemu/${vmid}/agent/exec`,
-        { command }
-      );
-      pid = start.data.data.pid;
-      logger.info('[HyperV] exec started', { vmid, node, label, attempt, pid });
+      // Shared PVE-8 argv-array exec + exec-status poll (same path as console fixups).
+      const out = await runGuestPowerShellOnce(node, vmid, script, {
+        logLabel: `HyperV:${label}`,
+        pollIntervalMs: config.HYPERV_EXEC_POLL_MS,
+        deadlineMs: deadline,
+      });
+      return { exitCode: out.exitCode, stdout: out.stdout, stderr: out.stderr };
     } catch (err) {
       const classified = classifyHyperVError(err);
       lastError = classified.message;
       if (!classified.retryable) {
         throw new Error(lastError);
       }
-      logger.warn('[HyperV] exec start failed — will retry', {
+      logger.warn('[HyperV] exec failed — will retry', {
         vmid,
         node,
         label,
@@ -253,69 +241,7 @@ async function runPowerShell(
         error: lastError,
       });
       await sleep(config.HYPERV_EXEC_POLL_MS);
-      continue;
     }
-
-    let polls = 0;
-    let agentDropped = false;
-    while (Date.now() < deadline) {
-      polls++;
-      try {
-        const status = await proxmoxClient.get<{ data: AgentExecStatus }>(
-          `/nodes/${node}/qemu/${vmid}/agent/exec-status`,
-          { params: { pid } }
-        );
-        const data = status.data.data;
-        if (polls === 1) {
-          logger.debug('[HyperV] exec-status raw (first poll)', { vmid, node, label, pid, data });
-        }
-        if (isProcessExited(data)) {
-          const stdout = decodeAgentOutput(data['out-data'], (payload) =>
-            logger.debug('[HyperV] decode out-data', { vmid, node, label, stream: 'stdout', ...payload })
-          );
-          const stderr = decodeAgentOutput(data['err-data'], (payload) =>
-            logger.debug('[HyperV] decode out-data', { vmid, node, label, stream: 'stderr', ...payload })
-          );
-          const out = {
-            exitCode: data.exitcode ?? 1,
-            stdout,
-            stderr,
-          };
-          logger.info('[HyperV] exec completed', {
-            vmid,
-            node,
-            label,
-            attempt,
-            pid,
-            polls,
-            exitCode: out.exitCode,
-            stdout: out.stdout.slice(0, 500),
-            stderr: out.stderr.slice(0, 500),
-          });
-          return out;
-        }
-      } catch (err) {
-        const classified = classifyHyperVError(err);
-        lastError = classified.message;
-        if (!classified.retryable) {
-          throw new Error(lastError);
-        }
-        logger.warn('[HyperV] exec-status poll failed — agent dropped, will re-issue', {
-          vmid,
-          node,
-          label,
-          attempt,
-          pid,
-          polls,
-          error: lastError,
-        });
-        agentDropped = true;
-        break;
-      }
-      await sleep(config.HYPERV_EXEC_POLL_MS);
-    }
-
-    if (!agentDropped) break;
   }
 
   logger.error('[HyperV] exec gave up', { vmid, node, label, lastError });

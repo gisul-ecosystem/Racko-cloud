@@ -34,6 +34,7 @@ import {
   PAUSE_CLEANUP_ACTION_LABELS,
   supportsPauseCleanup,
 } from '../../utils/requestForm';
+import { DEFAULT_USD_TO_INR_RATE } from '../../utils/walletBilling';
 import { InstanceOptionCard } from './InstanceOptionCard';
 import { ServiceOptionCard } from './ServiceOptionCard';
 
@@ -910,8 +911,8 @@ export function RequestForm({
               title="Per-user budget"
               description={
                 isTestIds
-                  ? 'Default $10 spending cap for Azure test_ids.'
-                  : 'Optional spending cap per lab user.'
+                  ? 'Default $10 spending cap for Azure test_ids (tracked in INR against Azure Cost Management).'
+                  : 'Optional spending cap per lab user. Enter USD — tracked in INR because Azure costs are billed in rupees.'
               }
             />
 
@@ -935,9 +936,20 @@ export function RequestForm({
               />
               <p className="mt-2 text-xs text-gray-500">
                 {isTestIds
-                  ? 'Fixed at $10 for Azure test_ids. When spending exceeds this amount, the user is notified and suspended.'
-                  : 'An Azure budget is created for each user with their own resource group.'}
+                  ? `Fixed at $10 for Azure test_ids. Stored and tracked in INR (₹${DEFAULT_USD_TO_INR_RATE} per $1) so it matches Azure Cost Management. When spend exceeds the cap, the user is notified and suspended.`
+                  : `Enter the cap in USD. Racko converts it to INR (₹${DEFAULT_USD_TO_INR_RATE} per $1) for Azure budgets and super-admin tracking, because Azure Cost Management reports spend in rupees.`}
               </p>
+              {perUserBudgetUsd != null &&
+              Number.isFinite(perUserBudgetUsd) &&
+              perUserBudgetUsd > 0 ? (
+                <p className="mt-1.5 text-xs font-medium text-gray-700">
+                  ≈ ₹{(perUserBudgetUsd * DEFAULT_USD_TO_INR_RATE).toLocaleString('en-IN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  INR tracked per user in super admin
+                </p>
+              ) : null}
             </div>
           </div>
         </section>

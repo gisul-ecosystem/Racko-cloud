@@ -7,6 +7,9 @@ import {
   ArrowLeft,
   Check,
   Circle,
+  Download,
+  FileSpreadsheet,
+  FileText,
   Loader2,
   RefreshCw,
   RotateCcw,
@@ -14,6 +17,8 @@ import {
 } from 'lucide-react';
 import { ErrorState } from '../../../../../components/dashboard/ErrorState';
 import {
+  downloadCredentialSpreadsheet,
+  downloadLabAccessGuide,
   getRequestById,
   getRequestSpend,
   reinstateRequestUser,
@@ -65,6 +70,8 @@ export default function AwsRequestStatusPage() {
   const [spendLoading, setSpendLoading] = useState(false);
   const [spendSyncing, setSpendSyncing] = useState(false);
   const [reinstatingUserIndex, setReinstatingUserIndex] = useState(null);
+  const [downloadBusy, setDownloadBusy] = useState(null);
+  const [downloadError, setDownloadError] = useState(null);
 
   const {
     snapshot,
@@ -257,6 +264,71 @@ export default function AwsRequestStatusPage() {
               )}
               {snapshot.credentialsSent && (
                 <span className="ml-3 text-green-600">Access instructions sent</span>
+              )}
+            </div>
+          )}
+
+          {(snapshot?.spreadsheetAvailable || snapshot?.guideAvailable || snapshot?.credentialsSent) && (
+            <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
+              <h2 className="mb-1 text-sm font-semibold text-gray-900">Lab access files</h2>
+              <p className="mb-4 text-xs text-gray-500">
+                Same Excel user list and Word access/tags guide that are emailed when credentials are sent.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  disabled={Boolean(downloadBusy)}
+                  onClick={() => {
+                    setDownloadError(null);
+                    setDownloadBusy('excel');
+                    void downloadCredentialSpreadsheet(requestId)
+                      .catch((err) =>
+                        setDownloadError(err?.message || 'Failed to download Excel spreadsheet.')
+                      )
+                      .finally(() => setDownloadBusy(null));
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
+                >
+                  {downloadBusy === 'excel' ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileSpreadsheet className="h-4 w-4 text-green-700" />
+                  )}
+                  Download users (Excel)
+                  <Download className="h-3.5 w-3.5 text-gray-400" />
+                </button>
+                <button
+                  type="button"
+                  disabled={Boolean(downloadBusy)}
+                  onClick={() => {
+                    setDownloadError(null);
+                    setDownloadBusy('guide');
+                    void downloadLabAccessGuide(requestId)
+                      .catch((err) =>
+                        setDownloadError(err?.message || 'Failed to download access guide.')
+                      )
+                      .finally(() => setDownloadBusy(null));
+                  }}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50 disabled:opacity-60"
+                >
+                  {downloadBusy === 'guide' ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <FileText className="h-4 w-4 text-blue-700" />
+                  )}
+                  Download access guide (Word)
+                  <Download className="h-3.5 w-3.5 text-gray-400" />
+                </button>
+              </div>
+              {downloadError ? (
+                <p className="mt-3 text-xs text-red-600">{downloadError}</p>
+              ) : (
+                <p className="mt-3 text-xs text-gray-500">
+                  The Word guide explains Manage Portal login, AWS console access, and required tags
+                  (<code className="rounded bg-gray-100 px-1">racko:request</code>,{' '}
+                  <code className="rounded bg-gray-100 px-1">racko:user-index</code>,{' '}
+                  <code className="rounded bg-gray-100 px-1">racko:user</code>) step by step.
+                </p>
               )}
             </div>
           )}

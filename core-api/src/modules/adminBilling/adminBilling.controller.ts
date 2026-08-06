@@ -8,6 +8,15 @@ function success<T>(res: Response, message: string, data: T, statusCode = 200): 
   res.status(statusCode).json({ success: true, message, data });
 }
 
+function transactionFilters(req: Request): { projectId?: string; serviceKey?: string } {
+  const filters: { projectId?: string; serviceKey?: string } = {};
+  const projectId = String(req.query['projectId'] ?? '').trim();
+  const serviceKey = String(req.query['serviceKey'] ?? '').trim();
+  if (projectId) filters.projectId = projectId;
+  if (serviceKey) filters.serviceKey = serviceKey;
+  return filters;
+}
+
 export class AdminBillingController {
   // ── Pricing ───────────────────────────────────────────────────────────────
 
@@ -80,7 +89,12 @@ export class AdminBillingController {
       const { userId } = req.params as { userId: string };
       const page = Number(req.query['page'] ?? 1);
       const limit = Number(req.query['limit'] ?? 20);
-      const result = await adminBillingService.listTransactions(userId, page, limit);
+      const result = await adminBillingService.listTransactions(
+        userId,
+        page,
+        limit,
+        transactionFilters(req)
+      );
       success(res, 'Admin wallet transactions retrieved.', result);
     } catch (err) {
       next(err);
@@ -92,8 +106,24 @@ export class AdminBillingController {
       const authReq = req as AuthenticatedRequest;
       const page = Number(req.query['page'] ?? 1);
       const limit = Number(req.query['limit'] ?? 20);
-      const result = await adminBillingService.listTransactions(authReq.user.userId, page, limit);
+      const result = await adminBillingService.listTransactions(
+        authReq.user.userId,
+        page,
+        limit,
+        transactionFilters(req)
+      );
       success(res, 'Admin wallet transactions retrieved.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  async getMyTransaction(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const { txId } = req.params as { txId: string };
+      const transaction = await adminBillingService.getTransaction(authReq.user.userId, txId);
+      success(res, 'Admin wallet transaction retrieved.', { transaction });
     } catch (err) {
       next(err);
     }
@@ -123,16 +153,22 @@ export class AdminBillingController {
   async chargeCloudRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as AuthenticatedRequest;
-      const { amountUsd, relatedRequestId, provider } = req.body as {
+      const { amountUsd, relatedRequestId, provider, projectId, serviceKey } = req.body as {
         amountUsd: number;
         relatedRequestId?: string | null;
         provider?: 'azure' | 'aws';
+        projectId?: string;
+        serviceKey?: 'azure' | 'aws' | 'cloud-labs';
       };
       const result = await adminBillingService.chargeCloudRequest(
         authReq.user.userId,
         amountUsd,
         relatedRequestId ?? null,
-        provider === 'aws' ? 'aws' : 'azure'
+        provider === 'aws' ? 'aws' : 'azure',
+        {
+          projectId: projectId ?? null,
+          serviceKey: serviceKey ?? null,
+        }
       );
       success(res, 'Wallet charged for cloud lab request.', result);
     } catch (err) {

@@ -2,7 +2,6 @@
 
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
-import { Shield } from 'lucide-react';
 import {
   fetchAwsManagePortalData,
   loginAwsManagePortal,
@@ -153,7 +152,7 @@ function AwsManagePortalContent() {
   if (bootstrapping) {
     return (
       <div className="flex min-h-screen items-center justify-center bg-gray-50">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[#B91C1C]" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[var(--cloud-accent,#B91C1C)]" />
       </div>
     );
   }
@@ -162,38 +161,13 @@ function AwsManagePortalContent() {
 
   if (!showPortal) {
     return (
-      <div className="min-h-screen bg-gray-50">
-        <header className="border-b border-gray-200 bg-white">
-          <div className="mx-auto flex max-w-screen-xl items-center gap-3 px-4 py-4 sm:px-6 lg:px-8">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
-              <Shield className="h-5 w-5" />
-            </div>
-            <div>
-              <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Racko Cloud</p>
-              <h1 className="text-lg font-bold text-gray-900">Secure Access Portal</h1>
-            </div>
-          </div>
-        </header>
-
-        <main className="mx-auto max-w-screen-xl px-4 py-8 sm:px-6 lg:px-8">
-          <div className="space-y-8">
-            <div className="mx-auto max-w-lg text-center">
-              <h2 className="text-2xl font-bold text-gray-900">Manage Portal</h2>
-              <p className="mt-2 text-sm text-gray-500">
-                Admins sign in with the temporary credentials from your email. Provisioned users sign in
-                with your IAM username and temporary password.
-              </p>
-            </div>
-            <ManagePortalLogin
-              token={urlToken}
-              loading={loginLoading}
-              error={loginError}
-              sessionExpired={sessionExpired}
-              onSubmit={handleLogin}
-            />
-          </div>
-        </main>
-      </div>
+      <ManagePortalLogin
+        token={urlToken}
+        loading={loginLoading}
+        error={loginError}
+        sessionExpired={sessionExpired}
+        onSubmit={handleLogin}
+      />
     );
   }
 
@@ -203,6 +177,7 @@ function AwsManagePortalContent() {
         onRefresh={handleRefresh}
         onSignOut={handleLogout}
         refreshing={dataLoading}
+        title={portalTitle}
       />
 
       <main className="mx-auto max-w-screen-xl space-y-6 px-4 py-8 sm:px-6 lg:px-8">
@@ -241,7 +216,7 @@ function AwsManagePortalContent() {
         {isUser ? (
           dataLoading || !currentUser ? (
             <div className="flex items-center justify-center rounded-xl border border-gray-200 bg-white px-6 py-16 shadow-sm">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[#B91C1C]" />
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[var(--cloud-accent,#B91C1C)]" />
             </div>
           ) : (
             <AwsUserAccountView
@@ -272,7 +247,7 @@ function AwsManagePortalContent() {
 function ManageUsersFallback() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-gray-50">
-      <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[#B91C1C]" />
+      <div className="h-8 w-8 animate-spin rounded-full border-2 border-gray-200 border-t-[var(--cloud-accent,#B91C1C)]" />
     </div>
   );
 }

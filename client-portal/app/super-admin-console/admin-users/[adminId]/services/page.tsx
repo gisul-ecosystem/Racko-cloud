@@ -13,6 +13,7 @@ import {
   type AdminServiceCatalogItem,
   type AdminServiceKey,
 } from '@/lib/adminServicesApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 
 export default function AdminUserServicesPage() {
@@ -33,8 +34,8 @@ export default function AdminUserServicesPage() {
     setError(null);
     try {
       const data = await fetchAdminServicesForUser(adminId);
-      setServices(data.services);
-      setCatalog(data.catalog);
+      setServices(data.services.filter((s) => !isServiceHiddenFromUi(s.serviceKey)));
+      setCatalog(data.catalog.filter((item) => !isServiceHiddenFromUi(item.serviceKey)));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load services.');
     } finally {

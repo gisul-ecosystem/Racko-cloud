@@ -15,6 +15,7 @@ const {
   normalizeCleanupTime,
   normalizeCleanupTimezone
 } = require('../utils/resourceCleanupSchedule');
+const { convertUsdToInr, getUsdToInrRate } = require('../utils/usdToInr');
 
 async function createRequest({
   customerEmail,
@@ -39,12 +40,14 @@ async function createRequest({
   resourceCleanupAction,
   usageWindows,
   projectName,
+  projectId,
   idMode,
   microsoftLicenseSkuId,
   microsoftLicenseSkuPartNumber,
   convertedFromRequestId,
   purchaseToken,
   rackoUserId,
+  portalBaseUrl,
   labPermissionMode
 }) {
 
@@ -53,6 +56,11 @@ async function createRequest({
   try {
 
     await client.query('BEGIN');
+
+    await client.query(`
+      ALTER TABLE requests
+        ADD COLUMN IF NOT EXISTS project_id TEXT
+    `);
 
     assertProvisionableLocation(location);
 
@@ -235,8 +243,18 @@ async function createRequest({
       );
 
       if (filtered.length !== instancesToValidate.length) {
+        const allowedIds = new Set(
+          filtered.map((entry) => Number(entry.serviceId ?? entry.service_id))
+        );
+        const unavailable = instancesToValidate
+          .filter((entry) => !allowedIds.has(Number(entry.serviceId)))
+          .map((entry) => entry.option_name)
+          .filter(Boolean);
+
         throw new AppError(
-          'One or more selected instance sizes are not available in the chosen region. Pick another region or instance size.',
+          unavailable.length > 0
+            ? `Instance size(s) not available in ${normalizedLocation}: ${unavailable.join(', ')}. Choose another region or instance.`
+            : 'One or more selected instance sizes are not available in the chosen region. Pick another region or instance size.',
           400
         );
       }
@@ -299,6 +317,7 @@ async function createRequest({
     // ==========================
 
     const resolvedRackoUserId = String(rackoUserId || '').trim() || null;
+    const resolvedPortalBaseUrl = String(portalBaseUrl || '').trim().replace(/\/+$/, '') || null;
     const resolvedCleanupEnabled = cleanupEnabled === true;
     const resolvedCleanupIntervalHours =
       resolvedCleanupEnabled && Number.isInteger(cleanupIntervalHours)
@@ -308,6 +327,26 @@ async function createRequest({
       perUserBudgetUsd !== undefined && perUserBudgetUsd !== null && perUserBudgetUsd !== ''
         ? Number(perUserBudgetUsd)
         : null;
+    // UI collects USD; Azure Cost Management returns INR for this subscription.
+    // Store the INR amount so super-admin tracking and Azure budgets match spend.
+    const resolvedPerUserBudgetInr =
+      resolvedPerUserBudgetUsd != null &&
+      Number.isFinite(resolvedPerUserBudgetUsd) &&
+      resolvedPerUserBudgetUsd > 0
+        ? convertUsdToInr(resolvedPerUserBudgetUsd)
+        : null;
+
+    if (resolvedPerUserBudgetInr != null) {
+      console.log(
+        JSON.stringify({
+          event: 'per_user_budget_converted_usd_to_inr',
+          service: 'request-service',
+          budgetUsd: resolvedPerUserBudgetUsd,
+          budgetInr: resolvedPerUserBudgetInr,
+          usdToInrRate: getUsdToInrRate()
+        })
+      );
+    }
     const resolvedNextCleanupAt =
       resolvedCleanupEnabled && resolvedCleanupIntervalHours
         ? new Date(Date.now() + resolvedCleanupIntervalHours * 60 * 60 * 1000).toISOString()
@@ -345,6 +384,8 @@ async function createRequest({
       resourceCleanupAction === 'pause' ? 'pause' : 'delete';
     const resolvedProjectName =
       typeof projectName === 'string' && projectName.trim() ? projectName.trim() : null;
+    const resolvedProjectId =
+      typeof projectId === 'string' && projectId.trim() ? projectId.trim() : null;
     const resolvedIdMode =
       idMode === 'test_ids' || idMode === 'azure_ids' ? idMode : null;
     const resolvedMicrosoftLicenseSkuId =
@@ -374,108 +415,7 @@ async function createRequest({
       || 'Asia/Kolkata';
     const startsAt = parseServiceDateTime(startDate, labTimezone);
 
-    const request =
-      await client.query(
-        `
-        INSERT INTO requests(
-
-          customer_email,
-
-          account_count,
-
-          location,
-
-          expiry_date,
-
-          starts_at,
-
-          estimated_price,
-
-          status,
-
-          enable_daily_usage,
-
-          daily_limit_minutes,
-
-          usage_schedule,
-
-          costing_mode,
-
-          racko_user_id,
-
-          cleanup_enabled,
-
-          cleanup_interval_hours,
-
-          next_cleanup_at,
-
-          per_user_budget_usd,
-
-          resource_cleanup_enabled,
-
-          resource_cleanup_interval_hours,
-
-          resource_cleanup_next_run_at,
-
-          resource_cleanup_action,
-
-          resource_cleanup_time,
-
-          resource_cleanup_timezone,
-
-          project_name,
-
-          id_mode,
-
-          microsoft_license_sku_id,
-
-          microsoft_license_sku_part_number,
-
-          purchase_intent_due_at,
-
-          converted_from_request_id
-
-        )
-
-        VALUES(
-
-          $1,
-          $2,
-          $3,
-          $4,
-          $5,
-          $6,
-          $7,
-          $8,
-          $9,
-          $10,
-          $11,
-          $12,
-          $13,
-          $14,
-          $15,
-          $16,
-          $17,
-          $18,
-          $19,
-          $20,
-          $21,
-          $22,
-          $23,
-          $24,
-          $25,
-          $26,
-          $27,
-          $28
-
-        )
-
-        RETURNING
-        id,
-        estimated_price,
-        costing_mode
-        `,
-        [
+    const insertParams = [
 
           customerEmail,
 
@@ -507,7 +447,7 @@ async function createRequest({
 
           resolvedNextCleanupAt,
 
-          resolvedPerUserBudgetUsd,
+          resolvedPerUserBudgetInr,
 
           resolvedResourceCleanupEnabled,
 
@@ -523,6 +463,8 @@ async function createRequest({
 
           resolvedProjectName,
 
+          resolvedProjectId,
+
           resolvedIdMode,
 
           resolvedMicrosoftLicenseSkuId,
@@ -533,13 +475,83 @@ async function createRequest({
 
           resolvedConvertedFromRequestId
 
-        ]
-      );
+        ];
 
+    // Insert without portal_base_url so create works even if migration is not applied.
+    // Tenant email links still resolve via racko_user_id → core-api tenant domain.
+    const request = await client.query(
+      `
+        INSERT INTO requests(
+          customer_email,
+          account_count,
+          location,
+          expiry_date,
+          starts_at,
+          estimated_price,
+          status,
+          enable_daily_usage,
+          daily_limit_minutes,
+          usage_schedule,
+          costing_mode,
+          racko_user_id,
+          cleanup_enabled,
+          cleanup_interval_hours,
+          next_cleanup_at,
+          per_user_budget_usd,
+          resource_cleanup_enabled,
+          resource_cleanup_interval_hours,
+          resource_cleanup_next_run_at,
+          resource_cleanup_action,
+          resource_cleanup_time,
+          resource_cleanup_timezone,
+          project_name,
+          project_id,
+          id_mode,
+          microsoft_license_sku_id,
+          microsoft_license_sku_part_number,
+          purchase_intent_due_at,
+          converted_from_request_id
+        )
+        VALUES(
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
+          $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+          $21, $22, $23, $24, $25, $26, $27, $28, $29
+        )
+        RETURNING
+        id,
+        estimated_price,
+        costing_mode
+      `,
+      insertParams
+    );
 
+    const requestId = request.rows[0].id;
 
-    const requestId =
-      request.rows[0].id;
+    if (resolvedPortalBaseUrl) {
+      try {
+        await client.query('SAVEPOINT portal_base_url_update');
+        await client.query(
+          `
+            UPDATE requests
+            SET portal_base_url = $2
+            WHERE id = $1
+          `,
+          [requestId, resolvedPortalBaseUrl]
+        );
+        await client.query('RELEASE SAVEPOINT portal_base_url_update');
+      } catch (error) {
+        try {
+          await client.query('ROLLBACK TO SAVEPOINT portal_base_url_update');
+        } catch {
+          // ignore
+        }
+        const message = String(error?.message || '');
+        if (!message.includes('portal_base_url')) {
+          throw error;
+        }
+        // Column missing until migration — ignore; racko_user_id lookup covers emails.
+      }
+    }
 
     if (Array.isArray(usageWindows) && usageWindows.length > 0) {
       for (const window of usageWindows) {

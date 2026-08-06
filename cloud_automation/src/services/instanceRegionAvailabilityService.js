@@ -20,15 +20,18 @@ const regionsFromPriceMap = (priceByRegion) => {
 const getVmBackedRegions = async (service, optionName) => {
   const vmSize = normalizeVmSize(optionName);
 
-  return getRegionsSupportingVmSize(vmSize).catch((error) => {
+  try {
+    return await getRegionsSupportingVmSize(vmSize);
+  } catch (error) {
     logAzureEvent(LOG_SERVICE, 'warn', 'vm_region_lookup_failed', {
       serviceName: service?.name,
       optionName,
       vmSize,
       message: error?.message
     });
-    return new Set();
-  });
+    // null = unknown — caller keeps broader region candidates instead of failing the UI.
+    return null;
+  }
 };
 
 /**

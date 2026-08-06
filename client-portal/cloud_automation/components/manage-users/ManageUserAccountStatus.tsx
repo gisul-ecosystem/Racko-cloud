@@ -175,7 +175,7 @@ export function ManageUserAccountStatus({
           type="button"
           onClick={() => void handleConsoleLaunch()}
           disabled={launching}
-          className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-[color-mix(in_srgb,var(--cloud-accent,#B91C1C)_88%,black)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           {launching ? (
             <Loader2 className="h-4 w-4 animate-spin" />

@@ -6,17 +6,21 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ArrowLeft,
   Check,
+  ChevronDown,
   Cloud,
   DollarSign,
   FilePlus2,
   Loader2,
+  MapPin,
   Search,
   Server,
   Shield,
 } from 'lucide-react';
 import { ErrorState } from '../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../components/dashboard/LoadingSkeleton';
+import { ProjectSelect } from '../../components/console/ProjectSelect';
 import { ApiError } from '../../lib/apiClient';
+import { useIsTenantPortal } from '../../lib/portalMode';
 import { useAzureRoutes } from '../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../lib/cloudAccent';
 import { hexToRgba, tenantAccentButton } from '../../lib/tenantAccentStyles';
@@ -32,8 +36,10 @@ import {
   defaultStartDate,
   defaultTestIdsEndDate,
   defaultTestIdsStartDate,
+  formatLocationOptionLabel,
   isProjectDetailsComplete,
   isValidCleanupTime,
+  pickCheapestLocation,
   TEST_IDS_DEFAULTS,
   TEST_IDS_MAX_ACCOUNT_COUNT,
 } from '../../cloud_automation/utils/requestForm';
@@ -45,6 +51,7 @@ import type {
   UsageWindow,
 } from '../../cloud_automation/types/catalog';
 import { createRequestWithPricing, getServices } from '../../cloud_automation/api/client';
+import { useAvailableLocations } from '../../cloud_automation/hooks/useAvailableLocations';
 import { usePricingEstimate } from '../../cloud_automation/hooks/usePricingEstimate';
 import { formatCurrency } from '../../cloud_automation/utils/formatters';
 import { createLabEnrollment, listLabTemplates } from '../api/client';
@@ -139,6 +146,7 @@ export function LabsRequestWorkspace() {
   const routes = useAzureRoutes();
   const accent = useCloudAccentColor();
   const soft = hexToRgba(accent, 0.1);
+  const isTenantPortal = useIsTenantPortal();
 
   const [labs, setLabs] = useState<LabTemplate[]>([]);
   const [catalog, setCatalog] = useState<ServiceCatalogResponse | null>(null);
@@ -147,8 +155,11 @@ export function LabsRequestWorkspace() {
   const [labSearch, setLabSearch] = useState('');
   const [selectedLabId, setSelectedLabId] = useState<string | null>(null);
   const [selectedInstances, setSelectedInstances] = useState<string[]>([]);
+  const [location, setLocation] = useState('');
+  const [changeLocationOpen, setChangeLocationOpen] = useState(false);
 
   const [projectName, setProjectName] = useState('');
+  const [rackoProjectId, setRackoProjectId] = useState('');
   const [idMode, setIdMode] = useState<AzureIdMode | null>(null);
   const [costingMode, setCostingMode] = useState<CostingMode>('shared');
   const [perUserBudgetUsd, setPerUserBudgetUsd] = useState<number | undefined>(undefined);
@@ -205,17 +216,79 @@ export function LabsRequestWorkspace() {
 
   const provisionBundle = useMemo(() => {
     if (!selectedLab || !catalog || selectedInstances.length === 0) return null;
-    return buildLabProvisionBundle(selectedLab, catalog, selectedInstances);
-  }, [selectedLab, catalog, selectedInstances]);
+    return buildLabProvisionBundle(selectedLab, catalog, selectedInstances, location || null);
+  }, [selectedLab, catalog, selectedInstances, location]);
+
+  const locationServiceIds = provisionBundle?.serviceIds ?? [];
+  const locationSelectedInstances = provisionBundle?.selectedInstances ?? [];
+
+  const {
+    locations,
+    loading: locationsLoading,
+    error: locationsError,
+  } = useAvailableLocations(locationServiceIds, locationSelectedInstances);
+
+  const selectedLocationEntry = locations.find((entry) => entry.arm_region_name === location);
+  const cheapestLocationId = useMemo(() => pickCheapestLocation(locations), [locations]);
+  const isCheapestLocationSelected =
+    Boolean(location) && location === cheapestLocationId;
+  const locationSelectionKey = useMemo(
+    () =>
+      locationSelectedInstances
+        .map((entry) => `${entry.serviceId}:${entry.instanceOption}`)
+        .sort()
+        .join('|'),
+    [locationSelectedInstances]
+  );
+
+  useEffect(() => {
+    setSelectedInstances([]);
+    setLocation('');
+    setChangeLocationOpen(false);
+  }, [selectedLabId]);
+
+  useEffect(() => {
+    if (locations.length === 0) {
+      if (location) setLocation('');
+      return;
+    }
+
+    const stillValid = locations.some((entry) => entry.arm_region_name === location);
+    if (!stillValid) {
+      const preferred = String(selectedLab?.region || '')
+        .trim()
+        .toLowerCase();
+      if (preferred && locations.some((entry) => entry.arm_region_name === preferred)) {
+        setLocation(preferred);
+        return;
+      }
+      setLocation(pickCheapestLocation(locations));
+    }
+  }, [locations, location, selectedLab?.region]);
+
+  // When lab resources change, force region to cheapest/preferred among the new intersection.
+  useEffect(() => {
+    if (!locationSelectionKey || locations.length === 0) return;
+
+    const preferred = String(selectedLab?.region || '')
+      .trim()
+      .toLowerCase();
+    if (preferred && locations.some((entry) => entry.arm_region_name === preferred)) {
+      setLocation(preferred);
+      return;
+    }
+    setLocation(pickCheapestLocation(locations));
+    setChangeLocationOpen(false);
+  }, [locationSelectionKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pricingPayload = useMemo<PricingEstimatePayload | null>(() => {
     if (!provisionBundle || provisionBundle.serviceIds.length === 0) return null;
-    if (!startDate || !endDate || accountCount <= 0) return null;
+    if (!location || !startDate || !endDate || accountCount <= 0) return null;
 
     return {
       accountCount,
       serviceIds: provisionBundle.serviceIds,
-      location: provisionBundle.location,
+      location,
       startDate,
       endDate,
       selectedInstances: provisionBundle.selectedInstances,
@@ -225,6 +298,7 @@ export function LabsRequestWorkspace() {
     };
   }, [
     provisionBundle,
+    location,
     accountCount,
     startDate,
     endDate,
@@ -251,8 +325,9 @@ export function LabsRequestWorkspace() {
         : hoursEstimate.usesUsageWindows;
 
     const hourly =
-      selectedLab.cost.capacityHourlyCostUsd ??
+      (typeof pricing?.infraHourlyTotal === 'number' ? pricing.infraHourlyTotal : null) ??
       (typeof pricing?.baseHourlyPrice === 'number' ? pricing.baseHourlyPrice : null) ??
+      selectedLab.cost.capacityHourlyCostUsd ??
       (typeof pricing?.portalHourlyTotal === 'number' ? pricing.portalHourlyTotal : null);
 
     const apiTotal =
@@ -279,6 +354,8 @@ export function LabsRequestWorkspace() {
             : null;
 
     const currency = pricing?.currency || 'USD';
+    const hoursLabel = formatHoursLabel(billableHours);
+    const accountsLabel = `${accountCount} account${accountCount === 1 ? '' : 's'}`;
 
     return {
       billableHours,
@@ -289,18 +366,32 @@ export function LabsRequestWorkspace() {
       currency,
       pricingLoading,
       pricingError,
+      subtitle:
+        estimatedTotalUsd != null
+          ? `${hoursLabel} · ${accountsLabel}`
+          : billableHours > 0
+            ? hoursLabel
+            : 'Set dates to estimate',
       label:
         estimatedTotalUsd != null
-          ? `${formatCurrency(estimatedTotalUsd, currency)} · ${formatHoursLabel(billableHours)}`
+          ? `${formatCurrency(estimatedTotalUsd, currency)} · ${hoursLabel}`
           : billableHours > 0
-            ? formatHoursLabel(billableHours)
+            ? hoursLabel
             : 'Set dates to estimate',
+      regionLabel: selectedLocationEntry
+        ? selectedLocationEntry.display_location
+        : location || null,
     };
-  }, [selectedLab, hoursEstimate, pricing, pricingLoading, pricingError]);
-
-  useEffect(() => {
-    setSelectedInstances([]);
-  }, [selectedLabId]);
+  }, [
+    selectedLab,
+    hoursEstimate,
+    pricing,
+    pricingLoading,
+    pricingError,
+    accountCount,
+    location,
+    selectedLocationEntry,
+  ]);
 
   const filteredLabs = useMemo(() => {
     const q = labSearch.trim().toLowerCase();
@@ -322,12 +413,18 @@ export function LabsRequestWorkspace() {
   });
   const labSelected = Boolean(selectedLab);
   const instancesComplete = labSelected && selectedInstances.length > 0;
+  const locationComplete =
+    instancesComplete &&
+    Boolean(location) &&
+    !locationsLoading &&
+    locations.some((entry) => entry.arm_region_name === location);
   const emailComplete = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.trim());
 
   const formProgress = [
     { label: 'Details', done: detailsComplete },
     { label: 'Labs', done: labSelected },
     { label: 'Instances', done: instancesComplete },
+    { label: 'Region', done: locationComplete },
     { label: 'Accounts', done: emailComplete && accountCount > 0 },
   ];
 
@@ -383,6 +480,14 @@ export function LabsRequestWorkspace() {
     if (!detailsComplete) errors.push('Complete project details.');
     if (!selectedLab) errors.push('Select a lab.');
     if (selectedInstances.length === 0) errors.push('Select at least one instance/resource.');
+    if (!location) {
+      errors.push('Select an available deployment region for this lab.');
+    } else if (
+      locations.length > 0 &&
+      !locations.some((entry) => entry.arm_region_name === location)
+    ) {
+      errors.push('Selected region is not available for this lab. Choose another region.');
+    }
     if (!emailComplete) errors.push('Enter a valid customer email.');
     if (!Number.isInteger(accountCount) || accountCount <= 0) {
       errors.push('Account count must be a positive integer.');
@@ -410,7 +515,7 @@ export function LabsRequestWorkspace() {
       const bundle =
         provisionBundle && catalog
           ? provisionBundle
-          : buildLabProvisionBundle(selectedLab, serviceCatalog, selectedInstances);
+          : buildLabProvisionBundle(selectedLab, serviceCatalog, selectedInstances, location);
 
       if (bundle.serviceIds.length === 0) {
         throw new Error(
@@ -425,7 +530,7 @@ export function LabsRequestWorkspace() {
       const response = await createRequestWithPricing({
         customerEmail: customerEmail.trim(),
         accountCount,
-        location: bundle.location,
+        location,
         startDate,
         endDate,
         serviceIds: bundle.serviceIds,
@@ -433,6 +538,7 @@ export function LabsRequestWorkspace() {
         selectedInstances: bundle.selectedInstances,
         costingMode,
         projectName: labProjectName,
+        projectId: rackoProjectId || undefined,
         idMode: idMode ?? undefined,
         labPermissionMode: bundle.labPermissionMode,
         resourceCleanupEnabled,
@@ -609,6 +715,15 @@ export function LabsRequestWorkspace() {
                     soft={soft}
                   />
                   <div className="mt-5 grid gap-4 sm:grid-cols-2">
+                    <div className="sm:col-span-2">
+                      <ProjectSelect
+                        serviceKey="cloud-labs"
+                        value={rackoProjectId}
+                        onChange={setRackoProjectId}
+                        portal={isTenantPortal ? 'tenant' : 'org'}
+                        disabled={submitting}
+                      />
+                    </div>
                     <div className="sm:col-span-2">
                       <label className={labelClass} htmlFor="projectName">
                         Project name
@@ -1098,6 +1213,113 @@ export function LabsRequestWorkspace() {
                   <div className="p-6">
                     <SectionHeader
                       step={step++}
+                      title="Available location"
+                      description="Only regions where this lab’s services and instances are available. Cheapest region is selected by default."
+                      accent={accent}
+                      soft={soft}
+                    />
+                    {locationsError ? (
+                      <p className="mt-3 text-sm text-red-600">{locationsError}</p>
+                    ) : null}
+                    {!locationsLoading && !locationsError && locations.length === 0 ? (
+                      <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+                        No Azure regions support the selected lab resources. Choose a different
+                        instance configuration.
+                      </div>
+                    ) : (
+                      <div className="mt-5 space-y-3">
+                        <div className="flex flex-col gap-3 rounded-xl border border-gray-200 bg-gray-50/60 p-4 sm:flex-row sm:items-center sm:justify-between">
+                          <div className="min-w-0">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500">
+                              Selected region
+                            </p>
+                            {locationsLoading ? (
+                              <p className="mt-1 flex items-center gap-2 text-sm text-gray-500">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                Loading available regions…
+                              </p>
+                            ) : selectedLocationEntry ? (
+                              <>
+                                <p className="mt-1 truncate text-sm font-semibold text-gray-900">
+                                  <MapPin
+                                    className="mr-1 inline h-3.5 w-3.5"
+                                    style={{ color: accent }}
+                                  />
+                                  {selectedLocationEntry.display_location}
+                                  <span className="ml-1 font-normal text-gray-500">
+                                    ({selectedLocationEntry.arm_region_name})
+                                  </span>
+                                </p>
+                                {selectedLocationEntry.basePrice != null ? (
+                                  <p className="mt-0.5 text-xs text-emerald-700">
+                                    {isCheapestLocationSelected
+                                      ? `Cheapest available · from $${Number(selectedLocationEntry.basePrice).toFixed(3)}/hr`
+                                      : `From $${Number(selectedLocationEntry.basePrice).toFixed(3)}/hr`}
+                                  </p>
+                                ) : (
+                                  <p className="mt-0.5 text-xs text-gray-500">
+                                    {isCheapestLocationSelected
+                                      ? 'Auto-selected cheapest available region'
+                                      : 'Selected for this lab'}
+                                  </p>
+                                )}
+                              </>
+                            ) : (
+                              <p className="mt-1 text-sm text-gray-500">No region selected yet</p>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => setChangeLocationOpen((open) => !open)}
+                            disabled={locationsLoading || locations.length === 0}
+                            className={`inline-flex shrink-0 items-center justify-center rounded-lg border px-3.5 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                              changeLocationOpen
+                                ? 'border-[var(--cloud-accent,#B91C1C)] bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)]'
+                                : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                            }`}
+                          >
+                            {changeLocationOpen ? 'Hide locations' : 'Change location'}
+                          </button>
+                        </div>
+
+                        {changeLocationOpen ? (
+                          <div className="relative">
+                            <select
+                              className={`${inputClass} appearance-none pr-10`}
+                              value={location}
+                              onChange={(event) => {
+                                setLocation(event.target.value);
+                                setChangeLocationOpen(false);
+                              }}
+                              disabled={locationsLoading || locations.length === 0}
+                            >
+                              <option value="" disabled>
+                                {locationsLoading
+                                  ? 'Loading regions…'
+                                  : locations.length === 0
+                                    ? 'No regions available'
+                                    : 'Select a region'}
+                              </option>
+                              {locations.map((entry) => (
+                                <option key={entry.arm_region_name} value={entry.arm_region_name}>
+                                  {formatLocationOptionLabel(entry)}
+                                </option>
+                              ))}
+                            </select>
+                            <ChevronDown className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+                          </div>
+                        ) : null}
+                      </div>
+                    )}
+                  </div>
+                </section>
+              ) : null}
+
+              {instancesComplete ? (
+                <section className={sectionClass}>
+                  <div className="p-6">
+                    <SectionHeader
+                      step={step++}
                       title="Customer email"
                       description="Credentials and lab access details will be sent to this address."
                       accent={accent}
@@ -1153,11 +1375,7 @@ export function LabsRequestWorkspace() {
                             <p className="text-2xl font-bold" style={{ color: accent }}>
                               {formatCurrency(dynamicCost.estimatedTotalUsd, dynamicCost.currency)}
                             </p>
-                            <p className="mt-1 text-xs text-gray-500">
-                              Estimated total for {accountCount} account
-                              {accountCount === 1 ? '' : 's'} ·{' '}
-                              {formatHoursLabel(dynamicCost.billableHours)}
-                            </p>
+                            <p className="mt-1 text-xs text-gray-500">{dynamicCost.subtitle}</p>
                           </>
                         ) : (
                           <p className="text-lg font-semibold text-gray-700">
@@ -1170,10 +1388,18 @@ export function LabsRequestWorkspace() {
                       </div>
 
                       <div className="space-y-2 border-t border-gray-100 pt-3">
+                        {dynamicCost.regionLabel ? (
+                          <div className="flex justify-between gap-3">
+                            <span className="text-gray-500">Region</span>
+                            <span className="truncate font-medium text-right">
+                              {dynamicCost.regionLabel}
+                            </span>
+                          </div>
+                        ) : null}
                         {dynamicCost.hourly != null ? (
                           <div className="flex justify-between gap-3">
                             <span className="text-gray-500">
-                              {selectedLab.kind === 'fabric' ? 'Capacity / hr' : 'Base / hr'}
+                              {selectedLab.kind === 'fabric' ? 'Capacity / hr' : 'Infra / hr'}
                             </span>
                             <span className="font-medium">
                               {formatCurrency(dynamicCost.hourly, dynamicCost.currency)}
@@ -1208,7 +1434,8 @@ export function LabsRequestWorkspace() {
                         </div>
                         {dynamicCost.estimatedTotalUsd == null && !dynamicCost.pricingLoading ? (
                           <p className="text-xs text-gray-500">
-                            Select lab resources and dates to calculate a price estimate.
+                            Select lab resources, an available region, and dates to calculate a
+                            price estimate.
                           </p>
                         ) : null}
                         <div className="flex justify-between gap-3 border-t border-gray-100 pt-2">
@@ -1230,7 +1457,7 @@ export function LabsRequestWorkspace() {
                 <button
                   type="button"
                   onClick={handleSubmit}
-                  disabled={submitting}
+                  disabled={submitting || (instancesComplete && !locationComplete)}
                   className={`w-full ${RACKO_BTN_PRIMARY} py-3`}
                   style={tenantAccentButton(accent)}
                 >
@@ -1239,6 +1466,8 @@ export function LabsRequestWorkspace() {
                       <Loader2 className="h-4 w-4 animate-spin" />
                       Creating request…
                     </>
+                  ) : locationsLoading && instancesComplete ? (
+                    'Loading regions…'
                   ) : (
                     'Create request'
                   )}
@@ -1269,10 +1498,7 @@ export function LabsRequestWorkspace() {
                     </p>
                   )}
                   {dynamicCost.estimatedTotalUsd != null ? (
-                    <p className="mt-1 text-xs text-gray-500">
-                      {formatHoursLabel(dynamicCost.billableHours)} · {accountCount} account
-                      {accountCount === 1 ? '' : 's'}
-                    </p>
+                    <p className="mt-1 text-xs text-gray-500">{dynamicCost.subtitle}</p>
                   ) : dynamicCost.usesUsageWindows ? (
                     <p className="mt-1 text-xs text-gray-500">
                       Based on daily usage windows (of {formatHoursLabel(dynamicCost.calendarHours)}{' '}
@@ -1287,11 +1513,15 @@ export function LabsRequestWorkspace() {
               <button
                 type="button"
                 onClick={handleSubmit}
-                disabled={submitting}
+                disabled={submitting || (instancesComplete && !locationComplete)}
                 className={`w-full ${RACKO_BTN_PRIMARY} py-3`}
                 style={tenantAccentButton(accent)}
               >
-                {submitting ? 'Creating request…' : 'Create request'}
+                {submitting
+                  ? 'Creating request…'
+                  : locationsLoading && instancesComplete
+                    ? 'Loading regions…'
+                    : 'Create request'}
               </button>
               {submitError ? <p className="text-sm text-red-600">{submitError}</p> : null}
             </div>
