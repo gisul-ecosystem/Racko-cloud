@@ -321,7 +321,7 @@ export default function MyMachinesPage() {
           const m = machines.find((machine) => machine._id === f.machineId);
           return m?.name ?? f.machineId;
         });
-        addToast('warning', `${result.deleted.length} machine(s) deleted. Failed: ${failedNames.join(', ')}`);
+        addToast('error', `${result.deleted.length} deleted, ${result.failed.length} failed: ${failedNames.join(', ')}`);
       } else {
         addToast('success', `${result.deleted.length} machine(s) removed. Agents will uninstall within a few seconds.`);
       }
