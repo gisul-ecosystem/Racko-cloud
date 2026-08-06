@@ -22,7 +22,10 @@ export interface ExternalVMResponse {
   adminId?: string;
   tenantId?: string;
   assignedTo?: string | null;
+  /** @deprecated Use assignedTenantUserIds — kept for backward compatibility (first assignee). */
   assignedTenantUserId?: string | null;
+  /** Tenant end-users with access to this elastic server (multi-share). */
+  assignedTenantUserIds?: string[];
   accessSchedule?: {
     startDate: string | null;
     endDate: string | null;

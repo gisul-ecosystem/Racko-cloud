@@ -7,6 +7,7 @@ import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
+import { canAccessTenantHubTile, canAccessTenantService } from '@/lib/tenantServicePermissions';
 import { TENANT_CONSOLE, tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
@@ -87,8 +88,11 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
   const { isTenantAdmin, hasPermission } = useTenantRbac();
 
   const links = SHORTCUTS.filter((l) => {
-    if (l.serviceKey === 'billing') return hasPermission('wallet.read', 'wallet.topup');
-    return hasActiveService(l.serviceKey);
+    if (l.serviceKey === 'billing') {
+      return canAccessTenantHubTile('billing', hasPermission, isTenantAdmin);
+    }
+    if (!hasActiveService(l.serviceKey)) return false;
+    return canAccessTenantService(l.serviceKey, hasPermission, isTenantAdmin);
   });
 
   const showOverview = isTenantAdmin || hasPermission('overview.read');
