@@ -2,20 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Plus, Shield, Trash2, Users } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 import {
   createTenantRbacRole,
   deleteTenantOperator,
-  fetchMyTenantRbac,
   fetchTenantRbacCatalog,
   fetchTenantRbacPeople,
   fetchTenantRbacRoles,
   inviteTenantOperator,
   setTenantRbacUserRoles,
   updateTenantRbacRole,
+  emitTenantRbacChanged,
   type OrgRbacPermissionDef,
   type OrgRbacRole,
   type TenantRbacPerson,
@@ -24,13 +27,23 @@ import {
 type Tab = 'roles' | 'people';
 
 export default function TenantAccessControlPage() {
+  const router = useRouter();
+  const { isLoading: authLoading, isAuthenticated } = useTenantAuth();
+  const {
+    loading: rbacLoading,
+    isTenantAdmin,
+    hasPermission,
+    refresh: refreshRbac,
+  } = useTenantRbac();
+  const canAccessPage =
+    isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
+  const canWriteRoles = isTenantAdmin || hasPermission('rbac.roles.write');
+  const canAssign = isTenantAdmin || hasPermission('rbac.assign');
+
   const [tab, setTab] = useState<Tab>('roles');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [isTenantAdmin, setIsTenantAdmin] = useState(false);
-  const [canWriteRoles, setCanWriteRoles] = useState(false);
-  const [canAssign, setCanAssign] = useState(false);
 
   const [catalog, setCatalog] = useState<OrgRbacPermissionDef[]>([]);
   const [roles, setRoles] = useState<OrgRbacRole[]>([]);
@@ -69,17 +82,11 @@ export default function TenantAccessControlPage() {
     setLoading(true);
     setError(null);
     try {
-      const [me, perms, roleList, peopleList] = await Promise.all([
-        fetchMyTenantRbac(),
+      const [perms, roleList, peopleList] = await Promise.all([
         fetchTenantRbacCatalog(),
         fetchTenantRbacRoles(),
         fetchTenantRbacPeople(),
       ]);
-      setIsTenantAdmin(me.isTenantAdmin);
-      setCanWriteRoles(
-        me.isTenantAdmin || me.permissions.includes('rbac.roles.write')
-      );
-      setCanAssign(me.isTenantAdmin || me.permissions.includes('rbac.assign'));
       setCatalog(perms);
       setRoles(roleList);
       setPeople(peopleList);
@@ -93,6 +100,17 @@ export default function TenantAccessControlPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (authLoading || rbacLoading) return;
+    if (!isAuthenticated) {
+      router.replace('/console/login');
+      return;
+    }
+    if (!canAccessPage) {
+      router.replace(TENANT_CONSOLE);
+    }
+  }, [authLoading, rbacLoading, isAuthenticated, canAccessPage, router]);
 
   async function saveRoleForm(e: React.FormEvent) {
     e.preventDefault();
@@ -115,6 +133,8 @@ export default function TenantAccessControlPage() {
       setCreatingRole(false);
       setEditingRole(null);
       await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to save role.');
     } finally {
@@ -132,6 +152,8 @@ export default function TenantAccessControlPage() {
       setFlash(`Roles updated for ${assignPerson.email}.`);
       setAssignPerson(null);
       await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to assign roles.');
     } finally {
@@ -161,6 +183,8 @@ export default function TenantAccessControlPage() {
       setInvitePassword('');
       setInviteRoleIds([]);
       await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to invite operator.');
     } finally {
@@ -178,6 +202,8 @@ export default function TenantAccessControlPage() {
       if (assignPerson?._id === deleteTarget._id) setAssignPerson(null);
       setDeleteTarget(null);
       await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to delete operator.');
     } finally {
@@ -186,6 +212,14 @@ export default function TenantAccessControlPage() {
   }
 
   const showRoleForm = creatingRole || Boolean(editingRole);
+
+  if (authLoading || rbacLoading || !isAuthenticated || !canAccessPage) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <Loader2 className="h-7 w-7 animate-spin text-[#B91C1C]" />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-6 p-6 lg:p-8">

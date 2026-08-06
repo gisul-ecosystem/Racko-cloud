@@ -1,5 +1,14 @@
 import { tenantPortalRequest } from './tenantPortalApiClient';
 
+/** Fired after roles/assignments change so other tabs refresh effective permissions. */
+export const TENANT_RBAC_CHANGED_EVENT = 'racko:tenant_rbac_changed';
+
+export function emitTenantRbacChanged(): void {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new Event(TENANT_RBAC_CHANGED_EVENT));
+  }
+}
+
 export interface OrgRbacPermissionDef {
   key: string;
   label: string;

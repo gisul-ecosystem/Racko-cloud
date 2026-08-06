@@ -99,10 +99,11 @@ export async function getTenantExternalVMConsole(
   );
 }
 
-export async function fetchAvailableTenantExternalVMs(): Promise<IExternalVM[]> {
+export async function fetchAvailableTenantExternalVMs(userId?: string): Promise<IExternalVM[]> {
+  const qs = userId ? `?userId=${encodeURIComponent(userId)}` : '';
   const data = await unwrap(
     tenantPortalRequest<ApiEnvelope<{ externalVms: IExternalVM[]; total: number }>>(
-      '/api/v1/tenant-external-vms/assign/available'
+      `/api/v1/tenant-external-vms/assign/available${qs}`
     )
   );
   return data.externalVms;
@@ -130,7 +131,7 @@ export async function assignTenantExternalVMs(
   userId: string,
   externalVmIds: string[],
   accessSchedule?: import('./accessSchedule').AccessScheduleInput
-): Promise<{ assigned: number }> {
+): Promise<{ assigned: number; skipped?: number }> {
   const data = await unwrap(
     tenantPortalRequest<ApiEnvelope<{ assigned: number }>>('/api/v1/tenant-external-vms/assign', {
       method: 'POST',
@@ -191,8 +192,11 @@ export async function bulkAssignTenantExternalOneToOne(
   };
 }
 
-export async function unassignTenantExternalVM(id: string): Promise<void> {
-  await tenantPortalRequest(`/api/v1/tenant-external-vms/assign/${id}`, { method: 'DELETE' });
+export async function unassignTenantExternalVM(id: string, userId: string): Promise<void> {
+  await tenantPortalRequest(
+    `/api/v1/tenant-external-vms/assign/${id}?userId=${encodeURIComponent(userId)}`,
+    { method: 'DELETE' }
+  );
 }
 
 export async function updateTenantExternalVmSchedule(

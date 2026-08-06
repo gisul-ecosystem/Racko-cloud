@@ -33,13 +33,14 @@ type JobHandler func(job Job)
 // WSPoller connects to the platform via WebSocket and receives jobs in real-time.
 // It implements infinite reconnection with exponential backoff.
 type WSPoller struct {
-	cfg            *config.Config
-	agentID        string
-	handler        JobHandler
-	backoff        *backoffState
-	cancel         func() // called on uninstall to stop all goroutines cleanly
-	stopWatcher    func() // called before reset to pause filesystem tracking
-	restartWatcher func() // called after reset to resume filesystem tracking
+	cfg              *config.Config
+	agentID          string
+	handler          JobHandler
+	backoff          *backoffState
+	cancel           func() // called on uninstall to stop all goroutines cleanly
+	stopWatcher      func() // called before reset to pause filesystem tracking
+	restartWatcher   func() // called after reset to resume filesystem tracking
+	onTrackingUpdate func(enabled bool) // called when server sends tracking_update command
 }
 
 type backoffState struct {
@@ -48,14 +49,15 @@ type backoffState struct {
 }
 
 // NewWS creates a WebSocket poller.
-func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func(), stopWatcher func(), restartWatcher func()) *WSPoller {
+func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func(), stopWatcher func(), restartWatcher func(), onTrackingUpdate func(bool)) *WSPoller {
 	return &WSPoller{
-		cfg:            cfg,
-		agentID:        agentID,
-		handler:        handler,
-		cancel:         cancel,
-		stopWatcher:    stopWatcher,
-		restartWatcher: restartWatcher,
+		cfg:              cfg,
+		agentID:          agentID,
+		handler:          handler,
+		cancel:           cancel,
+		stopWatcher:      stopWatcher,
+		restartWatcher:   restartWatcher,
+		onTrackingUpdate: onTrackingUpdate,
 		backoff: &backoffState{
 			current: 5 * time.Second,
 			max:     60 * time.Second,
@@ -209,6 +211,18 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				log.Printf("[ws-poller] Received clone_replay sessionId=%s sourceMachineId=%s",
 					cloneMsg.SessionID, cloneMsg.SourceMachineID)
 				go p.runCloneReplay(cloneMsg.SessionID, cloneMsg.SourceMachineID, safeWrite)
+			} else if msg.Type == "tracking_update" {
+				var trackMsg struct {
+					Enabled bool `json:"enabled"`
+				}
+				if err := json.Unmarshal(msg.Payload, &trackMsg); err != nil {
+					log.Printf("[ws-poller] Malformed tracking_update payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received tracking_update enabled=%v", trackMsg.Enabled)
+				if p.onTrackingUpdate != nil {
+					go p.onTrackingUpdate(trackMsg.Enabled)
+				}
 			}
 		}
 	}()

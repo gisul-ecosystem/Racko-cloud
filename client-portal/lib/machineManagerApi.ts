@@ -25,6 +25,8 @@ export interface IMachine {
     ramGb?: number;
     diskGb?: number;
   };
+  trackingEnabled: boolean;
+  trackingEnabledAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -129,6 +131,22 @@ export async function bulkCreateMachines(machines: CreateMachineDto[]): Promise<
 
 export async function deleteMachine(id: string): Promise<void> {
   await apiRequest(`/api/v1/machines/${id}`, { method: 'DELETE' });
+}
+
+/**
+ * Enable or disable file tracking on one or more machines.
+ * When enabled, the agent starts the filesystem watcher and activity log.
+ * When disabled, the watcher stops — no more activity is recorded.
+ */
+export async function setMachineTracking(
+  machineIds: string[],
+  enabled: boolean
+): Promise<IMachine[]> {
+  const res = await apiRequest<ApiResponse<{ machines: IMachine[]; total: number }>>(
+    '/api/v1/machines/tracking',
+    { method: 'PATCH', body: JSON.stringify({ machineIds, enabled }) }
+  );
+  return res.data.machines;
 }
 
 export async function execCommand(

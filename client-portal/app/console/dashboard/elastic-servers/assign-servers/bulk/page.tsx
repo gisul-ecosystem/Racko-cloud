@@ -238,7 +238,7 @@ export default function TenantElasticBulkAssignPage() {
             {loading ? (
               <Loader2 className="w-6 h-6 animate-spin" style={{ color: accentColor }} />
             ) : servers.length === 0 ? (
-              <p className="text-sm text-gray-500">No unassigned servers available.</p>
+              <p className="text-sm text-gray-500">No unassigned servers available for this user.</p>
             ) : (
               <>
                 {servers.length > BULK_ASSIGN_MAX ? (
