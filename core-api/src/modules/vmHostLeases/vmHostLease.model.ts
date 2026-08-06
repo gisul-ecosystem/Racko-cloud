@@ -8,6 +8,8 @@ export interface IVmHostLease extends Document {
   invoiceDate: Date;
   dueDate: Date;
   assignedTo: string;
+  clientAssignmentStartDate: Date | null;
+  clientAssignmentEndDate: Date | null;
   vmUsername: string;
   vmPassword: string;
   /** Due-date this lease was last warned for (prevents duplicate reminder emails). */
@@ -27,6 +29,8 @@ const vmHostLeaseSchema = new Schema<IVmHostLease>(
     invoiceDate: { type: Date, required: false, default: () => new Date(), index: true },
     dueDate: { type: Date, required: true, index: true },
     assignedTo: { type: String, required: false, default: 'N/A', trim: true, index: true },
+    clientAssignmentStartDate: { type: Date, default: null, index: true },
+    clientAssignmentEndDate: { type: Date, default: null, index: true },
     vmUsername: { type: String, required: false, default: 'N/A', trim: true },
     vmPassword: { type: String, required: true },
     expiryWarningFor: { type: Date, default: null },
@@ -50,6 +54,7 @@ vmHostLeaseSchema.index({ deleted: 1, dueDate: 1 });
 vmHostLeaseSchema.index({ ipAddress: 1, deleted: 1 });
 vmHostLeaseSchema.index({ provider: 1, deleted: 1 });
 vmHostLeaseSchema.index({ assignedTo: 1, deleted: 1 });
+vmHostLeaseSchema.index({ clientAssignmentStartDate: 1, clientAssignmentEndDate: 1 });
 vmHostLeaseSchema.index({ ipAddress: 'text', provider: 'text', assignedTo: 'text' });
 
 export const VmHostLeaseModel = mongoose.model<IVmHostLease>('VmHostLease', vmHostLeaseSchema);
