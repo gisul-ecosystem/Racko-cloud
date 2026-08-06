@@ -23,6 +23,7 @@ interface CreateRequestSubmitBarProps {
   usdToInrRate: number;
   walletLoading?: boolean;
   insufficientBalance?: boolean;
+  labsMode?: boolean;
 }
 
 export function CreateRequestSubmitBar({
@@ -38,6 +39,7 @@ export function CreateRequestSubmitBar({
   usdToInrRate,
   walletLoading = false,
   insufficientBalance = false,
+  labsMode = false,
 }: CreateRequestSubmitBarProps) {
   const isTenantPortal = useIsTenantPortal();
   const accent = useCloudAccentColor();
@@ -81,12 +83,14 @@ export function CreateRequestSubmitBar({
             </p>
             <h2 className="mt-1 text-lg font-semibold text-gray-900">Review &amp; submit</h2>
             <p className="mt-1 text-sm text-gray-500">
-              Estimated cost is converted to INR and deducted from your wallet when you create
-              the request.
+              {labsMode
+                ? 'Confirm the lab details, then create the Azure Labs request.'
+                : 'Estimated cost is converted to INR and deducted from your wallet when you create the request.'}
             </p>
           </div>
         )}
 
+        {!labsMode ? (
         <div
           className={`rounded-xl border p-4 ${
             insufficientBalance || walletUnavailable
@@ -164,8 +168,9 @@ export function CreateRequestSubmitBar({
             ) : null}
           </div>
         </div>
+        ) : null}
 
-        {walletUnavailable ? (
+        {!labsMode && walletUnavailable ? (
           <div className="mt-4 rounded-xl border border-red-200 bg-white p-4">
             <div className="flex items-start gap-3">
               <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
@@ -183,7 +188,7 @@ export function CreateRequestSubmitBar({
           </div>
         ) : null}
 
-        {insufficientBalance ? (
+        {!labsMode && insufficientBalance ? (
           <div className="mt-4 rounded-xl border border-red-200 bg-white p-4">
             <div className="flex items-start gap-3">
               <AlertCircle className="mt-0.5 h-5 w-5 shrink-0 text-red-600" />
@@ -212,7 +217,7 @@ export function CreateRequestSubmitBar({
         ) : null}
 
         <div className={`mt-4 ${compact ? '' : 'sm:flex sm:items-end sm:justify-between sm:gap-4'}`}>
-          {!compact && hasEstimate ? (
+          {!labsMode && !compact && hasEstimate ? (
             <div className="mb-4 min-w-0 flex-1 sm:mb-0">
               <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
                 Estimated total
@@ -225,7 +230,7 @@ export function CreateRequestSubmitBar({
                 ≈ {formatInr(estimatedInr)} deducted on create
               </p>
             </div>
-          ) : !compact ? (
+          ) : !labsMode && !compact ? (
             <div className="mb-4 min-w-0 flex-1 sm:mb-0">
               <p className="text-xs font-medium uppercase tracking-wide text-gray-500">
                 Estimated total
@@ -240,9 +245,10 @@ export function CreateRequestSubmitBar({
             {submitError ? (
               <p className="mb-3 text-sm text-red-600">
                 {submitError}{' '}
-                {(walletUnavailable ||
-                  insufficientBalance ||
-                  /wallet|balance/i.test(submitError)) && (
+                {!labsMode &&
+                  (walletUnavailable ||
+                    insufficientBalance ||
+                    /wallet|balance/i.test(submitError)) && (
                   <Link
                     href={billingHref}
                     className="font-semibold underline underline-offset-2 hover:opacity-80"
@@ -258,10 +264,8 @@ export function CreateRequestSubmitBar({
               onClick={onSubmit}
               disabled={
                 submitting ||
-                insufficientBalance ||
-                walletUnavailable ||
-                !hasEstimate ||
-                walletLoading
+                (!labsMode &&
+                  (insufficientBalance || walletUnavailable || !hasEstimate || walletLoading))
               }
               className={`w-full ${RACKO_BTN_PRIMARY} py-3`}
             >
@@ -270,15 +274,15 @@ export function CreateRequestSubmitBar({
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Creating request…
                 </>
-              ) : walletUnavailable ? (
+              ) : !labsMode && walletUnavailable ? (
                 'Wallet unavailable'
-              ) : insufficientBalance ? (
+              ) : !labsMode && insufficientBalance ? (
                 'Insufficient balance'
               ) : (
                 'Create request'
               )}
             </button>
-            {insufficientBalance || walletUnavailable ? (
+            {!labsMode && (insufficientBalance || walletUnavailable) ? (
               <Link
                 href={billingHref}
                 className={`mt-2 w-full ${RACKO_BTN_SECONDARY} justify-center`}

@@ -112,8 +112,9 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 		log.Printf("[agent] Registered with agentId=%s", agentID)
 
 		// First registration — capture baseline snapshot now.
-		// This runs synchronously before the watcher starts so the baseline
-		// file is always present before we begin tracking changes.
+		// Baseline is captured regardless of tracking state so it is ready
+		// the moment the admin enables tracking. The watcher itself won't
+		// start until tracking is enabled via heartbeat or WS command.
 		log.Println("[agent] First run — capturing baseline snapshot...")
 		if err := tracker.CaptureAndUpload(agentID, cfg); err != nil {
 			log.Printf("[agent] WARNING: baseline capture failed: %v (continuing)", err)
@@ -146,44 +147,59 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 		}
 	}()
 
-	go heartbeat.Start(cfg, agentID, cancelDone, cancel)
+	// NOTE: watcher does NOT start here. It starts only when tracking is enabled
+	// by the admin via the platform. The heartbeat and WS tracking_update command
+	// control whether the watcher runs. watcherDone is nil until tracking is enabled.
+	var watcherDone chan struct{}
 
-	// Start filesystem + registry watcher — tracks all changes after baseline.
-	// Load baseline from disk for diffing (nil if not yet captured — watcher
-	// still runs but won't skip unchanged files).
-	baseline, _ := tracker.LoadLocal()
-	wtr := tracker.NewWatcher(agentID, cfg, baseline)
-
-	// watcherDone is the channel that stops the watcher goroutine.
-	// We keep a reference so reset can stop the watcher before running the
-	// cleanup script (prevents 300+ fake file_delete events polluting the log)
-	// and restart it fresh after reset completes.
-	watcherDone := make(chan struct{})
-	go wtr.Start(watcherDone)
-
-	// stopWatcher stops the current watcher and starts a fresh one.
-	// Called by the poller around the reset script execution.
+	// stopWatcher stops the current watcher if it is running.
 	stopWatcher := func() {
+		if watcherDone == nil {
+			return // already stopped
+		}
 		select {
 		case <-watcherDone:
-			// already stopped
+			// already closed
 		default:
 			close(watcherDone)
 		}
-		log.Println("[agent] Watcher stopped for reset")
+		watcherDone = nil
+		log.Println("[agent] Watcher stopped")
 	}
 
 	restartWatcher := func() {
+		// Stop any existing watcher first
+		stopWatcher()
 		watcherDone = make(chan struct{})
 		baseline2, _ := tracker.LoadLocal()
 		wtr2 := tracker.NewWatcher(agentID, cfg, baseline2)
 		go wtr2.Start(watcherDone)
-		log.Println("[agent] Watcher restarted after reset")
+		log.Println("[agent] Watcher started")
 	}
+
+	// heartbeat.Start must come after stopWatcher/restartWatcher are defined
+	// so the tracking callback can reference them.
+	go heartbeat.Start(cfg, agentID, cancelDone, cancel, func(enabled bool) {
+		if enabled {
+			log.Println("[agent] Heartbeat: tracking enabled by server — starting watcher")
+			restartWatcher()
+		} else {
+			log.Println("[agent] Heartbeat: tracking disabled by server — stopping watcher")
+			stopWatcher()
+		}
+	})
 
 	rep := reporter.New(cfg)
 	exec := executor.New(agentID, cfg, rep)
-	p := poller.NewWS(cfg, agentID, exec.Handle, cancel, stopWatcher, restartWatcher)
+	p := poller.NewWS(cfg, agentID, exec.Handle, cancel, stopWatcher, restartWatcher, func(enabled bool) {
+		if enabled {
+			log.Println("[agent] WS: tracking enabled by server — starting watcher")
+			restartWatcher()
+		} else {
+			log.Println("[agent] WS: tracking disabled by server — stopping watcher")
+			stopWatcher()
+		}
+	})
 	p.Start(cancelDone)
 
 	log.Println("[agent] Stopped.")

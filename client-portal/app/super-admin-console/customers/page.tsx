@@ -651,6 +651,7 @@ function OrganizationRequestDetailModal({
             <DetailField label="Company name" value={request.companyName} />
             <DetailField label="Company website" value={request.companyWebsite} />
             <DetailField label="Phone" value={request.phone} />
+            <DetailField label="Office number" value={request.officeNumber} />
             <DetailField label="Designation" value={request.designation} />
             <DetailField label="Company size" value={request.companySize} />
             <DetailField label="Tax / registration ID" value={request.taxId} />

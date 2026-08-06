@@ -18,6 +18,14 @@ function success<T>(res: Response, message: string, data?: T, statusCode = 200):
   });
 }
 
+function tenantAuthFail(res: Response, error: TenantAuthError): void {
+  res.status(error.statusCode).json({
+    success: false,
+    message: error.message,
+    ...(error.code ? { code: error.code } : {}),
+  });
+}
+
 export class TenantAuthController {
   async login(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -43,9 +51,46 @@ export class TenantAuthController {
         return;
       }
       if (error instanceof TenantAuthError) {
-        res.status(error.statusCode).json({ success: false, message: error.message });
+        tenantAuthFail(res, error);
         return;
       }
+      next(error);
+    }
+  }
+
+  async verifyEmail(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const tenantId = getTenantIdFromHeader(req);
+      if (!tenantId) {
+        res.status(401).json({ success: false, message: 'TENANT_NOT_FOUND' });
+        return;
+      }
+
+      const result = await tenantAuthService.verifyEmail(tenantId, req.body);
+      success(res, result.message, {
+        requiresPasswordSetup: result.requiresPasswordSetup,
+        ...(result.resetToken ? { resetToken: result.resetToken } : {}),
+      });
+    } catch (error) {
+      if (error instanceof TenantAuthError) {
+        tenantAuthFail(res, error);
+        return;
+      }
+      next(error);
+    }
+  }
+
+  async resendVerification(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const tenantId = getTenantIdFromHeader(req);
+      if (!tenantId) {
+        res.status(401).json({ success: false, message: 'TENANT_NOT_FOUND' });
+        return;
+      }
+
+      await tenantAuthService.resendVerification(tenantId, req.body);
+      success(res, 'If an account needs verification, a new link has been sent.', {});
+    } catch (error) {
       next(error);
     }
   }
@@ -90,7 +135,7 @@ export class TenantAuthController {
       success(res, 'Password reset successful.', {});
     } catch (error) {
       if (error instanceof TenantAuthError) {
-        res.status(error.statusCode).json({ success: false, message: error.message });
+        tenantAuthFail(res, error);
         return;
       }
       next(error);

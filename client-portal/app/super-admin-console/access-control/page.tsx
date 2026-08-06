@@ -2,16 +2,18 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, Plus, Shield, Users } from 'lucide-react';
+import { ArrowLeft, Loader2, Plus, Shield, Trash2, Users } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   createRbacRole,
   createStaffUser,
+  deleteStaffUser,
   fetchRbacPeople,
   fetchRbacPermissionCatalog,
   fetchRbacRoles,
   setRbacUserRoles,
   updateRbacRole,
+  PROMOTE_EXISTING_USER_CODE,
   type RbacPermissionDef,
   type RbacPerson,
   type RbacRole,
@@ -46,6 +48,8 @@ export default function AccessControlPage() {
   const [staffTempPassword, setStaffTempPassword] = useState('');
   const [staffRoleIds, setStaffRoleIds] = useState<string[]>([]);
   const [savingStaff, setSavingStaff] = useState(false);
+  const [promotePrompt, setPromotePrompt] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const groups = useMemo(() => {
     const map = new Map<string, RbacPermissionDef[]>();
@@ -165,28 +169,68 @@ export default function AccessControlPage() {
     }
   }
 
-  async function saveStaff(e: React.FormEvent) {
-    e.preventDefault();
+  async function handleDeleteStaff(person: RbacPerson) {
+    const ok = window.confirm(
+      `Delete staff account ${person.email}?\n\nThis removes their console access and cannot be undone. You can invite the same email again later.`
+    );
+    if (!ok) return;
+
+    setDeletingId(person._id);
+    setError(null);
+    setFlash(null);
+    try {
+      await deleteStaffUser(person._id);
+      if (assignPerson?._id === person._id) setAssignPerson(null);
+      setFlash(`Deleted ${person.email}.`);
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete staff user.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
+  function resetStaffForm() {
+    setShowCreateStaff(false);
+    setStaffEmail('');
+    setStaffTempPassword('');
+    setStaffRoleIds([]);
+    setPromotePrompt(null);
+  }
+
+  async function submitStaff(promoteExisting: boolean) {
     setSavingStaff(true);
     setError(null);
     try {
       await createStaffUser({
         email: staffEmail,
-        tempPassword: staffTempPassword,
+        ...(promoteExisting ? {} : { tempPassword: staffTempPassword }),
         roleIds: staffRoleIds,
+        ...(promoteExisting ? { promoteExisting: true } : {}),
       });
-      setFlash('Staff invite sent.');
-      setShowCreateStaff(false);
-      setStaffEmail('');
-      setStaffTempPassword('');
-      setStaffRoleIds([]);
+      setFlash(
+        promoteExisting
+          ? `${staffEmail} now has staff console access.`
+          : 'Staff invite sent.'
+      );
+      resetStaffForm();
       setTab('people');
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to send staff invite.');
+      if (err instanceof ApiError && err.code === PROMOTE_EXISTING_USER_CODE) {
+        setPromotePrompt(err.message);
+      } else {
+        setError(err instanceof ApiError ? err.message : 'Failed to send staff invite.');
+      }
     } finally {
       setSavingStaff(false);
     }
+  }
+
+  async function saveStaff(e: React.FormEvent) {
+    e.preventDefault();
+    setPromotePrompt(null);
+    await submitStaff(false);
   }
 
   const showRoleForm = creatingRole || Boolean(editingRole);
@@ -446,6 +490,34 @@ export default function AccessControlPage() {
                     </label>
                   ))}
               </div>
+              {promotePrompt ? (
+                <div className="space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <p className="text-sm font-semibold text-gray-900">{promotePrompt}</p>
+                  <p className="text-xs text-gray-600">
+                    Promoting keeps their existing password and email verification, but replaces
+                    their current portal access with staff console access. No invite email is sent.
+                  </p>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    <button
+                      type="button"
+                      disabled={savingStaff}
+                      onClick={() => void submitStaff(true)}
+                      className="inline-flex items-center gap-2 rounded-lg bg-amber-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                    >
+                      {savingStaff ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                      Promote to staff
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setPromotePrompt(null)}
+                      className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm"
+                    >
+                      Use a different email
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
               <div className="flex gap-2">
                 <button
                   type="submit"
@@ -457,7 +529,7 @@ export default function AccessControlPage() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setShowCreateStaff(false)}
+                  onClick={resetStaffForm}
                   className="rounded-lg border border-gray-200 px-4 py-2 text-sm"
                 >
                   Cancel
@@ -541,13 +613,28 @@ export default function AccessControlPage() {
                     </td>
                     <td className="px-4 py-3 text-right">
                       {person.role === 'staff' ? (
-                        <button
-                          type="button"
-                          onClick={() => openAssign(person)}
-                          className="text-xs font-semibold text-[#B91C1C]"
-                        >
-                          Assign roles
-                        </button>
+                        <div className="inline-flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => openAssign(person)}
+                            className="text-xs font-semibold text-[#B91C1C]"
+                          >
+                            Assign roles
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingId === person._id}
+                            onClick={() => void handleDeleteStaff(person)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 disabled:opacity-50"
+                          >
+                            {deletingId === person._id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                            Delete
+                          </button>
+                        </div>
                       ) : (
                         <span className="text-xs text-gray-400">Full access</span>
                       )}

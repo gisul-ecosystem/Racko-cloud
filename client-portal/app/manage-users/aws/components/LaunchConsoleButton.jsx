@@ -47,7 +47,7 @@ export default function LaunchConsoleButton({
       type="button"
       onClick={handleLaunch}
       disabled={loading || blocked}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:border-[#B91C1C]/30 hover:bg-red-50 hover:text-[#B91C1C] disabled:cursor-not-allowed disabled:opacity-50"
+      className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:border-[var(--cloud-accent,#B91C1C)]/30 hover:bg-[var(--cloud-accent-soft,rgba(185,28,28,0.1))] hover:text-[var(--cloud-accent,#B91C1C)] disabled:cursor-not-allowed disabled:opacity-50"
       title={
         servicePeriodBlocked
           ? servicePeriodMessage || 'Lab access is not available yet'

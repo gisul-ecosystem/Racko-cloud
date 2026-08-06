@@ -7,25 +7,29 @@ import {
   BookOpen,
   Boxes,
   Cloud,
+  FlaskConical,
   FolderKanban,
-  Globe,
   HardDrive,
   Loader2,
   Monitor,
   PlusCircle,
   Server,
+  Shield,
   Wallet,
 } from 'lucide-react';
 import { TenantRecentResources } from '@/components/tenant/TenantRecentResources';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
+import { canAccessTenantHubTile } from '@/lib/tenantServicePermissions';
 import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
 const SERVICE_TILES: Array<{
-  serviceKey: TenantServiceKey | 'billing' | 'projects';
+  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control';
   name: string;
   href: string;
   description: string;
@@ -74,6 +78,13 @@ const SERVICE_TILES: Array<{
     description: 'Connect to external servers from any provider via secure browser console',
   },
   {
+    serviceKey: 'cloud-labs',
+    name: 'Cloud Labs',
+    href: tenantConsole.cloudLabs,
+    icon: FlaskConical,
+    description: 'Hands-on lab environments — Azure Labs first, more clouds next.',
+  },
+  {
     serviceKey: 'azure',
     name: 'Azure Services',
     href: tenantConsole.azure,
@@ -86,13 +97,6 @@ const SERVICE_TILES: Array<{
     href: tenantConsole.aws,
     icon: Server,
     description: 'AWS access management, provisioning, and lab environments.',
-  },
-  {
-    serviceKey: 'gcp',
-    name: 'GCP Services',
-    href: tenantConsole.gcp,
-    icon: Globe,
-    description: 'Google Cloud access management, provisioning, and lab environments.',
   },
   {
     serviceKey: 'docs',
@@ -108,6 +112,13 @@ const SERVICE_TILES: Array<{
     icon: Monitor,
     description: 'Install and manage software on any machine',
   },
+  {
+    serviceKey: 'access-control',
+    name: 'Access control',
+    href: tenantConsole.accessControl,
+    icon: Shield,
+    description: 'Manage roles, operators, and permissions for this workspace',
+  },
 ];
 
 export default function TenantConsolePage() {
@@ -115,20 +126,33 @@ export default function TenantConsolePage() {
   const { tenantUser } = useTenantAuth();
   const { accentColor, portalName } = useTenantBranding();
   const { loading, hasActiveService } = useTenantServices();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { loading: rbacLoading, isConsoleStaff, hasPermission, isTenantAdmin } = useTenantRbac();
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_user') {
+    if (rbacLoading) return;
+    // Elastic end-users only — console operators stay on the hub.
+    if (tenantUser?.role === 'tenant_user' && !isConsoleStaff) {
       router.replace(tenantVps.vms);
     }
-  }, [router, tenantUser?.role]);
+  }, [router, tenantUser?.role, isConsoleStaff, rbacLoading]);
 
   const tiles = SERVICE_TILES.filter((tile) => {
-    if (tile.serviceKey === 'billing' || tile.serviceKey === 'projects') return isAdmin;
-    return hasActiveService(tile.serviceKey);
+    if (isServiceHiddenFromUi(tile.serviceKey)) return false;
+    if (
+      tile.serviceKey !== 'billing' &&
+      tile.serviceKey !== 'projects' &&
+      tile.serviceKey !== 'access-control' &&
+      !hasActiveService(tile.serviceKey)
+    ) {
+      return false;
+    }
+    if (tile.serviceKey === 'access-control') {
+      return isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
+    }
+    return canAccessTenantHubTile(tile.serviceKey, hasPermission, isTenantAdmin);
   });
 
-  if (loading || tenantUser?.role === 'tenant_user') {
+  if (loading || rbacLoading || (tenantUser?.role === 'tenant_user' && !isConsoleStaff)) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
         <Loader2 className="h-7 w-7 animate-spin" style={{ color: accentColor }} />

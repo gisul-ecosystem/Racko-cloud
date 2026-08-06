@@ -8,12 +8,14 @@
     "start": "node dist/server.js",
     "dev": "node --watch -r ts-node/register src/server.ts",
     "seed": "ts-node src/scripts/seedSuperAdmin.ts",
+    "migrate:vm-leases": "ts-node src/scripts/migrateVmHostLeases.ts",
+    "delete:vm-leases": "ts-node src/scripts/deleteVmHostLease.ts",
     "typecheck": "tsc --noEmit",
     "test": "ts-node --transpile-only src/modules/vm/helpers/hypervGuestOutput.test.ts && ts-node --transpile-only src/modules/vmCatalog/catalogVmSerializer.test.ts"
   },
   "dependencies": {
-    "@aws-sdk/client-s3": "^3.621.0",
-    "@aws-sdk/s3-request-presigner": "^3.621.0",
+    "@aws-sdk/client-s3": "^3.1103.0",
+    "@aws-sdk/s3-request-presigner": "^3.1103.0",
     "argon2": "^0.31.2",
     "axios": "^1.18.1",
     "axios-cookiejar-support": "^7.0.0",
@@ -38,6 +40,7 @@
     "uuid": "^9.0.1",
     "winston": "^3.11.0",
     "ws": "^8.16.0",
+    "xlsx": "^0.18.5",
     "zod": "^3.22.4"
   },
   "devDependencies": {

@@ -32,6 +32,9 @@ export interface DedicatedServerResponse {
   tenantId?: string;
   tenantUserId?: string;
   adminEmail?: string;
+  projectId?: string;
+  projectName?: string;
+  clientName?: string;
   planId: string;
   planName: string;
   specs: {

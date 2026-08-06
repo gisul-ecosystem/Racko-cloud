@@ -9,15 +9,33 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
   deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStream,
+  setMachineTracking, bulkDeleteMachines,
   type IMachine, type MachineStatus, type IJob, type JobStatus,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
 import { useJobStream } from '../../../../hooks/useJobStream';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X, Activity,
 } from 'lucide-react';
 import Link from 'next/link';
+
+// ─── Tracking badge ────────────────────────────────────────────────────────────
+function TrackingBadge({ enabled }: { enabled: boolean }) {
+  if (enabled) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
+        <Activity className="h-3 w-3" />
+        Active
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-400">
+      Off
+    </span>
+  );
+}
 
 // ─── Status badge ──────────────────────────────────────────────────────────────
 function MachineStatusBadge({ status }: { status: MachineStatus }) {
@@ -237,8 +255,15 @@ export default function MyMachinesPage() {
   const [pendingDelete, setPendingDelete] = useState<IMachine | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
-  // Bulk selection (only online machines can be reset)
+  // Bulk delete state
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+
+  // Bulk selection — any machine can be selected for tracking/reset/clone
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+
+  // Tracking
+  const [trackingLoading, setTrackingLoading] = useState(false);
 
   // Reset confirm + status
   const [showResetConfirm, setShowResetConfirm] = useState(false);
@@ -284,8 +309,33 @@ export default function MyMachinesPage() {
     }
   };
 
-  const toggleSelect = (id: string, status: MachineStatus) => {
-    if (status !== 'online') return; // only online machines can be reset
+  const handleBulkDelete = async () => {
+    if (!selectedMachines.length) return;
+    setBulkDeleteLoading(true);
+    setShowBulkDeleteConfirm(false);
+    try {
+      const result = await bulkDeleteMachines(selectedMachines.map((m) => m._id));
+
+      if (result.failed.length > 0) {
+        const failedNames = result.failed.map((f) => {
+          const m = machines.find((machine) => machine._id === f.machineId);
+          return m?.name ?? f.machineId;
+        });
+        addToast('error', `${result.deleted.length} deleted, ${result.failed.length} failed: ${failedNames.join(', ')}`);
+      } else {
+        addToast('success', `${result.deleted.length} machine(s) removed. Agents will uninstall within a few seconds.`);
+      }
+
+      setSelectedIds(new Set());
+      refetch();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to delete machines.');
+    } finally {
+      setBulkDeleteLoading(false);
+    }
+  };
+
+  const toggleSelect = (id: string) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
       next.has(id) ? next.delete(id) : next.add(id);
@@ -294,16 +344,30 @@ export default function MyMachinesPage() {
   };
 
   const toggleSelectAll = () => {
-    const online = machines.filter((m) => m.status === 'online').map((m) => m._id);
-    const allSelected = online.every((id) => selectedIds.has(id));
+    const allSelected = machines.every((m) => selectedIds.has(m._id));
     if (allSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(online));
+      setSelectedIds(new Set(machines.map((m) => m._id)));
     }
   };
 
   const selectedMachines = machines.filter((m) => selectedIds.has(m._id));
+
+  const handleTracking = async (enabled: boolean) => {
+    if (!selectedMachines.length) return;
+    setTrackingLoading(true);
+    try {
+      await setMachineTracking(selectedMachines.map((m) => m._id), enabled);
+      addToast('success', `Tracking ${enabled ? 'enabled' : 'disabled'} on ${selectedMachines.length} machine(s).`);
+      setSelectedIds(new Set());
+      refetch();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to update tracking.');
+    } finally {
+      setTrackingLoading(false);
+    }
+  };
 
   const handleReset = async () => {
     if (!selectedMachines.length) return;
@@ -372,7 +436,7 @@ export default function MyMachinesPage() {
   };
 
   const onlineCount = machines.filter((m) => m.status === 'online').length;
-  const allOnlineSelected = onlineCount > 0 && machines.filter((m) => m.status === 'online').every((m) => selectedIds.has(m._id));
+  const allOnlineSelected = machines.length > 0 && machines.every((m) => selectedIds.has(m._id));
 
   return (
     <div className="max-w-screen-xl">
@@ -404,6 +468,19 @@ export default function MyMachinesPage() {
         />
       )}
 
+      {showBulkDeleteConfirm && (
+        <ConfirmModal
+          open
+          title="Delete Machines"
+          description={`This will permanently remove ${selectedMachines.length} machine${selectedMachines.length !== 1 ? 's' : ''} and uninstall the Racko agent from ${selectedMachines.length === 1 ? 'this machine' : 'these machines'}. This cannot be undone.`}
+          confirmLabel={`Delete ${selectedMachines.length} Machine${selectedMachines.length !== 1 ? 's' : ''}`}
+          confirmVariant="danger"
+          loading={bulkDeleteLoading}
+          onConfirm={() => void handleBulkDelete()}
+          onCancel={() => setShowBulkDeleteConfirm(false)}
+        />
+      )}
+
       {resetStates && (
         <ResetStatusModal
           states={resetStates}
@@ -424,14 +501,52 @@ export default function MyMachinesPage() {
         </div>
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
-            <button
-              onClick={() => setShowResetConfirm(true)}
-              disabled={resetting}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 transition hover:bg-orange-100 disabled:opacity-50"
-            >
-              <RotateCcw className="h-3.5 w-3.5" />
-              Reset {selectedIds.size} VM{selectedIds.size !== 1 ? 's' : ''}
-            </button>
+            <>
+              {/* Enable Tracking — only show if any selected machine has tracking off */}
+              {selectedMachines.some((m) => !m.trackingEnabled) && (
+                <button
+                  onClick={() => void handleTracking(true)}
+                  disabled={trackingLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100 disabled:opacity-50"
+                >
+                  {trackingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
+                  Enable Tracking
+                </button>
+              )}
+              {/* Disable Tracking — only show if any selected machine has tracking on */}
+              {selectedMachines.some((m) => m.trackingEnabled) && (
+                <button
+                  onClick={() => void handleTracking(false)}
+                  disabled={trackingLoading}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                >
+                  {trackingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5 opacity-40" />}
+                  Disable Tracking
+                </button>
+              )}
+              {/* Clone — only enabled if all selected machines have tracking on */}
+              {/* Clone button removed — clone is initiated from individual machine view */}
+              {/* Reset — only for online machines */}
+              {selectedMachines.some((m) => m.status === 'online') && (
+                <button
+                  onClick={() => setShowResetConfirm(true)}
+                  disabled={resetting}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-3 py-2 text-sm font-medium text-orange-700 transition hover:bg-orange-100 disabled:opacity-50"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reset {selectedMachines.filter((m) => m.status === 'online').length} VM{selectedMachines.filter((m) => m.status === 'online').length !== 1 ? 's' : ''}
+                </button>
+              )}
+              {/* Bulk Delete — delete selected machines */}
+              <button
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                disabled={bulkDeleteLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+              >
+                {bulkDeleteLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete {selectedMachines.length} Machine{selectedMachines.length !== 1 ? 's' : ''}
+              </button>
+            </>
           )}
           <button
             onClick={handleRefresh}
@@ -487,7 +602,7 @@ export default function MyMachinesPage() {
                         />
                       )}
                     </th>
-                    {['Name', 'IP Address', 'OS', 'Status', 'Software Progress', 'Last Seen', 'Actions'].map((h) => (
+                    {['Name', 'IP Address', 'OS', 'Status', 'Tracking', 'Software Progress', 'Last Seen', 'Actions'].map((h) => (
                       <th key={h} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
                     ))}
                   </tr>
@@ -505,10 +620,8 @@ export default function MyMachinesPage() {
                           <input
                             type="checkbox"
                             checked={isSelected}
-                            disabled={!isOnline}
-                            onChange={() => toggleSelect(m._id, m.status)}
-                            title={isOnline ? 'Select for reset' : 'Only online machines can be reset'}
-                            className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] cursor-pointer disabled:cursor-not-allowed disabled:opacity-30"
+                            onChange={() => toggleSelect(m._id)}
+                            className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] cursor-pointer"
                           />
                         </td>
                         <td className="px-5 py-3">
@@ -522,6 +635,7 @@ export default function MyMachinesPage() {
                         <td className="px-5 py-3 font-mono text-xs text-gray-600">{m.ipAddress}</td>
                         <td className="px-5 py-3 capitalize text-gray-600">{m.os}</td>
                         <td className="px-5 py-3"><MachineStatusBadge status={m.status} /></td>
+                        <td className="px-5 py-3"><TrackingBadge enabled={m.trackingEnabled} /></td>
                         <td className="px-5 py-3">
                           <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
                         </td>

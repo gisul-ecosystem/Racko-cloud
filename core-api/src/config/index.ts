@@ -1,5 +1,9 @@
 import { z } from 'zod';
- 
+
+const booleanFlag = z
+  .enum(['true', 'false'])
+  .transform((value) => value === 'true');
+
 const envSchema = z.object({
   NODE_ENV: z.enum(['development', 'production', 'test']).default('production'),
   PORT: z.string().regex(/^\d+$/).transform(Number).default('8001'),
@@ -7,6 +11,8 @@ const envSchema = z.object({
   // MongoDB
   MONGODB_URI: z.string().min(1, 'MONGODB_URI is required'),
   MONGODB_DB_NAME: z.string().min(1, 'MONGODB_DB_NAME is required'),
+  /** Absolute path inside the container to the Mongo CA PEM (on-prem TLS). */
+  MONGODB_TLS_CA_FILE: z.string().optional(),
   MONGODB_DNS_SERVERS: z
     .string()
     .optional()
@@ -31,8 +37,15 @@ const envSchema = z.object({
   ARGON2_TIME_COST: z.string().regex(/^\d+$/).transform(Number).default('3'),
   ARGON2_PARALLELISM: z.string().regex(/^\d+$/).transform(Number).default('4'),
 
-  // Email (Resend)
-  RESEND_API_KEY: z.string().min(1, 'RESEND_API_KEY is required'),
+  // Transactional email provider (exactly one must be enabled)
+  RESEND_EMAIL_ENABLED: booleanFlag.default('true'),
+  ZOHO_EMAIL_ENABLED: booleanFlag.default('false'),
+  RESEND_API_KEY: z.string().optional().default(''),
+  ZOHO_ZEPTOMAIL_TOKEN: z.string().optional().default(''),
+  ZOHO_ZEPTOMAIL_API_URL: z
+    .string()
+    .url('ZOHO_ZEPTOMAIL_API_URL must be a valid URL')
+    .default('https://api.zeptomail.com/v1.1/email'),
   EMAIL_FROM_ADDRESS: z.string().email('EMAIL_FROM_ADDRESS must be a valid email'),
   EMAIL_FROM_NAME: z.string().min(1, 'EMAIL_FROM_NAME is required'),
 
@@ -117,6 +130,14 @@ const envSchema = z.object({
   PLAN_EXPIRY_CHECK_INTERVAL_MS: z.string().regex(/^\d+$/).transform(Number).default('300000'),
   PLAN_EXPIRY_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('7'),
   PLAN_EXPIRY_WARNING_CHECK_INTERVAL_MS: z
+    .string()
+    .regex(/^\d+$/)
+    .transform(Number)
+    .default('3600000'),
+
+  // VM host leases (Excel inventory) — email SUPER_ADMIN_EMAIL this many days before endDate
+  VM_HOST_LEASE_WARNING_DAYS: z.string().regex(/^\d+$/).transform(Number).default('5'),
+  VM_HOST_LEASE_WARNING_CHECK_INTERVAL_MS: z
     .string()
     .regex(/^\d+$/)
     .transform(Number)
@@ -222,6 +243,42 @@ const envSchema = z.object({
   SEAWEEDFS_ACCESS_KEY: z.string().min(1, 'SEAWEEDFS_ACCESS_KEY is required'),
   SEAWEEDFS_SECRET_KEY: z.string().min(1, 'SEAWEEDFS_SECRET_KEY is required'),
   SEAWEEDFS_BUCKET:     z.string().min(1, 'SEAWEEDFS_BUCKET is required').default('racko-vm-activity'),
+
+  // Agent auto-update
+  // AGENT_VERSION is the current published version baked into the Docker image
+  // at build time via --build-arg. Agents whose heartbeat reports a different
+  // version will be instructed to update automatically.
+  // Empty string disables auto-update entirely.
+  AGENT_VERSION: z.string().default(''),
+  // SHA256 hex checksums of the agent binaries — also baked in at build time.
+  AGENT_CHECKSUM_WINDOWS: z.string().default(''),
+  AGENT_CHECKSUM_LINUX:   z.string().default(''),
+  AGENT_CHECKSUM_DARWIN:  z.string().default(''),
+}).superRefine((env, ctx) => {
+  if (env.RESEND_EMAIL_ENABLED === env.ZOHO_EMAIL_ENABLED) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RESEND_EMAIL_ENABLED'],
+      message:
+        'Enable exactly one email provider: RESEND_EMAIL_ENABLED or ZOHO_EMAIL_ENABLED.',
+    });
+  }
+
+  if (env.RESEND_EMAIL_ENABLED && !env.RESEND_API_KEY.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['RESEND_API_KEY'],
+      message: 'RESEND_API_KEY is required when RESEND_EMAIL_ENABLED=true.',
+    });
+  }
+
+  if (env.ZOHO_EMAIL_ENABLED && !env.ZOHO_ZEPTOMAIL_TOKEN.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['ZOHO_ZEPTOMAIL_TOKEN'],
+      message: 'ZOHO_ZEPTOMAIL_TOKEN is required when ZOHO_EMAIL_ENABLED=true.',
+    });
+  }
 });
 
 const parsed = envSchema.safeParse(process.env);

@@ -2,17 +2,23 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, Plus, Shield, Users } from 'lucide-react';
+import { useRouter } from 'next/navigation';
+import { ArrowLeft, Loader2, Plus, Shield, Trash2, Users } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 import {
   createTenantRbacRole,
-  fetchMyTenantRbac,
+  deleteTenantOperator,
   fetchTenantRbacCatalog,
   fetchTenantRbacPeople,
   fetchTenantRbacRoles,
+  inviteTenantOperator,
   setTenantRbacUserRoles,
   updateTenantRbacRole,
+  emitTenantRbacChanged,
   type OrgRbacPermissionDef,
   type OrgRbacRole,
   type TenantRbacPerson,
@@ -21,11 +27,23 @@ import {
 type Tab = 'roles' | 'people';
 
 export default function TenantAccessControlPage() {
+  const router = useRouter();
+  const { isLoading: authLoading, isAuthenticated } = useTenantAuth();
+  const {
+    loading: rbacLoading,
+    isTenantAdmin,
+    hasPermission,
+    refresh: refreshRbac,
+  } = useTenantRbac();
+  const canAccessPage =
+    isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
+  const canWriteRoles = isTenantAdmin || hasPermission('rbac.roles.write');
+  const canAssign = isTenantAdmin || hasPermission('rbac.assign');
+
   const [tab, setTab] = useState<Tab>('roles');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
-  const [isTenantAdmin, setIsTenantAdmin] = useState(false);
 
   const [catalog, setCatalog] = useState<OrgRbacPermissionDef[]>([]);
   const [roles, setRoles] = useState<OrgRbacRole[]>([]);
@@ -42,6 +60,14 @@ export default function TenantAccessControlPage() {
   const [assignRoleIds, setAssignRoleIds] = useState<string[]>([]);
   const [savingAssign, setSavingAssign] = useState(false);
 
+  const [showInvite, setShowInvite] = useState(false);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [invitePassword, setInvitePassword] = useState('');
+  const [inviteRoleIds, setInviteRoleIds] = useState<string[]>([]);
+  const [savingInvite, setSavingInvite] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TenantRbacPerson | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
   const groups = useMemo(() => {
     const map = new Map<string, OrgRbacPermissionDef[]>();
     for (const p of catalog) {
@@ -56,13 +82,11 @@ export default function TenantAccessControlPage() {
     setLoading(true);
     setError(null);
     try {
-      const [me, perms, roleList, peopleList] = await Promise.all([
-        fetchMyTenantRbac(),
+      const [perms, roleList, peopleList] = await Promise.all([
         fetchTenantRbacCatalog(),
         fetchTenantRbacRoles(),
         fetchTenantRbacPeople(),
       ]);
-      setIsTenantAdmin(me.isTenantAdmin);
       setCatalog(perms);
       setRoles(roleList);
       setPeople(peopleList);
@@ -76,6 +100,17 @@ export default function TenantAccessControlPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (authLoading || rbacLoading) return;
+    if (!isAuthenticated) {
+      router.replace('/console/login');
+      return;
+    }
+    if (!canAccessPage) {
+      router.replace(TENANT_CONSOLE);
+    }
+  }, [authLoading, rbacLoading, isAuthenticated, canAccessPage, router]);
 
   async function saveRoleForm(e: React.FormEvent) {
     e.preventDefault();
@@ -98,6 +133,8 @@ export default function TenantAccessControlPage() {
       setCreatingRole(false);
       setEditingRole(null);
       await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to save role.');
     } finally {
@@ -109,11 +146,14 @@ export default function TenantAccessControlPage() {
     e.preventDefault();
     if (!assignPerson) return;
     setSavingAssign(true);
+    setError(null);
     try {
       await setTenantRbacUserRoles(assignPerson._id, assignRoleIds);
       setFlash(`Roles updated for ${assignPerson.email}.`);
       setAssignPerson(null);
       await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to assign roles.');
     } finally {
@@ -121,10 +161,80 @@ export default function TenantAccessControlPage() {
     }
   }
 
+  async function saveInvite(e: React.FormEvent) {
+    e.preventDefault();
+    if (inviteRoleIds.length === 0) {
+      setError('Select at least one role for the operator.');
+      return;
+    }
+    setSavingInvite(true);
+    setError(null);
+    try {
+      await inviteTenantOperator({
+        email: inviteEmail,
+        temporaryPassword: invitePassword,
+        roleIds: inviteRoleIds,
+      });
+      setFlash(
+        `Operator invited: ${inviteEmail}. They must verify email and set a password before signing in.`
+      );
+      setShowInvite(false);
+      setInviteEmail('');
+      setInvitePassword('');
+      setInviteRoleIds([]);
+      await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to invite operator.');
+    } finally {
+      setSavingInvite(false);
+    }
+  }
+
+  async function confirmDeleteOperator() {
+    if (!deleteTarget) return;
+    setDeletingId(deleteTarget._id);
+    setError(null);
+    try {
+      await deleteTenantOperator(deleteTarget._id);
+      setFlash(`Deleted ${deleteTarget.email}.`);
+      if (assignPerson?._id === deleteTarget._id) setAssignPerson(null);
+      setDeleteTarget(null);
+      await load();
+      await refreshRbac();
+      emitTenantRbacChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to delete operator.');
+    } finally {
+      setDeletingId(null);
+    }
+  }
+
   const showRoleForm = creatingRole || Boolean(editingRole);
+
+  if (authLoading || rbacLoading || !isAuthenticated || !canAccessPage) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center">
+        <Loader2 className="h-7 w-7 animate-spin text-[#B91C1C]" />
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-6 p-6 lg:p-8">
+      <ConfirmModal
+        open={Boolean(deleteTarget)}
+        title={deleteTarget ? `Delete operator ${deleteTarget.email}?` : 'Delete operator'}
+        description="This removes their console access and cannot be undone. You can invite the same email again later."
+        confirmLabel="Delete"
+        confirmVariant="danger"
+        loading={Boolean(deleteTarget && deletingId === deleteTarget._id)}
+        onConfirm={() => void confirmDeleteOperator()}
+        onCancel={() => {
+          if (!deletingId) setDeleteTarget(null);
+        }}
+      />
       <div>
         <Link
           href={TENANT_CONSOLE}
@@ -134,7 +244,7 @@ export default function TenantAccessControlPage() {
         </Link>
         <h1 className="text-2xl font-bold text-gray-900">Access control</h1>
         <p className="mt-0.5 text-sm text-gray-500">
-          Manage roles and permissions for tenant users in this workspace.
+          Grant staff controlled access to the tenant console.
         </p>
       </div>
 
@@ -170,7 +280,7 @@ export default function TenantAccessControlPage() {
         </div>
       ) : tab === 'roles' ? (
         <div className="space-y-4">
-          {(isTenantAdmin) && (
+          {(canWriteRoles) && (
             <div className="flex justify-end">
               <button
                 type="button"
@@ -283,19 +393,21 @@ export default function TenantAccessControlPage() {
                     </td>
                     <td className="px-4 py-3 text-gray-700">{role.permissions.length}</td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingRole(role);
-                          setCreatingRole(false);
-                          setRoleName(role.name);
-                          setRoleDescription(role.description);
-                          setRolePerms([...role.permissions]);
-                        }}
-                        className="text-xs font-medium text-[#B91C1C] hover:underline"
-                      >
-                        Edit
-                      </button>
+                      {canWriteRoles ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setEditingRole(role);
+                            setCreatingRole(false);
+                            setRoleName(role.name);
+                            setRoleDescription(role.description);
+                            setRolePerms([...role.permissions]);
+                          }}
+                          className="text-xs font-medium text-[#B91C1C] hover:underline"
+                        >
+                          Edit
+                        </button>
+                      ) : null}
                     </td>
                   </tr>
                 ))}
@@ -305,6 +417,84 @@ export default function TenantAccessControlPage() {
         </div>
       ) : (
         <div className="space-y-4">
+          {canAssign ? (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowInvite(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white"
+              >
+                <Plus className="h-4 w-4" /> Invite operator
+              </button>
+            </div>
+          ) : null}
+
+          {showInvite ? (
+            <form
+              onSubmit={(e) => void saveInvite(e)}
+              className="space-y-3 rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
+            >
+              <input
+                required
+                type="email"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+                placeholder="Operator email"
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              />
+              <input
+                required
+                type="text"
+                value={invitePassword}
+                onChange={(e) => setInvitePassword(e.target.value)}
+                placeholder="Temporary password (sent in invite email)"
+                minLength={8}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              />
+              <p className="text-xs text-gray-500">
+                An invite email is sent with a verify link. After verifying, they set a password
+                before signing in.
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {roles.map((role) => (
+                  <label
+                    key={role._id}
+                    className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-2.5 py-1 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={inviteRoleIds.includes(role._id)}
+                      onChange={() =>
+                        setInviteRoleIds((prev) =>
+                          prev.includes(role._id)
+                            ? prev.filter((id) => id !== role._id)
+                            : [...prev, role._id]
+                        )
+                      }
+                    />
+                    {role.name}
+                  </label>
+                ))}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={savingInvite}
+                  className="rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                >
+                  {savingInvite ? 'Inviting…' : 'Send invite'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowInvite(false)}
+                  className="rounded-lg border border-gray-200 px-3.5 py-2 text-sm"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          ) : null}
+
           {assignPerson ? (
             <form
               onSubmit={(e) => void saveAssign(e)}
@@ -368,24 +558,41 @@ export default function TenantAccessControlPage() {
                     <td className="px-5 py-3">
                       <p className="font-medium text-gray-900">{person.email}</p>
                       <p className="text-xs text-gray-500">
-                        {person.isTenantAdmin ? 'Tenant admin' : person.role}
+                        {person.isTenantAdmin ? 'Tenant admin' : 'Operator'}
                       </p>
                     </td>
                     <td className="px-4 py-3 text-gray-700">
                       {person.roleNames.join(', ') || '—'}
                     </td>
                     <td className="px-4 py-3 text-right">
-                      {!person.isTenantAdmin ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setAssignPerson(person);
-                            setAssignRoleIds([...person.roleIds]);
-                          }}
-                          className="text-xs font-medium text-[#B91C1C] hover:underline"
-                        >
-                          Assign roles
-                        </button>
+                      {person.isTenantAdmin ? (
+                        <span className="text-xs text-gray-400">Full access</span>
+                      ) : canAssign ? (
+                        <div className="inline-flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setAssignPerson(person);
+                              setAssignRoleIds([...person.roleIds]);
+                            }}
+                            className="text-xs font-medium text-[#B91C1C] hover:underline"
+                          >
+                            Assign roles
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deletingId === person._id}
+                            onClick={() => setDeleteTarget(person)}
+                            className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 disabled:opacity-50"
+                          >
+                            {deletingId === person._id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Trash2 className="h-3 w-3" />
+                            )}
+                            Delete
+                          </button>
+                        </div>
                       ) : null}
                     </td>
                   </tr>

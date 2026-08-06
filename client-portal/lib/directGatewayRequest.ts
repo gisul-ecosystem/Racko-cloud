@@ -1,11 +1,38 @@
 'use client';
 
 import { ApiError, getAccessToken, setAccessToken, clearAccessToken, SESSION_EXPIRED_EVENT } from '@/lib/apiClient';
-import { getDirectGatewayBaseUrl, getGatewayBaseUrl } from '@/lib/gatewayUrl';
-import { getTenantAccessToken } from '@/lib/tenantPortalApiClient';
+import {
+  getDirectGatewayBaseUrl,
+  getGatewayBaseUrl,
+  getTenantGatewayIdentityHeaders,
+} from '@/lib/gatewayUrl';
+import {
+  clearTenantAccessToken,
+  emitTenantSessionExpired,
+  getTenantAccessToken,
+} from '@/lib/tenantPortalApiClient';
 import { isTenantPortalClient } from '@/lib/portalClient';
 
 type RequestOptions = RequestInit & { skipAuth?: boolean };
+
+const PROVISION_NETWORK_RETRIES = 2;
+
+function isProvisionNetworkFailure(error: unknown): boolean {
+  if (!(error instanceof TypeError)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes('failed to fetch') ||
+    message.includes('networkerror') ||
+    message.includes('load failed')
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function refreshPlatformAccessToken(): Promise<string | null> {
   try {
@@ -36,29 +63,60 @@ export async function directGatewayRequest<T>(
   options: RequestOptions = {}
 ): Promise<T> {
   const { skipAuth = false, ...fetchOptions } = options;
+  const isTenant = isTenantPortalClient();
+  const gatewayBase = getDirectGatewayBaseUrl();
   const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+    ...(isTenant ? getTenantGatewayIdentityHeaders(gatewayBase) : {}),
     ...(fetchOptions.headers as Record<string, string>),
   };
 
   if (!skipAuth) {
-    const token = isTenantPortalClient() ? getTenantAccessToken() : getAccessToken();
+    const token = isTenant ? getTenantAccessToken() : getAccessToken();
     if (token) {
       headers['Authorization'] = `Bearer ${token}`;
     }
   }
 
-  const url = `${getDirectGatewayBaseUrl()}${fullPath}`;
-  let res = await fetch(url, {
-    ...fetchOptions,
-    headers,
-    credentials: 'include',
-    cache: 'no-store',
-  });
+  const url = `${gatewayBase}${fullPath}`;
+  const isProvisionCall = fullPath.includes('/provision/request/');
+  const maxAttempts = isProvisionCall ? PROVISION_NETWORK_RETRIES + 1 : 1;
+
+  let res: Response | null = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      res = await fetch(url, {
+        ...fetchOptions,
+        headers,
+        credentials: isTenant ? 'omit' : 'include',
+        cache: 'no-store',
+      });
+      break;
+    } catch (error) {
+      if (!isProvisionNetworkFailure(error) || attempt >= maxAttempts) {
+        throw new ApiError(
+          'The provisioning request was interrupted before the server responded. This usually means a network or proxy timeout — click Retry step to continue.',
+          0,
+          'NETWORK_ERROR'
+        );
+      }
+
+      await sleep(1500 * attempt);
+    }
+  }
+
+  if (!res) {
+    throw new ApiError(
+      'The provisioning request was interrupted before the server responded. Click Retry step to continue.',
+      0,
+      'NETWORK_ERROR'
+    );
+  }
 
   // Match apiRequest: refresh once on 401 for platform sessions, then retry.
-  if (res.status === 401 && !skipAuth && !isTenantPortalClient()) {
+  if (res.status === 401 && !skipAuth && !isTenant) {
     const newToken = await refreshPlatformAccessToken();
     if (newToken) {
       headers['Authorization'] = `Bearer ${newToken}`;
@@ -76,9 +134,14 @@ export async function directGatewayRequest<T>(
     }
   }
 
+  if (res.status === 401 && !skipAuth && isTenant) {
+    clearTenantAccessToken();
+    emitTenantSessionExpired();
+  }
+
   if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { message?: string };
-    throw new ApiError(data.message || `Request failed (${res.status}).`, res.status);
+    const data = (await res.json().catch(() => ({}))) as { message?: string; code?: string };
+    throw new ApiError(data.message || `Request failed (${res.status}).`, res.status, data.code);
   }
 
   return res.json() as Promise<T>;

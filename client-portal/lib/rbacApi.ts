@@ -31,7 +31,20 @@ export interface RbacPerson {
 export interface MyRbacPermissions {
   role: string;
   permissions: string[];
+  /** Assigned RBAC role slugs (e.g. ceo). Empty for super_admin. */
+  roleSlugs?: string[];
   isSuperAdmin: boolean;
+}
+
+/** Internal slug for the Executive home role — never show "ceo" in UI labels. */
+export const EXECUTIVE_ROLE_SLUG = 'ceo';
+
+/** Business overview home for the Executive role (not named Analytics). */
+export const SUPER_ADMIN_OVERVIEW_PATH = '/super-admin-console/overview';
+
+export function hasExecutiveHomeRole(perms: MyRbacPermissions | null | undefined): boolean {
+  if (!perms || perms.isSuperAdmin) return false;
+  return (perms.roleSlugs ?? []).includes(EXECUTIVE_ROLE_SLUG);
 }
 
 interface ApiEnvelope<T> {
@@ -112,10 +125,24 @@ export async function setRbacUserRoles(userId: string, roleIds: string[]): Promi
   return data.person;
 }
 
+export async function deleteStaffUser(userId: string): Promise<{ email: string }> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ email: string }>>(`/api/v1/rbac/people/${userId}`, {
+      method: 'DELETE',
+    })
+  );
+  return data;
+}
+
+/** Returned when the email belongs to an existing non-staff account. */
+export const PROMOTE_EXISTING_USER_CODE = 'PROMOTE_EXISTING_USER';
+
 export async function createStaffUser(input: {
   email: string;
-  tempPassword: string;
+  tempPassword?: string;
   roleIds?: string[];
+  /** Convert an existing non-staff account to staff instead of failing. */
+  promoteExisting?: boolean;
 }): Promise<RbacPerson> {
   const data = await unwrap(
     apiRequest<ApiEnvelope<{ person: RbacPerson }>>('/api/v1/rbac/people/staff', {

@@ -34,6 +34,7 @@ import {
   PAUSE_CLEANUP_ACTION_LABELS,
   supportsPauseCleanup,
 } from '../../utils/requestForm';
+import { DEFAULT_USD_TO_INR_RATE } from '../../utils/walletBilling';
 import { InstanceOptionCard } from './InstanceOptionCard';
 import { ServiceOptionCard } from './ServiceOptionCard';
 
@@ -162,6 +163,8 @@ interface RequestFormProps {
   privilegedRoleMessage: string | null;
   privilegedRoleMessageType: 'success' | 'error' | null;
   validationErrors: string[];
+  /** Cloud Labs / Azure Labs: hide services, instances, and costing UI. */
+  labsMode?: boolean;
 }
 
 function groupServicesByCategory(services: CatalogService[]) {
@@ -295,6 +298,7 @@ export function RequestForm({
   privilegedRoleMessage,
   privilegedRoleMessageType,
   validationErrors,
+  labsMode = false,
 }: RequestFormProps) {
   const [serviceSearch, setServiceSearch] = useState('');
   const [serviceCategory, setServiceCategory] = useState<string>('All');
@@ -434,7 +438,11 @@ export function RequestForm({
           <SectionHeader
             step={step++}
             title="Project details"
-            description="Name the lab, choose Azure ID type, then set costing and the service window."
+            description={
+              labsMode
+                ? 'Name the lab, choose Azure ID type, and set the lab window.'
+                : 'Name the lab, choose Azure ID type, then set costing and the service window.'
+            }
           />
           <div className="mt-5 grid gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
@@ -487,6 +495,7 @@ export function RequestForm({
               )}
             </div>
 
+            {!labsMode ? (
             <div className="sm:col-span-2">
               <span className={labelClass}>Resource group costing</span>
               <div className="mt-2 grid gap-3 sm:grid-cols-2">
@@ -525,6 +534,7 @@ export function RequestForm({
                 </label>
               </div>
             </div>
+            ) : null}
 
             <div>
               <label className={labelClass} htmlFor="startDate">
@@ -893,7 +903,7 @@ export function RequestForm({
         </section>
       )}
 
-      {detailsComplete && (costingMode === 'per_user' || isTestIds) && (
+      {detailsComplete && !labsMode && (costingMode === 'per_user' || isTestIds) && (
         <section className={sectionClass}>
           <div className="p-6">
             <SectionHeader
@@ -901,8 +911,8 @@ export function RequestForm({
               title="Per-user budget"
               description={
                 isTestIds
-                  ? 'Default $10 spending cap for Azure test_ids.'
-                  : 'Optional spending cap per lab user.'
+                  ? 'Default $10 spending cap for Azure test_ids (tracked in INR against Azure Cost Management).'
+                  : 'Optional spending cap per lab user. Enter USD — tracked in INR because Azure costs are billed in rupees.'
               }
             />
 
@@ -926,9 +936,20 @@ export function RequestForm({
               />
               <p className="mt-2 text-xs text-gray-500">
                 {isTestIds
-                  ? 'Fixed at $10 for Azure test_ids. When spending exceeds this amount, the user is notified and suspended.'
-                  : 'An Azure budget is created for each user with their own resource group.'}
+                  ? `Fixed at $10 for Azure test_ids. Stored and tracked in INR (₹${DEFAULT_USD_TO_INR_RATE} per $1) so it matches Azure Cost Management. When spend exceeds the cap, the user is notified and suspended.`
+                  : `Enter the cap in USD. Racko converts it to INR (₹${DEFAULT_USD_TO_INR_RATE} per $1) for Azure budgets and super-admin tracking, because Azure Cost Management reports spend in rupees.`}
               </p>
+              {perUserBudgetUsd != null &&
+              Number.isFinite(perUserBudgetUsd) &&
+              perUserBudgetUsd > 0 ? (
+                <p className="mt-1.5 text-xs font-medium text-gray-700">
+                  ≈ ₹{(perUserBudgetUsd * DEFAULT_USD_TO_INR_RATE).toLocaleString('en-IN', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  INR tracked per user in super admin
+                </p>
+              ) : null}
             </div>
           </div>
         </section>
@@ -939,11 +960,13 @@ export function RequestForm({
           <div className="p-6">
             <SectionHeader
               step={step++}
-              title="Azure services"
+              title={labsMode ? 'Azure Labs' : 'Azure services'}
               description={
                 purchaseConvertMode
                   ? 'Copied from your test lab — these services stay locked for purchase.'
-                  : 'Search or filter, then tap to add.'
+                  : labsMode
+                    ? 'Search or filter, then select the labs to provision for this request.'
+                    : 'Search or filter, then tap to add.'
               }
             />
 
@@ -957,7 +980,7 @@ export function RequestForm({
                         type="search"
                         value={serviceSearch}
                         onChange={(event) => setServiceSearch(event.target.value)}
-                        placeholder="Search services…"
+                        placeholder={labsMode ? 'Search labs…' : 'Search services…'}
                         className={`${inputClass} pl-9`}
                       />
                     </div>
@@ -1103,7 +1126,9 @@ export function RequestForm({
               description={
                 purchaseConvertMode
                   ? 'Copied from your test lab — these tiers stay locked for purchase.'
-                  : 'Search or pick a tier for each service that supports sizing.'
+                  : labsMode
+                    ? 'Search or pick a tier for each selected lab that supports sizing.'
+                    : 'Search or pick a tier for each service that supports sizing.'
               }
             />
             {purchaseConvertMode ? (
@@ -1251,14 +1276,16 @@ export function RequestForm({
               description={
                 orgAdminCustomRoles.length > 0 || orgAdminCustomServices.length > 0
                   ? 'Catalog roles plus custom roles and services assigned in Lab Management (org-admin).'
-                  : 'Roles are assigned automatically from catalog rules and instance tiers.'
+                  : labsMode
+                    ? 'Roles are assigned automatically from lab catalog rules and instance tiers.'
+                    : 'Roles are assigned automatically from catalog rules and instance tiers.'
               }
             />
 
             {resolvedRoles.length > 0 && (
               <div className="mt-5 space-y-3">
                 <p className="text-xs font-medium uppercase tracking-wide text-gray-400">
-                  Catalog service roles
+                  {labsMode ? 'Lab roles' : 'Catalog service roles'}
                 </p>
                 {resolvedRoles.map((entry) => {
                   const service = catalog.services.find((svc) => svc.id === entry.serviceId);
@@ -1594,7 +1621,7 @@ export function RequestForm({
         </section>
       )}
 
-      {detailsComplete && (
+      {detailsComplete && !labsMode && (
         <section className={sectionClass}>
           <div className="p-6">
             <button

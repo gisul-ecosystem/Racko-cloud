@@ -5,10 +5,16 @@ import { TenantUser } from '../../models/tenantUser.model';
 import { hashPassword, verifyPassword } from '../../utils/argon2';
 import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { config } from '../../config';
+import {
+  sendTenantPasswordResetEmail,
+  sendTenantVerificationEmail,
+} from '../../utils/email/sender';
 import type {
   TenantForgotPasswordInput,
   TenantLoginInput,
+  TenantResendVerificationInput,
   TenantResetPasswordInput,
+  TenantVerifyEmailInput,
 } from './tenantAuth.validation';
 
 export interface TenantTokenPayload {
@@ -23,6 +29,8 @@ export interface TenantUserPublic {
   email: string;
   role: 'tenant_admin' | 'tenant_user';
   tenantId: string;
+  /** True for Access-control invited operators (and always for tenant_admin). */
+  isConsoleOperator: boolean;
 }
 
 function signTenantAccessToken(payload: TenantTokenPayload): string {
@@ -30,14 +38,6 @@ function signTenantAccessToken(payload: TenantTokenPayload): string {
     expiresIn: config.JWT_TENANT_ACCESS_EXPIRES_IN as jwt.SignOptions['expiresIn'],
     algorithm: 'HS256',
   });
-}
-
-// TODO: Wire real email delivery (SendGrid or equivalent) for tenant password resets.
-export function sendTenantPasswordResetEmail(
-  tenantUser: { email: string },
-  rawToken: string
-): void {
-  console.log('[STUB] Password reset token for', tenantUser.email, ':', rawToken);
 }
 
 export class TenantAuthService {
@@ -65,8 +65,27 @@ export class TenantAuthService {
       throw new TenantAuthError('INVALID_CREDENTIALS', 401);
     }
 
-    // End-user access window gate (assigned tenant VMs with schedule)
-    if (tenantUser.role === 'tenant_user') {
+    if (!tenantUser.isEmailVerified) {
+      throw new TenantAuthError(
+        'Please verify your email address before logging in. Check your inbox for the verification link.',
+        403,
+        'EMAIL_NOT_VERIFIED'
+      );
+    }
+
+    if (tenantUser.mustSetPassword) {
+      throw new TenantAuthError(
+        'Your account has been verified, but you must set a new password before logging in. Use the invite email or password reset flow.',
+        403,
+        'PASSWORD_SETUP_REQUIRED'
+      );
+    }
+
+    const isConsoleOperator =
+      tenantUser.role === 'tenant_admin' || Boolean(tenantUser.isConsoleOperator);
+
+    // End-user access window gate — not applied to console operators.
+    if (tenantUser.role === 'tenant_user' && !tenantUser.isConsoleOperator) {
       const {
         assertTenantUserAssignedVmsAccessible,
       } = await import('../vmAccessSchedule/scheduleManager');
@@ -94,8 +113,91 @@ export class TenantAuthService {
         email: tenantUser.email,
         role: tenantUser.role,
         tenantId: tenantUser.tenantId.toString(),
+        isConsoleOperator,
       },
     };
+  }
+
+  /**
+   * Verify invite/email token. When mustSetPassword, mints a reset token for the
+   * client to redirect straight to set-password (no separate link in the invite email).
+   */
+  async verifyEmail(
+    tenantId: string,
+    dto: TenantVerifyEmailInput
+  ): Promise<{
+    message: string;
+    requiresPasswordSetup: boolean;
+    resetToken?: string;
+  }> {
+    const hashedToken = hashToken(dto.token);
+
+    const tenantUser = await TenantUser.findOne({
+      tenantId: new mongoose.Types.ObjectId(tenantId),
+      emailVerificationTokenHash: hashedToken,
+      emailVerificationExpiresAt: { $gt: new Date() },
+    }).select('+emailVerificationTokenHash');
+
+    if (!tenantUser || !tenantUser.isActive) {
+      throw new TenantAuthError('Verification link is invalid or has expired.', 400, 'INVALID_TOKEN');
+    }
+
+    const requiresPasswordSetup = Boolean(tenantUser.mustSetPassword);
+    tenantUser.isEmailVerified = true;
+    tenantUser.emailVerificationTokenHash = null;
+    tenantUser.emailVerificationExpiresAt = null;
+
+    let resetToken: string | undefined;
+    if (requiresPasswordSetup) {
+      resetToken = generateSecureToken(32);
+      tenantUser.resetTokenHash = hashToken(resetToken);
+      tenantUser.resetTokenExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    }
+
+    await tenantUser.save();
+
+    return {
+      message: requiresPasswordSetup
+        ? 'Email verified. Continue to set your password.'
+        : 'Email verified successfully. You can now log in.',
+      requiresPasswordSetup,
+      ...(resetToken ? { resetToken } : {}),
+    };
+  }
+
+  /**
+   * Resend verification for unverified console accounts. Always succeeds (enumeration-safe).
+   */
+  async resendVerification(tenantId: string, dto: TenantResendVerificationInput): Promise<void> {
+    const email = dto.email.toLowerCase().trim();
+    const tenantUser = await TenantUser.findOne({
+      tenantId: new mongoose.Types.ObjectId(tenantId),
+      email,
+    }).select('+emailVerificationTokenHash');
+
+    if (!tenantUser || !tenantUser.isActive || tenantUser.isEmailVerified) {
+      return;
+    }
+
+    const rawToken = generateSecureToken(32);
+    tenantUser.emailVerificationTokenHash = hashToken(rawToken);
+    tenantUser.emailVerificationExpiresAt = new Date(
+      Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
+    );
+    await tenantUser.save();
+
+    const tenant = await Tenant.findById(tenantId).select('name domain branding').lean();
+    if (tenant) {
+      await sendTenantVerificationEmail({
+        to: tenantUser.email,
+        rawToken,
+        tenant: {
+          name: tenant.name,
+          domain: tenant.domain,
+          branding: tenant.branding,
+        },
+      });
+    }
   }
 
   async forgotPassword(tenantId: string, dto: TenantForgotPasswordInput): Promise<void> {
@@ -104,7 +206,7 @@ export class TenantAuthService {
       email: dto.email,
     });
 
-    if (!tenantUser) {
+    if (!tenantUser || !tenantUser.isActive) {
       return;
     }
 
@@ -113,7 +215,18 @@ export class TenantAuthService {
     tenantUser.resetTokenExpiresAt = new Date(Date.now() + 60 * 60 * 1000);
     await tenantUser.save();
 
-    sendTenantPasswordResetEmail(tenantUser, rawToken);
+    const tenant = await Tenant.findById(tenantId).select('name domain branding').lean();
+    if (tenant) {
+      await sendTenantPasswordResetEmail({
+        to: tenantUser.email,
+        rawToken,
+        tenant: {
+          name: tenant.name,
+          domain: tenant.domain,
+          branding: tenant.branding,
+        },
+      });
+    }
   }
 
   async resetPassword(tenantId: string, dto: TenantResetPasswordInput): Promise<void> {
@@ -125,13 +238,14 @@ export class TenantAuthService {
       resetTokenExpiresAt: { $gt: new Date() },
     });
 
-    if (!tenantUser) {
+    if (!tenantUser || !tenantUser.isActive) {
       throw new TenantAuthError('INVALID_OR_EXPIRED_TOKEN', 400);
     }
 
     tenantUser.passwordHash = await hashPassword(dto.newPassword);
     tenantUser.resetTokenHash = null;
     tenantUser.resetTokenExpiresAt = null;
+    tenantUser.mustSetPassword = false;
     await tenantUser.save();
   }
 
@@ -157,10 +271,12 @@ export class TenantAuthService {
 
 export class TenantAuthError extends Error {
   readonly statusCode: number;
+  readonly code?: string;
 
-  constructor(message: string, statusCode: number) {
+  constructor(message: string, statusCode: number, code?: string) {
     super(message);
     this.statusCode = statusCode;
+    this.code = code;
   }
 }
 

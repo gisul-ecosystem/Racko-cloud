@@ -69,9 +69,13 @@ const buildCredentialEmailHtml = ({ requestId, users, adminCredentials, portalLi
             </p>
           </div>
           <p style="margin: 18px 0 0; font-size: 13px; color: #6b7280;">
-            An Excel spreadsheet with the portal link and all learner usernames and passwords is attached for distribution.
+            Attachments included:
           </p>
-          <p style="margin: 8px 0 0; font-size: 13px; color: #6b7280;">
+          <ul style="margin: 8px 0 0; padding-left: 20px; font-size: 13px; color: #6b7280;">
+            <li style="margin-bottom: 4px;"><strong>Excel</strong> — portal link plus all learner usernames and passwords for distribution.</li>
+            <li><strong>Word guide</strong> — step-by-step Manage Portal login and how to open the Azure Portal.</li>
+          </ul>
+          <p style="margin: 12px 0 0; font-size: 13px; color: #6b7280;">
             This secure link expires in 7 days.
           </p>
           <p style="margin: 8px 0 0; font-size: 13px; color: #6b7280;">
@@ -158,6 +162,9 @@ const buildTestIdsCredentialEmailHtml = ({
             </p>
           </div>
           <p style="margin: 18px 0 0; font-size: 13px; color: #92400e;">
+            Attachments: Excel credentials for distribution, plus a Word guide covering Manage Portal login and Azure Portal access.
+          </p>
+          <p style="margin: 8px 0 0; font-size: 13px; color: #92400e;">
             This is a 24-hour test lab. We will email you shortly about continuing with a full purchase.
           </p>
         </div>

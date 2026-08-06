@@ -34,14 +34,39 @@ function createProxmoxClient(): AxiosInstance {
   instance.interceptors.response.use(
     (response) => response,
     (error: AxiosError<{ errors?: Record<string, string>; message?: string }>) => {
+      // For agent/exec debugging: log body shape (not full script) + raw HTTP
+      // status/body. Never log Authorization / token secret / PROXMOX host.
+      const endpoint = error.config?.url ?? '';
+      const isAgentExec = /\/agent\/exec(?:-status)?(?:\?|$)/.test(endpoint);
+      let requestBodyShape: Record<string, unknown> | null = null;
+      if (isAgentExec && error.config?.data) {
+        try {
+          const raw =
+            typeof error.config.data === 'string'
+              ? (JSON.parse(error.config.data) as Record<string, unknown>)
+              : (error.config.data as Record<string, unknown>);
+          const cmd = raw.command;
+          requestBodyShape = {
+            commandType: Array.isArray(cmd) ? 'array' : typeof cmd,
+            commandLength: Array.isArray(cmd) ? cmd.length : undefined,
+            hasArgsKey: Object.prototype.hasOwnProperty.call(raw, 'args'),
+            keys: Object.keys(raw),
+          };
+        } catch {
+          requestBodyShape = { parseError: true };
+        }
+      }
+
       // Log full error internally — never expose host or token secret
       logger.error('Proxmox API error', {
-        status: error.response?.status,
-        endpoint: error.config?.url,
+        status: error.response?.status ?? null,
+        endpoint,
         method: error.config?.method?.toUpperCase(),
         proxmoxMessage: error.response?.data?.message ?? error.message,
         proxmoxErrors: error.response?.data?.errors ?? null,
+        // Full raw body — this is the smoking gun for 400 schema / 403 / 5xx
         proxmoxData: error.response?.data ?? null,
+        requestBodyShape,
         // Deliberately omit: baseURL (contains internal IP), headers (contains token)
       });
 

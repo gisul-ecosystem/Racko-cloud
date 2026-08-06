@@ -242,6 +242,7 @@ function normalizePayload(payload) {
   return {
     customerEmail: payload.customerEmail ?? payload.customer_email,
     projectName: payload.projectName ?? payload.project_name ?? payload.requestName ?? payload.request_name,
+    projectId: payload.projectId ?? payload.project_id ?? null,
     idMode: payload.idMode ?? payload.id_mode,
     accountCount: payload.accountCount ?? payload.account_count,
     costingMode: payload.costingMode ?? payload.costing_mode ?? 'shared',
@@ -272,8 +273,9 @@ function normalizePayload(payload) {
   };
 }
 
-export const createRequest = async (payload, userId) => {
+export const createRequest = async (payload, userId, options = {}) => {
   const input = normalizePayload(payload);
+  const portalBaseUrl = String(options.portalBaseUrl || '').trim().replace(/\/+$/, '') || undefined;
 
   if (!isValidEmail(input.customerEmail)) {
     throw validationError('customer_email must be a valid email address');
@@ -434,6 +436,10 @@ export const createRequest = async (payload, userId) => {
     customerEmail: input.customerEmail.trim(),
     projectName,
     requestName: projectName,
+    projectId:
+      input.projectId && String(input.projectId).trim()
+        ? String(input.projectId).trim()
+        : undefined,
     idMode,
     accountCount: input.accountCount,
     costingMode: input.costingMode,
@@ -471,6 +477,7 @@ export const createRequest = async (payload, userId) => {
     estimatedPrice,
     status: 'Pending',
     createdBy: userId || undefined,
+    portalBaseUrl: portalBaseUrl || undefined,
     updatedAt: new Date(),
   });
 

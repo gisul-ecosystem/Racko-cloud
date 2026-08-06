@@ -4,7 +4,7 @@ const azureCatalogSyncService = require('./azureCatalogSyncService');
 const { getLocationsForSelectedServices } = require('./azureLocationService');
 
 const CACHE_TTL_MS = 5 * 60 * 1000;
-const AVAILABLE_LOCATIONS_CACHE_TTL_MS = 5 * 60 * 1000;
+const AVAILABLE_LOCATIONS_CACHE_TTL_MS = 10 * 60 * 1000;
 const DEFAULT_LOCATION = process.env.AZURE_PRICING_DEFAULT_REGION || 'eastus';
 const pricingCache = new Map();
 const availableLocationsCache = new Map();
