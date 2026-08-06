@@ -56,7 +56,7 @@ function ResetPasswordForm() {
     <>
       {done ? (
         <p className="text-sm text-green-700">
-          Password updated. You can sign in with your new password.
+          Password updated. Continue to sign in with your new password.
         </p>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-5">

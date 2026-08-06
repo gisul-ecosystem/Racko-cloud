@@ -3,6 +3,7 @@ import Request from '../models/Request.js';
 import { createRequest, getAllRequests, getRequestById } from '../services/requestService.js';
 import { syncRequestUserSpend, getAllUsersSpend } from '../services/costTrackingService.js';
 import { reinstateUser } from '../services/budgetEnforcementService.js';
+import { resolvePortalBaseUrlFromRequestHeaders } from '../utils/portalUrl.js';
 
 const router = Router();
 
@@ -22,7 +23,9 @@ async function loadOwnedRequest(req, requestId) {
 router.post('/requests', async (req, res, next) => {
   try {
     const userId = String(req.headers['x-user-id'] || '').trim() || undefined;
-    const request = await createRequest(req.body, userId);
+    const request = await createRequest(req.body, userId, {
+      portalBaseUrl: resolvePortalBaseUrlFromRequestHeaders(req.headers),
+    });
 
     res.status(201).json({
       success: true,

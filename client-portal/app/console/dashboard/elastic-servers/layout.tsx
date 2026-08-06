@@ -10,7 +10,7 @@ import {
 } from 'lucide-react';
 import { RequireTenantService } from '@/components/tenant/RequireTenantService';
 import { TenantServiceShell } from '@/components/tenant/TenantServiceShell';
-import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import type { ServiceNavLink } from '@/components/console/ServiceNavSidebar';
 
@@ -63,15 +63,15 @@ const endUserLinks: ServiceNavLink[] = [
 ];
 
 export default function TenantElasticLayout({ children }: { children: React.ReactNode }) {
-  const { tenantUser } = useTenantAuth();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
-  const links = isAdmin ? adminLinks : endUserLinks;
+  const { isConsoleStaff, hasPermission } = useTenantRbac();
+  const showAdminNav = isConsoleStaff && hasPermission('elastic.manage', 'elastic.read');
+  const links = showAdminNav ? adminLinks : endUserLinks;
 
   return (
     <RequireTenantService serviceKey="elastic-servers">
       <TenantServiceShell
         title="Elastic Server Import"
-        subtitle={isAdmin ? 'External server console' : 'Assigned servers'}
+        subtitle={showAdminNav ? 'External server console' : 'Assigned servers'}
         links={links}
       >
         {children}

@@ -55,4 +55,8 @@ router.post(
   }
 );
 
+router.delete('/people/:userId', (req, res, next) => {
+  tenantRbacController.deleteOperator(req, res, next);
+});
+
 export default router;

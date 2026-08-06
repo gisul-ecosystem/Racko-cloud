@@ -68,7 +68,13 @@ export class TenantExternalVmController {
   async getAvailable(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const { tenantId } = tenantIds(req);
-      const vms = await externalVMService.getAvailableTenantExternalVMs(tenantId);
+      const excludeUserId = req.query['userId'] as string | undefined;
+      const vms = await externalVMService.getAvailableTenantExternalVMs(
+        tenantId,
+        excludeUserId && mongoose.Types.ObjectId.isValid(excludeUserId)
+          ? { excludeTenantUserId: new mongoose.Types.ObjectId(excludeUserId) }
+          : undefined
+      );
       success(res, 'Available servers retrieved.', { externalVms: vms, total: vms.length });
     } catch (err) {
       next(err);
@@ -115,7 +121,13 @@ export class TenantExternalVmController {
         tenantUserId,
         accessSchedule
       );
-      success(res, `${result.assigned} server(s) assigned successfully.`, result);
+      const skippedNote =
+        result.skipped > 0 ? ` (${result.skipped} already assigned to this user)` : '';
+      success(
+        res,
+        `${result.assigned} server(s) assigned successfully${skippedNote}.`,
+        result
+      );
     } catch (err) {
       next(err);
     }
@@ -192,7 +204,16 @@ export class TenantExternalVmController {
     try {
       const { tenantId } = tenantIds(req);
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
-      await externalVMService.unassignTenantExternalVM(id, tenantId);
+      const userIdRaw = (req.query['userId'] as string | undefined) ?? (req.body as { userId?: string })?.userId;
+      if (!userIdRaw || !mongoose.Types.ObjectId.isValid(userIdRaw)) {
+        res.status(400).json({ success: false, message: 'userId is required.' });
+        return;
+      }
+      await externalVMService.unassignTenantExternalVM(
+        id,
+        tenantId,
+        new mongoose.Types.ObjectId(userIdRaw)
+      );
       success(res, 'Server unassigned successfully.');
     } catch (err) {
       next(err);

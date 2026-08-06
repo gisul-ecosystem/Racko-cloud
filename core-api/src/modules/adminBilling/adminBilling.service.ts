@@ -2,7 +2,9 @@ import mongoose from 'mongoose';
 import { AdminWallet } from '../../models/adminWallet.model';
 import { AdminWalletTransaction } from '../../models/adminWalletTransaction.model';
 import { AdminPricingConfig, type TemplateRates } from '../../models/adminPricingConfig.model';
-import { AppError, ValidationError } from '../../utils/errors';
+import type { AdminServiceKey } from '../../constants/adminServiceCatalog';
+import { AppError, NotFoundError, ValidationError } from '../../utils/errors';
+import { projectsService } from '../projects/projects.service';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -19,6 +21,8 @@ export interface AdminWalletTransactionPublic {
   relatedVmJobId: string | null;
   creditedBy: string | null;
   balanceAfter: number;
+  projectId: string | null;
+  serviceKey: string | null;
   createdAt: Date;
 }
 
@@ -117,7 +121,7 @@ export class AdminBillingService {
     if (Number.isFinite(configured) && configured > 0) {
       return configured;
     }
-    return 86;
+    return 95.12;
   }
 
   usdToInr(amountUsd: number): number {
@@ -184,7 +188,11 @@ export class AdminBillingService {
     userId: string,
     amountUsd: number,
     relatedRequestId: string | null = null,
-    provider: 'azure' | 'aws' = 'azure'
+    provider: 'azure' | 'aws' = 'azure',
+    attribution?: {
+      projectId?: string | null;
+      serviceKey?: AdminServiceKey | null;
+    }
   ): Promise<{
     balance: number;
     currency: string;
@@ -197,10 +205,29 @@ export class AdminBillingService {
       throw new ValidationError('Estimated amount must be a positive number.');
     }
 
+    const serviceKey: AdminServiceKey =
+      attribution?.serviceKey || (provider === 'aws' ? 'aws' : 'azure');
+    let projectId: string | null = attribution?.projectId ?? null;
+    let orgId: string | null = null;
+
+    if (projectId) {
+      const usable = await projectsService.assertUsableForService({
+        projectId,
+        actingUserId: userId,
+        serviceKey,
+      });
+      projectId = usable.projectId.toString();
+      orgId = usable.orgId;
+    }
+
     const usdToInrRate = this.getUsdToInrRate();
     const chargedInr = this.usdToInr(amountUsd);
     const reason = provider === 'aws' ? 'aws_lab_request' : 'azure_lab_request';
-    const wallet = await this.debitWallet(userId, chargedInr, relatedRequestId, reason);
+    const wallet = await this.debitWallet(userId, chargedInr, relatedRequestId, reason, {
+      projectId,
+      orgId,
+      serviceKey,
+    });
 
     return {
       balance: wallet.balance,
@@ -246,20 +273,29 @@ export class AdminBillingService {
   async listTransactions(
     userId: string,
     page = 1,
-    limit = 20
+    limit = 20,
+    filters?: { projectId?: string; serviceKey?: string }
   ): Promise<{ transactions: AdminWalletTransactionPublic[]; total: number; page: number; limit: number }> {
     const oid = new mongoose.Types.ObjectId(userId);
     const safePage = Math.max(1, page);
     const safeLimit = Math.min(Math.max(1, limit), 100);
     const skip = (safePage - 1) * safeLimit;
 
+    const query: Record<string, unknown> = { userId: oid };
+    if (filters?.projectId && mongoose.Types.ObjectId.isValid(filters.projectId)) {
+      query['projectId'] = new mongoose.Types.ObjectId(filters.projectId);
+    }
+    if (filters?.serviceKey) {
+      query['serviceKey'] = filters.serviceKey;
+    }
+
     const [rows, total] = await Promise.all([
-      AdminWalletTransaction.find({ userId: oid })
+      AdminWalletTransaction.find(query)
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(safeLimit)
         .lean(),
-      AdminWalletTransaction.countDocuments({ userId: oid }),
+      AdminWalletTransaction.countDocuments(query),
     ]);
 
     return {
@@ -271,11 +307,40 @@ export class AdminBillingService {
         relatedVmJobId: r.relatedVmJobId ?? null,
         creditedBy: r.creditedBy ? r.creditedBy.toString() : null,
         balanceAfter: r.balanceAfter,
+        projectId: r.projectId ? r.projectId.toString() : null,
+        serviceKey: r.serviceKey ?? null,
         createdAt: r.createdAt,
       })),
       total,
       page: safePage,
       limit: safeLimit,
+    };
+  }
+
+  async getTransaction(
+    userId: string,
+    transactionId: string
+  ): Promise<AdminWalletTransactionPublic> {
+    if (!mongoose.Types.ObjectId.isValid(transactionId)) {
+      throw new NotFoundError('Transaction not found.');
+    }
+    const row = await AdminWalletTransaction.findOne({
+      _id: new mongoose.Types.ObjectId(transactionId),
+      userId: new mongoose.Types.ObjectId(userId),
+    }).lean();
+    if (!row) throw new NotFoundError('Transaction not found.');
+
+    return {
+      id: row._id.toString(),
+      type: row.type,
+      amount: row.amount,
+      reason: row.reason,
+      relatedVmJobId: row.relatedVmJobId ?? null,
+      creditedBy: row.creditedBy ? row.creditedBy.toString() : null,
+      balanceAfter: row.balanceAfter,
+      projectId: row.projectId ? row.projectId.toString() : null,
+      serviceKey: row.serviceKey ?? null,
+      createdAt: row.createdAt,
     };
   }
 

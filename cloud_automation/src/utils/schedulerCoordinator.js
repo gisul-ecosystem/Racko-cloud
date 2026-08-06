@@ -10,7 +10,21 @@ const LIVE_JOBS = new Set(['usage-monitor', 'window-enforcement']);
 /** Track in-flight runs per job name (allows different jobs to overlap). */
 const localJobBusy = new Map();
 
+/** Rate-limit skip logs — overlapping ticks are normal, not useful every few seconds. */
+const lastSkipLogAt = new Map();
+const SKIP_LOG_INTERVAL_MS = 60_000;
+
 const logSchedulerEvent = (event, details = {}) => {
+  if (event === 'scheduler_job_skipped') {
+    const key = `${details.job || 'job'}:${details.reason || 'unknown'}`;
+    const now = Date.now();
+    const last = lastSkipLogAt.get(key) || 0;
+    if (now - last < SKIP_LOG_INTERVAL_MS) {
+      return;
+    }
+    lastSkipLogAt.set(key, now);
+  }
+
   console.log(
     JSON.stringify({
       event,

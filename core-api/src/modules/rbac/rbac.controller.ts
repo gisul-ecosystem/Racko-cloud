@@ -26,9 +26,11 @@ async function getMyPermissions(req: Request, res: Response, next: NextFunction)
   try {
     const authReq = req as AuthenticatedRequest;
     const keys = await rbacService.getEffectivePermissions(authReq.user.userId);
+    const roleSlugs = await rbacService.getAssignedRoleSlugs(authReq.user.userId);
     success(res, 'Effective permissions retrieved.', {
       role: authReq.user.role,
       permissions: [...keys].sort(),
+      roleSlugs,
       isSuperAdmin: authReq.user.role === 'super_admin',
     });
   } catch (err) {
@@ -100,6 +102,17 @@ async function createStaff(req: Request, res: Response, next: NextFunction): Pro
   }
 }
 
+async function deleteStaff(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const userId = req.params['userId'] as string;
+    const result = await rbacService.deleteStaffUser(userId, authReq.user.userId);
+    success(res, 'Staff user deleted.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listAudit(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const limit = Number(req.query['limit'] || 50);
@@ -119,5 +132,6 @@ export const rbacController = {
   listPeople,
   setUserRoles,
   createStaff,
+  deleteStaff,
   listAudit,
 };

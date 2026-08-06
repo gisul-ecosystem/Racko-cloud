@@ -189,6 +189,8 @@ const requestSchema = new mongoose.Schema(
     customerEmail: { type: String, required: true },
     projectName: String,
     requestName: String,
+    /** Racko org/tenant project ObjectId (string). Distinct from lab projectName. */
+    projectId: { type: String, default: null, index: true },
     idMode: { type: String, enum: ['test_ids', 'aws_ids'] },
     accountCount: { type: Number, required: true, min: 1, default: 10 },
     costingMode: { type: String, enum: ['shared', 'per_user'], default: 'shared' },
@@ -294,6 +296,8 @@ const requestSchema = new mongoose.Schema(
     failureReason: String,
 
     createdBy: { type: String },
+    /** Public portal origin for emailed manage/purchase links (tenant domain when applicable). */
+    portalBaseUrl: { type: String },
 
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },

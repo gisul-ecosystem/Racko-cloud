@@ -1,5 +1,5 @@
 /** Default USD→INR rate when wallet API does not return one. Override via core-api USD_TO_INR_RATE. */
-export const DEFAULT_USD_TO_INR_RATE = 86;
+export const DEFAULT_USD_TO_INR_RATE = 95.12;
 
 export function convertUsdToInr(
   amountUsd: number | null | undefined,

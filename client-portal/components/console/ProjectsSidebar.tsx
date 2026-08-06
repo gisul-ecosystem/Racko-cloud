@@ -28,10 +28,10 @@ export function ProjectsSidebar({
           exact: true,
         },
         {
-          href: '/console/projects/create',
+          href: '/console/projects',
           label: 'Create project',
           icon: <Plus className="h-4 w-4" />,
-          isActive: (p) => p.startsWith('/console/projects/create'),
+          isActive: () => false,
         },
         {
           href: '/console/projects/reports',

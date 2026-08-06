@@ -7,6 +7,7 @@ import {
   registerSchema,
   loginSchema,
   verifyEmailSchema,
+  resendVerificationSchema,
   forgotPasswordSchema,
   resetPasswordSchema,
 } from './auth.validation';
@@ -24,6 +25,14 @@ router.post('/register', validateRequest(registerSchema), (req, res, next) => {
 router.post('/verify-email', validateRequest(verifyEmailSchema), (req, res, next) => {
   authController.verifyEmail(req, res, next);
 });
+
+router.post(
+  '/resend-verification',
+  validateRequest(resendVerificationSchema),
+  (req, res, next) => {
+    authController.resendVerification(req, res, next);
+  }
+);
 
 router.post('/login', validateRequest(loginSchema), (req, res, next) => {
   authController.login(req, res, next);

@@ -170,6 +170,8 @@ const CUSTOM_POLICY_DEFINITIONS = {
         }
       }
     },
+    // Azure Policy requires count comparison operators as siblings of `count`,
+    // not nested inside CountExpressionDefinition (greater/equals inside count fails parse).
     policyRule: {
       if: {
         allOf: [
@@ -183,13 +185,13 @@ const CUSTOM_POLICY_DEFINITIONS = {
                 allOf: [
                   {
                     count: {
-                      field: 'Microsoft.DocumentDB/databaseAccounts/capabilities[*].name',
+                      field: 'Microsoft.DocumentDB/databaseAccounts/capabilities[*]',
                       where: {
                         field: 'Microsoft.DocumentDB/databaseAccounts/capabilities[*].name',
                         equals: 'EnableServerless'
-                      },
-                      greater: 0
-                    }
+                      }
+                    },
+                    greater: 0
                   },
                   {
                     not: {
@@ -203,13 +205,13 @@ const CUSTOM_POLICY_DEFINITIONS = {
                 allOf: [
                   {
                     count: {
-                      field: 'Microsoft.DocumentDB/databaseAccounts/capabilities[*].name',
+                      field: 'Microsoft.DocumentDB/databaseAccounts/capabilities[*]',
                       where: {
                         field: 'Microsoft.DocumentDB/databaseAccounts/capabilities[*].name',
                         equals: 'EnableServerless'
-                      },
-                      equals: 0
-                    }
+                      }
+                    },
+                    equals: 0
                   },
                   {
                     not: {
@@ -587,6 +589,14 @@ const buildPolicyDefinitionPayload = (definition) => ({
   policyRule: definition.policyRule
 });
 
+const serializePolicyRule = (rule) => {
+  try {
+    return JSON.stringify(rule ?? null);
+  } catch {
+    return '';
+  }
+};
+
 const ensureCustomPolicyDefinition = async (policyKey) => {
   if (customPolicyCache.has(policyKey)) {
     return customPolicyCache.get(policyKey);
@@ -599,32 +609,34 @@ const ensureCustomPolicyDefinition = async (policyKey) => {
 
   const { policyClient, subscriptionId } = createPolicyClient();
   const definitionId = getCustomPolicyDefinitionId(subscriptionId, policyKey);
+  const desiredPayload = buildPolicyDefinitionPayload(definition);
+  const desiredRule = serializePolicyRule(desiredPayload.policyRule);
+
+  let needsCreateOrUpdate = true;
 
   try {
     const existing = await policyClient.policyDefinitions.get(policyKey);
-    if (existing?.policyRule) {
-      customPolicyCache.set(policyKey, definitionId);
-      return definitionId;
+    if (existing?.policyRule && serializePolicyRule(existing.policyRule) === desiredRule) {
+      needsCreateOrUpdate = false;
+    } else {
+      logEvent('custom_policy_definition_repair_started', {
+        policyKey,
+        reason: existing?.policyRule ? 'policy_rule_outdated' : 'missing_policy_rule'
+      });
     }
-
-    logEvent('custom_policy_definition_repair_started', {
-      policyKey,
-      reason: 'missing_policy_rule'
-    });
   } catch (error) {
     if (Number(error?.statusCode || error?.status) !== 404) {
       throw error;
     }
   }
 
-  logEvent('custom_policy_definition_create_started', { policyKey });
+  if (needsCreateOrUpdate) {
+    logEvent('custom_policy_definition_create_started', { policyKey });
 
-  await policyClient.policyDefinitions.createOrUpdate(
-    policyKey,
-    buildPolicyDefinitionPayload(definition)
-  );
+    await policyClient.policyDefinitions.createOrUpdate(policyKey, desiredPayload);
 
-  logEvent('custom_policy_definition_create_success', { policyKey, definitionId });
+    logEvent('custom_policy_definition_create_success', { policyKey, definitionId });
+  }
 
   customPolicyCache.set(policyKey, definitionId);
   return definitionId;

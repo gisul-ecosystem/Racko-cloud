@@ -57,7 +57,6 @@ function availableBillings(plan: IVmCatalogPlan, category?: VmCatalogCategory): 
 
 export default function CreateVmPage() {
   const { api, routes, isReady } = useVmCatalogPortal();
-  const requiresProject = true;
   const projectPortal = routes.hub === '/console' ? 'org' : 'tenant';
   const [plans, setPlans] = useState<IVmCatalogPlan[]>([]);
   const [search, setSearch] = useState('');
@@ -141,10 +140,6 @@ export default function CreateVmPage() {
       setBuyError('Select a valid billing cycle for this template.');
       return;
     }
-    if (requiresProject && !projectId) {
-      setBuyError('Select a project for this purchase.');
-      return;
-    }
 
     const osLabel = OS_OPTIONS.find((o) => o.id === os)?.label || os;
 
@@ -174,7 +169,7 @@ export default function CreateVmPage() {
           total,
           billingLabel: 'GST 18%',
         },
-        ...(requiresProject ? { projectId } : {}),
+        ...(projectId ? { projectId } : {}),
       });
       setSubmittedRequestId(request._id);
     } catch (err) {
@@ -349,15 +344,13 @@ export default function CreateVmPage() {
                 />
               </div>
 
-              {requiresProject ? (
-                <ProjectSelect
-                  serviceKey="create-vm"
-                  value={projectId}
-                  onChange={setProjectId}
-                  disabled={buyLoading || !!submittedRequestId}
-                  portal={projectPortal}
-                />
-              ) : null}
+              <ProjectSelect
+                serviceKey="create-vm"
+                value={projectId}
+                onChange={setProjectId}
+                disabled={buyLoading || !!submittedRequestId}
+                portal={projectPortal}
+              />
 
               <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 text-sm">
                 <div className="flex justify-between text-gray-600">
@@ -392,8 +385,7 @@ export default function CreateVmPage() {
                 disabled={
                   buyLoading ||
                   !!submittedRequestId ||
-                  total <= 0 ||
-                  (requiresProject && !projectId)
+                  total <= 0
                 }
                 onClick={() => void onBuyNow()}
                 className="w-full rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"

@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Menu, LogOut, User } from 'lucide-react';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { TenantNotificationBell } from './TenantNotificationBell';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
 import { TENANT_CONSOLE, tenantVps } from '@/lib/tenantAdminRoutes';
@@ -17,8 +18,8 @@ interface TenantTopBarProps {
 export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarProps) {
   const { tenantUser, logout } = useTenantAuth();
   const { logoSrc, portalName, accentColor } = useTenantBranding();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
-  const homeHref = isAdmin ? TENANT_CONSOLE : tenantVps.vms;
+  const { isConsoleStaff, isTenantAdmin } = useTenantRbac();
+  const homeHref = isConsoleStaff ? TENANT_CONSOLE : tenantVps.vms;
 
   return (
     <header className="sticky top-0 z-10 border-b border-gray-200 bg-white">
@@ -70,7 +71,7 @@ export function TenantTopBar({ onToggleSidebar, title, subtitle }: TenantTopBarP
               {tenantUser?.email}
             </p>
           </div>
-          {isAdmin ? (
+          {isTenantAdmin ? (
             <Link
               href="/console/dashboard/profile"
               className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-gray-200 text-gray-600 transition hover:bg-gray-50"

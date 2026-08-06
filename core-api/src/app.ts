@@ -9,6 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { allowedOrigins, config } from './config';
 import { logger } from './utils/logger';
 import { sanitizeInput } from './middleware/sanitize.middleware';
+import { requestContext } from './middleware/requestContext.middleware';
 import { globalErrorHandler, notFoundHandler } from './middleware/error.middleware';
 import authRoutes from './modules/auth/auth.routes';
 import userRoutes from './modules/user/user.routes';
@@ -47,6 +48,8 @@ import tenantDedicatedServerRoutes from './modules/tenantDedicatedServer/tenantD
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
+import { startVmHostLeaseExpiryWarningScheduler } from './modules/vmHostLeases/vmHostLeaseExpiryScheduler';
+import vmHostLeaseRoutes from './modules/vmHostLeases/vmHostLease.routes';
 import { rescheduleFromDb } from './modules/vmAccessSchedule/scheduleManager';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
@@ -62,6 +65,7 @@ import tenantRbacRoutes from './modules/tenantRbac/tenantRbac.routes';
 import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboarding.routes';
 import projectsRoutes from './modules/projects/projects.routes';
 import tenantProjectsRoutes from './modules/projects/tenantProjects.routes';
+import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes';
 
 const app = express();
 
@@ -72,6 +76,9 @@ app.use((req, res, next) => {
   res.setHeader('X-Request-ID', requestId);
   next();
 });
+
+// 1b. Request context — makes the caller's portal origin available to services
+app.use(requestContext);
 
 // 2. Helmet — all security headers 
 app.use(
@@ -178,6 +185,7 @@ app.use('/api/v1/tenant-external-vms', tenantExternalVmRoutes);
 app.use('/api/v1/tenant-vm-catalog', tenantVmCatalogRoutes);
 app.use('/api/v1/tenant-dedicated-servers', tenantDedicatedServerRoutes);
 app.use('/api/v1/tenant-projects', tenantProjectsRoutes);
+app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -195,6 +203,7 @@ app.use('/api/v1/shared-files', adminSharedFilesRouter);
 // machines-for-app is inside agentSharedFilesRouter at /machines-for-app
 // so the full path is /api/v1/agent/shared-files/machines-for-app
 // The Go client is updated to use this path
+app.use('/api/v1/vm-host-leases', vmHostLeaseRoutes);
 app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 app.use('/api/v1/ip-pool', ipPoolRoutes);
 app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
@@ -218,6 +227,7 @@ startVmAutomationScheduler();
 startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
 startCatalogVmExpiryScheduler();
+startVmHostLeaseExpiryWarningScheduler();
 void rescheduleFromDb().catch((err) => {
   logger.error('[accessSchedule] rescheduleFromDb failed', {
     error: err instanceof Error ? err.message : String(err),
