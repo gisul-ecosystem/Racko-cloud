@@ -407,6 +407,8 @@ router.post('/api/v1/machines/reset-stream-ticket', authMiddleware, verifyMiddle
 // SSE stream for reset status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
 router.get('/api/v1/machines/reset-stream/:sessionId', sseProxy);
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+// PATCH /api/v1/machines/tracking — enable/disable file tracking (must come before /:id)
+router.patch('/api/v1/machines/tracking', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/machines/jobs/:id/stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
