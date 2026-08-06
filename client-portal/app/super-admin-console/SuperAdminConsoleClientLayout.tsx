@@ -68,7 +68,11 @@ function SuperAdminConsoleShell({ children }: { children: React.ReactNode }) {
   );
 }
 
-export default function SuperAdminConsoleClientLayout({ children }: { children: React.ReactNode }) {
+export default function SuperAdminConsoleClientLayout({
+  children,
+}: {
+  children: React.ReactNode;
+}) {
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
   const pathname = usePathname();
