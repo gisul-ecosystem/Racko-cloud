@@ -32,7 +32,7 @@ import { decrypt } from '../../utils/crypto';
 import { ProxmoxNodeService } from '../proxmoxNode/proxmoxNode.service';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
-import { decodeAgentOutput, isProcessExited } from './helpers/hypervGuestOutput';
+import { runGuestPowerShellOnce } from './helpers/guestAgentExec';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
 import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
 import { softwareService } from '../software/software.service';
@@ -52,6 +52,8 @@ import {
   VMOperationError,
   TemplateNotFoundError,
   InsufficientResourcesError,
+  ProxmoxConnectionError,
+  ProxmoxAuthError,
 } from '../../utils/errors';
 import {
   parseAccessScheduleInput,
@@ -122,6 +124,22 @@ function deriveConsoleProtocol(osType?: string): 'rdp' | 'ssh' {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Surface ProxmoxConnectionError/AuthError internals in fixup logs (public message is sanitized). */
+function proxmoxErrFields(err: unknown): Record<string, unknown> {
+  if (err instanceof ProxmoxConnectionError) {
+    return {
+      error: err.message,
+      internalMessage: err.internalMessage,
+      httpStatus: err.httpStatus,
+      isRetryable: err.isRetryable,
+    };
+  }
+  if (err instanceof ProxmoxAuthError) {
+    return { error: err.message, code: err.code };
+  }
+  return { error: err instanceof Error ? err.message : String(err) };
 }
 
 /**
@@ -196,7 +214,7 @@ async function fixPrivateNetworkGuestIp(
     const mtu = 1400; // custnet1/VXLAN carries 1450 — 1400 leaves headroom and matches net0's mtu=1400
     // Exit 2 + NO_ADAPTER when no NIC is Up yet so callers can retry instead
     // of treating a silent no-op as success.
-    const command =
+    const script =
       `$ip='${assignedIp}'; $gw='${gateway}'; $mask='${subnetMask}'; $mtu=${mtu}; ` +
       "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1; " +
       "if (-not $adapter) { Write-Output 'NO_ADAPTER'; exit 2 }; " +
@@ -207,52 +225,11 @@ async function fixPrivateNetworkGuestIp(
       "netsh interface ipv4 set subinterface \"$($adapter.Name)\" mtu=$mtu store=persistent | Out-Null; " +
       "Write-Output ('OK:' + $adapter.Name);";
 
-    const execStart = await proxmoxClient.post<{ data: { pid: number } }>(
-      `/nodes/${node}/qemu/${vmid}/agent/exec`,
-      { command: 'powershell.exe', args: ['-Command', command] }
-    );
-    const pid = execStart.data.data.pid;
-
-    let sawResult = false;
-    let exitCode: number | undefined;
-    let stdout = '';
-    let stderr = '';
-    for (let poll = 1; poll <= 8; poll++) {
-      await sleep(1000);
-      try {
-        const statusRes = await proxmoxClient.get<{
-          data: { exited?: number | boolean; exitcode?: number; 'out-data'?: string; 'err-data'?: string };
-        }>(`/nodes/${node}/qemu/${vmid}/agent/exec-status`, { params: { pid } });
-        const data = statusRes.data.data;
-        if (isProcessExited(data)) {
-          exitCode = data.exitcode;
-          stdout = decodeAgentOutput(data['out-data']);
-          stderr = decodeAgentOutput(data['err-data']);
-          sawResult = true;
-          break;
-        }
-      } catch (statusErr) {
-        logger.warn('[VMConsolePoll] Private-network guest IP fixup — exec-status poll failed', {
-          node,
-          vmid,
-          pid,
-          poll,
-          error: statusErr instanceof Error ? statusErr.message : String(statusErr),
-        });
-        break;
-      }
-    }
-
-    if (!sawResult) {
-      logger.warn('[VMConsolePoll] Private-network guest IP fixup — exec-status never exited (will retry)', {
-        node,
-        vmid,
-        pid,
-        assignedIp,
-        gateway,
-      });
-      return;
-    }
+    const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
+      logLabel: 'VMConsolePoll',
+      pollIntervalMs: 1000,
+      maxPolls: 8,
+    });
 
     // NO_ADAPTER (exit 2) or any non-zero exit — NIC not ready / netsh failed.
     // Do NOT log success; startIpPolling will re-invoke on the next attempt.
@@ -286,7 +263,7 @@ async function fixPrivateNetworkGuestIp(
       vmid,
       assignedIp,
       gateway,
-      error: err instanceof Error ? err.message : String(err),
+      ...proxmoxErrFields(err),
     });
   }
 }
@@ -301,25 +278,30 @@ async function fixPrivateNetworkGuestIp(
 async function fixWindowsPasswordPolicy(node: string, vmid: number, username: string): Promise<void> {
   try {
     const safeUsername = username.replace(/["'$`]/g, '');
-    const command =
+    const script =
       `Set-LocalUser -Name '${safeUsername}' -PasswordNeverExpires $true -ErrorAction SilentlyContinue; ` +
       `net user "${safeUsername}" /logonpasswordchg:no`;
 
-    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
-      command: 'powershell.exe',
-      args: ['-Command', command],
+    const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
+      logLabel: 'VMConsolePoll',
+      pollIntervalMs: 1000,
+      maxPolls: 8,
     });
     logger.info('[VMConsolePoll] Windows password-policy fixup executed', {
       node,
       vmid,
       username: safeUsername,
+      pid,
+      exitCode,
+      stdout: stdout.slice(0, 500),
+      stderr: stderr.slice(0, 500),
     });
   } catch (err) {
     logger.warn('[VMConsolePoll] Windows password-policy fixup failed — continuing anyway', {
       node,
       vmid,
       username,
-      error: err instanceof Error ? err.message : String(err),
+      ...proxmoxErrFields(err),
     });
   }
 }
@@ -346,19 +328,27 @@ async function fixWindowsPasswordPolicy(node: string, vmid: number, username: st
  */
 async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
   try {
-    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
-      command: 'powershell.exe',
-      args: [
-        '-Command',
-        "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0; $nlm = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'{DCB00C01-570F-4A9B-8D69-199FDBA5723B}')); $nlm.GetNetworkConnections() | ForEach-Object { $_.GetNetwork().SetCategory(1) };",
-      ],
+    const script =
+      "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0; $nlm = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'{DCB00C01-570F-4A9B-8D69-199FDBA5723B}')); $nlm.GetNetworkConnections() | ForEach-Object { $_.GetNetwork().SetCategory(1) };";
+
+    const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
+      logLabel: 'VMConsolePoll',
+      pollIntervalMs: 1000,
+      maxPolls: 8,
     });
-    logger.info('[VMConsolePoll] Windows RDP access fixup executed', { node, vmid });
+    logger.info('[VMConsolePoll] Windows RDP access fixup executed', {
+      node,
+      vmid,
+      pid,
+      exitCode,
+      stdout: stdout.slice(0, 500),
+      stderr: stderr.slice(0, 500),
+    });
   } catch (err) {
     logger.warn('[VMConsolePoll] Windows RDP access fixup failed — continuing anyway', {
       node,
       vmid,
-      error: err instanceof Error ? err.message : String(err),
+      ...proxmoxErrFields(err),
     });
   }
 }

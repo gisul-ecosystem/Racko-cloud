@@ -119,6 +119,42 @@ class MachineManagerService {
     return this.toMachineResponse(doc);
   }
 
+  async bulkDeleteMachines(
+    machineIds: string[],
+    adminId: mongoose.Types.ObjectId
+  ): Promise<{ deleted: string[]; failed: { machineId: string; error: string }[] }> {
+    const deleted: string[] = [];
+    const failed: { machineId: string; error: string }[] = [];
+
+    await Promise.all(
+      machineIds.map(async (machineId) => {
+        try {
+          const id = new mongoose.Types.ObjectId(machineId);
+          await this.deleteMachine(id, adminId);
+          deleted.push(machineId);
+        } catch (err) {
+          failed.push({
+            machineId,
+            error: err instanceof Error ? err.message : 'Unknown error',
+          });
+          logger.warn('[MachineManager] Bulk delete — single machine failed', {
+            machineId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })
+    );
+
+    logger.info('[MachineManager] Bulk delete completed', {
+      requested: machineIds.length,
+      deleted: deleted.length,
+      failed: failed.length,
+      adminId: adminId.toString(),
+    });
+
+    return { deleted, failed };
+  }
+
   async deleteMachine(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
@@ -151,6 +187,19 @@ class MachineManagerService {
     if (doc.agentId) {
       wsManager.closeConnection(doc.agentId, 4010, 'Machine deleted');
     }
+
+    // Clean up all related data so nothing orphans in the database
+    await JobModel.deleteMany({ machineId: id });
+
+    const { MachineActivityModel } = await import('../../models/machineActivity.model');
+    await MachineActivityModel.deleteMany({ machineId: id });
+
+    const { MachineBaselineModel } = await import('../../models/machineBaseline.model');
+    await MachineBaselineModel.deleteMany({ machineId: id });
+
+    logger.info('[MachineManager] Cleaned up related data for deleted machine', {
+      machineId: id.toString(),
+    });
   }
 
   // ─── Jobs ──────────────────────────────────────────────────────────────────
