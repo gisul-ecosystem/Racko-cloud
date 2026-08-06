@@ -36,6 +36,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
 Source: "..\dist\{#MyBinaryName}"; DestDir: "{#MyInstallDir}"; Flags: ignoreversion
+; GUI tray app — installed alongside the service
+Source: "..\dist\racko-app.exe"; DestDir: "{#MyInstallDir}"; Flags: ignoreversion
 
 [Code]
 var
@@ -186,7 +188,15 @@ end;
 
 [Icons]
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
+; Desktop and Start Menu shortcut to the GUI tray app
+Name: "{commondesktop}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app.exe"; Tasks: desktopicon
+Name: "{group}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app.exe"
+
+[Tasks]
+Name: "desktopicon"; Description: "Create a &desktop shortcut for Racko Shared Files"; GroupDescription: "Additional icons:"
 
 [Run]
+; Start the GUI app after install (non-blocking, visible to the logged-in user)
+Filename: "{#MyInstallDir}\racko-app.exe"; Description: "Launch Racko Shared Files"; Flags: nowait postinstall skipifsilent
 Filename: "{cmd}"; Parameters: "/c echo Racko Agent is running as a Windows service."; \
   Description: "Agent started"; Flags: nowait postinstall skipifsilent
