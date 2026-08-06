@@ -7,6 +7,7 @@ import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { ApiError } from '@/lib/apiClient';
 import { fetchTenantVms } from '@/lib/tenantVmApi';
 import type { TenantVmSummary } from '@/types/tenantPortal';
@@ -16,11 +17,14 @@ import type { VMStatus } from '@/lib/vmApi';
 export function TenantRecentResources() {
   const { accentColor } = useTenantBranding();
   const { hasActiveService, loading: servicesLoading } = useTenantServices();
+  const { loading: rbacLoading, isTenantAdmin, hasPermission } = useTenantRbac();
   const [vms, setVms] = useState<TenantVmSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const enabled = hasActiveService('vm-management');
+  const enabled =
+    hasActiveService('vm-management') &&
+    (isTenantAdmin || hasPermission('vms.read', 'vms.manage', 'vms.assign'));
 
   const load = useCallback(async () => {
     if (!enabled) {
@@ -44,11 +48,11 @@ export function TenantRecentResources() {
   }, [enabled]);
 
   useEffect(() => {
-    if (servicesLoading) return;
+    if (servicesLoading || rbacLoading) return;
     void load();
-  }, [servicesLoading, load]);
+  }, [servicesLoading, rbacLoading, load]);
 
-  if (servicesLoading || !enabled) return null;
+  if (servicesLoading || rbacLoading || !enabled) return null;
 
   return (
     <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">

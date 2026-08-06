@@ -24,6 +24,7 @@ import { useTenantServices } from '@/context/TenantServicesContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
 import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
+import { canAccessTenantHubTile } from '@/lib/tenantServicePermissions';
 import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
@@ -137,16 +138,18 @@ export default function TenantConsolePage() {
 
   const tiles = SERVICE_TILES.filter((tile) => {
     if (isServiceHiddenFromUi(tile.serviceKey)) return false;
-    if (tile.serviceKey === 'billing') {
-      return hasPermission('wallet.read', 'wallet.topup');
-    }
-    if (tile.serviceKey === 'projects') {
-      return hasPermission('projects.read', 'projects.manage');
+    if (
+      tile.serviceKey !== 'billing' &&
+      tile.serviceKey !== 'projects' &&
+      tile.serviceKey !== 'access-control' &&
+      !hasActiveService(tile.serviceKey)
+    ) {
+      return false;
     }
     if (tile.serviceKey === 'access-control') {
       return isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
     }
-    return hasActiveService(tile.serviceKey);
+    return canAccessTenantHubTile(tile.serviceKey, hasPermission, isTenantAdmin);
   });
 
   if (loading || rbacLoading || (tenantUser?.role === 'tenant_user' && !isConsoleStaff)) {

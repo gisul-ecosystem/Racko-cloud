@@ -15,7 +15,9 @@ export interface IExternalVM {
   adminId?: string;
   tenantId?: string;
   assignedTo?: string | null;
+  /** @deprecated First assignee — use assignedTenantUserIds */
   assignedTenantUserId?: string | null;
+  assignedTenantUserIds?: string[];
   accessSchedule?: AccessSchedule | null;
   createdAt: string;
   updatedAt: string;

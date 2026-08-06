@@ -2,7 +2,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import { TenantUser } from '../../models/tenantUser.model';
 import { VM } from '../vm/vm.model';
-import { ExternalVMModel } from '../external-vm/external-vm.model';
+import { removeAllExternalVmAssignmentsForUser, getExternalVmIdsForTenantUser, syncLegacyAssignedTenantUserId } from '../external-vm/externalVmTenantAssignment.service';
 import { logger } from '../../utils/logger';
 import { ConflictError, ForbiddenError, NotFoundError } from '../../utils/errors';
 import { hashPassword } from '../../utils/argon2';
@@ -252,10 +252,11 @@ export class TenantUserService {
       { $unset: { assignedTenantUserId: 1 } }
     );
 
-    const externalUnassignResult = await ExternalVMModel.updateMany(
-      { tenantId, assignedTenantUserId: user._id },
-      { $unset: { assignedTenantUserId: 1 } }
-    );
+    const externalVmIds = await getExternalVmIdsForTenantUser(tenantId, user._id);
+    const externalUnassignResult = await removeAllExternalVmAssignmentsForUser(tenantId, user._id);
+    for (const vmId of externalVmIds) {
+      await syncLegacyAssignedTenantUserId(tenantId, vmId);
+    }
 
     await user.deleteOne();
 
@@ -264,7 +265,7 @@ export class TenantUserService {
       tenantUserId: targetUserId,
       email: user.email,
       vmsUnassigned: unassignResult.modifiedCount,
-      externalVmsUnassigned: externalUnassignResult.modifiedCount,
+      externalVmsUnassigned: externalUnassignResult,
     });
   }
 
@@ -292,16 +293,20 @@ export class TenantUserService {
       return { deleted: 0 };
     }
 
-    await Promise.all([
-      VM.updateMany(
-        { tenantId, assignedTenantUserId: { $in: deletableIds } },
-        { $unset: { assignedTenantUserId: 1 } }
-      ),
-      ExternalVMModel.updateMany(
-        { tenantId, assignedTenantUserId: { $in: deletableIds } },
-        { $unset: { assignedTenantUserId: 1 } }
-      ),
-    ]);
+    const affectedExternalVmIds = new Set<string>();
+    for (const userId of deletableIds) {
+      const vmIds = await getExternalVmIdsForTenantUser(tenantId, userId);
+      for (const vmId of vmIds) affectedExternalVmIds.add(vmId.toString());
+      await removeAllExternalVmAssignmentsForUser(tenantId, userId);
+    }
+    for (const vmId of affectedExternalVmIds) {
+      await syncLegacyAssignedTenantUserId(tenantId, new mongoose.Types.ObjectId(vmId));
+    }
+
+    await VM.updateMany(
+      { tenantId, assignedTenantUserId: { $in: deletableIds } },
+      { $unset: { assignedTenantUserId: 1 } }
+    );
 
     const result = await TenantUser.deleteMany({
       _id: { $in: deletableIds },
