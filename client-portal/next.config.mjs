@@ -123,7 +123,7 @@ const nextConfig = {
       // cannot stream SSE. The frontend calls these directly via getSseGatewayBaseUrl()
       // which resolves to the public API hostname (api-dev.racko.ai etc).
       {
-        source: "/api/:path((?!create-vm(?:/|$)|book-meet(?:/|$)|v1/machines/push-stream|v1/machines/reset-stream|v1/machines/clone-stream|v1/machines/jobs/[^/]+/stream).*)",
+        source: "/api/:path((?!create-vm(?:/|$)|book-meet(?:/|$)|v1/machines/push-stream/|v1/machines/reset-stream/|v1/machines/clone-stream/|v1/machines/jobs/[^/]+/stream(?:\\?|$)).*)",
         destination: `${gatewayUrl}/api/:path`,
       },
       {
