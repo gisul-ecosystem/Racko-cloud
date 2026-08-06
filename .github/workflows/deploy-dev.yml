@@ -233,6 +233,15 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
           go build -ldflags "$LDFLAGS" -o dist/${{ matrix.output }} .
 
+      - name: Build racko-app GUI binary (Windows only)
+        if: matrix.platform == 'windows'
+        working-directory: racko-app
+        shell: bash
+        run: |
+          go mod tidy
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
+          go build -ldflags "-H windowsgui -s -w" -o ../agent/dist/racko-app.exe .
+
       - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
         working-directory: agent
@@ -272,6 +281,7 @@ jobs:
             agent/dist/checksum-${{ matrix.platform }}.txt
             agent/dist/agent-version.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
+            ${{ matrix.platform == 'windows' && 'agent/dist/racko-app.exe' || '' }}
           retention-days: 1
 
   deploy-agent:
@@ -312,6 +322,10 @@ jobs:
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
+          # GUI tray app (bundled in installer, also deployed standalone)
+          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
+            agent-artifacts/agent-windows/racko-app.exe \
+            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-app.exe"
           echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
 
   deploy:
