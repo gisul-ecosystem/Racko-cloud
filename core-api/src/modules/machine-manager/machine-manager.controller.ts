@@ -10,6 +10,7 @@ import type { AuthenticatedRequest } from '../../types';
 import type {
   CreateMachineInput,
   BulkCreateMachineInput,
+  BulkDeleteMachineInput,
   CreateJobInput,
   AgentRegisterInput,
   AgentEnrollInput,
@@ -81,6 +82,18 @@ export class MachineManagerController {
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
       await machineManagerService.deleteMachine(id, adminId);
       success(res, 'Machine deleted.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** DELETE /api/v1/machines/bulk — bulk delete machines by ID */
+  async bulkRemove(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const { machineIds } = req.body as BulkDeleteMachineInput;
+      const result = await machineManagerService.bulkDeleteMachines(machineIds, adminId);
+      success(res, `${result.deleted.length} machine(s) deleted.`, result);
     } catch (err) {
       next(err);
     }

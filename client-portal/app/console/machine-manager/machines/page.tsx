@@ -9,7 +9,7 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
   deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStream,
-  setMachineTracking,
+  setMachineTracking, bulkDeleteMachines,
   type IMachine, type MachineStatus, type IJob, type JobStatus,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
@@ -255,6 +255,10 @@ export default function MyMachinesPage() {
   const [pendingDelete, setPendingDelete] = useState<IMachine | null>(null);
   const [deleteLoading, setDeleteLoading] = useState(false);
 
+  // Bulk delete state
+  const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
+  const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+
   // Bulk selection — any machine can be selected for tracking/reset/clone
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -302,6 +306,32 @@ export default function MyMachinesPage() {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to remove machine.');
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (!selectedMachines.length) return;
+    setBulkDeleteLoading(true);
+    setShowBulkDeleteConfirm(false);
+    try {
+      const result = await bulkDeleteMachines(selectedMachines.map((m) => m._id));
+
+      if (result.failed.length > 0) {
+        const failedNames = result.failed.map((f) => {
+          const m = machines.find((machine) => machine._id === f.machineId);
+          return m?.name ?? f.machineId;
+        });
+        addToast('warning', `${result.deleted.length} machine(s) deleted. Failed: ${failedNames.join(', ')}`);
+      } else {
+        addToast('success', `${result.deleted.length} machine(s) removed. Agents will uninstall within a few seconds.`);
+      }
+
+      setSelectedIds(new Set());
+      refetch();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to delete machines.');
+    } finally {
+      setBulkDeleteLoading(false);
     }
   };
 
@@ -438,6 +468,19 @@ export default function MyMachinesPage() {
         />
       )}
 
+      {showBulkDeleteConfirm && (
+        <ConfirmModal
+          open
+          title="Delete Machines"
+          description={`This will permanently remove ${selectedMachines.length} machine${selectedMachines.length !== 1 ? 's' : ''} and uninstall the Racko agent from ${selectedMachines.length === 1 ? 'this machine' : 'these machines'}. This cannot be undone.`}
+          confirmLabel={`Delete ${selectedMachines.length} Machine${selectedMachines.length !== 1 ? 's' : ''}`}
+          confirmVariant="danger"
+          loading={bulkDeleteLoading}
+          onConfirm={() => void handleBulkDelete()}
+          onCancel={() => setShowBulkDeleteConfirm(false)}
+        />
+      )}
+
       {resetStates && (
         <ResetStatusModal
           states={resetStates}
@@ -494,6 +537,15 @@ export default function MyMachinesPage() {
                   Reset {selectedMachines.filter((m) => m.status === 'online').length} VM{selectedMachines.filter((m) => m.status === 'online').length !== 1 ? 's' : ''}
                 </button>
               )}
+              {/* Bulk Delete — delete selected machines */}
+              <button
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                disabled={bulkDeleteLoading}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+              >
+                {bulkDeleteLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Trash2 className="h-3.5 w-3.5" />}
+                Delete {selectedMachines.length} Machine{selectedMachines.length !== 1 ? 's' : ''}
+              </button>
             </>
           )}
           <button
