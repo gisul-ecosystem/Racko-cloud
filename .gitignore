@@ -37,6 +37,11 @@ Thumbs.db
 # TypeScript
 *.tsbuildinfo
 
+# .NET / C# build artifacts
+racko-app/bin/
+racko-app/obj/
+racko-app/publish/
+
 # TLS certificates (keep certs/.gitkeep)
 certs/*.pem
 certs/*.crt

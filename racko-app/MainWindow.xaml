@@ -1,0 +1,152 @@
+<Window x:Class="RackoApp.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Racko Shared Files"
+        Width="900" Height="600"
+        MinWidth="700" MinHeight="450"
+        Background="{StaticResource SurfaceBrush}"
+        WindowStartupLocation="CenterScreen">
+
+  <Window.Resources>
+    <!-- Tab button style -->
+    <Style x:Key="TabButton" TargetType="Button">
+      <Setter Property="Background"      Value="Transparent"/>
+      <Setter Property="BorderThickness" Value="0,0,0,2"/>
+      <Setter Property="BorderBrush"     Value="Transparent"/>
+      <Setter Property="Foreground"      Value="{StaticResource TextSecondary}"/>
+      <Setter Property="Padding"         Value="16,10"/>
+      <Setter Property="FontSize"        Value="14"/>
+      <Setter Property="FontWeight"      Value="Medium"/>
+      <Setter Property="Cursor"          Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="Button">
+            <Border Background="{TemplateBinding Background}"
+                    BorderBrush="{TemplateBinding BorderBrush}"
+                    BorderThickness="{TemplateBinding BorderThickness}"
+                    Padding="{TemplateBinding Padding}">
+              <ContentPresenter/>
+            </Border>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
+    </Style>
+    <Style x:Key="TabButtonActive" TargetType="Button" BasedOn="{StaticResource TabButton}">
+      <Setter Property="BorderBrush"  Value="{StaticResource BrandRedBrush}"/>
+      <Setter Property="Foreground"   Value="{StaticResource BrandRedBrush}"/>
+      <Setter Property="FontWeight"   Value="SemiBold"/>
+    </Style>
+  </Window.Resources>
+
+  <Grid>
+    <Grid.RowDefinitions>
+      <RowDefinition Height="56"/>   <!-- Header -->
+      <RowDefinition Height="Auto"/> <!-- Tabs -->
+      <RowDefinition Height="*"/>    <!-- Content -->
+    </Grid.RowDefinitions>
+
+    <!-- ── Header ──────────────────────────────────────────────────────── -->
+    <Border Grid.Row="0" Background="White"
+            BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+      <Grid Margin="20,0">
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="*"/>
+          <ColumnDefinition Width="Auto"/>
+        </Grid.ColumnDefinitions>
+
+        <!-- Logo -->
+        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+          <Ellipse Width="10" Height="10" Fill="{StaticResource BrandRedBrush}" Margin="0,0,8,0"/>
+          <TextBlock Text="Racko Shared Files" FontSize="16" FontWeight="Bold"
+                     Foreground="{StaticResource TextPrimary}" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <!-- Upload button -->
+        <Button Grid.Column="1" Style="{StaticResource PrimaryButton}"
+                Content="↑  Upload &amp; Share"
+                VerticalAlignment="Center"
+                Click="OnUploadClick"/>
+      </Grid>
+    </Border>
+
+    <!-- ── Tabs ────────────────────────────────────────────────────────── -->
+    <Border Grid.Row="1" Background="White"
+            BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+      <StackPanel Orientation="Horizontal" Margin="12,0">
+        <Button x:Name="TabInboxBtn"  Style="{StaticResource TabButtonActive}"
+                Content="↓  Received" Click="OnTabInboxClick"/>
+        <Button x:Name="TabOutboxBtn" Style="{StaticResource TabButton}"
+                Content="↑  Sent" Click="OnTabOutboxClick"/>
+        <!-- Spacer then Refresh -->
+        <Button Style="{StaticResource TabButton}" Content="↺  Refresh"
+                Foreground="{StaticResource TextSecondary}"
+                Click="OnRefreshClick" Margin="4,0,0,0"/>
+      </StackPanel>
+    </Border>
+
+    <!-- ── Content area ───────────────────────────────────────────────── -->
+    <Grid Grid.Row="2" Margin="16">
+
+      <!-- Status / loading overlay -->
+      <TextBlock x:Name="StatusText" Text="Loading…"
+                 Foreground="{StaticResource TextMuted}" FontSize="14"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 Visibility="Visible"/>
+
+      <!-- Inbox list -->
+      <Border x:Name="InboxPanel" Visibility="Collapsed"
+              Background="White" CornerRadius="10"
+              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+        <DataGrid x:Name="InboxGrid"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserAddRows="False"
+                  SelectionMode="Single"
+                  GridLinesVisibility="Horizontal"
+                  HorizontalGridLinesBrush="{StaticResource BorderBrush}"
+                  RowBackground="White"
+                  AlternatingRowBackground="#FAFAFA"
+                  HeadersVisibility="Column"
+                  BorderThickness="0"
+                  FontSize="13"
+                  ColumnHeaderStyle="{DynamicResource DataGridColumnHeaderStyle}"
+                  MouseDoubleClick="OnInboxRowDoubleClick">
+          <DataGrid.Columns>
+            <DataGridTextColumn  Header="File Name"   Binding="{Binding FileName}"          Width="2.5*"/>
+            <DataGridTextColumn  Header="From"        Binding="{Binding SourceMachineName}"  Width="1.5*"/>
+            <DataGridTextColumn  Header="Permission"  Binding="{Binding PermissionLabel}"    Width="1.2*"/>
+            <DataGridTextColumn  Header="Size"        Binding="{Binding SizeLabel}"          Width="0.8*"/>
+            <DataGridTextColumn  Header="Shared"      Binding="{Binding CreatedAt}"          Width="1.2*"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </Border>
+
+      <!-- Outbox list -->
+      <Border x:Name="OutboxPanel" Visibility="Collapsed"
+              Background="White" CornerRadius="10"
+              BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+        <DataGrid x:Name="OutboxGrid"
+                  AutoGenerateColumns="False"
+                  IsReadOnly="True"
+                  CanUserAddRows="False"
+                  SelectionMode="Single"
+                  GridLinesVisibility="Horizontal"
+                  HorizontalGridLinesBrush="{StaticResource BorderBrush}"
+                  RowBackground="White"
+                  AlternatingRowBackground="#FAFAFA"
+                  HeadersVisibility="Column"
+                  BorderThickness="0"
+                  FontSize="13"
+                  MouseDoubleClick="OnOutboxRowDoubleClick">
+          <DataGrid.Columns>
+            <DataGridTextColumn  Header="File Name"   Binding="{Binding FileName}"          Width="2.5*"/>
+            <DataGridTextColumn  Header="Permission"  Binding="{Binding PermissionLabel}"    Width="1.2*"/>
+            <DataGridTextColumn  Header="Shared With" Binding="{Binding SharedWithCount}"    Width="1*"/>
+            <DataGridTextColumn  Header="Size"        Binding="{Binding SizeLabel}"          Width="0.8*"/>
+            <DataGridTextColumn  Header="Uploaded"    Binding="{Binding CreatedAt}"          Width="1.2*"/>
+          </DataGrid.Columns>
+        </DataGrid>
+      </Border>
+    </Grid>
+  </Grid>
+</Window>
