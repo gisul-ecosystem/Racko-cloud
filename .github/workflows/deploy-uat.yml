@@ -216,12 +216,16 @@ jobs:
 
       - name: Build racko-app GUI binary (Windows only)
         if: matrix.platform == 'windows'
-        working-directory: racko-app
-        shell: bash
+        shell: pwsh
         run: |
-          go mod tidy
-          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-          go build -ldflags "-H windowsgui -s -w" -o ../agent/dist/racko-app.exe .
+          dotnet publish racko-app/RackoApp.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishReadyToRun=true `
+            -o racko-app/publish
+          Copy-Item "racko-app/publish/racko-app.exe" "agent/dist/racko-app.exe"
 
       - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
