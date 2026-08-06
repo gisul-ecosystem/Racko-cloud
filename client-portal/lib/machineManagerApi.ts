@@ -133,6 +133,20 @@ export async function deleteMachine(id: string): Promise<void> {
   await apiRequest(`/api/v1/machines/${id}`, { method: 'DELETE' });
 }
 
+export async function bulkDeleteMachines(machineIds: string[]): Promise<{
+  deleted: string[];
+  failed: Array<{ machineId: string; error: string }>;
+}> {
+  const res = await apiRequest<ApiResponse<{
+    deleted: string[];
+    failed: Array<{ machineId: string; error: string }>;
+  }>>('/api/v1/machines/bulk', {
+    method: 'DELETE',
+    body: JSON.stringify({ machineIds }),
+  });
+  return res.data;
+}
+
 /**
  * Enable or disable file tracking on one or more machines.
  * When enabled, the agent starts the filesystem watcher and activity log.
