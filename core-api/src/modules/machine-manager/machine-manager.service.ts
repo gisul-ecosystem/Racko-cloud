@@ -52,6 +52,8 @@ class MachineManagerService {
         ramGb:     doc.specs.ramGb,
         diskGb:    doc.specs.diskGb,
       } : undefined,
+      trackingEnabled: doc.trackingEnabled ?? false,
+      trackingEnabledAt: doc.trackingEnabledAt?.toISOString(),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
@@ -490,11 +492,59 @@ class MachineManagerService {
           updateAvailable: true,
           latestVersion: publishedVersion,
           checksum,
+          trackingEnabled: machine.trackingEnabled ?? false,
         };
       }
     }
 
-    return null;
+    return {
+      updateAvailable: false,
+      latestVersion: '',
+      checksum: '',
+      trackingEnabled: machine.trackingEnabled ?? false,
+    };
+  }
+
+  /**
+   * Enable or disable tracking for one or more machines.
+   * Sends a real-time tracking_update WS command to any connected agents.
+   * Idempotent — safe to call multiple times with the same value.
+   */
+  async setTracking(
+    machineIds: string[],
+    enabled: boolean,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<MachineResponse[]> {
+    const { wsManager } = await import('./websocket/wsManager');
+    const updated: MachineResponse[] = [];
+
+    for (const machineId of machineIds) {
+      const id = new mongoose.Types.ObjectId(machineId);
+      const doc = await this.findOwnedMachine(id, adminId);
+
+      const now = new Date();
+      doc.trackingEnabled = enabled;
+      if (enabled) {
+        doc.trackingEnabledAt = now;
+        doc.trackingEnabledBy = adminId;
+      }
+      await doc.save();
+
+      logger.info('[MachineManager] Tracking updated', {
+        machineId,
+        enabled,
+        adminId: adminId.toString(),
+      });
+
+      // Send real-time command to agent if connected — no need to wait for next heartbeat
+      if (doc.agentId && wsManager.isConnected(doc.agentId)) {
+        wsManager.sendTrackingUpdate(doc.agentId, enabled);
+      }
+
+      updated.push(this.toMachineResponse(doc));
+    }
+
+    return updated;
   }
 
   /**

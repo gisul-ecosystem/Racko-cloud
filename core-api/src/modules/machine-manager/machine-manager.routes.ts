@@ -100,6 +100,13 @@ machineRouter.post(
   (req, res, next) => machineManagerController.issueResetStreamTicket(req, res, next)
 );
 
+// PATCH /api/v1/machines/tracking — enable/disable tracking on selected machines (must come before /:id)
+machineRouter.patch(
+  '/tracking',
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
+  (req, res, next) => machineManagerController.setTracking(req, res, next)
+);
+
 // POST /api/v1/machines/jobs — must come before /:id
 machineRouter.post(
   '/jobs',
