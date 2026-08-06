@@ -16,7 +16,7 @@ import { ApiError } from '../../../../lib/apiClient';
 import { useJobStream } from '../../../../hooks/useJobStream';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X, Activity, Copy,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X, Activity,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -482,24 +482,7 @@ export default function MyMachinesPage() {
                 </button>
               )}
               {/* Clone — only enabled if all selected machines have tracking on */}
-              <Link
-                href={`/console/machine-manager/clone?ids=${selectedMachines.map((m) => m._id).join(',')}`}
-                aria-disabled={selectedMachines.some((m) => !m.trackingEnabled)}
-                onClick={(e) => {
-                  if (selectedMachines.some((m) => !m.trackingEnabled)) {
-                    e.preventDefault();
-                    addToast('error', 'Enable tracking on all selected machines before cloning.');
-                  }
-                }}
-                className={`inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-medium transition ${
-                  selectedMachines.every((m) => m.trackingEnabled)
-                    ? 'border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100'
-                    : 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
-                }`}
-              >
-                <Copy className="h-3.5 w-3.5" />
-                Clone
-              </Link>
+              {/* Clone button removed — clone is initiated from individual machine view */}
               {/* Reset — only for online machines */}
               {selectedMachines.some((m) => m.status === 'online') && (
                 <button
