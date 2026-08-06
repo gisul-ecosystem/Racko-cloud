@@ -14,12 +14,24 @@ export const createVmHostLeaseSchema = z.object({
       invoiceDate: dateLike,
       dueDate: dateLike,
       assignedTo: z.string().trim().min(1, 'Assigned To is required.'),
+      clientAssignmentStartDate: dateLike.optional().nullable(),
+      clientAssignmentEndDate: dateLike.optional().nullable(),
       vmUsername: z.string().trim().min(1, 'VM Username is required.'),
       vmPassword: z.string().min(1, 'VM Password is required.'),
     })
     .refine((data) => data.dueDate.getTime() >= data.invoiceDate.getTime(), {
       message: 'Due Date must be on or after Invoice Date.',
       path: ['dueDate'],
+    })
+    .superRefine((data, ctx) => {
+      if (data.clientAssignmentStartDate && data.clientAssignmentEndDate && 
+          data.clientAssignmentEndDate.getTime() < data.clientAssignmentStartDate.getTime()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Assignment End Date must be on or after Assignment Start Date.',
+          path: ['clientAssignmentEndDate'],
+        });
+      }
     }),
 });
 
@@ -35,6 +47,8 @@ export const updateVmHostLeaseSchema = z.object({
       invoiceDate: dateLike.optional(),
       dueDate: dateLike.optional(),
       assignedTo: z.string().trim().min(1).optional(),
+      clientAssignmentStartDate: dateLike.optional().nullable(),
+      clientAssignmentEndDate: dateLike.optional().nullable(),
       vmUsername: z.string().trim().min(1).optional(),
       vmPassword: z.string().min(1).optional(),
     })
@@ -47,6 +61,14 @@ export const updateVmHostLeaseSchema = z.object({
           code: z.ZodIssueCode.custom,
           message: 'Due Date must be on or after Invoice Date.',
           path: ['dueDate'],
+        });
+      }
+      if (data.clientAssignmentStartDate && data.clientAssignmentEndDate && 
+          data.clientAssignmentEndDate.getTime() < data.clientAssignmentStartDate.getTime()) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Assignment End Date must be on or after Assignment Start Date.',
+          path: ['clientAssignmentEndDate'],
         });
       }
     }),

@@ -148,6 +148,31 @@ class WSManager {
   }
 
   /**
+   * Send a tracking_update command to a connected agent.
+   * Agent receives { type: "tracking_update", payload: { enabled: boolean } }
+   * and starts/stops the filesystem watcher immediately.
+   * Returns true if delivered, false if agent is offline (heartbeat will sync it).
+   */
+  sendTrackingUpdate(agentId: string, enabled: boolean): boolean {
+    const conn = this.connections.get(agentId);
+    if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+      logger.warn('[WSManager] Cannot send tracking_update — agent not connected', { agentId });
+      return false;
+    }
+    try {
+      conn.ws.send(JSON.stringify({ type: 'tracking_update', payload: { enabled } }));
+      logger.info('[WSManager] Sent tracking_update command to agent', { agentId, enabled });
+      return true;
+    } catch (err) {
+      logger.error('[WSManager] Failed to send tracking_update command', {
+        agentId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+  }
+
+  /**
    * Send an uninstall command to a connected agent over the existing WebSocket.
    * Agent receives { type: "uninstall" } and immediately runs the cleanup script.
    * Returns true if delivered, false if agent is offline (403 fallback will handle it).

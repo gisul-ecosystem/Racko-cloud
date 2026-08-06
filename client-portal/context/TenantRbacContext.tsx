@@ -10,7 +10,7 @@ import {
   type ReactNode,
 } from 'react';
 import { ApiError } from '@/lib/apiClient';
-import { fetchMyTenantRbac, type MyTenantRbac } from '@/lib/tenantRbacApi';
+import { fetchMyTenantRbac, type MyTenantRbac, TENANT_RBAC_CHANGED_EVENT } from '@/lib/tenantRbacApi';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 
 interface TenantRbacContextValue {
@@ -69,6 +69,14 @@ export function TenantRbacProvider({ children }: { children: ReactNode }) {
     if (authLoading) return;
     void refresh();
   }, [authLoading, refresh]);
+
+  useEffect(() => {
+    const onRbacChanged = () => {
+      void refresh();
+    };
+    window.addEventListener(TENANT_RBAC_CHANGED_EVENT, onRbacChanged);
+    return () => window.removeEventListener(TENANT_RBAC_CHANGED_EVENT, onRbacChanged);
+  }, [refresh]);
 
   const permissions = useMemo(() => new Set(me?.permissions || []), [me]);
 

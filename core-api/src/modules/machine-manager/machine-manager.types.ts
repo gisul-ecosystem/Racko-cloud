@@ -30,6 +30,8 @@ export interface MachineResponse {
     ramGb?: number;
     diskGb?: number;
   };
+  trackingEnabled: boolean;
+  trackingEnabledAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -95,4 +97,5 @@ export interface HeartbeatUpdateInfo {
   updateAvailable: boolean;
   latestVersion: string;
   checksum: string;
+  trackingEnabled: boolean;
 }

@@ -76,6 +76,12 @@ function ServerCard({
       <div className="flex-1 min-w-0">
         <p className="text-sm font-medium truncate">{vm.name}</p>
         <p className="text-xs text-gray-400 font-mono">{vm.ipAddress}</p>
+        {(vm.assignedTenantUserIds?.length ?? 0) > 0 ? (
+          <p className="mt-0.5 text-[11px] text-amber-700">
+            Shared with {vm.assignedTenantUserIds!.length} user
+            {vm.assignedTenantUserIds!.length === 1 ? '' : 's'}
+          </p>
+        ) : null}
       </div>
       {action && (
         <button
@@ -126,7 +132,7 @@ function AssignDrawer({
     try {
       const [a, b] = await Promise.all([
         fetchAssignedTenantExternalVMsForUser(userId),
-        fetchAvailableTenantExternalVMs(),
+        fetchAvailableTenantExternalVMs(userId),
       ]);
       setAssigned(a);
       setAvailable(b);
@@ -168,7 +174,7 @@ function AssignDrawer({
                           accentColor={accentColor}
                           action={async () => {
                             setUnassigningId(vm._id);
-                            await unassignTenantExternalVM(vm._id);
+                            await unassignTenantExternalVM(vm._id, userId);
                             onChanged();
                             await load();
                             setUnassigningId(null);
@@ -208,7 +214,12 @@ function AssignDrawer({
                 </div>
               </section>
               <section>
-                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3">Available ({available.length})</h3>
+                <h3 className="text-xs font-semibold text-gray-500 uppercase mb-3">
+                  Available for this user ({available.length})
+                </h3>
+                <p className="mb-2 text-xs text-gray-400">
+                  Includes servers shared with other users — assigning grants this user access too.
+                </p>
                 <div className="space-y-2">
                   {available.map((vm) => (
                     <ServerCard
@@ -358,7 +369,9 @@ export default function TenantElasticAssignServersPage() {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-gray-900">Assign Servers</h1>
-          <p className="text-sm text-gray-500">Assign imported servers to tenant users</p>
+          <p className="text-sm text-gray-500">
+            Assign imported servers to tenant users. The same server can be shared with multiple users.
+          </p>
         </div>
         <Link href={tenantConsole.elasticBulkAssign} className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white" style={tenantAccentButton(accentColor)}>
           Bulk assign (1:1)
