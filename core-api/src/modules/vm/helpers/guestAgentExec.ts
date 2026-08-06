@@ -29,9 +29,9 @@ interface AgentExecStatus {
 export interface RunGuestPowerShellOptions {
   /** Log prefix (e.g. VMConsolePoll, HyperV). */
   logLabel?: string;
-  /** Interval between exec-status polls. Default 1000ms. */
+  /** Interval between exec-status polls. Default 500ms. */
   pollIntervalMs?: number;
-  /** Max status polls when no deadlineMs. Default 8. */
+  /** Max status polls when no deadlineMs. Default 20 (~10s at 500ms). */
   maxPolls?: number;
   /** Absolute wall-clock deadline (Date.now()-based). Overrides maxPolls when set. */
   deadlineMs?: number;
@@ -58,8 +58,10 @@ export async function runGuestPowerShellOnce(
   options: RunGuestPowerShellOptions = {}
 ): Promise<GuestExecResult> {
   const logLabel = options.logLabel ?? 'GuestExec';
-  const pollIntervalMs = options.pollIntervalMs ?? 1000;
-  const maxPolls = options.maxPolls ?? 8;
+  // Default ~10s window (20 × 500ms) so netsh / RDP fixups usually finish
+  // within a single startIpPolling attempt instead of timing out at polls=8.
+  const pollIntervalMs = options.pollIntervalMs ?? 500;
+  const maxPolls = options.maxPolls ?? 20;
   const deadlineMs = options.deadlineMs;
   const command = powershellCommandArgv(script);
 
