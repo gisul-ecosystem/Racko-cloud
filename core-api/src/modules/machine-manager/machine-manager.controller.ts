@@ -353,9 +353,10 @@ export class MachineManagerController {
 
       const os = req.params['os'] as string;
       const fileMap: Record<string, { file: string; name: string }> = {
-        windows: { file: 'racko-agent.exe',     name: 'racko-agent.exe' },
-        linux:   { file: 'racko-agent',          name: 'racko-agent' },
-        darwin:  { file: 'racko-agent-mac',      name: 'racko-agent' },
+        windows:   { file: 'racko-agent.exe', name: 'racko-agent.exe' },
+        linux:     { file: 'racko-agent',     name: 'racko-agent' },
+        darwin:    { file: 'racko-agent-mac', name: 'racko-agent' },
+        'racko-app': { file: 'racko-app.exe', name: 'racko-app.exe' },
       };
 
       const entry = fileMap[os];
