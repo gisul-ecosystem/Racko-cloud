@@ -14,6 +14,8 @@ export interface VmHostLease {
   invoiceDate: string;
   dueDate: string;
   assignedTo: string;
+  clientAssignmentStartDate: string | null;
+  clientAssignmentEndDate: string | null;
   vmUsername: string;
   vmPassword: string;
   sourceFileName: string | null;
@@ -47,8 +49,23 @@ export interface CreateVmHostLeaseDto {
   invoiceDate: string;
   dueDate: string;
   assignedTo: string;
+  clientAssignmentStartDate?: string | null;
+  clientAssignmentEndDate?: string | null;
   vmUsername: string;
   vmPassword: string;
+}
+
+export interface UpdateVmHostLeaseDto {
+  provider?: string;
+  ipAddress?: string;
+  description?: string;
+  invoiceDate?: string;
+  dueDate?: string;
+  assignedTo?: string;
+  clientAssignmentStartDate?: string | null;
+  clientAssignmentEndDate?: string | null;
+  vmUsername?: string;
+  vmPassword?: string;
 }
 
 export async function listVmHostLeases(params?: {
@@ -79,6 +96,17 @@ export async function deleteVmHostLease(id: string): Promise<void> {
   await apiRequest<ApiEnvelope<Record<string, never>>>(`/api/v1/vm-host-leases/${id}`, {
     method: 'DELETE',
   });
+}
+
+export async function updateVmHostLease(id: string, dto: UpdateVmHostLeaseDto): Promise<VmHostLease> {
+  const res = await apiRequest<ApiEnvelope<{ lease: VmHostLease }>>(
+    `/api/v1/vm-host-leases/${id}`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data.lease;
 }
 
 export async function uploadVmHostLeasesExcel(file: File): Promise<UploadVmHostLeasesResult> {

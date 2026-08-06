@@ -101,7 +101,7 @@ const services: ServiceTile[] = [
   },
   {
     id: 'vm-host-leases',
-    name: 'VM Host Leases',
+    name: 'Vm Inventory',
     href: '/super-admin-console/vm-host-leases',
     icon: FileSpreadsheet,
     description: 'Upload Excel inventory of leased VM hosts and track expiry dates',
