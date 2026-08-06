@@ -10,6 +10,7 @@ import { validateRequest } from '../../middleware/validate.middleware';
 import {
   createMachineSchema,
   bulkCreateMachineSchema,
+  bulkDeleteMachineSchema,
   machineIdParamSchema,
   createJobSchema,
   jobIdParamSchema,
@@ -69,6 +70,14 @@ machineRouter.post(
   requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(bulkCreateMachineSchema),
   (req, res, next) => machineManagerController.bulkCreate(req, res, next)
+);
+
+// DELETE /api/v1/machines/bulk — must come before /:id to avoid collision
+machineRouter.delete(
+  '/bulk',
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
+  validateRequest(bulkDeleteMachineSchema),
+  (req, res, next) => machineManagerController.bulkRemove(req, res, next)
 );
 
 // POST /api/v1/machines/push-agent — VM push flow (must come before /:id)
