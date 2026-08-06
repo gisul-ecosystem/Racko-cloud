@@ -247,7 +247,7 @@ export class VmHostLeaseService {
         // Exact match for IP address for better performance
         filter.ipAddress = q;
       } else {
-        // Use text search for provider and assignedTo
+        // Use text search for provider, assignedTo, description, and ipAddress
         filter.$text = { $search: q };
       }
     }
