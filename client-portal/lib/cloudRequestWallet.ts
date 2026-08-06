@@ -32,13 +32,22 @@ export async function getCloudRequestWallet(): Promise<AdminWallet> {
 export async function chargeCloudRequestWallet(
   amountUsd: number,
   relatedRequestId: string | null | undefined,
-  provider: 'azure' | 'aws'
+  provider: 'azure' | 'aws',
+  attribution?: {
+    projectId?: string | null;
+    serviceKey?: 'azure' | 'aws' | 'cloud-labs' | null;
+  }
 ): Promise<AdminCloudChargeResult> {
   if (isTenantPortalClient()) {
-    return chargeTenantWalletForCloudRequest(amountUsd, relatedRequestId, provider);
+    return chargeTenantWalletForCloudRequest(
+      amountUsd,
+      relatedRequestId,
+      provider,
+      attribution
+    );
   }
 
-  return chargeAdminWalletForCloudRequest(amountUsd, relatedRequestId, provider);
+  return chargeAdminWalletForCloudRequest(amountUsd, relatedRequestId, provider, attribution);
 }
 
 export async function refundCloudRequestWallet(

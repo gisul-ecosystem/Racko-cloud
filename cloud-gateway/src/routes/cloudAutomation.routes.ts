@@ -44,7 +44,8 @@ function skipSiblingAutomationPaths(req: Request, _res: Response, next: NextFunc
   const path = req.path.split('?')[0] ?? req.path;
   if (
     path.startsWith('/api/v1/cloud-automation-aws') ||
-    path.startsWith('/api/v1/cloud-automation-gcp')
+    path.startsWith('/api/v1/cloud-automation-gcp') ||
+    path.startsWith('/api/v1/cloud-automation-training')
   ) {
     return next('route');
   }

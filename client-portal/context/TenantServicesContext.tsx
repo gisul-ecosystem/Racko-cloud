@@ -9,6 +9,7 @@ import React, {
   useState,
 } from 'react';
 import { useTenantAuth } from '@/context/TenantAuthContext';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import { getTenantServices } from '@/lib/tenantPortalApi';
 import type { TenantAssignedService, TenantServiceKey } from '@/types/tenantPortal';
 
@@ -62,8 +63,10 @@ export function TenantServicesProvider({ children }: { children: React.ReactNode
   }, [refresh, authLoading]);
 
   const hasActiveService = useCallback(
-    (serviceKey: TenantServiceKey) =>
-      services.some((s) => s.serviceKey === serviceKey && s.status === 'active'),
+    (serviceKey: TenantServiceKey) => {
+      if (isServiceHiddenFromUi(serviceKey)) return false;
+      return services.some((s) => s.serviceKey === serviceKey && s.status === 'active');
+    },
     [services]
   );
 

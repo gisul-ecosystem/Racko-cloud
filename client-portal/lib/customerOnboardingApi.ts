@@ -26,6 +26,7 @@ export interface OrganizationAccessRequest {
   companyName: string;
   companyWebsite?: string;
   phone?: string;
+  officeNumber?: string;
   designation?: string;
   companySize?: string;
   registeredAddress?: string;
@@ -52,13 +53,14 @@ export async function submitOrganizationRequest(input: {
   contactName: string;
   companyName: string;
   companyWebsite?: string;
-  phone?: string;
-  designation?: string;
-  companySize?: string;
-  registeredAddress?: string;
-  taxId?: string;
-  useCase?: string;
-  expectedUsage?: string;
+  phone: string;
+  officeNumber?: string;
+  designation: string;
+  companySize: string;
+  registeredAddress: string;
+  taxId: string;
+  useCase: string;
+  expectedUsage: string;
 }): Promise<OrganizationAccessRequest> {
   const data = await unwrap(
     apiRequest<ApiEnvelope<{ request: OrganizationAccessRequest }>>(

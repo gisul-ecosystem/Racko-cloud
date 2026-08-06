@@ -16,6 +16,8 @@ import {
 import { createRequest, getPurchaseClonePayload, listPrivilegedRoles, createPrivilegedRoleRequest } from '../../api/client';
 import { AWS_DEFAULT_REGION } from '../../constants';
 import { useAwsRoutes } from '../../../lib/cloudPortalRoutes';
+import { ProjectSelect } from '@/components/console/ProjectSelect';
+import { useIsTenantPortal } from '@/lib/portalMode';
 import { DEFAULT_IAM_POLICIES } from '../../config/iamPolicies';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
 import { useAvailableRegions } from '../../hooks/useAvailableRegions';
@@ -165,6 +167,7 @@ export function RequestWorkspace() {
   const purchaseToken = searchParams.get('purchaseToken');
   const isPurchaseConvert = Boolean(fromTestRequest && purchaseToken);
   const AWS_ROUTES = useAwsRoutes();
+  const isTenantPortal = useIsTenantPortal();
   const { services, servicesByCategory, loading, error, refetch } = useServiceCatalog();
 
   const [currentStep, setCurrentStep] = useState(1);
@@ -176,6 +179,7 @@ export function RequestWorkspace() {
   const [permissionOverrides, setPermissionOverrides] = useState({});
   const [region, setRegion] = useState('');
   const [projectName, setProjectName] = useState('');
+  const [rackoProjectId, setRackoProjectId] = useState('');
   const [idMode, setIdMode] = useState(isPurchaseConvert ? 'aws_ids' : null);
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
@@ -712,6 +716,7 @@ export function RequestWorkspace() {
 
     const payload = {
       project_name: projectName.trim(),
+      project_id: rackoProjectId || undefined,
       id_mode: isPurchaseConvert ? 'aws_ids' : idMode,
       customer_email: customerEmail.trim(),
       account_count: accountCount,
@@ -752,7 +757,10 @@ export function RequestWorkspace() {
 
     try {
       if (totalPrice > 0) {
-        const charge = await chargeCloudRequestWallet(totalPrice, null, 'aws');
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'aws', {
+          projectId: rackoProjectId || undefined,
+          serviceKey: 'aws',
+        });
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
         setUsdToInrRate(charge.usdToInrRate);
@@ -858,6 +866,22 @@ export function RequestWorkspace() {
           }`}
         >
           <div className="min-w-0 space-y-6">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Cost attribution
+              </p>
+              <p className="mb-3 text-sm text-gray-500">
+                Charges stay on your main wallet. Optionally assign a project so spend appears in
+                Reports.
+              </p>
+              <ProjectSelect
+                serviceKey="aws"
+                value={rackoProjectId}
+                onChange={setRackoProjectId}
+                portal={isTenantPortal ? 'tenant' : 'org'}
+                disabled={submitting}
+              />
+            </div>
             <RequestForm
               currentStep={currentStep}
               maxReachableStep={maxReachableStep}

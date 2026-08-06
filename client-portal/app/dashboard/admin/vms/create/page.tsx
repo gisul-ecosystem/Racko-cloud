@@ -257,10 +257,6 @@ export default function CreateVMPage() {
 
   async function handleSubmit() {
     if (!selectedTemplateId || !templateDetails) return;
-    if (!projectId) {
-      addToast('error', 'Select a project for this VM.');
-      return;
-    }
 
     // Enforce sufficient balance only if pricing is configured
     if (pricingConfigured && !hasSufficientBalance) {
@@ -276,8 +272,8 @@ export default function CreateVMPage() {
         count,
         cloneType,
         passwordMode,
-        projectId,
         networkType,
+        ...(projectId ? { projectId } : {}),
         ...(passwordMode === 'fixed' ? { consolePassword } : {}),
         ...(cpuOverride && safeCpu > minCpu ? { cpuCores: safeCpu } : {}),
         ...(ramOverride && safeRam > minRam ? { memoryGb: safeRam } : {}),
@@ -742,7 +738,7 @@ export default function CreateVMPage() {
             </button>
             <button
               onClick={() => void handleSubmit()}
-              disabled={submitting || !projectId || (pricingConfigured && !hasSufficientBalance)}
+              disabled={submitting || (pricingConfigured && !hasSufficientBalance)}
               className="inline-flex items-center gap-2 px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50 shadow-sm">
               {submitting && <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />}
               {count > 1 ? `Create ${count} VMs` : 'Create VM'}

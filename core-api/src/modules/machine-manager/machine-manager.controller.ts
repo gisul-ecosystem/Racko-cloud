@@ -10,6 +10,7 @@ import type { AuthenticatedRequest } from '../../types';
 import type {
   CreateMachineInput,
   BulkCreateMachineInput,
+  BulkDeleteMachineInput,
   CreateJobInput,
   AgentRegisterInput,
   AgentEnrollInput,
@@ -81,6 +82,18 @@ export class MachineManagerController {
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
       await machineManagerService.deleteMachine(id, adminId);
       success(res, 'Machine deleted.');
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** DELETE /api/v1/machines/bulk — bulk delete machines by ID */
+  async bulkRemove(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const { machineIds } = req.body as BulkDeleteMachineInput;
+      const result = await machineManagerService.bulkDeleteMachines(machineIds, adminId);
+      success(res, `${result.deleted.length} machine(s) deleted.`, result);
     } catch (err) {
       next(err);
     }
@@ -364,6 +377,10 @@ export class MachineManagerController {
 
       res.setHeader('Content-Type', 'application/octet-stream');
       res.setHeader('Content-Disposition', `attachment; filename="${entry.name}"`);
+      // Prevent Cloudflare and any intermediate proxy from compressing the binary.
+      // Compression changes the bytes on disk, causing SHA256 checksum mismatches
+      // when the agent verifies the downloaded file against the expected hash.
+      res.setHeader('Cache-Control', 'no-transform');
       fs.createReadStream(binaryPath).pipe(res);
     } catch (err) {
       next(err);
@@ -489,8 +506,9 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   /** POST /api/v1/agent/heartbeat */
   async agentHeartbeat(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      await machineManagerService.handleHeartbeat(req.body as AgentHeartbeatInput);
-      success(res, 'Heartbeat received.');
+      const updateInfo = await machineManagerService.handleHeartbeat(req.body as AgentHeartbeatInput);
+      // Always return updateInfo — it now always includes trackingEnabled
+      success(res, 'Heartbeat received.', updateInfo);
     } catch (err) {
       next(err);
     }
@@ -674,6 +692,35 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
       resetSessionEmitter.removeListener(sessionId, listener);
       machineManagerService.removeResetSession(sessionId);
     });
+  }
+
+  /**
+   * PATCH /api/v1/machines/tracking
+   * Enable or disable file tracking on one or more machines.
+   * Body: { machineIds: string[], enabled: boolean }
+   */
+  async setTracking(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const { machineIds, enabled } = req.body as { machineIds: string[]; enabled: boolean };
+
+      if (!Array.isArray(machineIds) || machineIds.length === 0) {
+        res.status(400).json({ success: false, message: 'machineIds must be a non-empty array.' });
+        return;
+      }
+      if (typeof enabled !== 'boolean') {
+        res.status(400).json({ success: false, message: 'enabled must be a boolean.' });
+        return;
+      }
+
+      const machines = await machineManagerService.setTracking(machineIds, enabled, adminId);
+      success(res, `Tracking ${enabled ? 'enabled' : 'disabled'} on ${machines.length} machine(s).`, {
+        machines,
+        total: machines.length,
+      });
+    } catch (err) {
+      next(err);
+    }
   }
 
   /** POST /api/v1/machines/:id/exec */

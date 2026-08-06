@@ -90,10 +90,11 @@ export class TrackerController {
         throw new ValidationError('X-Agent-ID header is required.');
       }
 
-      const { sha256, filename, mimeType } = req.query as {
+      const { sha256, filename, mimeType, filePath } = req.query as {
         sha256?: string;
         filename?: string;
         mimeType?: string;
+        filePath?: string;
       };
 
       if (!sha256 || !filename) {
@@ -104,7 +105,8 @@ export class TrackerController {
         agentId,
         sha256,
         filename,
-        mimeType ?? 'application/octet-stream'
+        mimeType ?? 'application/octet-stream',
+        filePath
       );
 
       success(res, 'Presigned upload URL generated.', result);

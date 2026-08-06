@@ -6,6 +6,7 @@ export const SERVICE_CATALOG = [
   'azure',
   'aws',
   'gcp',
+  'cloud-labs',
   'docs',
   'machine-manager',
 ] as const;

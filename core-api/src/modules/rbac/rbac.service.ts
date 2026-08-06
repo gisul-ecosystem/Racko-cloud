@@ -2,8 +2,8 @@ import mongoose from 'mongoose';
 import { RbacRoleModel, type IRbacRole } from '../../models/rbacRole.model';
 import { RbacAssignmentModel } from '../../models/rbacAssignment.model';
 import { RbacAuditModel, type RbacAuditAction } from '../../models/rbacAudit.model';
-import { User } from '../../models/user.model';
-import { NotFoundError, ValidationError, ForbiddenError } from '../../utils/errors';
+import { User, type IUser } from '../../models/user.model';
+import { AppError, NotFoundError, ValidationError, ForbiddenError } from '../../utils/errors';
 import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { config } from '../../config';
 import { sendStaffInviteEmail } from '../../utils/email/sender';
@@ -77,18 +77,22 @@ class RbacService {
       await RbacRoleModel.findOneAndUpdate(
         { slug: seed.slug },
         {
-          $setOnInsert: {
-            slug: seed.slug,
+          $set: {
             name: seed.name,
             description: seed.description,
             permissions: seed.permissions,
             isSystem: true,
             isActive: true,
           },
+          $setOnInsert: {
+            slug: seed.slug,
+          },
         },
         { upsert: true, new: true }
       );
     }
+    // System role permission sets may have changed — drop cached effective perms.
+    permissionCache.clear();
   }
 
   listPermissionCatalog() {
@@ -232,6 +236,26 @@ class RbacService {
     if (user.role === 'super_admin') return true;
     const keys = await this.getEffectivePermissions(userId);
     return keys.has(permission);
+  }
+
+  /** Active assigned RBAC role slugs (empty for super_admin). */
+  async getAssignedRoleSlugs(userId: string): Promise<string[]> {
+    const user = await User.findById(userId).select('role').lean();
+    if (!user || user.role === 'super_admin') return [];
+
+    const assignments = await RbacAssignmentModel.find({
+      userId: new mongoose.Types.ObjectId(userId),
+    }).lean();
+    if (assignments.length === 0) return [];
+
+    const roles = await RbacRoleModel.find({
+      _id: { $in: assignments.map((a) => a.roleId) },
+      isActive: true,
+    })
+      .select('slug')
+      .lean();
+
+    return roles.map((r) => r.slug).sort();
   }
 
   async listStaffPeople(): Promise<
@@ -388,14 +412,80 @@ class RbacService {
     return userIds.length;
   }
 
+  /**
+   * Converts an existing verified non-staff account to staff, keeping their
+   * current password and verified state. Used by the "promote" confirmation.
+   */
+  private async promoteExistingUserToStaff(
+    user: IUser,
+    roleIds: string[] | undefined,
+    actorId: string
+  ) {
+    const previousRole = user.role;
+    user.role = 'staff';
+    user.isActive = true;
+    await user.save();
+
+    this.clearPermissionCache(user._id.toString());
+
+    await writeAudit({
+      actorId,
+      action: 'staff_created',
+      targetType: 'user',
+      targetId: user._id.toString(),
+      before: { email: user.email, role: previousRole },
+      after: { email: user.email, role: 'staff', promoted: true },
+    });
+
+    if (roleIds && roleIds.length > 0) {
+      return this.setUserRoles(user._id.toString(), roleIds, actorId);
+    }
+
+    return {
+      _id: user._id.toString(),
+      email: user.email,
+      role: user.role,
+      isActive: Boolean(user.isActive),
+      roleIds: [] as string[],
+      roleNames: [] as string[],
+      permissions: [] as string[],
+    };
+  }
+
   async createStaffUser(
-    input: { email: string; tempPassword: string; roleIds?: string[] },
+    input: {
+      email: string;
+      tempPassword?: string;
+      roleIds?: string[];
+      promoteExisting?: boolean;
+    },
     actorId: string
   ) {
     const email = input.email.trim().toLowerCase();
     const existing = await User.findOne({ email });
+
     if (existing && existing.isEmailVerified) {
-      throw new ValidationError('Email is already registered.');
+      if (existing.role === 'super_admin') {
+        throw new ValidationError('This email belongs to a super admin and already has full access.');
+      }
+      if (existing.role === 'staff') {
+        throw new ValidationError(
+          'This email is already a staff member. Use "Assign roles" in the People tab instead.'
+        );
+      }
+      if (!input.promoteExisting) {
+        throw new AppError(
+          `This email already has a ${existing.role} account. Promote it to staff to grant console access.`,
+          409,
+          'PROMOTE_EXISTING_USER'
+        );
+      }
+      return this.promoteExistingUserToStaff(existing, input.roleIds, actorId);
+    }
+
+    const tempPassword = input.tempPassword;
+    if (!tempPassword) {
+      throw new ValidationError('A temporary password is required to invite a new staff user.');
     }
 
     const rawVerifyToken = generateSecureToken(32);
@@ -409,7 +499,7 @@ class RbacService {
 
     let user;
     if (existing) {
-      existing.password = input.tempPassword;
+      existing.password = tempPassword;
       existing.role = 'staff';
       existing.isActive = true;
       existing.isEmailVerified = false;
@@ -423,7 +513,7 @@ class RbacService {
     } else {
       user = await User.create({
         email,
-        password: input.tempPassword,
+        password: tempPassword,
         role: 'staff',
         isEmailVerified: false,
         isActive: true,
@@ -439,7 +529,7 @@ class RbacService {
     await sendStaffInviteEmail({
       to: email,
       email,
-      tempPassword: input.tempPassword,
+      tempPassword,
       verifyToken: rawVerifyToken,
       resetToken: rawResetToken,
     });
@@ -465,6 +555,47 @@ class RbacService {
       roleNames: [] as string[],
       permissions: [] as string[],
     };
+  }
+
+  /**
+   * Removes a staff account from the control plane: clears RBAC assignments
+   * and deletes the user document. Super admins cannot be deleted.
+   */
+  async deleteStaffUser(userId: string, actorId: string): Promise<{ email: string }> {
+    if (userId === actorId) {
+      throw new ValidationError('You cannot delete your own account.');
+    }
+
+    const user = await User.findById(userId);
+    if (!user) throw new NotFoundError('User not found.');
+    if (user.role === 'super_admin') {
+      throw new ValidationError('Super admin accounts cannot be deleted from Access control.');
+    }
+    if (user.role !== 'staff') {
+      throw new ValidationError('Only staff accounts can be deleted from Access control.');
+    }
+
+    const beforeAssign = await RbacAssignmentModel.find({ userId: user._id }).lean();
+    await RbacAssignmentModel.deleteMany({ userId: user._id });
+    this.clearPermissionCache(userId);
+
+    const email = user.email;
+    await User.deleteOne({ _id: user._id });
+
+    await writeAudit({
+      actorId,
+      action: 'staff_deleted',
+      targetType: 'user',
+      targetId: userId,
+      before: {
+        email,
+        role: 'staff',
+        roleIds: beforeAssign.map((a) => a.roleId.toString()),
+      },
+      after: { deleted: true },
+    });
+
+    return { email };
   }
 
   async listAudit(limit = 50) {

@@ -12,6 +12,9 @@ var (
 	LDPlatformURL   string
 	LDAccountToken  string
 	LDEnrollmentKey string
+	// Version is injected at build time: -ldflags "-X github.com/racko-ai/agent/config.Version=1.2.0"
+	// Defaults to "dev" so development builds are always considered outdated.
+	Version = "dev"
 )
 
 type Config struct {

@@ -17,6 +17,7 @@ export const corsOptions: CorsOptions = {
     'X-Access-Session',
     'X-Org-Admin-Session',
     'X-Tenant-Domain',
+    'X-Forwarded-Host',
     'Idempotency-Key',
   ],
   exposedHeaders: ['X-Request-ID', 'Retry-After'],

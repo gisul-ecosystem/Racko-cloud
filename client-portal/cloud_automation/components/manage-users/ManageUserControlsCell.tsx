@@ -8,6 +8,7 @@ import {
   updateManagePortalCleanupSettings,
 } from '../../api/managePortalClient';
 import type { ManagePortalSession, ManagePortalUserControlData } from '../../types/managePortal';
+import { DEFAULT_USD_TO_INR_RATE } from '../../utils/walletBilling';
 
 interface ManageUserControlsCellProps {
   userId: number;
@@ -231,7 +232,7 @@ export function ManageUserControlsCell({
             </p>
 
             <label className="mt-4 block text-xs font-medium text-gray-700">
-              Additional budget (USD)
+              Additional budget (USD — converted to INR for Azure tracking)
             </label>
             <input
               type="number"
@@ -245,8 +246,9 @@ export function ManageUserControlsCell({
             />
             {topUpAmount && (
               <p className="mt-1 text-xs text-emerald-600">
-                New total budget: $
-                {(control.totalBudget! + parseFloat(topUpAmount || '0')).toFixed(2)}
+                Top-up ≈ ₹
+                {(parseFloat(topUpAmount || '0') * DEFAULT_USD_TO_INR_RATE).toFixed(2)} INR added to
+                tracked budget
               </p>
             )}
 
@@ -260,7 +262,7 @@ export function ManageUserControlsCell({
               </button>
               <button
                 type="button"
-                className="rounded-lg bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
+                className="rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                 disabled={!topUpAmount || busy}
                 onClick={() => void handleRenewBudget()}
               >
@@ -319,7 +321,7 @@ export function ManageUserControlsCell({
               </button>
               <button
                 type="button"
-                className="rounded-lg bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
+                className="rounded-lg bg-[var(--cloud-accent,#B91C1C)] px-3 py-1.5 text-sm font-medium text-white hover:bg-red-800 disabled:opacity-50"
                 disabled={busy}
                 onClick={() => void handleSaveCleanupInterval(false)}
               >

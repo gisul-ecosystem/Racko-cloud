@@ -28,6 +28,9 @@ export interface IMachine extends Document {
   lastSeen?: Date;
   specs?: IMachineSpecs;
   deleted: boolean;
+  trackingEnabled: boolean;
+  trackingEnabledAt?: Date;
+  trackingEnabledBy?: mongoose.Types.ObjectId;
   createdAt: Date;
   updatedAt: Date;
 }
@@ -50,6 +53,9 @@ const machineSchema = new Schema<IMachine>(
       diskGb:    { type: Number },
     },
     deleted: { type: Boolean, default: false, index: true },
+    trackingEnabled: { type: Boolean, default: false, index: true },
+    trackingEnabledAt: { type: Date },
+    trackingEnabledBy: { type: Schema.Types.ObjectId, ref: 'User' },
   },
   {
     strict: true,

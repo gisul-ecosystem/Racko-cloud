@@ -110,6 +110,7 @@ export const agentHeartbeatSchema = z.object({
   body: z.object({
     agentId: z.string({ required_error: 'agentId is required' }).min(1),
     status: z.string().min(1).max(32),
+    version: z.string().optional(),
     specs: z.object({
       hostname:  z.string().optional(),
       osVersion: z.string().optional(),
@@ -120,8 +121,18 @@ export const agentHeartbeatSchema = z.object({
   }),
 });
 
+export const bulkDeleteMachineSchema = z.object({
+  body: z.object({
+    machineIds: z
+      .array(mongoObjectId)
+      .min(1, 'At least one machine is required')
+      .max(100, 'Cannot delete more than 100 machines at once'),
+  }),
+});
+
 export type CreateMachineInput = z.infer<typeof createMachineSchema>['body'];
 export type BulkCreateMachineInput = z.infer<typeof bulkCreateMachineSchema>['body'];
+export type BulkDeleteMachineInput = z.infer<typeof bulkDeleteMachineSchema>['body'];
 export type CreateJobInput = z.infer<typeof createJobSchema>['body'];
 export type AgentRegisterInput = z.infer<typeof agentRegisterSchema>['body'];
 export type AgentJobResultInput = z.infer<typeof agentJobResultSchema>['body'];

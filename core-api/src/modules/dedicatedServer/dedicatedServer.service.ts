@@ -16,6 +16,10 @@ import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
 import { walletService } from '../wallet/wallet.service';
 import { projectsService } from '../projects/projects.service';
+import {
+  accountVmPricingService,
+  type AccountPricingContext,
+} from '../accountVmPricing/accountVmPricing.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
@@ -83,6 +87,7 @@ class DedicatedServerService {
       ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
       ...(doc.tenantUserId ? { tenantUserId: doc.tenantUserId.toString() } : {}),
       ...(opts?.adminEmail ? { adminEmail: opts.adminEmail } : {}),
+      ...(doc.projectId ? { projectId: doc.projectId.toString() } : {}),
       planId: doc.planId.toString(),
       planName: doc.planName,
       specs: doc.specs,
@@ -217,31 +222,44 @@ class DedicatedServerService {
     };
   }
 
-  private async resolveSellMultiplier(): Promise<number> {
-    const settings = await this.getPricingSettings();
-    return settings.sellMultiplier;
-  }
-
   // ─── Plans ───────────────────────────────────────────────────────────────
 
   async listPlans(opts?: {
     activeOnly?: boolean;
     applySellPrice?: boolean;
+    account?: AccountPricingContext | null;
   }): Promise<DedicatedPlanResponse[]> {
     const filter = opts?.activeOnly ? { isActive: true } : {};
     const docs = await DedicatedServerPlanModel.find(filter).sort({
       sortOrder: 1,
       createdAt: -1,
     });
-    const multiplier = opts?.applySellPrice ? await this.resolveSellMultiplier() : 1;
+
+    if (!opts?.applySellPrice) {
+      return docs.map((d) => this.toPlan(d));
+    }
+
+    const { multiplier, planOverrides } =
+      await accountVmPricingService.resolveDedicatedMultiplier(opts.account ?? null);
+
     return docs.map((d) => {
       const plan = this.toPlan(d);
-      if (!opts?.applySellPrice || multiplier === 1) return plan;
+      const abs = planOverrides[plan._id];
+      const monthly =
+        abs?.monthlyPrice != null && Number.isFinite(Number(abs.monthlyPrice))
+          ? roundMoney(Number(abs.monthlyPrice))
+          : applyMultiplier(plan.monthlyPrice, multiplier);
+      const setup =
+        abs?.setupFee != null && Number.isFinite(Number(abs.setupFee))
+          ? roundMoney(Number(abs.setupFee))
+          : plan.setupFee != null
+            ? applyMultiplier(plan.setupFee, multiplier)
+            : plan.setupFee;
+      if (monthly === plan.monthlyPrice && setup === plan.setupFee) return plan;
       return {
         ...plan,
-        monthlyPrice: applyMultiplier(plan.monthlyPrice, multiplier),
-        setupFee:
-          plan.setupFee != null ? applyMultiplier(plan.setupFee, multiplier) : plan.setupFee,
+        monthlyPrice: monthly,
+        setupFee: setup,
       };
     });
   }
@@ -327,7 +345,14 @@ class DedicatedServerService {
       throw new NotFoundError('Dedicated server plan not found or inactive.');
     }
 
-    const multiplier = await this.resolveSellMultiplier();
+    const adminUser = await User.findById(adminId).select('role orgOwnerId').lean();
+    const orgId = adminUser
+      ? accountVmPricingService.resolveOrgIdFromUser({
+          _id: adminUser._id,
+          role: adminUser.role,
+          orgOwnerId: adminUser.orgOwnerId,
+        })
+      : null;
     const baseMonthly = Number(plan.monthlyPrice);
     const baseSetup = Number(plan.setupFee ?? 0);
     if (!Number.isFinite(baseMonthly) || baseMonthly < 0) {
@@ -337,8 +362,14 @@ class DedicatedServerService {
       throw new ValidationError('Invalid setup fee.');
     }
 
-    const sellMonthly = applyMultiplier(baseMonthly, multiplier);
-    const sellSetup = baseSetup > 0 ? applyMultiplier(baseSetup, multiplier) : 0;
+    const resolved = await accountVmPricingService.resolveDedicatedSell({
+      account: orgId ? { scopeType: 'organization', orgId } : null,
+      planId: plan._id.toString(),
+      baseMonthly,
+      baseSetup,
+    });
+    const sellMonthly = resolved.monthly;
+    const sellSetup = resolved.setup;
     const subtotal = roundMoney(sellMonthly + sellSetup);
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);
@@ -710,12 +741,14 @@ class DedicatedServerService {
       throw new NotFoundError('Dedicated server plan not found or inactive.');
     }
 
-    const multiplier = await this.resolveSellMultiplier();
-    const sellMonthly = applyMultiplier(Number(plan.monthlyPrice), multiplier);
-    const sellSetup =
-      Number(plan.setupFee ?? 0) > 0
-        ? applyMultiplier(Number(plan.setupFee), multiplier)
-        : 0;
+    const resolved = await accountVmPricingService.resolveDedicatedSell({
+      account: { scopeType: 'tenant', tenantId: tenantId.toString() },
+      planId: plan._id.toString(),
+      baseMonthly: Number(plan.monthlyPrice),
+      baseSetup: Number(plan.setupFee ?? 0),
+    });
+    const sellMonthly = resolved.monthly;
+    const sellSetup = resolved.setup;
     const subtotal = roundMoney(sellMonthly + sellSetup);
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);

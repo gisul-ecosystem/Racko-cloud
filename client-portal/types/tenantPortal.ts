@@ -12,6 +12,8 @@ export interface TenantPortalUser {
   email: string;
   role: TenantUserRole;
   tenantId: string;
+  /** Invited Access-control operator (or tenant_admin). */
+  isConsoleOperator?: boolean;
 }
 
 export interface TenantUserProfile {
@@ -65,6 +67,7 @@ export type TenantServiceKey =
   | 'azure'
   | 'aws'
   | 'gcp'
+  | 'cloud-labs'
   | 'docs'
   | 'machine-manager';
 export type TenantServiceStatus = 'active' | 'suspended';
@@ -81,6 +84,8 @@ export interface TenantWalletTransaction {
   reason: string;
   relatedOrderId: string | null;
   balanceAfter: number;
+  projectId?: string | null;
+  serviceKey?: string | null;
   createdAt: string;
 }
 

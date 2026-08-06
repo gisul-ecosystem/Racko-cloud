@@ -1,7 +1,8 @@
 'use client';
 
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Activity,
   ArrowRight,
@@ -30,6 +31,8 @@ import { useAwsRoutes } from '../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../lib/cloudAccent';
 import { useIsTenantPortal } from '../../lib/portalMode';
 import { hexToRgba, tenantAccentButton } from '../../lib/tenantAccentStyles';
+import { fetchProjects, type OrgProject } from '../../lib/projectsApi';
+import { fetchTenantProjects } from '../../lib/tenantProjectsApi';
 import { useAwsRequests } from '../hooks/useAwsRequests';
 import { AwsRequestStatusBadge } from './AwsRequestStatusBadge';
 import type { AwsRequest } from '../api/client';
@@ -156,6 +159,13 @@ function getCreatedAt(request: AwsRequest): string | null {
   return request.created_at ?? request.createdAt ?? null;
 }
 
+function getRackoProjectId(request: AwsRequest): string | null {
+  const raw = request.projectId ?? request.project_id;
+  if (!raw) return null;
+  const id = String(raw).trim();
+  return id || null;
+}
+
 function formatRequestId(id: string): string {
   const str = String(id);
   return str.length > 10 ? `${str.slice(0, 8)}…` : str;
@@ -163,15 +173,56 @@ function formatRequestId(id: string): string {
 
 export function AwsDashboardHome() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const filterProjectId = searchParams?.get('projectId')?.trim() || null;
   const auth = useOptionalAuth();
   const isTenantPortal = useIsTenantPortal();
   const accent = useCloudAccentColor();
   const soft = hexToRgba(accent, 0.1);
   const isAuthenticated = isTenantPortal || (auth?.isAuthenticated ?? false);
   const AWS_ROUTES = useAwsRoutes();
-  const { requests, stats, loading, error, refetch } = useAwsRequests(isAuthenticated);
+  const { requests, loading, error, refetch } = useAwsRequests(isAuthenticated);
+  const [projectsById, setProjectsById] = useState<Map<string, OrgProject>>(new Map());
 
-  const recentRequests = requests.slice(0, 10);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setProjectsById(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const list = isTenantPortal ? await fetchTenantProjects() : await fetchProjects();
+        if (cancelled) return;
+        setProjectsById(new Map(list.map((p) => [p.id, p])));
+      } catch {
+        if (!cancelled) setProjectsById(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, isTenantPortal]);
+
+  const filteredRequests = useMemo(() => {
+    if (!filterProjectId) return requests;
+    return requests.filter((r) => getRackoProjectId(r) === filterProjectId);
+  }, [requests, filterProjectId]);
+
+  const stats = useMemo(() => {
+    const next = { total: 0, completed: 0, provisioning: 0, expired: 0 };
+    for (const request of filteredRequests) {
+      next.total += 1;
+      const status = (request.status ?? '').toLowerCase();
+      if (status === 'completed') next.completed += 1;
+      else if (['pending', 'provisioning', 'processing'].includes(status)) next.provisioning += 1;
+      else if (['expired', 'cancelled', 'failed'].includes(status)) next.expired += 1;
+    }
+    return next;
+  }, [filteredRequests]);
+
+  const recentRequests = filteredRequests.slice(0, 10);
+  const filterProject = filterProjectId ? projectsById.get(filterProjectId) : null;
   const completionRate =
     stats.total > 0 ? Math.round((stats.completed / stats.total) * 100) : 0;
 
@@ -209,6 +260,19 @@ export function AwsDashboardHome() {
               <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
                 {AWS_SERVICE.description}
               </p>
+              {filterProjectId ? (
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <span className="inline-flex max-w-full truncate rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100">
+                    Project · {filterProject?.name || filterProjectId}
+                  </span>
+                  <Link
+                    href={AWS_ROUTES.dashboard}
+                    className="text-xs font-semibold text-gray-500 underline-offset-2 hover:text-gray-800 hover:underline"
+                  >
+                    Clear filter
+                  </Link>
+                </div>
+              ) : null}
               {!loading && !error && stats.total > 0 ? (
                 <div className="mt-3 flex flex-wrap gap-2">
                   <span className="inline-flex items-center rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
@@ -318,10 +382,10 @@ export function AwsDashboardHome() {
                   <p className="mt-0.5 text-xs text-gray-400">
                     {loading
                       ? 'Loading…'
-                      : `${requests.length} total · click a row to view details`}
+                      : `${filteredRequests.length} total · click a row to view details`}
                   </p>
                 </div>
-                {!loading && requests.length > 0 ? (
+                {!loading && filteredRequests.length > 0 ? (
                   <Link
                     href={AWS_ROUTES.createRequest}
                     className="inline-flex items-center gap-1 text-sm font-semibold transition hover:opacity-80"
@@ -333,7 +397,7 @@ export function AwsDashboardHome() {
               </div>
 
               {loading ? (
-                <TableSkeleton rows={5} cols={7} embedded />
+                <TableSkeleton rows={5} cols={8} embedded />
               ) : recentRequests.length === 0 ? (
                 <div className="px-6 py-14 text-center">
                   <div
@@ -346,13 +410,22 @@ export function AwsDashboardHome() {
                   >
                     <Cloud className="h-8 w-8" />
                   </div>
-                  <p className="text-base font-semibold text-gray-900">No provisioning requests yet</p>
+                  <p className="text-base font-semibold text-gray-900">
+                    {filterProjectId
+                      ? 'No requests for this project'
+                      : 'No provisioning requests yet'}
+                  </p>
                   <p className="mx-auto mt-2 max-w-sm text-sm text-gray-500">
-                    Create your first AWS lab request to provision accounts and deliver access
-                    credentials.
+                    {filterProjectId
+                      ? 'Create an AWS request from this project’s Use service flow to see it here.'
+                      : 'Create your first AWS lab request to provision accounts and deliver access credentials.'}
                   </p>
                   <Link
-                    href={AWS_ROUTES.createRequest}
+                    href={
+                      filterProjectId
+                        ? `${AWS_ROUTES.createRequest}?projectId=${encodeURIComponent(filterProjectId)}`
+                        : AWS_ROUTES.createRequest
+                    }
                     className={`mt-6 ${primaryBtnClass}`}
                     style={tenantAccentButton(accent)}
                   >
@@ -367,6 +440,9 @@ export function AwsDashboardHome() {
                       <tr className="border-b border-gray-100 bg-gray-50/80">
                         <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           Request ID
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Project
                         </th>
                         <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           Customer
@@ -392,6 +468,10 @@ export function AwsDashboardHome() {
                       {recentRequests.map((request) => {
                         const createdAt = getCreatedAt(request);
                         const requestId = String(request._id);
+                        const rackoProjectId = getRackoProjectId(request);
+                        const project = rackoProjectId
+                          ? projectsById.get(rackoProjectId)
+                          : undefined;
 
                         return (
                           <tr
@@ -410,6 +490,28 @@ export function AwsDashboardHome() {
                               title={requestId}
                             >
                               {formatRequestId(requestId)}
+                            </td>
+                            <td className="px-4 py-3.5">
+                              {rackoProjectId && project ? (
+                                <span
+                                  className="inline-flex max-w-[10rem] truncate rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100"
+                                  title={
+                                    project.clientName
+                                      ? `${project.name} · ${project.clientName}`
+                                      : project.name
+                                  }
+                                >
+                                  {project.name}
+                                </span>
+                              ) : rackoProjectId ? (
+                                <span className="inline-flex max-w-[10rem] truncate rounded-full bg-blue-50 px-2.5 py-0.5 text-xs font-semibold text-blue-700 ring-1 ring-inset ring-blue-100">
+                                  Project
+                                </span>
+                              ) : (
+                                <span className="inline-flex rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-500">
+                                  Unassigned
+                                </span>
+                              )}
                             </td>
                             <td className="px-4 py-3.5 text-gray-900">
                               <span title={getCustomerEmail(request)}>

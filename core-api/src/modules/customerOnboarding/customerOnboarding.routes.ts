@@ -12,18 +12,81 @@ import { sendPlainEmail } from '../../utils/email/sender';
 
 const router = Router();
 
+const COMPANY_SIZE_OPTIONS = ['1-10', '11-50', '51-200', '201-500', '500+'] as const;
+
+const contactNameSchema = z
+  .string()
+  .trim()
+  .min(2, 'Name must be at least 2 characters')
+  .max(120, 'Name must be at most 120 characters')
+  .regex(/^[A-Za-z][A-Za-z .'-]*$/, 'Name may only include letters, spaces, periods, hyphens, and apostrophes');
+
+const phoneE164Schema = z
+  .string()
+  .trim()
+  .regex(/^\+[1-9]\d{6,18}$/, 'Enter a valid phone number with country code');
+
+const optionalPhoneSchema = z
+  .string()
+  .trim()
+  .max(40)
+  .refine((v) => v === '' || /^\+[1-9]\d{6,18}$/.test(v), {
+    message: 'Enter a valid phone number with country code',
+  })
+  .optional()
+  .or(z.literal(''));
+
+const optionalWebsiteSchema = z
+  .string()
+  .trim()
+  .max(255)
+  .refine((v) => v === '' || /^https?:\/\/.+/i.test(v), {
+    message: 'Website must start with http:// or https://',
+  })
+  .optional()
+  .or(z.literal(''));
+
 const submitOrganizationDetailsSchema = z.object({
   body: z.object({
-    contactName: z.string().trim().min(2).max(120),
-    companyName: z.string().trim().min(2).max(160),
-    companyWebsite: z.string().trim().url().max(255).optional().or(z.literal('')),
-    phone: z.string().trim().max(40).optional(),
-    designation: z.string().trim().max(120).optional(),
-    companySize: z.string().trim().max(80).optional(),
-    registeredAddress: z.string().trim().max(500).optional(),
-    taxId: z.string().trim().max(120).optional(),
-    useCase: z.string().trim().max(1000).optional(),
-    expectedUsage: z.string().trim().max(1000).optional(),
+    contactName: contactNameSchema,
+    companyName: z
+      .string()
+      .trim()
+      .min(2, 'Company name must be at least 2 characters')
+      .max(160, 'Company name must be at most 160 characters'),
+    companyWebsite: optionalWebsiteSchema,
+    phone: phoneE164Schema,
+    officeNumber: optionalPhoneSchema,
+    designation: z
+      .string()
+      .trim()
+      .min(2, 'Designation must be at least 2 characters')
+      .max(120, 'Designation must be at most 120 characters'),
+    companySize: z.enum(COMPANY_SIZE_OPTIONS, {
+      required_error: 'Select a valid company size',
+      invalid_type_error: 'Select a valid company size',
+    }),
+    registeredAddress: z
+      .string()
+      .trim()
+      .min(10, 'Address must be at least 10 characters')
+      .max(500, 'Address must be at most 500 characters'),
+    taxId: z
+      .string()
+      .trim()
+      .min(5, 'Tax / registration ID must be at least 5 characters')
+      .max(120, 'Tax / registration ID must be at most 120 characters')
+      .regex(/^[A-Za-z0-9][A-Za-z0-9\-\/]*$/, 'Tax ID may only include letters, numbers, hyphens, and slashes'),
+    useCase: z
+      .string()
+      .trim()
+      .min(10, 'Use cases must be at least 10 characters')
+      .max(1000, 'Use cases must be at most 1000 characters'),
+    expectedUsage: z
+      .string()
+      .trim()
+      .min(10, 'Expected usage must be at least 10 characters')
+      .max(1000, 'Expected usage must be at most 1000 characters'),
   }),
 });
 
@@ -75,6 +138,7 @@ router.post(
           $set: {
             ...body,
             companyWebsite: body.companyWebsite || undefined,
+            officeNumber: body.officeNumber || undefined,
             status: 'pending',
           },
           $setOnInsert: {

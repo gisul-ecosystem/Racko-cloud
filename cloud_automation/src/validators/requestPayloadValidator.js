@@ -30,12 +30,16 @@ const allowedRequestFields = new Set([
   'resourceCleanupAction',
   'usageWindows',
   'projectName',
+  'projectId',
   'idMode',
   'microsoftLicenseSkuId',
   'microsoftLicenseSkuPartNumber',
   'convertedFromRequestId',
-  'purchaseToken'
+  'purchaseToken',
+  'labPermissionMode'
 ]);
+
+const allowedLabPermissionModes = new Set(['strict', 'standard']);
 
 const timePattern = /^\d{2}:\d{2}$/;
 
@@ -65,6 +69,7 @@ const validateRequestPayload = (body) => {
     resourceCleanupAction,
     usageWindows,
     projectName,
+    projectId,
     idMode,
     microsoftLicenseSkuId,
     microsoftLicenseSkuPartNumber,
@@ -87,6 +92,12 @@ const validateRequestPayload = (body) => {
 
     if (projectName.trim().length > 120) {
       throw new AppError('projectName must be 120 characters or fewer.', 400);
+    }
+  }
+
+  if (projectId !== undefined && projectId !== null) {
+    if (typeof projectId !== 'string' || !/^[a-fA-F0-9]{24}$/.test(projectId.trim())) {
+      throw new AppError('projectId must be a 24-character hex id when provided.', 400);
     }
   }
 
@@ -123,6 +134,15 @@ const validateRequestPayload = (body) => {
   if (purchaseToken !== undefined && purchaseToken !== null) {
     if (typeof purchaseToken !== 'string' || purchaseToken.trim().length === 0) {
       throw new AppError('purchaseToken must be a non-empty string when provided.', 400);
+    }
+  }
+
+  if (body.labPermissionMode !== undefined && body.labPermissionMode !== null) {
+    if (
+      typeof body.labPermissionMode !== 'string'
+      || !allowedLabPermissionModes.has(body.labPermissionMode)
+    ) {
+      throw new AppError("labPermissionMode must be 'strict' or 'standard' when provided.", 400);
     }
   }
 

@@ -49,6 +49,7 @@ interface RequestStatusViewProps {
   initialError?: string | null;
   backHref?: string;
   backLabel?: string;
+  labsMode?: boolean;
 }
 
 function StepIcon({
@@ -218,6 +219,7 @@ export function RequestStatusView({
   initialError = null,
   backHref,
   backLabel = 'Back to overview',
+  labsMode = false,
 }: RequestStatusViewProps) {
   const AZURE_ROUTES = useAzureRoutes();
   const accent = useCloudAccentColor();
@@ -363,6 +365,7 @@ export function RequestStatusView({
                   accent={accent}
                   soft={soft}
                 />
+                {!labsMode ? (
                 <MetaChip
                   icon={<DollarSign className="h-4 w-4" />}
                   label="Est. price"
@@ -370,6 +373,7 @@ export function RequestStatusView({
                   accent={accent}
                   soft={soft}
                 />
+                ) : null}
                 <MetaChip
                   icon={<Calendar className="h-4 w-4" />}
                   label="Created"

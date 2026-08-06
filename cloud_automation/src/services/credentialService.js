@@ -13,6 +13,10 @@ const {
   buildCredentialSpreadsheetBuffer,
   buildCredentialSpreadsheetFilename
 } = require('./email/credentialExcelService');
+const {
+  buildAzureLabAccessGuideBuffer,
+  buildAzureLabAccessGuideFilename
+} = require('./email/azureLabAccessGuideService');
 
 const DELIVERY_STATUS_QUEUED = 'queued';
 const DELIVERY_STATUS_SENT = 'sent';
@@ -334,7 +338,7 @@ const getCredentialDelivery = async (requestId) => {
   };
 };
 
-const buildCredentialSpreadsheetForRequest = async (requestId) => {
+const loadCredentialAttachmentPayload = async (requestId) => {
   validateRequestId(requestId);
 
   const [delivery, credentials] = await Promise.all([
@@ -357,7 +361,7 @@ const buildCredentialSpreadsheetForRequest = async (requestId) => {
     throw new AppError('No provisioned users found for this request.', 404);
   }
 
-  const buffer = buildCredentialSpreadsheetBuffer({
+  return {
     requestId,
     customerEmail: credentials.request.customer_email,
     location: credentials.request.location,
@@ -374,11 +378,26 @@ const buildCredentialSpreadsheetForRequest = async (requestId) => {
       temporaryPassword: delivery.adminTemporaryPassword || ''
     },
     users: credentials.users
-  });
+  };
+};
+
+const buildCredentialSpreadsheetForRequest = async (requestId) => {
+  const payload = await loadCredentialAttachmentPayload(requestId);
+  const buffer = buildCredentialSpreadsheetBuffer(payload);
 
   return {
     buffer,
     filename: buildCredentialSpreadsheetFilename(requestId)
+  };
+};
+
+const buildAzureLabAccessGuideForRequest = async (requestId) => {
+  const payload = await loadCredentialAttachmentPayload(requestId);
+  const buffer = await buildAzureLabAccessGuideBuffer(payload);
+
+  return {
+    buffer,
+    filename: buildAzureLabAccessGuideFilename(requestId)
   };
 };
 
@@ -390,6 +409,30 @@ const buildCredentialSpreadsheetAttachment = async (requestId) => {
     content: buffer,
     contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
   };
+};
+
+/** Excel credentials + Word manage-portal guide (same pattern as AWS). */
+const buildCredentialEmailAttachments = async (requestId) => {
+  const payload = await loadCredentialAttachmentPayload(requestId);
+
+  const [excelBuffer, guideBuffer] = await Promise.all([
+    Promise.resolve(buildCredentialSpreadsheetBuffer(payload)),
+    buildAzureLabAccessGuideBuffer(payload)
+  ]);
+
+  return [
+    {
+      filename: buildCredentialSpreadsheetFilename(requestId),
+      content: excelBuffer,
+      contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    },
+    {
+      filename: buildAzureLabAccessGuideFilename(requestId),
+      content: guideBuffer,
+      contentType:
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    }
+  ];
 };
 
 const sendCredentials = async (requestId) => {
@@ -413,6 +456,7 @@ const sendCredentials = async (requestId) => {
       usersSent: (await loadCredentials(requestId)).users.length,
       deliveryStatus: existingDelivery.deliveryStatus,
       spreadsheetFilename: buildCredentialSpreadsheetFilename(requestId),
+      guideFilename: buildAzureLabAccessGuideFilename(requestId),
     };
   }
 
@@ -536,7 +580,8 @@ const sendCredentials = async (requestId) => {
       adminUsername: adminCredentials?.username || null,
       usersSent: users.length,
       deliveryStatus: DELIVERY_STATUS_QUEUED,
-      spreadsheetFilename: buildCredentialSpreadsheetFilename(requestId)
+      spreadsheetFilename: buildCredentialSpreadsheetFilename(requestId),
+      guideFilename: buildAzureLabAccessGuideFilename(requestId)
     };
   } catch (error) {
     logCredentialEvent('error', 'credential_delivery_failed', {
@@ -747,5 +792,7 @@ module.exports = {
   sendNewUserCredentials,
   sendNewUsersCredentials,
   buildCredentialSpreadsheetForRequest,
-  buildCredentialSpreadsheetAttachment
+  buildCredentialSpreadsheetAttachment,
+  buildAzureLabAccessGuideForRequest,
+  buildCredentialEmailAttachments
 };

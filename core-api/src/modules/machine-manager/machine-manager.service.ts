@@ -52,6 +52,8 @@ class MachineManagerService {
         ramGb:     doc.specs.ramGb,
         diskGb:    doc.specs.diskGb,
       } : undefined,
+      trackingEnabled: doc.trackingEnabled ?? false,
+      trackingEnabledAt: doc.trackingEnabledAt?.toISOString(),
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
@@ -117,6 +119,42 @@ class MachineManagerService {
     return this.toMachineResponse(doc);
   }
 
+  async bulkDeleteMachines(
+    machineIds: string[],
+    adminId: mongoose.Types.ObjectId
+  ): Promise<{ deleted: string[]; failed: { machineId: string; error: string }[] }> {
+    const deleted: string[] = [];
+    const failed: { machineId: string; error: string }[] = [];
+
+    await Promise.all(
+      machineIds.map(async (machineId) => {
+        try {
+          const id = new mongoose.Types.ObjectId(machineId);
+          await this.deleteMachine(id, adminId);
+          deleted.push(machineId);
+        } catch (err) {
+          failed.push({
+            machineId,
+            error: err instanceof Error ? err.message : 'Unknown error',
+          });
+          logger.warn('[MachineManager] Bulk delete — single machine failed', {
+            machineId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })
+    );
+
+    logger.info('[MachineManager] Bulk delete completed', {
+      requested: machineIds.length,
+      deleted: deleted.length,
+      failed: failed.length,
+      adminId: adminId.toString(),
+    });
+
+    return { deleted, failed };
+  }
+
   async deleteMachine(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
@@ -149,6 +187,19 @@ class MachineManagerService {
     if (doc.agentId) {
       wsManager.closeConnection(doc.agentId, 4010, 'Machine deleted');
     }
+
+    // Clean up all related data so nothing orphans in the database
+    await JobModel.deleteMany({ machineId: id });
+
+    const { MachineActivityModel } = await import('../../models/machineActivity.model');
+    await MachineActivityModel.deleteMany({ machineId: id });
+
+    const { MachineBaselineModel } = await import('../../models/machineBaseline.model');
+    await MachineBaselineModel.deleteMany({ machineId: id });
+
+    logger.info('[MachineManager] Cleaned up related data for deleted machine', {
+      machineId: id.toString(),
+    });
   }
 
   // ─── Jobs ──────────────────────────────────────────────────────────────────
@@ -422,7 +473,7 @@ class MachineManagerService {
     });
   }
 
-  async handleHeartbeat(dto: AgentHeartbeatDto): Promise<void> {
+  async handleHeartbeat(dto: AgentHeartbeatDto): Promise<import('./machine-manager.types').HeartbeatUpdateInfo | null> {
     const machine = await MachineModel.findOne({ agentId: dto.agentId });
     if (!machine) throw new NotFoundError('Agent not found.');
 
@@ -442,6 +493,10 @@ class MachineManagerService {
         diskGb:    dto.specs.diskGb,
       };
     }
+    // Store the agent version so admins can see which version each machine runs
+    if (dto.version) {
+      (machine as any).agentVersion = dto.version;
+    }
     await machine.save();
 
     // Emit agent_connected SSE event if this machine is part of an active push session
@@ -459,6 +514,86 @@ class MachineManagerService {
         }
       }
     }
+
+    // ── Auto-update check ─────────────────────────────────────────────────────
+    // Compare the agent's reported version against the published version in config.
+    // If the agent is outdated, tell it to update via the heartbeat response.
+    const { config } = await import('../../config');
+    const publishedVersion = config.AGENT_VERSION;
+
+    if (publishedVersion && dto.version && dto.version !== publishedVersion) {
+      const isOutdated = isVersionOutdated(dto.version, publishedVersion);
+      if (isOutdated) {
+        logger.info('[MachineManager] Agent outdated — sending update signal', {
+          agentId: dto.agentId,
+          currentVersion: dto.version,
+          latestVersion: publishedVersion,
+        });
+
+        // Pick the right checksum based on machine OS
+        let checksum = '';
+        const os = machine.os?.toLowerCase() ?? '';
+        if (os === 'windows') checksum = (config.AGENT_CHECKSUM_WINDOWS ?? '').trim();
+        else if (os === 'linux') checksum = (config.AGENT_CHECKSUM_LINUX ?? '').trim();
+        else if (os === 'macos') checksum = (config.AGENT_CHECKSUM_DARWIN ?? '').trim();
+
+        return {
+          updateAvailable: true,
+          latestVersion: publishedVersion,
+          checksum,
+          trackingEnabled: machine.trackingEnabled ?? false,
+        };
+      }
+    }
+
+    return {
+      updateAvailable: false,
+      latestVersion: '',
+      checksum: '',
+      trackingEnabled: machine.trackingEnabled ?? false,
+    };
+  }
+
+  /**
+   * Enable or disable tracking for one or more machines.
+   * Sends a real-time tracking_update WS command to any connected agents.
+   * Idempotent — safe to call multiple times with the same value.
+   */
+  async setTracking(
+    machineIds: string[],
+    enabled: boolean,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<MachineResponse[]> {
+    const { wsManager } = await import('./websocket/wsManager');
+    const updated: MachineResponse[] = [];
+
+    for (const machineId of machineIds) {
+      const id = new mongoose.Types.ObjectId(machineId);
+      const doc = await this.findOwnedMachine(id, adminId);
+
+      const now = new Date();
+      doc.trackingEnabled = enabled;
+      if (enabled) {
+        doc.trackingEnabledAt = now;
+        doc.trackingEnabledBy = adminId;
+      }
+      await doc.save();
+
+      logger.info('[MachineManager] Tracking updated', {
+        machineId,
+        enabled,
+        adminId: adminId.toString(),
+      });
+
+      // Send real-time command to agent if connected — no need to wait for next heartbeat
+      if (doc.agentId && wsManager.isConnected(doc.agentId)) {
+        wsManager.sendTrackingUpdate(doc.agentId, enabled);
+      }
+
+      updated.push(this.toMachineResponse(doc));
+    }
+
+    return updated;
   }
 
   /**
@@ -706,3 +841,20 @@ class MachineManagerService {
 }
 
 export const machineManagerService = new MachineManagerService();
+
+// ─── Version comparison helper ────────────────────────────────────────────────
+
+/**
+ * Returns true when agentVersion differs from publishedVersion.
+ *
+ * The version strings are git SHAs (e.g. "cc6b4450719406c1...") injected at
+ * build time via --ldflags. A SHA is not semver — any difference means the
+ * agent is outdated and should update. Simple string inequality is correct.
+ *
+ * "dev" is treated as outdated when a real version is published, so development
+ * builds always get updated when deployed alongside a versioned binary.
+ */
+function isVersionOutdated(agentVersion: string, publishedVersion: string): boolean {
+  if (!agentVersion || agentVersion === 'dev') return true;
+  return agentVersion !== publishedVersion;
+}

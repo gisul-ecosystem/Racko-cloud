@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { resolveTenantContext } from '../../middleware/resolveTenantContext.middleware';
-import { requireTenantAuth, requireTenantRole } from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantAuth } from '../../middleware/requireTenantAuth.middleware';
+import { requireTenantPermission } from '../../middleware/requireOrgPermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { tenantVmController } from './tenantVm.controller';
 import {
@@ -19,40 +20,40 @@ router.use(requireTenantAuth);
 
 router.get(
   '/assign/available',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('vms.assign'),
   (req, res, next) => tenantVmController.getAvailableVms(req, res, next)
 );
 
 router.get(
   '/assign/counts',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('vms.assign'),
   (req, res, next) => tenantVmController.getAssignedVmCounts(req, res, next)
 );
 
 router.get(
   '/assign/user/:userId',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('vms.assign'),
   validateRequest(tenantUserIdParamSchema),
   (req, res, next) => tenantVmController.getAssignedVmsForUser(req, res, next)
 );
 
 router.post(
   '/assign/onboard',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('vms.assign'),
   validateRequest(tenantOnboardSchema),
   (req, res, next) => tenantVmController.onboardVms(req, res, next)
 );
 
 router.delete(
   '/assign/:vmId',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('vms.assign'),
   validateRequest(tenantVmIdParamSchema),
   (req, res, next) => tenantVmController.unassignVm(req, res, next)
 );
 
 router.patch(
   '/:vmId/schedule',
-  requireTenantRole('tenant_admin'),
+  requireTenantPermission('vms.manage'),
   validateRequest(tenantVmScheduleSchema),
   (req, res, next) => tenantVmController.updateVmSchedule(req, res, next)
 );

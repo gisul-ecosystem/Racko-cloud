@@ -1,7 +1,8 @@
 import { cloudAutomationRequest, getAzureCloudApiPrefix } from '../../lib/cloudAutomationRequest';
 import { ApiError, getAccessToken } from '../../lib/apiClient';
 import { getTenantAccessToken } from '../../lib/tenantPortalApiClient';
-import { getGatewayBaseUrl } from '../../lib/gatewayUrl';
+import { getGatewayBaseUrl, getTenantGatewayIdentityHeaders } from '../../lib/gatewayUrl';
+import { isTenantPortalClient } from '../../lib/portalClient';
 import type {
   AdminAccessRequestPayload,
   AvailableInstance,
@@ -307,6 +308,33 @@ export async function provisionRoles(requestId: number): Promise<ProvisionStepSt
   );
 }
 
+/** POST /api/provision/request/:id/fabric — Fabric capacity/workspace/roles for DP-600/DP-700 */
+export async function provisionFabric(requestId: number): Promise<ProvisionStepStatus> {
+  return azureRequest<ProvisionStepStatus>(
+    cloudAutomationPath(`/provision/request/${requestId}/fabric`),
+    { method: 'POST' }
+  );
+}
+
+/** GET /api/provision/request/:id/fabric */
+export async function getProvisionFabric(requestId: number) {
+  return azureRequest<{
+    success: boolean;
+    required: boolean;
+    complete: boolean;
+    status?: string;
+    workspaceId?: string | null;
+    capacityId?: string | null;
+    workspaceName?: string | null;
+    workspaceRole?: string | null;
+    onelakePermissions?: string | null;
+    items?: unknown[];
+    roleAssignments?: unknown[];
+    certTag?: string | null;
+    errorMessage?: string | null;
+  }>(cloudAutomationPath(`/provision/request/${requestId}/fabric`));
+}
+
 /** POST /api/provision/request/:id/send-credentials */
 export async function sendProvisionCredentials(requestId: number): Promise<ProvisionStepStatus> {
   return azureRequest<ProvisionStepStatus>(
@@ -317,13 +345,18 @@ export async function sendProvisionCredentials(requestId: number): Promise<Provi
 
 /** GET /api/provision/request/:id/credentials/spreadsheet */
 export async function downloadCredentialSpreadsheet(requestId: number): Promise<void> {
+  const isTenant = isTenantPortalClient();
   const token = getTenantAccessToken() || getAccessToken();
+  const gatewayBase = getGatewayBaseUrl();
   const response = await fetch(
-    `${getGatewayBaseUrl()}${getAzureCloudApiPrefix()}/provision/request/${requestId}/credentials/spreadsheet`,
+    `${gatewayBase}${getAzureCloudApiPrefix()}/provision/request/${requestId}/credentials/spreadsheet`,
     {
       method: 'GET',
-      credentials: getTenantAccessToken() ? 'omit' : 'include',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      credentials: isTenant ? 'omit' : 'include',
+      headers: {
+        ...(isTenant ? getTenantGatewayIdentityHeaders(gatewayBase) : {}),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       cache: 'no-store',
     }
   );
@@ -364,21 +397,35 @@ function readSnapshotPart<T>(result: SnapshotPart<T>, fallback: T): T {
 
 /** Combine backend reads into a single provisioning snapshot. */
 export async function fetchProvisionSnapshot(requestId: number): Promise<ProvisionSnapshot> {
-  const [requestResult, provisionResult, servicesResult, usersResult, rolesResult, credentialsResult] =
-    await Promise.allSettled([
-      getRequestById(requestId),
-      getProvisionStatus(requestId),
-      getProvisionServices(requestId),
-      getProvisionUsers(requestId),
-      getProvisionRoles(requestId),
-      getProvisionCredentials(requestId),
-    ]);
+  const [
+    requestResult,
+    provisionResult,
+    servicesResult,
+    usersResult,
+    rolesResult,
+    fabricResult,
+    credentialsResult,
+  ] = await Promise.allSettled([
+    getRequestById(requestId),
+    getProvisionStatus(requestId),
+    getProvisionServices(requestId),
+    getProvisionUsers(requestId),
+    getProvisionRoles(requestId),
+    getProvisionFabric(requestId),
+    getProvisionCredentials(requestId),
+  ]);
 
   const request = readSnapshotPart(requestResult, null);
   const provisionRaw = readSnapshotPart(provisionResult, { success: false });
   const servicesRaw = readSnapshotPart(servicesResult, { success: false, resources: [] });
   const usersRaw = readSnapshotPart(usersResult, { success: false, users: [] });
   const rolesRaw = readSnapshotPart(rolesResult, { success: false, roles: [] });
+  const fabricRaw = readSnapshotPart(fabricResult, {
+    success: false,
+    required: false,
+    complete: true,
+    status: 'skipped',
+  });
   const credentialsRaw = readSnapshotPart(credentialsResult, { success: false });
 
   const servicesResources = Array.isArray(servicesRaw.resources)
@@ -418,6 +465,22 @@ export async function fetchProvisionSnapshot(requestId: number): Promise<Provisi
       complete: rolesRaw.complete === true,
       remaining:
         typeof rolesRaw.remaining === 'number' ? rolesRaw.remaining : undefined,
+    },
+    fabric: {
+      required: fabricRaw.required === true,
+      complete: fabricRaw.required === true ? fabricRaw.complete === true : true,
+      status: fabricRaw.status ?? null,
+      workspaceId: fabricRaw.workspaceId ?? null,
+      capacityId: fabricRaw.capacityId ?? null,
+      workspaceName: fabricRaw.workspaceName ?? null,
+      workspaceRole: fabricRaw.workspaceRole ?? null,
+      onelakePermissions: fabricRaw.onelakePermissions ?? null,
+      items: Array.isArray(fabricRaw.items) ? fabricRaw.items : [],
+      roleAssignments: Array.isArray(fabricRaw.roleAssignments)
+        ? fabricRaw.roleAssignments
+        : [],
+      certTag: fabricRaw.certTag ?? null,
+      errorMessage: fabricRaw.errorMessage ?? null,
     },
     credentials: {
       deliveryStatus: credentialsRaw.deliveryStatus ?? null,

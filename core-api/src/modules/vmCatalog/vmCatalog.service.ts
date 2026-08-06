@@ -5,13 +5,14 @@ import {
   type VmCatalogStatus,
 } from '../../models/catalogVm.model';
 import { VmCatalogPlan } from '../../models/vmCatalogPlan.model';
+import { ProjectModel } from '../../models/project.model';
 import { User } from '../../models/user.model';
 import { TenantUser } from '../../models/tenantUser.model';
 import { TenantNotification } from '../../models/tenantNotification.model';
 import { Notification } from '../notification/notification.model';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
 import { walletService } from '../wallet/wallet.service';
-import { externalVmPricingService } from '../externalVmPricing/externalVmPricing.service';
+import { accountVmPricingService } from '../accountVmPricing/accountVmPricing.service';
 import { projectsService } from '../projects/projects.service';
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { encrypt, decrypt } from '../../utils/crypto';
@@ -91,6 +92,8 @@ class VmCatalogService {
       forAdmin?: boolean;
       /** Customer-facing plan label (Cloud VPS - N); overrides stored Webyne planName. */
       displayPlanName?: string;
+      projectName?: string;
+      clientName?: string;
       role?: CatalogVmCallerRole;
     }
   ): CatalogVmResponse {
@@ -108,6 +111,9 @@ class VmCatalogService {
       ...(doc.tenantId ? { tenantId: doc.tenantId.toString() } : {}),
       ...(doc.tenantUserId ? { tenantUserId: doc.tenantUserId.toString() } : {}),
       ...(opts?.adminEmail ? { adminEmail: opts.adminEmail } : {}),
+      ...(doc.projectId ? { projectId: doc.projectId.toString() } : {}),
+      ...(opts?.projectName ? { projectName: opts.projectName } : {}),
+      ...(opts?.clientName ? { clientName: opts.clientName } : {}),
       provider: doc.provider,
       category: doc.category,
       planId: doc.planId,
@@ -188,19 +194,54 @@ class VmCatalogService {
     return map;
   }
 
+  private async resolveProjectLabels(
+    docs: Array<{ projectId?: mongoose.Types.ObjectId | null }>
+  ): Promise<Map<string, { projectName: string; clientName: string }>> {
+    const ids = [
+      ...new Set(
+        docs
+          .map((d) => d.projectId?.toString())
+          .filter((id): id is string => Boolean(id) && mongoose.Types.ObjectId.isValid(id!))
+      ),
+    ];
+    if (ids.length === 0) return new Map();
+
+    const projects = await ProjectModel.find({
+      _id: { $in: ids.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select('name clientName')
+      .lean();
+
+    const map = new Map<string, { projectName: string; clientName: string }>();
+    for (const project of projects) {
+      map.set(project._id.toString(), {
+        projectName: project.name,
+        clientName: project.clientName,
+      });
+    }
+    return map;
+  }
+
   private async toCustomerResponses(
     docs: ICatalogVm[],
     opts?: { adminEmail?: string; includeSecrets?: boolean }
   ): Promise<CatalogVmResponse[]> {
-    const names = await this.resolveCustomerPlanNames(docs);
-    return docs.map((doc) =>
-      this.toResponse(doc, {
+    const [names, projects] = await Promise.all([
+      this.resolveCustomerPlanNames(docs),
+      this.resolveProjectLabels(docs),
+    ]);
+    return docs.map((doc) => {
+      const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      return this.toResponse(doc, {
         ...opts,
         forAdmin: true,
         role: 'admin',
         displayPlanName: names.get(doc.planId),
-      })
-    );
+        ...(project
+          ? { projectName: project.projectName, clientName: project.clientName }
+          : {}),
+      });
+    });
   }
 
   private async toCustomerResponse(
@@ -329,24 +370,30 @@ class VmCatalogService {
       throw new ValidationError('Invalid billing cycle.');
     }
 
-    const pricingCfgEarly = await externalVmPricingService.getByProvider('webyne');
-    if (billing === 'hourly' && !pricingCfgEarly.hourlyEnabled) {
-      throw new ValidationError('Hourly billing is not available.');
-    }
-
     const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
     if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
       throw new ValidationError('Selected billing cycle is not priced for this template.');
     }
 
-    const pricingCfg = pricingCfgEarly;
+    const adminUser = await User.findById(adminId).select('role orgOwnerId').lean();
+    const orgId = adminUser
+      ? accountVmPricingService.resolveOrgIdFromUser({
+          _id: adminUser._id,
+          role: adminUser.role,
+          orgOwnerId: adminUser.orgOwnerId,
+        })
+      : null;
     const priceBucket = catalogPricingBucket(dto.category);
-    const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
-    const multiplier =
-      Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
+    const resolved = await accountVmPricingService.resolveWebyneUnitPrice({
+      account: orgId ? { scopeType: 'organization', orgId } : null,
+      category: priceBucket,
+      planId: plan._id.toString(),
+      period: billing as (typeof BILLING_PERIODS)[number],
+      baseUnit,
+    });
 
     const quantity = Math.max(1, Math.floor(Number(dto.quantity) || 1));
-    const unitPrice = roundMoney(baseUnit * multiplier);
+    const unitPrice = resolved.unitPrice;
     const subtotal = roundMoney(unitPrice * quantity);
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);
@@ -502,7 +549,7 @@ class VmCatalogService {
           region: doc.region,
         });
 
-        return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
+        return this.toCustomerResponse(doc, { adminEmail: admin.email });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         doc.status = 'failed';
@@ -541,7 +588,7 @@ class VmCatalogService {
           error: message,
         });
 
-        return this.toResponse(doc, { adminEmail: admin.email, role: 'admin', forAdmin: true });
+        return this.toCustomerResponse(doc, { adminEmail: admin.email });
       }
     }
 
@@ -908,14 +955,19 @@ class VmCatalogService {
       .select('email')
       .lean();
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
+    const projects = await this.resolveProjectLabels(docs);
 
-    return docs.map((doc) =>
-      this.toResponse(doc, {
+    return docs.map((doc) => {
+      const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      return this.toResponse(doc, {
         adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
         includeSecrets: true,
         role: 'super_admin',
-      })
-    );
+        ...(project
+          ? { projectName: project.projectName, clientName: project.clientName }
+          : {}),
+      });
+    });
   }
 
   /**
@@ -1427,24 +1479,22 @@ class VmCatalogService {
       throw new ValidationError('Invalid billing cycle.');
     }
 
-    const pricingCfgEarly = await externalVmPricingService.getByProvider('webyne');
-    if (billing === 'hourly' && !pricingCfgEarly.hourlyEnabled) {
-      throw new ValidationError('Hourly billing is not available.');
-    }
-
     const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
     if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
       throw new ValidationError('Selected billing cycle is not priced for this template.');
     }
 
-    const pricingCfg = pricingCfgEarly;
     const priceBucket = catalogPricingBucket(dto.category);
-    const multiplierRaw = Number(pricingCfg.categories[priceBucket]?.multiplier);
-    const multiplier =
-      Number.isFinite(multiplierRaw) && multiplierRaw > 0 ? multiplierRaw : 1;
+    const resolved = await accountVmPricingService.resolveWebyneUnitPrice({
+      account: { scopeType: 'tenant', tenantId: tenantId.toString() },
+      category: priceBucket,
+      planId: plan._id.toString(),
+      period: billing as (typeof BILLING_PERIODS)[number],
+      baseUnit,
+    });
 
     const quantity = Math.max(1, Math.floor(Number(dto.quantity) || 1));
-    const unitPrice = roundMoney(baseUnit * multiplier);
+    const unitPrice = resolved.unitPrice;
     const subtotal = roundMoney(unitPrice * quantity);
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);

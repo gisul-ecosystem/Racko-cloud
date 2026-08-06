@@ -23,6 +23,9 @@ import {
 import { useAzureRoutes } from '../../../lib/cloudPortalRoutes';
 import { useCloudAccentColor } from '../../../lib/cloudAccent';
 import { hexToRgba } from '../../../lib/tenantAccentStyles';
+import { ProjectSelect } from '@/components/console/ProjectSelect';
+import { useIsTenantPortal } from '@/lib/portalMode';
+import type { AdminServiceKey } from '@/lib/adminServicesApi';
 import { useAvailableLocations } from '../../hooks/useAvailableLocations';
 import { useMicrosoftLicenses } from '../../hooks/useMicrosoftLicenses';
 import { usePricingEstimate } from '../../hooks/usePricingEstimate';
@@ -139,6 +142,8 @@ function validateForm(input: {
   customerEmail: string;
   accountCount: number;
   location: string;
+  availableLocations?: Array<{ arm_region_name: string }>;
+  locationsLoading?: boolean;
   serviceIds: number[];
   selectedRoles: SelectedRole[];
   selectedInstances: SelectedInstance[];
@@ -151,6 +156,7 @@ function validateForm(input: {
   resourceCleanupAction?: 'delete' | 'pause';
   perUserBudgetUsd?: number;
   costingMode?: CostingMode;
+  labsMode?: boolean;
 }): string[] {
   const errors: string[] = [];
   const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -174,11 +180,29 @@ function validateForm(input: {
   }
 
   if (input.serviceIds.length === 0) {
-    errors.push('Select at least one service.');
+    errors.push(input.labsMode ? 'Select at least one lab.' : 'Select at least one service.');
   }
 
   if (!input.location.trim()) {
     errors.push('Select a region.');
+  } else if (input.locationsLoading) {
+    errors.push('Wait for available regions to finish loading.');
+  } else if (
+    Array.isArray(input.availableLocations) &&
+    input.availableLocations.length > 0 &&
+    !input.availableLocations.some((entry) => entry.arm_region_name === input.location.trim())
+  ) {
+    errors.push(
+      'Selected region is not available for the chosen instance size(s). Pick a region from the available list.'
+    );
+  } else if (
+    Array.isArray(input.availableLocations) &&
+    input.availableLocations.length === 0 &&
+    input.selectedInstances.length > 0
+  ) {
+    errors.push(
+      'No regions support all selected instance sizes. Change one or more instance options.'
+    );
   }
 
   if (!input.startDate || !input.endDate) {
@@ -192,7 +216,9 @@ function validateForm(input: {
     if (service?.supports_instances) {
       const hasInstance = input.selectedInstances.some((entry) => entry.serviceId === serviceId);
       if (!hasInstance) {
-        errors.push(`Select an instance for ${service.service_name || service.name}.`);
+        errors.push(
+          `Select an instance for ${service.service_name || service.name}.`
+        );
       }
     }
   }
@@ -205,7 +231,9 @@ function validateForm(input: {
   for (const serviceId of servicesRequiringRoles) {
     if (!servicesWithRoles.has(serviceId)) {
       const service = input.catalog.services.find((entry) => entry.id === serviceId);
-      errors.push(`Assign at least one role for ${service?.service_name || service?.name || serviceId}.`);
+      errors.push(
+        `Assign at least one role for ${service?.service_name || service?.name || serviceId}.`
+      );
     }
   }
 
@@ -225,7 +253,7 @@ function validateForm(input: {
     }
   }
 
-  if (input.costingMode === 'per_user' && input.perUserBudgetUsd !== undefined) {
+  if (!input.labsMode && input.costingMode === 'per_user' && input.perUserBudgetUsd !== undefined) {
     if (!Number.isFinite(input.perUserBudgetUsd) || input.perUserBudgetUsd <= 0) {
       errors.push('Budget per user must be a positive number.');
     }
@@ -234,7 +262,7 @@ function validateForm(input: {
   return errors;
 }
 
-export function RequestWorkspace() {
+export function RequestWorkspace({ labsMode = false }: { labsMode?: boolean }) {
   const router = useRouter();
   const searchParams = useSearchParams();
   const fromTestRequest = searchParams.get('fromTestRequest');
@@ -243,13 +271,17 @@ export function RequestWorkspace() {
   const AZURE_ROUTES = useAzureRoutes();
   const accent = useCloudAccentColor();
   const soft = hexToRgba(accent, 0.1);
+  const isTenantPortal = useIsTenantPortal();
+  const projectServiceKey: AdminServiceKey = labsMode ? 'cloud-labs' : 'azure';
   const { catalog, loading: catalogLoading, error: catalogError, refetch } = useServiceCatalog();
 
   const [selectedServiceIds, setSelectedServiceIds] = useState<number[]>([]);
   const [selectedInstances, setSelectedInstances] = useState<SelectedInstance[]>([]);
   const [manualRoles, setManualRoles] = useState<Record<number, string[]>>({});
   const [location, setLocation] = useState('');
+  const locationManualRef = useRef(false);
   const [projectName, setProjectName] = useState('');
+  const [rackoProjectId, setRackoProjectId] = useState('');
   const [idMode, setIdMode] = useState<AzureIdMode | null>(null);
   const [customerEmail, setCustomerEmail] = useState('');
   const [accountCount, setAccountCount] = useState(10);
@@ -313,6 +345,40 @@ export function RequestWorkspace() {
     selectedServiceIds,
     selectedInstances
   );
+
+  const selectedInstanceKey = useMemo(
+    () =>
+      selectedInstances
+        .map((entry) => `${entry.serviceId}:${entry.instanceOption}`)
+        .sort()
+        .join('|'),
+    [selectedInstances]
+  );
+
+  useEffect(() => {
+    // New service/instance mix → allow cheapest auto-select again.
+    locationManualRef.current = false;
+  }, [selectedServiceIds.join(','), selectedInstanceKey]);
+
+  useEffect(() => {
+    if (locations.length === 0) {
+      if (location) setLocation('');
+      return;
+    }
+
+    const stillValid = locations.some((entry) => entry.arm_region_name === location);
+    if (!stillValid || !locationManualRef.current) {
+      const nextLocation = pickCheapestLocation(locations);
+      if (nextLocation && nextLocation !== location) {
+        setLocation(nextLocation);
+      }
+    }
+  }, [locations, location]);
+
+  const handleLocationChange = useCallback((nextLocation: string) => {
+    locationManualRef.current = true;
+    setLocation(nextLocation);
+  }, []);
   const {
     licenses,
     loading: licensesLoading,
@@ -420,18 +486,6 @@ export function RequestWorkspace() {
       setResourceCleanupAction('delete');
     }
   }, [pauseCleanupAvailable, resourceCleanupAction]);
-
-  useEffect(() => {
-    if (locations.length === 0) {
-      if (location) setLocation('');
-      return;
-    }
-
-    const stillValid = locations.some((entry) => entry.arm_region_name === location);
-    if (!stillValid) {
-      setLocation(pickCheapestLocation(locations));
-    }
-  }, [locations, location]);
 
   const pricingPayload = useMemo<PricingEstimatePayload | null>(() => {
     if (!catalog || selectedServiceIds.length === 0 || !location) return null;
@@ -570,6 +624,8 @@ export function RequestWorkspace() {
       customerEmail,
       accountCount,
       location,
+      availableLocations: locations,
+      locationsLoading,
       serviceIds: selectedServiceIds,
       selectedRoles,
       selectedInstances,
@@ -582,6 +638,7 @@ export function RequestWorkspace() {
       resourceCleanupAction,
       perUserBudgetUsd,
       costingMode,
+      labsMode,
     });
 
     setValidationErrors(errors);
@@ -589,24 +646,26 @@ export function RequestWorkspace() {
 
     if (errors.length > 0) return;
 
-    if (totalPrice == null) {
-      setSubmitError('Complete the form to calculate an estimate before creating the request.');
-      return;
-    }
-
-    const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate) ?? 0;
-
-    if (totalPrice > 0) {
-      if (walletBalance == null) {
-        setSubmitError('Unable to load your wallet balance.');
+    if (!labsMode) {
+      if (totalPrice == null) {
+        setSubmitError('Complete the form to calculate an estimate before creating the request.');
         return;
       }
 
-      if (walletBalance < estimatedInr) {
-        setSubmitError(
-          `Insufficient wallet balance. This request needs ${formatInr(estimatedInr)} but your wallet has ${formatInr(walletBalance)}.`
-        );
-        return;
+      const estimatedInr = convertUsdToInr(totalPrice, usdToInrRate) ?? 0;
+
+      if (totalPrice > 0) {
+        if (walletBalance == null) {
+          setSubmitError('Unable to load your wallet balance.');
+          return;
+        }
+
+        if (walletBalance < estimatedInr) {
+          setSubmitError(
+            `Insufficient wallet balance. This request needs ${formatInr(estimatedInr)} but your wallet has ${formatInr(walletBalance)}.`
+          );
+          return;
+        }
       }
     }
 
@@ -614,8 +673,11 @@ export function RequestWorkspace() {
     let chargedInr: number | null = null;
 
     try {
-      if (totalPrice > 0) {
-        const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure');
+      if (!labsMode && totalPrice != null && totalPrice > 0) {
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'azure', {
+          projectId: rackoProjectId || undefined,
+          serviceKey: projectServiceKey === 'cloud-labs' ? 'cloud-labs' : 'azure',
+        });
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
         setUsdToInrRate(charge.usdToInrRate);
@@ -631,8 +693,9 @@ export function RequestWorkspace() {
           serviceIds: selectedServiceIds,
           selectedRoles,
           selectedInstances,
-          costingMode,
+          costingMode: labsMode ? 'shared' : costingMode,
           projectName: projectName.trim(),
+          projectId: rackoProjectId || undefined,
           idMode: isPurchaseConvert ? 'azure_ids' : idMode ?? undefined,
           ...(isPurchaseConvert && convertedFromRequestId
             ? {
@@ -658,7 +721,7 @@ export function RequestWorkspace() {
                   : {}),
               }
             : {}),
-          ...(costingMode === 'per_user' && perUserBudgetUsd !== undefined
+          ...(!labsMode && costingMode === 'per_user' && perUserBudgetUsd !== undefined
             ? { perUserBudgetUsd }
             : {}),
           ...(idMode !== 'test_ids' && usageWindows.length > 0
@@ -843,24 +906,35 @@ export function RequestWorkspace() {
 
     return [
       { label: 'Details', done: detailsDone },
-      { label: 'Services', done: servicesDone },
+      { label: labsMode ? 'Labs' : 'Services', done: servicesDone },
       { label: 'Email', done: emailDone },
       { label: 'Region', done: regionDone },
     ];
-  }, [projectName, accountCount, startDate, endDate, idMode, selectedServiceIds, customerEmail, location]);
+  }, [
+    projectName,
+    accountCount,
+    startDate,
+    endDate,
+    idMode,
+    selectedServiceIds,
+    customerEmail,
+    location,
+    labsMode,
+  ]);
 
   const submitBarProps = {
     submitting,
     submitError,
-    totalPrice,
+    totalPrice: labsMode ? null : totalPrice,
     currency: pricing?.currency,
     onSubmit: handleSubmit,
     walletBalance,
     walletCurrency,
-    estimatedInr,
+    estimatedInr: labsMode ? null : estimatedInr,
     usdToInrRate,
     walletLoading,
-    insufficientBalance,
+    insufficientBalance: labsMode ? false : insufficientBalance,
+    labsMode,
   };
 
   return (
@@ -905,7 +979,7 @@ export function RequestWorkspace() {
                   className="text-xs font-semibold uppercase tracking-wider"
                   style={{ color: accent }}
                 >
-                  Azure automation
+                  {labsMode ? 'Azure Labs' : 'Azure automation'}
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
                   {isPurchaseConvert ? 'Continue purchase from test lab' : 'Create request'}
@@ -913,7 +987,9 @@ export function RequestWorkspace() {
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
                   {isPurchaseConvert
                     ? 'Services, permissions, and license are copied from your test IDs. Set dates, timing, cleanup, budget, and account count, then pay from your wallet.'
-                    : 'Provision Azure lab access for a customer using the service catalog.'}
+                    : labsMode
+                      ? 'Provision an Azure training lab — select labs, instances, and permissions (no costing steps).'
+                      : 'Provision Azure lab access for a customer using the service catalog.'}
                 </p>
               </div>
             </div>
@@ -989,12 +1065,28 @@ export function RequestWorkspace() {
 
           <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
             <div className="min-w-0 space-y-6">
+            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                Cost attribution
+              </p>
+              <p className="mb-3 text-sm text-gray-500">
+                Charges stay on your main wallet. Optionally assign a project so spend appears in
+                Reports.
+              </p>
+              <ProjectSelect
+                serviceKey={projectServiceKey}
+                value={rackoProjectId}
+                onChange={setRackoProjectId}
+                portal={isTenantPortal ? 'tenant' : 'org'}
+                disabled={submitting}
+              />
+            </div>
             <RequestForm
               catalog={catalog}
               selectedServiceIds={selectedServiceIds}
               onToggleService={handleToggleService}
               location={location}
-              onLocationChange={setLocation}
+              onLocationChange={handleLocationChange}
               locations={locations}
               locationsLoading={locationsLoading}
               locationsError={locationsError}
@@ -1074,9 +1166,11 @@ export function RequestWorkspace() {
               privilegedRoleMessage={privilegedRoleMessage}
               privilegedRoleMessageType={privilegedRoleMessageType}
               validationErrors={validationErrors}
+              labsMode={labsMode}
             />
 
             <div className="space-y-4 xl:hidden">
+              {!labsMode ? (
               <PricingSummary
                 totalPrice={totalPrice}
                 currency={pricing?.currency}
@@ -1091,6 +1185,7 @@ export function RequestWorkspace() {
                 loading={pricingLoading}
                 error={pricingError}
               />
+              ) : null}
 
               <CreateRequestSubmitBar {...submitBarProps} />
             </div>
@@ -1098,6 +1193,7 @@ export function RequestWorkspace() {
 
           <aside className="hidden xl:block">
             <div className="sticky top-20 space-y-4">
+              {!labsMode ? (
               <PricingSummary
                 totalPrice={totalPrice}
                 currency={pricing?.currency}
@@ -1112,6 +1208,7 @@ export function RequestWorkspace() {
                 loading={pricingLoading}
                 error={pricingError}
               />
+              ) : null}
 
               <CreateRequestSubmitBar {...submitBarProps} compact />
             </div>

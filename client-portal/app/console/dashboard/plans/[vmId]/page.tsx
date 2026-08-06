@@ -9,6 +9,7 @@ import { StatCardSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { PlanStatusBadge } from '@/components/tenant/PlanStatusBadge';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import {
   extendTenantPlan,
   getTenantPlan,
@@ -43,7 +44,9 @@ export default function TenantPlanDetailPage() {
   const vmId = params.vmId as string;
   const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
+  const { loading: rbacLoading, isConsoleStaff, hasPermission } = useTenantRbac();
   const router = useRouter();
+  const canView = isConsoleStaff && hasPermission('orders.read', 'wallet.read');
 
   const [plan, setPlan] = useState<TenantPlan | null>(null);
   const [history, setHistory] = useState<TenantPlanHistoryEntry[]>([]);
@@ -60,10 +63,11 @@ export default function TenantPlanDetailPage() {
   const [renewVmStatus, setRenewVmStatus] = useState<string | null>(null);
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_user') {
+    if (rbacLoading) return;
+    if (tenantUser?.role === 'tenant_user' && !isConsoleStaff) {
       router.replace('/console/dashboard');
     }
-  }, [tenantUser, router]);
+  }, [tenantUser, router, rbacLoading, isConsoleStaff]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -85,8 +89,8 @@ export default function TenantPlanDetailPage() {
   }, [vmId]);
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_admin') void load();
-  }, [tenantUser, load]);
+    if (!rbacLoading && canView) void load();
+  }, [rbacLoading, canView, load]);
 
   async function openConfirm() {
     setActionError(null);
@@ -138,7 +142,7 @@ export default function TenantPlanDetailPage() {
     }
   }
 
-  if (tenantUser?.role !== 'tenant_admin') return null;
+  if (rbacLoading || !canView) return null;
 
   if (loading) {
     return (

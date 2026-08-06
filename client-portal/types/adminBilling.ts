@@ -37,6 +37,8 @@ export interface AdminWalletTransaction {
   relatedVmJobId: string | null;
   creditedBy: string | null;
   balanceAfter: number;
+  projectId?: string | null;
+  serviceKey?: string | null;
   createdAt: string;
 }
 

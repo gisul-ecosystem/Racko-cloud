@@ -358,9 +358,22 @@ export async function assertTenantUserAssignedVmsAccessible(
   }
 
   const { ExternalVMModel } = await import('../external-vm/external-vm.model');
-  const externalVms = await ExternalVMModel.find({
-    assignedTenantUserId: new mongoose.Types.ObjectId(tenantUserId),
-  }).lean();
+  const { getExternalVmIdsForTenantUser } = await import(
+    '../external-vm/externalVmTenantAssignment.service'
+  );
+  const { TenantUser } = await import('../../models/tenantUser.model');
+  const tenantUser = await TenantUser.findById(tenantUserId).select('tenantId').lean();
+  const externalVms =
+    tenantUser?.tenantId != null
+      ? await ExternalVMModel.find({
+          _id: {
+            $in: await getExternalVmIdsForTenantUser(
+              tenantUser.tenantId as mongoose.Types.ObjectId,
+              new mongoose.Types.ObjectId(tenantUserId)
+            ),
+          },
+        }).lean()
+      : [];
   for (const vm of externalVms) {
     if (!hasScheduleRestriction(vm) && !vm.accessOverride) continue;
     const result = checkAccessWindow(vm);

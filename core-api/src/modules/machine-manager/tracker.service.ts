@@ -98,6 +98,13 @@ export async function appendActivity(
     throw new NotFoundError(`Agent not found: ${agentId}`);
   }
 
+  logger.info('[Tracker] appendActivity received', {
+    agentId,
+    machineId: machine._id.toString(),
+    type,
+    payloadSummary: JSON.stringify(payload).slice(0, 200),
+  });
+
   // Rename deduplication: when a file is renamed, delete the old S3 object
   // so storage doesn't accumulate with each rename. We find the most recent
   // file_write for the old path and delete its storageRef from S3.
@@ -132,10 +139,94 @@ export async function appendActivity(
     }
   }
 
+  // File delete: remove S3 objects for the deleted path.
+  //
+  // Two cases handled:
+  //
+  // 1. Direct file delete — exact path match finds one file_write record →
+  //    delete its single S3 object.
+  //
+  // 2. Folder delete — Windows sends a delete event for the top-level folder
+  //    path (e.g. "Desktop\folder1"), not for each file inside it. An exact
+  //    match finds nothing. We then do a prefix query to find ALL file_write
+  //    records whose path starts with "Desktop\folder1\" and delete every
+  //    one of their S3 objects. This handles arbitrarily deep nesting.
+  if (type === 'file_delete') {
+    const deletePayload = payload as { path?: string };
+    if (deletePayload.path) {
+      const deletePath = deletePayload.path;
+
+      // ── Case 1: exact match (direct file delete) ──────────────────────────
+      const exactMatch = await MachineActivityModel.findOne({
+        machineId: machine._id,
+        type: 'file_write',
+        'payload.path': deletePath,
+      }).sort({ sequence: -1 });
+
+      if (exactMatch) {
+        const p = exactMatch.payload as { storageRef?: string };
+        if (p.storageRef) {
+          try {
+            await seaweedfsService.delete(p.storageRef);
+            logger.info('[Tracker] Deleted S3 object on file delete', {
+              path: deletePath,
+              storageRef: p.storageRef,
+            });
+          } catch (err) {
+            logger.warn('[Tracker] Could not delete S3 object on file delete (non-fatal)', {
+              path: deletePath, storageRef: p.storageRef, err,
+            });
+          }
+        }
+      } else {
+        // ── Case 2: prefix match (folder delete) ────────────────────────────
+        // Find all file_write records whose path is inside the deleted folder.
+        // Use a case-insensitive regex anchored to the folder path + separator.
+        // Escape backslashes for regex: "C:\Users\folder1" → "C:\\Users\\folder1\\"
+        const escapedPrefix = deletePath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const prefixRegex = new RegExp(`^${escapedPrefix}\\\\`, 'i');
+
+        const childActivities = await MachineActivityModel.find({
+          machineId: machine._id,
+          type: 'file_write',
+          'payload.path': { $regex: prefixRegex },
+        });
+
+        if (childActivities.length > 0) {
+          logger.info('[Tracker] Folder delete — deleting S3 objects for all files inside', {
+            folderPath: deletePath,
+            fileCount: childActivities.length,
+          });
+
+          await Promise.all(
+            childActivities.map(async (act) => {
+              const p = act.payload as { storageRef?: string; path?: string };
+              if (!p.storageRef) return;
+              try {
+                await seaweedfsService.delete(p.storageRef);
+                logger.debug('[Tracker] Deleted S3 object (folder delete)', {
+                  path: p.path,
+                  storageRef: p.storageRef,
+                });
+              } catch (err) {
+                logger.warn('[Tracker] Could not delete S3 object (folder delete, non-fatal)', {
+                  path: p.path, storageRef: p.storageRef, err,
+                });
+              }
+            })
+          );
+        } else {
+          logger.warn('[Tracker] file_delete: no matching file_write records found (exact or prefix)', {
+            path: deletePath,
+          });
+        }
+      }
+    }
+  }
+
   // File write deduplication: when a file is re-uploaded (same path, new content),
   // delete the previous S3 object so only the latest version is kept in storage.
-  if (type === 'file_write') {
-    const writePayload = payload as { path?: string; storageRef?: string };
+  if (type === 'file_write') {    const writePayload = payload as { path?: string; storageRef?: string };
     if (writePayload.path) {
       const prevActivity = await MachineActivityModel.findOne({
         machineId: machine._id,
@@ -223,7 +314,8 @@ export async function getPresignedUploadUrl(
   agentId: string,
   sha256: string,
   filename: string,
-  mimeType: string
+  mimeType: string,
+  filePath?: string
 ): Promise<{ presignedUrl: string; storageRef: string }> {
   const machine = await MachineModel.findOne({ agentId });
   if (!machine) {
@@ -235,7 +327,8 @@ export async function getPresignedUploadUrl(
     sha256,
     filename,
     mimeType,
-    3600 // 1 hour TTL
+    3600, // 1 hour TTL
+    filePath
   );
 }
 
@@ -276,7 +369,8 @@ export async function uploadFile(
     machine._id.toString(),
     hashSegment,
     filename,
-    mimeType
+    mimeType,
+    filePath  // pass full path so S3 key is unique per location
   );
 
   logger.info('[Tracker] File uploaded to SeaweedFS', {

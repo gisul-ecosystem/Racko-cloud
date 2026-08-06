@@ -1,6 +1,7 @@
 import { TenantAuthProvider } from '@/context/TenantAuthContext';
 import { TenantBrandingProvider } from '@/context/TenantBrandingContext';
 import { TenantServicesProvider } from '@/context/TenantServicesContext';
+import { TenantRbacProvider } from '@/context/TenantRbacContext';
 import { TenantBrandingHead } from '@/components/tenant/TenantBrandingHead';
 import { TenantConsoleAuthGate } from '@/components/tenant/TenantConsoleAuthGate';
 import { buildTenantMetadata } from '@/lib/tenantBrandingServer';
@@ -15,10 +16,12 @@ export default function ConsoleDashboardLayout({ children }: { children: React.R
     <TenantAuthProvider>
       <TenantBrandingProvider>
         <TenantServicesProvider>
-          <div className="min-h-screen bg-gray-50 text-gray-900">
-            <TenantBrandingHead />
-            <TenantConsoleAuthGate>{children}</TenantConsoleAuthGate>
-          </div>
+          <TenantRbacProvider>
+            <div className="min-h-screen bg-gray-50 text-gray-900">
+              <TenantBrandingHead />
+              <TenantConsoleAuthGate>{children}</TenantConsoleAuthGate>
+            </div>
+          </TenantRbacProvider>
         </TenantServicesProvider>
       </TenantBrandingProvider>
     </TenantAuthProvider>

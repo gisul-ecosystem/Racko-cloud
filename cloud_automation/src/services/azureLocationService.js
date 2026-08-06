@@ -603,17 +603,20 @@ const filterLocationsForSelectedInstances = async (
     ])
   );
 
-  const instancesToValidate = services
-    .filter((service) => serviceSupportsInstances(service.name))
-    .map((service) => {
-      const serviceId = Number(service.id);
-      const optionName = resolveInstanceOptionForLocation(
-        serviceId,
-        instancesByServiceId,
-        selectedInstancesByServiceId
-      );
+  // Only filter by instances the user explicitly selected — never fall back to a
+  // catalog default SKU (that caused wrong regions and create-time mismatches).
+  const explicitSelections = selectedInstancesByServiceId || {};
+  const instancesToValidate = Object.entries(explicitSelections)
+    .map(([rawServiceId, rawOption]) => {
+      const serviceId = Number(rawServiceId);
+      const optionName = String(rawOption || '').trim();
+      const service = servicesById.get(serviceId);
 
-      if (!optionName) {
+      if (!Number.isInteger(serviceId) || serviceId <= 0 || !optionName || !service) {
+        return null;
+      }
+
+      if (!serviceSupportsInstances(service.name)) {
         return null;
       }
 
@@ -630,6 +633,7 @@ const filterLocationsForSelectedInstances = async (
   }
 
   const regionSets = [];
+  let lookupFailures = 0;
 
   const instanceRegionSets = await Promise.all(
     instancesToValidate.map(async (instance) => {
@@ -640,31 +644,68 @@ const filterLocationsForSelectedInstances = async (
         return null;
       }
 
-      return getRegionsSupportingInstance(service, optionName);
+      try {
+        const regions = await getRegionsSupportingInstance(service, optionName);
+        if (!regions || regions.size === 0) {
+          logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_instance_has_no_regions', {
+            serviceId: service.id,
+            serviceName: service.name,
+            optionName
+          });
+        }
+        return regions;
+      } catch (error) {
+        lookupFailures += 1;
+        logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_instance_region_filter_failed', {
+          serviceId: service.id,
+          serviceName: service.name,
+          optionName,
+          message: error?.message
+        });
+        return null;
+      }
     })
   );
 
   for (const regionSet of instanceRegionSets) {
-    if (regionSet && regionSet.size > 0) {
+    // Empty Set means the SKU has no deployable regions — treat as hard filter.
+    if (regionSet instanceof Set) {
       regionSets.push(regionSet);
     }
   }
 
-  const validRegions = intersectRegionNameSets(regionSets);
-
-  if (regionSets.length > 0) {
-    if (!validRegions || validRegions.size === 0) {
-      logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_no_matching_instance_regions', {
-        serviceCount: services.length,
-        instanceCount: instancesToValidate.length
+  // If every lookup failed, keep broader candidates rather than blocking the form.
+  if (regionSets.length === 0) {
+    if (lookupFailures > 0) {
+      logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_instance_filter_skipped', {
+        instanceCount: instancesToValidate.length,
+        lookupFailures
       });
-      return [];
     }
-
-    return locations.filter((location) => validRegions.has(location.arm_region_name));
+    return locations;
   }
 
-  return locations;
+  const validRegions = intersectRegionNameSets(regionSets);
+
+  if (!validRegions || validRegions.size === 0) {
+    logAzureEvent(LOG_SERVICE, 'warn', 'azure_locations_no_matching_instance_regions', {
+      serviceCount: services.length,
+      instanceCount: instancesToValidate.length,
+      selectedOptions: instancesToValidate.map((entry) => entry.option_name)
+    });
+    return [];
+  }
+
+  const filtered = locations.filter((location) => validRegions.has(location.arm_region_name));
+
+  logAzureEvent(LOG_SERVICE, 'info', 'azure_locations_filtered_for_instances', {
+    instanceCount: instancesToValidate.length,
+    selectedOptions: instancesToValidate.map((entry) => entry.option_name),
+    matchingRegionCount: filtered.length,
+    skuRegionCount: validRegions.size
+  });
+
+  return filtered;
 };
 
 const getCatalogHourlyPricesForServices = async (serviceIds) => {

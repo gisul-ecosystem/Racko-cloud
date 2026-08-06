@@ -1,10 +1,12 @@
 'use client';
 
-import { AlertCircle, Loader2, Lock, Shield } from 'lucide-react';
+import { AlertCircle, Loader2, Lock } from 'lucide-react';
 import type { ManagePortalErrorKind } from '../../types/managePortal';
-
-const inputClass =
-  'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
+import {
+  ManagePortalAuthFrame,
+  useManagePortalBrand,
+} from '@/components/manage-portal/ManagePortalAuthFrame';
+import { tenantAccentButton } from '@/lib/tenantAccentStyles';
 
 const labelClass = 'mb-1.5 block text-xs font-medium uppercase tracking-wide text-gray-500';
 
@@ -17,7 +19,12 @@ interface ManageUsersLoginProps {
   onSubmit: (credentials: { username: string; password: string }) => Promise<void>;
 }
 
-function resolveBanner(error: string | null, errorKind: ManagePortalErrorKind | null, sessionExpired: boolean, missingToken: boolean) {
+function resolveBanner(
+  error: string | null,
+  errorKind: ManagePortalErrorKind | null,
+  sessionExpired: boolean,
+  missingToken: boolean
+) {
   if (missingToken) {
     return {
       title: 'Access link required',
@@ -68,6 +75,7 @@ export function ManageUsersLogin({
   sessionExpired,
   onSubmit,
 }: ManageUsersLoginProps) {
+  const { accent } = useManagePortalBrand();
   const missingToken = !token?.trim();
   const banner = resolveBanner(error, errorKind, sessionExpired, missingToken);
 
@@ -82,91 +90,86 @@ export function ManageUsersLogin({
     });
   }
 
+  const inputClass =
+    'w-full rounded-lg border border-gray-200 bg-white px-3 py-2.5 text-sm text-gray-900 shadow-sm transition focus:outline-none focus:ring-1';
+
   return (
-    <div className="mx-auto w-full max-w-md">
-      <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="border-b border-gray-100 bg-gray-50 px-6 py-8 text-center">
-          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-xl bg-red-50 text-[#B91C1C]">
-            <Shield className="h-7 w-7" />
-          </div>
-          <h1 className="text-xl font-bold text-gray-900">Manage Portal Login</h1>
-          <p className="mt-2 text-sm text-gray-500">
-            Admins: use the temporary admin username and password from your email. Provisioned users:
-            sign in with your Azure username or user ID and temporary password.
-          </p>
-        </div>
-
-        <div className="p-6">
-          {banner && (
-            <div
-              className={`mb-5 flex gap-3 rounded-lg border px-4 py-3 text-sm ${
-                banner.tone === 'danger'
-                  ? 'border-red-200 bg-red-50 text-red-700'
-                  : 'border-amber-200 bg-amber-50 text-amber-800'
-              }`}
-            >
-              {banner.tone === 'danger' ? (
-                <Lock className="mt-0.5 h-4 w-4 shrink-0" />
-              ) : (
-                <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
-              )}
-              <div>
-                <p className="font-medium">{banner.title}</p>
-                <p className="mt-0.5">{banner.message}</p>
-              </div>
-            </div>
+    <ManagePortalAuthFrame
+      eyebrow="AZURE LAB"
+      title="Manage Portal Login"
+      description="Admins: use the temporary admin username and password from your email. Provisioned users: sign in with your Azure username or user ID and temporary password."
+    >
+      {banner && (
+        <div
+          className={`mb-5 flex gap-3 rounded-lg border px-4 py-3 text-sm ${
+            banner.tone === 'danger'
+              ? 'border-red-200 bg-red-50 text-red-700'
+              : 'border-amber-200 bg-amber-50 text-amber-800'
+          }`}
+        >
+          {banner.tone === 'danger' ? (
+            <Lock className="mt-0.5 h-4 w-4 shrink-0" />
+          ) : (
+            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
           )}
-
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="username" className={labelClass}>
-                Username or Azure User ID
-              </label>
-              <input
-                id="username"
-                name="username"
-                type="text"
-                autoComplete="username"
-                required
-                disabled={missingToken || loading}
-                className={inputClass}
-                placeholder="admin-username or azure-user-id"
-              />
-            </div>
-
-            <div>
-              <label htmlFor="password" className={labelClass}>
-                Temporary Password
-              </label>
-              <input
-                id="password"
-                name="password"
-                type="password"
-                autoComplete="current-password"
-                required
-                disabled={missingToken || loading}
-                className={inputClass}
-                placeholder="From your email"
-              />
-            </div>
-
-            <button
-              type="submit"
-              disabled={missingToken || loading}
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-[#a01717] disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Authenticating…
-                </>
-              ) : (
-                'Sign In'
-              )}
-            </button>
-          </form>
+          <div>
+            <p className="font-medium">{banner.title}</p>
+            <p className="mt-0.5">{banner.message}</p>
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div>
+          <label htmlFor="username" className={labelClass}>
+            Username or Azure User ID
+          </label>
+          <input
+            id="username"
+            name="username"
+            type="text"
+            autoComplete="username"
+            required
+            disabled={missingToken || loading}
+            className={inputClass}
+            style={{ ['--tw-ring-color' as string]: accent }}
+            placeholder="admin-username or azure-user-id"
+          />
+        </div>
+
+        <div>
+          <label htmlFor="password" className={labelClass}>
+            Temporary Password
+          </label>
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autoComplete="current-password"
+            required
+            disabled={missingToken || loading}
+            className={inputClass}
+            style={{ ['--tw-ring-color' as string]: accent }}
+            placeholder="From your email"
+          />
+        </div>
+
+        <button
+          type="submit"
+          disabled={missingToken || loading}
+          className="inline-flex w-full items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm font-medium text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-50"
+          style={tenantAccentButton(accent)}
+        >
+          {loading ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Authenticating…
+            </>
+          ) : (
+            'Sign In'
+          )}
+        </button>
+      </form>
+    </ManagePortalAuthFrame>
   );
 }

@@ -26,8 +26,12 @@ const AZURE_ALLOWED_SUFFIXES = [
   /^\/requests\/\d+\/cleanup-schedule$/,
   /^\/services(\/[\w%-]+)*\/?$/,
   /^\/pricing(\/[\w%-]+)*\/?$/,
+  /^\/azure\/licenses\/?$/,
+  /^\/purchase-intent\/(clone|respond)\/?$/,
   /^\/provision\/request\/\d+(\/[\w%-]+)*\/?$/,
   /^\/admin-access-requests\/?$/,
+  /^\/privileged-role-requests\/?$/,
+  /^\/privileged-role-requests\/roles\/?$/,
   /^\/notifications(\/[\w%-]+)*\/?$/,
 ];
 
@@ -38,12 +42,15 @@ const AWS_ALLOWED_SUFFIXES = [
   /^\/pricing(\/[\w%-]+)*\/?$/,
   /^\/regions\/?$/,
   /^\/available-regions\/?$/,
+  /^\/purchase-intent\/(clone|respond)\/?$/,
   /^\/requests\/?$/,
   /^\/requests\/[\w-]+$/,
   /^\/requests\/[\w-]+\/spend$/,
   /^\/requests\/[\w-]+\/sync-spend$/,
   /^\/requests\/[\w-]+\/users\/\d+\/reinstate$/,
-  /^\/provision\/request\/[\w-]+\/(start|status|retry)$/,
+  /^\/provision\/request\/[\w-]+\/(start|status|retry)\/?$/,
+  /^\/privileged-role-requests\/?$/,
+  /^\/privileged-role-requests\/roles\/?$/,
   /^\/notifications(\/[\w%-]+)*\/?$/,
 ];
 
