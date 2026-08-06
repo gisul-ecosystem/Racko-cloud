@@ -185,15 +185,13 @@ interface ConsolePollOptions {
  * adapter (named "Ethernet" on these templates) onto the assigned static
  * IP/gateway/DNS/MTU via `netsh`.
  *
- * Deliberately uses `netsh interface ipv4 set address ... static` rather
- * than New-NetIPAddress/Remove-NetIPAddress: on a guest that already has a
- * default-gateway route (always true here), New-NetIPAddress -DefaultGateway
- * throws "Instance DefaultGateway already exists" (Win32 error 87) — Remove
- * succeeds, New fails, and the adapter is left with NO IPv4 address at all,
- * which is worse than the original mismatch. `netsh set address` replaces
- * the address + gateway atomically in one call and is naturally idempotent
- * (re-running with the same values is a no-op), so no "only if not already
- * set" guard is needed.
+ * Deliberately uses `netsh interface ipv4 set address ... static` (via the
+ * shared guestAgentExec helper) rather than PowerShell networking cmdlets that
+ * fail when a default-gateway route already exists: those leave the adapter
+ * with no IPv4 at all, which is worse than the original mismatch. `netsh set
+ * address` replaces the address + gateway atomically in one call and is
+ * naturally idempotent (re-running with the same values is a no-op), so no
+ * "only if not already set" guard is needed.
  *
  * Verifies the GUEST-side result via agent/exec-status (exitCode + stdout/
  * stderr). If no "Up" adapter is ready yet the script exits 2 with
@@ -227,8 +225,6 @@ async function fixPrivateNetworkGuestIp(
 
     const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
       logLabel: 'VMConsolePoll',
-      pollIntervalMs: 1000,
-      maxPolls: 8,
     });
 
     // NO_ADAPTER (exit 2) or any non-zero exit — NIC not ready / netsh failed.
@@ -284,8 +280,6 @@ async function fixWindowsPasswordPolicy(node: string, vmid: number, username: st
 
     const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
       logLabel: 'VMConsolePoll',
-      pollIntervalMs: 1000,
-      maxPolls: 8,
     });
     logger.info('[VMConsolePoll] Windows password-policy fixup executed', {
       node,
@@ -333,8 +327,6 @@ async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
 
     const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
       logLabel: 'VMConsolePoll',
-      pollIntervalMs: 1000,
-      maxPolls: 8,
     });
     logger.info('[VMConsolePoll] Windows RDP access fixup executed', {
       node,

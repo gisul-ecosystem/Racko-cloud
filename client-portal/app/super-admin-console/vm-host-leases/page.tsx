@@ -13,6 +13,7 @@ import {
   RefreshCw,
   Search,
   Trash2,
+  Trash,
   Upload,
   X,
 } from 'lucide-react';
@@ -161,6 +162,9 @@ export default function VmHostLeasesPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editData, setEditData] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
+  const [selectedLeases, setSelectedLeases] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
 
   // Determine which columns have actual data
   const visibleColumns = useMemo(() => {
@@ -270,6 +274,61 @@ export default function VmHostLeasesPage() {
       );
     } finally {
       setDeleteLoading(false);
+    }
+  };
+
+  const toggleSelectLease = (leaseId: string) => {
+    const newSelected = new Set(selectedLeases);
+    if (newSelected.has(leaseId)) {
+      newSelected.delete(leaseId);
+    } else {
+      newSelected.add(leaseId);
+    }
+    setSelectedLeases(newSelected);
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedLeases.size === leases.length) {
+      setSelectedLeases(new Set());
+    } else {
+      setSelectedLeases(new Set(leases.map((l) => l.id)));
+    }
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedLeases.size === 0) {
+      addToast('error', 'No rows selected');
+      return;
+    }
+
+    setBulkDeleting(true);
+    try {
+      const selectedArray = Array.from(selectedLeases);
+      let successCount = 0;
+      let errorCount = 0;
+
+      for (const leaseId of selectedArray) {
+        try {
+          await deleteVmHostLease(leaseId);
+          successCount++;
+        } catch (err) {
+          errorCount++;
+        }
+      }
+
+      setSelectedLeases(new Set());
+      addToast(
+        'success',
+        `Deleted ${successCount} lease(s)${errorCount > 0 ? `. ${errorCount} failed.` : '.'}`
+      );
+      await load();
+    } catch (err) {
+      addToast(
+        'error',
+        err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Bulk delete failed'
+      );
+    } finally {
+      setBulkDeleting(false);
     }
   };
 
@@ -411,25 +470,38 @@ export default function VmHostLeasesPage() {
                 className={`${inputClass} pl-9`}
               />
             </form>
-            {visibleColumns.description && (
-              <button
-                type="button"
-                onClick={() => setDescriptionCollapsed(!descriptionCollapsed)}
-                className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 hover:bg-gray-50 bg-white transition"
-              >
-                {descriptionCollapsed ? (
-                  <>
-                    <ChevronDown className="h-3.5 w-3.5" />
-                    Show Description
-                  </>
-                ) : (
-                  <>
-                    <ChevronUp className="h-3.5 w-3.5" />
-                    Hide Description
-                  </>
+              <div className="flex flex-wrap items-center gap-2">
+                {visibleColumns.description && (
+                  <button
+                    type="button"
+                    onClick={() => setDescriptionCollapsed(!descriptionCollapsed)}
+                    className="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-700 border border-gray-200 hover:bg-gray-50 bg-white transition"
+                  >
+                    {descriptionCollapsed ? (
+                      <>
+                        <ChevronDown className="h-3.5 w-3.5" />
+                        Show Description
+                      </>
+                    ) : (
+                      <>
+                        <ChevronUp className="h-3.5 w-3.5" />
+                        Hide Description
+                      </>
+                    )}
+                  </button>
                 )}
-              </button>
-            )}
+                {selectedLeases.size > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setPendingBulkDelete(true)}
+                    disabled={bulkDeleting}
+                    className="inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 transition"
+                  >
+                    <Trash className="h-3.5 w-3.5" />
+                    Delete Selected ({selectedLeases.size})
+                  </button>
+                )}
+              </div>
           </div>
         </div>
 
@@ -490,6 +562,15 @@ export default function VmHostLeasesPage() {
               <table className="min-w-full divide-y divide-gray-200 text-left text-sm">
                 <thead>
                   <tr className="border-b-2 border-gray-200 bg-gradient-to-r from-gray-50 to-gray-100">
+                    <th className="w-12 px-4 py-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedLeases.size === leases.length && leases.length > 0}
+                        onChange={toggleSelectAll}
+                        className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                        aria-label="Select all rows"
+                      />
+                    </th>
                     {visibleColumns.provider && (
                       <th className="px-6 py-4 text-xs font-bold uppercase tracking-wider text-gray-600">
                         Provider
@@ -537,8 +618,18 @@ export default function VmHostLeasesPage() {
                     key={lease.id}
                     className={`transition-colors ${
                       editingId === lease.id ? 'bg-blue-50' : 'hover:bg-gray-50/60'
-                    }`}
+                    } ${selectedLeases.has(lease.id) ? 'bg-blue-100' : ''}`}
                   >
+                    <td className="w-12 px-4 py-4">
+                      <input
+                        type="checkbox"
+                        checked={selectedLeases.has(lease.id)}
+                        onChange={() => toggleSelectLease(lease.id)}
+                        disabled={editingId === lease.id}
+                        className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C] disabled:opacity-50"
+                        aria-label={`Select row for ${lease.ipAddress}`}
+                      />
+                    </td>
                     {visibleColumns.provider && (
                       <td className="px-6 py-4">
                         {editingId === lease.id ? (
@@ -751,6 +842,17 @@ export default function VmHostLeasesPage() {
         loading={deleteLoading}
         onCancel={() => setPendingDelete(null)}
         onConfirm={() => void handleDelete()}
+      />
+
+      <ConfirmModal
+        open={pendingBulkDelete}
+        title={`Delete ${selectedLeases.size} lease${selectedLeases.size !== 1 ? 's' : ''}?`}
+        description={`Remove ${selectedLeases.size} selected lease${selectedLeases.size !== 1 ? 's' : ''}? This action cannot be undone.`}
+        confirmLabel={`Delete ${selectedLeases.size}`}
+        confirmVariant="danger"
+        loading={bulkDeleting}
+        onCancel={() => setPendingBulkDelete(false)}
+        onConfirm={() => void handleBulkDelete()}
       />
 
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
