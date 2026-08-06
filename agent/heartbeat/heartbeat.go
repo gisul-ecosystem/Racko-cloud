@@ -39,12 +39,16 @@ type heartbeatResponse struct {
 	// Checksum is the expected SHA256 hex string of the new binary.
 	// Empty string means the server did not provide one — checksum is skipped.
 	Checksum        string `json:"checksum"`
+	// TrackingEnabled tells the agent whether it should run the filesystem watcher.
+	// Server is the source of truth — agent obeys unconditionally.
+	TrackingEnabled bool   `json:"trackingEnabled"`
 }
 
 // Start sends a heartbeat to the platform every 30 seconds including machine specs.
-// Call this in a separate goroutine: go heartbeat.Start(cfg, agentID, done, cancel).
+// Call this in a separate goroutine: go heartbeat.Start(cfg, agentID, done, cancel, onTrackingChanged).
 // cancel is called on 403 to stop all goroutines before self-uninstalling.
-func Start(cfg *config.Config, agentID string, done <-chan struct{}, cancel func()) {
+// onTrackingChanged is called whenever the server's trackingEnabled value changes.
+func Start(cfg *config.Config, agentID string, done <-chan struct{}, cancel func(), onTrackingChanged func(enabled bool)) {
 	const interval = 30 * time.Second
 	client := &http.Client{Timeout: 10 * time.Second}
 	ticker := time.NewTicker(interval)
@@ -52,20 +56,24 @@ func Start(cfg *config.Config, agentID string, done <-chan struct{}, cancel func
 
 	log.Printf("[heartbeat] Started — sending every %s (version=%s)", interval, config.Version)
 
+	// Track last known value so we only call onTrackingChanged on actual transitions.
+	// -1 = unknown (first heartbeat not yet received)
+	lastTracking := -1
+
 	for {
 		select {
 		case <-done:
 			log.Println("[heartbeat] Stopping.")
 			return
 		case <-ticker.C:
-			if err := sendHeartbeat(client, cfg, agentID, cancel); err != nil {
+			if err := sendHeartbeat(client, cfg, agentID, cancel, &lastTracking, onTrackingChanged); err != nil {
 				log.Printf("[heartbeat] Failed: %v", err)
 			}
 		}
 	}
 }
 
-func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, cancel func()) error {
+func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, cancel func(), lastTracking *int, onTrackingChanged func(bool)) error {
 	specs := collectSpecs()
 	log.Printf("[heartbeat] Specs collected — hostname=%s osVersion=%s cpuCores=%d ramGb=%.1f diskGb=%.1f",
 		specs.Hostname, specs.OSVersion, specs.CPUCores, specs.RAMGB, specs.DiskGB)
@@ -102,7 +110,7 @@ func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, canc
 		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
 	}
 
-	// Parse response to check for update availability
+	// Parse response to check for update availability and tracking state
 	var hbResp struct {
 		Data heartbeatResponse `json:"data"`
 	}
@@ -113,6 +121,19 @@ func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, canc
 			// Run update in a goroutine so heartbeat returns cleanly.
 			// The updater will cancel goroutines and exit when done.
 			go updater.Update(cfg, hbResp.Data.Checksum, cancel)
+		}
+
+		// Notify main.go if tracking state changed — server is the source of truth.
+		newTracking := 0
+		if hbResp.Data.TrackingEnabled {
+			newTracking = 1
+		}
+		if *lastTracking != newTracking {
+			*lastTracking = newTracking
+			log.Printf("[heartbeat] Tracking state changed from server — trackingEnabled=%v", hbResp.Data.TrackingEnabled)
+			if onTrackingChanged != nil {
+				onTrackingChanged(hbResp.Data.TrackingEnabled)
+			}
 		}
 	}
 

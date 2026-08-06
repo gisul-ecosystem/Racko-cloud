@@ -243,41 +243,7 @@ const sseProxy = createProxyMiddleware({
   proxyTimeout: 0,
   selfHandleResponse: false,
   on: {
-    proxyReq: (_proxyReq: unknown, req: unknown) => {
-      const r = req as Request;
-      logger.info('[SSE][Gateway] SSE proxy request forwarded to core-api', {
-        path: r.path,
-        url: r.url,
-        method: r.method,
-        target: config.CORE_API_URL,
-        acceptHeader: r.headers['accept'] ?? null,
-        timestamp: new Date().toISOString(),
-      });
-    },
-    proxyRes: (proxyRes: unknown, req: unknown) => {
-      const r = req as Request;
-      const pr = proxyRes as import('http').IncomingMessage;
-      logger.info('[SSE][Gateway] SSE proxy response received from core-api', {
-        path: r.path,
-        statusCode: pr.statusCode ?? null,
-        contentType: pr.headers['content-type'] ?? null,
-        timestamp: new Date().toISOString(),
-      });
-    },
-    error: (err: unknown, req: unknown, res: unknown) => {
-      const e = err as Error;
-      const r = req as Request;
-      logger.error('[SSE][Gateway] SSE proxy error', {
-        path: r?.path ?? 'unknown',
-        error: e.message,
-        timestamp: new Date().toISOString(),
-      });
-      (res as Response).status(502).json({
-        success: false,
-        message: 'Service temporarily unavailable.',
-        code: 'BAD_GATEWAY',
-      });
-    },
+    error: proxyOnHandlers.error,
   },
 });
 router.get('/api/v1/admin-vm-templates/:templateId/stream', sseProxy);
@@ -446,6 +412,8 @@ router.post('/api/v1/machines/reset-stream-ticket', authMiddleware, verifyMiddle
 // SSE stream for reset status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
 router.get('/api/v1/machines/reset-stream/:sessionId', sseProxy);
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+// PATCH /api/v1/machines/tracking — enable/disable file tracking (must come before /:id)
+router.patch('/api/v1/machines/tracking', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/machines/jobs/:id/stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);

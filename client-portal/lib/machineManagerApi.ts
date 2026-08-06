@@ -25,6 +25,8 @@ export interface IMachine {
     ramGb?: number;
     diskGb?: number;
   };
+  trackingEnabled: boolean;
+  trackingEnabledAt?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -129,6 +131,22 @@ export async function bulkCreateMachines(machines: CreateMachineDto[]): Promise<
 
 export async function deleteMachine(id: string): Promise<void> {
   await apiRequest(`/api/v1/machines/${id}`, { method: 'DELETE' });
+}
+
+/**
+ * Enable or disable file tracking on one or more machines.
+ * When enabled, the agent starts the filesystem watcher and activity log.
+ * When disabled, the watcher stops — no more activity is recorded.
+ */
+export async function setMachineTracking(
+  machineIds: string[],
+  enabled: boolean
+): Promise<IMachine[]> {
+  const res = await apiRequest<ApiResponse<{ machines: IMachine[]; total: number }>>(
+    '/api/v1/machines/tracking',
+    { method: 'PATCH', body: JSON.stringify({ machineIds, enabled }) }
+  );
+  return res.data.machines;
 }
 
 export async function execCommand(
@@ -236,22 +254,8 @@ export function openPushStatusStream(
   sessionId: string,
   streamToken: string
 ): EventSource {
-  const baseUrl = getSseGatewayBaseUrl();
-  const url = `${baseUrl}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
-  console.log(`[SSE][Push][${new Date().toISOString()}] Opening EventSource`, {
-    sessionId,
-    baseUrl,
-    fullUrl: url,
-    windowOrigin: typeof window !== 'undefined' ? window.location.origin : 'SSR',
-    NEXT_PUBLIC_GATEWAY_URL: process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'NOT_SET',
-  });
-  const es = new EventSource(url, { withCredentials: true });
-  console.log(`[SSE][Push][${new Date().toISOString()}] EventSource created`, {
-    sessionId,
-    readyState: es.readyState,
-    url,
-  });
-  return es;
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
+  return new EventSource(url, { withCredentials: true });
 }
 
 // ─── Enrollment Key API ───────────────────────────────────────────────────────
@@ -319,15 +323,7 @@ export function openResetStatusStream(
   sessionId: string,
   streamToken: string
 ): EventSource {
-  const baseUrl = getSseGatewayBaseUrl();
-  const url = `${baseUrl}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
-  console.log(`[SSE][Reset][${new Date().toISOString()}] Opening EventSource`, {
-    sessionId,
-    baseUrl,
-    fullUrl: url,
-    windowOrigin: typeof window !== 'undefined' ? window.location.origin : 'SSR',
-    NEXT_PUBLIC_GATEWAY_URL: process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'NOT_SET',
-  });
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
   return new EventSource(url, { withCredentials: true });
 }
 
@@ -373,14 +369,6 @@ export function openCloneStatusStream(
   sessionId: string,
   streamTicket: string
 ): EventSource {
-  const baseUrl = getSseGatewayBaseUrl();
-  const url = `${baseUrl}/api/v1/machines/clone-stream/${sessionId}?ticket=${streamTicket}`;
-  console.log(`[SSE][Clone][${new Date().toISOString()}] Opening EventSource`, {
-    sessionId,
-    baseUrl,
-    fullUrl: url,
-    windowOrigin: typeof window !== 'undefined' ? window.location.origin : 'SSR',
-    NEXT_PUBLIC_GATEWAY_URL: process.env['NEXT_PUBLIC_GATEWAY_URL'] ?? 'NOT_SET',
-  });
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/clone-stream/${sessionId}?ticket=${streamTicket}`;
   return new EventSource(url, { withCredentials: true });
 }
