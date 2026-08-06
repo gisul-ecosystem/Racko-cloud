@@ -503,19 +503,14 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
     try {
       const sessionId = `push-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-      console.log(`[Push][${new Date().toISOString()}] Step 1 — Requesting stream ticket`, { sessionId, vmCount: valid.length });
-      const t0 = Date.now();
+      // Issue SSE stream ticket first (before opening EventSource)
       const { streamToken } = await issuePushStreamTicket(sessionId);
-      console.log(`[Push][${new Date().toISOString()}] Step 2 — Ticket received in ${Date.now() - t0}ms — opening SSE stream`);
 
+      // Open SSE stream
       const sse = openPushStatusStream(sessionId, streamToken);
       sseRef.current = sse;
 
-      const t1 = Date.now();
-      sse.onopen = () => {
-        console.log(`[Push][${new Date().toISOString()}] Step 3 — SSE stream OPENED in ${Date.now() - t1}ms`);
-      };
-
+      // Start 3-minute countdown
       setSecondsLeft(180);
       setTimeoutReached(false);
       countdownRef.current = setInterval(() => {
@@ -525,16 +520,17 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
         });
       }, 1000);
 
+      // 3-minute timeout — move forward regardless
       timerRef.current = setTimeout(() => {
         setTimeoutReached(true);
         cleanup();
       }, PUSH_TIMEOUT_MS);
 
+      // Handle SSE events
       sse.onmessage = (e: MessageEvent) => {
         type PushEvent = { type: string; machineId: string; success?: boolean; error?: string; machineName?: string };
         try {
           const event = JSON.parse(e.data as string) as PushEvent;
-          console.log(`[Push][${new Date().toISOString()}] SSE event received`, { type: event.type, machineId: event.machineId, success: event.success, error: event.error });
           if (event.type === 'push_result') {
             setVmStatus((prev) => ({
               ...prev,
@@ -560,32 +556,24 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
         }
       };
 
-      sse.onerror = (err) => {
-        console.error(`[Push][${new Date().toISOString()}] SSE stream ERROR`, { readyState: sse.readyState, event: err });
+      sse.onerror = () => {
         sse.close();
       };
 
-      console.log(`[Push][${new Date().toISOString()}] Step 4 — Calling push-agent API`);
-      const t2 = Date.now();
+      // Trigger the actual push (runs in parallel with SSE receiving events)
       const result = await pushAgentToVMs(valid, sessionId);
-      console.log(`[Push][${new Date().toISOString()}] Step 5 — push-agent API returned in ${Date.now() - t2}ms`, { machineIds: result.machines.map((m) => m._id) });
-
       setMachines(result.machines);
 
+      // Initialize status map — merge with any SSE events already received before API returned
       setVmStatus((prev) => {
         const next: Record<string, { pushSuccess?: boolean; pushError?: string; agentConnected: boolean }> = {};
         for (const m of result.machines) {
           next[m._id] = prev[m._id] ?? { agentConnected: false };
         }
-        const sseEventsAlreadyReceived = Object.keys(prev).length;
-        console.log(`[Push][${new Date().toISOString()}] Step 6 — vmStatus initialized`, {
-          machineIds: result.machines.map((m) => m._id),
-          sseEventsAlreadyReceived,
-          mergedStatus: next,
-        });
         return next;
       });
 
+      // Move to step 2 immediately after push API responds
       setStep(2);
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to push agent.');

@@ -3,6 +3,7 @@
 import { BarChart3, FolderKanban, Plus } from 'lucide-react';
 import { TenantServiceShell } from '@/components/tenant/TenantServiceShell';
 import { useTenantRbac } from '@/context/TenantRbacContext';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import type { ServiceNavLink } from '@/components/console/ServiceNavSidebar';
 import { useRouter } from 'next/navigation';
@@ -34,6 +35,7 @@ export default function TenantProjectsLayout({ children }: { children: React.Rea
   const router = useRouter();
   const { isLoading, isAuthenticated } = useTenantAuth();
   const { loading: rbacLoading, hasPermission } = useTenantRbac();
+  const { accentColor } = useTenantBranding();
   const canAccess = hasPermission('projects.read', 'projects.manage');
 
   useEffect(() => {
@@ -50,7 +52,10 @@ export default function TenantProjectsLayout({ children }: { children: React.Rea
   if (isLoading || rbacLoading || !isAuthenticated || !canAccess) {
     return (
       <div className="flex min-h-[40vh] items-center justify-center">
-        <div className="h-8 w-8 animate-spin rounded-full border-2 border-[#B91C1C] border-t-transparent" />
+        <div
+          className="h-8 w-8 animate-spin rounded-full border-2 border-t-transparent"
+          style={{ borderColor: accentColor, borderTopColor: 'transparent' }}
+        />
       </div>
     );
   }
