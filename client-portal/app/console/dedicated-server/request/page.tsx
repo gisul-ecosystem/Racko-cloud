@@ -40,7 +40,6 @@ function SpecPill({ icon: Icon, label, value }: { icon: typeof Cpu; label: strin
 export default function DedicatedRequestPage() {
   const router = useRouter();
   const { api, routes, isReady } = useDedicatedServerPortal();
-  const requiresProject = true;
   const projectPortal = routes.hub === '/console' ? 'org' : 'tenant';
   const [plans, setPlans] = useState<IDedicatedPlan[]>([]);
   const [search, setSearch] = useState('');
@@ -94,17 +93,13 @@ export default function DedicatedRequestPage() {
 
   async function handleSubmit() {
     if (!selected) return;
-    if (requiresProject && !projectId) {
-      setError('Select a project for this request.');
-      return;
-    }
     setSubmitting(true);
     setError(null);
     try {
       await api.submitRequest({
         planId: selected._id,
         notes: notes.trim() || undefined,
-        ...(requiresProject ? { projectId } : {}),
+        ...(projectId ? { projectId } : {}),
       });
       router.push(routes.myServers);
     } catch (err) {
@@ -333,15 +328,13 @@ export default function DedicatedRequestPage() {
                 </div>
               </div>
 
-              {requiresProject ? (
-                <ProjectSelect
-                  serviceKey="dedicated-server"
-                  value={projectId}
-                  onChange={setProjectId}
-                  disabled={submitting}
-                  portal={projectPortal}
-                />
-              ) : null}
+              <ProjectSelect
+                serviceKey="dedicated-server"
+                value={projectId}
+                onChange={setProjectId}
+                disabled={submitting}
+                portal={projectPortal}
+              />
 
               <div>
                 <label className="text-sm font-medium text-gray-800">
@@ -366,7 +359,7 @@ export default function DedicatedRequestPage() {
             <div className="border-t bg-gray-50 px-6 py-4">
               <button
                 type="button"
-                disabled={submitting || chargeTotal <= 0 || (requiresProject && !projectId)}
+                disabled={submitting || chargeTotal <= 0}
                 onClick={() => void handleSubmit()}
                 className="w-full rounded-xl bg-[#B91C1C] py-3 text-sm font-semibold text-white shadow-sm transition hover:bg-[#a01717] disabled:opacity-50"
               >

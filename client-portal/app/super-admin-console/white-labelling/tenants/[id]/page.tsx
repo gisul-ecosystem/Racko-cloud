@@ -327,7 +327,7 @@ export default function TenantDetailPage() {
       setAdmins((prev) => [admin, ...prev]);
       setAdminOpen(false);
       setAdminForm({ email: '', password: '' });
-      flash('Tenant admin created.');
+      flash('Tenant admin invited — they must verify email and set a password before signing in.');
     } catch (err) {
       flashErr(err instanceof ApiError ? err.message : 'Failed to create admin');
     } finally {
@@ -1072,7 +1072,7 @@ export default function TenantDetailPage() {
               className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-2 text-sm font-medium text-white hover:bg-[#991B1B]"
             >
               <Plus className="h-4 w-4" />
-              Create admin
+              Invite admin
             </button>
           </div>
 
@@ -1094,7 +1094,7 @@ export default function TenantDetailPage() {
                       <WhiteLabellingEmptyState
                         icon={UserPlus}
                         title="No tenant admins yet"
-                        description="Create an admin account so the tenant can sign in to their portal."
+                        description="Invite an admin — they'll verify email and set a password before signing in to the tenant portal."
                         action={
                           <button
                             type="button"
@@ -1102,7 +1102,7 @@ export default function TenantDetailPage() {
                             className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#991B1B]"
                           >
                             <UserPlus className="h-4 w-4" />
-                            Create admin
+                            Invite admin
                           </button>
                         }
                       />
@@ -1641,7 +1641,7 @@ export default function TenantDetailPage() {
             <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
               <div className="flex items-center gap-2">
                 <UserPlus className="h-4 w-4 text-[#B91C1C]" />
-                <h2 className="text-base font-semibold text-gray-900">Create tenant admin</h2>
+                <h2 className="text-base font-semibold text-gray-900">Invite tenant admin</h2>
               </div>
               <button
                 type="button"
@@ -1663,7 +1663,9 @@ export default function TenantDetailPage() {
                 />
               </div>
               <div>
-                <label className="mb-1 block text-xs font-medium text-gray-700">Password</label>
+                <label className="mb-1 block text-xs font-medium text-gray-700">
+                  Temporary password
+                </label>
                 <input
                   type="password"
                   required
@@ -1673,7 +1675,8 @@ export default function TenantDetailPage() {
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                 />
                 <p className="mt-1 text-xs text-gray-400">
-                  Min 8 chars, uppercase, lowercase, number & special character.
+                  Sent in the invite email. They must verify email and set their own password (min 8
+                  chars, uppercase, lowercase, number & special character).
                 </p>
               </div>
               <div className="flex justify-end gap-2">
@@ -1690,7 +1693,7 @@ export default function TenantDetailPage() {
                   className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
                 >
                   {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                  Create
+                  Send invite
                 </button>
               </div>
             </form>

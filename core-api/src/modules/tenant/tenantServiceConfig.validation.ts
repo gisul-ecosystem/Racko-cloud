@@ -77,6 +77,7 @@ export const serviceConfigCreateSchema = z.discriminatedUnion('serviceKey', [
   genericServiceCreateSchema('azure'),
   genericServiceCreateSchema('aws'),
   genericServiceCreateSchema('gcp'),
+  genericServiceCreateSchema('cloud-labs'),
   genericServiceCreateSchema('docs'),
   genericServiceCreateSchema('machine-manager'),
 ]);

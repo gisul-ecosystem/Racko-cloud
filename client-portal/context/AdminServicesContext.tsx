@@ -14,6 +14,7 @@ import {
   type AdminAssignedService,
   type AdminServiceKey,
 } from '@/lib/adminServicesApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 
 interface AdminServicesState {
   services: AdminAssignedService[];
@@ -57,6 +58,7 @@ export function AdminServicesProvider({ children }: { children: React.ReactNode 
 
   const hasActiveService = useCallback(
     (serviceKey: AdminServiceKey) => {
+      if (isServiceHiddenFromUi(serviceKey)) return false;
       // Super admins can open Azure (and other) console routes e.g. purchase convert links.
       if (user?.role === 'super_admin') return true;
       return services.some((s) => s.serviceKey === serviceKey && s.status === 'active');

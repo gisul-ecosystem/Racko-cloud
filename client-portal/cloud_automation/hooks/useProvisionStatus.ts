@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { ApiError } from '../../lib/apiClient';
 import {
   fetchProvisionSnapshot,
+  provisionFabric,
   provisionResourceGroup,
   provisionRoles,
   provisionServices,
@@ -58,6 +59,7 @@ const STEP_ACTIONS: Record<ProvisionStepKey, (requestId: number) => Promise<unkn
   services: provisionServices,
   users: provisionUsers,
   roles: provisionRoles,
+  fabric: provisionFabric,
   credentials: sendProvisionCredentials,
 };
 
@@ -67,6 +69,7 @@ const EMPTY_SNAPSHOT: ProvisionSnapshot = {
   services: { resources: [], count: 0 },
   users: { users: [], count: 0 },
   roles: { roles: [], count: 0 },
+  fabric: { required: false, complete: true, status: 'skipped' },
   credentials: null,
   fetchedAt: new Date().toISOString(),
 };
@@ -171,9 +174,6 @@ export function useProvisionStatus({
           ?.label ?? nextStep;
 
       orchestratingRef.current = true;
-      appendEvent(
-        createOrchestrationEvent(`${stepLabel} — orchestration started.`, 'info', nextStep)
-      );
 
       let shouldChainNextStep = false;
       let refreshedSnapshot: ProvisionSnapshot | null = null;
@@ -187,7 +187,11 @@ export function useProvisionStatus({
           'complete' in stepResult &&
           stepResult.complete === false;
 
-        if (nextStep === 'credentials' || (nextStep === 'services' && !partialProgress)) {
+        if (
+          nextStep === 'credentials' ||
+          nextStep === 'fabric' ||
+          (nextStep === 'services' && !partialProgress)
+        ) {
           const nextOverrides = { ...overridesRef.current, [nextStep]: true };
           overridesRef.current = nextOverrides;
           setOverrides(nextOverrides);
@@ -204,10 +208,16 @@ export function useProvisionStatus({
             'remaining' in stepResult && typeof stepResult.remaining === 'number'
               ? stepResult.remaining
               : null;
+          const rolesAssigned =
+            'rolesAssigned' in stepResult && typeof stepResult.rolesAssigned === 'number'
+              ? stepResult.rolesAssigned
+              : null;
           appendEvent(
             createOrchestrationEvent(
               remaining != null
-                ? `${stepLabel} — batch complete, ${remaining} remaining. Continuing…`
+                ? rolesAssigned != null
+                  ? `${stepLabel} — assigned ${rolesAssigned}, ${remaining} left…`
+                  : `${stepLabel} — ${remaining} remaining…`
                 : `${stepLabel} — batch complete. Continuing…`,
               'info',
               nextStep

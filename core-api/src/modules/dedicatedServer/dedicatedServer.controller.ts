@@ -1,6 +1,8 @@
 import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import type { AuthenticatedRequest } from '../../types';
+import { User } from '../../models/user.model';
+import { accountVmPricingService } from '../accountVmPricing/accountVmPricing.service';
 import { dedicatedServerService } from './dedicatedServer.service';
 import type {
   AttachDedicatedRequestInput,
@@ -19,7 +21,25 @@ async function listPlans(req: Request, res: Response, next: NextFunction): Promi
     const authReq = req as AuthenticatedRequest;
     const activeOnly = authReq.user.role === 'admin';
     const applySellPrice = authReq.user.role === 'admin';
-    const plans = await dedicatedServerService.listPlans({ activeOnly, applySellPrice });
+
+    let account = null;
+    if (applySellPrice) {
+      const user = await User.findById(authReq.user.userId).select('role orgOwnerId').lean();
+      const orgId = user
+        ? accountVmPricingService.resolveOrgIdFromUser({
+            _id: user._id,
+            role: user.role,
+            orgOwnerId: user.orgOwnerId,
+          })
+        : null;
+      if (orgId) account = { scopeType: 'organization' as const, orgId };
+    }
+
+    const plans = await dedicatedServerService.listPlans({
+      activeOnly,
+      applySellPrice,
+      account,
+    });
     success(res, 'Dedicated server plans retrieved.', { plans, total: plans.length });
   } catch (err) {
     next(err);

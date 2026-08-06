@@ -18,6 +18,7 @@ import type {
   TenantTemplateDetail,
   TenantTopupResult,
   TenantWallet,
+  TenantWalletTransaction,
   TenantWalletTransactionsResult,
 } from '../types/tenantPortal';
 
@@ -56,6 +57,32 @@ export async function tenantResetPassword(token: string, newPassword: string): P
   await tenantPortalRequest<ApiEnvelope<Record<string, never>>>(
     '/api/v1/tenant-auth/reset-password',
     { method: 'POST', body: JSON.stringify({ token, newPassword }), skipAuth: true }
+  );
+}
+
+export async function tenantVerifyEmail(token: string): Promise<{
+  message: string;
+  requiresPasswordSetup?: boolean;
+  resetToken?: string;
+}> {
+  const res = await tenantPortalRequest<
+    ApiEnvelope<{ requiresPasswordSetup?: boolean; resetToken?: string }> & { message: string }
+  >('/api/v1/tenant-auth/verify-email', {
+    method: 'POST',
+    body: JSON.stringify({ token }),
+    skipAuth: true,
+  });
+  return {
+    message: res.message,
+    requiresPasswordSetup: res.data?.requiresPasswordSetup,
+    resetToken: res.data?.resetToken,
+  };
+}
+
+export async function tenantResendVerification(email: string): Promise<void> {
+  await tenantPortalRequest<ApiEnvelope<Record<string, never>>>(
+    '/api/v1/tenant-auth/resend-verification',
+    { method: 'POST', body: JSON.stringify({ email }), skipAuth: true }
   );
 }
 
@@ -141,13 +168,28 @@ export async function getTenantWallet(): Promise<TenantWallet> {
 
 export async function getTenantWalletTransactions(
   page = 1,
-  limit = 20
+  limit = 20,
+  filters?: { projectId?: string; serviceKey?: string }
 ): Promise<TenantWalletTransactionsResult> {
+  const params = new URLSearchParams({ page: String(page), limit: String(limit) });
+  if (filters?.projectId) params.set('projectId', filters.projectId);
+  if (filters?.serviceKey) params.set('serviceKey', filters.serviceKey);
   return unwrap(
     tenantPortalRequest<ApiEnvelope<TenantWalletTransactionsResult>>(
-      `/api/v1/tenant-wallet/transactions?page=${page}&limit=${limit}`
+      `/api/v1/tenant-wallet/transactions?${params.toString()}`
     )
   );
+}
+
+export async function getTenantWalletTransaction(
+  txId: string
+): Promise<TenantWalletTransaction> {
+  const data = await unwrap(
+    tenantPortalRequest<ApiEnvelope<{ transaction: TenantWalletTransaction }>>(
+      `/api/v1/tenant-wallet/transactions/${encodeURIComponent(txId)}`
+    )
+  );
+  return data.transaction;
 }
 
 export async function createTenantWalletTopup(amount: number): Promise<TenantTopupResult> {
@@ -171,7 +213,11 @@ export interface TenantCloudChargeResult {
 export async function chargeTenantWalletForCloudRequest(
   amountUsd: number,
   relatedRequestId?: string | null,
-  provider: 'azure' | 'aws' = 'azure'
+  provider: 'azure' | 'aws' = 'azure',
+  attribution?: {
+    projectId?: string | null;
+    serviceKey?: 'azure' | 'aws' | 'cloud-labs' | null;
+  }
 ): Promise<TenantCloudChargeResult> {
   return unwrap(
     tenantPortalRequest<ApiEnvelope<TenantCloudChargeResult>>(
@@ -182,6 +228,8 @@ export async function chargeTenantWalletForCloudRequest(
           amountUsd,
           provider,
           ...(relatedRequestId ? { relatedRequestId } : {}),
+          ...(attribution?.projectId ? { projectId: attribution.projectId } : {}),
+          ...(attribution?.serviceKey ? { serviceKey: attribution.serviceKey } : {}),
         }),
       }
     )

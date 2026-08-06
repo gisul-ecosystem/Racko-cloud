@@ -2,11 +2,12 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, Cloud, HardDrive, LayoutGrid, Monitor, PlusCircle, Server, Shield, Wallet } from 'lucide-react';
-import { useTenantAuth } from '@/context/TenantAuthContext';
+import { Boxes, Cloud, HardDrive, LayoutDashboard, LayoutGrid, Monitor, PlusCircle, Server, Shield, Wallet } from 'lucide-react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
+import { canAccessTenantHubTile, canAccessTenantService } from '@/lib/tenantServicePermissions';
 import { TENANT_CONSOLE, tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
@@ -75,24 +76,32 @@ const SHORTCUTS: Array<{
 const ADMIN_LINKS = [
   {
     label: 'Access control',
-    href: `${TENANT_CONSOLE}/access-control`,
+    href: tenantConsole.accessControl,
     icon: <Shield className="h-4 w-4 shrink-0" />,
   },
 ];
 
 export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantConsoleSidebarProps) {
   const pathname = usePathname() ?? '';
-  const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const { hasActiveService } = useTenantServices();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { isTenantAdmin, hasPermission } = useTenantRbac();
 
   const links = SHORTCUTS.filter((l) => {
-    if (l.serviceKey === 'billing') return isAdmin;
-    return hasActiveService(l.serviceKey);
+    if (l.serviceKey === 'billing') {
+      return canAccessTenantHubTile('billing', hasPermission, isTenantAdmin);
+    }
+    if (!hasActiveService(l.serviceKey)) return false;
+    return canAccessTenantService(l.serviceKey, hasPermission, isTenantAdmin);
   });
 
+  const showOverview = isTenantAdmin || hasPermission('overview.read');
+  const showAccessControl =
+    isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
+
   const hubActive = pathname === TENANT_CONSOLE || pathname === `${TENANT_CONSOLE}/`;
+  const overviewActive =
+    pathname === tenantConsole.overview || pathname.startsWith(`${tenantConsole.overview}/`);
 
   return (
     <>
@@ -117,10 +126,31 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
           </div>
 
           <nav className="flex-1 overflow-y-auto p-3">
+            {showOverview ? (
+              <Link
+                href={tenantConsole.overview}
+                onClick={() => closeIfMobile(onCloseSidebar)}
+                className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+                style={
+                  overviewActive
+                    ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
+                    : undefined
+                }
+              >
+                <LayoutDashboard
+                  className="h-4 w-4 shrink-0"
+                  style={{ color: overviewActive ? accentColor : undefined }}
+                />
+                <span className={overviewActive ? '' : 'text-gray-600'}>Overview</span>
+              </Link>
+            ) : null}
+
             <Link
               href={TENANT_CONSOLE}
               onClick={() => closeIfMobile(onCloseSidebar)}
-              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                showOverview ? 'mt-0.5' : ''
+              }`}
               style={
                 hubActive
                   ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
@@ -159,7 +189,7 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
               );
             })}
 
-            {isAdmin
+            {showAccessControl
               ? ADMIN_LINKS.map((link) => {
                   const isActive =
                     pathname === link.href || pathname.startsWith(`${link.href}/`);

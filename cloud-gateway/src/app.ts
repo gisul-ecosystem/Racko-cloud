@@ -13,6 +13,7 @@ import { config } from './config';
 import cloudAutomationRoutes from './routes/cloudAutomation.routes';
 import cloudAutomationAwsRoutes from './routes/cloudAutomationAws.routes';
 import cloudAutomationGcpRoutes from './routes/cloudAutomationGcp.routes';
+import cloudAutomationTrainingRoutes from './routes/cloudAutomationTraining.routes';
 import managePortalRoutes from './routes/managePortal.routes';
 import purchaseIntentRoutes from './routes/purchaseIntent.routes';
 import orgAdminPortalRoutes from './routes/orgAdminPortal.routes';
@@ -51,6 +52,7 @@ const RATE_LIMIT_SKIP_PREFIXES = [
   '/api/v1/cloud-automation',
   '/api/v1/cloud-automation-aws',
   '/api/v1/cloud-automation-gcp',
+  '/api/v1/cloud-automation-training',
   '/api/v1/tenant-cloud',
   '/api/org-admin',
   '/api/manage',
@@ -175,10 +177,11 @@ app.use(purchaseIntentRoutes);
 app.use(orgAdminPortalRoutes);
 // Tenant cloud automation (tenant JWT + assigned service → azure/aws services)
 app.use(tenantCloudRoutes);
-// Cloud automation AWS/GCP — register before Azure routes because
-// /api/v1/cloud-automation-aws and /api/v1/cloud-automation-gcp are prefixes of /api/v1/cloud-automation.
+// Cloud automation AWS/GCP/training — register before Azure routes because
+// /api/v1/cloud-automation-aws, -gcp, and -training are prefixes of /api/v1/cloud-automation.
 app.use(cloudAutomationAwsRoutes);
 app.use(cloudAutomationGcpRoutes);
+app.use(cloudAutomationTrainingRoutes);
 // Cloud automation (Type 1 admin APIs) — must register before core-api catch-all
 app.use(cloudAutomationRoutes);
 app.use(proxyRoutes);

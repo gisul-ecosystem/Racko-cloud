@@ -30,11 +30,15 @@ export class TenantRbacController {
   getMyPermissions = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
       const ctx = getTenantCtx(req);
-      const permissions = await tenantRbacService.getEffectivePermissions(ctx);
+      const [permissions, flags] = await Promise.all([
+        tenantRbacService.getEffectivePermissions(ctx),
+        tenantRbacService.getSubjectFlags(ctx.tenantId, ctx.subjectId),
+      ]);
       success(res, 'Tenant permissions retrieved.', {
         role: ctx.role,
         tenantId: ctx.tenantId,
         isTenantAdmin: ctx.isTenantAdmin,
+        isConsoleOperator: ctx.isTenantAdmin || flags.isConsoleOperator,
         permissions: [...permissions],
       });
     } catch (err) {
@@ -44,9 +48,9 @@ export class TenantRbacController {
 
   getCatalog = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     try {
-      getTenantCtx(req);
+      const ctx = getTenantCtx(req);
       success(res, 'Permission catalog retrieved.', {
-        permissions: tenantRbacService.listPermissionCatalog(),
+        permissions: await tenantRbacService.listPermissionCatalog(ctx.tenantId),
       });
     } catch (err) {
       next(err);
@@ -134,6 +138,47 @@ export class TenantRbacController {
         ctx.subjectId
       );
       success(res, 'Roles assigned.', { roleIds });
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  inviteOperator = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const ctx = getTenantCtx(req);
+      if (!ctx.isTenantAdmin) {
+        const perms = await tenantRbacService.getEffectivePermissions(ctx);
+        if (!perms.has('rbac.assign')) {
+          throw new ForbiddenError('Insufficient permissions.');
+        }
+      }
+      const body = req.body as {
+        email: string;
+        temporaryPassword: string;
+        roleIds: string[];
+      };
+      const user = await tenantRbacService.inviteOperator(ctx.tenantId, body, ctx.subjectId);
+      success(res, 'Operator invited.', { user }, 201);
+    } catch (err) {
+      next(err);
+    }
+  };
+
+  deleteOperator = async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    try {
+      const ctx = getTenantCtx(req);
+      if (!ctx.isTenantAdmin) {
+        const perms = await tenantRbacService.getEffectivePermissions(ctx);
+        if (!perms.has('rbac.assign')) {
+          throw new ForbiddenError('Insufficient permissions.');
+        }
+      }
+      const result = await tenantRbacService.deleteOperator(
+        ctx.tenantId,
+        req.params.userId as string,
+        ctx.subjectId
+      );
+      success(res, 'Operator deleted.', result);
     } catch (err) {
       next(err);
     }

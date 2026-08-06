@@ -40,6 +40,8 @@ export async function getStatus(requestId) {
         : [],
     perUserAccess: isPerUserCosting(request.costingMode),
     credentialsSent: Boolean(request.credentialsSent),
+    spreadsheetAvailable: Boolean(request.credentialsSent || request.status === 'Completed'),
+    guideAvailable: Boolean(request.credentialsSent || request.status === 'Completed'),
     failureReason: request.failureReason || null,
     logs: logs.map((entry) => ({
       step: entry.step,

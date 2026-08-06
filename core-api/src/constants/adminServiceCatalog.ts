@@ -6,6 +6,7 @@ export const ADMIN_SERVICE_CATALOG = [
   'azure',
   'aws',
   'gcp',
+  'cloud-labs',
   'docs',
   'machine-manager',
 ] as const;
@@ -26,6 +27,7 @@ export const ADMIN_SERVICE_LABELS: Record<AdminServiceKey, string> = {
   azure: 'Azure Lab',
   aws: 'AWS Lab',
   gcp: 'GCP Lab',
+  'cloud-labs': 'Cloud Labs',
   docs: 'Documentation',
   'machine-manager': 'Machine Manager',
 };

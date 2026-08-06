@@ -12,7 +12,7 @@ client-portal  →  cloud-gateway  →  cloud_automation_aws
                                               ├── in-process orchestrator
                                               ├── AWS Organizations
                                               ├── IAM Identity Center
-                                              └── SMTP credentials email
+                                              └── Resend credentials email
 ```
 
 ## Folder structure (new)
@@ -20,7 +20,7 @@ client-portal  →  cloud-gateway  →  cloud_automation_aws
 ```
 src/
 ├── config/
-│   ├── provisioning.js      # OU, SMTP, scheduler settings
+│   ├── provisioning.js      # OU, email, scheduler settings
 │   └── scpPolicies.js       # SCP deny map + helpers
 ├── models/
 │   └── ProvisionLog.js      # Step-level audit log
@@ -58,7 +58,7 @@ Provisioning runs asynchronously in-process via `setImmediate` (no external queu
 3. **Users** — Create Identity Center users (`accountCount`)
 4. **Permission sets** — Create SSO permission set(s), attach managed policies from request
 5. **Assignments** — Map users → permission set → lab account
-6. **Email** — Send credentials (SMTP or console fallback)
+6. **Email** — Send credentials via Resend (or console fallback if unset)
 
 On failure: status → `Failed`, rollback attempted (assignments, permission sets, users, SCP). The lab account itself is never closed.
 
@@ -105,13 +105,20 @@ ACCOUNT_CREATION_TIMEOUT_MS=1200000
 ACCOUNT_CREATION_POLL_MS=15000
 ACCOUNT_CREATION_MAX_RETRIES=5
 
-# Email
-SMTP_HOST=
-SMTP_PORT=587
-SMTP_SECURE=false
-SMTP_USER=
-SMTP_PASS=
-SMTP_FROM=noreply@racko.ai
+# Transactional email provider (enable exactly one)
+RESEND_EMAIL_ENABLED=false
+ZOHO_EMAIL_ENABLED=true
+
+# Resend
+RESEND_API_KEY=
+
+# Zoho ZeptoMail
+ZOHO_ZEPTOMAIL_TOKEN=
+ZOHO_ZEPTOMAIL_API_URL=https://api.zeptomail.in/v1.1/email
+
+# Shared verified sender identity
+EMAIL_FROM_ADDRESS=info@racko.ai
+EMAIL_FROM_NAME=Racko
 CLIENT_PORTAL_URL=http://localhost:3000
 PROVISION_ACCESS_TOKEN_SECRET=
 
@@ -151,5 +158,5 @@ npm test
 
 - Provisioning uses the existing `MASTER_ACCOUNT_ID` lab account and IAM Identity Center users (same model as Azure AD users in a shared subscription).
 - Ensure `MASTER_ACCOUNT_ID`, `AWS_SSO_INSTANCE_ARN`, `AWS_SSO_IDENTITY_STORE_ID`, and `AWS_SSO_REGION` are set before starting provisioning. Identity Center is regional — `AWS_SSO_REGION` must match the region where IAM Identity Center is enabled (check the console URL or run `aws sso-admin list-instances --region <region>`).
-- Without SMTP, credentials are logged to the service console.
+- Without Resend env vars, credentials are logged to the service console.
 - Existing catalog/pricing/request code is unchanged.

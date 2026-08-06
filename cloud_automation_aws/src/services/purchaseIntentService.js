@@ -2,6 +2,7 @@ import crypto from 'crypto';
 import mongoose from 'mongoose';
 import Request from '../models/Request.js';
 import { sendEmailWithRetry } from '../provisioners/aws/emailProvisioner.js';
+import { resolvePortalBaseUrl } from '../utils/portalUrl.js';
 
 function createError(message, statusCode = 400) {
   const error = new Error(message);
@@ -26,14 +27,6 @@ export function getPurchaseIntentDelayMs() {
   const hours = Number(process.env.PURCHASE_INTENT_DELAY_HOURS);
   const resolvedHours = Number.isFinite(hours) && hours >= 0 ? hours : 24;
   return resolvedHours * 60 * 60 * 1000;
-}
-
-function resolveFrontendBaseUrl() {
-  const base =
-    process.env.FRONTEND_URL ||
-    process.env.CLIENT_PORTAL_URL ||
-    'http://localhost:3000';
-  return String(base).replace(/\/$/, '');
 }
 
 function buildPurchaseIntentEmailHtml({
@@ -111,7 +104,10 @@ async function sendPurchaseIntentEmailForRequest(request, { force = false } = {}
   const requestId = String(request._id);
   const rawToken = crypto.randomUUID();
   const tokenHash = hashToken(rawToken);
-  const baseUrl = resolveFrontendBaseUrl();
+  const baseUrl = await resolvePortalBaseUrl({
+    portalBaseUrl: request.portalBaseUrl,
+    ownerId: request.createdBy,
+  });
   const yesUrl = `${baseUrl}/console/aws/requests/new?fromTestRequest=${encodeURIComponent(requestId)}&purchaseToken=${encodeURIComponent(rawToken)}`;
   const noUrl = `${baseUrl}/console/aws/purchase-response?token=${encodeURIComponent(rawToken)}&response=no`;
 

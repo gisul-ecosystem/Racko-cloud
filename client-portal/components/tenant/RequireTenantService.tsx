@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation';
 import { Loader2 } from 'lucide-react';
 import { useTenantServices } from '@/context/TenantServicesContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
+import { canAccessTenantService } from '@/lib/tenantServicePermissions';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 
@@ -19,7 +21,7 @@ interface RequireTenantServiceProps {
   embedded?: boolean;
 }
 
-/** Redirects to the services hub when the required service is not active. */
+/** Redirects to the services hub when the service is inactive or RBAC denies access. */
 export function RequireTenantService({
   serviceKey,
   children,
@@ -28,15 +30,19 @@ export function RequireTenantService({
   const router = useRouter();
   const { accentColor } = useTenantBranding();
   const { loading, hasActiveService } = useTenantServices();
-  const allowed = hasActiveService(serviceKey);
+  const { loading: rbacLoading, isTenantAdmin, hasPermission } = useTenantRbac();
+  const serviceActive = hasActiveService(serviceKey);
+  const rbacAllowed = canAccessTenantService(serviceKey, hasPermission, isTenantAdmin);
+  const allowed = serviceActive && rbacAllowed;
+  const checking = loading || rbacLoading;
 
   useEffect(() => {
-    if (!loading && !allowed) {
+    if (!checking && !allowed) {
       router.replace(TENANT_CONSOLE);
     }
-  }, [loading, allowed, router]);
+  }, [checking, allowed, router]);
 
-  if (loading || !allowed) {
+  if (checking || !allowed) {
     if (embedded) {
       return (
         <div className="flex justify-center py-16">

@@ -26,16 +26,32 @@ jobs:
   build-core-api:
     name: Build & Push core-api
     runs-on: ubuntu-latest
+    needs: build-agent
     steps:
       - name: Checkout
         uses: actions/checkout@v4
- 
+
+      - name: Download agent checksum artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: agent-artifacts
+
       - name: Docker login
         run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
- 
+
       - name: Build core-api image
-        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:dev -f core-api/Dockerfile core-api/
- 
+        run: |
+          CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt | tr -d '[:space:]')
+          CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt | tr -d '[:space:]')
+          AGENT_VERSION=$(cat agent-artifacts/agent-linux/agent-version.txt | tr -d '[:space:]')
+          docker build \
+            --build-arg AGENT_VERSION=$AGENT_VERSION \
+            --build-arg AGENT_CHECKSUM_WINDOWS=$CHECKSUM_WINDOWS \
+            --build-arg AGENT_CHECKSUM_LINUX=$CHECKSUM_LINUX \
+            -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:${{ env.IMAGE_TAG }} \
+            -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:dev \
+            -f core-api/Dockerfile core-api/
+
       - name: Push core-api image
         run: |
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:${{ env.IMAGE_TAG }}
@@ -113,6 +129,24 @@ jobs:
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:${{ env.IMAGE_TAG }}
           docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-reseller:dev
 
+  build-cloud-automation-training:
+    name: Build & Push cloud-automation-training
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Docker login
+        run: echo "${{ env.DOCKERHUB_TOKEN }}" | docker login -u "${{ env.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build cloud-automation-training image
+        run: docker build -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:${{ env.IMAGE_TAG }} -t ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:dev -f cloud_automation_training/Dockerfile cloud_automation_training/
+
+      - name: Push cloud-automation-training image
+        run: |
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:${{ env.IMAGE_TAG }}
+          docker push ${{ env.DOCKERHUB_USERNAME }}/racko-cloud-automation-training:dev
+
   build-client-portal:
     name: Build & Push client-portal
     runs-on: ubuntu-latest
@@ -166,13 +200,11 @@ jobs:
             output: racko-agent
             goos: linux
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-dev.racko.ai'
           - os: windows-latest
             platform: windows
             output: racko-agent.exe
             goos: windows
             goarch: amd64
-            ldflags: '-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-dev.racko.ai -H windowsgui'
             ldflags_url: 'https://api-dev.racko.ai'
 
     steps:
@@ -184,12 +216,44 @@ jobs:
         with:
           go-version-file: agent/go.mod
 
+      - name: Read agent version
+        id: agent-version
+        shell: bash
+        working-directory: agent
+        run: echo "VERSION=$(cat VERSION | tr -d '[:space:]')" >> $GITHUB_OUTPUT
+
       - name: Build agent binary
         working-directory: agent
         shell: bash
         run: |
+          LDFLAGS="-X github.com/racko-ai/agent/config.LDPlatformURL=https://api-dev.racko.ai -X github.com/racko-ai/agent/config.Version=${{ steps.agent-version.outputs.VERSION }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            LDFLAGS="$LDFLAGS -H windowsgui"
+          fi
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
-          go build -ldflags "${{ matrix.ldflags }}" -o dist/${{ matrix.output }} .
+          go build -ldflags "$LDFLAGS" -o dist/${{ matrix.output }} .
+
+      - name: Compute and save checksum (Linux)
+        if: matrix.platform == 'linux'
+        working-directory: agent
+        shell: bash
+        run: |
+          CHECKSUM=$(sha256sum dist/racko-agent | awk '{print $1}')
+          echo "AGENT_CHECKSUM_LINUX=$CHECKSUM" >> $GITHUB_STEP_SUMMARY
+          echo "$CHECKSUM" > dist/checksum-linux.txt
+          # Save VERSION so build-core-api can read it from the artifact
+          cp VERSION dist/agent-version.txt
+
+      - name: Compute and save checksum (Windows)
+        if: matrix.platform == 'windows'
+        working-directory: agent
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash dist/racko-agent.exe -Algorithm SHA256).Hash.ToLower()
+          Write-Host "Windows binary SHA256: $hash"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "AGENT_CHECKSUM_WINDOWS=$hash"
+          # Save to file artifact so deploy job can read it
+          Set-Content -Path dist/checksum-windows.txt -Value $hash
 
       - name: Build Windows installer (Windows only)
         if: matrix.platform == 'windows'
@@ -197,7 +261,7 @@ jobs:
         shell: pwsh
         run: |
           choco install innosetup --no-progress -y
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DPlatformURL=${{ matrix.ldflags_url }}" "installer\racko-agent-setup.iss"
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DPlatformURL=https://api-dev.racko.ai" "installer\racko-agent-setup.iss"
 
       - name: Upload binary as artifact
         uses: actions/upload-artifact@v4
@@ -205,6 +269,8 @@ jobs:
           name: agent-${{ matrix.platform }}
           path: |
             agent/dist/${{ matrix.output }}
+            agent/dist/checksum-${{ matrix.platform }}.txt
+            agent/dist/agent-version.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
           retention-days: 1
 
@@ -246,7 +312,6 @@ jobs:
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
-          # macOS binary removed — not needed
           echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
 
   deploy:
@@ -260,6 +325,7 @@ jobs:
       - build-cloud-automation
       - build-cloud-automation-aws
       - build-cloud-automation-reseller
+      - build-cloud-automation-training
       - build-client-portal
       - build-create-vm-catalog-agent
       - deploy-agent
@@ -325,3 +391,4 @@ jobs:
           echo "Azure service:  http://${VM_HOST}:3002"
           echo "AWS service:    http://${VM_HOST}:3003"
           echo "Reseller svc:   http://${VM_HOST}:3005"
+          echo "Training svc:  http://${VM_HOST}:3006"

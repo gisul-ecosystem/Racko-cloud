@@ -13,6 +13,7 @@ const provisionRoutes = require('./src/routes/provisionRoutes');
 const roleProvisionRoutes = require('./src/routes/roleProvisionRoutes');
 const serviceResourceProvisionRoutes = require('./src/routes/serviceResourceProvisionRoutes');
 const userProvisionRoutes = require('./src/routes/userProvisionRoutes');
+const fabricProvisionRoutes = require('./src/routes/fabricProvisionRoutes');
 const { startExpiryScheduler } = require('./src/scheduler/expiryScheduler');
 const { startUsageScheduler } = require('./src/scheduler/usageScheduler');
 const { startCleanupScheduler } = require('./src/scheduler/cleanupScheduler');
@@ -54,6 +55,19 @@ app.use((req, res, next) => {
   const start = process.hrtime.bigint();
 
   res.on('finish', () => {
+    const path = req.originalUrl.split('?')[0] || '';
+    // High-frequency polling / health — skip access logs (noise during Assigning Access).
+    const quiet =
+      req.method === 'GET' &&
+      (/\/api\/provision\/request\/\d+/i.test(path) ||
+        path.startsWith('/api/notifications') ||
+        path === '/health' ||
+        /^\/api\/requests\/\d+$/i.test(path));
+
+    if (quiet) {
+      return;
+    }
+
     const durationMs = Number(process.hrtime.bigint() - start) / 1000000;
     console.log(`${req.method} ${req.originalUrl} ${res.statusCode} - ${durationMs.toFixed(2)} ms`);
   });
@@ -78,6 +92,7 @@ app.use('/api', catalogRoutes);
 app.use('/api/provision', credentialRoutes);
 app.use('/api/provision', provisionRoutes);
 app.use('/api/provision', userProvisionRoutes);
+app.use('/api/provision', fabricProvisionRoutes);
 app.use('/api/provision', roleProvisionRoutes);
 app.use('/api/provision', serviceResourceProvisionRoutes);
 app.use('/api/pricing', pricingRoutes);
@@ -164,10 +179,10 @@ const startServer = () => {
 
     const emailStatus = getResendConfigStatus();
     if (emailStatus.configured) {
-      console.log('Resend email delivery is configured.');
+      console.log(`Transactional email delivery is configured (${emailStatus.provider}).`);
     } else {
       console.warn(
-        `Resend email delivery is NOT configured. Missing: ${emailStatus.missingVars.join(', ')}`
+        `Transactional email delivery is NOT configured. Missing: ${emailStatus.missingVars.join(', ')}`
       );
     }
 

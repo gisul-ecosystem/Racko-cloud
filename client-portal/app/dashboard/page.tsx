@@ -1,15 +1,21 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '../../context/AuthContext';
+import {
+  fetchMyRbacPermissions,
+  hasExecutiveHomeRole,
+  SUPER_ADMIN_OVERVIEW_PATH,
+} from '@/lib/rbacApi';
 
 /**
- * Dashboard index — redirects to role-specific dashboard.
+ * Dashboard index — redirects to role-specific home.
  */
 export default function DashboardPage() {
   const { user, isLoading, isAuthenticated } = useAuth();
   const router = useRouter();
+  const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
     if (isLoading) return;
@@ -18,18 +24,49 @@ export default function DashboardPage() {
       return;
     }
 
-    if (user.role === 'super_admin') {
-      router.replace('/super-admin-console');
-    } else if (user.role === 'admin') {
-      router.replace('/console');
-    } else {
+    let cancelled = false;
+
+    async function go() {
+      if (user!.role === 'super_admin') {
+        router.replace('/super-admin-console');
+        return;
+      }
+
+      if (user!.role === 'staff') {
+        setResolving(true);
+        try {
+          const rbac = await fetchMyRbacPermissions();
+          if (cancelled) return;
+          router.replace(
+            hasExecutiveHomeRole(rbac) ? SUPER_ADMIN_OVERVIEW_PATH : '/super-admin-console'
+          );
+        } catch {
+          if (!cancelled) router.replace('/super-admin-console');
+        }
+        return;
+      }
+
+      if (user!.role === 'admin') {
+        router.replace('/console');
+        return;
+      }
+
       router.replace('/dashboard/user');
     }
+
+    void go();
+    return () => {
+      cancelled = true;
+    };
   }, [user, isLoading, isAuthenticated, router]);
 
   return (
-    <div className="flex items-center justify-center h-64">
-      <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+    <div className="flex h-64 items-center justify-center">
+      <div
+        className={`h-6 w-6 animate-spin rounded-full border-2 border-t-transparent ${
+          resolving ? 'border-[#B91C1C]' : 'border-blue-500'
+        }`}
+      />
     </div>
   );
 }

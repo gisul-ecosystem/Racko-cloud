@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation';
 import { Loader2, Plus, Wallet as WalletIcon, ArrowDownLeft, ArrowUpRight } from 'lucide-react';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantRbac } from '@/context/TenantRbacContext';
 import {
   createTenantWalletTopup,
   getTenantWallet,
@@ -44,7 +45,8 @@ export default function TenantWalletPage() {
   const { tenantUser } = useTenantAuth();
   const { accentColor } = useTenantBranding();
   const router = useRouter();
-  const isAdmin = tenantUser?.role === 'tenant_admin';
+  const { isConsoleStaff, hasPermission } = useTenantRbac();
+  const isAdmin = isConsoleStaff && hasPermission('wallet.read', 'wallet.topup');
 
   const [wallet, setWallet] = useState<TenantWallet | null>(null);
   const [transactions, setTransactions] = useState<TenantWalletTransaction[]>([]);
@@ -92,13 +94,14 @@ export default function TenantWalletPage() {
   }, []);
 
   useEffect(() => {
-    if (tenantUser?.role === 'tenant_user') {
+    if (tenantUser?.role === 'tenant_user' && !isConsoleStaff) {
       router.replace('/console/dashboard');
     }
-  }, [router, tenantUser?.role]);
+  }, [router, tenantUser?.role, isConsoleStaff]);
 
   useEffect(() => {
-    if (!tenantUser || tenantUser.role === 'tenant_user') return;
+    if (!tenantUser || (tenantUser.role === 'tenant_user' && !isConsoleStaff)) return;
+    if (!hasPermission('wallet.read', 'wallet.topup')) return;
     setLoading(true);
     setError(null);
     Promise.all([loadWallet(), loadTransactions(1)])
@@ -106,7 +109,7 @@ export default function TenantWalletPage() {
         setError(err instanceof ApiError ? err.message : 'Failed to load billing data.')
       )
       .finally(() => setLoading(false));
-  }, [tenantUser, loadWallet, loadTransactions]);
+  }, [tenantUser, isConsoleStaff, hasPermission, loadWallet, loadTransactions]);
 
   function startBalancePoll(previousBalance: number) {
     clearPoll();
@@ -155,7 +158,7 @@ export default function TenantWalletPage() {
     }
   }
 
-  if (tenantUser?.role === 'tenant_user') {
+  if (tenantUser?.role === 'tenant_user' && !isConsoleStaff) {
     return null;
   }
 

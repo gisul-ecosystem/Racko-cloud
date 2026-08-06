@@ -12,6 +12,11 @@ export const PERMISSION_CATALOG: PermissionDef[] = [
   // VM management / cluster control
   { key: 'vm_management.manage', label: 'Manage VM management dashboard', group: 'VM Management' },
   { key: 'machine_manager.manage', label: 'Manage machine manager', group: 'Machine Manager' },
+  {
+    key: 'vm_host_leases.manage',
+    label: 'Manage VM host leases (Excel inventory)',
+    group: 'VM Host Leases',
+  },
   { key: 'admin_users.manage', label: 'Manage admin users & services', group: 'Admin Users' },
 
   // Webyne VM requests
@@ -40,6 +45,9 @@ export const PERMISSION_CATALOG: PermissionDef[] = [
   // Access control (staff management)
   { key: 'rbac.roles.write', label: 'Create / edit roles', group: 'Access control' },
   { key: 'rbac.assign', label: 'Assign roles to people', group: 'Access control' },
+
+  // Executive overview (internal slug ceo — display name is Executive)
+  { key: 'overview.read', label: 'View business overview dashboard', group: 'Overview' },
 ];
 
 export const ALL_PERMISSION_KEYS = PERMISSION_CATALOG.map((p) => p.key) as readonly string[];
@@ -103,6 +111,7 @@ export const SYSTEM_ROLE_SEEDS: Array<{
     permissions: [
       'vm_management.manage',
       'machine_manager.manage',
+      'vm_host_leases.manage',
       'admin_users.manage',
       'white_labelling.manage',
       'azure.manage',
@@ -111,5 +120,13 @@ export const SYSTEM_ROLE_SEEDS: Array<{
       'dedicated.requests.attach',
       'dedicated.requests.reject',
     ],
+  },
+  {
+    slug: 'ceo',
+    name: 'Executive',
+    description:
+      'Full Super Admin service access; Overview is the post-login home.',
+    // Keep in sync with the full catalog — Executive gets every control-plane permission.
+    permissions: [...ALL_PERMISSION_KEYS],
   },
 ];

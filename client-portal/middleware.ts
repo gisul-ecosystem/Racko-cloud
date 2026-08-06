@@ -14,6 +14,7 @@ function isTenantWorkspacePath(pathname: string): boolean {
     pathname === '/console/login' ||
     pathname === '/console/forgot-password' ||
     pathname === '/console/reset-password' ||
+    pathname === '/console/verify-email' ||
     pathname.startsWith('/console/dashboard')
   );
 }

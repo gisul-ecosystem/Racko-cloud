@@ -501,7 +501,6 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
     setPushing(true);
 
     try {
-      // Generate a unique session ID for this push batch
       const sessionId = `push-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
       // Issue SSE stream ticket first (before opening EventSource)
@@ -516,10 +515,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
       setTimeoutReached(false);
       countdownRef.current = setInterval(() => {
         setSecondsLeft((s) => {
-          if (s <= 1) {
-            clearInterval(countdownRef.current!);
-            return 0;
-          }
+          if (s <= 1) { clearInterval(countdownRef.current!); return 0; }
           return s - 1;
         });
       }, 1000);
@@ -570,8 +566,11 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
 
       // Initialize status map — merge with any SSE events already received before API returned
       setVmStatus((prev) => {
-        const init = Object.fromEntries(result.machines.map((m) => [m._id, { agentConnected: false }]));
-        return { ...init, ...prev };
+        const next: Record<string, { pushSuccess?: boolean; pushError?: string; agentConnected: boolean }> = {};
+        for (const m of result.machines) {
+          next[m._id] = prev[m._id] ?? { agentConnected: false };
+        }
+        return next;
       });
 
       // Move to step 2 immediately after push API responds

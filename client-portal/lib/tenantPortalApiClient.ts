@@ -1,5 +1,5 @@
 import { ApiError } from './apiClient';
-import { getGatewayBaseUrl, getTenantDomainHeaders } from './gatewayUrl';
+import { getGatewayBaseUrl, getTenantGatewayIdentityHeaders } from './gatewayUrl';
 import type { TenantPortalUser } from '../types/tenantPortal';
 
 const TENANT_SESSION_STORAGE_KEY = 'racko_tenant_session';
@@ -108,7 +108,7 @@ export async function tenantPortalRequest<T>(
   const isFormData = typeof FormData !== 'undefined' && fetchOptions.body instanceof FormData;
   const headers: Record<string, string> = {
     ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
-    ...getTenantDomainHeaders(),
+    ...getTenantGatewayIdentityHeaders(API_BASE),
     ...(fetchOptions.headers as Record<string, string>),
   };
 

@@ -1,11 +1,23 @@
-import { config } from '../../../config';
+import { getAppBaseUrl } from '../../requestContext';
+import { buildBrandedEmail, type EmailBrand } from './brandedLayout';
+import { resolvePlatformEmailBrand } from './emailBrand';
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 export interface StaffInviteTemplateData {
   email: string;
   tempPassword: string;
   verifyToken: string;
   resetToken: string;
-  platformName?: string;
+  brand?: EmailBrand;
+  verifyUrl?: string;
+  resetUrl?: string;
 }
 
 export function buildStaffInviteTemplate(data: StaffInviteTemplateData): {
@@ -13,77 +25,44 @@ export function buildStaffInviteTemplate(data: StaffInviteTemplateData): {
   html: string;
   text: string;
 } {
-  const platformName = data.platformName ?? config.EMAIL_FROM_NAME;
-  const verifyUrl = `${config.FRONTEND_URL}/verify-email?token=${data.verifyToken}`;
-  const resetUrl = `${config.FRONTEND_URL}/reset-password?token=${data.resetToken}`;
+  const brand = data.brand ?? resolvePlatformEmailBrand();
+  const base = getAppBaseUrl();
+  const verifyUrl = data.verifyUrl ?? `${base}/verify-email?token=${data.verifyToken}`;
+  const resetUrl = data.resetUrl ?? `${base}/reset-password?token=${data.resetToken}`;
 
-  const html = `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>You're invited</title>
-</head>
-<body style="margin:0;padding:0;background-color:#f4f4f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f5;padding:40px 0;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="max-width:600px;width:100%;background:#ffffff;border-radius:8px;overflow:hidden;border:1px solid #e4e4e7;">
-          <tr>
-            <td style="background:#B91C1C;padding:32px 40px;text-align:center;">
-              <p style="margin:0;font-size:22px;font-weight:700;color:#ffffff;">${platformName}</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:40px;">
-              <p style="margin:0 0 8px;font-size:24px;font-weight:700;color:#18181b;">You're invited to the Super Admin dashboard</p>
-              <p style="margin:0 0 20px;font-size:15px;color:#71717a;line-height:1.6;">A Super Admin has created a staff account for you. First verify your email, then set your own password before signing in.</p>
-              <div style="margin:0 0 24px;padding:16px;border-radius:8px;background:#fafafa;border:1px solid #e4e4e7;">
-                <p style="margin:0 0 6px;font-size:13px;color:#71717a;">Sign-in email</p>
-                <p style="margin:0 0 14px;font-size:15px;font-weight:600;color:#18181b;">${data.email}</p>
-                <p style="margin:0 0 6px;font-size:13px;color:#71717a;">Temporary password</p>
-                <p style="margin:0;font-size:15px;font-weight:600;color:#18181b;">${data.tempPassword}</p>
-              </div>
-              <table cellpadding="0" cellspacing="0" style="margin:0 0 12px;">
-                <tr>
-                  <td style="background:#B91C1C;border-radius:6px;">
-                    <a href="${verifyUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">Verify email</a>
-                  </td>
-                </tr>
-              </table>
-              <table cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
-                <tr>
-                  <td style="background:#111827;border-radius:6px;">
-                    <a href="${resetUrl}" style="display:inline-block;padding:14px 32px;font-size:15px;font-weight:600;color:#ffffff;text-decoration:none;">Set your password</a>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:0 0 8px;font-size:13px;color:#a1a1aa;">Verification link</p>
-              <p style="margin:0 0 16px;font-size:13px;color:#B91C1C;word-break:break-all;">${verifyUrl}</p>
-              <p style="margin:0 0 8px;font-size:13px;color:#a1a1aa;">Password setup link</p>
-              <p style="margin:0 0 24px;font-size:13px;color:#B91C1C;word-break:break-all;">${resetUrl}</p>
-              <p style="margin:0;font-size:13px;color:#a1a1aa;">Use the temporary password only as a bootstrap. You must set your own password before the first login.</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
+  const detailsHtml = `
+    <table width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e5e7eb;border-radius:10px;overflow:hidden;text-align:left;">
+      <tr style="background:#f9fafb;">
+        <td style="padding:14px 16px;border-bottom:1px solid #e5e7eb;">
+          <p style="margin:0 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;">Sign-in email</p>
+          <p style="margin:0;font-size:14px;color:#111827;font-weight:600;word-break:break-all;">${escapeHtml(data.email)}</p>
+        </td>
+      </tr>
+      <tr>
+        <td style="padding:14px 16px;">
+          <p style="margin:0 0 4px;font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:#9ca3af;">Temporary password</p>
+          <p style="margin:0;font-family:Consolas,Monaco,monospace;font-size:15px;color:#111827;font-weight:700;">${escapeHtml(data.tempPassword)}</p>
+        </td>
+      </tr>
+    </table>`;
 
-  const text = `You're invited to ${platformName}
+  const afterCtaHtml = `
+    <p style="margin:0 0 10px;font-size:13px;color:#6b7280;line-height:1.5;">
+      After verifying your email, complete setup by creating your own password.
+    </p>
+    <a href="${escapeHtml(resetUrl)}" style="display:inline-block;padding:11px 22px;border:1px solid ${brand.primaryColor};border-radius:9px;color:${brand.primaryColor};font-size:14px;font-weight:600;text-decoration:none;">Set Your Password →</a>`;
 
-Email: ${data.email}
-Temporary password: ${data.tempPassword}
-
-1. Verify your email:
-${verifyUrl}
-
-2. Set your password:
-${resetUrl}
-
-You must verify your email and set your own password before signing in.`;
-
-  return { subject: `You're invited to ${platformName}`, html, text };
+  return buildBrandedEmail(brand, {
+    subject: `You're invited to ${brand.name}`,
+    headline: "You're invited",
+    bodyHtml: `<p style="margin:0;">A Super Admin has created a staff account for you on <strong style="color:#111827;">${escapeHtml(brand.name)}</strong>. First verify your email, then set your own password before signing in.</p>`,
+    ctaLabel: 'Verify Email Address',
+    ctaUrl: verifyUrl,
+    detailsHtml,
+    afterCtaHtml,
+    expiryText: 'Verification and password links expire in 7 days.',
+    noticeTitle: "Didn't expect this invite?",
+    noticeBody: 'You can safely ignore this email.',
+    hero: 'invite',
+  });
 }

@@ -52,6 +52,11 @@ export interface ProvisioningRequest {
   microsoftLicenseSkuId?: string | null;
   microsoft_license_sku_part_number?: string | null;
   microsoftLicenseSkuPartNumber?: string | null;
+  project_name?: string | null;
+  projectName?: string | null;
+  /** Racko org/tenant project ObjectId. */
+  project_id?: string | null;
+  projectId?: string | null;
   usage_windows?: UsageWindow[];
   usageWindows?: UsageWindow[];
 }

@@ -11,6 +11,7 @@ import {
 import { ServiceNavSidebar, type ServiceNavLink } from '@/components/console/ServiceNavSidebar';
 import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { tenantVps } from '@/lib/tenantAdminRoutes';
 
 interface TenantVpsSidebarProps {
   sidebarOpen: boolean;
@@ -25,19 +26,18 @@ export function TenantVpsSidebar({ sidebarOpen, onCloseSidebar }: TenantVpsSideb
 
   const links: ServiceNavLink[] = [
     {
-      href: '/console/dashboard/overview',
+      href: tenantVps.overview,
       label: 'Overview',
       icon: <LayoutDashboard className="h-4 w-4" />,
       exact: true,
     },
     {
-      href: '/console/dashboard/vms',
+      href: tenantVps.vms,
       label: 'My VMs',
       icon: <Server className="h-4 w-4" />,
       isActive: (p) =>
-        p === '/console/dashboard/vms' ||
-        (p.startsWith('/console/dashboard/vms/') &&
-          !p.startsWith('/console/dashboard/vms/onboard')),
+        p === tenantVps.vms ||
+        (p.startsWith(`${tenantVps.vms}/`) && !p.startsWith(tenantVps.restricted)),
     },
   ];
 

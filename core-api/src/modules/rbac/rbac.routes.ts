@@ -1,7 +1,9 @@
 import { Router } from 'express';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
-import { requireRole } from '../../middleware/requireRole.middleware';
-import { requireControlPlane } from '../../middleware/requirePermission.middleware';
+import {
+  requireControlPlane,
+  requirePermission,
+} from '../../middleware/requirePermission.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import { rbacController } from './rbac.controller';
 import {
@@ -9,9 +11,15 @@ import {
   updateRbacRoleSchema,
   setUserRolesSchema,
   createStaffUserSchema,
+  deleteStaffUserSchema,
 } from './rbac.validation';
 
 const router = Router();
+
+/** Any of these unlocks the Access Control console (super_admin bypasses). */
+const requireAccessControl = requirePermission('rbac.assign', 'rbac.roles.write');
+const requireRolesWrite = requirePermission('rbac.roles.write');
+const requireAssign = requirePermission('rbac.assign');
 
 router.use(requireAuth);
 
@@ -20,21 +28,17 @@ router.get('/me', requireControlPlane(), (req, res, next) => {
   rbacController.getMyPermissions(req, res, next);
 });
 
-/**
- * Access Control management — super_admin only in v1.
- * Staff receive permissions; they do not manage the matrix yet.
- */
-router.get('/permissions', requireRole('super_admin'), (req, res, next) => {
+router.get('/permissions', requireAccessControl, (req, res, next) => {
   rbacController.getCatalog(req, res, next);
 });
 
-router.get('/roles', requireRole('super_admin'), (req, res, next) => {
+router.get('/roles', requireAccessControl, (req, res, next) => {
   rbacController.listRoles(req, res, next);
 });
 
 router.post(
   '/roles',
-  requireRole('super_admin'),
+  requireRolesWrite,
   validateRequest(createRbacRoleSchema),
   (req, res, next) => {
     rbacController.createRole(req, res, next);
@@ -43,20 +47,20 @@ router.post(
 
 router.patch(
   '/roles/:id',
-  requireRole('super_admin'),
+  requireRolesWrite,
   validateRequest(updateRbacRoleSchema),
   (req, res, next) => {
     rbacController.updateRole(req, res, next);
   }
 );
 
-router.get('/people', requireRole('super_admin'), (req, res, next) => {
+router.get('/people', requireAccessControl, (req, res, next) => {
   rbacController.listPeople(req, res, next);
 });
 
 router.put(
   '/people/:userId/roles',
-  requireRole('super_admin'),
+  requireAssign,
   validateRequest(setUserRolesSchema),
   (req, res, next) => {
     rbacController.setUserRoles(req, res, next);
@@ -65,14 +69,23 @@ router.put(
 
 router.post(
   '/people/staff',
-  requireRole('super_admin'),
+  requireAssign,
   validateRequest(createStaffUserSchema),
   (req, res, next) => {
     rbacController.createStaff(req, res, next);
   }
 );
 
-router.get('/audit', requireRole('super_admin'), (req, res, next) => {
+router.delete(
+  '/people/:userId',
+  requireAssign,
+  validateRequest(deleteStaffUserSchema),
+  (req, res, next) => {
+    rbacController.deleteStaff(req, res, next);
+  }
+);
+
+router.get('/audit', requireAccessControl, (req, res, next) => {
   rbacController.listAudit(req, res, next);
 });
 

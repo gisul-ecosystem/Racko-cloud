@@ -160,6 +160,14 @@ begin
       'description {#MyServiceName} "Racko software management agent"',
       '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
+    // Configure automatic restart on failure — required for zero-touch auto-update.
+    // The updater calls os.Exit(0) after replacing the binary; the SCM detects
+    // the exit and restarts the service with the new binary automatically.
+    // Actions: restart after 5s, 10s, 30s. Reset failure count after 24h.
+    Exec('sc.exe',
+      'failure {#MyServiceName} reset= 86400 actions= restart/5000/restart/10000/restart/30000',
+      '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
     Exec('sc.exe', 'start {#MyServiceName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
   end;
 end;
