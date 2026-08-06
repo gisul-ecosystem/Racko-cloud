@@ -32,6 +32,7 @@ import { decrypt } from '../../utils/crypto';
 import { ProxmoxNodeService } from '../proxmoxNode/proxmoxNode.service';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
+import { decodeAgentOutput, isProcessExited } from './helpers/hypervGuestOutput';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
 import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
 import { softwareService } from '../software/software.service';
@@ -162,9 +163,9 @@ interface ConsolePollOptions {
  * network config on clones (some base templates carry over a NIC config
  * baked in at capture time), so the clone can boot with a stale/wrong
  * address instead of the freshly-allocated custnet1 address. This is a
- * one-shot guest-exec fallback for PRIVATE Windows VMs only: force the
- * primary "Up" adapter (named "Ethernet" on these templates) onto the
- * assigned static IP/gateway/DNS/MTU via `netsh`.
+ * guest-exec fallback for PRIVATE Windows VMs only: force the primary "Up"
+ * adapter (named "Ethernet" on these templates) onto the assigned static
+ * IP/gateway/DNS/MTU via `netsh`.
  *
  * Deliberately uses `netsh interface ipv4 set address ... static` rather
  * than New-NetIPAddress/Remove-NetIPAddress: on a guest that already has a
@@ -175,6 +176,11 @@ interface ConsolePollOptions {
  * the address + gateway atomically in one call and is naturally idempotent
  * (re-running with the same values is a no-op), so no "only if not already
  * set" guard is needed.
+ *
+ * Verifies the GUEST-side result via agent/exec-status (exitCode + stdout/
+ * stderr). If no "Up" adapter is ready yet the script exits 2 with
+ * NO_ADAPTER — treated as "not done" so the next poll attempt retries.
+ * Success is only logged when exitCode is 0 and an adapter was configured.
  *
  * Best-effort only — never throws. A failure here must not block the
  * console-readiness poll from continuing to retry.
@@ -188,27 +194,91 @@ async function fixPrivateNetworkGuestIp(
   try {
     const subnetMask = '255.255.0.0'; // custnet1 is a flat /16 — see bulkProcessor.ts ipconfig0
     const mtu = 1400; // custnet1/VXLAN carries 1450 — 1400 leaves headroom and matches net0's mtu=1400
+    // Exit 2 + NO_ADAPTER when no NIC is Up yet so callers can retry instead
+    // of treating a silent no-op as success.
     const command =
       `$ip='${assignedIp}'; $gw='${gateway}'; $mask='${subnetMask}'; $mtu=${mtu}; ` +
       "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1; " +
-      'if ($adapter) { ' +
+      "if (-not $adapter) { Write-Output 'NO_ADAPTER'; exit 2 }; " +
       "netsh interface ipv4 set address name=\"$($adapter.Name)\" static $ip $mask $gw | Out-Null; " +
       "netsh interface ipv4 set dns name=\"$($adapter.Name)\" static 8.8.8.8 | Out-Null; " +
       // Same adapter selected above — the guacd RDP graphics pipeline times out over the
       // 1450-byte custnet1/VXLAN path without this, even though the IP itself is reachable.
-      "netsh interface ipv4 set subinterface \"$($adapter.Name)\" mtu=$mtu store=persistent | Out-Null " +
-      '};';
+      "netsh interface ipv4 set subinterface \"$($adapter.Name)\" mtu=$mtu store=persistent | Out-Null; " +
+      "Write-Output ('OK:' + $adapter.Name);";
 
-    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
-      command: 'powershell.exe',
-      args: ['-Command', command],
-    });
+    const execStart = await proxmoxClient.post<{ data: { pid: number } }>(
+      `/nodes/${node}/qemu/${vmid}/agent/exec`,
+      { command: 'powershell.exe', args: ['-Command', command] }
+    );
+    const pid = execStart.data.data.pid;
+
+    let sawResult = false;
+    let exitCode: number | undefined;
+    let stdout = '';
+    let stderr = '';
+    for (let poll = 1; poll <= 8; poll++) {
+      await sleep(1000);
+      try {
+        const statusRes = await proxmoxClient.get<{
+          data: { exited?: number | boolean; exitcode?: number; 'out-data'?: string; 'err-data'?: string };
+        }>(`/nodes/${node}/qemu/${vmid}/agent/exec-status`, { params: { pid } });
+        const data = statusRes.data.data;
+        if (isProcessExited(data)) {
+          exitCode = data.exitcode;
+          stdout = decodeAgentOutput(data['out-data']);
+          stderr = decodeAgentOutput(data['err-data']);
+          sawResult = true;
+          break;
+        }
+      } catch (statusErr) {
+        logger.warn('[VMConsolePoll] Private-network guest IP fixup — exec-status poll failed', {
+          node,
+          vmid,
+          pid,
+          poll,
+          error: statusErr instanceof Error ? statusErr.message : String(statusErr),
+        });
+        break;
+      }
+    }
+
+    if (!sawResult) {
+      logger.warn('[VMConsolePoll] Private-network guest IP fixup — exec-status never exited (will retry)', {
+        node,
+        vmid,
+        pid,
+        assignedIp,
+        gateway,
+      });
+      return;
+    }
+
+    // NO_ADAPTER (exit 2) or any non-zero exit — NIC not ready / netsh failed.
+    // Do NOT log success; startIpPolling will re-invoke on the next attempt.
+    if (exitCode !== 0 || stdout.includes('NO_ADAPTER')) {
+      logger.warn('[VMConsolePoll] Private-network guest IP fixup — not done (will retry)', {
+        node,
+        vmid,
+        pid,
+        exitCode,
+        stdout: stdout.slice(0, 1000),
+        stderr: stderr.slice(0, 1000),
+        assignedIp,
+        gateway,
+      });
+      return;
+    }
+
     logger.info('[VMConsolePoll] Private-network guest IP + MTU fixup executed (netsh)', {
       node,
       vmid,
       assignedIp,
       gateway,
       mtu,
+      pid,
+      exitCode,
+      stdout: stdout.slice(0, 500),
     });
   } catch (err) {
     logger.warn('[VMConsolePoll] Private-network guest IP + MTU fixup failed — continuing anyway', {
@@ -309,13 +379,16 @@ async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
  * ipconfig0 on a /16), so we deliberately verify the assigned address actually
  * came up rather than assuming cloud-init succeeded — an exact match, never a
  * prefix check, so a stray address on the same subnet can't false-positive.
- * If the assigned IP hasn't shown up by the second attempt and the VM is a
- * Windows/RDP guest, we force-apply the full set of no-reboot console
- * prerequisites via guest-exec (cloudbase-init doesn't always re-run network
- * config on clones, and the IP alone isn't enough for Guacamole to connect):
- * fixPrivateNetworkGuestIp() (static IP + same-adapter MTU), then
+ * After attempt 1 (cloud-init's natural first chance), if the assigned IP still
+ * hasn't shown up and the VM is a Windows/RDP guest, we force-apply the full
+ * set of no-reboot console prerequisites via guest-exec on EVERY subsequent
+ * attempt until the guest reports vm.ipAddress (cloudbase-init doesn't always
+ * re-run network config on clones, and the IP alone isn't enough for Guacamole
+ * to connect): fixPrivateNetworkGuestIp() (static IP + same-adapter MTU), then
  * fixWindowsRdpAccess() (RDP enabled/firewall/NLA/admin unlock), then
  * fixWindowsPasswordPolicy() (no forced password-change/expiry surprises).
+ * Each attempt's guest-agent query + fixup is wrapped in try/catch so a
+ * transient throw never aborts the poll loop.
  *
  * All Proxmox/agent errors are swallowed and retried — this never throws and
  * never blocks the caller (the start API responds immediately; readiness
@@ -398,18 +471,26 @@ async function startIpPolling(
           allIpv4Seen: seenIps,
         });
 
-        // Give cloud-init one natural attempt (the initial wait + one retry
-        // interval), then force the remaining no-reboot console prerequisites
-        // via guest-exec — cloudbase-init on Windows is known to skip
-        // re-applying ipconfig0 on some base templates, and testing showed
-        // the IP alone isn't sufficient for Guacamole to actually connect.
-        // fEnableWddmDriver is deliberately NOT touched here — it requires a
-        // reboot and must be set in the template, not fixed at runtime.
-        if (vm.consoleProtocol === 'rdp' && vm.ipAddress && attempt === 2) {
-          await fixPrivateNetworkGuestIp(node, vmid, vm.ipAddress, config.PRIVATE_POOL_GATEWAY); // IP + same-adapter MTU
-          await fixWindowsRdpAccess(node, vmid); // RDP enabled + firewall + NLA + admin unlocked
-          if (vm.consoleUsername) {
-            await fixWindowsPasswordPolicy(node, vmid, vm.consoleUsername); // no "credentials expired" surprises
+        // Skip attempt 1 so cloud-init gets one natural chance. From attempt 2
+        // onward keep re-applying the no-reboot console prerequisites until
+        // exactMatchFound — a prior one-shot attempt===2 gate meant a single
+        // transient guest-agent throw permanently skipped the fixup for the
+        // whole poll cycle. fEnableWddmDriver is deliberately NOT touched here
+        // — it requires a reboot and must be set in the template, not fixed
+        // at runtime.
+        if (attempt >= 2 && vm.consoleProtocol === 'rdp' && vm.ipAddress) {
+          try {
+            await fixPrivateNetworkGuestIp(node, vmid, vm.ipAddress, config.PRIVATE_POOL_GATEWAY); // IP + same-adapter MTU
+            await fixWindowsRdpAccess(node, vmid); // RDP enabled + firewall + NLA + admin unlocked
+            if (vm.consoleUsername) {
+              await fixWindowsPasswordPolicy(node, vmid, vm.consoleUsername); // no "credentials expired" surprises
+            }
+          } catch (fixupErr) {
+            logger.warn('[VMConsolePoll] Private-VM fixup threw — will retry next attempt', {
+              vmid,
+              attempt,
+              error: fixupErr instanceof Error ? fixupErr.message : String(fixupErr),
+            });
           }
         }
       } else {
@@ -439,6 +520,7 @@ async function startIpPolling(
       }
     } catch (err) {
       // Guest agent not ready yet, VM still booting, transient Proxmox error, etc.
+      // Log and continue — a throw on one attempt must not abort the poll loop.
       logger.warn('[VMConsolePoll] Guest-agent poll failed — will retry', {
         vmId: vmObjectId.toString(),
         vmid,
