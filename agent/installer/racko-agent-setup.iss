@@ -48,12 +48,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 ; Go agent service binary
 Source: "..\dist\{#MyBinaryName}"; DestDir: "{#MyInstallDir}"; Flags: ignoreversion
 
-; racko-app — published as a folder (not single-file) so WebView2Loader.dll
-; lands on disk next to the exe. The {#MyAppExe} entry must be listed first
-; so Inno knows it is the main exe; the wildcard picks up all DLLs including
-; WebView2Loader.dll, the .NET runtime files, and all managed assemblies.
-Source: "..\racko-app\publish\{#MyAppExe}"; DestDir: "{#MyInstallDir}"; Flags: ignoreversion
-Source: "..\racko-app\publish\*"; DestDir: "{#MyInstallDir}"; \
+; racko-app — full folder publish so WebView2Loader.dll lands on disk next to the exe.
+; Built by: dotnet publish racko-app/RackoApp.csproj -c Release -r win-x64 --self-contained true -o racko-app/publish/
+; The wildcard copies all DLLs including WebView2Loader.dll and the .NET runtime.
+Source: "..\dist\racko-app\{#MyAppExe}"; DestDir: "{#MyInstallDir}\racko-app"; Flags: ignoreversion
+Source: "..\dist\racko-app\*"; DestDir: "{#MyInstallDir}\racko-app"; \
   Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "{#MyAppExe}"
 
 ; WebView2 Evergreen Bootstrapper (~2MB).
@@ -62,7 +61,7 @@ Source: "..\racko-app\publish\*"; DestDir: "{#MyInstallDir}"; \
 ; The bootstrapper detects if WebView2 Runtime is already installed and skips
 ; the download in that case — safe to run on every install, online or offline
 ; if the machine already has Edge/WebView2 Runtime present.
-Source: "{#WebView2Setup}"; DestDir: "{tmp}"; Flags: deleteafterinstall
+Source: "{#WebView2Setup}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: WebView2SetupExists
 
 [Code]
 var
@@ -70,6 +69,14 @@ var
   TokenEdit: TEdit;
   TokenLabel: TLabel;
   TokenHint: TLabel;
+
+// ── WebView2 bootstrapper presence check ─────────────────────────────────────
+// Used as a [Files] Check — if the bootstrapper wasn't placed next to the iss
+// (e.g. CI didn't download it), skip that file entry gracefully.
+function WebView2SetupExists(): Boolean;
+begin
+  Result := FileExists(ExpandConstant('{tmp}\{#WebView2Setup}'));
+end;
 
 // ── Detect old install — show instructions and block ─────────────────────────
 function InitializeSetup(): Boolean;
@@ -224,15 +231,15 @@ end;
 
 [Icons]
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-; Desktop and Start Menu shortcut to the GUI tray app
-Name: "{commondesktop}\Racko Shared Files"; Filename: "{#MyInstallDir}\{#MyAppExe}"; Tasks: desktopicon
-Name: "{group}\Racko Shared Files"; Filename: "{#MyInstallDir}\{#MyAppExe}"
+; Desktop and Start Menu shortcut — exe is in the racko-app subfolder
+Name: "{commondesktop}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app\{#MyAppExe}"; Tasks: desktopicon
+Name: "{group}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app\{#MyAppExe}"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut for Racko Shared Files"; GroupDescription: "Additional icons:"
 
 [Run]
 ; Start the GUI app after install (non-blocking, visible to the logged-in user)
-Filename: "{#MyInstallDir}\{#MyAppExe}"; Description: "Launch Racko Shared Files"; Flags: nowait postinstall skipifsilent
+Filename: "{#MyInstallDir}\racko-app\{#MyAppExe}"; Description: "Launch Racko Shared Files"; Flags: nowait postinstall skipifsilent
 Filename: "{cmd}"; Parameters: "/c echo Racko Agent is running as a Windows service."; \
   Description: "Agent started"; Flags: nowait postinstall skipifsilent
