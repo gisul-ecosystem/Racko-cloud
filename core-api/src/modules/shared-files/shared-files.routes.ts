@@ -37,6 +37,13 @@ agentSharedFilesRouter.get(
   (req, res, next) => sharedFilesController.agentListMachines(req, res, next),
 );
 
+// GET /api/v1/agent/shared-files/:id/view-url — presigned GET URL (view or download)
+agentSharedFilesRouter.get(
+  '/:id/view-url',
+  requireAgentAuth,
+  (req, res, next) => sharedFilesController.agentViewUrl(req, res, next),
+);
+
 // GET /api/v1/agent/shared-files/:id/download
 agentSharedFilesRouter.get(
   '/:id/download',

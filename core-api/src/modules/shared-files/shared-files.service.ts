@@ -168,7 +168,49 @@ class SharedFilesService {
     return results;
   }
 
-  // ─── Download ──────────────────────────────────────────────────────────────
+  // ─── Get presigned view/download URL ──────────────────────────────────────
+
+  /**
+   * Returns a presigned GET URL from SeaweedFS for the file.
+   * - read permission  → 60s TTL  (view only — open in WebView2, URL expires before user can share)
+   * - full permission  → 300s TTL (download — enough time for large file download)
+   * File bytes go S3 → client directly. Core-API is NOT in the data path.
+   */
+  async getViewUrl(
+    fileId: string,
+    agentId: string,
+  ): Promise<{ presignedUrl: string; permission: SharedFilePermission; fileName: string; expiresIn: number }> {
+    const machine = await MachineModel.findOne({ agentId, deleted: { $ne: true } });
+    if (!machine) throw new NotFoundError('Agent not found.');
+
+    const doc = await SharedFileModel.findById(fileId);
+    if (!doc || doc.deleted) throw new NotFoundError('Shared file not found.');
+
+    const isSource = doc.sourceMachineId.toString() === machine._id.toString();
+    const isTarget = doc.sharedWithMachineIds.some((id) => id.toString() === machine._id.toString());
+    if (!isSource && !isTarget) throw new ForbiddenError('This file is not shared with your machine.');
+
+    // TTL: read = 60s (view only), full = 300s (5 min — enough for large downloads)
+    const ttl = doc.permission === 'full' ? 300 : 60;
+
+    const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(doc.storageRef, ttl);
+
+    logger.info('[SharedFiles] Presigned GET URL issued', {
+      fileId,
+      permission: doc.permission,
+      machineId: machine._id.toString(),
+      ttl,
+    });
+
+    return {
+      presignedUrl,
+      permission: doc.permission,
+      fileName:   doc.fileName,
+      expiresIn:  ttl,
+    };
+  }
+
+  // ─── Download (stream through API — kept for compatibility) ───────────────
 
   async getDownloadStream(
     fileId: string,

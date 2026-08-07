@@ -477,6 +477,7 @@ router.post('/api/v1/agent/shared-files', coreApiProxy);
 router.get('/api/v1/agent/shared-files/inbox', coreApiProxy);
 router.get('/api/v1/agent/shared-files/outbox', coreApiProxy);
 router.get('/api/v1/agent/shared-files/machines-for-app', coreApiProxy);
+router.get('/api/v1/agent/shared-files/:id/view-url', coreApiProxy);
 router.get('/api/v1/agent/shared-files/:id/download', coreApiProxy);
 router.patch('/api/v1/agent/shared-files/:id', coreApiProxy);
 router.delete('/api/v1/agent/shared-files/:id', coreApiProxy);

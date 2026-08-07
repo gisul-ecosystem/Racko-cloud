@@ -10,7 +10,6 @@ public class ManageForm : Form
     private readonly RackoApiClient _api;
 
     private RadioButton    _rbRead      = null!;
-    private RadioButton    _rbReadWrite = null!;
     private RadioButton    _rbFull      = null!;
     private CheckedListBox _vmList      = null!;
     private IReadOnlyList<MachineDto> _machines = [];
@@ -68,19 +67,14 @@ public class ManageForm : Form
 
         // ── Permission ────────────────────────────────────────────────────────
         AddLabel("Permission", pad, ref y);
-        _rbRead      = new RadioButton { Text = "Read Only",      Left = pad,       Top = y, AutoSize = true };
-        _rbReadWrite = new RadioButton { Text = "Read && Write",  Left = pad + 110, Top = y, AutoSize = true };
-        _rbFull      = new RadioButton { Text = "Full Control",   Left = pad + 240, Top = y, AutoSize = true };
+        _rbRead = new RadioButton { Text = "Read Only",    Left = pad,       Top = y, AutoSize = true };
+        _rbFull = new RadioButton { Text = "Full Control", Left = pad + 130, Top = y, AutoSize = true };
 
-        // Set current permission
-        switch (_file.Permission)
-        {
-            case "read-write": _rbReadWrite.Checked = true; break;
-            case "full":       _rbFull.Checked      = true; break;
-            default:           _rbRead.Checked      = true; break;
-        }
+        // Set current permission — only read or full
+        _rbFull.Checked = _file.Permission == "full";
+        _rbRead.Checked = _file.Permission != "full";
 
-        Controls.AddRange(new Control[] { _rbRead, _rbReadWrite, _rbFull });
+        Controls.AddRange(new Control[] { _rbRead, _rbFull });
         y += 30;
 
         // ── VM list ───────────────────────────────────────────────────────────
@@ -147,9 +141,7 @@ public class ManageForm : Form
 
     private async void OnSaveClick(object? s, EventArgs e)
     {
-        var permission = _rbReadWrite.Checked ? "read-write"
-                       : _rbFull.Checked      ? "full"
-                       : "read";
+        var permission = _rbFull.Checked ? "full" : "read";
 
         var ids = new List<string>();
         for (int i = 0; i < _vmList.CheckedIndices.Count; i++)
