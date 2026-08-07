@@ -9,7 +9,6 @@ import type { GuacamoleProtocol } from '../../utils/guacamoleClient';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
 import type { AccessScheduleInput } from '../vmAccessSchedule/accessScheduleParse';
 import { projectsService } from '../projects/projects.service';
-import { ValidationError } from '../../utils/errors';
 
 // Consistent response shape — matches all other modules
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
@@ -110,14 +109,13 @@ export class VMController {
       }
 
       let debitedAmount = 0;
-      if (!dto.projectId) {
-        throw new ValidationError('projectId is required.');
-      }
-      const projectCtx = await projectsService.assertUsableForService({
-        projectId: dto.projectId,
-        actingUserId: authReq.user.userId,
-        serviceKey: 'vm-management',
-      });
+      const projectCtx = dto.projectId
+        ? await projectsService.assertUsableForService({
+            projectId: dto.projectId,
+            actingUserId: authReq.user.userId,
+            serviceKey: 'vm-management',
+          })
+        : null;
 
       if (cpuCores && memoryGb && diskGb) {
         const quote = await adminBillingService.quoteVmCreation(
@@ -137,8 +135,8 @@ export class VMController {
             null, // jobId patched in after creation below
             'vm_creation',
             {
-              projectId: projectCtx.projectId.toString(),
-              orgId: projectCtx.orgId,
+              projectId: projectCtx?.projectId.toString() ?? null,
+              orgId: projectCtx?.orgId ?? null,
               serviceKey: 'vm-management',
             }
           );

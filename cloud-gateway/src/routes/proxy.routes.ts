@@ -95,12 +95,11 @@ const sharedProxyOptions = {
 // Explicit routes use the full path — no rewrite needed
 const coreApiProxy = createProxyMiddleware(sharedProxyOptions);
 
-/** Live multi-cloud pricing can take >10s; default REQUEST_TIMEOUT_MS is too short. */
-const PRICING_PROXY_TIMEOUT_MS = Math.max(config.REQUEST_TIMEOUT_MS, 300_000);
+/** Live multi-cloud pricing can run for a long time — no proxy idle timeout. */
 const coreApiPricingProxy = createProxyMiddleware({
   ...sharedProxyOptions,
-  timeout: PRICING_PROXY_TIMEOUT_MS,
-  proxyTimeout: PRICING_PROXY_TIMEOUT_MS,
+  timeout: 0,
+  proxyTimeout: 0,
 });
 
 // Catch-all mounted at /api/v1 — Express strips that prefix from req.url before
@@ -471,6 +470,33 @@ router.post('/api/v1/agent/file-upload', coreApiProxy);
 router.get('/api/v1/agent/file-download', coreApiProxy);
 router.get('/api/v1/agent/clone-manifest', coreApiProxy);
 router.post('/api/v1/agent/clone-install', coreApiProxy);
+
+// ─── SHARED FILES AGENT ROUTES (X-Agent-ID auth, used by racko-app GUI) ──────
+router.post('/api/v1/agent/shared-files', coreApiProxy);
+router.post('/api/v1/agent/shared-files/upload-url', coreApiProxy);
+router.post('/api/v1/agent/shared-files/upload-complete', coreApiProxy);
+router.get('/api/v1/agent/shared-files/inbox', coreApiProxy);
+router.get('/api/v1/agent/shared-files/outbox', coreApiProxy);
+router.get('/api/v1/agent/shared-files/machines-for-app', coreApiProxy);
+router.get('/api/v1/agent/shared-files/:id/view-url', coreApiProxy);
+router.get('/api/v1/agent/shared-files/:id/download', coreApiProxy);
+router.patch('/api/v1/agent/shared-files/:id', coreApiProxy);
+router.delete('/api/v1/agent/shared-files/:id', coreApiProxy);
+
+// ─── SHARED FILES ADMIN ROUTES (JWT auth) ─────────────────────────────────────
+router.get('/api/v1/shared-files', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/shared-files/:id/download', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.delete('/api/v1/shared-files/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+
+// ─── MACHINE GROUPS ROUTES (JWT auth) ─────────────────────────────────────────
+router.post('/api/v1/machine-groups', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/machine-groups', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/machine-groups/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.patch('/api/v1/machine-groups/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.delete('/api/v1/machine-groups/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/machine-groups/:id/machines', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.delete('/api/v1/machine-groups/:id/machines', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.get('/api/v1/machine-groups/:id/machines', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 // ─── TENANT PUBLIC ROUTES (host → x-tenant-id; no platform JWT) ───────────────
 router.post('/api/v1/tenant-auth/login', injectTenantHeader, coreApiProxy);
 router.post(

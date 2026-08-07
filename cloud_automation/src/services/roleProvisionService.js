@@ -329,8 +329,11 @@ const getRoleProvisionStatus = async (requestId) => {
     getSelectedRolesForRequest(db, requestId)
   ]);
 
+  // Match POST /roles: nothing to assign means the step is done.
+  // Returning complete:false here caused the UI to spin forever
+  // (POST → complete:true, GET snapshot → complete:false → POST again).
   if (users.length === 0 || baseRoles.length === 0) {
-    return { complete: false, remaining: 0 };
+    return { complete: true, remaining: 0 };
   }
 
   const existingMap = await getAllExistingAssignments(

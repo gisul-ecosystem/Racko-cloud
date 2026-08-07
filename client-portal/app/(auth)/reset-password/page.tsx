@@ -24,6 +24,7 @@ function ResetPasswordForm() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get('token');
+  const isFirstTimeSetup = searchParams.get('setup') === '1';
 
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -88,15 +89,21 @@ function ResetPasswordForm() {
   if (success) {
     return (
       <div className="text-center">
-        <div className="flex items-center justify-center w-12 h-12 bg-green-900/30 border border-green-700 rounded-full mx-auto mb-4">
-          <svg className="w-6 h-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <div className="mx-auto mb-4 flex h-12 w-12 items-center justify-center rounded-full border border-green-700 bg-green-900/30">
+          <svg className="h-6 w-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
         </div>
-        <h2 className="text-xl font-semibold text-white mb-3">Password reset</h2>
-        <p className="text-sm text-gray-400 mb-2">Your password has been updated successfully.</p>
-        <p className="text-xs text-gray-500 mb-6">Redirecting to sign in...</p>
-        <Link href="/login" className="text-sm text-[#DC2626] hover:text-[#B91C1C] font-medium">
+        <h2 className="mb-3 text-xl font-semibold text-white">
+          {isFirstTimeSetup ? 'Password set' : 'Password reset'}
+        </h2>
+        <p className="mb-2 text-sm text-gray-400">
+          {isFirstTimeSetup
+            ? 'Your account is ready. Redirecting you to sign in…'
+            : 'Your password has been updated successfully.'}
+        </p>
+        <p className="mb-6 text-xs text-gray-500">Redirecting to sign in...</p>
+        <Link href="/login" className="text-sm font-medium text-[#DC2626] hover:text-[#B91C1C]">
           Sign in now
         </Link>
       </div>
@@ -105,12 +112,18 @@ function ResetPasswordForm() {
 
   return (
     <>
-      <h1 className="text-xl font-semibold text-white mb-2">Set a new password</h1>
-      <p className="text-sm text-gray-400 mb-6">Choose a strong password for your account.</p>
+      <h1 className="mb-2 text-xl font-semibold text-white">
+        {isFirstTimeSetup ? 'Create your password' : 'Set a new password'}
+      </h1>
+      <p className="mb-6 text-sm text-gray-400">
+        {isFirstTimeSetup
+          ? 'Choose a strong password to finish setting up your Racko account.'
+          : 'Choose a strong password for your account.'}
+      </p>
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
         <div>
-          <label htmlFor="password" className="block text-sm font-medium text-gray-300 mb-1.5">
-            New password
+          <label htmlFor="password" className="mb-1.5 block text-sm font-medium text-gray-300">
+            {isFirstTimeSetup ? 'Password' : 'New password'}
           </label>
           <div className="relative">
             <input
@@ -126,17 +139,17 @@ function ResetPasswordForm() {
             <button
               type="button"
               onClick={() => setShowPassword(!showPassword)}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-200 text-xs"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-200"
               aria-label={showPassword ? 'Hide password' : 'Show password'}
             >
               {showPassword ? 'Hide' : 'Show'}
             </button>
           </div>
-          {fieldErrors.password && <p className="text-red-400 text-xs mt-1">{fieldErrors.password}</p>}
+          {fieldErrors.password && <p className="mt-1 text-xs text-red-400">{fieldErrors.password}</p>}
         </div>
         <div>
-          <label htmlFor="confirm" className="block text-sm font-medium text-gray-300 mb-1.5">
-            Confirm new password
+          <label htmlFor="confirm" className="mb-1.5 block text-sm font-medium text-gray-300">
+            {isFirstTimeSetup ? 'Confirm password' : 'Confirm new password'}
           </label>
           <input
             id="confirm"
@@ -148,10 +161,10 @@ function ResetPasswordForm() {
             placeholder="••••••••"
             disabled={loading}
           />
-          {fieldErrors.confirm && <p className="text-red-400 text-xs mt-1">{fieldErrors.confirm}</p>}
+          {fieldErrors.confirm && <p className="mt-1 text-xs text-red-400">{fieldErrors.confirm}</p>}
         </div>
         {error && (
-          <div className="rounded-lg bg-red-900/30 border border-red-700 px-4 py-3 text-sm text-red-300">
+          <div className="rounded-lg border border-red-700 bg-red-900/30 px-4 py-3 text-sm text-red-300">
             {error}
             {error.includes('expired') && (
               <div className="mt-2">
@@ -163,7 +176,13 @@ function ResetPasswordForm() {
           </div>
         )}
         <button type="submit" disabled={loading} className={BTN_PRIMARY}>
-          {loading ? 'Resetting...' : 'Reset password'}
+          {loading
+            ? isFirstTimeSetup
+              ? 'Saving…'
+              : 'Resetting...'
+            : isFirstTimeSetup
+              ? 'Create password'
+              : 'Reset password'}
         </button>
       </form>
     </>

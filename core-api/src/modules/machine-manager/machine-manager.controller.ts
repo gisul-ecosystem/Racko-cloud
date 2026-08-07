@@ -154,9 +154,9 @@ export class MachineManagerController {
   async pushAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
-      const { vms, sessionId } = req.body as PushAgentInput & { sessionId?: string };
+      const { vms, sessionId, groupId } = req.body as PushAgentInput & { sessionId?: string; groupId?: string };
       const sid = sessionId ?? `push-${Date.now()}`;
-      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid);
+      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid, groupId);
       success(res, 'Agent push initiated.', { ...result, sessionId: sid }, 201);
     } catch (err) {
       next(err);
@@ -353,9 +353,12 @@ export class MachineManagerController {
 
       const os = req.params['os'] as string;
       const fileMap: Record<string, { file: string; name: string }> = {
-        windows: { file: 'racko-agent.exe',     name: 'racko-agent.exe' },
-        linux:   { file: 'racko-agent',          name: 'racko-agent' },
-        darwin:  { file: 'racko-agent-mac',      name: 'racko-agent' },
+        windows:   { file: 'racko-agent.exe', name: 'racko-agent.exe' },
+        linux:     { file: 'racko-agent',     name: 'racko-agent' },
+        darwin:    { file: 'racko-agent-mac', name: 'racko-agent' },
+        // racko-app is published as a folder-zip (required for WebView2Loader.dll to
+        // land on disk as a loose file). The push script downloads and extracts the zip.
+        'racko-app': { file: 'racko-app.zip', name: 'racko-app.zip' },
       };
 
       const entry = fileMap[os];
@@ -380,6 +383,7 @@ export class MachineManagerController {
       // Prevent Cloudflare and any intermediate proxy from compressing the binary.
       // Compression changes the bytes on disk, causing SHA256 checksum mismatches
       // when the agent verifies the downloaded file against the expected hash.
+      // For racko-app.zip, compression is also pointless (zip is already compressed).
       res.setHeader('Cache-Control', 'no-transform');
       fs.createReadStream(binaryPath).pipe(res);
     } catch (err) {

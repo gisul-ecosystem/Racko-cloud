@@ -49,6 +49,28 @@ export async function fetchMyOnboardingRequest(): Promise<OrganizationAccessRequ
   return data.request;
 }
 
+export async function saveOrganizationProfile(input: {
+  contactName: string;
+  companyName: string;
+  companyWebsite?: string;
+  phone: string;
+  officeNumber?: string;
+  designation: string;
+  companySize: string;
+  registeredAddress: string;
+  taxId: string;
+  useCase: string;
+  expectedUsage: string;
+}): Promise<OrganizationAccessRequest> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ request: OrganizationAccessRequest }>>(
+      '/api/v1/customer-onboarding/me/organization',
+      { method: 'PUT', body: JSON.stringify(input) }
+    )
+  );
+  return data.request;
+}
+
 export async function submitOrganizationRequest(input: {
   contactName: string;
   companyName: string;
@@ -95,4 +117,70 @@ export async function reviewOrganizationRequest(
     )
   );
   return data.request;
+}
+
+export type AdminCreateOrganizationInput = {
+  email: string;
+  sendInvite?: boolean;
+  /** Unlock console without collecting org details. */
+  skipOrgOnboarding?: boolean;
+  organization?: {
+    contactName: string;
+    companyName: string;
+    companyWebsite?: string;
+    phone: string;
+    officeNumber?: string;
+    designation: string;
+    companySize: string;
+    registeredAddress: string;
+    taxId: string;
+    useCase: string;
+    expectedUsage: string;
+  };
+};
+
+export type AdminCreateOrganizationResult = {
+  user: {
+    id: string;
+    email: string;
+    accountType: string;
+    onboardingStatus: string;
+    isEmailVerified: boolean;
+    isActive: boolean;
+  };
+  organizationRequest: OrganizationAccessRequest | null;
+  inviteSent: boolean;
+};
+
+export async function adminCreateOrganization(
+  input: AdminCreateOrganizationInput
+): Promise<AdminCreateOrganizationResult> {
+  return unwrap(
+    apiRequest<ApiEnvelope<AdminCreateOrganizationResult>>(
+      '/api/v1/customer-onboarding/admin/organizations',
+      { method: 'POST', body: JSON.stringify(input) }
+    )
+  );
+}
+
+export async function adminSendOrganizationInvite(
+  userId: string
+): Promise<{ userId: string; email: string; inviteSent: boolean }> {
+  return unwrap(
+    apiRequest<ApiEnvelope<{ userId: string; email: string; inviteSent: boolean }>>(
+      `/api/v1/customer-onboarding/admin/organizations/${userId}/send-invite`,
+      { method: 'POST', body: JSON.stringify({}) }
+    )
+  );
+}
+
+export async function adminDeleteOrganization(
+  userId: string
+): Promise<{ email: string; deleted: Record<string, number> }> {
+  return unwrap(
+    apiRequest<ApiEnvelope<{ email: string; deleted: Record<string, number> }>>(
+      `/api/v1/customer-onboarding/admin/organizations/${userId}`,
+      { method: 'DELETE' }
+    )
+  );
 }

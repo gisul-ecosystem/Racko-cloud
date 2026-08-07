@@ -233,10 +233,12 @@ async function parseApiErrorResponse(res: Response): Promise<ApiError> {
       code?: string;
       nextWindow?: string | null;
       errors?: string[];
+      resetToken?: string;
     };
     return new ApiError(errorData.message ?? 'Request failed', res.status, errorData.code, {
       nextWindow: errorData.nextWindow,
       errors: errorData.errors,
+      resetToken: errorData.resetToken,
     });
   } catch {
     const timedOut = res.status === 502 || res.status === 504;
@@ -263,17 +265,19 @@ export class ApiError extends Error {
   public readonly code?: string;
   public readonly nextWindow?: string | null;
   public readonly errors?: string[];
+  public readonly resetToken?: string;
 
   constructor(
     message: string,
     status: number,
     code?: string,
-    extras?: { nextWindow?: string | null; errors?: string[] }
+    extras?: { nextWindow?: string | null; errors?: string[]; resetToken?: string }
   ) {
     super(message);
     this.status = status;
     this.code = code;
     this.nextWindow = extras?.nextWindow;
     this.errors = extras?.errors;
+    this.resetToken = extras?.resetToken;
   }
 }

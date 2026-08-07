@@ -1,7 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { ChevronDown } from 'lucide-react';
+import Link from 'next/link';
+import { ChevronDown, UserRound } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
 function roleLabel(role: string | undefined) {
@@ -57,6 +58,7 @@ export function ConsoleProfileMenu() {
   if (!user) return null;
 
   const label = roleLabel(user.role);
+  const showOrgProfile = user.role === 'admin' && user.accountType === 'b2b';
 
   return (
     <div ref={containerRef} className="relative ml-1 border-l border-gray-200 pl-3">
@@ -90,7 +92,7 @@ export function ConsoleProfileMenu() {
             </button>
           </div>
 
-          <div className="flex gap-4 px-4 py-4">
+          <div className="flex gap-4 border-b border-gray-100 px-4 py-4">
             <UserAvatar email={user.email} size="lg" />
             <div className="min-w-0 flex-1">
               <p className="truncate text-sm font-semibold text-gray-900">{user.email}</p>
@@ -102,6 +104,19 @@ export function ConsoleProfileMenu() {
               </span>
             </div>
           </div>
+
+          {showOrgProfile ? (
+            <div className="p-2">
+              <Link
+                href="/console/profile"
+                onClick={() => setOpen(false)}
+                className="flex items-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50 hover:text-[#B91C1C]"
+              >
+                <UserRound className="h-4 w-4" />
+                Organization profile
+              </Link>
+            </div>
+          ) : null}
         </div>
       )}
     </div>

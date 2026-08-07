@@ -34,9 +34,14 @@ const start = async () => {
   startPricingSyncScheduler();
 
   const port = Number(process.env.PORT || 3005);
-  app.listen(port, () => {
+  const server = app.listen(port, () => {
     console.log(`Cloud Automation Reseller running on port ${port}`);
   });
+
+  // /api/select live cloud fan-out can exceed Node's default 5m requestTimeout.
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.timeout = 0;
 };
 
 start();
