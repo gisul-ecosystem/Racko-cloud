@@ -15,6 +15,8 @@ export interface ParsedVmHostLeaseRow {
   invoiceDate: Date;
   dueDate: Date;
   assignedTo: string;
+  clientAssignmentStartDate: Date | null;
+  clientAssignmentEndDate: Date | null;
   vmUsername: string;
   vmPassword: string;
   rowNumber: number;
@@ -32,6 +34,8 @@ const HEADER_ALIASES: Record<keyof Omit<ParsedVmHostLeaseRow, 'rowNumber'>, stri
   invoiceDate: ['invoice date', 'invoicedate', 'invoice', 'bill date', 'billdate'],
   dueDate: ['due date', 'duedate', 'due', 'expiry', 'expiry date', 'end date', 'enddate'],
   assignedTo: ['assigned to', 'assignedto', 'assigned', 'owner', 'person', 'contact', 'assigned to'],
+  clientAssignmentStartDate: ['client assignment start date', 'client assignment start', 'assignment start date', 'assignment start', 'client start date', 'client start', 'start date'],
+  clientAssignmentEndDate: ['client assignment end date', 'client assignment end', 'assignment end date', 'assignment end', 'client end date', 'client end', 'end date'],
   vmUsername: ['vm username', 'vm user', 'vmusername', 'vm login'],
   vmPassword: ['vm password', 'vm pass', 'vmpassword', 'password', 'pass', 'passwd'],
 };
@@ -148,7 +152,7 @@ export function parseVmHostLeaseWorkbook(buffer: Buffer): UploadParseResult {
 
   if (missing.length > 0) {
     throw new ValidationError(
-      `Missing required column(s): ${missing.join(', ')}. Expected headers like: Provider, IP Address, Description, Invoice Date, Due Date, VM Password. (Assigned To and VM Username are optional)`
+      `Missing required column(s): ${missing.join(', ')}. Expected headers like: Provider, IP Address, Description, Invoice Date, Due Date, VM Password. (Assigned To, Client Assignment Start Date, Client Assignment End Date, and VM Username are optional)`
     );
   }
 
@@ -165,6 +169,8 @@ export function parseVmHostLeaseWorkbook(buffer: Buffer): UploadParseResult {
     const invoiceDate = parseExcelDate(row[columnMap.invoiceDate!]);
     const dueDate = parseExcelDate(row[columnMap.dueDate!]);
     const assignedTo = cellString(row[columnMap.assignedTo!]);
+    const clientAssignmentStartDate = parseExcelDate(row[columnMap.clientAssignmentStartDate!]);
+    const clientAssignmentEndDate = parseExcelDate(row[columnMap.clientAssignmentEndDate!]);
     const vmUsername = cellString(row[columnMap.vmUsername!]);
     const vmPassword = cellString(row[columnMap.vmPassword!]);
 
@@ -185,13 +191,21 @@ export function parseVmHostLeaseWorkbook(buffer: Buffer): UploadParseResult {
       continue;
     }
 
+    if (clientAssignmentStartDate && clientAssignmentEndDate && 
+        clientAssignmentEndDate.getTime() < clientAssignmentStartDate.getTime()) {
+      errors.push({ rowNumber, message: 'Assignment End Date must be on or after Assignment Start Date.' });
+      continue;
+    }
+
     rows.push({ 
       provider: provider || 'N/A', 
       ipAddress, 
       description: description || 'N/A', 
       invoiceDate: invoiceDate || new Date(), 
       dueDate, 
-      assignedTo: assignedTo || 'N/A', 
+      assignedTo: assignedTo || 'N/A',
+      clientAssignmentStartDate: clientAssignmentStartDate || null,
+      clientAssignmentEndDate: clientAssignmentEndDate || null,
       vmUsername: vmUsername || 'N/A', 
       vmPassword: vmPassword || 'N/A', 
       rowNumber 
@@ -210,6 +224,8 @@ function serializeLease(lease: IVmHostLease) {
     invoiceDate: (lease.invoiceDate || (lease as any).startDate || new Date()).toISOString(),
     dueDate: (lease.dueDate || (lease as any).endDate || new Date()).toISOString(),
     assignedTo: lease.assignedTo || 'N/A',
+    clientAssignmentStartDate: lease.clientAssignmentStartDate?.toISOString() || null,
+    clientAssignmentEndDate: lease.clientAssignmentEndDate?.toISOString() || null,
     vmUsername: lease.vmUsername || (lease as any).username || 'N/A',
     vmPassword: lease.vmPassword || (lease as any).password || 'N/A',
     uploadedBy: lease.uploadedBy.toString(),
@@ -231,7 +247,7 @@ export class VmHostLeaseService {
         // Exact match for IP address for better performance
         filter.ipAddress = q;
       } else {
-        // Use text search for provider and assignedTo
+        // Use text search for provider, assignedTo, description, and ipAddress
         filter.$text = { $search: q };
       }
     }
@@ -278,6 +294,8 @@ export class VmHostLeaseService {
     if (input.invoiceDate !== undefined) lease.invoiceDate = input.invoiceDate;
     if (input.dueDate !== undefined) lease.dueDate = input.dueDate;
     if (input.assignedTo !== undefined) lease.assignedTo = input.assignedTo;
+    if (input.clientAssignmentStartDate !== undefined) lease.clientAssignmentStartDate = input.clientAssignmentStartDate;
+    if (input.clientAssignmentEndDate !== undefined) lease.clientAssignmentEndDate = input.clientAssignmentEndDate;
     if (input.vmUsername !== undefined) lease.vmUsername = input.vmUsername;
     if (input.vmPassword !== undefined) lease.vmPassword = input.vmPassword;
 
@@ -285,6 +303,11 @@ export class VmHostLeaseService {
     const dueDate = lease.dueDate;
     if (dueDate.getTime() < invoiceDate.getTime()) {
       throw new ValidationError('Due Date must be on or after Invoice Date.');
+    }
+
+    if (lease.clientAssignmentStartDate && lease.clientAssignmentEndDate &&
+        lease.clientAssignmentEndDate.getTime() < lease.clientAssignmentStartDate.getTime()) {
+      throw new ValidationError('Assignment End Date must be on or after Assignment Start Date.');
     }
 
     // If due date changed, allow a new reminder for the new due date.
@@ -330,6 +353,8 @@ export class VmHostLeaseService {
             invoiceDate: row.invoiceDate,
             dueDate: row.dueDate,
             assignedTo: row.assignedTo,
+            clientAssignmentStartDate: row.clientAssignmentStartDate,
+            clientAssignmentEndDate: row.clientAssignmentEndDate,
             vmUsername: row.vmUsername,
             vmPassword: row.vmPassword,
             sourceFileName,

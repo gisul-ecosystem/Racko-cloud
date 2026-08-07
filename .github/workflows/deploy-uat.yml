@@ -214,6 +214,19 @@ jobs:
           GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} \
           go build -ldflags "$LDFLAGS" -o dist/${{ matrix.output }} .
 
+      - name: Build racko-app GUI binary (Windows only)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          dotnet publish racko-app/RackoApp.csproj `
+            -c Release `
+            -r win-x64 `
+            --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:PublishReadyToRun=true `
+            -o racko-app/publish
+          Copy-Item "racko-app/publish/racko-app.exe" "agent/dist/racko-app.exe"
+
       - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
         working-directory: agent
@@ -251,6 +264,7 @@ jobs:
             agent/dist/checksum-${{ matrix.platform }}.txt
             agent/dist/agent-version.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
+            ${{ matrix.platform == 'windows' && 'agent/dist/racko-app.exe' || '' }}
           retention-days: 1
 
   deploy-agent:
@@ -288,6 +302,9 @@ jobs:
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
+          scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
+            agent-artifacts/agent-windows/racko-app.exe \
+            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-app.exe"
           echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
 
   deploy:

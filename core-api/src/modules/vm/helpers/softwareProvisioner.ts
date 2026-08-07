@@ -5,6 +5,7 @@ import { VMEvent } from '../vmEvent.model';
 import { softwareService } from '../../software/software.service';
 import { classifyHyperVError } from './hypervErrors';
 import { decodeAgentOutput } from './hypervGuestOutput';
+import { powershellCommandArgv } from './guestAgentExec';
 import { proxmoxClient } from '../../../utils/proxmoxClient';
 import { config } from '../../../config';
 import type { SoftwareInstallStatus } from '../vm.types';
@@ -309,7 +310,7 @@ export async function runPowerShell(
   softwareId?: mongoose.Types.ObjectId,
   context?: { jobId?: string }
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
-  const command = ['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script];
+  const command = powershellCommandArgv(script);
   const startedAt = Date.now();
   const deadline = startedAt + config.HYPERV_EXEC_DEADLINE_MS;
   const isSysprep = label === 'sysprep';

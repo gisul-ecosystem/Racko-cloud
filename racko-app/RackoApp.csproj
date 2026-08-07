@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- WinForms only — no WPF. Works on Win10/11/Server 2016/2019/2022/Core -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>racko-app</AssemblyName>
+    <RootNamespace>RackoApp</RootNamespace>
+    <ApplicationIcon>Assets\racko.ico</ApplicationIcon>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!-- Single self-contained exe — no .NET runtime needed on the VM -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\racko.ico" />
+  </ItemGroup>
+
+</Project>

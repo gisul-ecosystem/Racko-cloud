@@ -22,6 +22,8 @@ import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
 import { machineRouter, agentRouter } from './modules/machine-manager/machine-manager.routes';
+import { agentSharedFilesRouter, adminSharedFilesRouter } from './modules/shared-files/shared-files.routes';
+import machineGroupsRoutes from './modules/machine-groups/machine-groups.routes';
 import softwareCatalogRoutes from './modules/software-catalog/software-catalog.routes';
 import internalTenantRoutes from './modules/tenant/internalTenant.routes';
 import tenantRoutes from './modules/tenant/tenant.routes';
@@ -197,6 +199,12 @@ app.use('/api/v1/notifications', notificationRoutes);
 app.use('/api/v1/admin-vm-templates', adminVmTemplateRoutes);
 app.use('/api/v1/machines', machineRouter);
 app.use('/api/v1/agent', agentRouter);
+app.use('/api/v1/agent/shared-files', agentSharedFilesRouter);
+app.use('/api/v1/shared-files', adminSharedFilesRouter);
+app.use('/api/v1/machine-groups', machineGroupsRoutes);
+// machines-for-app is inside agentSharedFilesRouter at /machines-for-app
+// so the full path is /api/v1/agent/shared-files/machines-for-app
+// The Go client is updated to use this path
 app.use('/api/v1/vm-host-leases', vmHostLeaseRoutes);
 app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 app.use('/api/v1/ip-pool', ipPoolRoutes);

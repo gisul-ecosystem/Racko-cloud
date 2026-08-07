@@ -119,6 +119,42 @@ class MachineManagerService {
     return this.toMachineResponse(doc);
   }
 
+  async bulkDeleteMachines(
+    machineIds: string[],
+    adminId: mongoose.Types.ObjectId
+  ): Promise<{ deleted: string[]; failed: { machineId: string; error: string }[] }> {
+    const deleted: string[] = [];
+    const failed: { machineId: string; error: string }[] = [];
+
+    await Promise.all(
+      machineIds.map(async (machineId) => {
+        try {
+          const id = new mongoose.Types.ObjectId(machineId);
+          await this.deleteMachine(id, adminId);
+          deleted.push(machineId);
+        } catch (err) {
+          failed.push({
+            machineId,
+            error: err instanceof Error ? err.message : 'Unknown error',
+          });
+          logger.warn('[MachineManager] Bulk delete — single machine failed', {
+            machineId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      })
+    );
+
+    logger.info('[MachineManager] Bulk delete completed', {
+      requested: machineIds.length,
+      deleted: deleted.length,
+      failed: failed.length,
+      adminId: adminId.toString(),
+    });
+
+    return { deleted, failed };
+  }
+
   async deleteMachine(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId
@@ -151,6 +187,19 @@ class MachineManagerService {
     if (doc.agentId) {
       wsManager.closeConnection(doc.agentId, 4010, 'Machine deleted');
     }
+
+    // Clean up all related data so nothing orphans in the database
+    await JobModel.deleteMany({ machineId: id });
+
+    const { MachineActivityModel } = await import('../../models/machineActivity.model');
+    await MachineActivityModel.deleteMany({ machineId: id });
+
+    const { MachineBaselineModel } = await import('../../models/machineBaseline.model');
+    await MachineBaselineModel.deleteMany({ machineId: id });
+
+    logger.info('[MachineManager] Cleaned up related data for deleted machine', {
+      machineId: id.toString(),
+    });
   }
 
   // ─── Jobs ──────────────────────────────────────────────────────────────────
@@ -624,7 +673,8 @@ class MachineManagerService {
   async pushAgentToVMs(
     vms: Array<{ name: string; ipAddress: string; os: import('./machine-manager.model').MachineOS; username: string; password: string }>,
     adminId: mongoose.Types.ObjectId,
-    sessionId: string
+    sessionId: string,
+    groupId?: string,
   ): Promise<{ machines: MachineResponse[]; pushResults: import('./vm-push.service').VMPushResult[] }> {
     const { vmPushService } = await import('./vm-push.service');
     const { emitPushEvent } = await import('./push.events');
@@ -637,6 +687,31 @@ class MachineManagerService {
         adminId
       );
       machines.push(machine);
+    }
+
+    // Step 2: If a groupId was provided, add the new machines to the group
+    if (groupId) {
+      try {
+        const gid = new mongoose.Types.ObjectId(groupId);
+        const { MachineGroupModel } = await import('../../models/machineGroup.model');
+        const group = await MachineGroupModel.findOne({ _id: gid, adminId });
+        if (group) {
+          const newIds = machines.map((m) => new mongoose.Types.ObjectId(m._id));
+          const existingSet = new Set(group.machineIds.map((id) => id.toString()));
+          for (const oid of newIds) {
+            if (!existingSet.has(oid.toString())) group.machineIds.push(oid);
+          }
+          await group.save();
+          // Set groupId on the machine records
+          await MachineModel.updateMany(
+            { _id: { $in: newIds } },
+            { groupId: gid },
+          );
+          logger.info('[MachineManager] Pushed machines added to group', { groupId, count: machines.length });
+        }
+      } catch (err) {
+        logger.warn('[MachineManager] Failed to assign group to pushed machines (non-fatal)', { err });
+      }
     }
 
     // Register this session so agent heartbeat/WS can emit agent_connected events

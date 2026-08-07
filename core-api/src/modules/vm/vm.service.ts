@@ -32,6 +32,7 @@ import { decrypt } from '../../utils/crypto';
 import { ProxmoxNodeService } from '../proxmoxNode/proxmoxNode.service';
 import { config } from '../../config';
 import { isWindowsOsType } from './helpers/hypervProvisioner';
+import { runGuestPowerShellOnce } from './helpers/guestAgentExec';
 import { scheduleHyperVEnable, scheduleHyperVDisable } from './helpers/hypervQueue';
 import { isHyperVInProgress, updateHyperVStatus } from './helpers/hypervStatus';
 import { softwareService } from '../software/software.service';
@@ -51,6 +52,8 @@ import {
   VMOperationError,
   TemplateNotFoundError,
   InsufficientResourcesError,
+  ProxmoxConnectionError,
+  ProxmoxAuthError,
 } from '../../utils/errors';
 import {
   parseAccessScheduleInput,
@@ -123,6 +126,22 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Surface ProxmoxConnectionError/AuthError internals in fixup logs (public message is sanitized). */
+function proxmoxErrFields(err: unknown): Record<string, unknown> {
+  if (err instanceof ProxmoxConnectionError) {
+    return {
+      error: err.message,
+      internalMessage: err.internalMessage,
+      httpStatus: err.httpStatus,
+      isRetryable: err.isRetryable,
+    };
+  }
+  if (err instanceof ProxmoxAuthError) {
+    return { error: err.message, code: err.code };
+  }
+  return { error: err instanceof Error ? err.message : String(err) };
+}
+
 /**
  * Console passwords for private-network VMs are stored AES-256-CBC encrypted
  * (see bulkProcessor.ts createSingleVM). Public-network VMs keep the existing
@@ -162,19 +181,22 @@ interface ConsolePollOptions {
  * network config on clones (some base templates carry over a NIC config
  * baked in at capture time), so the clone can boot with a stale/wrong
  * address instead of the freshly-allocated custnet1 address. This is a
- * one-shot guest-exec fallback for PRIVATE Windows VMs only: force the
- * primary "Up" adapter (named "Ethernet" on these templates) onto the
- * assigned static IP/gateway/DNS/MTU via `netsh`.
+ * guest-exec fallback for PRIVATE Windows VMs only: force the primary "Up"
+ * adapter (named "Ethernet" on these templates) onto the assigned static
+ * IP/gateway/DNS/MTU via `netsh`.
  *
- * Deliberately uses `netsh interface ipv4 set address ... static` rather
- * than New-NetIPAddress/Remove-NetIPAddress: on a guest that already has a
- * default-gateway route (always true here), New-NetIPAddress -DefaultGateway
- * throws "Instance DefaultGateway already exists" (Win32 error 87) — Remove
- * succeeds, New fails, and the adapter is left with NO IPv4 address at all,
- * which is worse than the original mismatch. `netsh set address` replaces
- * the address + gateway atomically in one call and is naturally idempotent
- * (re-running with the same values is a no-op), so no "only if not already
- * set" guard is needed.
+ * Deliberately uses `netsh interface ipv4 set address ... static` (via the
+ * shared guestAgentExec helper) rather than PowerShell networking cmdlets that
+ * fail when a default-gateway route already exists: those leave the adapter
+ * with no IPv4 at all, which is worse than the original mismatch. `netsh set
+ * address` replaces the address + gateway atomically in one call and is
+ * naturally idempotent (re-running with the same values is a no-op), so no
+ * "only if not already set" guard is needed.
+ *
+ * Verifies the GUEST-side result via agent/exec-status (exitCode + stdout/
+ * stderr). If no "Up" adapter is ready yet the script exits 2 with
+ * NO_ADAPTER — treated as "not done" so the next poll attempt retries.
+ * Success is only logged when exitCode is 0 and an adapter was configured.
  *
  * Best-effort only — never throws. A failure here must not block the
  * console-readiness poll from continuing to retry.
@@ -188,27 +210,48 @@ async function fixPrivateNetworkGuestIp(
   try {
     const subnetMask = '255.255.0.0'; // custnet1 is a flat /16 — see bulkProcessor.ts ipconfig0
     const mtu = 1400; // custnet1/VXLAN carries 1450 — 1400 leaves headroom and matches net0's mtu=1400
-    const command =
+    // Exit 2 + NO_ADAPTER when no NIC is Up yet so callers can retry instead
+    // of treating a silent no-op as success.
+    const script =
       `$ip='${assignedIp}'; $gw='${gateway}'; $mask='${subnetMask}'; $mtu=${mtu}; ` +
       "$adapter = Get-NetAdapter | Where-Object { $_.Status -eq 'Up' } | Select-Object -First 1; " +
-      'if ($adapter) { ' +
+      "if (-not $adapter) { Write-Output 'NO_ADAPTER'; exit 2 }; " +
       "netsh interface ipv4 set address name=\"$($adapter.Name)\" static $ip $mask $gw | Out-Null; " +
       "netsh interface ipv4 set dns name=\"$($adapter.Name)\" static 8.8.8.8 | Out-Null; " +
       // Same adapter selected above — the guacd RDP graphics pipeline times out over the
       // 1450-byte custnet1/VXLAN path without this, even though the IP itself is reachable.
-      "netsh interface ipv4 set subinterface \"$($adapter.Name)\" mtu=$mtu store=persistent | Out-Null " +
-      '};';
+      "netsh interface ipv4 set subinterface \"$($adapter.Name)\" mtu=$mtu store=persistent | Out-Null; " +
+      "Write-Output ('OK:' + $adapter.Name);";
 
-    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
-      command: 'powershell.exe',
-      args: ['-Command', command],
+    const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
+      logLabel: 'VMConsolePoll',
     });
+
+    // NO_ADAPTER (exit 2) or any non-zero exit — NIC not ready / netsh failed.
+    // Do NOT log success; startIpPolling will re-invoke on the next attempt.
+    if (exitCode !== 0 || stdout.includes('NO_ADAPTER')) {
+      logger.warn('[VMConsolePoll] Private-network guest IP fixup — not done (will retry)', {
+        node,
+        vmid,
+        pid,
+        exitCode,
+        stdout: stdout.slice(0, 1000),
+        stderr: stderr.slice(0, 1000),
+        assignedIp,
+        gateway,
+      });
+      return;
+    }
+
     logger.info('[VMConsolePoll] Private-network guest IP + MTU fixup executed (netsh)', {
       node,
       vmid,
       assignedIp,
       gateway,
       mtu,
+      pid,
+      exitCode,
+      stdout: stdout.slice(0, 500),
     });
   } catch (err) {
     logger.warn('[VMConsolePoll] Private-network guest IP + MTU fixup failed — continuing anyway', {
@@ -216,7 +259,7 @@ async function fixPrivateNetworkGuestIp(
       vmid,
       assignedIp,
       gateway,
-      error: err instanceof Error ? err.message : String(err),
+      ...proxmoxErrFields(err),
     });
   }
 }
@@ -231,25 +274,28 @@ async function fixPrivateNetworkGuestIp(
 async function fixWindowsPasswordPolicy(node: string, vmid: number, username: string): Promise<void> {
   try {
     const safeUsername = username.replace(/["'$`]/g, '');
-    const command =
+    const script =
       `Set-LocalUser -Name '${safeUsername}' -PasswordNeverExpires $true -ErrorAction SilentlyContinue; ` +
       `net user "${safeUsername}" /logonpasswordchg:no`;
 
-    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
-      command: 'powershell.exe',
-      args: ['-Command', command],
+    const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
+      logLabel: 'VMConsolePoll',
     });
     logger.info('[VMConsolePoll] Windows password-policy fixup executed', {
       node,
       vmid,
       username: safeUsername,
+      pid,
+      exitCode,
+      stdout: stdout.slice(0, 500),
+      stderr: stderr.slice(0, 500),
     });
   } catch (err) {
     logger.warn('[VMConsolePoll] Windows password-policy fixup failed — continuing anyway', {
       node,
       vmid,
       username,
-      error: err instanceof Error ? err.message : String(err),
+      ...proxmoxErrFields(err),
     });
   }
 }
@@ -276,19 +322,25 @@ async function fixWindowsPasswordPolicy(node: string, vmid: number, username: st
  */
 async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
   try {
-    await proxmoxClient.post<{ data: string }>(`/nodes/${node}/qemu/${vmid}/agent/exec`, {
-      command: 'powershell.exe',
-      args: [
-        '-Command',
-        "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0; $nlm = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'{DCB00C01-570F-4A9B-8D69-199FDBA5723B}')); $nlm.GetNetworkConnections() | ForEach-Object { $_.GetNetwork().SetCategory(1) };",
-      ],
+    const script =
+      "Enable-LocalUser -Name 'Administrator'; Set-LocalUser -Name 'Administrator' -PasswordNeverExpires $true; $user = [ADSI]'WinNT://./Administrator,user'; $user.PasswordExpired = 0; $user.SetInfo(); Add-LocalGroupMember -Group 'Remote Desktop Users' -Member 'Administrator' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server' -Name fDenyTSConnections -Value 0 -ErrorAction SilentlyContinue; Enable-NetFirewallRule -DisplayGroup 'Remote Desktop' -ErrorAction SilentlyContinue; Set-ItemProperty 'HKLM:\\System\\CurrentControlSet\\Control\\Terminal Server\\WinStations\\RDP-Tcp' -Name UserAuthentication -Value 0; $nlm = [Activator]::CreateInstance([Type]::GetTypeFromCLSID([Guid]'{DCB00C01-570F-4A9B-8D69-199FDBA5723B}')); $nlm.GetNetworkConnections() | ForEach-Object { $_.GetNetwork().SetCategory(1) };";
+
+    const { pid, exitCode, stdout, stderr } = await runGuestPowerShellOnce(node, vmid, script, {
+      logLabel: 'VMConsolePoll',
     });
-    logger.info('[VMConsolePoll] Windows RDP access fixup executed', { node, vmid });
+    logger.info('[VMConsolePoll] Windows RDP access fixup executed', {
+      node,
+      vmid,
+      pid,
+      exitCode,
+      stdout: stdout.slice(0, 500),
+      stderr: stderr.slice(0, 500),
+    });
   } catch (err) {
     logger.warn('[VMConsolePoll] Windows RDP access fixup failed — continuing anyway', {
       node,
       vmid,
-      error: err instanceof Error ? err.message : String(err),
+      ...proxmoxErrFields(err),
     });
   }
 }
@@ -309,13 +361,16 @@ async function fixWindowsRdpAccess(node: string, vmid: number): Promise<void> {
  * ipconfig0 on a /16), so we deliberately verify the assigned address actually
  * came up rather than assuming cloud-init succeeded — an exact match, never a
  * prefix check, so a stray address on the same subnet can't false-positive.
- * If the assigned IP hasn't shown up by the second attempt and the VM is a
- * Windows/RDP guest, we force-apply the full set of no-reboot console
- * prerequisites via guest-exec (cloudbase-init doesn't always re-run network
- * config on clones, and the IP alone isn't enough for Guacamole to connect):
- * fixPrivateNetworkGuestIp() (static IP + same-adapter MTU), then
+ * After attempt 1 (cloud-init's natural first chance), if the assigned IP still
+ * hasn't shown up and the VM is a Windows/RDP guest, we force-apply the full
+ * set of no-reboot console prerequisites via guest-exec on EVERY subsequent
+ * attempt until the guest reports vm.ipAddress (cloudbase-init doesn't always
+ * re-run network config on clones, and the IP alone isn't enough for Guacamole
+ * to connect): fixPrivateNetworkGuestIp() (static IP + same-adapter MTU), then
  * fixWindowsRdpAccess() (RDP enabled/firewall/NLA/admin unlock), then
  * fixWindowsPasswordPolicy() (no forced password-change/expiry surprises).
+ * Each attempt's guest-agent query + fixup is wrapped in try/catch so a
+ * transient throw never aborts the poll loop.
  *
  * All Proxmox/agent errors are swallowed and retried — this never throws and
  * never blocks the caller (the start API responds immediately; readiness
@@ -398,18 +453,26 @@ async function startIpPolling(
           allIpv4Seen: seenIps,
         });
 
-        // Give cloud-init one natural attempt (the initial wait + one retry
-        // interval), then force the remaining no-reboot console prerequisites
-        // via guest-exec — cloudbase-init on Windows is known to skip
-        // re-applying ipconfig0 on some base templates, and testing showed
-        // the IP alone isn't sufficient for Guacamole to actually connect.
-        // fEnableWddmDriver is deliberately NOT touched here — it requires a
-        // reboot and must be set in the template, not fixed at runtime.
-        if (vm.consoleProtocol === 'rdp' && vm.ipAddress && attempt === 2) {
-          await fixPrivateNetworkGuestIp(node, vmid, vm.ipAddress, config.PRIVATE_POOL_GATEWAY); // IP + same-adapter MTU
-          await fixWindowsRdpAccess(node, vmid); // RDP enabled + firewall + NLA + admin unlocked
-          if (vm.consoleUsername) {
-            await fixWindowsPasswordPolicy(node, vmid, vm.consoleUsername); // no "credentials expired" surprises
+        // Skip attempt 1 so cloud-init gets one natural chance. From attempt 2
+        // onward keep re-applying the no-reboot console prerequisites until
+        // exactMatchFound — a prior one-shot attempt===2 gate meant a single
+        // transient guest-agent throw permanently skipped the fixup for the
+        // whole poll cycle. fEnableWddmDriver is deliberately NOT touched here
+        // — it requires a reboot and must be set in the template, not fixed
+        // at runtime.
+        if (attempt >= 2 && vm.consoleProtocol === 'rdp' && vm.ipAddress) {
+          try {
+            await fixPrivateNetworkGuestIp(node, vmid, vm.ipAddress, config.PRIVATE_POOL_GATEWAY); // IP + same-adapter MTU
+            await fixWindowsRdpAccess(node, vmid); // RDP enabled + firewall + NLA + admin unlocked
+            if (vm.consoleUsername) {
+              await fixWindowsPasswordPolicy(node, vmid, vm.consoleUsername); // no "credentials expired" surprises
+            }
+          } catch (fixupErr) {
+            logger.warn('[VMConsolePoll] Private-VM fixup threw — will retry next attempt', {
+              vmid,
+              attempt,
+              error: fixupErr instanceof Error ? fixupErr.message : String(fixupErr),
+            });
           }
         }
       } else {
@@ -439,6 +502,7 @@ async function startIpPolling(
       }
     } catch (err) {
       // Guest agent not ready yet, VM still booting, transient Proxmox error, etc.
+      // Log and continue — a throw on one attempt must not abort the poll loop.
       logger.warn('[VMConsolePoll] Guest-agent poll failed — will retry', {
         vmId: vmObjectId.toString(),
         vmid,

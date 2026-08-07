@@ -9,6 +9,7 @@ import {
   Server,
   Briefcase,
   Wand2,
+  Layers,
 } from 'lucide-react';
 
 interface NavLink {
@@ -22,6 +23,11 @@ const navLinks: NavLink[] = [
     href: '/console/machine-manager',
     label: 'Overview',
     icon: <LayoutDashboard className="h-4 w-4" />,
+  },
+  {
+    href: '/console/machine-manager/groups',
+    label: 'Groups',
+    icon: <Layers className="h-4 w-4" />,
   },
   {
     href: '/console/machine-manager/setup',

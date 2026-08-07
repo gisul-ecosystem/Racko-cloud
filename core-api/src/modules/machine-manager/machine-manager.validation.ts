@@ -83,6 +83,7 @@ export const pushAgentSchema = z.object({
   body: z.object({
     vms: z.array(vmPushBody).min(1).max(50),
     sessionId: z.string().optional(),
+    groupId: z.string().optional(),   // optional — assign pushed machines to this group
   }),
 });
 
@@ -121,8 +122,18 @@ export const agentHeartbeatSchema = z.object({
   }),
 });
 
+export const bulkDeleteMachineSchema = z.object({
+  body: z.object({
+    machineIds: z
+      .array(mongoObjectId)
+      .min(1, 'At least one machine is required')
+      .max(100, 'Cannot delete more than 100 machines at once'),
+  }),
+});
+
 export type CreateMachineInput = z.infer<typeof createMachineSchema>['body'];
 export type BulkCreateMachineInput = z.infer<typeof bulkCreateMachineSchema>['body'];
+export type BulkDeleteMachineInput = z.infer<typeof bulkDeleteMachineSchema>['body'];
 export type CreateJobInput = z.infer<typeof createJobSchema>['body'];
 export type AgentRegisterInput = z.infer<typeof agentRegisterSchema>['body'];
 export type AgentJobResultInput = z.infer<typeof agentJobResultSchema>['body'];
