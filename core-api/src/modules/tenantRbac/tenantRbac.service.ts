@@ -11,6 +11,7 @@ import {
 import { hashPassword } from '../../utils/argon2';
 import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { sendTenantOperatorInviteEmail } from '../../utils/email/sender';
+import { generateInvitePassword } from '../../utils/generateInvitePassword';
 import { TenantServiceConfig } from '../../models/tenantServiceConfig.model';
 import type { ServiceKey } from '../../constants/serviceCatalog';
 import {
@@ -340,29 +341,27 @@ class TenantRbacService {
 
   async inviteOperator(
     tenantId: string,
-    input: { email: string; temporaryPassword: string; roleIds: string[] },
+    input: { email: string; roleIds: string[] },
     actorId: string
   ) {
     const email = input.email.toLowerCase().trim();
     const existing = await TenantUser.findOne({ tenantId, email }).select('_id').lean();
     if (existing) throw new ConflictError('Email already in use.');
 
-    if (!input.temporaryPassword || input.temporaryPassword.length < 8) {
-      throw new ValidationError('Temporary password must be at least 8 characters.');
-    }
     if (!input.roleIds?.length) {
       throw new ValidationError('Select at least one role for the operator.');
     }
 
     await this.ensureTenantRoles(tenantId);
 
+    const temporaryPassword = generateInvitePassword();
     const rawVerifyToken = generateSecureToken(32);
     const inviteExpiresAt = new Date(Date.now() + CONSOLE_INVITE_TOKEN_TTL_MS);
 
     const user = await TenantUser.create({
       tenantId: new mongoose.Types.ObjectId(tenantId),
       email,
-      passwordHash: await hashPassword(input.temporaryPassword),
+      passwordHash: await hashPassword(temporaryPassword),
       role: 'tenant_user',
       isConsoleOperator: true,
       isActive: true,
@@ -381,7 +380,7 @@ class TenantRbacService {
         await sendTenantOperatorInviteEmail({
           to: email,
           email,
-          tempPassword: input.temporaryPassword,
+          tempPassword: temporaryPassword,
           verifyToken: rawVerifyToken,
           inviteKind: 'operator',
           tenant: {

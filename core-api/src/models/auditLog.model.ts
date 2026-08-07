@@ -18,7 +18,10 @@ export type AuditEvent =
   | 'PASSWORD_CHANGE'
   | 'WALLET_MANUAL_CREDIT'
   | 'PASSWORD_RESET_REQUESTED'
-  | 'PASSWORD_RESET_SUCCESS';
+  | 'PASSWORD_RESET_SUCCESS'
+  | 'ORG_ADMIN_ONBOARDED'
+  | 'ORG_ADMIN_INVITE_SENT'
+  | 'ORG_ADMIN_DELETED';
 
 export interface IAuditLog extends Document {
   _id: mongoose.Types.ObjectId;
@@ -60,6 +63,9 @@ const auditLogSchema = new Schema<IAuditLog>(
         'WALLET_MANUAL_CREDIT',
         'PASSWORD_RESET_REQUESTED',
         'PASSWORD_RESET_SUCCESS',
+        'ORG_ADMIN_ONBOARDED',
+        'ORG_ADMIN_INVITE_SENT',
+        'ORG_ADMIN_DELETED',
       ],
       index: true,
     },

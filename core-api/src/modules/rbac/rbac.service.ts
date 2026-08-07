@@ -7,6 +7,7 @@ import { AppError, NotFoundError, ValidationError, ForbiddenError } from '../../
 import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { config } from '../../config';
 import { sendStaffInviteEmail } from '../../utils/email/sender';
+import { generateInvitePassword } from '../../utils/generateInvitePassword';
 import {
   PERMISSION_CATALOG,
   SYSTEM_ROLE_SEEDS,
@@ -455,7 +456,6 @@ class RbacService {
   async createStaffUser(
     input: {
       email: string;
-      tempPassword?: string;
       roleIds?: string[];
       promoteExisting?: boolean;
     },
@@ -483,10 +483,7 @@ class RbacService {
       return this.promoteExistingUserToStaff(existing, input.roleIds, actorId);
     }
 
-    const tempPassword = input.tempPassword;
-    if (!tempPassword) {
-      throw new ValidationError('A temporary password is required to invite a new staff user.');
-    }
+    const tempPassword = generateInvitePassword();
 
     const rawVerifyToken = generateSecureToken(32);
     const rawResetToken = generateSecureToken(32);
