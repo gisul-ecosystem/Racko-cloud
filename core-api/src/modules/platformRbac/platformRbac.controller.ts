@@ -154,7 +154,7 @@ export class PlatformRbacController {
       }
       const user = await platformRbacService.inviteOperator(
         ctx.orgId,
-        req.body as { email: string; temporaryPassword: string; roleIds: string[] },
+        req.body as { email: string; roleIds: string[] },
         ctx.subjectId
       );
       success(res, 'Operator invited.', { user }, 201);

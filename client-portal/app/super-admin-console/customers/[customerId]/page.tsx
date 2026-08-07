@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import {
   ArrowDownLeft,
   ArrowLeft,
   ArrowUpRight,
   CheckCircle2,
   Loader2,
+  Trash2,
   Users,
   Wallet,
   XCircle,
@@ -42,6 +43,8 @@ import type { ICatalogVm } from '@/lib/vmCatalogApi';
 import type { IDedicatedServer } from '@/lib/dedicatedServerApi';
 import type { IVM } from '@/lib/vmApi';
 import { CustomerProjectsPanel } from '@/components/super-admin-console/CustomerProjectsPanel';
+import { DeleteOrganizationModal } from '@/components/super-admin-console/DeleteOrganizationModal';
+import { useAuth } from '@/context/AuthContext';
 
 type Tab = 'overview' | 'services' | 'projects' | 'billing' | 'usage' | 'team';
 
@@ -164,11 +167,15 @@ function CloudLabRequestsTable({
 
 export default function CustomerDetailPage() {
   const params = useParams();
+  const router = useRouter();
+  const { user: authUser } = useAuth();
+  const isSuperAdmin = authUser?.role === 'super_admin';
   const customerId = typeof params?.customerId === 'string' ? params.customerId : '';
 
   const [tab, setTab] = useState<Tab>('overview');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
 
   const [profile, setProfile] = useState<CustomerProfile | null>(null);
   const [wallet, setWallet] = useState<AdminWallet | null>(null);
@@ -357,11 +364,23 @@ export default function CustomerDetailPage() {
               ) : null}
             </div>
           </div>
-          <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
-            <p className="text-xs text-gray-500">Wallet balance</p>
-            <p className="mt-0.5 text-lg font-semibold text-gray-900">
-              {wallet ? formatMoney(wallet.balance) : '—'}
-            </p>
+          <div className="flex flex-wrap items-center gap-3">
+            {isSuperAdmin && profile.accountType === 'b2b' && profile.role === 'admin' ? (
+              <button
+                type="button"
+                onClick={() => setDeleteOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-white px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-50"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+                Delete organization
+              </button>
+            ) : null}
+            <div className="rounded-xl border border-gray-200 bg-white px-4 py-3 shadow-sm">
+              <p className="text-xs text-gray-500">Wallet balance</p>
+              <p className="mt-0.5 text-lg font-semibold text-gray-900">
+                {wallet ? formatMoney(wallet.balance) : '—'}
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -752,6 +771,15 @@ export default function CustomerDetailPage() {
           </p>
         </section>
       ) : null}
+
+      <DeleteOrganizationModal
+        open={deleteOpen}
+        user={{ id: profile.id, email: profile.email }}
+        onClose={() => setDeleteOpen(false)}
+        onDeleted={() => {
+          router.push('/super-admin-console/customers?filter=organization');
+        }}
+      />
     </div>
   );
 }

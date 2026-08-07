@@ -6,7 +6,8 @@ import type { NextRequest } from 'next/server';
  * Checks for refreshToken cookie as session indicator.
  * Access token is in memory — middleware uses cookie presence as proxy.
  *
- * Protected: /dashboard/*
+ * Protected: /dashboard/*, /console/* (non-tenant), /super-admin-console/*,
+ *            /onboarding/*, /request, /status/*
  * Auth routes: /login, /register (redirect to dashboard if session exists)
  */
 function isTenantWorkspacePath(pathname: string): boolean {
@@ -119,11 +120,13 @@ export function middleware(request: NextRequest) {
   // Check session via refreshToken cookie presence
   const hasSession = request.cookies.has('refreshToken');
 
-  // Protect console, dashboard, and request builder routes.
+  // Protect console, dashboard, SA console, onboarding, and request builder routes.
   // Tenant workspace under /console/{login,forgot-password,reset-password,dashboard} uses tenant JWT.
   if (
     (pathname.startsWith('/dashboard') ||
       pathname.startsWith('/console') ||
+      pathname.startsWith('/super-admin-console') ||
+      pathname.startsWith('/onboarding') ||
       pathname === '/request' ||
       pathname.startsWith('/status/')) &&
     !isTenantWorkspacePath(pathname)
@@ -155,6 +158,8 @@ export const config = {
     '/dashboard/:path*',
     '/console',
     '/console/:path*',
+    '/super-admin-console',
+    '/super-admin-console/:path*',
     '/tenant',
     '/tenant/:path*',
     '/request',

@@ -168,7 +168,11 @@ export default function OrganizationOnboardingPage() {
   const [officeNational, setOfficeNational] = useState('');
 
   useEffect(() => {
-    if (isLoading || !user) return;
+    if (isLoading) return;
+    if (!isAuthenticated || !user) {
+      router.replace('/login?redirect=/onboarding/organization');
+      return;
+    }
     if (user.accountType !== 'b2b') {
       router.replace(user.role === 'admin' ? '/console' : '/dashboard/user');
       return;
@@ -235,7 +239,7 @@ export default function OrganizationOnboardingPage() {
         setLoadingRequest(false);
       }
     })();
-  }, [isLoading, user, router]);
+  }, [isLoading, isAuthenticated, user, router]);
 
   function updateForm<K extends keyof OrganizationOnboardingForm>(key: K, value: OrganizationOnboardingForm[K]) {
     setForm((prev) => ({ ...prev, [key]: value }));

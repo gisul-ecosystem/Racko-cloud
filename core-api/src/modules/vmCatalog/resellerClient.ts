@@ -75,13 +75,17 @@ async function postReseller<T>(
   path: string,
   body: unknown,
   logLabel: string,
+  /** 0 = no client-side abort (wait until reseller responds). */
   timeoutMs = 300_000
 ): Promise<T> {
   const url = `${resellerBaseUrl()}${path}`;
-  logger.info(`[Reseller] ${logLabel}`, { url });
+  logger.info(`[Reseller] ${logLabel}`, { url, timeoutMs });
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const controller = timeoutMs > 0 ? new AbortController() : null;
+  const timer =
+    controller && timeoutMs > 0
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
 
   try {
     const res = await fetch(url, {
@@ -92,7 +96,7 @@ async function postReseller<T>(
         'X-Internal-Secret': config.INTERNAL_SERVICE_SECRET,
       },
       body: JSON.stringify(body),
-      signal: controller.signal,
+      ...(controller ? { signal: controller.signal } : {}),
     });
 
     const data = (await res.json().catch(() => ({}))) as {
@@ -121,7 +125,7 @@ async function postReseller<T>(
     }
     throw err;
   } finally {
-    clearTimeout(timer);
+    if (timer) clearTimeout(timer);
   }
 }
 
@@ -189,8 +193,8 @@ async function getReseller<T>(
 export async function selectProvider(
   input: ResellerSelectInput
 ): Promise<ResellerSelectResult> {
-  // Live multi-cloud quotes routinely exceed 60s when regions are slow.
-  return postReseller<ResellerSelectResult>('/api/select', input, 'select', 300_000);
+  // Live multi-cloud quotes can take many minutes; do not abort client-side.
+  return postReseller<ResellerSelectResult>('/api/select', input, 'select', 0);
 }
 
 export interface ResellerPricingRow {

@@ -7,6 +7,11 @@ import { logger } from './utils/logger';
 
 const server = http.createServer(app);
 
+// Pricing calculate and other long proxy calls must not hit Node's default 5m requestTimeout.
+server.requestTimeout = 0;
+server.headersTimeout = 0;
+server.timeout = 0;
+
 // Handle WebSocket upgrades for agent connections directly on the HTTP server.
 // This avoids the res.status crash caused by ws:true in http-proxy-middleware.
 const wsProxy = httpProxy.createProxyServer({

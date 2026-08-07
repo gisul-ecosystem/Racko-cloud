@@ -154,7 +154,6 @@ export class TenantRbacController {
       }
       const body = req.body as {
         email: string;
-        temporaryPassword: string;
         roleIds: string[];
       };
       const user = await tenantRbacService.inviteOperator(ctx.tenantId, body, ctx.subjectId);

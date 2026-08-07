@@ -23,6 +23,11 @@ async function bootstrap(): Promise<void> {
     });
   });
 
+  // Live multi-cloud pricing / provision can exceed Node's default 5m requestTimeout.
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.timeout = 0;
+
   // Attach WebSocket server for agent connections
   const { wsManager } = await import('./modules/machine-manager/websocket/wsManager');
   wsManager.attach(server);

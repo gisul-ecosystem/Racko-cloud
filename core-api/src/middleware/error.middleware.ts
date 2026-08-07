@@ -39,6 +39,9 @@ export function globalErrorHandler(
       payload.error = err.message;
       payload.nextWindow = (err as { nextWindow: string | null }).nextWindow;
     }
+    if ('resetToken' in err && typeof (err as { resetToken?: unknown }).resetToken === 'string') {
+      payload.resetToken = (err as { resetToken: string }).resetToken;
+    }
     res.status(err.statusCode).json(payload);
     return;
   }

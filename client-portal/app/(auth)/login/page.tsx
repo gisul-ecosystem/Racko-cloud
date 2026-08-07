@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { z } from 'zod';
 import { AlertCircle, Eye, EyeOff, KeyRound, Mail, MailWarning } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
@@ -157,6 +158,7 @@ function HeroPanel() {
 
 export default function LoginPage() {
   const { login } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -189,6 +191,12 @@ export default function LoginPage() {
     } catch (err) {
       if (err instanceof ApiError) {
         setErrorCode(err.code ?? null);
+        if (err.code === 'PASSWORD_SETUP_REQUIRED' && err.resetToken) {
+          router.replace(
+            `/reset-password?token=${encodeURIComponent(err.resetToken)}&setup=1`
+          );
+          return;
+        }
         if (err.code === 'ACCOUNT_LOCKED') {
           const match = err.message.match(/(\d+) minute/);
           if (match) {
