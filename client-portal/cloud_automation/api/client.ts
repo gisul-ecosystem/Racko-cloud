@@ -483,45 +483,42 @@ export async function fetchProvisionSnapshot(requestId: number): Promise<Provisi
   const roles = Array.isArray(rolesRaw.roles) ? (rolesRaw.roles as ProvisionedRole[]) : [];
 
   const normalizeCohort = (
-    raw: Record<string, unknown> | null | undefined
+    raw: unknown
   ): NonNullable<ProvisionSnapshot['activeCohort']> | null => {
     if (!raw || typeof raw !== 'object') return null;
-    const cohortIndex = Number(raw.cohortIndex ?? raw.cohort_index);
-    const userNumberFrom = Number(raw.userNumberFrom ?? raw.user_number_from);
-    const userNumberTo = Number(raw.userNumberTo ?? raw.user_number_to);
+    const row = raw as Record<string, unknown>;
+    const cohortIndex = Number(row.cohortIndex ?? row.cohort_index);
+    const userNumberFrom = Number(row.userNumberFrom ?? row.user_number_from);
+    const userNumberTo = Number(row.userNumberTo ?? row.user_number_to);
     if (!Number.isFinite(cohortIndex) || !Number.isFinite(userNumberFrom) || !Number.isFinite(userNumberTo)) {
       return null;
     }
     return {
-      id: raw.id != null ? Number(raw.id) : undefined,
+      id: row.id != null ? Number(row.id) : undefined,
       cohortIndex,
       userNumberFrom,
       userNumberTo,
-      status: String(raw.status || 'pending'),
-      currentStep: String(raw.currentStep ?? raw.current_step ?? 'resourceGroup'),
+      status: String(row.status || 'pending'),
+      currentStep: String(row.currentStep ?? row.current_step ?? 'resourceGroup'),
       lastError:
-        (raw.lastError as string | null | undefined) ??
-        (raw.last_error as string | null | undefined) ??
+        (row.lastError as string | null | undefined) ??
+        (row.last_error as string | null | undefined) ??
         null,
       cohortTotal:
-        raw.cohortTotal != null
-          ? Number(raw.cohortTotal)
-          : raw.cohort_total != null
-            ? Number(raw.cohort_total)
+        row.cohortTotal != null
+          ? Number(row.cohortTotal)
+          : row.cohort_total != null
+            ? Number(row.cohort_total)
             : undefined,
     };
   };
 
   const cohorts = Array.isArray(provisionRaw.cohorts)
     ? provisionRaw.cohorts
-        .map((row) => normalizeCohort(row as Record<string, unknown>))
+        .map((row) => normalizeCohort(row))
         .filter((row): row is NonNullable<typeof row> => Boolean(row))
     : [];
-  const activeCohort = normalizeCohort(
-    provisionRaw.activeCohort && typeof provisionRaw.activeCohort === 'object'
-      ? (provisionRaw.activeCohort as Record<string, unknown>)
-      : null
-  );
+  const activeCohort = normalizeCohort(provisionRaw.activeCohort);
 
   return {
     request,
