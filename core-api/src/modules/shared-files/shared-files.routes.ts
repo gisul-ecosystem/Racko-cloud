@@ -8,12 +8,26 @@ import { agentFileUpload } from '../../middleware/agentFileUpload.middleware';
 // ─── Agent routes (X-Agent-ID auth) ──────────────────────────────────────────
 export const agentSharedFilesRouter = Router();
 
-// POST /api/v1/agent/shared-files — upload file from GUI app
+// POST /api/v1/agent/shared-files — upload file from GUI app (legacy multipart)
 agentSharedFilesRouter.post(
   '/',
   requireAgentAuth,
   agentFileUpload.single('file'),
   (req, res, next) => sharedFilesController.agentUpload(req, res, next),
+);
+
+// POST /api/v1/agent/shared-files/upload-url — step 1: get presigned PUT URL
+agentSharedFilesRouter.post(
+  '/upload-url',
+  requireAgentAuth,
+  (req, res, next) => sharedFilesController.agentUploadUrl(req, res, next),
+);
+
+// POST /api/v1/agent/shared-files/upload-complete — step 2: finalize after S3 PUT
+agentSharedFilesRouter.post(
+  '/upload-complete',
+  requireAgentAuth,
+  (req, res, next) => sharedFilesController.agentUploadComplete(req, res, next),
 );
 
 // GET /api/v1/agent/shared-files/inbox — files shared with this machine
@@ -35,6 +49,13 @@ agentSharedFilesRouter.get(
   '/machines-for-app',
   requireAgentAuth,
   (req, res, next) => sharedFilesController.agentListMachines(req, res, next),
+);
+
+// GET /api/v1/agent/shared-files/:id/view-url — presigned GET URL (view or download)
+agentSharedFilesRouter.get(
+  '/:id/view-url',
+  requireAgentAuth,
+  (req, res, next) => sharedFilesController.agentViewUrl(req, res, next),
 );
 
 // GET /api/v1/agent/shared-files/:id/download
