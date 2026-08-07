@@ -422,7 +422,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
   useEffect(() => { onStepChange?.(step); }, [step, onStepChange]);
 
   // Step 2 — per-machine live status
-  type VMStatus = { pushSuccess?: boolean; pushError?: string; agentConnected: boolean };
+  type VMStatus = { pushSuccess?: boolean; pushError?: string; agentConnected: boolean; rackoAppInstalled?: boolean; rackoAppError?: string };
   const [vmStatus, setVmStatus] = useState<Record<string, VMStatus>>({});
   const [timeoutReached, setTimeoutReached] = useState(false);
   const [secondsLeft, setSecondsLeft] = useState(180);
@@ -548,6 +548,16 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
                 ...prev[event.machineId],
                 pushSuccess: prev[event.machineId]?.pushSuccess ?? true,
                 agentConnected: true,
+              },
+            }));
+          } else if (event.type === 'racko_app_installed') {
+            setVmStatus((prev) => ({
+              ...prev,
+              [event.machineId]: {
+                ...prev[event.machineId],
+                agentConnected: prev[event.machineId]?.agentConnected ?? true,
+                rackoAppInstalled: event.success,
+                rackoAppError: event.error,
               },
             }));
           }
@@ -710,7 +720,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  {['Machine', 'IP', 'Push', 'Agent'].map((h) => (
+                  {['Machine', 'IP', 'Push', 'Agent', 'Racko App'].map((h) => (
                     <th key={h} className="px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wide text-gray-400">{h}</th>
                   ))}
                 </tr>
@@ -749,6 +759,29 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
                           <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
                             <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-transparent" /> Waiting…
                           </span>
+                        )}
+                      </td>
+                      {/* Racko App column — shows status of racko-app GUI installation via exec */}
+                      <td className="px-4 py-3">
+                        {st?.pushSuccess === false ? (
+                          // Push failed — agent never started, racko-app can't install
+                          <span className="text-xs text-gray-400">—</span>
+                        ) : st?.rackoAppInstalled === true ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-green-600">
+                            <Check className="h-3.5 w-3.5" /> Installed
+                          </span>
+                        ) : st?.rackoAppInstalled === false ? (
+                          <span className="inline-flex items-center gap-1.5 text-xs font-medium text-red-600" title={st.rackoAppError}>
+                            <span className="h-1.5 w-1.5 rounded-full bg-red-500" /> Failed
+                          </span>
+                        ) : st?.agentConnected ? (
+                          // Agent is connected, racko-app exec is running in background
+                          <span className="inline-flex items-center gap-1.5 text-xs text-gray-400">
+                            <span className="h-3 w-3 animate-spin rounded-full border-2 border-gray-300 border-t-transparent" /> Installing…
+                          </span>
+                        ) : (
+                          // Agent not yet connected — waiting
+                          <span className="text-xs text-gray-400">Pending</span>
                         )}
                       </td>
                     </tr>
