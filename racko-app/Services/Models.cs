@@ -54,3 +54,14 @@ public record ApiFileResponse(
 public record ApiFileData(
     [property: JsonPropertyName("file")] SharedFileDto File
 );
+
+public record ViewUrlResponse(
+    [property: JsonPropertyName("presignedUrl")] string PresignedUrl,
+    [property: JsonPropertyName("permission")]   string Permission,
+    [property: JsonPropertyName("fileName")]     string FileName,
+    [property: JsonPropertyName("expiresIn")]    int    ExpiresIn
+);
+
+public record ApiViewUrlResponse(
+    [property: JsonPropertyName("data")] ViewUrlResponse Data
+);

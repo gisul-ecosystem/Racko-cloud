@@ -103,6 +103,19 @@ public class RackoApiClient
         return destPath;
     }
 
+    /// <summary>
+    /// Gets a presigned S3 GET URL for the file.
+    /// read permission  → 60s TTL  (open in viewer, never saved)
+    /// full permission  → 300s TTL (download directly from S3, API not involved)
+    /// </summary>
+    public async Task<ViewUrlResponse> GetViewUrlAsync(string fileId)
+    {
+        var resp = await _http.GetFromJsonAsync<ApiViewUrlResponse>(
+            $"/api/v1/agent/shared-files/{fileId}/view-url", JsonOpts)
+            ?? throw new InvalidOperationException("Empty response.");
+        return resp.Data;
+    }
+
     /// <summary>Update permission and/or target VMs for a file.</summary>
     public async Task UpdateShareAsync(
         string   fileId,

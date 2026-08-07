@@ -14,7 +14,6 @@ public class UploadForm : Form
 
     private Label        _fileLabel   = null!;
     private RadioButton  _rbRead      = null!;
-    private RadioButton  _rbReadWrite = null!;
     private RadioButton  _rbFull      = null!;
     private CheckedListBox _vmList    = null!;
     private Button       _uploadBtn   = null!;
@@ -28,8 +27,8 @@ public class UploadForm : Form
     private void BuildUI()
     {
         Text            = "Upload & Share File";
-        Size            = new Size(460, 480);
-        MinimumSize     = new Size(440, 460);
+        Size            = new Size(460, 460);
+        MinimumSize     = new Size(440, 440);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox     = false;
         MinimizeBox     = false;
@@ -68,12 +67,11 @@ public class UploadForm : Form
         Controls.Add(fileRow);
         y += 38;
 
-        // ── Permission ────────────────────────────────────────────────────────
+        // ── Permission — Read Only or Full Control only ───────────────────────
         AddLabel("Permission", pad, ref y);
-        _rbRead      = new RadioButton { Text = "Read Only",      Checked = true, Left = pad,       Top = y, AutoSize = true };
-        _rbReadWrite = new RadioButton { Text = "Read && Write",  Left = pad + 110, Top = y, AutoSize = true };
-        _rbFull      = new RadioButton { Text = "Full Control",   Left = pad + 240, Top = y, AutoSize = true };
-        Controls.AddRange(new Control[] { _rbRead, _rbReadWrite, _rbFull });
+        _rbRead = new RadioButton { Text = "Read Only",    Checked = true, Left = pad,       Top = y, AutoSize = true };
+        _rbFull = new RadioButton { Text = "Full Control", Left = pad + 130, Top = y, AutoSize = true };
+        Controls.AddRange(new Control[] { _rbRead, _rbFull });
         y += 30;
 
         // ── VM list ───────────────────────────────────────────────────────────
@@ -126,9 +124,7 @@ public class UploadForm : Form
 
     private void OnUploadClick(object? s, EventArgs e)
     {
-        SelectedPermission = _rbReadWrite.Checked ? "read-write"
-                           : _rbFull.Checked      ? "full"
-                           : "read";
+        SelectedPermission = _rbFull.Checked ? "full" : "read";
 
         if (_machines.Count == 0) { DialogResult = DialogResult.OK; Close(); return; }
 

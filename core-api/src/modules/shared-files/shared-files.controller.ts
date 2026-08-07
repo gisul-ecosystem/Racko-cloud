@@ -103,6 +103,18 @@ export class SharedFilesController {
     }
   }
 
+  /** GET /api/v1/agent/shared-files/:id/view-url — presigned GET URL for viewing/downloading */
+  async agentViewUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const agentId = req.headers['x-agent-id'] as string;
+      const fileId  = req.params['id'] as string;
+      const result  = await sharedFilesService.getViewUrl(fileId, agentId);
+      success(res, 'View URL generated.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** GET /api/v1/agent/shared-files/:id/download */
   async agentDownload(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.IO;
 using System.Windows.Forms;
 using RackoApp.Services;
 using RackoApp.Views;
@@ -7,21 +8,17 @@ namespace RackoApp;
 
 public class MainForm : Form
 {
-    // ── Brand colour ──────────────────────────────────────────────────────────
-    private static readonly Color Brand    = Color.FromArgb(185, 28,  28);  // #B91C1C
-    private static readonly Color Surface  = Color.FromArgb(248, 250, 252); // #F8FAFC
-    private static readonly Color CardBg   = Color.White;
-    private static readonly Color Border   = Color.FromArgb(226, 232, 240); // #E2E8F0
-    private static readonly Color TextMain = Color.FromArgb( 15,  23,  42); // #0F172A
-    private static readonly Color TextMute = Color.FromArgb(100, 116, 139); // #64748B
+    // ── Brand colours ──────────────────────────────────────────────────────────
+    private static readonly Color Brand    = Color.FromArgb(185, 28,  28);
+    private static readonly Color Surface  = Color.FromArgb(248, 250, 252);
+    private static readonly Color TextMute = Color.FromArgb(100, 116, 139);
 
     private readonly RackoApiClient _api;
 
-    // Controls
-    private TabControl  _tabs    = null!;
-    private DataGridView _inboxGrid  = null!;
-    private DataGridView _outboxGrid = null!;
-    private Label       _statusLabel = null!;
+    private TabControl   _tabs        = null!;
+    private DataGridView _inboxGrid   = null!;
+    private DataGridView _outboxGrid  = null!;
+    private Label        _statusLabel = null!;
 
     public MainForm(AgentConfig config)
     {
@@ -35,7 +32,7 @@ public class MainForm : Form
     private void BuildUI()
     {
         Text            = "Racko Shared Files";
-        Size            = new Size(900, 580);
+        Size            = new Size(920, 580);
         MinimumSize     = new Size(700, 440);
         BackColor       = Surface;
         StartPosition   = FormStartPosition.CenterScreen;
@@ -46,11 +43,12 @@ public class MainForm : Form
         {
             Dock      = DockStyle.Top,
             Height    = 52,
-            BackColor = CardBg,
+            BackColor = Color.White,
             Padding   = new Padding(16, 0, 16, 0),
         };
         header.Paint += (_, e) =>
-            e.Graphics.DrawLine(new Pen(Border), 0, header.Height - 1, header.Width, header.Height - 1);
+            e.Graphics.DrawLine(new Pen(Color.FromArgb(226, 232, 240)),
+                0, header.Height - 1, header.Width, header.Height - 1);
 
         var logo = new Label
         {
@@ -71,9 +69,9 @@ public class MainForm : Form
             Size      = new Size(140, 30),
             Cursor    = Cursors.Hand,
         };
-        uploadBtn.FlatAppearance.BorderSize  = 0;
-        uploadBtn.FlatAppearance.MouseOverBackColor = Color.FromArgb(160, 23, 23);
-        uploadBtn.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+        uploadBtn.FlatAppearance.BorderSize          = 0;
+        uploadBtn.FlatAppearance.MouseOverBackColor  = Color.FromArgb(160, 23, 23);
+        uploadBtn.Anchor  = AnchorStyles.Top | AnchorStyles.Right;
         uploadBtn.Location = new Point(header.Width - 160, 11);
         uploadBtn.Click   += async (_, _) => await OnUploadClickAsync();
         header.SizeChanged += (_, _) => uploadBtn.Left = header.Width - 160;
@@ -94,9 +92,9 @@ public class MainForm : Form
         // ── Tabs ──────────────────────────────────────────────────────────────
         _tabs = new TabControl
         {
-            Dock     = DockStyle.Fill,
-            Padding  = new Point(12, 6),
-            Font     = new Font("Segoe UI", 9f),
+            Dock    = DockStyle.Fill,
+            Padding = new Point(12, 6),
+            Font    = new Font("Segoe UI", 9f),
         };
 
         var inboxPage  = new TabPage("↓  Received");
@@ -105,37 +103,22 @@ public class MainForm : Form
         _inboxGrid  = BuildGrid();
         _outboxGrid = BuildGrid();
 
+        // Inbox: double-click opens or downloads based on permission
         _inboxGrid.CellDoubleClick  += (_, e) => { if (e.RowIndex >= 0) _ = OnInboxDoubleClickAsync(e.RowIndex); };
+        // Outbox: double-click opens manage dialog; delete button handled by CellClick
         _outboxGrid.CellDoubleClick += (_, e) => { if (e.RowIndex >= 0) OnOutboxDoubleClick(e.RowIndex); };
+        _outboxGrid.CellClick       += (_, e) => { if (e.RowIndex >= 0) _ = OnOutboxCellClickAsync(e.RowIndex, e.ColumnIndex); };
 
         inboxPage.Controls.Add(_inboxGrid);
         outboxPage.Controls.Add(_outboxGrid);
         _tabs.TabPages.Add(inboxPage);
         _tabs.TabPages.Add(outboxPage);
-
         _tabs.SelectedIndexChanged += (_, _) =>
         {
             if (_tabs.SelectedIndex == 0) _ = LoadInboxAsync();
             else _ = LoadOutboxAsync();
         };
 
-        // Refresh button in tab area
-        var refreshBtn = new Button
-        {
-            Text      = "↺",
-            FlatStyle = FlatStyle.Flat,
-            Size      = new Size(28, 22),
-            Cursor    = Cursors.Hand,
-            Font      = new Font("Segoe UI", 10f),
-        };
-        refreshBtn.FlatAppearance.BorderSize = 0;
-        refreshBtn.Click += (_, _) =>
-        {
-            if (_tabs.SelectedIndex == 0) _ = LoadInboxAsync();
-            else _ = LoadOutboxAsync();
-        };
-
-        // Main layout
         var body = new Panel { Dock = DockStyle.Fill, Padding = new Padding(12) };
         body.Controls.Add(_tabs);
         body.Controls.Add(_statusLabel);
@@ -148,23 +131,23 @@ public class MainForm : Form
     {
         var grid = new DataGridView
         {
-            Dock                    = DockStyle.Fill,
-            ReadOnly                = true,
-            AllowUserToAddRows      = false,
-            AllowUserToDeleteRows   = false,
-            SelectionMode           = DataGridViewSelectionMode.FullRowSelect,
-            MultiSelect             = false,
-            AutoSizeRowsMode        = DataGridViewAutoSizeRowsMode.AllCells,
+            Dock                        = DockStyle.Fill,
+            ReadOnly                    = true,
+            AllowUserToAddRows          = false,
+            AllowUserToDeleteRows       = false,
+            SelectionMode               = DataGridViewSelectionMode.FullRowSelect,
+            MultiSelect                 = false,
+            AutoSizeRowsMode            = DataGridViewAutoSizeRowsMode.AllCells,
             ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize,
-            BackgroundColor         = Color.White,
-            BorderStyle             = BorderStyle.None,
-            RowHeadersVisible       = false,
-            GridColor               = Color.FromArgb(226, 232, 240),
-            Font                    = new Font("Segoe UI", 9f),
+            BackgroundColor             = Color.White,
+            BorderStyle                 = BorderStyle.None,
+            RowHeadersVisible           = false,
+            GridColor                   = Color.FromArgb(226, 232, 240),
+            Font                        = new Font("Segoe UI", 9f),
         };
-        grid.DefaultCellStyle.SelectionBackColor = Color.FromArgb(254, 242, 242);
-        grid.DefaultCellStyle.SelectionForeColor = Color.FromArgb(15, 23, 42);
-        grid.ColumnHeadersDefaultCellStyle.Font  = new Font("Segoe UI", 8.5f, FontStyle.Bold);
+        grid.DefaultCellStyle.SelectionBackColor    = Color.FromArgb(254, 242, 242);
+        grid.DefaultCellStyle.SelectionForeColor    = Color.FromArgb(15, 23, 42);
+        grid.ColumnHeadersDefaultCellStyle.Font     = new Font("Segoe UI", 8.5f, FontStyle.Bold);
         grid.ColumnHeadersDefaultCellStyle.BackColor = Color.FromArgb(248, 250, 252);
         grid.EnableHeadersVisualStyles = false;
         return grid;
@@ -179,8 +162,8 @@ public class MainForm : Form
         {
             var files = await _api.ListInboxAsync();
             _inboxGrid.Columns.Clear();
-            _inboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File Name",   Width = 260, DataPropertyName = "FileName" });
-            _inboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "From",        Width = 160, DataPropertyName = "SourceMachineName" });
+            _inboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File Name",   Width = 240, DataPropertyName = "FileName" });
+            _inboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "From",        Width = 150, DataPropertyName = "SourceMachineName" });
             _inboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Permission",  Width = 120, DataPropertyName = "PermissionLabel" });
             _inboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Size",        Width =  90, DataPropertyName = "SizeLabel" });
             _inboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Shared",      Width = 140, DataPropertyName = "CreatedAtFormatted" });
@@ -188,7 +171,7 @@ public class MainForm : Form
             _inboxGrid.DataSource = files.Select(f => new InboxRow(f)).ToList();
 
             ShowGrid(inbox: true, empty: !files.Any(),
-                emptyMsg: "No files shared with this VM yet.\nDouble-click a row to download.");
+                emptyMsg: "No files shared with this VM yet.\nDouble-click a row to open or download.");
         }
         catch (Exception ex) { ShowStatus($"Error: {ex.Message}"); }
     }
@@ -200,11 +183,24 @@ public class MainForm : Form
         {
             var files = await _api.ListOutboxAsync();
             _outboxGrid.Columns.Clear();
-            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "File Name",   Width = 260, DataPropertyName = "FileName" });
-            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Permission",  Width = 120, DataPropertyName = "PermissionLabel" });
-            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Shared With", Width = 100, DataPropertyName = "SharedWithCount" });
-            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Size",        Width =  90, DataPropertyName = "SizeLabel" });
-            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn { HeaderText = "Uploaded",    Width = 140, DataPropertyName = "CreatedAtFormatted" });
+            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn   { HeaderText = "File Name",   Width = 230, DataPropertyName = "FileName" });
+            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn   { HeaderText = "Permission",  Width = 120, DataPropertyName = "PermissionLabel" });
+            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn   { HeaderText = "Shared With", Width = 100, DataPropertyName = "SharedWithCount" });
+            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn   { HeaderText = "Size",        Width =  90, DataPropertyName = "SizeLabel" });
+            _outboxGrid.Columns.Add(new DataGridViewTextBoxColumn   { HeaderText = "Uploaded",    Width = 140, DataPropertyName = "CreatedAtFormatted" });
+
+            // Delete button column
+            var deleteCol = new DataGridViewButtonColumn
+            {
+                HeaderText    = "",
+                Text          = "Delete",
+                UseColumnTextForButtonValue = true,
+                Width         = 70,
+                FlatStyle     = FlatStyle.Flat,
+                Name          = "DeleteCol",
+            };
+            _outboxGrid.Columns.Add(deleteCol);
+
             _outboxGrid.AutoGenerateColumns = false;
             _outboxGrid.DataSource = files.Select(f => new OutboxRow(f)).ToList();
 
@@ -227,8 +223,8 @@ public class MainForm : Form
             return;
         }
 
-        using var dlg = new UploadForm(machines);
-        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+        using var dlg = new UploadForm(machines) { Owner = this };
+        if (dlg.ShowDialog() != DialogResult.OK) return;
 
         try
         {
@@ -245,54 +241,117 @@ public class MainForm : Form
         }
     }
 
-    // ── Row interactions ───────────────────────────────────────────────────────
+    // ── Inbox: permission-based action ─────────────────────────────────────────
 
     private async Task OnInboxDoubleClickAsync(int rowIndex)
     {
         if (_inboxGrid.DataSource is not List<InboxRow> rows || rowIndex >= rows.Count) return;
         var file = rows[rowIndex].File;
 
-        using var save = new SaveFileDialog
-        {
-            FileName         = file.FileName,
-            InitialDirectory = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
-        };
-        if (save.ShowDialog(this) != DialogResult.OK) return;
-
-        try
-        {
-            var destDir  = Path.GetDirectoryName(save.FileName)!;
-            var destName = Path.GetFileName(save.FileName);
-            await _api.DownloadAsync(file.Id, destName, destDir);
-            MessageBox.Show($"Saved to:\n{save.FileName}",
-                "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
+        ViewUrlResponse viewUrl;
+        try { viewUrl = await _api.GetViewUrlAsync(file.Id); }
         catch (Exception ex)
         {
-            MessageBox.Show($"Download failed:\n{ex.Message}",
+            MessageBox.Show($"Could not load file URL:\n{ex.Message}",
                 "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            return;
+        }
+
+        if (viewUrl.Permission == "full")
+        {
+            // Full control → download directly from S3 via presigned URL
+            // API is NOT in the data path — bytes go S3 → HttpClient → disk
+            using var save = new SaveFileDialog
+            {
+                FileName         = file.FileName,
+                InitialDirectory = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
+            };
+            if (save.ShowDialog(this) != DialogResult.OK) return;
+
+            try
+            {
+                using var http     = new System.Net.Http.HttpClient();
+                using var response = await http.GetAsync(
+                    viewUrl.PresignedUrl,
+                    System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                response.EnsureSuccessStatusCode();
+
+                await using var fs = File.Create(save.FileName);
+                await response.Content.CopyToAsync(fs);
+
+                MessageBox.Show($"Saved to:\n{save.FileName}",
+                    "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Download failed:\n{ex.Message}",
+                    "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+        else
+        {
+            // Read only → open in embedded WebView2 viewer
+            // File streams S3 → Chromium engine — never written to disk
+            var viewer = new RackoApp.Views.FileViewerForm(viewUrl.PresignedUrl, file.FileName)
+            {
+                Owner = this,
+            };
+            viewer.Show();
         }
     }
+
+    // ── Outbox: manage dialog (double-click) ───────────────────────────────────
 
     private void OnOutboxDoubleClick(int rowIndex)
     {
         if (_outboxGrid.DataSource is not List<OutboxRow> rows || rowIndex >= rows.Count) return;
         var file = rows[rowIndex].File;
+        using var dlg = new ManageForm(file, _api) { Owner = this };
+        if (dlg.ShowDialog() == DialogResult.OK) _ = LoadOutboxAsync();
+    }
 
-        using var dlg = new ManageForm(file, _api);
-        if (dlg.ShowDialog(this) == DialogResult.OK)
+    // ── Outbox: delete button click ────────────────────────────────────────────
+
+    private async Task OnOutboxCellClickAsync(int rowIndex, int colIndex)
+    {
+        if (_outboxGrid.DataSource is not List<OutboxRow> rows || rowIndex >= rows.Count) return;
+
+        // Only handle the Delete button column
+        var col = _outboxGrid.Columns[colIndex];
+        if (col?.Name != "DeleteCol") return;
+
+        var file = rows[rowIndex].File;
+
+        var confirm = MessageBox.Show(
+            $"Permanently delete '{file.FileName}'?\nThis will remove it from S3 storage and all target VMs. This cannot be undone.",
+            "Racko — Confirm Delete",
+            MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+
+        if (confirm != DialogResult.Yes) return;
+
+        try
+        {
+            await _api.DeleteAsync(file.Id);
+            MessageBox.Show("File deleted successfully.", "Racko",
+                MessageBoxButtons.OK, MessageBoxIcon.Information);
             _ = LoadOutboxAsync();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show($"Delete failed:\n{ex.Message}",
+                "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 
     // ── Helpers ────────────────────────────────────────────────────────────────
 
     private void ShowStatus(string msg)
     {
-        _statusLabel.Text    = msg;
-        _statusLabel.Visible = true;
-        _inboxGrid.Visible   = false;
-        _outboxGrid.Visible  = false;
+        _statusLabel.Text        = msg;
+        _statusLabel.Visible     = true;
+        _inboxGrid.Visible       = false;
+        _outboxGrid.Visible      = false;
     }
 
     private void ShowGrid(bool inbox, bool empty, string emptyMsg)
