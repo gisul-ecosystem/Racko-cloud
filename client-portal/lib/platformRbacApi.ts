@@ -123,7 +123,6 @@ export async function setPlatformRbacUserRoles(
 
 export async function invitePlatformOperator(input: {
   email: string;
-  temporaryPassword: string;
   roleIds: string[];
 }): Promise<{ _id: string; email: string; role: string }> {
   const data = await unwrap(

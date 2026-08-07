@@ -10,11 +10,15 @@ export default function IndividualKycPage() {
   const router = useRouter();
 
   useEffect(() => {
-    if (isLoading || !user) return;
+    if (isLoading) return;
+    if (!isAuthenticated || !user) {
+      router.replace('/login?redirect=/onboarding/individual-kyc');
+      return;
+    }
     if (user.accountType !== 'b2c' || user.onboardingStatus !== 'kyc_pending') {
       router.replace(user.role === 'admin' ? '/console' : '/dashboard/user');
     }
-  }, [isLoading, user, router]);
+  }, [isLoading, isAuthenticated, user, router]);
 
   if (isLoading || !isAuthenticated || !user) {
     return <div className="min-h-screen bg-[#0a0f1e] flex items-center justify-center text-white">Loading...</div>;

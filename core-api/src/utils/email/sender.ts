@@ -13,6 +13,7 @@ import {
   type VmHostLeaseExpiryTemplateData,
 } from './templates/vmHostLeaseExpiry';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
+import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
   resolveTenantEmailBrand,
@@ -248,6 +249,23 @@ export async function sendStaffInviteEmail(input: {
     tempPassword: input.tempPassword,
     verifyToken: input.verifyToken,
     resetToken: input.resetToken,
+    brand: input.brand,
+  });
+  await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
+}
+
+/** Platform B2B org admin invite (credentials + sign-in). */
+export async function sendOrgAdminInviteEmail(input: {
+  to: string;
+  email: string;
+  temporaryPassword: string;
+  companyName?: string;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const template = buildOrgAdminInviteTemplate({
+    email: input.email,
+    temporaryPassword: input.temporaryPassword,
+    companyName: input.companyName,
     brand: input.brand,
   });
   await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });

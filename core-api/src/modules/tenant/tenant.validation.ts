@@ -137,7 +137,6 @@ export const createTenantAdminSchema = z.object({
       .max(254, 'Email too long')
       .toLowerCase()
       .trim(),
-    password: passwordSchema,
   }),
 });
 

@@ -1,3 +1,4 @@
+import fs from 'fs';
 import mongoose from 'mongoose';
 import dns from 'dns';
 
@@ -11,15 +12,27 @@ try {
 const connectDB = async () => {
   try {
     const useTls = process.env.MONGODB_TLS !== 'false';
+    const tlsOptions = {};
+
+    if (useTls) {
+      tlsOptions.tls = true;
+      tlsOptions.tlsAllowInvalidCertificates = false;
+
+      const caFile = process.env.MONGODB_TLS_CA_FILE?.trim();
+      if (caFile) {
+        if (!fs.existsSync(caFile)) {
+          throw new Error(`MONGODB_TLS_CA_FILE not found: ${caFile}`);
+        }
+        tlsOptions.tlsCAFile = caFile;
+        console.log(`MongoDB TLS enabled with custom CA — ${caFile}`);
+      }
+    }
 
     await mongoose.connect(process.env.MONGODB_URI, {
       dbName: process.env.MONGODB_DB_NAME || 'racko_reseller',
       serverSelectionTimeoutMS: 20_000,
       family: 4,
-      ...(useTls && {
-        tls: true,
-        tlsAllowInvalidCertificates: false,
-      }),
+      ...tlsOptions,
     });
     console.log(`MongoDB connected — ${process.env.MONGODB_DB_NAME || 'racko_reseller'}`);
 

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import Link from 'next/link';
-import { ArrowLeft, Loader2, Plus, Shield, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, Loader2, Plus, Shield, Trash2, Users, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   createRbacRole,
@@ -45,10 +45,10 @@ export default function AccessControlPage() {
 
   const [showCreateStaff, setShowCreateStaff] = useState(false);
   const [staffEmail, setStaffEmail] = useState('');
-  const [staffTempPassword, setStaffTempPassword] = useState('');
   const [staffRoleIds, setStaffRoleIds] = useState<string[]>([]);
   const [savingStaff, setSavingStaff] = useState(false);
   const [promotePrompt, setPromotePrompt] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<RbacPerson | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const groups = useMemo(() => {
@@ -169,18 +169,16 @@ export default function AccessControlPage() {
     }
   }
 
-  async function handleDeleteStaff(person: RbacPerson) {
-    const ok = window.confirm(
-      `Delete staff account ${person.email}?\n\nThis removes their console access and cannot be undone. You can invite the same email again later.`
-    );
-    if (!ok) return;
-
+  async function confirmDeleteStaff() {
+    if (!deleteTarget) return;
+    const person = deleteTarget;
     setDeletingId(person._id);
     setError(null);
     setFlash(null);
     try {
       await deleteStaffUser(person._id);
       if (assignPerson?._id === person._id) setAssignPerson(null);
+      setDeleteTarget(null);
       setFlash(`Deleted ${person.email}.`);
       await load();
     } catch (err) {
@@ -193,7 +191,6 @@ export default function AccessControlPage() {
   function resetStaffForm() {
     setShowCreateStaff(false);
     setStaffEmail('');
-    setStaffTempPassword('');
     setStaffRoleIds([]);
     setPromotePrompt(null);
   }
@@ -204,14 +201,13 @@ export default function AccessControlPage() {
     try {
       await createStaffUser({
         email: staffEmail,
-        ...(promoteExisting ? {} : { tempPassword: staffTempPassword }),
         roleIds: staffRoleIds,
         ...(promoteExisting ? { promoteExisting: true } : {}),
       });
       setFlash(
         promoteExisting
           ? `${staffEmail} now has staff console access.`
-          : 'Staff invite sent.'
+          : 'Staff invite sent. A temporary password was emailed automatically.'
       );
       resetStaffForm();
       setTab('people');
@@ -446,8 +442,8 @@ export default function AccessControlPage() {
               <div>
                 <p className="text-sm font-semibold text-gray-900">Send staff invite</p>
                 <p className="mt-1 text-xs text-gray-500">
-                  The user will receive an email with their login email, temporary password,
-                  verification link, and password setup link.
+                  The user will receive an email with a generated temporary password, verification
+                  link, and password setup link.
                 </p>
               </div>
               <input
@@ -456,15 +452,6 @@ export default function AccessControlPage() {
                 value={staffEmail}
                 onChange={(e) => setStaffEmail(e.target.value)}
                 placeholder="Email"
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              />
-              <input
-                required
-                type="password"
-                minLength={8}
-                value={staffTempPassword}
-                onChange={(e) => setStaffTempPassword(e.target.value)}
-                placeholder="Temporary password (min 8)"
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
               />
               <div className="grid gap-1.5 sm:grid-cols-2">
@@ -624,7 +611,7 @@ export default function AccessControlPage() {
                           <button
                             type="button"
                             disabled={deletingId === person._id}
-                            onClick={() => void handleDeleteStaff(person)}
+                            onClick={() => setDeleteTarget(person)}
                             className="inline-flex items-center gap-1 text-xs font-semibold text-red-600 disabled:opacity-50"
                           >
                             {deletingId === person._id ? (
@@ -646,6 +633,59 @@ export default function AccessControlPage() {
           </div>
         </div>
       )}
+
+      {deleteTarget ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md overflow-hidden rounded-xl border border-gray-200 bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <div className="flex items-center gap-2">
+                <Trash2 className="h-4 w-4 text-red-600" />
+                <h2 className="text-base font-semibold text-gray-900">Delete staff account</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDeleteTarget(null)}
+                disabled={Boolean(deletingId)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-600 disabled:opacity-50"
+                aria-label="Close"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="space-y-4 p-5">
+              <p className="text-sm text-gray-600">
+                Delete staff account{' '}
+                <span className="font-medium text-gray-900">{deleteTarget.email}</span>?
+              </p>
+              <div className="rounded-lg border border-red-100 bg-red-50 px-4 py-3 text-xs text-red-700">
+                This removes their console access and cannot be undone. You can invite the same
+                email again later.
+              </div>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeleteTarget(null)}
+                  disabled={Boolean(deletingId)}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm text-gray-600 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void confirmDeleteStaff()}
+                  disabled={Boolean(deletingId)}
+                  className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-50"
+                >
+                  {deletingId === deleteTarget._id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : null}
+                  Delete staff
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
