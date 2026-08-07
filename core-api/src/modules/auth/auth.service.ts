@@ -365,11 +365,6 @@ export class AuthService {
       throw new EmailNotVerifiedError();
     }
 
-    if (user.mustSetPassword) {
-      await verifyPassword(DUMMY_HASH, data.password);
-      throw new PasswordSetupRequiredError();
-    }
-
     // Verify password
     const isPasswordValid = await verifyPassword(user.password, data.password);
 
@@ -419,6 +414,27 @@ export class AuthService {
     user.failedLoginAttempts = 0;
     user.isLocked = false;
     user.lockedUntil = undefined;
+
+    // Invited accounts must set their own password before a session is created.
+    if (user.mustSetPassword) {
+      const resetToken = generateSecureToken(32);
+      user.passwordResetToken = hashToken(resetToken);
+      user.passwordResetExpires = new Date(
+        Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
+      );
+      await user.save();
+
+      await AuditLog.create({
+        userId: user._id,
+        event: 'PASSWORD_RESET_REQUESTED',
+        ipAddress: ip,
+        userAgent,
+        deviceFingerprint: fingerprint,
+        metadata: { reason: 'must_set_password_after_temp_login' },
+      });
+
+      throw new PasswordSetupRequiredError(resetToken);
+    }
 
     // End-user access window gate (assigned VMs with schedule)
     if (user.role === 'user') {

@@ -75,7 +75,7 @@ export class AdminOrgOnboardingService {
       onboardingStatus,
       isEmailVerified: true,
       isActive: true,
-      mustSetPassword: false,
+      mustSetPassword: true,
       createdBy: new mongoose.Types.ObjectId(actorId),
     });
 
@@ -191,7 +191,7 @@ export class AdminOrgOnboardingService {
 
     const temporaryPassword = generateInvitePassword();
     user.password = temporaryPassword;
-    user.mustSetPassword = false;
+    user.mustSetPassword = true;
     user.isEmailVerified = true;
     if (!user.isActive) user.isActive = true;
     await user.save();

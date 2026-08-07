@@ -110,12 +110,17 @@ export class EmailNotVerifiedError extends AppError {
 }
 
 export class PasswordSetupRequiredError extends AppError {
-  constructor() {
+  public readonly resetToken?: string;
+
+  constructor(resetToken?: string) {
     super(
-      'Your account has been verified, but you must set a new password before logging in. Use the invite email or password reset flow.',
+      resetToken
+        ? 'You must set a new password before continuing.'
+        : 'Your account requires a new password before logging in. Use the invite email or password reset flow.',
       403,
       'PASSWORD_SETUP_REQUIRED'
     );
+    this.resetToken = resetToken;
   }
 }
 
