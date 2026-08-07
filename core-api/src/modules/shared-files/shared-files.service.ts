@@ -44,7 +44,77 @@ class SharedFilesService {
     };
   }
 
-  // ─── Upload & Share ────────────────────────────────────────────────────────
+  // ─── Upload — Presigned PUT URL flow (zero server memory) ─────────────────
+
+  /**
+   * Step 1: Issue presigned S3 PUT URL. Client uploads directly to S3 — no file bytes touch the server.
+   */
+  async getUploadUrl(
+    agentId: string,
+    fileName: string,
+    mimeType: string,
+    sizeBytes: number,
+    permission: SharedFilePermission,
+    sharedWithMachineIds: string[],
+  ): Promise<{ presignedUrl: string; storageRef: string; pendingId: string; expiresIn: number }> {
+    const sourceMachine = await MachineModel.findOne({ agentId, deleted: { $ne: true } });
+    if (!sourceMachine) throw new NotFoundError('Agent not found.');
+    const adminId = sourceMachine.adminId;
+
+    for (const machineId of sharedWithMachineIds) {
+      if (!mongoose.Types.ObjectId.isValid(machineId)) throw new ValidationError(`Invalid machine ID: ${machineId}`);
+      const target = await MachineModel.findById(machineId).lean();
+      if (!target) throw new ValidationError(`Target machine ${machineId} not found.`);
+      if (target.adminId.toString() !== adminId.toString()) throw new ForbiddenError(`Machine ${machineId} does not belong to your account.`);
+    }
+
+    // Build unique key — client uploads to this exact path in S3
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const ts           = Date.now().toString();
+    const prefix       = `shared-files/${sourceMachine._id.toString()}`;
+    const storageRef   = `${prefix}/${ts}_${safeFileName}`;
+
+    const { presignedUrl } = await seaweedfsService.generatePresignedPutUrl(
+      prefix, ts, safeFileName, mimeType, 3600,
+    );
+
+    // Create SharedFile record now — it will be visible immediately after PUT completes
+    const doc = await SharedFileModel.create({
+      fileName, mimeType, sizeBytes, storageRef,
+      sourceMachineId:      sourceMachine._id,
+      adminId,
+      permission,
+      sharedWithMachineIds: sharedWithMachineIds.map((id) => new mongoose.Types.ObjectId(id)),
+    });
+
+    logger.info('[SharedFiles] Presigned PUT URL issued', {
+      fileId: doc._id.toString(), fileName, storageRef,
+    });
+
+    return { presignedUrl, storageRef, pendingId: doc._id.toString(), expiresIn: 3600 };
+  }
+
+  /**
+   * Step 2: Called after client finishes PUT to S3. Notifies target machines.
+   */
+  async finalizeUpload(pendingId: string, agentId: string): Promise<SharedFileResponse> {
+    const machine = await MachineModel.findOne({ agentId, deleted: { $ne: true } });
+    if (!machine) throw new NotFoundError('Agent not found.');
+    const doc = await SharedFileModel.findById(pendingId);
+    if (!doc || doc.deleted) throw new NotFoundError('Pending upload not found.');
+    if (doc.sourceMachineId.toString() !== machine._id.toString()) throw new ForbiddenError('Access denied.');
+
+    await this.notifyTargets(
+      doc._id.toString(), doc.fileName, doc.permission, machine.name,
+      doc.sharedWithMachineIds.map((id) => id.toString()),
+      'shared_file_added',
+    );
+
+    logger.info('[SharedFiles] Upload finalized', { fileId: doc._id.toString() });
+    return this.toResponse(doc, machine.name);
+  }
+
+  // ─── Legacy multipart upload (kept for backward compatibility) ────────────
 
   /**
    * Called by agent GUI app via POST /api/v1/agent/shared-files
@@ -168,7 +238,49 @@ class SharedFilesService {
     return results;
   }
 
-  // ─── Download ──────────────────────────────────────────────────────────────
+  // ─── Get presigned view/download URL ──────────────────────────────────────
+
+  /**
+   * Returns a presigned GET URL from SeaweedFS for the file.
+   * - read permission  → 60s TTL  (view only — open in WebView2, URL expires before user can share)
+   * - full permission  → 300s TTL (download — enough time for large file download)
+   * File bytes go S3 → client directly. Core-API is NOT in the data path.
+   */
+  async getViewUrl(
+    fileId: string,
+    agentId: string,
+  ): Promise<{ presignedUrl: string; permission: SharedFilePermission; fileName: string; expiresIn: number }> {
+    const machine = await MachineModel.findOne({ agentId, deleted: { $ne: true } });
+    if (!machine) throw new NotFoundError('Agent not found.');
+
+    const doc = await SharedFileModel.findById(fileId);
+    if (!doc || doc.deleted) throw new NotFoundError('Shared file not found.');
+
+    const isSource = doc.sourceMachineId.toString() === machine._id.toString();
+    const isTarget = doc.sharedWithMachineIds.some((id) => id.toString() === machine._id.toString());
+    if (!isSource && !isTarget) throw new ForbiddenError('This file is not shared with your machine.');
+
+    // TTL: read = 60s (view only), full = 300s (5 min — enough for large downloads)
+    const ttl = doc.permission === 'full' ? 300 : 60;
+
+    const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(doc.storageRef, ttl);
+
+    logger.info('[SharedFiles] Presigned GET URL issued', {
+      fileId,
+      permission: doc.permission,
+      machineId: machine._id.toString(),
+      ttl,
+    });
+
+    return {
+      presignedUrl,
+      permission: doc.permission,
+      fileName:   doc.fileName,
+      expiresIn:  ttl,
+    };
+  }
+
+  // ─── Download (stream through API — kept for compatibility) ───────────────
 
   async getDownloadStream(
     fileId: string,

@@ -151,7 +151,7 @@ export default function TenantDetailPage() {
   const [disallowingKey, setDisallowingKey] = useState<ServiceKey | null>(null);
 
   const [adminOpen, setAdminOpen] = useState(false);
-  const [adminForm, setAdminForm] = useState({ email: '', password: '' });
+  const [adminForm, setAdminForm] = useState({ email: '' });
   const [adminDeleteTarget, setAdminDeleteTarget] = useState<TenantAdmin | null>(null);
   const [deletingAdminId, setDeletingAdminId] = useState<string | null>(null);
 
@@ -326,9 +326,10 @@ export default function TenantDetailPage() {
       const admin = await createTenantAdmin(tenantId, adminForm);
       setAdmins((prev) => [admin, ...prev]);
       setAdminOpen(false);
-      setAdminForm({ email: '', password: '' });
-      flash('Tenant admin invited — they must verify email and set a password before signing in.');
-    } catch (err) {
+      setAdminForm({ email: '' });
+      flash(
+        'Tenant admin invited — a temporary password was emailed; they must verify and set a password before signing in.'
+      );    } catch (err) {
       flashErr(err instanceof ApiError ? err.message : 'Failed to create admin');
     } finally {
       setSaving(false);
@@ -1661,22 +1662,9 @@ export default function TenantDetailPage() {
                   onChange={(e) => setAdminForm((f) => ({ ...f, email: e.target.value }))}
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                 />
-              </div>
-              <div>
-                <label className="mb-1 block text-xs font-medium text-gray-700">
-                  Temporary password
-                </label>
-                <input
-                  type="password"
-                  required
-                  minLength={8}
-                  value={adminForm.password}
-                  onChange={(e) => setAdminForm((f) => ({ ...f, password: e.target.value }))}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                />
                 <p className="mt-1 text-xs text-gray-400">
-                  Sent in the invite email. They must verify email and set their own password (min 8
-                  chars, uppercase, lowercase, number & special character).
+                  A temporary password is generated and sent in the invite email. They must verify
+                  email and set their own password before signing in.
                 </p>
               </div>
               <div className="flex justify-end gap-2">

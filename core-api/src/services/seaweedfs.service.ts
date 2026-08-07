@@ -214,6 +214,34 @@ class SeaweedFSService {
 
     return { presignedUrl, storageRef };
   }
+
+  /**
+   * Generate a presigned GET URL for direct client-to-S3 download/preview.
+   *
+   * The client (racko-app) uses this URL to fetch the file directly from
+   * SeaweedFS, bypassing core-api entirely — no API memory pressure, no size limit.
+   * URL expires after ttlSeconds — cannot be reused or shared after expiry.
+   *
+   * @param storageRef  The S3 object key (from SharedFile.storageRef)
+   * @param ttlSeconds  How long the URL is valid (60s for read-only, 300s for download)
+   * @returns           { presignedUrl }
+   */
+  async generatePresignedGetUrl(
+    storageRef: string,
+    ttlSeconds = 60,
+  ): Promise<{ presignedUrl: string }> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key:    storageRef,
+    });
+
+    const presignedUrl = await getSignedUrl(getClient(), command, {
+      expiresIn: ttlSeconds,
+    });
+
+    logger.debug('[SeaweedFS] Generated presigned GET URL', { storageRef, ttlSeconds });
+    return { presignedUrl };
+  }
 }
 
 export const seaweedfsService = new SeaweedFSService();

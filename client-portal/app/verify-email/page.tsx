@@ -1,17 +1,30 @@
 'use client';
 
 import { Suspense, useEffect, useState } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
+import { CheckCircle2, Loader2, XCircle } from 'lucide-react';
 import { apiRequest, ApiError } from '../../lib/apiClient';
+import { AuthBrand } from '../../components/auth/AuthBrand';
 
-type VerifyState = 'loading' | 'success' | 'error';
+type VerifyState = 'loading' | 'success' | 'error' | 'redirecting';
 
 interface VerifyResponse {
+  success: boolean;
   message: string;
+  data?: {
+    requiresPasswordSetup?: boolean;
+    resetToken?: string;
+  };
 }
 
+const BTN_PRIMARY =
+  'inline-flex items-center justify-center rounded-lg bg-[#B91C1C] px-6 py-2.5 text-sm font-semibold text-white transition hover:bg-[#DC2626] focus:outline-none focus:ring-2 focus:ring-[#B91C1C] focus:ring-offset-2 focus:ring-offset-[#111827]';
+const BTN_SECONDARY =
+  'w-full rounded-lg border border-gray-700 bg-[#1f2937] px-4 py-2.5 text-sm font-medium text-white transition hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-[#B91C1C] focus:ring-offset-2 focus:ring-offset-[#111827]';
+
 function VerifyEmailContent() {
+  const router = useRouter();
   const searchParams = useSearchParams();
   const token = searchParams.get('token');
 
@@ -35,10 +48,19 @@ function VerifyEmailContent() {
           body: JSON.stringify({ token }),
           skipAuth: true,
         });
-        if (!cancelled) {
-          setState('success');
-          setMessage(res.message);
+        if (cancelled) return;
+
+        if (res.data?.requiresPasswordSetup && res.data.resetToken) {
+          setState('redirecting');
+          setMessage('Email verified. Redirecting to set your password…');
+          router.replace(
+            `/reset-password?token=${encodeURIComponent(res.data.resetToken)}&setup=1`
+          );
+          return;
         }
+
+        setState('success');
+        setMessage(res.message);
       } catch (err) {
         if (!cancelled) {
           setState('error');
@@ -51,90 +73,81 @@ function VerifyEmailContent() {
       }
     }
 
-    verify();
-    return () => { cancelled = true; };
-  }, [token]);
+    void verify();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, router]);
 
-  async function handleResend() {
-    // Trigger re-registration flow to get a new verification email
-    // The register endpoint is idempotent for unverified accounts
+  function handleResend() {
     setResendSent(true);
   }
 
   return (
-    <div className="min-h-screen bg-[#0a0f1e] flex items-center justify-center px-4">
+    <div className="flex min-h-screen items-center justify-center bg-[#0a0f1e] px-4">
       <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <span className="text-2xl font-bold text-blue-400 tracking-tight">CloudPlatform</span>
-        </div>
+        <AuthBrand />
 
-        <div className="bg-[#111827] border border-gray-800 rounded-xl p-10 text-center">
-          {state === 'loading' && (
+        <div className="rounded-xl border border-gray-800 bg-[#111827] p-8 text-center shadow-sm">
+          {state === 'loading' || state === 'redirecting' ? (
             <>
-              <div className="w-12 h-12 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-5" />
-              <h2 className="text-lg font-semibold text-white mb-2">Verifying your email</h2>
-              <p className="text-gray-400 text-sm">Please wait a moment...</p>
+              <Loader2 className="mx-auto mb-5 h-10 w-10 animate-spin text-[#B91C1C]" />
+              <h1 className="mb-2 text-lg font-semibold text-white">
+                {state === 'redirecting' ? 'Email verified' : 'Verifying your email'}
+              </h1>
+              <p className="text-sm text-gray-400">
+                {state === 'redirecting'
+                  ? message || 'Redirecting to set your password…'
+                  : 'Please wait a moment…'}
+              </p>
             </>
-          )}
+          ) : null}
 
-          {state === 'success' && (
+          {state === 'success' ? (
             <>
-              <div className="w-14 h-14 bg-green-900/40 rounded-full flex items-center justify-center mx-auto mb-5">
-                <svg className="w-7 h-7 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                </svg>
+              <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full border border-green-700 bg-green-900/30">
+                <CheckCircle2 className="h-7 w-7 text-green-400" />
               </div>
-              <h2 className="text-xl font-semibold text-white mb-3">Email verified</h2>
-              <p className="text-gray-400 text-sm mb-6">{message}</p>
-              <Link
-                href="/login"
-                className="inline-block bg-blue-600 hover:bg-blue-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition"
-              >
-                Sign in to your account
+              <h1 className="mb-3 text-xl font-semibold text-white">Email verified</h1>
+              <p className="mb-6 text-sm text-gray-400">{message}</p>
+              <Link href="/login" className={BTN_PRIMARY}>
+                Sign in to Racko
               </Link>
             </>
-          )}
+          ) : null}
 
-          {state === 'error' && (
+          {state === 'error' ? (
             <>
-              <div className="w-14 h-14 bg-red-900/40 rounded-full flex items-center justify-center mx-auto mb-5">
-                <svg className="w-7 h-7 text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+              <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full border border-red-700 bg-red-900/30">
+                <XCircle className="h-7 w-7 text-red-400" />
               </div>
-              <h2 className="text-xl font-semibold text-white mb-3">Verification failed</h2>
-              <p className="text-gray-400 text-sm mb-6">{message}</p>
+              <h1 className="mb-3 text-xl font-semibold text-white">Verification failed</h1>
+              <p className="mb-6 text-sm text-gray-400">{message}</p>
 
               {!resendSent ? (
                 <div className="space-y-3">
-                  <button
-                    onClick={handleResend}
-                    className="w-full bg-gray-700 hover:bg-gray-600 text-white font-medium py-2.5 rounded-lg text-sm transition"
-                  >
+                  <button type="button" onClick={handleResend} className={BTN_SECONDARY}>
                     Request a new verification link
                   </button>
                   <Link
                     href="/login"
-                    className="block text-blue-400 hover:text-blue-300 text-sm"
+                    className="block text-sm font-medium text-[#DC2626] hover:text-[#B91C1C]"
                   >
                     Back to sign in
                   </Link>
                 </div>
               ) : (
                 <div>
-                  <p className="text-green-400 text-sm mb-4">
+                  <p className="mb-4 text-sm text-green-400">
                     Please register again with your email to receive a new verification link.
                   </p>
-                  <Link
-                    href="/register"
-                    className="inline-block bg-blue-600 hover:bg-blue-500 text-white font-semibold px-6 py-2.5 rounded-lg text-sm transition"
-                  >
+                  <Link href="/register" className={BTN_PRIMARY}>
                     Go to registration
                   </Link>
                 </div>
               )}
             </>
-          )}
+          ) : null}
         </div>
       </div>
     </div>
@@ -145,8 +158,8 @@ export default function VerifyEmailPage() {
   return (
     <Suspense
       fallback={
-        <div className="min-h-screen bg-[#0a0f1e] flex items-center justify-center px-4">
-          <div className="w-12 h-12 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+        <div className="flex min-h-screen items-center justify-center bg-[#0a0f1e] px-4">
+          <Loader2 className="h-10 w-10 animate-spin text-[#B91C1C]" />
         </div>
       }
     >

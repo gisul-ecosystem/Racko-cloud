@@ -172,7 +172,6 @@ export interface UpdateTenantIpAccessInput {
 
 export interface CreateTenantAdminInput {
   email: string;
-  password: string;
 }
 
 export interface AssignServiceInput {

@@ -44,7 +44,6 @@ export const inviteTenantOperatorSchema = z.object({
   body: z
     .object({
       email: z.string().email(),
-      temporaryPassword: z.string().min(8).max(128),
       roleIds: z.array(z.string().regex(/^[a-f\d]{24}$/i)).min(1),
     })
     .strict(),

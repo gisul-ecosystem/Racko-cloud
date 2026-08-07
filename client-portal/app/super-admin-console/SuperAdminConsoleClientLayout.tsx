@@ -84,10 +84,17 @@ export default function SuperAdminConsoleClientLayout({
 
   useEffect(() => {
     if (isLoading) return;
-    if (isAuthenticated && user && !isControlPlaneRole(user.role)) {
+    if (!isAuthenticated || !user) {
+      const dest = pathname
+        ? `/login?redirect=${encodeURIComponent(pathname)}`
+        : '/login';
+      router.replace(dest);
+      return;
+    }
+    if (!isControlPlaneRole(user.role)) {
       router.replace(user.role === 'admin' ? '/console' : '/dashboard/user');
     }
-  }, [isLoading, isAuthenticated, user, router]);
+  }, [isLoading, isAuthenticated, user, router, pathname]);
 
   useEffect(() => {
     if (!allowed) {

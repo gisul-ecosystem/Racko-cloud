@@ -1,6 +1,5 @@
 using System.IO;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
@@ -60,29 +59,68 @@ public class RackoApiClient
         return resp?.Data.Files ?? [];
     }
 
-    /// <summary>Upload a local file and share it with target VMs.</summary>
+    /// <summary>
+    /// Upload a file using presigned S3 PUT URL — zero server memory usage.
+    /// Step 1: Get presigned URL + pendingId from core-api (no file bytes sent).
+    /// Step 2: PUT file directly to S3 using the presigned URL.
+    /// Step 3: Notify core-api that upload completed (pendingId).
+    /// </summary>
     public async Task<SharedFileDto> UploadAsync(
         string   localPath,
         string   permission,
         string[] sharedWithMachineIds)
     {
-        await using var stream = File.OpenRead(localPath);
-        var fileName  = Path.GetFileName(localPath);
-        var mimeType  = GuessMimeType(fileName);
+        var fileName = Path.GetFileName(localPath);
+        var mimeType = GuessMimeType(fileName);
+        var fileInfo = new FileInfo(localPath);
 
-        using var form = new MultipartFormDataContent();
+        // ── Step 1: Get presigned PUT URL from core-api ───────────────────────
+        var requestBody = new
+        {
+            fileName,
+            mimeType,
+            sizeBytes           = fileInfo.Length,
+            permission,
+            sharedWithMachineIds,
+        };
 
-        var fileContent = new StreamContent(stream);
-        fileContent.Headers.ContentType = new MediaTypeHeaderValue(mimeType);
-        form.Add(fileContent, "file", fileName);
-        form.Add(new StringContent(permission), "permission");
-        form.Add(new StringContent(string.Join(",", sharedWithMachineIds)), "sharedWithMachineIds");
+        var reqContent = new StringContent(
+            System.Text.Json.JsonSerializer.Serialize(requestBody),
+            System.Text.Encoding.UTF8,
+            "application/json");
 
-        var response = await _http.PostAsync("/api/v1/agent/shared-files", form);
-        response.EnsureSuccessStatusCode();
+        var urlResp = await _http.PostAsync("/api/v1/agent/shared-files/upload-url", reqContent);
+        urlResp.EnsureSuccessStatusCode();
 
-        var result = await response.Content.ReadFromJsonAsync<ApiFileResponse>(JsonOpts)
-            ?? throw new InvalidOperationException("Empty response from server.");
+        var urlResult = await urlResp.Content.ReadFromJsonAsync<ApiUploadUrlResponse>(JsonOpts)
+            ?? throw new InvalidOperationException("Empty upload-url response.");
+
+        var presignedUrl = urlResult.Data.PresignedUrl;
+        var pendingId    = urlResult.Data.PendingId;
+
+        // ── Step 2: PUT file DIRECTLY to S3 — no bytes through core-api ───────
+        using var s3Client  = new System.Net.Http.HttpClient();
+        await using var fs  = File.OpenRead(localPath);
+        using var fileContent = new StreamContent(fs);
+        fileContent.Headers.ContentType =
+            new System.Net.Http.Headers.MediaTypeHeaderValue(mimeType);
+        fileContent.Headers.ContentLength = fileInfo.Length;
+
+        var putResp = await s3Client.PutAsync(presignedUrl, fileContent);
+        putResp.EnsureSuccessStatusCode();
+
+        // ── Step 3: Finalize — notify core-api the upload completed ───────────
+        var completeBody = new StringContent(
+            System.Text.Json.JsonSerializer.Serialize(new { pendingId }),
+            System.Text.Encoding.UTF8,
+            "application/json");
+
+        var completeResp = await _http.PostAsync(
+            "/api/v1/agent/shared-files/upload-complete", completeBody);
+        completeResp.EnsureSuccessStatusCode();
+
+        var result = await completeResp.Content.ReadFromJsonAsync<ApiFileResponse>(JsonOpts)
+            ?? throw new InvalidOperationException("Empty upload-complete response.");
         return result.Data.File;
     }
 
@@ -101,6 +139,19 @@ public class RackoApiClient
         await using var fs = File.Create(destPath);
         await response.Content.CopyToAsync(fs);
         return destPath;
+    }
+
+    /// <summary>
+    /// Gets a presigned S3 GET URL for the file.
+    /// read permission  → 60s TTL  (open in viewer, never saved)
+    /// full permission  → 300s TTL (download directly from S3, API not involved)
+    /// </summary>
+    public async Task<ViewUrlResponse> GetViewUrlAsync(string fileId)
+    {
+        var resp = await _http.GetFromJsonAsync<ApiViewUrlResponse>(
+            $"/api/v1/agent/shared-files/{fileId}/view-url", JsonOpts)
+            ?? throw new InvalidOperationException("Empty response.");
+        return resp.Data;
     }
 
     /// <summary>Update permission and/or target VMs for a file.</summary>
