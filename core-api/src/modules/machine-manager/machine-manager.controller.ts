@@ -154,9 +154,9 @@ export class MachineManagerController {
   async pushAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
-      const { vms, sessionId } = req.body as PushAgentInput & { sessionId?: string };
+      const { vms, sessionId, groupId } = req.body as PushAgentInput & { sessionId?: string; groupId?: string };
       const sid = sessionId ?? `push-${Date.now()}`;
-      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid);
+      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid, groupId);
       success(res, 'Agent push initiated.', { ...result, sessionId: sid }, 201);
     } catch (err) {
       next(err);
