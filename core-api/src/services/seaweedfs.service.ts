@@ -243,3 +243,5 @@ class SeaweedFSService {
     return { presignedUrl };
   }
 }
+
+export const seaweedfsService = new SeaweedFSService();
