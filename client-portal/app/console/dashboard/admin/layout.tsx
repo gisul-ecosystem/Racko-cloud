@@ -13,6 +13,12 @@ export default function TenantAdminLayout({ children }: { children: React.ReactN
   const isBilling = pathname.startsWith('/console/dashboard/admin/billing');
   const isEndUserResources =
     tenantUser?.role === 'tenant_user' && isTenantEndUserResourcesPath(pathname);
+  const isVmConsole = /\/vms\/[^/]+\/console\/?$/.test(pathname);
+
+  // Full-bleed Guacamole console — no VPS sidebar/padding.
+  if (isVmConsole) {
+    return <>{children}</>;
+  }
 
   if (isBilling) {
     return <TenantBillingShell>{children}</TenantBillingShell>;
