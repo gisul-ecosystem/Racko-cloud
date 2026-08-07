@@ -59,6 +59,17 @@ export interface CredentialDelivery {
   spreadsheetAvailable?: boolean;
 }
 
+export interface ProvisionCohort {
+  id?: number;
+  cohortIndex: number;
+  userNumberFrom: number;
+  userNumberTo: number;
+  status: string;
+  currentStep: ProvisionStepKey | 'done' | string;
+  lastError?: string | null;
+  cohortTotal?: number;
+}
+
 export interface ProvisionSnapshot {
   request: ProvisioningRequest | null;
   provision: {
@@ -100,6 +111,12 @@ export interface ProvisionSnapshot {
     errorMessage?: string | null;
   };
   credentials: CredentialDelivery | null;
+  /** Wave / cohort provisioning (users 1–10, then 11–20, …). */
+  cohorts?: ProvisionCohort[];
+  activeCohort?: ProvisionCohort | null;
+  cohortTotal?: number;
+  cohortsCompleted?: number;
+  allCohortsComplete?: boolean;
   fetchedAt: string;
 }
 

@@ -123,10 +123,19 @@ export async function fetchProvisionSnapshotServer(
       `${prefix}/requests/${requestId}`,
       headers
     ),
-    gatewayRequest<{ success: boolean; status?: string; resourceGroup?: string | null }>(
-      `${prefix}/provision/request/${requestId}`,
-      headers
-    ),
+    gatewayRequest<{
+      success: boolean;
+      status?: string;
+      resourceGroup?: string | null;
+      resourceGroupCount?: number | null;
+      accountCount?: number | null;
+      complete?: boolean;
+      cohorts?: ProvisionSnapshot['cohorts'];
+      activeCohort?: ProvisionSnapshot['activeCohort'];
+      cohortsCompleted?: number;
+      cohortTotal?: number;
+      allCohortsComplete?: boolean;
+    }>(`${prefix}/provision/request/${requestId}`, headers),
     gatewayRequest<{ success: boolean; resources?: ProvisionSnapshot['services']['resources']; count?: number }>(
       `${prefix}/provision/request/${requestId}/services`,
       headers
@@ -162,14 +171,18 @@ export async function fetchProvisionSnapshotServer(
 
   const request =
     requestResponse.status === 'fulfilled' ? (requestResponse.value.data ?? null) : null;
-  const provision =
-    provisionResponse.status === 'fulfilled'
-      ? {
-          status: provisionResponse.value.status,
-          resourceGroup: provisionResponse.value.resourceGroup ?? null,
-          resourceGroupId: null,
-        }
-      : null;
+  const provisionRaw =
+    provisionResponse.status === 'fulfilled' ? provisionResponse.value : null;
+  const provision = provisionRaw
+    ? {
+        status: provisionRaw.status,
+        resourceGroup: provisionRaw.resourceGroup ?? null,
+        resourceGroupId: null,
+        resourceGroupCount: provisionRaw.resourceGroupCount ?? null,
+        accountCount: provisionRaw.accountCount ?? null,
+        complete: provisionRaw.complete === true,
+      }
+    : null;
   const servicesResources =
     servicesResponse.status === 'fulfilled' && Array.isArray(servicesResponse.value.resources)
       ? servicesResponse.value.resources
@@ -236,6 +249,11 @@ export async function fetchProvisionSnapshotServer(
       errorMessage: fabricRaw.errorMessage ?? null,
     },
     credentials,
+    cohorts: Array.isArray(provisionRaw?.cohorts) ? provisionRaw.cohorts : [],
+    activeCohort: provisionRaw?.activeCohort ?? null,
+    cohortTotal: provisionRaw?.cohortTotal,
+    cohortsCompleted: provisionRaw?.cohortsCompleted,
+    allCohortsComplete: provisionRaw?.allCohortsComplete === true,
     fetchedAt: new Date().toISOString(),
   };
 }

@@ -91,7 +91,9 @@ const provisionPerUserResourceGroups = async ({
   requestId,
   accountCount,
   location,
-  batchSize = getResourceGroupBatchSize()
+  batchSize = getResourceGroupBatchSize(),
+  userNumberFrom = null,
+  userNumberTo = null
 }) => {
   const resolvedAccountCount = Number(accountCount);
 
@@ -99,23 +101,40 @@ const provisionPerUserResourceGroups = async ({
     throw new AppError('Request account count is invalid.', 400);
   }
 
-  const existing = await getStagingResourceGroups(requestId);
+  const rangeFrom =
+    Number.isInteger(Number(userNumberFrom)) && Number(userNumberFrom) > 0
+      ? Number(userNumberFrom)
+      : 1;
+  const rangeTo =
+    Number.isInteger(Number(userNumberTo)) && Number(userNumberTo) > 0
+      ? Number(userNumberTo)
+      : resolvedAccountCount;
+  const targetCount = Math.max(0, rangeTo - rangeFrom + 1);
 
-  if (existing.length >= resolvedAccountCount) {
+  const existing = await getStagingResourceGroups(requestId);
+  const existingInRange = existing.filter((row) => {
+    const n = Number(row.user_number);
+    return n >= rangeFrom && n <= rangeTo;
+  });
+
+  if (existingInRange.length >= targetCount) {
     return {
       rows: existing,
-      completed: existing.length,
+      completed: existingInRange.length,
       remaining: 0,
       done: true,
       batchCreated: 0,
-      failures: []
+      failures: [],
+      userNumberFrom: rangeFrom,
+      userNumberTo: rangeTo
     };
   }
 
   const existingNumbers = new Set(existing.map((row) => Number(row.user_number)));
-  const pendingUserNumbers = Array.from({ length: resolvedAccountCount }, (_, index) => index + 1).filter(
-    (userNumber) => !existingNumbers.has(userNumber)
-  );
+  const pendingUserNumbers = Array.from(
+    { length: rangeTo - rangeFrom + 1 },
+    (_, index) => rangeFrom + index
+  ).filter((userNumber) => !existingNumbers.has(userNumber));
   const batchUserNumbers = pendingUserNumbers.slice(0, batchSize);
   const provisionedEntries = [];
   const failures = [];
@@ -149,30 +168,30 @@ const provisionPerUserResourceGroups = async ({
   }
 
   const updated = await getStagingResourceGroups(requestId);
-  const completed = updated.length;
-  const remaining = Math.max(0, resolvedAccountCount - completed);
+  const completedInRange = updated.filter((row) => {
+    const n = Number(row.user_number);
+    return n >= rangeFrom && n <= rangeTo;
+  }).length;
+  const remaining = Math.max(0, targetCount - completedInRange);
 
-  if (batchUserNumbers.length > 0 && provisionedEntries.length === 0 && failures.length > 0) {
-    throw new AppError(
-      `Failed to create resource groups for users ${failures
-        .slice(0, 3)
-        .map((entry) => entry.userNumber)
-        .join(', ')}${failures.length > 3 ? '...' : ''}: ${failures[0].message}`,
-      502
-    );
-  }
-
+  // Soft-fail: return partial progress instead of 502 when a batch creates zero RGs.
   return {
     rows: updated,
-    completed,
+    completed: completedInRange,
     remaining,
     done: remaining === 0,
     batchCreated: provisionedEntries.length,
-    failures
+    failures,
+    userNumberFrom: rangeFrom,
+    userNumberTo: rangeTo
   };
 };
 
-const getPerUserResourceGroupProgress = async (requestId, client = db) => {
+const getPerUserResourceGroupProgress = async (
+  requestId,
+  client = db,
+  { userNumberFrom = null, userNumberTo = null } = {}
+) => {
   const result = await client.query(
     `
       SELECT account_count, costing_mode
@@ -207,14 +226,31 @@ const getPerUserResourceGroupProgress = async (requestId, client = db) => {
     };
   }
 
+  const rangeFrom =
+    Number.isInteger(Number(userNumberFrom)) && Number(userNumberFrom) > 0
+      ? Number(userNumberFrom)
+      : 1;
+  const rangeTo =
+    Number.isInteger(Number(userNumberTo)) && Number(userNumberTo) > 0
+      ? Number(userNumberTo)
+      : accountCount;
+  const targetCount = Math.max(0, rangeTo - rangeFrom + 1);
+
   const stagingRows = await getStagingResourceGroups(requestId, client);
+  const completedInRange = stagingRows.filter((row) => {
+    const n = Number(row.user_number);
+    return n >= rangeFrom && n <= rangeTo;
+  }).length;
 
   return {
     required: true,
-    ready: stagingRows.length >= accountCount,
-    accountCount,
-    completed: stagingRows.length,
-    remaining: Math.max(0, accountCount - stagingRows.length)
+    ready: completedInRange >= targetCount,
+    accountCount: targetCount,
+    fullAccountCount: accountCount,
+    completed: completedInRange,
+    remaining: Math.max(0, targetCount - completedInRange),
+    userNumberFrom: rangeFrom,
+    userNumberTo: rangeTo
   };
 };
 
