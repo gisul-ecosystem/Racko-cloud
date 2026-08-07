@@ -374,14 +374,13 @@ class DedicatedServerService {
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);
 
-    if (!input.projectId) {
-      throw new ValidationError('projectId is required.');
-    }
-    const projectCtx = await projectsService.assertUsableForService({
-      projectId: input.projectId,
-      actingUserId: adminId.toString(),
-      serviceKey: 'dedicated-server',
-    });
+    const projectCtx = input.projectId
+      ? await projectsService.assertUsableForService({
+          projectId: input.projectId,
+          actingUserId: adminId.toString(),
+          serviceKey: 'dedicated-server',
+        })
+      : null;
 
     if (total > 0) {
       await adminBillingService.debitWallet(
@@ -390,8 +389,8 @@ class DedicatedServerService {
         null,
         'dedicated_server_purchase',
         {
-          projectId: projectCtx.projectId.toString(),
-          orgId: projectCtx.orgId,
+          projectId: projectCtx?.projectId.toString() ?? null,
+          orgId: projectCtx?.orgId ?? null,
           serviceKey: 'dedicated-server',
         }
       );
@@ -401,7 +400,7 @@ class DedicatedServerService {
     try {
       doc = await DedicatedServerRequestModel.create({
         adminId,
-        projectId: projectCtx.projectId,
+        ...(projectCtx ? { projectId: projectCtx.projectId } : {}),
         planId: plan._id,
         planName: plan.name,
         specs: {
@@ -753,14 +752,13 @@ class DedicatedServerService {
     const tax = roundMoney(subtotal * GST_RATE);
     const total = roundMoney(subtotal + tax);
 
-    if (!input.projectId) {
-      throw new ValidationError('projectId is required.');
-    }
-    const projectCtx = await projectsService.assertUsableForTenantService({
-      projectId: input.projectId,
-      tenantId: tenantId.toString(),
-      serviceKey: 'dedicated-server',
-    });
+    const projectCtx = input.projectId
+      ? await projectsService.assertUsableForTenantService({
+          projectId: input.projectId,
+          tenantId: tenantId.toString(),
+          serviceKey: 'dedicated-server',
+        })
+      : null;
 
     if (total > 0) {
       await walletService.debitWallet(
@@ -771,7 +769,7 @@ class DedicatedServerService {
         null,
         null,
         {
-          projectId: projectCtx.projectId.toString(),
+          projectId: projectCtx?.projectId.toString() ?? null,
           serviceKey: 'dedicated-server',
         }
       );
@@ -782,7 +780,7 @@ class DedicatedServerService {
       doc = await DedicatedServerRequestModel.create({
         tenantId,
         tenantUserId,
-        projectId: projectCtx.projectId,
+        ...(projectCtx ? { projectId: projectCtx.projectId } : {}),
         planId: plan._id,
         planName: plan.name,
         specs: {

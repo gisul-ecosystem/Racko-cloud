@@ -223,6 +223,9 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				if p.onTrackingUpdate != nil {
 					go p.onTrackingUpdate(trackMsg.Enabled)
 				}
+			} else if msg.Type == "shared_file_added" || msg.Type == "shared_file_updated" || msg.Type == "shared_file_deleted" {
+				log.Printf("[ws-poller] Received %s — notifying racko-app", msg.Type)
+				go writeSharedFileNotify(msg.Type)
 			}
 		}
 	}()
@@ -459,6 +462,8 @@ if (Test-Path "C:\ProgramData\racko-agent\unins000.exe") {
 }
 sc.exe stop RackoAgent 2>$null
 sc.exe delete RackoAgent 2>$null
+Stop-Process -Name "racko-app" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:PUBLIC\Desktop\Racko Shared Files.lnk" -Force -ErrorAction SilentlyContinue
 Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue
 `
 	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)
@@ -487,4 +492,26 @@ func parseCloseError(err error) *websocket.CloseError {
 		return closeErr
 	}
 	return nil
+}
+
+// ─── Shared File Notification ─────────────────────────────────────────────────
+//
+// writeSharedFileNotify writes a trigger file to the agent's data directory.
+// The racko-app GUI watches this file with FileSystemWatcher and reloads
+// the inbox immediately when it changes — zero-latency real-time updates.
+//
+// Protocol:
+//   C:\ProgramData\racko-agent\racko-notify.json
+//   Content: {"event":"shared_file_added","ts":1234567890}
+
+func writeSharedFileNotify(eventType string) {
+	const notifyPath = `C:\ProgramData\racko-agent\racko-notify.json`
+
+	ts := time.Now().UnixMilli()
+	content := fmt.Sprintf(`{"event":%q,"ts":%d}`, eventType, ts)
+	if err := os.WriteFile(notifyPath, []byte(content), 0o644); err != nil {
+		log.Printf("[ws-poller] writeSharedFileNotify: failed to write trigger: %v", err)
+		return
+	}
+	log.Printf("[ws-poller] writeSharedFileNotify: notified racko-app of %s", eventType)
 }

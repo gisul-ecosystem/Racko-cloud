@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- WinForms only — no WPF. Works on Win10/11/Server 2016/2019/2022/Core -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <AssemblyName>racko-app</AssemblyName>
+    <RootNamespace>RackoApp</RootNamespace>
+    <ApplicationIcon>Assets\racko.ico</ApplicationIcon>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <!--
+      Self-contained folder publish — no .NET runtime needed on the VM.
+      PublishSingleFile is intentionally NOT set here. WebView2 requires
+      WebView2Loader.dll to exist as a loose file on disk next to the exe.
+      Single-file publish embeds it inside the bundle where the OS DLL loader
+      cannot find it, causing "Dll was not found" at runtime.
+      The Inno Setup installer bundles the entire publish\ folder instead.
+    -->
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- WebView2: embedded Chromium for in-app file preview (read-only) -->
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2739.15" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Assets\racko.ico" />
+  </ItemGroup>
+
+</Project>

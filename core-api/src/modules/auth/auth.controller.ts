@@ -33,7 +33,10 @@ export class AuthController {
     try {
       const { token } = req.body as { token: string };
       const result = await authService.verifyEmail(token, req);
-      success(res, result.message);
+      success(res, result.message, {
+        requiresPasswordSetup: result.requiresPasswordSetup,
+        ...(result.resetToken ? { resetToken: result.resetToken } : {}),
+      });
     } catch (error) {
       next(error);
     }

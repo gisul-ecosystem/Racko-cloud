@@ -139,7 +139,6 @@ export const PROMOTE_EXISTING_USER_CODE = 'PROMOTE_EXISTING_USER';
 
 export async function createStaffUser(input: {
   email: string;
-  tempPassword?: string;
   roleIds?: string[];
   /** Convert an existing non-staff account to staff instead of failing. */
   promoteExisting?: boolean;

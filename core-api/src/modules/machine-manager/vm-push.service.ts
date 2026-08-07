@@ -377,6 +377,43 @@ class VMPushService {
       'Write-Host "[racko] Starting service..."',
       'sc.exe start RackoAgent',
       'Write-Host "[racko] Agent installed and started successfully."',
+      // ── Racko App (GUI) ────────────────────────────────────────────────
+      // Download racko-app.zip (folder-publish, required for WebView2Loader.dll),
+      // extract to its own subdirectory, then create the desktop shortcut.
+      `$appZipUrl = '${this.platformUrl}/api/v1/agent/binary/racko-app'`,
+      `$appDir = '$installDir\\racko-app'`,
+      `$appZip = '$installDir\\racko-app.zip'`,
+      'Write-Host "[racko] Downloading Racko App..."',
+      'Invoke-WebRequest -Uri $appZipUrl -OutFile $appZip -UseBasicParsing',
+      'Write-Host "[racko] Extracting Racko App..."',
+      // Expand-Archive -Force overwrites any previous install cleanly
+      'Expand-Archive -Path $appZip -DestinationPath $appDir -Force',
+      'Remove-Item $appZip -Force -ErrorAction SilentlyContinue',
+      // Create a desktop shortcut visible to all users (C:\Users\Public\Desktop)
+      'Write-Host "[racko] Creating desktop shortcut..."',
+      '$wsh = New-Object -ComObject WScript.Shell',
+      '$shortcut = $wsh.CreateShortcut("$env:PUBLIC\\Desktop\\Racko Shared Files.lnk")',
+      '$shortcut.TargetPath = "$appDir\\racko-app.exe"',
+      '$shortcut.WorkingDirectory = $appDir',
+      '$shortcut.Description = "Racko Shared Files"',
+      '$shortcut.Save()',
+      // ── WebView2 Runtime — install BEFORE launching the app ───────────────
+      // Required for the in-app file viewer. The installer auto-detects if
+      // already present (Windows 10/11) and skips — safe to run always.
+      'Write-Host "[racko] Installing WebView2 Runtime (required for file viewer)..."',
+      '$wv2Path = "$installDir\\WebView2Setup.exe"',
+      'try {',
+      '    Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $wv2Path -UseBasicParsing',
+      '    & $wv2Path /silent /install | Out-Null',
+      '    Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
+      '    Write-Host "[racko] WebView2 Runtime installed successfully."',
+      '} catch {',
+      '    Write-Host "[racko] WARNING: WebView2 install failed (non-fatal): $_"',
+      '}',
+      // Launch the app for the currently logged-in user (non-blocking)
+      'Write-Host "[racko] Launching Racko App..."',
+      'Start-Process "$appDir\\racko-app.exe"',
+      'Write-Host "[racko] Racko App installed successfully."',
     ].join('; ');
   }
 }
