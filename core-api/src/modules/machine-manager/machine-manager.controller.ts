@@ -356,7 +356,9 @@ export class MachineManagerController {
         windows:   { file: 'racko-agent.exe', name: 'racko-agent.exe' },
         linux:     { file: 'racko-agent',     name: 'racko-agent' },
         darwin:    { file: 'racko-agent-mac', name: 'racko-agent' },
-        'racko-app': { file: 'racko-app.exe', name: 'racko-app.exe' },
+        // racko-app is published as a folder-zip (required for WebView2Loader.dll to
+        // land on disk as a loose file). The push script downloads and extracts the zip.
+        'racko-app': { file: 'racko-app.zip', name: 'racko-app.zip' },
       };
 
       const entry = fileMap[os];
@@ -381,6 +383,7 @@ export class MachineManagerController {
       // Prevent Cloudflare and any intermediate proxy from compressing the binary.
       // Compression changes the bytes on disk, causing SHA256 checksum mismatches
       // when the agent verifies the downloaded file against the expected hash.
+      // For racko-app.zip, compression is also pointless (zip is already compressed).
       res.setHeader('Cache-Control', 'no-transform');
       fs.createReadStream(binaryPath).pipe(res);
     } catch (err) {

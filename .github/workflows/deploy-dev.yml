@@ -241,10 +241,11 @@ jobs:
             -c Release `
             -r win-x64 `
             --self-contained true `
-            -p:PublishSingleFile=true `
             -p:PublishReadyToRun=true `
             -o racko-app/publish
-          Copy-Item "racko-app/publish/racko-app.exe" "agent/dist/racko-app.exe"
+          # Zip the full publish folder — WebView2Loader.dll must be a loose file on disk.
+          # PublishSingleFile is NOT used; the push script extracts the zip so all DLLs land next to the exe.
+          Compress-Archive -Path racko-app/publish/* -DestinationPath agent/dist/racko-app.zip -Force
 
       - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
@@ -285,7 +286,7 @@ jobs:
             agent/dist/checksum-${{ matrix.platform }}.txt
             agent/dist/agent-version.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
-            ${{ matrix.platform == 'windows' && 'agent/dist/racko-app.exe' || '' }}
+            ${{ matrix.platform == 'windows' && 'agent/dist/racko-app.zip' || '' }}
           retention-days: 1
 
   deploy-agent:
@@ -326,10 +327,10 @@ jobs:
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
             agent-artifacts/agent-windows/racko-agent-setup.exe \
             "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-agent-setup.exe"
-          # GUI tray app (bundled in installer, also deployed standalone)
+          # GUI tray app zip (folder-publish — WebView2Loader.dll must be loose on disk)
           scp -i ~/.ssh/vm_key -o StrictHostKeyChecking=no \
-            agent-artifacts/agent-windows/racko-app.exe \
-            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-app.exe"
+            agent-artifacts/agent-windows/racko-app.zip \
+            "${VM_USER}@${VM_HOST}:${DEPLOY_PATH}/agent/dist/racko-app.zip"
           echo "Agent binaries uploaded to ${DEPLOY_PATH}/agent/dist/"
 
   deploy:
