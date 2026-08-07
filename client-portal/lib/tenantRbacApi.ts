@@ -135,7 +135,6 @@ export async function setTenantRbacUserRoles(
 
 export async function inviteTenantOperator(input: {
   email: string;
-  temporaryPassword: string;
   roleIds: string[];
 }): Promise<{ _id: string; email: string; role: string }> {
   const data = await unwrap(

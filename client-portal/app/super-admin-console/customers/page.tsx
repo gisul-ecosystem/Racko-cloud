@@ -9,6 +9,9 @@ import {
   CheckCircle2,
   Globe,
   Loader2,
+  Mail,
+  Plus,
+  Trash2,
   UserRound,
   Users,
   Wallet,
@@ -24,6 +27,8 @@ import {
 import { fetchTenants } from '@/lib/tenantApi';
 import type { Tenant } from '@/lib/tenantTypes';
 import { TenantStatusBadge } from '@/components/super-admin-console/white-labelling/TenantStatusBadge';
+import { OnboardOrganizationModal } from '@/components/super-admin-console/OnboardOrganizationModal';
+import { DeleteOrganizationModal } from '@/components/super-admin-console/DeleteOrganizationModal';
 import { useAuth } from '@/context/AuthContext';
 
 type CustomerFilter = 'all' | 'individual' | 'organization' | 'tenant';
@@ -96,6 +101,9 @@ function CustomerDirectoryContent() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [selectedRequest, setSelectedRequest] = useState<OrganizationAccessRequest | null>(null);
+  const [onboardOpen, setOnboardOpen] = useState(false);
+  const [inviteUser, setInviteUser] = useState<{ id: string; email: string } | null>(null);
+  const [deleteUser, setDeleteUser] = useState<{ id: string; email: string } | null>(null);
 
   useEffect(() => {
     setFilter(parseFilter(searchParams.get('filter')));
@@ -255,17 +263,32 @@ function CustomerDirectoryContent() {
         >
           <ArrowLeft className="h-3 w-3" /> Back to console
         </Link>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-bold text-gray-900">Customer Directory</h1>
-          {!loading ? (
-            <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
-              {headerCount}
-            </span>
-          ) : null}
-          {pendingOrgCount > 0 ? (
-            <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
-              {pendingOrgCount} org request{pendingOrgCount === 1 ? '' : 's'} pending
-            </span>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <h1 className="text-2xl font-bold text-gray-900">Customer Directory</h1>
+            {!loading ? (
+              <span className="rounded-full bg-gray-100 px-2.5 py-0.5 text-xs font-medium text-gray-600">
+                {headerCount}
+              </span>
+            ) : null}
+            {pendingOrgCount > 0 ? (
+              <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
+                {pendingOrgCount} org request{pendingOrgCount === 1 ? '' : 's'} pending
+              </span>
+            ) : null}
+          </div>
+          {isSuperAdmin && filter === 'organization' ? (
+            <button
+              type="button"
+              onClick={() => {
+                setInviteUser(null);
+                setOnboardOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-800"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Onboard organization
+            </button>
           ) : null}
         </div>
         <p className="mt-0.5 text-sm text-gray-500">
@@ -462,7 +485,22 @@ function CustomerDirectoryContent() {
 
       {showCustomers ? (
       <section className="space-y-3">
-        <h2 className="text-sm font-semibold text-gray-900">Customers</h2>
+        <div className="flex items-center justify-between gap-3">
+          <h2 className="text-sm font-semibold text-gray-900">Customers</h2>
+          {isSuperAdmin && filter === 'organization' ? (
+            <button
+              type="button"
+              onClick={() => {
+                setInviteUser(null);
+                setOnboardOpen(true);
+              }}
+              className="inline-flex items-center gap-1.5 text-xs font-medium text-[#B91C1C] hover:underline"
+            >
+              <Plus className="h-3.5 w-3.5" />
+              Onboard organization
+            </button>
+          ) : null}
+        </div>
         {loading ? (
           <div className="flex items-center gap-2 py-8 text-sm text-gray-500">
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -474,7 +512,24 @@ function CustomerDirectoryContent() {
               <Users className="h-6 w-6 text-gray-400" />
             </div>
             <p className="text-sm font-medium text-gray-600">No customers in this filter</p>
-            <p className="mt-1 text-xs text-gray-400">Try another filter or invite a new customer.</p>
+            <p className="mt-1 text-xs text-gray-400">
+              {filter === 'organization'
+                ? 'Onboard an organization admin to get started.'
+                : 'Try another filter or invite a new customer.'}
+            </p>
+            {isSuperAdmin && filter === 'organization' ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setInviteUser(null);
+                  setOnboardOpen(true);
+                }}
+                className="mt-4 inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3.5 py-2 text-xs font-semibold text-white hover:bg-red-800"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Onboard organization
+              </button>
+            ) : null}
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
@@ -567,8 +622,37 @@ function CustomerDirectoryContent() {
                   </dl>
 
                   {customer.role === 'admin' ? (
-                    <div className="mt-4 flex flex-wrap gap-3 border-t border-gray-100 pt-3 text-xs font-medium text-[#B91C1C]">
-                      View billing, services, and usage →
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 text-xs font-medium text-[#B91C1C]">
+                      <span>View billing, services, and usage →</span>
+                      {isSuperAdmin && isOrganization(customer.accountType) ? (
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setInviteUser({ id: customer.id, email: customer.email });
+                              setOnboardOpen(true);
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border border-red-100 bg-red-50 px-2 py-1 text-[11px] font-semibold text-[#B91C1C] hover:bg-red-100"
+                          >
+                            <Mail className="h-3 w-3" />
+                            Send invite
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setDeleteUser({ id: customer.id, email: customer.email });
+                            }}
+                            className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-50"
+                          >
+                            <Trash2 className="h-3 w-3" />
+                            Delete
+                          </button>
+                        </div>
+                      ) : null}
                     </div>
                   ) : null}
                 </Link>
@@ -587,6 +671,28 @@ function CustomerDirectoryContent() {
           onReview={(status) => void handleReview(selectedRequest, status)}
         />
       ) : null}
+
+      <OnboardOrganizationModal
+        key={inviteUser ? `invite-${inviteUser.id}` : 'create'}
+        open={onboardOpen}
+        inviteUser={inviteUser}
+        onClose={() => {
+          setOnboardOpen(false);
+          setInviteUser(null);
+        }}
+        onCreated={() => {
+          void load();
+        }}
+      />
+
+      <DeleteOrganizationModal
+        open={Boolean(deleteUser)}
+        user={deleteUser}
+        onClose={() => setDeleteUser(null)}
+        onDeleted={() => {
+          void load();
+        }}
+      />
     </div>
   );
 }

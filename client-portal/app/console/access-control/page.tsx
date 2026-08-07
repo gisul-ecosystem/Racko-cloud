@@ -44,7 +44,6 @@ export default function PlatformAccessControlPage() {
 
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
-  const [invitePassword, setInvitePassword] = useState('');
   const [inviteRoleIds, setInviteRoleIds] = useState<string[]>([]);
   const [savingInvite, setSavingInvite] = useState(false);
 
@@ -134,15 +133,13 @@ export default function PlatformAccessControlPage() {
     try {
       await invitePlatformOperator({
         email: inviteEmail,
-        temporaryPassword: invitePassword,
         roleIds: inviteRoleIds,
       });
       setFlash(
-        'Operator invited. They must verify email and set a password before signing in.'
+        'Operator invited. A temporary password was emailed — they must verify and set a password before signing in.'
       );
       setShowInvite(false);
       setInviteEmail('');
-      setInvitePassword('');
       setInviteRoleIds([]);
       setTab('people');
       await load();
@@ -360,18 +357,9 @@ export default function PlatformAccessControlPage() {
                 placeholder="Operator email"
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
               />
-              <input
-                required
-                type="text"
-                value={invitePassword}
-                onChange={(e) => setInvitePassword(e.target.value)}
-                placeholder="Temporary password (sent in invite email)"
-                minLength={8}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              />
               <p className="text-xs text-gray-500">
-                An invite email is sent with a verify link. After verifying, they set a password
-                before signing in.
+                An invite email is sent with a generated temporary password and verify link. After
+                verifying, they set their own password before signing in.
               </p>
               <div className="flex flex-wrap gap-2">
                 {roles.map((role) => (

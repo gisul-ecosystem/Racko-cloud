@@ -56,16 +56,11 @@ export const createStaffUserSchema = z.object({
   body: z
     .object({
       email: z.string().trim().email().max(255),
-      tempPassword: z.string().min(8).max(128).optional(),
       roleIds: z.array(z.string().regex(/^[a-f\d]{24}$/i)).optional(),
       /** Convert an existing non-staff account to staff instead of failing. */
       promoteExisting: z.boolean().optional(),
     })
-    .strict()
-    .refine((body) => Boolean(body.promoteExisting) || Boolean(body.tempPassword), {
-      message: 'tempPassword is required when creating a new staff user',
-      path: ['tempPassword'],
-    }),
+    .strict(),
 });
 
 export type CreateRbacRoleInput = z.infer<typeof createRbacRoleSchema>['body'];

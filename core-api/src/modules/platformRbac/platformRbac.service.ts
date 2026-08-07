@@ -3,6 +3,7 @@ import { User } from '../../models/user.model';
 import { NotFoundError, ValidationError, ForbiddenError, ConflictError } from '../../utils/errors';
 import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { sendStaffInviteEmail } from '../../utils/email/sender';
+import { generateInvitePassword } from '../../utils/generateInvitePassword';
 import {
   PLATFORM_PERMISSION_CATALOG,
   PLATFORM_ALL_PERMISSION_KEYS,
@@ -256,24 +257,21 @@ class PlatformRbacService {
 
   async inviteOperator(
     orgId: string,
-    input: { email: string; temporaryPassword: string; roleIds: string[] },
+    input: { email: string; roleIds: string[] },
     actorId: string
   ) {
     const email = input.email.toLowerCase().trim();
     const existing = await User.findOne({ email });
     if (existing) throw new ConflictError('Email already in use.');
 
-    if (!input.temporaryPassword || input.temporaryPassword.length < 8) {
-      throw new ValidationError('Temporary password must be at least 8 characters.');
-    }
-
     await this.ensureOrgRoles(orgId);
 
+    const temporaryPassword = generateInvitePassword();
     const verifyToken = generateSecureToken(32);
     const resetToken = generateSecureToken(32);
     const user = await User.create({
       email,
-      password: input.temporaryPassword,
+      password: temporaryPassword,
       role: 'admin',
       accountType: 'legacy',
       onboardingStatus: 'active',
@@ -296,7 +294,7 @@ class PlatformRbacService {
       await sendStaffInviteEmail({
         to: email,
         email,
-        tempPassword: input.temporaryPassword,
+        tempPassword: temporaryPassword,
         verifyToken,
         resetToken,
       });
