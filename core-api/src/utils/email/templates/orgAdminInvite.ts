@@ -60,7 +60,7 @@ export function buildOrgAdminInviteTemplate(data: OrgAdminInviteTemplateData): {
 
   const afterCtaHtml = `
     <p style="margin:0;font-size:13px;color:#6b7280;line-height:1.5;">
-      For security, please change your password after your first login.
+      Sign in with this temporary password. You will be asked to set a new password before accessing the console.
     </p>`;
 
   const { subject, html } = buildBrandedEmail(brand, {
@@ -88,7 +88,7 @@ export function buildOrgAdminInviteTemplate(data: OrgAdminInviteTemplateData): {
     '',
     `Sign in: ${loginUrl}`,
     '',
-    'Please change your password after your first login.',
+    'Sign in with this temporary password. You will be asked to set a new password before accessing the console.',
     '',
     "Didn't expect this invite? Contact your Racko Super Admin if you received this by mistake.",
     brand.websiteLabel,

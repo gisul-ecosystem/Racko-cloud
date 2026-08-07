@@ -1,12 +1,14 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ArrowLeft, Loader2, Plus, Shield, Trash2, Users } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { RoleWizard } from '@/components/access-control/RoleWizard';
 import { useTenantAuth } from '@/context/TenantAuthContext';
+import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
 import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 import {
@@ -28,6 +30,7 @@ type Tab = 'roles' | 'people';
 
 export default function TenantAccessControlPage() {
   const router = useRouter();
+  const { accentColor } = useTenantBranding();
   const { isLoading: authLoading, isAuthenticated } = useTenantAuth();
   const {
     loading: rbacLoading,
@@ -51,10 +54,8 @@ export default function TenantAccessControlPage() {
 
   const [editingRole, setEditingRole] = useState<OrgRbacRole | null>(null);
   const [creatingRole, setCreatingRole] = useState(false);
-  const [roleName, setRoleName] = useState('');
-  const [roleDescription, setRoleDescription] = useState('');
-  const [rolePerms, setRolePerms] = useState<string[]>([]);
   const [savingRole, setSavingRole] = useState(false);
+  const [roleFormError, setRoleFormError] = useState<string | null>(null);
 
   const [assignPerson, setAssignPerson] = useState<TenantRbacPerson | null>(null);
   const [assignRoleIds, setAssignRoleIds] = useState<string[]>([]);
@@ -66,16 +67,6 @@ export default function TenantAccessControlPage() {
   const [savingInvite, setSavingInvite] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TenantRbacPerson | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-
-  const groups = useMemo(() => {
-    const map = new Map<string, OrgRbacPermissionDef[]>();
-    for (const p of catalog) {
-      const list = map.get(p.group) || [];
-      list.push(p);
-      map.set(p.group, list);
-    }
-    return [...map.entries()];
-  }, [catalog]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -111,31 +102,41 @@ export default function TenantAccessControlPage() {
     }
   }, [authLoading, rbacLoading, isAuthenticated, canAccessPage, router]);
 
-  async function saveRoleForm(e: React.FormEvent) {
-    e.preventDefault();
+  function cancelRoleWizard() {
+    setCreatingRole(false);
+    setEditingRole(null);
+    setRoleFormError(null);
+  }
+
+  async function saveRoleWizard(payload: {
+    name: string;
+    description: string;
+    permissions: string[];
+  }) {
     setSavingRole(true);
+    setRoleFormError(null);
+    setError(null);
     try {
       if (editingRole) {
         await updateTenantRbacRole(editingRole._id, {
-          ...(editingRole.isSystem ? {} : { name: roleName, description: roleDescription }),
-          permissions: rolePerms,
+          ...(editingRole.isSystem ? {} : { name: payload.name, description: payload.description }),
+          permissions: payload.permissions,
         });
         setFlash('Role updated.');
       } else {
         await createTenantRbacRole({
-          name: roleName,
-          description: roleDescription,
-          permissions: rolePerms,
+          name: payload.name,
+          description: payload.description,
+          permissions: payload.permissions,
         });
         setFlash('Role created.');
       }
-      setCreatingRole(false);
-      setEditingRole(null);
+      cancelRoleWizard();
       await load();
       await refreshRbac();
       emitTenantRbacChanged();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to save role.');
+      setRoleFormError(err instanceof ApiError ? err.message : 'Failed to save role.');
     } finally {
       setSavingRole(false);
     }
@@ -284,11 +285,10 @@ export default function TenantAccessControlPage() {
                 onClick={() => {
                   setCreatingRole(true);
                   setEditingRole(null);
-                  setRoleName('');
-                  setRoleDescription('');
-                  setRolePerms([]);
+                  setRoleFormError(null);
                 }}
                 className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white"
+                style={{ backgroundColor: accentColor }}
               >
                 <Plus className="h-4 w-4" /> New role
               </button>
@@ -296,80 +296,21 @@ export default function TenantAccessControlPage() {
           )}
 
           {showRoleForm ? (
-            <form
-              onSubmit={(e) => void saveRoleForm(e)}
-              className="space-y-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
-            >
-              {!editingRole?.isSystem ? (
-                <>
-                  <input
-                    required
-                    value={roleName}
-                    onChange={(e) => setRoleName(e.target.value)}
-                    placeholder="Role name"
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                  />
-                  <textarea
-                    value={roleDescription}
-                    onChange={(e) => setRoleDescription(e.target.value)}
-                    placeholder="Description"
-                    rows={2}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                  />
-                </>
-              ) : (
-                <p className="text-sm font-semibold text-gray-900">{editingRole.name}</p>
-              )}
-              <div className="space-y-3">
-                {groups.map(([group, perms]) => (
-                  <div key={group}>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      {group}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {perms.map((p) => (
-                        <label
-                          key={p.key}
-                          className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-2.5 py-1 text-xs"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={rolePerms.includes(p.key)}
-                            onChange={() =>
-                              setRolePerms((prev) =>
-                                prev.includes(p.key)
-                                  ? prev.filter((k) => k !== p.key)
-                                  : [...prev, p.key]
-                              )
-                            }
-                          />
-                          {p.label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={savingRole}
-                  className="rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  {savingRole ? 'Saving…' : 'Save role'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreatingRole(false);
-                    setEditingRole(null);
-                  }}
-                  className="rounded-lg border border-gray-200 px-3.5 py-2 text-sm"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
+            <RoleWizard
+              key={editingRole?._id ?? 'new'}
+              catalog={catalog}
+              accentColor={accentColor}
+              initial={{
+                name: editingRole?.name ?? '',
+                description: editingRole?.description ?? '',
+                permissions: editingRole ? [...editingRole.permissions] : [],
+                lockedMeta: Boolean(editingRole?.isSystem),
+              }}
+              saving={savingRole}
+              error={roleFormError}
+              onCancel={cancelRoleWizard}
+              onSave={(payload) => void saveRoleWizard(payload)}
+            />
           ) : null}
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -396,11 +337,10 @@ export default function TenantAccessControlPage() {
                           onClick={() => {
                             setEditingRole(role);
                             setCreatingRole(false);
-                            setRoleName(role.name);
-                            setRoleDescription(role.description);
-                            setRolePerms([...role.permissions]);
+                            setRoleFormError(null);
                           }}
                           className="text-xs font-medium text-[#B91C1C] hover:underline"
+                          style={{ color: accentColor }}
                         >
                           Edit
                         </button>
