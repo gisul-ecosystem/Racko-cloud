@@ -6,14 +6,40 @@ const { getStagingResourceGroups, getPerUserResourceGroupProgress } = require('.
 const { runWithConcurrency } = require('../utils/concurrency');
 const {
   getServiceProvisionConcurrency,
-  getProvisionStepTimeBudgetMs,
+  getServiceProvisionTimeBudgetMs,
+  getCohortWaveTimeBudgetMs,
   getServicePolicyBatchSize
 } = require('../utils/provisionConcurrency');
+const { findInstancePolicyRule } = require('../utils/instancePolicyRules');
+const { ensureCustomPolicyDefinition } = require('../provisioners/azure/customPolicyProvisioner');
 
 const TERMINAL_STATUSES = new Set(['policy_configured', 'provisioned', 'skipped']);
 const RG_OFFSET_PREFIX = 'rg_offset:';
+const RG_COHORTS_PREFIX = 'rg_cohorts:';
 
 const isNoOpPolicyService = (instance) => /ai foundry/i.test(String(instance?.service_name || ''));
+
+const parseCompletedCohortRanges = (row) => {
+  const message = String(row?.error_message || '');
+  if (!message.startsWith(RG_COHORTS_PREFIX)) {
+    return new Set();
+  }
+  return new Set(
+    message
+      .slice(RG_COHORTS_PREFIX.length)
+      .split(',')
+      .map((part) => part.trim())
+      .filter(Boolean)
+  );
+};
+
+const cohortRangeKey = (from, to) => `${from}-${to}`;
+
+const mergeCohortRangeMessage = (row, from, to) => {
+  const set = parseCompletedCohortRanges(row);
+  set.add(cohortRangeKey(from, to));
+  return `${RG_COHORTS_PREFIX}${[...set].sort().join(',')}`;
+};
 
 const logEvent = (event, details = {}) => {
   console.log(
@@ -168,15 +194,60 @@ const provisionPerUserServicePoliciesInBatches = async ({
   instances,
   resourceGroupNames,
   location,
-  existingByServiceId
+  existingByServiceId,
+  userNumberFrom = null,
+  userNumberTo = null
 }) => {
   const batchSizeBase = getServicePolicyBatchSize();
   const startedAt = Date.now();
-  const timeBudgetMs = getProvisionStepTimeBudgetMs();
+  const cohortScoped =
+    Number.isInteger(Number(userNumberFrom)) && Number.isInteger(Number(userNumberTo));
+  const cohortKey = cohortScoped
+    ? cohortRangeKey(Number(userNumberFrom), Number(userNumberTo))
+    : null;
+  // Cohort waves: finish the whole wave in one POST when possible (parallel Azure calls).
+  const configuredBudgetMs = getServiceProvisionTimeBudgetMs();
+  const timeBudgetMs = cohortScoped
+    ? configuredBudgetMs > 0
+      ? configuredBudgetMs
+      : getCohortWaveTimeBudgetMs()
+    : configuredBudgetMs;
+  const concurrency = getServiceProvisionConcurrency();
+
+  // Warm custom policy definitions once so parallel RG assigns don't race-create them.
+  const uniqueCustomKeys = new Set();
+  for (const instance of instances) {
+    const rule = findInstancePolicyRule(instance.service_name);
+    if (rule?.customPolicyKey) {
+      uniqueCustomKeys.add(rule.customPolicyKey);
+    }
+  }
+  await runWithConcurrency(
+    [...uniqueCustomKeys],
+    Math.min(10, uniqueCustomKeys.size || 1),
+    async (key) => {
+      await ensureCustomPolicyDefinition(key);
+    },
+    { continueOnError: true }
+  );
 
   const serviceState = instances.map((instance) => {
     const serviceId = Number(instance.service_id);
     const existing = existingByServiceId.get(serviceId);
+
+    if (cohortScoped) {
+      const completedRanges = parseCompletedCohortRanges(existing);
+      const alreadyDoneForCohort =
+        TERMINAL_STATUSES.has(String(existing?.status || '')) ||
+        completedRanges.has(cohortKey);
+      return {
+        instance,
+        serviceId,
+        offset: alreadyDoneForCohort ? resourceGroupNames.length : 0,
+        done: alreadyDoneForCohort
+      };
+    }
+
     const offset = parseRgOffset(existing);
     return {
       instance,
@@ -194,12 +265,17 @@ const provisionPerUserServicePoliciesInBatches = async ({
     (timeBudgetMs === 0 ? !processedBatch : Date.now() - startedAt < timeBudgetMs)
   ) {
     const pendingStates = serviceState.filter((state) => !state.done);
+    const remainingTasks = pendingStates.reduce(
+      (sum, state) => sum + Math.max(0, resourceGroupNames.length - state.offset),
+      0
+    );
     const allNoOp =
       pendingStates.length > 0 && pendingStates.every((state) => isNoOpPolicyService(state.instance));
-    // AI Foundry policies are metadata-only — finish all RGs in one request.
-    const batchSize = allNoOp
-      ? Math.max(batchSizeBase, resourceGroupNames.length * pendingStates.length)
-      : batchSizeBase;
+    // Cohort / no-op: take the full remaining wave in one parallel batch.
+    const batchSize =
+      cohortScoped || allNoOp
+        ? Math.max(batchSizeBase, remainingTasks)
+        : batchSizeBase;
 
     const tasks = [];
     const plannedOffsets = new Map();
@@ -239,17 +315,44 @@ const provisionPerUserServicePoliciesInBatches = async ({
       break;
     }
 
-    await runWithConcurrency(tasks, getServiceProvisionConcurrency(), async (task) => {
-      const result = await provisionServiceResource({
-        requestId,
-        serviceId: task.state.serviceId,
-        serviceName: task.state.instance.service_name,
-        resourceGroupName: task.resourceGroupName,
-        location,
-        instanceOption: task.state.instance.instance_option
-      });
-      lastResultByService.set(task.state.serviceId, result);
+    logEvent('service_policy_batch_started', {
+      requestId,
+      cohortScoped,
+      taskCount: tasks.length,
+      concurrency,
+      timeBudgetMs,
+      remainingBefore: remainingTasks
     });
+
+    await runWithConcurrency(
+      tasks,
+      concurrency,
+      async (task) => {
+        try {
+          const result = await provisionServiceResource({
+            requestId,
+            serviceId: task.state.serviceId,
+            serviceName: task.state.instance.service_name,
+            resourceGroupName: task.resourceGroupName,
+            location,
+            instanceOption: task.state.instance.instance_option
+          });
+          lastResultByService.set(task.state.serviceId, result);
+        } catch (error) {
+          logEvent('service_policy_item_failed', {
+            requestId,
+            serviceId: task.state.serviceId,
+            resourceGroupName: task.resourceGroupName,
+            message: error?.message
+          });
+          lastResultByService.set(task.state.serviceId, {
+            status: 'policy_configured',
+            errorMessage: error?.message || 'Policy apply failed'
+          });
+        }
+      },
+      { continueOnError: true }
+    );
 
     const offsetsAfterBatch = new Map(plannedOffsets);
     for (const state of serviceState) {
@@ -263,14 +366,35 @@ const provisionPerUserServicePoliciesInBatches = async ({
 
       const result = lastResultByService.get(state.serviceId);
       if (state.done) {
-        await persistServiceProgress({
-          requestId,
-          instance: state.instance,
-          result,
-          status: result?.status || 'policy_configured',
-          errorMessage: result?.errorMessage || null
-        });
-      } else {
+        if (cohortScoped) {
+          const existing = existingByServiceId.get(state.serviceId);
+          const cohortMessage = mergeCohortRangeMessage(
+            existing,
+            Number(userNumberFrom),
+            Number(userNumberTo)
+          );
+          await persistServiceProgress({
+            requestId,
+            instance: state.instance,
+            result,
+            status: 'in_progress',
+            errorMessage: cohortMessage
+          });
+          existingByServiceId.set(state.serviceId, {
+            ...(existing || {}),
+            status: 'in_progress',
+            error_message: cohortMessage
+          });
+        } else {
+          await persistServiceProgress({
+            requestId,
+            instance: state.instance,
+            result,
+            status: result?.status || 'policy_configured',
+            errorMessage: result?.errorMessage || null
+          });
+        }
+      } else if (!cohortScoped) {
         await persistServiceProgress({
           requestId,
           instance: state.instance,
@@ -279,7 +403,18 @@ const provisionPerUserServicePoliciesInBatches = async ({
           errorMessage: `${RG_OFFSET_PREFIX}${newOffset}`
         });
       }
+      // Cohort in-progress: keep prior cohort markers; resume uses relative offset in memory.
     }
+
+    logEvent('service_policy_batch_finished', {
+      requestId,
+      taskCount: tasks.length,
+      elapsedMs: Date.now() - startedAt,
+      remainingAfter: serviceState.reduce(
+        (sum, state) => sum + Math.max(0, resourceGroupNames.length - state.offset),
+        0
+      )
+    });
 
     processedBatch = true;
   }
@@ -300,7 +435,7 @@ const provisionPerUserServicePoliciesInBatches = async ({
   };
 };
 
-const provisionServiceResourcesForRequest = async (requestId) => {
+const provisionServiceResourcesForRequest = async (requestId, options = {}) => {
   const requestResult = await db.query(
     `
       SELECT
@@ -322,7 +457,22 @@ const provisionServiceResourcesForRequest = async (requestId) => {
     throw new AppError('Request not found.', 404);
   }
 
-  const perUserProgress = await getPerUserResourceGroupProgress(requestId);
+  const accountCount = Number(request.account_count);
+  const cohortFrom =
+    Number.isInteger(Number(options.userNumberFrom)) && Number(options.userNumberFrom) > 0
+      ? Number(options.userNumberFrom)
+      : 1;
+  const cohortTo =
+    Number.isInteger(Number(options.userNumberTo)) && Number(options.userNumberTo) > 0
+      ? Number(options.userNumberTo)
+      : Number.isInteger(accountCount) && accountCount > 0
+        ? accountCount
+        : 1;
+
+  const perUserProgress = await getPerUserResourceGroupProgress(requestId, db, {
+    userNumberFrom: cohortFrom,
+    userNumberTo: cohortTo
+  });
 
   if (perUserProgress.required && !perUserProgress.ready) {
     return {
@@ -331,12 +481,22 @@ const provisionServiceResourcesForRequest = async (requestId) => {
       complete: false,
       remaining: perUserProgress.remaining,
       resourceGroupCount: perUserProgress.completed,
-      accountCount: perUserProgress.accountCount
+      accountCount: perUserProgress.accountCount,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
     };
   }
 
+  const stagingRows = isPerUserCosting(request.costing_mode)
+    ? await getStagingResourceGroups(requestId)
+    : [];
   const resourceGroupNames = isPerUserCosting(request.costing_mode)
-    ? (await getStagingResourceGroups(requestId)).map((row) => row.azure_resource_group_name)
+    ? stagingRows
+        .filter((row) => {
+          const n = Number(row.user_number);
+          return n >= cohortFrom && n <= cohortTo;
+        })
+        .map((row) => row.azure_resource_group_name)
     : request.azure_resource_group_name
       ? [request.azure_resource_group_name]
       : [];
@@ -379,15 +539,23 @@ const provisionServiceResourcesForRequest = async (requestId) => {
       instances,
       resourceGroupNames,
       location: request.location,
-      existingByServiceId
+      existingByServiceId,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
     });
 
     logEvent('service_resources_provision_batch', {
       requestId,
-      ...batchResult
+      ...batchResult,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
     });
 
-    return batchResult;
+    return {
+      ...batchResult,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
+    };
   }
 
   const existingCount = [...existingByServiceId.values()].filter((row) =>
@@ -407,7 +575,7 @@ const provisionServiceResourcesForRequest = async (requestId) => {
   let provisioned = 0;
   let skipped = 0;
   const startedAt = Date.now();
-  const timeBudgetMs = getProvisionStepTimeBudgetMs();
+  const timeBudgetMs = getServiceProvisionTimeBudgetMs();
 
   for (const instance of instances) {
     if (timeBudgetMs > 0 && Date.now() - startedAt >= timeBudgetMs) {

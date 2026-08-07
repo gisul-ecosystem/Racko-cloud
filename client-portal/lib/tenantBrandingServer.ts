@@ -65,7 +65,6 @@ export async function fetchTenantBrandingForMetadata(): Promise<{
         'X-Tenant-Domain': host,
       },
       cache: 'no-store',
-      next: { revalidate: 0 },
     });
 
     if (!res.ok) {

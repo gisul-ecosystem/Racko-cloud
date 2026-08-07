@@ -3,28 +3,29 @@ const parsePositiveInt = (value, fallback) => {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
 };
 
-// Defaults tuned for ~500–1000 user labs with multi-service selection.
-// Keep PROVISION_STEP_TIME_BUDGET_MS=0 so each HTTP call does one batch (proxy-safe).
+// Defaults tuned for cohort waves (10 users) × many services — high Azure fan-out.
+// PROVISION_STEP_TIME_BUDGET_MS=0 still means "one batch" for non-cohort paths;
+// cohort waves use getCohortWaveTimeBudgetMs() so a wave can finish in one HTTP call.
 const getBulkProvisionConcurrency = () =>
-  parsePositiveInt(process.env.BULK_PROVISION_CONCURRENCY, 50);
+  parsePositiveInt(process.env.BULK_PROVISION_CONCURRENCY, 80);
 
 const getRoleProvisionConcurrency = () =>
   parsePositiveInt(
     process.env.ROLE_PROVISION_CONCURRENCY || process.env.BULK_PROVISION_CONCURRENCY,
-    60
+    100
   );
 
 const getServiceProvisionConcurrency = () =>
   parsePositiveInt(
     process.env.SERVICE_PROVISION_CONCURRENCY || process.env.BULK_PROVISION_CONCURRENCY,
-    40
+    80
   );
 
 const getResourceGroupBatchSize = () =>
   parsePositiveInt(process.env.RESOURCE_GROUP_BATCH_SIZE, 50);
 
 const getRoleProvisionBatchSize = () =>
-  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 120);
+  parsePositiveInt(process.env.ROLE_PROVISION_BATCH_SIZE, 250);
 
 const getUserProvisionBatchSize = () =>
   parsePositiveInt(process.env.USER_PROVISION_BATCH_SIZE, 50);
@@ -32,7 +33,7 @@ const getUserProvisionBatchSize = () =>
 const getServicePolicyBatchSize = () =>
   parsePositiveInt(
     process.env.SERVICE_POLICY_BATCH_SIZE || process.env.RESOURCE_GROUP_BATCH_SIZE,
-    50
+    200
   );
 
 const getBudgetProvisionBatchSize = () =>
@@ -61,6 +62,24 @@ const getProvisionStepTimeBudgetMs = () => {
   return Math.floor(parsed);
 };
 
+/** Max wall time to finish one cohort wave of policies/roles in a single POST. */
+const getCohortWaveTimeBudgetMs = () =>
+  parsePositiveInt(process.env.COHORT_WAVE_TIME_BUDGET_MS, 120000);
+
+const getServiceProvisionTimeBudgetMs = () => {
+  const raw = process.env.SERVICE_PROVISION_TIME_BUDGET_MS;
+  if (raw === '0') {
+    return 0;
+  }
+  if (raw != null && String(raw).trim() !== '') {
+    const parsed = Number(raw);
+    if (Number.isFinite(parsed) && parsed >= 0) {
+      return Math.floor(parsed);
+    }
+  }
+  return getProvisionStepTimeBudgetMs();
+};
+
 /**
  * Role assignment packs many RBAC calls into one HTTP request.
  * Default 55s keeps nginx (300s) happy while finishing 48–500 user labs faster.
@@ -84,7 +103,9 @@ const getRoleProvisionTimeBudgetMs = () => {
     return shared;
   }
 
-  return 55_000;
+  // Default 0 = one RBAC batch per HTTP call for non-wave paths.
+  // Cohort waves override this with getCohortWaveTimeBudgetMs() in roleProvisionService.
+  return 0;
 };
 
 const getMaxProvisionAccountCount = () =>
@@ -113,6 +134,8 @@ module.exports = {
   getBudgetProvisionBatchSize,
   getResourceScopedUserBatchSize,
   getProvisionStepTimeBudgetMs,
+  getServiceProvisionTimeBudgetMs,
+  getCohortWaveTimeBudgetMs,
   getRoleProvisionTimeBudgetMs,
   getMaxProvisionAccountCount,
   getDeleteAzureConcurrency,

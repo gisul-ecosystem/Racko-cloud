@@ -20,6 +20,7 @@ const {
   getRoleProvisionConcurrency,
   getRoleProvisionBatchSize,
   getRoleProvisionTimeBudgetMs,
+  getCohortWaveTimeBudgetMs,
   getResourceScopedUserBatchSize
 } = require('../utils/provisionConcurrency');
 
@@ -238,6 +239,66 @@ const getSelectedRolesForRequest = async (client, requestId) => {
   }));
 };
 
+/**
+ * Same Azure role can appear on multiple services (e.g. Network Reader on VNet + ExpressRoute).
+ * Assign once per user by azure role name.
+ */
+const dedupeRolesByAzureRole = (roles = []) => {
+  const byRole = new Map();
+
+  for (const role of roles) {
+    const key = String(role?.azureRole || '')
+      .trim()
+      .toLowerCase();
+    if (!key) continue;
+
+    const existing = byRole.get(key);
+    if (!existing) {
+      byRole.set(key, {
+        ...role,
+        serviceIds: Number.isInteger(role.serviceId) ? [role.serviceId] : []
+      });
+      continue;
+    }
+
+    if (Number.isInteger(role.serviceId) && !existing.serviceIds.includes(role.serviceId)) {
+      existing.serviceIds.push(role.serviceId);
+    }
+
+    // Prefer an explicit Entra group assignment when one service maps to group mode.
+    if (
+      role.assignmentMode === 'group' &&
+      role.entraGroupId &&
+      !(existing.assignmentMode === 'group' && existing.entraGroupId)
+    ) {
+      existing.assignmentMode = role.assignmentMode;
+      existing.entraGroupId = role.entraGroupId;
+      existing.serviceId = role.serviceId;
+    }
+  }
+
+  return [...byRole.values()];
+};
+
+const userHasAzureRole = (existingRoles, azureRole) => {
+  if (!existingRoles || existingRoles.size === 0) return false;
+  if (existingRoles.has(azureRole)) return true;
+
+  const normalized = String(azureRole || '')
+    .trim()
+    .toLowerCase();
+  for (const role of existingRoles) {
+    if (
+      String(role || '')
+        .trim()
+        .toLowerCase() === normalized
+    ) {
+      return true;
+    }
+  }
+  return false;
+};
+
 // Fetch ALL existing assignments for ALL users in one query
 const getAllExistingAssignments = async (client, requestId, userIds) => {
   if (!Array.isArray(userIds) || userIds.length === 0) {
@@ -342,11 +403,13 @@ const getRoleProvisionStatus = async (requestId) => {
     users.map((user) => user.id)
   );
 
+  const uniqueRoles = dedupeRolesByAzureRole(baseRoles);
+
   let remaining = 0;
   for (const user of users) {
     const existingRoles = existingMap.get(user.id) || new Set();
-    for (const role of baseRoles) {
-      if (!existingRoles.has(role.azureRole)) {
+    for (const role of uniqueRoles) {
+      if (!userHasAzureRole(existingRoles, role.azureRole)) {
         remaining += 1;
       }
     }
@@ -510,12 +573,27 @@ const assignAcrPullAtRegistryScope = async ({
   }
 };
 
-const provisionRolesForRequest = async (requestId) => {
+const provisionRolesForRequest = async (requestId, options = {}) => {
   try {
     const request = await getRequestContext(db, requestId);
     if (!request) throw new AppError('Request not found', 404);
 
-    const perUserProgress = await getPerUserResourceGroupProgress(requestId);
+    const accountCount = Number(request.account_count);
+    const cohortFrom =
+      Number.isInteger(Number(options.userNumberFrom)) && Number(options.userNumberFrom) > 0
+        ? Number(options.userNumberFrom)
+        : 1;
+    const cohortTo =
+      Number.isInteger(Number(options.userNumberTo)) && Number(options.userNumberTo) > 0
+        ? Number(options.userNumberTo)
+        : Number.isInteger(accountCount) && accountCount > 0
+          ? accountCount
+          : 1;
+
+    const perUserProgress = await getPerUserResourceGroupProgress(requestId, db, {
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
+    });
 
     if (perUserProgress.required && !perUserProgress.ready) {
       return {
@@ -523,37 +601,44 @@ const provisionRolesForRequest = async (requestId) => {
         complete: false,
         remaining: perUserProgress.remaining,
         usersProcessed: 0,
-        rolesAssigned: 0
+        rolesAssigned: 0,
+        failures: [],
+        userNumberFrom: cohortFrom,
+        userNumberTo: cohortTo
       };
     }
 
-    const [users, baseRoles, selectedServices, selectedInstances] = await Promise.all([
+    const [allUsers, baseRoles, selectedServices, selectedInstances] = await Promise.all([
       getAzureUsersForRequest(db, requestId),
       getSelectedRolesForRequest(db, requestId),
       getSelectedServicesForRequest(db, requestId),
       getSelectedInstancesForRequest(db, requestId)
     ]);
 
-    const accountCount = Number(request.account_count);
+    const users = allUsers.filter((user) => {
+      const n = Number(user.user_number);
+      return Number.isInteger(n) && n >= cohortFrom && n <= cohortTo;
+    });
 
-    if (
-      perUserProgress.required &&
-      Number.isInteger(accountCount) &&
-      accountCount > 0 &&
-      users.length < accountCount
-    ) {
+    const cohortTarget = cohortTo - cohortFrom + 1;
+
+    if (perUserProgress.required && users.length < cohortTarget) {
       return {
         success: true,
         complete: false,
-        remaining: accountCount - users.length,
+        remaining: cohortTarget - users.length,
         usersProcessed: users.length,
-        rolesAssigned: 0
+        rolesAssigned: 0,
+        failures: [],
+        userNumberFrom: cohortFrom,
+        userNumberTo: cohortTo
       };
     }
 
     let roles = await augmentRolesWithDependencies(db, baseRoles, requestId);
     roles = await filterRolesByAiFoundryTier(db, roles, requestId, selectedServices, selectedInstances);
     await backfillRequestServiceRoles(db, requestId, roles);
+    roles = dedupeRolesByAzureRole(roles);
 
     const hasAiFoundry = selectedServices.some((service) => service.serviceName === 'Azure AI Foundry');
     const hasStandaloneAcr = selectedServices.some(
@@ -641,17 +726,19 @@ const provisionRolesForRequest = async (requestId) => {
       );
     }
 
-    // 3. Build all RBAC tasks and group assignments
+    // 3. Build all RBAC tasks and group assignments (roles already deduped by azure role name)
     const rbacTasks = [];
     const groupAssignments = new Map();
     const groupDbInserts = [];
+    const skippedDbInserts = [];
+    const unresolvedRoleNames = new Set();
 
     for (const user of users) {
       const existingRoles = existingMap.get(user.id) || new Set();
       const scope = await resolveScopeForUser(user);
 
       for (const role of rolesForResourceGroup) {
-        if (existingRoles.has(role.azureRole)) continue;
+        if (userHasAzureRole(existingRoles, role.azureRole)) continue;
 
         if (role.assignmentMode === 'group' && role.entraGroupId) {
           if (!groupAssignments.has(role.entraGroupId)) {
@@ -672,13 +759,32 @@ const provisionRolesForRequest = async (requestId) => {
             assignmentKind: 'group',
             entraGroupId: role.entraGroupId
           });
+          existingRoles.add(role.azureRole);
           continue;
         }
 
         const definition = isPerUserCosting(request.costing_mode)
           ? roleDefMap.get(`${resolveUserResourceGroupName(request, user)}:${role.azureRole}`)
           : roleDefMap.get(role.azureRole);
-        if (!definition) continue;
+
+        if (!definition) {
+          unresolvedRoleNames.add(role.azureRole);
+          skippedDbInserts.push({
+            assignmentId: roleAssignmentIdFromSeed(
+              `${requestId}-${user.id}-unresolved-${role.azureRole}`
+            ),
+            requestId,
+            userId: user.id,
+            azureRole: role.azureRole,
+            scope: scope || 'unresolved-role-definition',
+            status: 'skipped_missing_definition',
+            assignedAt: new Date(),
+            assignmentKind: 'skipped',
+            entraGroupId: null
+          });
+          existingRoles.add(role.azureRole);
+          continue;
+        }
 
         const assignmentId = roleAssignmentIdFromSeed(`${requestId}-${user.id}-${definition.id}`);
 
@@ -713,21 +819,48 @@ const provisionRolesForRequest = async (requestId) => {
             entraGroupId: null
           };
         });
+        existingRoles.add(role.azureRole);
       }
+    }
+
+    if (unresolvedRoleNames.size > 0) {
+      console.warn(
+        JSON.stringify({
+          event: 'role_definition_unresolved',
+          requestId,
+          roles: [...unresolvedRoleNames],
+          action: 'marked_skipped_so_provision_can_complete'
+        })
+      );
     }
 
     if (groupDbInserts.length > 0) {
       await batchUpsertAssignments(groupDbInserts);
     }
+    if (skippedDbInserts.length > 0) {
+      await batchUpsertAssignments(skippedDbInserts);
+    }
 
     const startedAt = Date.now();
-    const timeBudgetMs = getRoleProvisionTimeBudgetMs();
-    const batchSize = getRoleProvisionBatchSize();
+    const cohortScoped =
+      Number.isInteger(Number(options.userNumberFrom)) &&
+      Number.isInteger(Number(options.userNumberTo));
+    const configuredRoleBudgetMs = getRoleProvisionTimeBudgetMs();
+    // Cohort waves: spend up to 120s packing RBAC in one POST (high parallel fan-out).
+    const timeBudgetMs = cohortScoped
+      ? configuredRoleBudgetMs > 0
+        ? configuredRoleBudgetMs
+        : getCohortWaveTimeBudgetMs()
+      : configuredRoleBudgetMs;
+    const batchSize = cohortScoped
+      ? Math.max(getRoleProvisionBatchSize(), rbacTasks.length)
+      : getRoleProvisionBatchSize();
     let batchAssigned = 0;
-    const pendingDbInserts = [...groupDbInserts];
+    const pendingDbInserts = [...groupDbInserts, ...skippedDbInserts];
+    const failures = [];
 
-    // Pack as many RBAC batches as fit in the time budget (default ~55s).
-    // Budget 0 = one batch per HTTP call (proxy-safe fallback).
+    // Pack as many RBAC batches as fit in the time budget.
+    // Cohort waves use a non-zero budget so 10 users × many roles finish in one call.
     let processedBatch = false;
     while (
       rbacTasks.length > 0 &&
@@ -741,7 +874,18 @@ const provisionRolesForRequest = async (requestId) => {
         if (result.status === 'fulfilled' && result.value) {
           batchInserts.push(result.value);
         } else if (result.status === 'rejected') {
-          throw result.reason;
+          // Soft-fail: keep successful assignments; retry leftovers on next POST.
+          failures.push({
+            error: result.reason?.message || String(result.reason || 'Role assignment failed')
+          });
+          console.warn(
+            JSON.stringify({
+              event: 'role_provision_item_failed',
+              requestId,
+              message: result.reason?.message || String(result.reason),
+              statusCode: result.reason?.statusCode || result.reason?.status
+            })
+          );
         }
       }
 
@@ -766,13 +910,14 @@ const provisionRolesForRequest = async (requestId) => {
       processedBatch = true;
     }
 
-    const rbacComplete = rbacTasks.length === 0;
+    // Failures were soft-skipped this call; next POST rebuilds remaining from DB gaps.
+    const rbacComplete = rbacTasks.length === 0 && failures.length === 0;
 
     if (!rbacComplete) {
       return {
         success: true,
         complete: false,
-        remaining: rbacTasks.length,
+        remaining: rbacTasks.length + failures.length,
         usersProcessed: users.length,
         rolesAssigned: batchAssigned,
         successful: pendingDbInserts.length,
@@ -781,7 +926,10 @@ const provisionRolesForRequest = async (requestId) => {
         permissionsComplete: false,
         provisioningStatus: 'provisioning_roles',
         resourceScopedAssignments: 0,
-        permissionFailures: []
+        permissionFailures: [],
+        failures,
+        userNumberFrom: cohortFrom,
+        userNumberTo: cohortTo
       };
     }
 
@@ -888,7 +1036,8 @@ const provisionRolesForRequest = async (requestId) => {
 
     return {
       success: permissionsComplete,
-      complete: permissionsComplete,
+      // Advance cohort when RG-scoped RBAC finished; resource-scoped gaps remain retryable.
+      complete: true,
       remaining: 0,
       usersProcessed: users.length,
       rolesAssigned: pendingDbInserts.length,
@@ -898,7 +1047,10 @@ const provisionRolesForRequest = async (requestId) => {
       permissionsComplete,
       provisioningStatus: permissionsComplete ? 'provisioned' : 'provisioned_permissions_incomplete',
       resourceScopedAssignments: resourcePermissionResult.resourcesProcessed,
-      permissionFailures: resourcePermissionResult.failures
+      permissionFailures: resourcePermissionResult.failures,
+      failures,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
     };
   } catch (error) {
     throw error;

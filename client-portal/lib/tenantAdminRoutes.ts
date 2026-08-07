@@ -7,6 +7,10 @@ export const tenantVps = {
   vms: `${TENANT_VPS}/vms`,
   createVm: `${TENANT_VPS}/vms/create`,
   vm: (id: string) => `${TENANT_VPS}/vms/${id}`,
+  vmConsole: (id: string, protocol?: string) =>
+    protocol
+      ? `${TENANT_VPS}/vms/${id}/console?protocol=${encodeURIComponent(protocol)}`
+      : `${TENANT_VPS}/vms/${id}/console`,
   restricted: `${TENANT_VPS}/vms/restricted`,
   jobs: `${TENANT_VPS}/jobs`,
   job: (id: string) => `${TENANT_VPS}/jobs/${id}`,
