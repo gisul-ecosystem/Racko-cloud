@@ -393,6 +393,20 @@ class VMPushService {
       'Write-Host "[racko] Launching Racko App..."',
       'Start-Process "$installDir\\racko-app.exe"',
       'Write-Host "[racko] Racko App installed successfully."',
+      // ── WebView2 Runtime (required for in-app file viewer) ─────────────────
+      // Silently installs WebView2 Runtime from Microsoft's CDN.
+      // The installer detects if it's already installed and skips — safe to run
+      // on Windows 10/11 (already present) and Windows Server (not pre-installed).
+      'Write-Host "[racko] Installing WebView2 Runtime (required for file viewer)..."',
+      '$wv2Path = "$installDir\\WebView2Setup.exe"',
+      'try {',
+      '    Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $wv2Path -UseBasicParsing',
+      '    & $wv2Path /silent /install | Out-Null',
+      '    Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
+      '    Write-Host "[racko] WebView2 Runtime installed successfully."',
+      '} catch {',
+      '    Write-Host "[racko] WARNING: WebView2 install failed (non-fatal): $_"',
+      '}',
     ].join('; ');
   }
 }
