@@ -459,6 +459,8 @@ if (Test-Path "C:\ProgramData\racko-agent\unins000.exe") {
 }
 sc.exe stop RackoAgent 2>$null
 sc.exe delete RackoAgent 2>$null
+Stop-Process -Name "racko-app" -Force -ErrorAction SilentlyContinue
+Remove-Item "$env:PUBLIC\Desktop\Racko Shared Files.lnk" -Force -ErrorAction SilentlyContinue
 Remove-Item "C:\ProgramData\racko-agent" -Recurse -Force -ErrorAction SilentlyContinue
 `
 	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", script)

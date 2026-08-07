@@ -377,6 +377,22 @@ class VMPushService {
       'Write-Host "[racko] Starting service..."',
       'sc.exe start RackoAgent',
       'Write-Host "[racko] Agent installed and started successfully."',
+      // ── Racko App (GUI) ────────────────────────────────────────────────
+      // Download racko-app.exe alongside the agent binary
+      `$appUrl = '${this.platformUrl}/api/v1/agent/binary/racko-app'`,
+      'Write-Host "[racko] Downloading Racko App..."',
+      'Invoke-WebRequest -Uri $appUrl -OutFile "$installDir\\racko-app.exe" -UseBasicParsing',
+      // Create a desktop shortcut visible to all users (C:\Users\Public\Desktop)
+      'Write-Host "[racko] Creating desktop shortcut..."',
+      '$wsh = New-Object -ComObject WScript.Shell',
+      '$shortcut = $wsh.CreateShortcut("$env:PUBLIC\\Desktop\\Racko Shared Files.lnk")',
+      '$shortcut.TargetPath = "$installDir\\racko-app.exe"',
+      '$shortcut.Description = "Racko Shared Files"',
+      '$shortcut.Save()',
+      // Launch the app for the currently logged-in user (non-blocking)
+      'Write-Host "[racko] Launching Racko App..."',
+      'Start-Process "$installDir\\racko-app.exe"',
+      'Write-Host "[racko] Racko App installed successfully."',
     ].join('; ');
   }
 }

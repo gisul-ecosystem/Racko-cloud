@@ -83,6 +83,7 @@ export const pushAgentSchema = z.object({
   body: z.object({
     vms: z.array(vmPushBody).min(1).max(50),
     sessionId: z.string().optional(),
+    groupId: z.string().optional(),   // optional — assign pushed machines to this group
   }),
 });
 
