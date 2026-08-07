@@ -65,3 +65,14 @@ public record ViewUrlResponse(
 public record ApiViewUrlResponse(
     [property: JsonPropertyName("data")] ViewUrlResponse Data
 );
+
+public record UploadUrlResponse(
+    [property: JsonPropertyName("presignedUrl")] string PresignedUrl,
+    [property: JsonPropertyName("storageRef")]   string StorageRef,
+    [property: JsonPropertyName("pendingId")]    string PendingId,
+    [property: JsonPropertyName("expiresIn")]    int    ExpiresIn
+);
+
+public record ApiUploadUrlResponse(
+    [property: JsonPropertyName("data")] UploadUrlResponse Data
+);

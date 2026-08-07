@@ -153,6 +153,28 @@ public class MainForm : Form
         return grid;
     }
 
+    // ── Public refresh — called by TrayApplicationContext on file notify ──────
+
+    /// <summary>
+    /// Called by FileSystemWatcher when the agent writes racko-notify.json.
+    /// Reloads the inbox in real time without any user interaction.
+    /// </summary>
+    public void RefreshInbox()
+    {
+        // Only reload if the inbox tab is currently visible
+        if (_tabs.SelectedIndex == 0)
+            _ = LoadInboxAsync();
+        // If on outbox tab, reload inbox silently in background
+        // so it's fresh when user switches back
+        else
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(500); // brief delay to let S3 settle
+                if (_inboxGrid.IsHandleCreated)
+                    _inboxGrid.BeginInvoke(() => _ = LoadInboxAsync());
+            });
+    }
+
     // ── Load data ──────────────────────────────────────────────────────────────
 
     private async Task LoadInboxAsync()

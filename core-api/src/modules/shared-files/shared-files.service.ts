@@ -44,7 +44,77 @@ class SharedFilesService {
     };
   }
 
-  // ─── Upload & Share ────────────────────────────────────────────────────────
+  // ─── Upload — Presigned PUT URL flow (zero server memory) ─────────────────
+
+  /**
+   * Step 1: Issue presigned S3 PUT URL. Client uploads directly to S3 — no file bytes touch the server.
+   */
+  async getUploadUrl(
+    agentId: string,
+    fileName: string,
+    mimeType: string,
+    sizeBytes: number,
+    permission: SharedFilePermission,
+    sharedWithMachineIds: string[],
+  ): Promise<{ presignedUrl: string; storageRef: string; pendingId: string; expiresIn: number }> {
+    const sourceMachine = await MachineModel.findOne({ agentId, deleted: { $ne: true } });
+    if (!sourceMachine) throw new NotFoundError('Agent not found.');
+    const adminId = sourceMachine.adminId;
+
+    for (const machineId of sharedWithMachineIds) {
+      if (!mongoose.Types.ObjectId.isValid(machineId)) throw new ValidationError(`Invalid machine ID: ${machineId}`);
+      const target = await MachineModel.findById(machineId).lean();
+      if (!target) throw new ValidationError(`Target machine ${machineId} not found.`);
+      if (target.adminId.toString() !== adminId.toString()) throw new ForbiddenError(`Machine ${machineId} does not belong to your account.`);
+    }
+
+    // Build unique key — client uploads to this exact path in S3
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const ts           = Date.now().toString();
+    const prefix       = `shared-files/${sourceMachine._id.toString()}`;
+    const storageRef   = `${prefix}/${ts}_${safeFileName}`;
+
+    const { presignedUrl } = await seaweedfsService.generatePresignedPutUrl(
+      prefix, ts, safeFileName, mimeType, 3600,
+    );
+
+    // Create SharedFile record now — it will be visible immediately after PUT completes
+    const doc = await SharedFileModel.create({
+      fileName, mimeType, sizeBytes, storageRef,
+      sourceMachineId:      sourceMachine._id,
+      adminId,
+      permission,
+      sharedWithMachineIds: sharedWithMachineIds.map((id) => new mongoose.Types.ObjectId(id)),
+    });
+
+    logger.info('[SharedFiles] Presigned PUT URL issued', {
+      fileId: doc._id.toString(), fileName, storageRef,
+    });
+
+    return { presignedUrl, storageRef, pendingId: doc._id.toString(), expiresIn: 3600 };
+  }
+
+  /**
+   * Step 2: Called after client finishes PUT to S3. Notifies target machines.
+   */
+  async finalizeUpload(pendingId: string, agentId: string): Promise<SharedFileResponse> {
+    const machine = await MachineModel.findOne({ agentId, deleted: { $ne: true } });
+    if (!machine) throw new NotFoundError('Agent not found.');
+    const doc = await SharedFileModel.findById(pendingId);
+    if (!doc || doc.deleted) throw new NotFoundError('Pending upload not found.');
+    if (doc.sourceMachineId.toString() !== machine._id.toString()) throw new ForbiddenError('Access denied.');
+
+    await this.notifyTargets(
+      doc._id.toString(), doc.fileName, doc.permission, machine.name,
+      doc.sharedWithMachineIds.map((id) => id.toString()),
+      'shared_file_added',
+    );
+
+    logger.info('[SharedFiles] Upload finalized', { fileId: doc._id.toString() });
+    return this.toResponse(doc, machine.name);
+  }
+
+  // ─── Legacy multipart upload (kept for backward compatibility) ────────────
 
   /**
    * Called by agent GUI app via POST /api/v1/agent/shared-files

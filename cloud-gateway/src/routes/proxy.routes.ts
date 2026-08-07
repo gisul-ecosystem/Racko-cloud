@@ -474,6 +474,8 @@ router.post('/api/v1/agent/clone-install', coreApiProxy);
 
 // ─── SHARED FILES AGENT ROUTES (X-Agent-ID auth, used by racko-app GUI) ──────
 router.post('/api/v1/agent/shared-files', coreApiProxy);
+router.post('/api/v1/agent/shared-files/upload-url', coreApiProxy);
+router.post('/api/v1/agent/shared-files/upload-complete', coreApiProxy);
 router.get('/api/v1/agent/shared-files/inbox', coreApiProxy);
 router.get('/api/v1/agent/shared-files/outbox', coreApiProxy);
 router.get('/api/v1/agent/shared-files/machines-for-app', coreApiProxy);

@@ -11,6 +11,51 @@ function success<T>(res: Response, message: string, data?: T, statusCode = 200):
 export class SharedFilesController {
   // ─── Agent: upload & share ─────────────────────────────────────────────────
 
+  /** POST /api/v1/agent/shared-files/upload-url — get presigned PUT URL for direct-to-S3 upload */
+  async agentUploadUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const agentId  = req.headers['x-agent-id'] as string;
+      const { fileName, mimeType, sizeBytes, permission, sharedWithMachineIds } =
+        req.body as {
+          fileName: string;
+          mimeType: string;
+          sizeBytes: number;
+          permission: SharedFilePermission;
+          sharedWithMachineIds: string[];
+        };
+
+      if (!fileName || !mimeType) {
+        res.status(400).json({ success: false, message: 'fileName and mimeType are required.' });
+        return;
+      }
+
+      const result = await sharedFilesService.getUploadUrl(
+        agentId, fileName, mimeType, sizeBytes ?? 0, permission ?? 'read', sharedWithMachineIds ?? [],
+      );
+      success(res, 'Upload URL issued.', result, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/agent/shared-files/upload-complete — finalize after direct S3 upload */
+  async agentUploadComplete(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const agentId = req.headers['x-agent-id'] as string;
+      const { pendingId } = req.body as { pendingId: string };
+
+      if (!pendingId) {
+        res.status(400).json({ success: false, message: 'pendingId is required.' });
+        return;
+      }
+
+      const file = await sharedFilesService.finalizeUpload(pendingId, agentId);
+      success(res, 'File uploaded and shared.', { file }, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** POST /api/v1/agent/shared-files  (multipart/form-data) */
   async agentUpload(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
