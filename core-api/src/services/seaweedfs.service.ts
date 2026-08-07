@@ -50,6 +50,14 @@ function buildClient(): S3Client {
       secretAccessKey: config.SEAWEEDFS_SECRET_KEY,
     },
     forcePathStyle: true,  // required for SeaweedFS S3 — disables virtual-hosted-style
+    // AWS SDK v3 injects CRC32 checksums automatically into presigned URLs by default.
+    // SeaweedFS and other S3-compatible stores (MinIO, Ceph) do not support AWS's
+    // flexible checksum extension — they enforce the baked-in checksum against the
+    // actual payload and reject the PUT with "BadDigest" when they don't match.
+    // WHEN_REQUIRED disables automatic checksum injection, keeping presigned URLs
+    // clean and compatible with any S3-compatible backend.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
 }
 
@@ -213,6 +221,34 @@ class SeaweedFSService {
     logger.debug('[SeaweedFS] Generated presigned PUT URL', { storageRef, ttlSeconds });
 
     return { presignedUrl, storageRef };
+  }
+
+  /**
+   * Generate a presigned GET URL for direct client-to-S3 download/preview.
+   *
+   * The client (racko-app) uses this URL to fetch the file directly from
+   * SeaweedFS, bypassing core-api entirely — no API memory pressure, no size limit.
+   * URL expires after ttlSeconds — cannot be reused or shared after expiry.
+   *
+   * @param storageRef  The S3 object key (from SharedFile.storageRef)
+   * @param ttlSeconds  How long the URL is valid (60s for read-only, 300s for download)
+   * @returns           { presignedUrl }
+   */
+  async generatePresignedGetUrl(
+    storageRef: string,
+    ttlSeconds = 60,
+  ): Promise<{ presignedUrl: string }> {
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key:    storageRef,
+    });
+
+    const presignedUrl = await getSignedUrl(getClient(), command, {
+      expiresIn: ttlSeconds,
+    });
+
+    logger.debug('[SeaweedFS] Generated presigned GET URL', { storageRef, ttlSeconds });
+    return { presignedUrl };
   }
 }
 

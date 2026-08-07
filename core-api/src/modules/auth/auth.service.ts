@@ -244,8 +244,12 @@ export class AuthService {
 
   /**
    * Verify email with token from email link.
+   * Invited staff/operators with mustSetPassword get a fresh reset token to set their password next.
    */
-  async verifyEmail(token: string, req: Request): Promise<{ message: string }> {
+  async verifyEmail(
+    token: string,
+    req: Request
+  ): Promise<{ message: string; requiresPasswordSetup: boolean; resetToken?: string }> {
     const ip = getClientIp(req);
     const userAgent = req.headers['user-agent'] ?? 'unknown';
     const fingerprint = generateFingerprint(req);
@@ -255,7 +259,7 @@ export class AuthService {
     const user = await User.findOne({
       emailVerificationToken: hashedToken,
       emailVerificationExpires: { $gt: new Date() },
-    }).select('+emailVerificationToken');
+    }).select('+emailVerificationToken +passwordResetToken +passwordResetExpires');
 
     if (!user) {
       throw new AppError('Verification link is invalid or has expired.', 400, 'INVALID_TOKEN');
@@ -265,6 +269,16 @@ export class AuthService {
     user.isEmailVerified = true;
     user.emailVerificationToken = undefined;
     user.emailVerificationExpires = undefined;
+
+    let resetToken: string | undefined;
+    if (requiresPasswordSetup) {
+      resetToken = generateSecureToken(32);
+      user.passwordResetToken = hashToken(resetToken);
+      user.passwordResetExpires = new Date(
+        Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
+      );
+    }
+
     await user.save();
 
     await AuditLog.create({
@@ -277,8 +291,10 @@ export class AuthService {
 
     return {
       message: requiresPasswordSetup
-        ? 'Email verified successfully. Now set your password from the invite email before logging in.'
+        ? 'Email verified successfully. Set your password to finish account setup.'
         : 'Email verified successfully. You can now log in.',
+      requiresPasswordSetup,
+      ...(resetToken ? { resetToken } : {}),
     };
   }
 
@@ -349,11 +365,6 @@ export class AuthService {
       throw new EmailNotVerifiedError();
     }
 
-    if (user.mustSetPassword) {
-      await verifyPassword(DUMMY_HASH, data.password);
-      throw new PasswordSetupRequiredError();
-    }
-
     // Verify password
     const isPasswordValid = await verifyPassword(user.password, data.password);
 
@@ -403,6 +414,27 @@ export class AuthService {
     user.failedLoginAttempts = 0;
     user.isLocked = false;
     user.lockedUntil = undefined;
+
+    // Invited accounts must set their own password before a session is created.
+    if (user.mustSetPassword) {
+      const resetToken = generateSecureToken(32);
+      user.passwordResetToken = hashToken(resetToken);
+      user.passwordResetExpires = new Date(
+        Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
+      );
+      await user.save();
+
+      await AuditLog.create({
+        userId: user._id,
+        event: 'PASSWORD_RESET_REQUESTED',
+        ipAddress: ip,
+        userAgent,
+        deviceFingerprint: fingerprint,
+        metadata: { reason: 'must_set_password_after_temp_login' },
+      });
+
+      throw new PasswordSetupRequiredError(resetToken);
+    }
 
     // End-user access window gate (assigned VMs with schedule)
     if (user.role === 'user') {

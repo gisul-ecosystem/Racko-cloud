@@ -1,9 +1,10 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { ArrowLeft, Loader2, Plus, Shield, Users } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
+import { RoleWizard } from '@/components/access-control/RoleWizard';
 import {
   createPlatformRbacRole,
   fetchMyPlatformRbac,
@@ -33,10 +34,8 @@ export default function PlatformAccessControlPage() {
 
   const [editingRole, setEditingRole] = useState<OrgRbacRole | null>(null);
   const [creatingRole, setCreatingRole] = useState(false);
-  const [roleName, setRoleName] = useState('');
-  const [roleDescription, setRoleDescription] = useState('');
-  const [rolePerms, setRolePerms] = useState<string[]>([]);
   const [savingRole, setSavingRole] = useState(false);
+  const [roleFormError, setRoleFormError] = useState<string | null>(null);
 
   const [assignPerson, setAssignPerson] = useState<PlatformRbacPerson | null>(null);
   const [assignRoleIds, setAssignRoleIds] = useState<string[]>([]);
@@ -44,19 +43,8 @@ export default function PlatformAccessControlPage() {
 
   const [showInvite, setShowInvite] = useState(false);
   const [inviteEmail, setInviteEmail] = useState('');
-  const [invitePassword, setInvitePassword] = useState('');
   const [inviteRoleIds, setInviteRoleIds] = useState<string[]>([]);
   const [savingInvite, setSavingInvite] = useState(false);
-
-  const groups = useMemo(() => {
-    const map = new Map<string, OrgRbacPermissionDef[]>();
-    for (const p of catalog) {
-      const list = map.get(p.group) || [];
-      list.push(p);
-      map.set(p.group, list);
-    }
-    return [...map.entries()];
-  }, [catalog]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -83,30 +71,39 @@ export default function PlatformAccessControlPage() {
     void load();
   }, [load]);
 
-  async function saveRoleForm(e: React.FormEvent) {
-    e.preventDefault();
+  function cancelRoleWizard() {
+    setCreatingRole(false);
+    setEditingRole(null);
+    setRoleFormError(null);
+  }
+
+  async function saveRoleWizard(payload: {
+    name: string;
+    description: string;
+    permissions: string[];
+  }) {
     setSavingRole(true);
+    setRoleFormError(null);
     setError(null);
     try {
       if (editingRole) {
         await updatePlatformRbacRole(editingRole._id, {
-          ...(editingRole.isSystem ? {} : { name: roleName, description: roleDescription }),
-          permissions: rolePerms,
+          ...(editingRole.isSystem ? {} : { name: payload.name, description: payload.description }),
+          permissions: payload.permissions,
         });
         setFlash('Role updated.');
       } else {
         await createPlatformRbacRole({
-          name: roleName,
-          description: roleDescription,
-          permissions: rolePerms,
+          name: payload.name,
+          description: payload.description,
+          permissions: payload.permissions,
         });
         setFlash('Role created.');
       }
-      setCreatingRole(false);
-      setEditingRole(null);
+      cancelRoleWizard();
       await load();
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to save role.');
+      setRoleFormError(err instanceof ApiError ? err.message : 'Failed to save role.');
     } finally {
       setSavingRole(false);
     }
@@ -134,15 +131,13 @@ export default function PlatformAccessControlPage() {
     try {
       await invitePlatformOperator({
         email: inviteEmail,
-        temporaryPassword: invitePassword,
         roleIds: inviteRoleIds,
       });
       setFlash(
-        'Operator invited. They must verify email and set a password before signing in.'
+        'Operator invited. A temporary password was emailed — they must verify and set a password before signing in.'
       );
       setShowInvite(false);
       setInviteEmail('');
-      setInvitePassword('');
       setInviteRoleIds([]);
       setTab('people');
       await load();
@@ -208,9 +203,7 @@ export default function PlatformAccessControlPage() {
               onClick={() => {
                 setCreatingRole(true);
                 setEditingRole(null);
-                setRoleName('');
-                setRoleDescription('');
-                setRolePerms([]);
+                setRoleFormError(null);
               }}
               className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white"
             >
@@ -219,80 +212,20 @@ export default function PlatformAccessControlPage() {
           </div>
 
           {showRoleForm ? (
-            <form
-              onSubmit={(e) => void saveRoleForm(e)}
-              className="space-y-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm"
-            >
-              {!editingRole?.isSystem ? (
-                <>
-                  <input
-                    required
-                    value={roleName}
-                    onChange={(e) => setRoleName(e.target.value)}
-                    placeholder="Role name"
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                  />
-                  <textarea
-                    value={roleDescription}
-                    onChange={(e) => setRoleDescription(e.target.value)}
-                    placeholder="Description"
-                    rows={2}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-                  />
-                </>
-              ) : (
-                <p className="text-sm font-semibold text-gray-900">{editingRole.name}</p>
-              )}
-              <div className="space-y-3">
-                {groups.map(([group, perms]) => (
-                  <div key={group}>
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      {group}
-                    </p>
-                    <div className="flex flex-wrap gap-2">
-                      {perms.map((p) => (
-                        <label
-                          key={p.key}
-                          className="inline-flex items-center gap-1.5 rounded-full border border-gray-200 px-2.5 py-1 text-xs"
-                        >
-                          <input
-                            type="checkbox"
-                            checked={rolePerms.includes(p.key)}
-                            onChange={() =>
-                              setRolePerms((prev) =>
-                                prev.includes(p.key)
-                                  ? prev.filter((k) => k !== p.key)
-                                  : [...prev, p.key]
-                              )
-                            }
-                          />
-                          {p.label}
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={savingRole}
-                  className="rounded-lg bg-[#B91C1C] px-3.5 py-2 text-sm font-semibold text-white disabled:opacity-50"
-                >
-                  {savingRole ? 'Saving…' : 'Save role'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreatingRole(false);
-                    setEditingRole(null);
-                  }}
-                  className="rounded-lg border border-gray-200 px-3.5 py-2 text-sm"
-                >
-                  Cancel
-                </button>
-              </div>
-            </form>
+            <RoleWizard
+              key={editingRole?._id ?? 'new'}
+              catalog={catalog}
+              initial={{
+                name: editingRole?.name ?? '',
+                description: editingRole?.description ?? '',
+                permissions: editingRole ? [...editingRole.permissions] : [],
+                lockedMeta: Boolean(editingRole?.isSystem),
+              }}
+              saving={savingRole}
+              error={roleFormError}
+              onCancel={cancelRoleWizard}
+              onSave={(payload) => void saveRoleWizard(payload)}
+            />
           ) : null}
 
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -318,9 +251,7 @@ export default function PlatformAccessControlPage() {
                         onClick={() => {
                           setEditingRole(role);
                           setCreatingRole(false);
-                          setRoleName(role.name);
-                          setRoleDescription(role.description);
-                          setRolePerms([...role.permissions]);
+                          setRoleFormError(null);
                         }}
                         className="text-xs font-medium text-[#B91C1C] hover:underline"
                       >
@@ -360,18 +291,9 @@ export default function PlatformAccessControlPage() {
                 placeholder="Operator email"
                 className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
               />
-              <input
-                required
-                type="text"
-                value={invitePassword}
-                onChange={(e) => setInvitePassword(e.target.value)}
-                placeholder="Temporary password (sent in invite email)"
-                minLength={8}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
-              />
               <p className="text-xs text-gray-500">
-                An invite email is sent with a verify link. After verifying, they set a password
-                before signing in.
+                An invite email is sent with a generated temporary password and verify link. After
+                verifying, they set their own password before signing in.
               </p>
               <div className="flex flex-wrap gap-2">
                 {roles.map((role) => (

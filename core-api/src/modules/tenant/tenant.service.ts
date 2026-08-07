@@ -16,6 +16,7 @@ import { ExternalVMModel } from '../external-vm/external-vm.model';
 import { hashPassword } from '../../utils/argon2';
 import { generateSecureToken, hashToken } from '../../utils/crypto';
 import { sendTenantOperatorInviteEmail } from '../../utils/email/sender';
+import { generateInvitePassword } from '../../utils/generateInvitePassword';
 import {
   ConflictError,
   NotFoundError,
@@ -244,7 +245,8 @@ export class TenantService {
       throw new ConflictError('TENANT_ADMIN_ALREADY_EXISTS');
     }
 
-    const passwordHash = await hashPassword(dto.password);
+    const temporaryPassword = generateInvitePassword();
+    const passwordHash = await hashPassword(temporaryPassword);
     const rawVerifyToken = generateSecureToken(32);
     const inviteExpiresAt = new Date(Date.now() + CONSOLE_INVITE_TOKEN_TTL_MS);
 
@@ -265,7 +267,7 @@ export class TenantService {
       await sendTenantOperatorInviteEmail({
         to: tenantAdmin.email,
         email: tenantAdmin.email,
-        tempPassword: dto.password,
+        tempPassword: temporaryPassword,
         verifyToken: rawVerifyToken,
         inviteKind: 'admin',
         tenant: {

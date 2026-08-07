@@ -85,6 +85,14 @@ services:
     environment:
       PORT: ${CLOUD_AUTOMATION_RESELLER_PORT:-3005}
       NODE_ENV: production
+      # On-prem Mongo TLS: mount CA below; set in .env if needed:
+      #   MONGODB_TLS=true
+      #   MONGODB_TLS_CA_FILE=/certs/mongo-ca.crt
+      MONGODB_TLS_CA_FILE: ${RESELLER_MONGODB_TLS_CA_FILE:-/certs/mongo-ca.crt}
+      NODE_EXTRA_CA_CERTS: ${RESELLER_NODE_EXTRA_CA_CERTS:-/certs/mongo-ca.crt}
+    volumes:
+      # Same on-prem Mongo CA as core-api (required when Mongo uses a private CA)
+      - /opt/racko/certs:/certs:ro
     ports:
       - "127.0.0.1:${CLOUD_AUTOMATION_RESELLER_PORT:-3005}:3005"
     networks:

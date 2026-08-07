@@ -25,6 +25,7 @@ export interface IMachine extends Document {
   accountToken: string;
   status: MachineStatus;
   adminId: mongoose.Types.ObjectId;
+  groupId?: mongoose.Types.ObjectId;   // optional — machines without a group show all admin machines
   lastSeen?: Date;
   specs?: IMachineSpecs;
   deleted: boolean;
@@ -53,6 +54,7 @@ const machineSchema = new Schema<IMachine>(
       diskGb:    { type: Number },
     },
     deleted: { type: Boolean, default: false, index: true },
+    groupId: { type: Schema.Types.ObjectId, ref: 'MachineGroup', default: null, index: true },
     trackingEnabled: { type: Boolean, default: false, index: true },
     trackingEnabledAt: { type: Date },
     trackingEnabledBy: { type: Schema.Types.ObjectId, ref: 'User' },

@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   FileSpreadsheet,
+  Plus,
   RefreshCw,
   Search,
   Trash2,
@@ -29,8 +30,10 @@ import {
   listVmHostLeases,
   uploadVmHostLeasesExcel,
   updateVmHostLease,
+  createVmHostLease,
   type VmHostLease,
   type UpdateVmHostLeaseDto,
+  type CreateVmHostLeaseDto,
 } from '@/lib/vmHostLeaseApi';
 
 const inputClass =
@@ -165,6 +168,20 @@ export default function VmHostLeasesPage() {
   const [selectedLeases, setSelectedLeases] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
   const [pendingBulkDelete, setPendingBulkDelete] = useState(false);
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addFormData, setAddFormData] = useState({
+    provider: '',
+    ipAddress: '',
+    description: '',
+    invoiceDate: '',
+    dueDate: '',
+    assignedTo: '',
+    clientAssignmentStartDate: '',
+    clientAssignmentEndDate: '',
+    vmUsername: '',
+    vmPassword: '',
+  });
+  const [addingLease, setAddingLease] = useState(false);
 
   // Determine which columns have actual data
   const visibleColumns = useMemo(() => {
@@ -332,6 +349,80 @@ export default function VmHostLeasesPage() {
     }
   };
 
+  const handleAddLease = async () => {
+    setAddingLease(true);
+    try {
+      // Validate required fields
+      if (
+        !addFormData.provider.trim() ||
+        !addFormData.ipAddress.trim() ||
+        !addFormData.description.trim() ||
+        !addFormData.invoiceDate ||
+        !addFormData.dueDate ||
+        !addFormData.assignedTo.trim() ||
+        !addFormData.vmUsername.trim() ||
+        !addFormData.vmPassword.trim()
+      ) {
+        addToast('error', 'Please fill in all required fields');
+        setAddingLease(false);
+        return;
+      }
+
+      // Validate dates
+      const invoiceDate = new Date(addFormData.invoiceDate);
+      const dueDate = new Date(addFormData.dueDate);
+      if (dueDate < invoiceDate) {
+        addToast('error', 'Due Date must be on or after Invoice Date');
+        setAddingLease(false);
+        return;
+      }
+
+      // Validate assignment dates if provided
+      if (addFormData.clientAssignmentStartDate && addFormData.clientAssignmentEndDate) {
+        const startDate = new Date(addFormData.clientAssignmentStartDate);
+        const endDate = new Date(addFormData.clientAssignmentEndDate);
+        if (endDate < startDate) {
+          addToast('error', 'Assignment End Date must be on or after Assignment Start Date');
+          setAddingLease(false);
+          return;
+        }
+      }
+
+      // Convert empty strings to null for optional date fields
+      const payload: CreateVmHostLeaseDto = {
+        ...addFormData,
+        clientAssignmentStartDate: addFormData.clientAssignmentStartDate || null,
+        clientAssignmentEndDate: addFormData.clientAssignmentEndDate || null,
+      };
+
+      await createVmHostLease(payload);
+      addToast('success', `VM lease added successfully for ${addFormData.ipAddress}`);
+      
+      // Reset form and close modal
+      setAddFormData({
+        provider: '',
+        ipAddress: '',
+        description: '',
+        invoiceDate: '',
+        dueDate: '',
+        assignedTo: '',
+        clientAssignmentStartDate: '',
+        clientAssignmentEndDate: '',
+        vmUsername: '',
+        vmPassword: '',
+      });
+      setShowAddModal(false);
+      await load();
+    } catch (err) {
+      addToast(
+        'error',
+        err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Failed to add lease'
+      );
+    } finally {
+      setAddingLease(false);
+    }
+  };
+
   const startEdit = (lease: VmHostLease) => {
     setEditingId(lease.id);
     setEditData({
@@ -414,6 +505,15 @@ export default function VmHostLeasesPage() {
           >
             <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             Refresh
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowAddModal(true)}
+            disabled={false}
+            className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition"
+          >
+            <Plus className="h-4 w-4" />
+            Add Manual
           </button>
           <button
             type="button"
@@ -854,6 +954,188 @@ export default function VmHostLeasesPage() {
         onCancel={() => setPendingBulkDelete(false)}
         onConfirm={() => void handleBulkDelete()}
       />
+
+      {/* Add Manual Lease Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="w-full max-w-2xl rounded-xl bg-white p-6 shadow-lg">
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-gray-900">Add VM Host Lease Manually</h2>
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-700"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <div className="space-y-4 max-h-96 overflow-y-auto">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Provider <span className="text-red-600">*</span>
+                  </label>
+                  <select
+                    value={addFormData.provider}
+                    onChange={(e) => setAddFormData({ ...addFormData, provider: e.target.value })}
+                    className={inputClass}
+                  >
+                    <option value="">Select Provider</option>
+                    <option value="Webyne">Webyne</option>
+                    <option value="Azure">Azure</option>
+                    <option value="Aws">AWS</option>
+                    <option value="Oci">OCI</option>
+                    <option value="Gcp">GCP</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    IP Address <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g., 192.168.1.100"
+                    value={addFormData.ipAddress}
+                    onChange={(e) => setAddFormData({ ...addFormData, ipAddress: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Description <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g., Production Server"
+                    value={addFormData.description}
+                    onChange={(e) => setAddFormData({ ...addFormData, description: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Invoice Date <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={addFormData.invoiceDate}
+                    onChange={(e) => setAddFormData({ ...addFormData, invoiceDate: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Due Date <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={addFormData.dueDate}
+                    onChange={(e) => setAddFormData({ ...addFormData, dueDate: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Assigned To <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g., John Doe"
+                    value={addFormData.assignedTo}
+                    onChange={(e) => setAddFormData({ ...addFormData, assignedTo: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Assignment Start Date <span className="text-gray-400">(Optional)</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={addFormData.clientAssignmentStartDate}
+                    onChange={(e) => setAddFormData({ ...addFormData, clientAssignmentStartDate: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Assignment End Date <span className="text-gray-400">(Optional)</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={addFormData.clientAssignmentEndDate}
+                    onChange={(e) => setAddFormData({ ...addFormData, clientAssignmentEndDate: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    VM Username <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="e.g., admin"
+                    value={addFormData.vmUsername}
+                    onChange={(e) => setAddFormData({ ...addFormData, vmUsername: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    VM Password <span className="text-red-600">*</span>
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Enter password"
+                    value={addFormData.vmPassword}
+                    onChange={(e) => setAddFormData({ ...addFormData, vmPassword: e.target.value })}
+                    className={inputClass}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="mt-6 flex gap-3 justify-end border-t border-gray-200 pt-4">
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                disabled={addingLease}
+                className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50 transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleAddLease()}
+                disabled={addingLease}
+                className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:bg-[#a01717] disabled:opacity-50 transition inline-flex items-center gap-2"
+              >
+                {addingLease ? (
+                  <>
+                    <div className="h-4 w-4 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                    Adding...
+                  </>
+                ) : (
+                  <>
+                    <Plus className="h-4 w-4" />
+                    Add Lease
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </div>
