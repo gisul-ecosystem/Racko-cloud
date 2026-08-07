@@ -228,9 +228,11 @@ jobs:
             --self-contained true `
             -p:PublishReadyToRun=true `
             -o racko-app/publish
-          # Zip the full publish folder — WebView2Loader.dll must be a loose file on disk.
-          # PublishSingleFile is NOT used; the push script extracts the zip so all DLLs land next to the exe.
+          # 1. Zip for VM push flow (push script downloads + extracts this)
           Compress-Archive -Path racko-app/publish/* -DestinationPath agent/dist/racko-app.zip -Force
+          # 2. Copy folder to agent/dist/racko-app/ for Inno Setup bundling
+          New-Item -ItemType Directory -Force -Path agent/dist/racko-app | Out-Null
+          Copy-Item -Path racko-app/publish/* -Destination agent/dist/racko-app/ -Recurse -Force
 
       - name: Compute and save checksum (Linux)
         if: matrix.platform == 'linux'
