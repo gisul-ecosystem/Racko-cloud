@@ -178,7 +178,16 @@ const insertAzureUsers = async (client, requestId, createdUsers) => {
   );
 };
 
-const provisionUsersForRequest = async (requestId) => {
+const provisionUsersForRequest = async (requestId, options = {}) => {
+  const rangeFrom =
+    Number.isInteger(Number(options.userNumberFrom)) && Number(options.userNumberFrom) > 0
+      ? Number(options.userNumberFrom)
+      : null;
+  const rangeTo =
+    Number.isInteger(Number(options.userNumberTo)) && Number(options.userNumberTo) > 0
+      ? Number(options.userNumberTo)
+      : null;
+
   const requestResult = await db.query(
     `
       SELECT
@@ -207,44 +216,65 @@ const provisionUsersForRequest = async (requestId) => {
     throw new AppError('Request not found.', 404);
   }
 
-  const perUserProgress = await getPerUserResourceGroupProgress(requestId);
-
-  if (isPerUserCosting(request.costing_mode)) {
-    const existingUsers = await getExistingUsersForRequest(requestId);
-
-    if (!perUserProgress.ready) {
-      return {
-        usersCreated: existingUsers.length,
-        accountCount: perUserProgress.accountCount,
-        complete: false,
-        remaining: perUserProgress.remaining
-      };
-    }
-  }
-
   const accountCount = Number(request.account_count);
 
   if (!Number.isInteger(accountCount) || accountCount <= 0) {
     throw new AppError('Request account count is invalid.', 400);
   }
 
-  const existingUsers = await getExistingUsersForRequest(requestId);
+  const cohortFrom = rangeFrom || 1;
+  const cohortTo = rangeTo || accountCount;
+  const cohortTarget = cohortTo - cohortFrom + 1;
 
-  if (existingUsers.length >= accountCount) {
+  const perUserProgress = await getPerUserResourceGroupProgress(requestId, db, {
+    userNumberFrom: cohortFrom,
+    userNumberTo: cohortTo
+  });
+
+  if (isPerUserCosting(request.costing_mode)) {
+    const existingUsers = await getExistingUsersForRequest(requestId);
+    const existingInCohort = existingUsers.filter((user) => {
+      const n = Number(user.user_number);
+      return n >= cohortFrom && n <= cohortTo;
+    });
+
+    if (!perUserProgress.ready) {
+      return {
+        usersCreated: existingInCohort.length,
+        accountCount: cohortTarget,
+        complete: false,
+        remaining: perUserProgress.remaining,
+        userNumberFrom: cohortFrom,
+        userNumberTo: cohortTo
+      };
+    }
+  }
+
+  const existingUsers = await getExistingUsersForRequest(requestId);
+  const existingInCohort = existingUsers.filter((user) => {
+    const n = Number(user.user_number);
+    return n >= cohortFrom && n <= cohortTo;
+  });
+
+  if (existingInCohort.length >= cohortTarget) {
     logAzureUserEvent('info', 'azure_user_provision_reused_existing', {
       requestId,
-      usersCreated: existingUsers.length
+      usersCreated: existingInCohort.length,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
     });
 
     try {
       const budgetResult = await provisionBudgetsForRequest(requestId);
       if (budgetResult && budgetResult.complete === false) {
         return {
-          usersCreated: existingUsers.length,
-          accountCount,
+          usersCreated: existingInCohort.length,
+          accountCount: cohortTarget,
           complete: false,
           remaining: Math.max(1, Number(budgetResult.remaining) || 0),
-          budgetsRemaining: budgetResult.remaining
+          budgetsRemaining: budgetResult.remaining,
+          userNumberFrom: cohortFrom,
+          userNumberTo: cohortTo
         };
       }
     } catch (budgetError) {
@@ -255,10 +285,12 @@ const provisionUsersForRequest = async (requestId) => {
     }
 
     return {
-      usersCreated: existingUsers.length,
-      accountCount,
+      usersCreated: existingInCohort.length,
+      accountCount: cohortTarget,
       complete: true,
-      remaining: 0
+      remaining: 0,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
     };
   }
 
@@ -267,9 +299,10 @@ const provisionUsersForRequest = async (requestId) => {
       .map((user) => Number(user.user_number))
       .filter((userNumber) => Number.isInteger(userNumber) && userNumber > 0)
   );
-  const pendingUserNumbers = Array.from({ length: accountCount }, (_, index) => index + 1).filter(
-    (userNumber) => !existingUserNumbers.has(userNumber)
-  );
+  const pendingUserNumbers = Array.from(
+    { length: cohortTo - cohortFrom + 1 },
+    (_, index) => cohortFrom + index
+  ).filter((userNumber) => !existingUserNumbers.has(userNumber));
 
   const { graphClient, subscriptionId } = createGraphClient();
   const verifiedDomain = await getVerifiedDomain(graphClient);
@@ -304,6 +337,7 @@ const provisionUsersForRequest = async (requestId) => {
   const batchSize = getUserProvisionBatchSize();
   let adoptedCount = 0;
   let batchCreated = 0;
+  const failures = [];
 
   // With no time budget: one HTTP request = one user batch (proxy-safe for large labs).
   let processedBatch = false;
@@ -314,91 +348,96 @@ const provisionUsersForRequest = async (requestId) => {
     const batchUserNumbers = pendingUserNumbers.splice(0, batchSize);
     const createdUsers = [];
 
-    try {
-      await runWithConcurrency(batchUserNumbers, DEFAULT_CONCURRENCY, async (userNumber) => {
-        const { username, temporaryPassword, payload } = buildUserPayload({
-          requestId,
-          userNumber,
-          domain: verifiedDomain,
-          accountEnabled: !initialAccess.disableAzureAccount,
-          usageLocation
-        });
+    await runWithConcurrency(
+      batchUserNumbers,
+      DEFAULT_CONCURRENCY,
+      async (userNumber) => {
+        try {
+          const { username, temporaryPassword, payload } = buildUserPayload({
+            requestId,
+            userNumber,
+            domain: verifiedDomain,
+            accountEnabled: !initialAccess.disableAzureAccount,
+            usageLocation
+          });
 
-        const { user: createdUser, adopted } = await createOrAdoptGraphUser(
-          graphClient,
-          { payload, temporaryPassword },
-          requestId
-        );
+          const { user: createdUser, adopted } = await createOrAdoptGraphUser(
+            graphClient,
+            { payload, temporaryPassword },
+            requestId
+          );
 
-        if (adopted) {
-          adoptedCount += 1;
-        }
-
-        const licenseSkuId = String(request.microsoft_license_sku_id || '').trim();
-        if (licenseSkuId) {
-          try {
-            await assignLicenseToUser(graphClient, createdUser.id, licenseSkuId, usageLocation);
-            logAzureUserEvent('info', 'azure_user_license_assigned', {
-              requestId,
-              azureUserId: createdUser.id,
-              username,
-              skuId: licenseSkuId,
-              usageLocation
-            });
-          } catch (licenseError) {
-            logAzureUserEvent('error', 'azure_user_license_assign_failed', {
-              requestId,
-              azureUserId: createdUser.id,
-              username,
-              skuId: licenseSkuId,
-              usageLocation,
-              message: licenseError?.message || null,
-              statusCode: licenseError?.statusCode || licenseError?.status || null
-            });
-            throw licenseError;
-          }
-        }
-
-        let resourceGroupName = null;
-        let resourceGroupId = null;
-
-        if (isPerUserCosting(request.costing_mode)) {
-          const stagedResourceGroup = stagingResourceGroupByUserNumber.get(userNumber);
-
-          if (!stagedResourceGroup) {
-            throw new AppError(
-              `Per-user resource group is missing for user slot ${userNumber}. Create resource groups first.`,
-              400
-            );
+          if (adopted) {
+            adoptedCount += 1;
           }
 
-          resourceGroupName = stagedResourceGroup.azure_resource_group_name;
-          resourceGroupId = stagedResourceGroup.azure_resource_group_id;
+          const licenseSkuId = String(request.microsoft_license_sku_id || '').trim();
+          if (licenseSkuId) {
+            try {
+              await assignLicenseToUser(graphClient, createdUser.id, licenseSkuId, usageLocation);
+              logAzureUserEvent('info', 'azure_user_license_assigned', {
+                requestId,
+                azureUserId: createdUser.id,
+                username,
+                skuId: licenseSkuId,
+                usageLocation
+              });
+            } catch (licenseError) {
+              logAzureUserEvent('error', 'azure_user_license_assign_failed', {
+                requestId,
+                azureUserId: createdUser.id,
+                username,
+                skuId: licenseSkuId,
+                usageLocation,
+                message: licenseError?.message || null,
+                statusCode: licenseError?.statusCode || licenseError?.status || null
+              });
+              // Soft-fail: keep the user even if license assign fails; retry can re-run.
+            }
+          }
+
+          let resourceGroupName = null;
+          let resourceGroupId = null;
+
+          if (isPerUserCosting(request.costing_mode)) {
+            const stagedResourceGroup = stagingResourceGroupByUserNumber.get(userNumber);
+
+            if (!stagedResourceGroup) {
+              throw new AppError(
+                `Per-user resource group is missing for user slot ${userNumber}. Create resource groups first.`,
+                400
+              );
+            }
+
+            resourceGroupName = stagedResourceGroup.azure_resource_group_name;
+            resourceGroupId = stagedResourceGroup.azure_resource_group_id;
+          }
+
+          createdUsers.push({
+            azureUserId: createdUser.id,
+            username,
+            temporaryPassword,
+            status: initialAccess.status,
+            blockedUntil: initialAccess.blockedUntil,
+            userNumber,
+            resourceGroupName,
+            resourceGroupId
+          });
+        } catch (error) {
+          failures.push({
+            userNumber,
+            error: error?.message || 'User provision failed'
+          });
+          logAzureUserEvent('error', 'azure_user_provision_item_failed', {
+            requestId,
+            userNumber,
+            message: error?.message,
+            statusCode: error?.statusCode || error?.status
+          });
         }
-
-        createdUsers.push({
-          azureUserId: createdUser.id,
-          username,
-          temporaryPassword,
-          status: initialAccess.status,
-          blockedUntil: initialAccess.blockedUntil,
-          userNumber,
-          resourceGroupName,
-          resourceGroupId
-        });
-      });
-    } catch (error) {
-      logAzureUserEvent('error', 'azure_user_provision_failed', {
-        requestId,
-        errorName: error?.name,
-        errorCode: error?.code || error?.cause?.code,
-        statusCode: error?.statusCode || error?.status,
-        message: error?.message,
-        cause: error?.cause?.message || null
-      });
-
-      throw toGraphProvisionError(error);
-    }
+      },
+      { continueOnError: true }
+    );
 
     if (createdUsers.length > 0) {
       const client = await db.connect();
@@ -419,17 +458,24 @@ const provisionUsersForRequest = async (requestId) => {
     processedBatch = true;
   }
 
-  const totalUsers = (await getExistingUsersForRequest(requestId)).length;
-  const remaining = Math.max(0, accountCount - totalUsers);
+  const allUsers = await getExistingUsersForRequest(requestId);
+  const cohortUsers = allUsers.filter((user) => {
+    const n = Number(user.user_number);
+    return n >= cohortFrom && n <= cohortTo;
+  });
+  const remaining = Math.max(0, cohortTarget - cohortUsers.length);
   const complete = remaining === 0;
 
   logAzureUserEvent(complete ? 'info' : 'info', complete ? 'azure_user_provision_success' : 'azure_user_provision_partial', {
     requestId,
     subscriptionId,
-    usersCreated: totalUsers,
+    usersCreated: cohortUsers.length,
     usersAdopted: adoptedCount,
     batchCreated,
-    remaining
+    remaining,
+    failures: failures.length,
+    userNumberFrom: cohortFrom,
+    userNumberTo: cohortTo
   });
 
   if (complete) {
@@ -437,11 +483,14 @@ const provisionUsersForRequest = async (requestId) => {
       const budgetResult = await provisionBudgetsForRequest(requestId);
       if (budgetResult && budgetResult.complete === false) {
         return {
-          usersCreated: totalUsers,
-          accountCount,
+          usersCreated: cohortUsers.length,
+          accountCount: cohortTarget,
           complete: false,
           remaining: Math.max(1, Number(budgetResult.remaining) || 0),
-          budgetsRemaining: budgetResult.remaining
+          budgetsRemaining: budgetResult.remaining,
+          failures,
+          userNumberFrom: cohortFrom,
+          userNumberTo: cohortTo
         };
       }
     } catch (budgetError) {
@@ -452,7 +501,7 @@ const provisionUsersForRequest = async (requestId) => {
     }
   }
 
-  if (usageWindows.length > 0 && totalUsers > 0) {
+  if (usageWindows.length > 0 && allUsers.length > 0) {
     try {
       await enforceWindowForRequest({
         id: requestId,
@@ -469,10 +518,13 @@ const provisionUsersForRequest = async (requestId) => {
   }
 
   return {
-    usersCreated: totalUsers,
-    accountCount,
+    usersCreated: cohortUsers.length,
+    accountCount: cohortTarget,
     complete,
-    remaining
+    remaining,
+    failures,
+    userNumberFrom: cohortFrom,
+    userNumberTo: cohortTo
   };
 };
 
