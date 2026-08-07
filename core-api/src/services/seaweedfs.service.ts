@@ -50,6 +50,14 @@ function buildClient(): S3Client {
       secretAccessKey: config.SEAWEEDFS_SECRET_KEY,
     },
     forcePathStyle: true,  // required for SeaweedFS S3 — disables virtual-hosted-style
+    // AWS SDK v3 injects CRC32 checksums automatically into presigned URLs by default.
+    // SeaweedFS and other S3-compatible stores (MinIO, Ceph) do not support AWS's
+    // flexible checksum extension — they enforce the baked-in checksum against the
+    // actual payload and reject the PUT with "BadDigest" when they don't match.
+    // WHEN_REQUIRED disables automatic checksum injection, keeping presigned URLs
+    // clean and compatible with any S3-compatible backend.
+    requestChecksumCalculation: 'WHEN_REQUIRED',
+    responseChecksumValidation: 'WHEN_REQUIRED',
   });
 }
 

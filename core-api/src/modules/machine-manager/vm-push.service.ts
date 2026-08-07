@@ -389,14 +389,9 @@ class VMPushService {
       '$shortcut.TargetPath = "$installDir\\racko-app.exe"',
       '$shortcut.Description = "Racko Shared Files"',
       '$shortcut.Save()',
-      // Launch the app for the currently logged-in user (non-blocking)
-      'Write-Host "[racko] Launching Racko App..."',
-      'Start-Process "$installDir\\racko-app.exe"',
-      'Write-Host "[racko] Racko App installed successfully."',
-      // ── WebView2 Runtime (required for in-app file viewer) ─────────────────
-      // Silently installs WebView2 Runtime from Microsoft's CDN.
-      // The installer detects if it's already installed and skips — safe to run
-      // on Windows 10/11 (already present) and Windows Server (not pre-installed).
+      // ── WebView2 Runtime — install BEFORE launching the app ───────────────
+      // Required for the in-app file viewer. The installer auto-detects if
+      // already present (Windows 10/11) and skips — safe to run always.
       'Write-Host "[racko] Installing WebView2 Runtime (required for file viewer)..."',
       '$wv2Path = "$installDir\\WebView2Setup.exe"',
       'try {',
@@ -407,6 +402,10 @@ class VMPushService {
       '} catch {',
       '    Write-Host "[racko] WARNING: WebView2 install failed (non-fatal): $_"',
       '}',
+      // Launch the app for the currently logged-in user (non-blocking)
+      'Write-Host "[racko] Launching Racko App..."',
+      'Start-Process "$installDir\\racko-app.exe"',
+      'Write-Host "[racko] Racko App installed successfully."',
     ].join('; ');
   }
 }
