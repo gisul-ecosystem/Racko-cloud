@@ -95,12 +95,11 @@ const sharedProxyOptions = {
 // Explicit routes use the full path — no rewrite needed
 const coreApiProxy = createProxyMiddleware(sharedProxyOptions);
 
-/** Live multi-cloud pricing can take >10s; default REQUEST_TIMEOUT_MS is too short. */
-const PRICING_PROXY_TIMEOUT_MS = Math.max(config.REQUEST_TIMEOUT_MS, 300_000);
+/** Live multi-cloud pricing can run for a long time — no proxy idle timeout. */
 const coreApiPricingProxy = createProxyMiddleware({
   ...sharedProxyOptions,
-  timeout: PRICING_PROXY_TIMEOUT_MS,
-  proxyTimeout: PRICING_PROXY_TIMEOUT_MS,
+  timeout: 0,
+  proxyTimeout: 0,
 });
 
 // Catch-all mounted at /api/v1 — Express strips that prefix from req.url before
