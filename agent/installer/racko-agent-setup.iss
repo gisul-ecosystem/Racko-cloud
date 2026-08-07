@@ -3,12 +3,15 @@
 ; Requires: Inno Setup 6+ (https://jrsoftware.org/isinfo.php)
 ;
 ; Pre-build checklist:
-;   1. Build Go agent:        make build-windows   (outputs dist\racko-agent.exe)
-;   2. Publish racko-app:     dotnet publish ..\racko-app\RackoApp.csproj -c Release -r win-x64 --no-self-contained false --output ..\racko-app\publish\
-;      OR with self-contained: dotnet publish ..\racko-app\RackoApp.csproj -c Release -r win-x64 --output ..\racko-app\publish\
-;   3. Download WebView2 bootstrapper (one-time, ~2MB):
-;      Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "MicrosoftEdgeWebview2Setup.exe"
-;   4. Run Inno Setup compiler: iscc racko-agent-setup.iss
+;   1. Build Go agent:   make build-windows          (outputs dist\racko-agent.exe)
+;   2. Build racko-app:  dotnet publish ..\racko-app\RackoApp.csproj
+;                          -c Release -r win-x64 --self-contained true
+;                          -o ..\dist\racko-app\
+;   3. Run Inno Setup compiler: iscc racko-agent-setup.iss
+;
+; WebView2 Runtime is installed at runtime by the installer itself — no file
+; to download manually. The installer checks the registry; if already present
+; (Win10/11/Server with Edge) it skips the download entirely.
 
 #define MyAppName      "Racko Agent"
 #define MyAppVersion   "1.0.0"
@@ -18,7 +21,6 @@
 #define MyInstallDir   "{commonappdata}\racko-agent"
 #define MyBinaryName   "racko-agent.exe"
 #define MyAppExe       "racko-app.exe"
-#define WebView2Setup  "MicrosoftEdgeWebview2Setup.exe"
 #ifndef PlatformURL
   #define PlatformURL "http://localhost:8000"
 #endif
@@ -49,19 +51,11 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Source: "..\dist\{#MyBinaryName}"; DestDir: "{#MyInstallDir}"; Flags: ignoreversion
 
 ; racko-app — full folder publish so WebView2Loader.dll lands on disk next to the exe.
-; Built by: dotnet publish racko-app/RackoApp.csproj -c Release -r win-x64 --self-contained true -o racko-app/publish/
+; Built by CI: dotnet publish -c Release -r win-x64 --self-contained true -o dist\racko-app\
 ; The wildcard copies all DLLs including WebView2Loader.dll and the .NET runtime.
 Source: "..\dist\racko-app\{#MyAppExe}"; DestDir: "{#MyInstallDir}\racko-app"; Flags: ignoreversion
 Source: "..\dist\racko-app\*"; DestDir: "{#MyInstallDir}\racko-app"; \
   Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "{#MyAppExe}"
-
-; WebView2 Evergreen Bootstrapper (~2MB).
-; Download once with:
-;   Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile "{#WebView2Setup}"
-; The bootstrapper detects if WebView2 Runtime is already installed and skips
-; the download in that case — safe to run on every install, online or offline
-; if the machine already has Edge/WebView2 Runtime present.
-Source: "{#WebView2Setup}"; DestDir: "{tmp}"; Flags: deleteafterinstall; Check: WebView2SetupExists
 
 [Code]
 var
@@ -70,12 +64,31 @@ var
   TokenLabel: TLabel;
   TokenHint: TLabel;
 
-// ── WebView2 bootstrapper presence check ─────────────────────────────────────
-// Used as a [Files] Check — if the bootstrapper wasn't placed next to the iss
-// (e.g. CI didn't download it), skip that file entry gracefully.
-function WebView2SetupExists(): Boolean;
+// ── WebView2 registry check ───────────────────────────────────────────────────
+// Returns true if WebView2 Runtime is already installed at the system level.
+// Checks the same registry key the WebView2 loader uses internally.
+// Source: https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution
+function IsWebView2Installed(): Boolean;
+var
+  Version: String;
 begin
-  Result := FileExists(ExpandConstant('{tmp}\{#WebView2Setup}'));
+  // 64-bit system-level install (most common — Edge/Win11 ships this)
+  if RegQueryStringValue(HKLM,
+    'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+    'pv', Version) then
+  begin
+    Result := (Version <> '') and (Version <> '0.0.0.0');
+    Exit;
+  end;
+  // 32-bit or per-user install fallback
+  if RegQueryStringValue(HKCU,
+    'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+    'pv', Version) then
+  begin
+    Result := (Version <> '') and (Version <> '0.0.0.0');
+    Exit;
+  end;
+  Result := False;
 end;
 
 // ── Detect old install — show instructions and block ─────────────────────────
@@ -173,16 +186,25 @@ begin
     Exec('sc.exe', 'stop {#MyServiceName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(1500);
 
-    // ── Install WebView2 Runtime (Evergreen Bootstrapper) ─────────────────────
-    // Runs silently — bootstrapper detects if Runtime is already present and
-    // skips the download in that case (idempotent, safe on every install).
-    // /silent    — no UI
-    // /install   — install the runtime
-    // Edge/WebView2 is already present on Win11 and most Win10 machines; this
-    // is a no-op for them. On Server 2019/2022 Core it downloads ~120MB once.
-    if FileExists(ExpandConstant('{tmp}\{#WebView2Setup}')) then
-      Exec(ExpandConstant('{tmp}\{#WebView2Setup}'), '/silent /install', '',
-           SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    // ── Install WebView2 Runtime ───────────────────────────────────────────────
+    // Uses the Microsoft Evergreen Bootstrapper approach:
+    //   1. Check registry — if already installed, skip entirely (no download, no wait)
+    //   2. If not installed — download the ~2MB bootstrapper from Microsoft at runtime
+    //      and run it silently. The bootstrapper then fetches the full ~120MB runtime.
+    // This is Microsoft's documented production deployment method — no file to bundle
+    // in CI, no compile-time dependency, works on any online Windows machine.
+    // Reference: https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution
+    if not IsWebView2Installed() then
+    begin
+      Exec('powershell.exe',
+        '-NonInteractive -ExecutionPolicy Bypass -Command ' +
+        '"$p = Join-Path $env:TEMP ''MicrosoftEdgeWebview2Setup.exe''; ' +
+        'Invoke-WebRequest -Uri ''https://go.microsoft.com/fwlink/p/?LinkId=2124703'' ' +
+        '-OutFile $p -UseBasicParsing; ' +
+        'Start-Process $p -ArgumentList ''/silent /install'' -Wait; ' +
+        'Remove-Item $p -Force -ErrorAction SilentlyContinue"',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
   end;
 
   if CurStep = ssPostInstall then
