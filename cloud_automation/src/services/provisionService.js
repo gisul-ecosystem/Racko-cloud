@@ -157,7 +157,14 @@ const provisionSharedResourceGroup = async (client, request) => {
 
     return {
       resourceGroup: request.azure_resource_group_name,
-      costingMode: request.costing_mode
+      resourceGroupCount: 1,
+      accountCount: Number(request.account_count) || 0,
+      costingMode: request.costing_mode,
+      complete: true,
+      remaining: 0,
+      batchCreated: 0,
+      failures: [],
+      failed: false
     };
   }
 
@@ -199,11 +206,21 @@ const provisionSharedResourceGroup = async (client, request) => {
 
   return {
     resourceGroup: provisionedResourceGroup.resourceGroupName,
-    costingMode: request.costing_mode
+    resourceGroupCount: 1,
+    accountCount: Number(request.account_count) || 0,
+    costingMode: request.costing_mode,
+    complete: true,
+    remaining: 0,
+    batchCreated: 1,
+    failures: [],
+    failed: false
   };
 };
 
-const provisionPerUserResourceGroupsForRequest = async (request) => {
+const provisionPerUserResourceGroupsForRequest = async (
+  request,
+  { userNumberFrom = null, userNumberTo = null } = {}
+) => {
   const accountCount = Number(request.account_count);
   const maxAccountCount = getMaxProvisionAccountCount();
 
@@ -218,31 +235,51 @@ const provisionPerUserResourceGroupsForRequest = async (request) => {
     );
   }
 
-  const existingGroups = await getStagingResourceGroups(request.id);
+  const rangeFrom =
+    Number.isInteger(Number(userNumberFrom)) && Number(userNumberFrom) > 0
+      ? Number(userNumberFrom)
+      : 1;
+  const rangeTo =
+    Number.isInteger(Number(userNumberTo)) && Number(userNumberTo) > 0
+      ? Number(userNumberTo)
+      : accountCount;
 
-  if (existingGroups.length >= accountCount) {
-    await db.query(
-      `
-        UPDATE requests
-        SET status = $2
-        WHERE id = $1
-      `,
-      [request.id, STATUS_COMPLETED]
-    );
+  const existingGroups = await getStagingResourceGroups(request.id);
+  const existingInRange = existingGroups.filter((row) => {
+    const n = Number(row.user_number);
+    return n >= rangeFrom && n <= rangeTo;
+  });
+  const targetCount = rangeTo - rangeFrom + 1;
+
+  if (existingInRange.length >= targetCount) {
+    // Only mark request Completed when ALL users have RGs (all cohorts done for this step).
+    if (existingGroups.length >= accountCount) {
+      await db.query(
+        `
+          UPDATE requests
+          SET status = $2
+          WHERE id = $1
+        `,
+        [request.id, STATUS_COMPLETED]
+      );
+    }
 
     logProvisionEvent('info', 'provision_request_reused_existing', {
       requestId: request.id,
       status: request.status,
-      resourceGroupCount: existingGroups.length,
-      costingMode: request.costing_mode
+      resourceGroupCount: existingInRange.length,
+      costingMode: request.costing_mode,
+      userNumberFrom: rangeFrom,
+      userNumberTo: rangeTo
     });
 
     return {
       resourceGroup: summarizePerUserResourceGroups(existingGroups),
-      resourceGroupCount: existingGroups.length,
-      accountCount,
+      resourceGroupCount: existingInRange.length,
+      accountCount: targetCount,
       complete: true,
-      remaining: 0
+      remaining: 0,
+      failures: []
     };
   }
 
@@ -253,9 +290,11 @@ const provisionPerUserResourceGroupsForRequest = async (request) => {
     requestId: request.id,
     status: request.status,
     accountCount,
-    existingResourceGroupCount: existingGroups.length,
+    existingResourceGroupCount: existingInRange.length,
     location,
-    costingMode: request.costing_mode
+    costingMode: request.costing_mode,
+    userNumberFrom: rangeFrom,
+    userNumberTo: rangeTo
   });
 
   await preflightAzureManagementAccess({ requestId: request.id });
@@ -263,18 +302,21 @@ const provisionPerUserResourceGroupsForRequest = async (request) => {
   const startedAt = Date.now();
   const timeBudgetMs = getProvisionStepTimeBudgetMs();
   let progress = {
-    completed: existingGroups.length,
-    remaining: Math.max(0, accountCount - existingGroups.length),
+    completed: existingInRange.length,
+    remaining: Math.max(0, targetCount - existingInRange.length),
     done: false,
     batchCreated: 0,
-    failures: []
+    failures: [],
+    rows: existingGroups
   };
 
   while (!progress.done) {
     progress = await provisionPerUserResourceGroups({
       requestId: request.id,
       accountCount,
-      location
+      location,
+      userNumberFrom: rangeFrom,
+      userNumberTo: rangeTo
     });
 
     // No time budget: one resource-group batch per HTTP request (proxy-safe).
@@ -288,48 +330,71 @@ const provisionPerUserResourceGroupsForRequest = async (request) => {
   }
 
   if (!progress.done) {
-    logProvisionEvent('info', 'provision_request_partial', {
+    const failures = progress.failures || [];
+    const zeroProgressFailure =
+      Number(progress.batchCreated || 0) === 0 && failures.length > 0;
+
+    logProvisionEvent(zeroProgressFailure ? 'error' : 'info', 'provision_request_partial', {
       requestId: request.id,
       resourceGroupCount: progress.completed,
-      accountCount,
+      accountCount: targetCount,
       remaining: progress.remaining,
-      batchCreated: progress.batchCreated
+      batchCreated: progress.batchCreated,
+      failures: failures.length,
+      failed: zeroProgressFailure
     });
 
     return {
       resourceGroup: summarizePerUserResourceGroups(progress.rows),
       resourceGroupCount: progress.completed,
-      accountCount,
+      accountCount: targetCount,
       complete: false,
-      remaining: progress.remaining
+      remaining: progress.remaining,
+      batchCreated: progress.batchCreated || 0,
+      failures,
+      // Zero-progress batch with errors is terminal until explicit Retry.
+      failed: zeroProgressFailure
     };
   }
 
-  await db.query(
-    `
-      UPDATE requests
-      SET status = $2
-      WHERE id = $1
-    `,
-    [request.id, STATUS_COMPLETED]
-  );
+  const allGroups = await getStagingResourceGroups(request.id);
+  if (allGroups.length >= accountCount) {
+    await db.query(
+      `
+        UPDATE requests
+        SET status = $2
+        WHERE id = $1
+      `,
+      [request.id, STATUS_COMPLETED]
+    );
+  }
 
   logProvisionEvent('info', 'provision_request_completed', {
     requestId: request.id,
     resourceGroupCount: progress.completed,
-    costingMode: request.costing_mode
+    costingMode: request.costing_mode,
+    userNumberFrom: rangeFrom,
+    userNumberTo: rangeTo
   });
 
   return {
     resourceGroup: summarizePerUserResourceGroups(progress.rows),
     resourceGroupCount: progress.completed,
-    accountCount,
+    accountCount: targetCount,
     complete: true,
-    remaining: 0
+    remaining: 0,
+    failures: progress.failures || []
   };
 };
 
-const provisionRequestResourceGroup = async (requestId) => {
+const provisionRequestResourceGroup = async (requestId, options = {}) => {
+  const {
+    resolveActiveCohort,
+    advanceCohortAfterStep,
+    withCohortMeta,
+    markCohortFailed
+  } = require('./provisionCohortService');
+
   const requestResult = await db.query(
     `
       SELECT
@@ -347,6 +412,8 @@ const provisionRequestResourceGroup = async (requestId) => {
   );
 
   const request = requestResult.rows[0];
+  let cohort = null;
+  const reviveFailed = options.retry === true;
 
   try {
     if (!request) {
@@ -358,7 +425,69 @@ const provisionRequestResourceGroup = async (requestId) => {
     }
 
     if (isPerUserCosting(request.costing_mode)) {
-      return provisionPerUserResourceGroupsForRequest(request);
+      try {
+        cohort = await resolveActiveCohort(requestId, {
+          reviveFailed,
+          claimPending: true
+        });
+      } catch {
+        cohort = null;
+      }
+
+      if (cohort && cohort.status === 'failed' && !cohort.allComplete) {
+        return withCohortMeta(
+          {
+            resourceGroup: null,
+            resourceGroupCount: 0,
+            accountCount: Number(request.account_count) || 0,
+            complete: false,
+            remaining: Math.max(
+              0,
+              Number(cohort.userNumberTo) - Number(cohort.userNumberFrom) + 1
+            ),
+            batchCreated: 0,
+            failures: [
+              {
+                message:
+                  cohort.lastError ||
+                  'Resource group step failed. Retry after fixing the Azure error.'
+              }
+            ],
+            failed: true
+          },
+          cohort
+        );
+      }
+
+      const range =
+        cohort && !cohort.allComplete
+          ? {
+              userNumberFrom: options.userNumberFrom ?? cohort.userNumberFrom,
+              userNumberTo: options.userNumberTo ?? cohort.userNumberTo
+            }
+          : {
+              userNumberFrom: options.userNumberFrom ?? null,
+              userNumberTo: options.userNumberTo ?? null
+            };
+
+      const result = await provisionPerUserResourceGroupsForRequest(request, range);
+
+      if (result.complete && cohort && !cohort.allComplete) {
+        await advanceCohortAfterStep(requestId, 'resourceGroup');
+        cohort = await resolveActiveCohort(requestId, { claimPending: false });
+      } else if ((!result.complete && result.failures?.length && cohort) || result.failed) {
+        const failureMessage =
+          result.failures?.[0]?.message ||
+          'Unable to create Azure resource groups for this wave.';
+        await markCohortFailed(cohort.id, failureMessage);
+        cohort = {
+          ...cohort,
+          status: 'failed',
+          lastError: failureMessage
+        };
+      }
+
+      return withCohortMeta(result, cohort);
     }
 
     const client = await db.connect();

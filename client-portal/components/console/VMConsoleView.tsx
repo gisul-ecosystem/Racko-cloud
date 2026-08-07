@@ -6,6 +6,7 @@ import { ChevronLeft, Maximize, RefreshCw, LogOut } from 'lucide-react';
 import {
   closeConsoleSession,
   getConsoleSession,
+  type ConsoleDimensions,
   type ConsoleProtocol,
   type ConsoleSession,
 } from '../../lib/consoleApi';
@@ -53,9 +54,22 @@ function dimensionsDrifted(
 export interface VMConsoleViewProps {
   backHref: string;
   disconnectHref: string;
+  /**
+   * Override session minting (e.g. tenant portal uses /api/v1/tenant-vms/:id/console).
+   * Defaults to platform GET /api/v1/vms/:id/console.
+   */
+  getSession?: (
+    vmId: string,
+    protocol: ConsoleProtocol,
+    dimensions?: ConsoleDimensions
+  ) => Promise<ConsoleSession>;
 }
 
-export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) {
+export function VMConsoleView({
+  backHref,
+  disconnectHref,
+  getSession = getConsoleSession,
+}: VMConsoleViewProps) {
   const { vmId } = useParams<{ vmId: string }>();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -138,7 +152,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
       try {
         const dims = getContainerDimensions();
         lastFetchDimsRef.current = dims;
-        const data = await getConsoleSession(vmId, protocol, dims);
+        const data = await getSession(vmId, protocol, dims);
         if (signal?.aborted) return;
         setSession(data);
         sessionRef.current = data;
@@ -155,7 +169,7 @@ export function VMConsoleView({ backHref, disconnectHref }: VMConsoleViewProps) 
         if (!signal?.aborted) setLoading(false);
       }
     },
-    [vmId, protocol, getContainerDimensions]
+    [vmId, protocol, getContainerDimensions, getSession]
   );
 
   useEffect(() => {

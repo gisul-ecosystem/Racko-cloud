@@ -8,6 +8,7 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react';
+import { usePathname } from 'next/navigation';
 import { RequireTenantService } from '@/components/tenant/RequireTenantService';
 import { TenantServiceShell } from '@/components/tenant/TenantServiceShell';
 import { useTenantRbac } from '@/context/TenantRbacContext';
@@ -63,9 +64,17 @@ const endUserLinks: ServiceNavLink[] = [
 ];
 
 export default function TenantElasticLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname() ?? '';
   const { isConsoleStaff, hasPermission } = useTenantRbac();
   const showAdminNav = isConsoleStaff && hasPermission('elastic.manage', 'elastic.read');
   const links = showAdminNav ? adminLinks : endUserLinks;
+
+  // Assigned end users open console without elastic.read/manage — skip admin gate
+  // (backend still enforces assignment + access window).
+  const isConsole = /\/elastic-servers\/[^/]+\/console\/?$/.test(pathname);
+  if (isConsole) {
+    return <>{children}</>;
+  }
 
   return (
     <RequireTenantService serviceKey="elastic-servers">

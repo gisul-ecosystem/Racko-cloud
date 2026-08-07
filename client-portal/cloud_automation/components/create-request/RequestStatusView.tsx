@@ -29,7 +29,7 @@ import { hexToRgba } from '../../../lib/tenantAccentStyles';
 import { downloadCredentialSpreadsheet } from '../../api/client';
 import { useProvisionStatus } from '../../hooks/useProvisionStatus';
 import type { OrchestrationEvent, ProvisionSnapshot, ProvisionStepState } from '../../types/provisioning';
-import { getCompletedStepCount } from '../../utils/provisionSnapshot';
+import { getCohortWaveLabel, getCompletedStepCount } from '../../utils/provisionSnapshot';
 import {
   formatAzureRegion,
   formatCurrency,
@@ -236,7 +236,16 @@ export function RequestStatusView({
     });
 
   const completedCount = getCompletedStepCount(steps);
-  const progressPct = Math.round((completedCount / steps.length) * 100);
+  const waveLabel = snapshot ? getCohortWaveLabel(snapshot) : null;
+  const cohortTotal = snapshot?.cohortTotal ?? snapshot?.cohorts?.length ?? 0;
+  const cohortsCompleted = snapshot?.cohortsCompleted ?? 0;
+  const overallPct =
+    cohortTotal > 0
+      ? Math.round(
+          ((cohortsCompleted + completedCount / Math.max(steps.length, 1)) / cohortTotal) * 100
+        )
+      : Math.round((completedCount / steps.length) * 100);
+  const progressPct = Math.min(100, Math.max(0, overallPct));
   const request = snapshot?.request ?? null;
   const failedStep = steps.find((step) => step.status === 'failed');
   const regionLabel = formatAzureRegion(request?.location);
@@ -445,7 +454,9 @@ export function RequestStatusView({
                 <div className="border-b border-gray-100 px-6 py-4">
                   <h2 className="text-base font-semibold text-gray-900">Provisioning progress</h2>
                   <p className="mt-0.5 text-xs text-gray-400">
-                    {completedCount} of {steps.length} steps · {progressPct}% complete
+                    {waveLabel ? `${waveLabel} · ` : ''}
+                    {completedCount} of {steps.length} steps
+                    {cohortTotal > 1 ? ` in this wave · ${progressPct}% overall` : ` · ${progressPct}% complete`}
                   </p>
                 </div>
 
@@ -507,7 +518,14 @@ export function RequestStatusView({
                             <p className="mt-1 text-xs text-gray-400">
                               {step.key === 'users' && licenseLabel
                                 ? `Creating accounts and assigning ${licenseLabel}…`
-                                : 'In progress…'}
+                                : step.key === 'resourceGroup' && waveLabel
+                                  ? `${waveLabel}: creating or reusing resource groups…`
+                                  : 'In progress…'}
+                            </p>
+                          ) : null}
+                          {step.status === 'failed' ? (
+                            <p className="mt-1 text-xs text-red-600/80">
+                              Auto-retry paused. Use Retry step after fixing the issue.
                             </p>
                           ) : null}
                         </div>
@@ -521,7 +539,9 @@ export function RequestStatusView({
               <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
                 <div className="border-b border-gray-100 px-6 py-4">
                   <h2 className="text-base font-semibold text-gray-900">Activity log</h2>
-                  <p className="mt-0.5 text-xs text-gray-400">Recent provisioning events from the backend</p>
+                  <p className="mt-0.5 text-xs text-gray-400">
+                    Live step progress for this request (errors stop here until you retry)
+                  </p>
                 </div>
                 <div className="max-h-96 overflow-y-auto px-6 py-4">
                   {events.length === 0 ? (
