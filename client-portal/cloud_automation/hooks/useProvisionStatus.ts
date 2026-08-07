@@ -10,6 +10,7 @@ import {
   provisionServices,
   provisionUsers,
   sendProvisionCredentials,
+  type ProvisionStepStatus,
 } from '../api/client';
 import type {
   OrchestrationEvent,
@@ -24,6 +25,8 @@ import {
   buildProgressSummary,
   createOrchestrationEvent,
   deriveStepStates,
+  getAbsoluteStepCompletionMap,
+  getCohortWaveLabel,
   getNextProvisionStepKey,
   isCredentialDeliveryComplete,
   isSnapshotProvisioningComplete,
@@ -34,6 +37,46 @@ const POLL_INTERVAL_MS = 2000;
 function isAccessLinkDeliveryPending(snapshot: ProvisionSnapshot | null): boolean {
   const status = String(snapshot?.credentials?.deliveryStatus ?? '').toLowerCase();
   return status === 'queued';
+}
+
+function formatStepFailures(stepResult: ProvisionStepStatus): string {
+  const failures = Array.isArray(stepResult.failures) ? stepResult.failures : [];
+  const messages = failures
+    .map((failure) => String(failure?.message || '').trim())
+    .filter(Boolean);
+  if (messages.length === 0) {
+    return (
+      stepResult.cohortLastError ||
+      'Provisioning step failed with no progress. Retry after fixing the Azure error.'
+    );
+  }
+
+  const unique = [...new Set(messages)];
+  if (unique.length === 1) {
+    return failures.length > 1 ? `${unique[0]} (${failures.length} users)` : unique[0];
+  }
+
+  return `${unique[0]} (+${unique.length - 1} more)`;
+}
+
+function isTerminalStepFailure(stepResult: ProvisionStepStatus): boolean {
+  if (stepResult.failed === true) return true;
+  if (String(stepResult.cohortStatus || '').toLowerCase() === 'failed') return true;
+
+  const failures = Array.isArray(stepResult.failures) ? stepResult.failures : [];
+  if (failures.length === 0) return false;
+
+  const complete = stepResult.complete === true;
+  if (complete) return false;
+
+  const batchCreated = Number(stepResult.batchCreated ?? 0);
+  const remaining = Number(stepResult.remaining ?? NaN);
+  // Soft-fail with zero progress must stop the auto-chain.
+  if (batchCreated === 0 && (!Number.isFinite(remaining) || remaining > 0)) {
+    return true;
+  }
+
+  return false;
 }
 
 interface UseProvisionStatusOptions {
@@ -54,7 +97,10 @@ interface UseProvisionStatusResult {
   retryFailedStep: () => Promise<void>;
 }
 
-const STEP_ACTIONS: Record<ProvisionStepKey, (requestId: number) => Promise<unknown>> = {
+const STEP_ACTIONS: Record<
+  ProvisionStepKey,
+  (requestId: number, options?: { retry?: boolean }) => Promise<ProvisionStepStatus | unknown>
+> = {
   resourceGroup: provisionResourceGroup,
   services: provisionServices,
   users: provisionUsers,
@@ -86,6 +132,8 @@ export function useProvisionStatus({
   const isCompleteRef = useRef(false);
   const deliveryPendingRef = useRef(false);
   const snapshotRef = useRef<ProvisionSnapshot | null>(initialSnapshot);
+  const lastProgressKeyRef = useRef<string | null>(null);
+  const retryNextStepRef = useRef(false);
 
   const [snapshot, setSnapshot] = useState<ProvisionSnapshot | null>(initialSnapshot);
   const [overrides, setOverrides] = useState<StepCompletionOverrides>({});
@@ -106,13 +154,77 @@ export function useProvisionStatus({
   const [error, setError] = useState<string | null>(initialError);
 
   const appendEvent = useCallback((event: OrchestrationEvent) => {
-    setEvents((current) => [event, ...current].slice(0, 40));
+    setEvents((current) => {
+      const previous = current[0];
+      if (
+        previous &&
+        previous.level === event.level &&
+        previous.step === event.step &&
+        previous.message === event.message
+      ) {
+        // Collapse identical spam (e.g. repeated "10 remaining…").
+        return current;
+      }
+      return [event, ...current].slice(0, 40);
+    });
   }, []);
+
+  const lastCohortIndexRef = useRef<number | null>(null);
+
+  const syncCohortFailureFromSnapshot = useCallback((nextSnapshot: ProvisionSnapshot) => {
+    const active = nextSnapshot.activeCohort;
+    if (!active || String(active.status).toLowerCase() !== 'failed') {
+      return;
+    }
+
+    const step = String(active.currentStep || '') as ProvisionStepKey;
+    const message = String(active.lastError || '').trim();
+    if (
+      !message ||
+      (step !== 'resourceGroup' &&
+        step !== 'services' &&
+        step !== 'users' &&
+        step !== 'roles' &&
+        step !== 'fabric')
+    ) {
+      return;
+    }
+
+    if (stepErrorsRef.current[step] === message) {
+      return;
+    }
+
+    const nextErrors = { ...stepErrorsRef.current, [step]: message };
+    stepErrorsRef.current = nextErrors;
+    setStepErrors(nextErrors);
+    appendEvent(
+      createOrchestrationEvent(
+        `${getCohortWaveLabel(nextSnapshot) ? `${getCohortWaveLabel(nextSnapshot)}: ` : ''}${message}`,
+        'error',
+        step
+      )
+    );
+  }, [appendEvent]);
 
   const loadSnapshot = useCallback(async () => {
     const nextSnapshot = await fetchProvisionSnapshot(requestId);
     deliveryPendingRef.current = isAccessLinkDeliveryPending(nextSnapshot);
     snapshotRef.current = nextSnapshot;
+
+    const cohortIndex = nextSnapshot.activeCohort?.cohortIndex ?? null;
+    if (
+      cohortIndex != null &&
+      lastCohortIndexRef.current != null &&
+      cohortIndex !== lastCohortIndexRef.current
+    ) {
+      // New wave — clear per-step overrides from the previous cohort.
+      overridesRef.current = {};
+      setOverrides({});
+      stepErrorsRef.current = {};
+      setStepErrors({});
+      lastProgressKeyRef.current = null;
+    }
+    lastCohortIndexRef.current = cohortIndex;
 
     if (isCredentialDeliveryComplete(nextSnapshot.credentials)) {
       const nextOverrides = { ...overridesRef.current, credentials: true };
@@ -126,10 +238,11 @@ export function useProvisionStatus({
       });
     }
 
+    syncCohortFailureFromSnapshot(nextSnapshot);
     setSnapshot(nextSnapshot);
     setError(null);
     return nextSnapshot;
-  }, [requestId]);
+  }, [requestId, syncCohortFailureFromSnapshot]);
 
   const runNextStep = useCallback(
     async (currentSnapshot: ProvisionSnapshot) => {
@@ -141,12 +254,49 @@ export function useProvisionStatus({
         return;
       }
 
-      const nextStep = getNextProvisionStepKey(
+      let nextStep = getNextProvisionStepKey(
         currentSnapshot,
         currentOverrides,
         stepErrorsRef.current
       );
+
+      // Explicit Retry can continue a failed wave (backend reviveFailed).
+      if (!nextStep && retryNextStepRef.current) {
+        const active = currentSnapshot.activeCohort;
+        const step = String(active?.currentStep || '');
+        if (
+          active &&
+          String(active.status).toLowerCase() === 'failed' &&
+          (step === 'resourceGroup' ||
+            step === 'services' ||
+            step === 'users' ||
+            step === 'roles' ||
+            step === 'fabric')
+        ) {
+          nextStep = step as ProvisionStepKey;
+        }
+      }
+
       if (!nextStep) return;
+
+      // Never re-POST a step Azure/DB already finished (stops shared-lab RG loops).
+      const absoluteDone = getAbsoluteStepCompletionMap(
+        currentSnapshot,
+        currentOverrides
+      );
+      if (
+        nextStep !== 'credentials' &&
+        nextStep !== 'fabric' &&
+        absoluteDone[nextStep]
+      ) {
+        const skippedSnapshot = await loadSnapshot();
+        if (!isSnapshotProvisioningComplete(skippedSnapshot, overridesRef.current)) {
+          void runNextStep(skippedSnapshot);
+        } else {
+          isCompleteRef.current = true;
+        }
+        return;
+      }
 
       if (!areProvisionPrerequisitesMet(nextStep, currentSnapshot, currentOverrides)) {
         appendEvent(
@@ -172,6 +322,10 @@ export function useProvisionStatus({
       const stepLabel =
         deriveStepStates(currentSnapshot, currentOverrides).find((step) => step.key === nextStep)
           ?.label ?? nextStep;
+      const waveLabel = getCohortWaveLabel(currentSnapshot);
+      const labeledStep = waveLabel ? `${waveLabel}: ${stepLabel}` : stepLabel;
+      const useRetry = retryNextStepRef.current;
+      retryNextStepRef.current = false;
 
       orchestratingRef.current = true;
 
@@ -179,7 +333,9 @@ export function useProvisionStatus({
       let refreshedSnapshot: ProvisionSnapshot | null = null;
 
       try {
-        const stepResult = await STEP_ACTIONS[nextStep](requestId);
+        const stepResult = (await STEP_ACTIONS[nextStep](requestId, {
+          retry: useRetry,
+        })) as ProvisionStepStatus;
 
         const partialProgress =
           stepResult &&
@@ -187,14 +343,28 @@ export function useProvisionStatus({
           'complete' in stepResult &&
           stepResult.complete === false;
 
+        if (isTerminalStepFailure(stepResult)) {
+          const message = formatStepFailures(stepResult);
+          setStepErrors((current) => ({ ...current, [nextStep]: message }));
+          stepErrorsRef.current = { ...stepErrorsRef.current, [nextStep]: message };
+          appendEvent(
+            createOrchestrationEvent(`${labeledStep} — ${message}`, 'error', nextStep)
+          );
+          refreshedSnapshot = await loadSnapshot();
+          return;
+        }
+
         if (
           nextStep === 'credentials' ||
           nextStep === 'fabric' ||
+          nextStep === 'roles' ||
           (nextStep === 'services' && !partialProgress)
         ) {
-          const nextOverrides = { ...overridesRef.current, [nextStep]: true };
-          overridesRef.current = nextOverrides;
-          setOverrides(nextOverrides);
+          if (!partialProgress) {
+            const nextOverrides = { ...overridesRef.current, [nextStep]: true };
+            overridesRef.current = nextOverrides;
+            setOverrides(nextOverrides);
+          }
         }
 
         setStepErrors((current) => {
@@ -202,6 +372,9 @@ export function useProvisionStatus({
           delete next[nextStep];
           return next;
         });
+        const cleared = { ...stepErrorsRef.current };
+        delete cleared[nextStep];
+        stepErrorsRef.current = cleared;
 
         if (partialProgress) {
           const remaining =
@@ -212,26 +385,43 @@ export function useProvisionStatus({
             'rolesAssigned' in stepResult && typeof stepResult.rolesAssigned === 'number'
               ? stepResult.rolesAssigned
               : null;
-          appendEvent(
-            createOrchestrationEvent(
-              remaining != null
-                ? rolesAssigned != null
-                  ? `${stepLabel} — assigned ${rolesAssigned}, ${remaining} left…`
-                  : `${stepLabel} — ${remaining} remaining…`
-                : `${stepLabel} — batch complete. Continuing…`,
-              'info',
-              nextStep
-            )
-          );
+          const batchCreated =
+            'batchCreated' in stepResult && typeof stepResult.batchCreated === 'number'
+              ? stepResult.batchCreated
+              : null;
+
+          const progressKey = `${nextStep}:${remaining}:${rolesAssigned}:${batchCreated}`;
+          if (lastProgressKeyRef.current !== progressKey) {
+            lastProgressKeyRef.current = progressKey;
+            appendEvent(
+              createOrchestrationEvent(
+                remaining != null
+                  ? rolesAssigned != null
+                    ? `${labeledStep} — assigned ${rolesAssigned}, ${remaining} left…`
+                    : batchCreated != null && batchCreated > 0
+                      ? `${labeledStep} — created ${batchCreated}, ${remaining} remaining…`
+                      : `${labeledStep} — ${remaining} remaining…`
+                  : `${labeledStep} — batch complete. Continuing…`,
+                'info',
+                nextStep
+              )
+            );
+          }
         } else {
+          lastProgressKeyRef.current = null;
           appendEvent(
-            createOrchestrationEvent(`${stepLabel} — completed successfully.`, 'success', nextStep)
+            createOrchestrationEvent(`${labeledStep} — completed successfully.`, 'success', nextStep)
           );
         }
 
         refreshedSnapshot = await loadSnapshot();
         if (isSnapshotProvisioningComplete(refreshedSnapshot, overridesRef.current)) {
           isCompleteRef.current = true;
+        } else if (
+          refreshedSnapshot.activeCohort &&
+          String(refreshedSnapshot.activeCohort.status).toLowerCase() === 'failed'
+        ) {
+          shouldChainNextStep = false;
         } else {
           shouldChainNextStep = true;
         }
@@ -244,8 +434,9 @@ export function useProvisionStatus({
               : 'Provisioning step failed.';
 
         setStepErrors((current) => ({ ...current, [nextStep]: message }));
+        stepErrorsRef.current = { ...stepErrorsRef.current, [nextStep]: message };
         appendEvent(
-          createOrchestrationEvent(`${stepLabel} — ${message}`, 'error', nextStep)
+          createOrchestrationEvent(`${labeledStep} — ${message}`, 'error', nextStep)
         );
       } finally {
         orchestratingRef.current = false;
@@ -317,6 +508,9 @@ export function useProvisionStatus({
       setStepErrors(cleared);
     }
 
+    lastProgressKeyRef.current = null;
+    retryNextStepRef.current = true;
+
     try {
       await loadSnapshot();
       await startOrchestration();
@@ -337,6 +531,8 @@ export function useProvisionStatus({
     overridesRef.current = {};
     stepErrorsRef.current = {};
     snapshotRef.current = initialSnapshot;
+    lastProgressKeyRef.current = null;
+    retryNextStepRef.current = false;
     setOverrides({});
     setStepErrors({});
     setEvents(

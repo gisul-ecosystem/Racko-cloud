@@ -10,6 +10,7 @@ import type {
 
 export interface StepCompletionOverrides {
   services?: boolean;
+  roles?: boolean;
   fabric?: boolean;
   credentials?: boolean;
 }
@@ -95,9 +96,16 @@ export function isUsersStepComplete(snapshot: ProvisionSnapshot): boolean {
   return usersCreated > 0;
 }
 
-export function isRolesStepComplete(snapshot: ProvisionSnapshot): boolean {
+export function isRolesStepComplete(
+  snapshot: ProvisionSnapshot,
+  overrides: StepCompletionOverrides = {}
+): boolean {
   if (!isUsersStepComplete(snapshot)) {
     return false;
+  }
+
+  if (overrides.roles === true) {
+    return true;
   }
 
   if (snapshot.roles?.complete === true) {
@@ -122,7 +130,7 @@ export function isFabricStepComplete(
   snapshot: ProvisionSnapshot,
   overrides: StepCompletionOverrides
 ): boolean {
-  if (!isRolesStepComplete(snapshot)) {
+  if (!isRolesStepComplete(snapshot, overrides)) {
     return false;
   }
 
@@ -145,7 +153,17 @@ export function isCredentialStepComplete(
   return overrides.credentials === true || isCredentialDeliveryComplete(snapshot.credentials);
 }
 
-export function getStepCompletionMap(
+const COHORT_STEP_ORDER: Array<ProvisionStepKey | 'done'> = [
+  'resourceGroup',
+  'services',
+  'users',
+  'roles',
+  'fabric',
+  'done',
+];
+
+/** Absolute completion from DB snapshot (ignores cohort wave state). */
+export function getAbsoluteStepCompletionMap(
   snapshot: ProvisionSnapshot,
   overrides: StepCompletionOverrides = {}
 ): Record<ProvisionStepKey, boolean> {
@@ -153,10 +171,99 @@ export function getStepCompletionMap(
     resourceGroup: isResourceGroupStepComplete(snapshot),
     services: isServicesStepComplete(snapshot, overrides),
     users: isUsersStepComplete(snapshot),
-    roles: isRolesStepComplete(snapshot),
+    roles: isRolesStepComplete(snapshot, overrides),
     fabric: isFabricStepComplete(snapshot, overrides),
     credentials: isCredentialStepComplete(snapshot, overrides),
   };
+}
+
+/** When per-user cohorts exist, step completion is relative to the active wave. */
+function getCohortRelativeCompletion(
+  snapshot: ProvisionSnapshot,
+  overrides: StepCompletionOverrides
+): Record<ProvisionStepKey, boolean> | null {
+  // Shared labs never use waves — leftover cohort rows must not drive the UI.
+  if (!isPerUserCostingRequest(snapshot)) {
+    return null;
+  }
+
+  const active = snapshot.activeCohort;
+  const hasCohorts = (snapshot.cohortTotal ?? snapshot.cohorts?.length ?? 0) > 0;
+
+  if (!hasCohorts) {
+    return null;
+  }
+
+  if (snapshot.allCohortsComplete) {
+    return {
+      resourceGroup: true,
+      services: true,
+      users: true,
+      roles: true,
+      fabric: true,
+      credentials: isCredentialStepComplete(snapshot, overrides),
+    };
+  }
+
+  if (!active) {
+    return null;
+  }
+
+  const current = String(active.currentStep || 'resourceGroup');
+  const currentIdx = COHORT_STEP_ORDER.indexOf(current as ProvisionStepKey | 'done');
+  const idx = currentIdx >= 0 ? currentIdx : 0;
+
+  const fabricRequired = snapshot.fabric?.required === true;
+
+  return {
+    resourceGroup: idx > 0,
+    services: idx > 1,
+    users: idx > 2,
+    roles: idx > 3,
+    fabric: !fabricRequired || idx > 4,
+    // Credentials only after every wave finishes.
+    credentials: false,
+  };
+}
+
+export function getStepCompletionMap(
+  snapshot: ProvisionSnapshot,
+  overrides: StepCompletionOverrides = {}
+): Record<ProvisionStepKey, boolean> {
+  const cohortMap = getCohortRelativeCompletion(snapshot, overrides);
+  if (cohortMap) {
+    // If Azure/DB already finished a step, never regress it because the wave
+    // pointer is still on an earlier step (stale cohort / shared leftover).
+    const absolute = getAbsoluteStepCompletionMap(snapshot, overrides);
+    return {
+      resourceGroup: cohortMap.resourceGroup || absolute.resourceGroup,
+      services: cohortMap.services || absolute.services,
+      users: cohortMap.users || absolute.users,
+      roles: cohortMap.roles || absolute.roles,
+      fabric: cohortMap.fabric || absolute.fabric,
+      credentials: cohortMap.credentials || absolute.credentials,
+    };
+  }
+
+  return getAbsoluteStepCompletionMap(snapshot, overrides);
+}
+
+export function getCohortWaveLabel(snapshot: ProvisionSnapshot): string | null {
+  if (!isPerUserCostingRequest(snapshot)) {
+    return null;
+  }
+
+  const total = snapshot.cohortTotal ?? snapshot.cohorts?.length ?? 0;
+  if (total <= 0) return null;
+
+  if (snapshot.allCohortsComplete) {
+    return `All ${total} waves complete`;
+  }
+
+  const active = snapshot.activeCohort;
+  if (!active) return `${total} waves`;
+
+  return `Wave ${active.cohortIndex} of ${total} (users ${active.userNumberFrom}–${active.userNumberTo})`;
 }
 
 export function areProvisionPrerequisitesMet(
@@ -188,12 +295,40 @@ export function isSnapshotProvisioningComplete(
   return deriveStepStates(snapshot, overrides).every((step) => step.status === 'complete');
 }
 
+function getCohortStepError(
+  snapshot: ProvisionSnapshot
+): { stepKey: ProvisionStepKey; message: string } | null {
+  const active = snapshot.activeCohort;
+  if (!active || String(active.status).toLowerCase() !== 'failed') {
+    return null;
+  }
+
+  const step = String(active.currentStep || '');
+  if (
+    step !== 'resourceGroup' &&
+    step !== 'services' &&
+    step !== 'users' &&
+    step !== 'roles' &&
+    step !== 'fabric'
+  ) {
+    return null;
+  }
+
+  const message = String(active.lastError || '').trim();
+  if (!message) {
+    return null;
+  }
+
+  return { stepKey: step as ProvisionStepKey, message };
+}
+
 export function deriveStepStates(
   snapshot: ProvisionSnapshot,
   overrides: StepCompletionOverrides = {},
   stepErrors: Partial<Record<ProvisionStepKey, string>> = {}
 ): ProvisionStepState[] {
   const completion = getStepCompletionMap(snapshot, overrides);
+  const cohortError = getCohortStepError(snapshot);
   const visibleSteps = PROVISION_STEPS.filter(
     (step) => step.key !== 'fabric' || snapshot.fabric?.required === true
   );
@@ -203,7 +338,9 @@ export function deriveStepStates(
 
   return visibleSteps.map((step) => {
     const isComplete = completion[step.key];
-    const error = stepErrors[step.key] ?? null;
+    const error =
+      stepErrors[step.key] ??
+      (cohortError?.stepKey === step.key ? cohortError.message : null);
 
     let status: ProvisionStepStatus = 'pending';
 
@@ -248,7 +385,44 @@ export function getNextProvisionStepKey(
   overrides: StepCompletionOverrides = {},
   stepErrors: Partial<Record<ProvisionStepKey, string>> = {}
 ): ProvisionStepKey | null {
+  const absolute = getAbsoluteStepCompletionMap(snapshot, overrides);
+
+  // Cohort driver (per-user only): honor active wave step even if Fabric is hidden.
+  const active = snapshot.activeCohort;
+  if (
+    isPerUserCostingRequest(snapshot) &&
+    active &&
+    !snapshot.allCohortsComplete
+  ) {
+    if (String(active.status).toLowerCase() === 'failed') {
+      // Wait for explicit Retry — do not auto-POST a failed wave.
+      return null;
+    }
+
+    const step = String(active.currentStep || '');
+    if (
+      step === 'resourceGroup' ||
+      step === 'services' ||
+      step === 'users' ||
+      step === 'roles' ||
+      step === 'fabric'
+    ) {
+      // Wave pointer can lag behind Azure/DB — skip already-finished steps.
+      if (step !== 'fabric' && absolute[step as ProvisionStepKey]) {
+        // Fall through to derived next step from completion map.
+      } else if (step === 'fabric') {
+        // Always POST fabric — service no-ops when not required and advances the wave.
+        return 'fabric';
+      } else {
+        return step as ProvisionStepKey;
+      }
+    }
+  }
+
   const steps = deriveStepStates(snapshot, overrides, stepErrors);
+  if (steps.some((step) => step.status === 'failed')) {
+    return null;
+  }
   const next = steps.find((step) => step.status === 'active');
   return next?.key ?? null;
 }

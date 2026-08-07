@@ -209,6 +209,11 @@ export async function getServiceRoles(serviceId: number): Promise<ServiceRole[]>
   return response.roles ?? [];
 }
 
+export interface ProvisionStepFailure {
+  userNumber?: number;
+  message?: string;
+}
+
 export interface ProvisionStepStatus {
   success: boolean;
   status?: string;
@@ -217,6 +222,9 @@ export interface ProvisionStepStatus {
   accountCount?: number | null;
   complete?: boolean;
   remaining?: number;
+  batchCreated?: number | null;
+  failed?: boolean;
+  failures?: ProvisionStepFailure[];
   resourcesProvisioned?: number;
   resourcesSkipped?: number;
   users?: unknown[];
@@ -228,6 +236,18 @@ export interface ProvisionStepStatus {
   usersSent?: number;
   spreadsheetFilename?: string | null;
   spreadsheetAvailable?: boolean;
+  cohortIndex?: number;
+  cohortTotal?: number;
+  userNumberFrom?: number;
+  userNumberTo?: number;
+  cohortStatus?: string;
+  cohortCurrentStep?: string;
+  cohortLastError?: string | null;
+  allCohortsComplete?: boolean;
+  rolesAssigned?: number;
+  cohorts?: ProvisionSnapshot['cohorts'];
+  activeCohort?: ProvisionSnapshot['activeCohort'];
+  cohortsCompleted?: number;
 }
 
 /** GET /api/provision/request/:id — resource group provisioning status. */
@@ -263,26 +283,48 @@ export async function getProvisionCredentials(requestId: number): Promise<Provis
   );
 }
 
-/** POST /api/provision/request/:id — create resource group. */
-export async function provisionResourceGroup(requestId: number): Promise<ProvisionStepStatus> {
-  return azureRequest<ProvisionStepStatus>(cloudAutomationPath(`/provision/request/${requestId}`), {
+type ProvisionStepOptions = {
+  retry?: boolean;
+};
+
+function provisionPostOptions(options?: ProvisionStepOptions): RequestInit {
+  return {
     method: 'POST',
-  });
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ retry: options?.retry === true }),
+  };
+}
+
+/** POST /api/provision/request/:id — create resource group. */
+export async function provisionResourceGroup(
+  requestId: number,
+  options?: ProvisionStepOptions
+): Promise<ProvisionStepStatus> {
+  return azureRequest<ProvisionStepStatus>(
+    cloudAutomationPath(`/provision/request/${requestId}`),
+    provisionPostOptions(options)
+  );
 }
 
 /** POST /api/provision/request/:id/services — configure instance policies. */
-export async function provisionServices(requestId: number): Promise<ProvisionStepStatus> {
+export async function provisionServices(
+  requestId: number,
+  options?: ProvisionStepOptions
+): Promise<ProvisionStepStatus> {
   return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/services`),
-    { method: 'POST' }
+    provisionPostOptions(options)
   );
 }
 
 /** POST /api/provision/request/:id/users */
-export async function provisionUsers(requestId: number): Promise<ProvisionStepStatus> {
+export async function provisionUsers(
+  requestId: number,
+  options?: ProvisionStepOptions
+): Promise<ProvisionStepStatus> {
   return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/users`),
-    { method: 'POST' }
+    provisionPostOptions(options)
   );
 }
 
@@ -301,18 +343,24 @@ export async function reprovisionRequestRoles(requestId: number) {
 }
 
 /** POST /api/provision/request/:id/roles */
-export async function provisionRoles(requestId: number): Promise<ProvisionStepStatus> {
+export async function provisionRoles(
+  requestId: number,
+  options?: ProvisionStepOptions
+): Promise<ProvisionStepStatus> {
   return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/roles`),
-    { method: 'POST' }
+    provisionPostOptions(options)
   );
 }
 
 /** POST /api/provision/request/:id/fabric — Fabric capacity/workspace/roles for DP-600/DP-700 */
-export async function provisionFabric(requestId: number): Promise<ProvisionStepStatus> {
+export async function provisionFabric(
+  requestId: number,
+  options?: ProvisionStepOptions
+): Promise<ProvisionStepStatus> {
   return azureRequest<ProvisionStepStatus>(
     cloudAutomationPath(`/provision/request/${requestId}/fabric`),
-    { method: 'POST' }
+    provisionPostOptions(options)
   );
 }
 
@@ -434,6 +482,47 @@ export async function fetchProvisionSnapshot(requestId: number): Promise<Provisi
   const users = Array.isArray(usersRaw.users) ? (usersRaw.users as ProvisionedUser[]) : [];
   const roles = Array.isArray(rolesRaw.roles) ? (rolesRaw.roles as ProvisionedRole[]) : [];
 
+  const normalizeCohort = (
+    raw: Record<string, unknown> | null | undefined
+  ): NonNullable<ProvisionSnapshot['activeCohort']> | null => {
+    if (!raw || typeof raw !== 'object') return null;
+    const cohortIndex = Number(raw.cohortIndex ?? raw.cohort_index);
+    const userNumberFrom = Number(raw.userNumberFrom ?? raw.user_number_from);
+    const userNumberTo = Number(raw.userNumberTo ?? raw.user_number_to);
+    if (!Number.isFinite(cohortIndex) || !Number.isFinite(userNumberFrom) || !Number.isFinite(userNumberTo)) {
+      return null;
+    }
+    return {
+      id: raw.id != null ? Number(raw.id) : undefined,
+      cohortIndex,
+      userNumberFrom,
+      userNumberTo,
+      status: String(raw.status || 'pending'),
+      currentStep: String(raw.currentStep ?? raw.current_step ?? 'resourceGroup'),
+      lastError:
+        (raw.lastError as string | null | undefined) ??
+        (raw.last_error as string | null | undefined) ??
+        null,
+      cohortTotal:
+        raw.cohortTotal != null
+          ? Number(raw.cohortTotal)
+          : raw.cohort_total != null
+            ? Number(raw.cohort_total)
+            : undefined,
+    };
+  };
+
+  const cohorts = Array.isArray(provisionRaw.cohorts)
+    ? provisionRaw.cohorts
+        .map((row) => normalizeCohort(row as Record<string, unknown>))
+        .filter((row): row is NonNullable<typeof row> => Boolean(row))
+    : [];
+  const activeCohort = normalizeCohort(
+    provisionRaw.activeCohort && typeof provisionRaw.activeCohort === 'object'
+      ? (provisionRaw.activeCohort as Record<string, unknown>)
+      : null
+  );
+
   return {
     request,
     provision: {
@@ -488,6 +577,17 @@ export async function fetchProvisionSnapshot(requestId: number): Promise<Provisi
       sentAt: null,
       spreadsheetAvailable: Boolean(credentialsRaw.spreadsheetAvailable),
     },
+    cohorts: cohorts as ProvisionSnapshot['cohorts'],
+    activeCohort: activeCohort as ProvisionSnapshot['activeCohort'],
+    cohortTotal:
+      typeof provisionRaw.cohortTotal === 'number'
+        ? provisionRaw.cohortTotal
+        : cohorts.length,
+    cohortsCompleted:
+      typeof provisionRaw.cohortsCompleted === 'number'
+        ? provisionRaw.cohortsCompleted
+        : undefined,
+    allCohortsComplete: provisionRaw.allCohortsComplete === true,
     fetchedAt: new Date().toISOString(),
   };
 }
