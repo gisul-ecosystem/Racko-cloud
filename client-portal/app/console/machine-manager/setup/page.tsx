@@ -430,7 +430,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const PUSH_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+  const PUSH_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
   const connectedMachines = machines.filter((m) => vmStatus[m._id]?.agentConnected);
   const allResolved = machines.length > 0 && machines.every(
@@ -510,8 +510,8 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
       const sse = openPushStatusStream(sessionId, streamToken);
       sseRef.current = sse;
 
-      // Start 3-minute countdown
-      setSecondsLeft(180);
+      // Start 10-minute countdown
+      setSecondsLeft(600);
       setTimeoutReached(false);
       countdownRef.current = setInterval(() => {
         setSecondsLeft((s) => {
@@ -694,7 +694,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
             <div className="mb-4 h-1.5 w-full overflow-hidden rounded-full bg-gray-100">
               <div
                 className="h-full bg-[#B91C1C] transition-all duration-1000"
-                style={{ width: `${((180 - secondsLeft) / 180) * 100}%` }}
+                style={{ width: `${((600 - secondsLeft) / 600) * 100}%` }}
               />
             </div>
           )}
