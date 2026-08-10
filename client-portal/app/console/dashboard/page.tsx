@@ -106,6 +106,13 @@ const TOOL_TILES: HubTile[] = [
     description: 'Manage your wallet balance, top up, and view transaction history',
   },
   {
+    serviceKey: 'gcp',
+    name: 'GCP Services',
+    href: tenantConsole.gcp,
+    icon: Cloud,
+    description: 'Google Cloud access management, provisioning, and lab environments.',
+  },
+  {
     serviceKey: 'docs',
     name: 'Documentation',
     href: tenantConsole.docs,

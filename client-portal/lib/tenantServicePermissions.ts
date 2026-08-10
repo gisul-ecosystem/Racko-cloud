@@ -11,6 +11,7 @@ export const TENANT_SERVICE_PERMISSIONS: Partial<Record<TenantServiceKey, string
   'elastic-servers': ['elastic.read', 'elastic.manage'],
   azure: ['azure.read', 'azure.manage'],
   aws: ['aws.read', 'aws.manage'],
+  gcp: ['gcp.read', 'gcp.manage'],
   'cloud-labs': ['cloud_labs.read', 'cloud_labs.manage'],
 };
 

@@ -26,6 +26,7 @@ export default function GCPConsoleLayout({ children }: { children: React.ReactNo
           <nav style={{ padding: '12px 12px 0' }}>
             {[
               { label: 'Overview', href: '/console/gcp', icon: '▦' },
+              { label: 'Create request', href: '/console/gcp/requests/new', icon: '+' },
             ].map((item) => (
               <Link
                 key={item.href}

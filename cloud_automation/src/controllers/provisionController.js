@@ -71,12 +71,14 @@ const getProvisionedRequest = async (req, res, next) => {
       // migration not applied
     }
 
-    // Cohort-aware RG complete: current wave's RGs done (or all cohorts done).
+    // Cohort-aware RG complete only applies when per-user waves exist.
+    // Shared labs (0 cohorts) must use the real azure_resource_group_name flag —
+    // allCohortsComplete on an empty cohort list must NOT mark RG complete.
     let complete = request.complete ?? Boolean(request.resourceGroup);
     if (activeCohort) {
       complete =
         activeCohort.currentStep !== 'resourceGroup' || activeCohort.status === 'completed';
-    } else if (allCohortsComplete) {
+    } else if (allCohortsComplete && cohorts.length > 0) {
       complete = true;
     }
 
@@ -86,6 +88,7 @@ const getProvisionedRequest = async (req, res, next) => {
       resourceGroup: request.resourceGroup,
       resourceGroupCount: request.resourceGroupCount ?? null,
       accountCount: request.accountCount ?? null,
+      costingMode: request.costingMode ?? null,
       complete,
       cohorts,
       activeCohort,

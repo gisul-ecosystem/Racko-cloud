@@ -50,9 +50,12 @@ const sendBatch = async (graphClient, requests) => {
   return graphClient.api('/$batch').post({ requests });
 };
 
-const executeBatchWithRetry = async (graphClient, requests, context) => {
+const executeBatchWithRetry = async (graphClient, requests, context, options = {}) => {
   let pendingRequests = requests;
   let lastError;
+  const successStatuses = new Set(
+    Array.isArray(options.successStatuses) ? options.successStatuses : []
+  );
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS && pendingRequests.length > 0; attempt += 1) {
     try {
@@ -71,7 +74,10 @@ const executeBatchWithRetry = async (graphClient, requests, context) => {
           continue;
         }
 
-        if (response.status >= 200 && response.status < 300) {
+        if (
+          (response.status >= 200 && response.status < 300) ||
+          successStatuses.has(Number(response.status))
+        ) {
           results.push({
             request,
             response
@@ -81,6 +87,16 @@ const executeBatchWithRetry = async (graphClient, requests, context) => {
 
         if (isRetryableError(response)) {
           failedRequests.push(request);
+          continue;
+        }
+
+        // Soft-fail non-retryable item errors so one bad user doesn't abort the lab delete.
+        if (options.continueOnItemError) {
+          results.push({
+            request,
+            response,
+            softFailed: true
+          });
           continue;
         }
 
@@ -308,13 +324,89 @@ const batchDisableUsers = async (graphClient, azureUserIds, context = 'bulk disa
   return { disabled, failed };
 };
 
+/**
+ * Delete Entra users via Graph /$batch (20/request). Much faster and gentler
+ * than one DELETE per user when tearing down large labs (52–500 users).
+ */
+const batchDeleteUsers = async (graphClient, azureUserIds, context = 'bulk delete users') => {
+  const uniqueIds = [...new Set((azureUserIds || []).filter(Boolean).map(String))];
+  const deleted = [];
+  const failed = [];
+
+  if (!uniqueIds.length) {
+    return { deleted, failed };
+  }
+
+  const chunks = chunkArray(uniqueIds, GRAPH_BATCH_SIZE);
+
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunk = chunks[chunkIndex];
+    const batchRequests = chunk.map((azureUserId) => ({
+      id: String(azureUserId),
+      method: 'DELETE',
+      url: `/users/${encodeURIComponent(azureUserId)}`
+    }));
+
+    try {
+      const batchResult = await executeBatchWithRetry(graphClient, batchRequests, context, {
+        successStatuses: [404],
+        continueOnItemError: true
+      });
+      const responses = Array.isArray(batchResult?.responses) ? batchResult.responses : [];
+      const responseById = new Map(responses.map((response) => [String(response.id), response]));
+      // Prefer per-request results (includes soft-failed items).
+      const resultById = new Map(
+        (batchResult?.results || []).map((entry) => [String(entry.request.id), entry])
+      );
+
+      for (const azureUserId of chunk) {
+        const entry = resultById.get(String(azureUserId));
+        const response = entry?.response || responseById.get(String(azureUserId));
+        const status = Number(response?.status || 0);
+
+        // 204/200 = deleted; 404 = already gone — both OK for teardown.
+        if ((status >= 200 && status < 300) || status === 404) {
+          deleted.push(azureUserId);
+          continue;
+        }
+
+        failed.push({
+          azureUserId,
+          status: status || null,
+          error:
+            response?.body?.error?.message ||
+            response?.body?.message ||
+            'Failed to delete Azure user'
+        });
+      }
+    } catch (error) {
+      for (const azureUserId of chunk) {
+        failed.push({
+          azureUserId,
+          status: Number(error?.statusCode || error?.status || 502),
+          error: error?.message || 'Graph batch delete failed'
+        });
+      }
+    }
+
+    // Pace batches so Graph throttling stays rare on 500-user deletes.
+    if (chunkIndex < chunks.length - 1) {
+      await sleep(400);
+    }
+  }
+
+  return { deleted, failed };
+};
+
 module.exports = {
   GRAPH_BATCH_SIZE,
   batchAddUsersToGroups,
   batchPatchUsers,
   batchEnableUsers,
   batchDisableUsers,
+  batchDeleteUsers,
   chunkArray,
   executeBatchWithRetry,
-  isRetryableError
+  isRetryableError,
+  getRetryDelayMs
 };

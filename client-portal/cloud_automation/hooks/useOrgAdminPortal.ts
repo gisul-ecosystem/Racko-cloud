@@ -594,11 +594,13 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const fetchUserAzureCost = useCallback(
     async (userId: number, options: { refresh?: boolean } = {}) => {
       if (selectedRequestId == null) return null;
+      if (deletingRequest) return null;
 
       try {
         const response = await getOrgUserAzureCost(selectedRequestId, userId, options);
         return response.cost ?? null;
       } catch (err) {
+        if (deletingRequest) return null;
         if (err instanceof OrgAdminError) {
           setActionError(err.message);
         } else {
@@ -607,12 +609,14 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         return null;
       }
     },
-    [selectedRequestId]
+    [selectedRequestId, deletingRequest]
   );
 
   const fetchSharedAzureCost = useCallback(
     async (options: { refresh?: boolean } = {}) => {
       if (selectedRequestId == null) return null;
+      // Don't surface Cost Management 429s over an in-flight delete.
+      if (deletingRequest) return null;
 
       try {
         const response = await getOrgSharedAzureCost(selectedRequestId, options);
@@ -627,15 +631,17 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
           return null;
         }
 
-        setActionError(
-          err instanceof OrgAdminError
-            ? err.message
-            : 'Failed to fetch shared Azure cost for this request.'
-        );
+        if (!deletingRequest) {
+          setActionError(
+            err instanceof OrgAdminError
+              ? err.message
+              : 'Failed to fetch shared Azure cost for this request.'
+          );
+        }
         return null;
       }
     },
-    [selectedRequestId, refreshOverview]
+    [selectedRequestId, refreshOverview, deletingRequest]
   );
 
   const clearActionFeedback = useCallback(() => {

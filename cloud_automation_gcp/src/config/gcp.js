@@ -1,3 +1,5 @@
+import fs from 'fs';
+import path from 'path';
 import { GoogleAuth } from 'google-auth-library';
 import { ProjectsClient } from '@google-cloud/resource-manager';
 import { IAMCredentialsClient } from '@google-cloud/iam-credentials';
@@ -17,9 +19,52 @@ import { Firestore } from '@google-cloud/firestore';
 
 // ─── Auth ──────────────────────────────────────────────────────────────────
 
-const authConfig = process.env.GCP_SERVICE_ACCOUNT_KEY_PATH
-  ? { keyFilename: process.env.GCP_SERVICE_ACCOUNT_KEY_PATH }
-  : {}; // Falls back to Application Default Credentials (ADC) if no key file
+function loadCredentials() {
+  if (process.env.GCP_SERVICE_ACCOUNT_KEY) {
+    try {
+      return JSON.parse(process.env.GCP_SERVICE_ACCOUNT_KEY);
+    } catch {
+      console.warn('[gcp] GCP_SERVICE_ACCOUNT_KEY is not valid JSON');
+    }
+  }
+  return null;
+}
+
+const credentialsJson = loadCredentials();
+const keyFilename = process.env.GCP_SERVICE_ACCOUNT_KEY_PATH || '';
+
+export const gcpConfig = {
+  projectId: process.env.GCP_PROJECT_ID || '',
+  region: process.env.GCP_DEFAULT_REGION || 'asia-south1',
+  zone: process.env.GCP_DEFAULT_ZONE || 'asia-south1-a',
+  apiKey: process.env.GCP_API_KEY || '',
+  keyFilename,
+  credentials: credentialsJson,
+};
+
+function resolveAuthConfig() {
+  if (gcpConfig.credentials) {
+    return { credentials: gcpConfig.credentials };
+  }
+  if (gcpConfig.keyFilename) {
+    const resolved = path.resolve(gcpConfig.keyFilename);
+    if (fs.existsSync(resolved)) {
+      return { keyFilename: resolved };
+    }
+  }
+  return {};
+}
+
+export function hasGcpPricingAuth() {
+  if (gcpConfig.apiKey) return true;
+  if (gcpConfig.credentials) return true;
+  if (gcpConfig.keyFilename) {
+    return fs.existsSync(path.resolve(gcpConfig.keyFilename));
+  }
+  return false;
+}
+
+const authConfig = resolveAuthConfig();
 
 export const auth = new GoogleAuth({
   ...authConfig,
@@ -114,12 +159,63 @@ export const firestoreClient = new Firestore({
   projectId: GCP_PROJECT_ID,
 });
 
+export async function getGcpAccessToken() {
+  if (!hasGcpPricingAuth()) return null;
+
+  try {
+    const authOpts = {
+      scopes: [
+        'https://www.googleapis.com/auth/cloud-billing.readonly',
+        'https://www.googleapis.com/auth/cloud-platform',
+      ],
+    };
+    if (gcpConfig.credentials) authOpts.credentials = gcpConfig.credentials;
+    else if (gcpConfig.keyFilename && fs.existsSync(path.resolve(gcpConfig.keyFilename))) {
+      authOpts.keyFilename = path.resolve(gcpConfig.keyFilename);
+    } else {
+      return null;
+    }
+    const billingAuth = new GoogleAuth(authOpts);
+    const client = await billingAuth.getClient();
+    const token = await client.getAccessToken();
+    return token?.token || null;
+  } catch (err) {
+    console.warn('[gcp] Could not obtain billing API token:', err instanceof Error ? err.message : err);
+    return null;
+  }
+}
+
+export const GCP_REGION_BILLING_NAMES = {
+  'asia-south1': 'Mumbai',
+  'asia-south2': 'Delhi',
+  'asia-southeast1': 'Singapore',
+  'us-central1': 'Iowa',
+  'us-east1': 'South Carolina',
+  'us-west1': 'Oregon',
+  'europe-west1': 'Belgium',
+  'europe-west2': 'London',
+  'europe-west3': 'Frankfurt',
+  'asia-northeast1': 'Tokyo',
+  'australia-southeast1': 'Sydney',
+};
+
 // ─── Google APIs (Admin SDK for Cloud Identity) ────────────────────────────
 
 export async function getGoogleAdminClient() {
   const { google } = await import('googleapis');
-  const authClient = await auth.getClient();
-  return google.admin({ version: 'directory_v1', auth: authClient });
+
+  const authOpts = {
+    scopes: ['https://www.googleapis.com/auth/admin.directory.user'],
+  };
+  if (gcpConfig.credentials) authOpts.credentials = gcpConfig.credentials;
+  else if (gcpConfig.keyFilename) authOpts.keyFilename = gcpConfig.keyFilename;
+  if (GCP_ADMIN_EMAIL) {
+    authOpts.clientOptions = { subject: GCP_ADMIN_EMAIL };
+  }
+
+  const authClient = new GoogleAuth(authOpts);
+  const client = await authClient.getClient();
+  return google.admin({ version: 'directory_v1', auth: client });
 }
 
 // ─── Helper: get short-lived access token ──────────────────────────────────
