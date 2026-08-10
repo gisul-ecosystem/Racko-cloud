@@ -17,7 +17,7 @@ public class UploadForm : Form
     private RadioButton    _rbFull        = null!;
     private CheckedListBox _vmList        = null!;
     private Button         _uploadBtn     = null!;
-    private Button         _selectAllBtn  = null!;   // Select All / Deselect All
+    private CheckBox       _selectAllChk  = null!;   // Select All / Deselect All toggle
 
     public UploadForm(IReadOnlyList<MachineDto> machines)
     {
@@ -75,35 +75,40 @@ public class UploadForm : Form
         Controls.AddRange(new Control[] { _rbRead, _rbFull });
         y += 30;
 
-        // ── VM list header: "Share with VMs" label ───────────────────────────
-        AddLabel("Share with VMs", pad, ref y, bold: true);
-
-        // Select All button — placed directly on the form.
-        // Left position is calculated in the Load event where ClientSize is finalized.
-        _selectAllBtn = new Button
+        // ── VM list header: "Share with VMs" label + Select All checkbox ────────
+        var vmLabel = new Label
         {
-            Text      = "Select All",
-            FlatStyle = FlatStyle.Flat,
-            Font      = new Font("Segoe UI", 8f),
-            Height    = 24,
-            Width     = 90,
-            Top       = y - 24, // aligned with the label row above
-            Cursor    = Cursors.Hand,
-            BackColor = Color.White,
-            ForeColor = Color.FromArgb(185, 28, 28),
-            Anchor    = AnchorStyles.Top | AnchorStyles.Right,
+            Text      = "Share with VMs",
+            Left      = pad,
+            Top       = y,
+            AutoSize  = true,
+            Font      = new Font("Segoe UI", 9f, FontStyle.Bold),
+            ForeColor = Color.FromArgb(15, 23, 42),
         };
-        _selectAllBtn.FlatAppearance.BorderColor = Color.FromArgb(185, 28, 28);
-        _selectAllBtn.Click += OnSelectAllClick;
-        Controls.Add(_selectAllBtn);
+        Controls.Add(vmLabel);
 
-        // Finalize button Left position after the form is fully shown (ClientSize is correct then)
-        Shown += (_, _) =>
+        // CheckBox styled as a button — left-aligned, no right-edge calculation needed.
+        // Appearance.Button makes it look like a toggle button.
+        // No DPI positioning issues — Left is a fixed offset from the label.
+        _selectAllChk = new CheckBox
         {
-            _selectAllBtn.Left = ClientSize.Width - pad - _selectAllBtn.Width;
+            Text        = "Select All",
+            Appearance  = Appearance.Button,
+            FlatStyle   = FlatStyle.Flat,
+            Font        = new Font("Segoe UI", 8f),
+            AutoSize    = true,
+            Left        = pad + vmLabel.PreferredWidth + 12,
+            Top         = y - 1,
+            Cursor      = Cursors.Hand,
+            BackColor   = Color.White,
+            ForeColor   = Color.FromArgb(185, 28, 28),
         };
+        _selectAllChk.FlatAppearance.BorderColor        = Color.FromArgb(185, 28, 28);
+        _selectAllChk.FlatAppearance.CheckedBackColor   = Color.FromArgb(254, 242, 242);
+        _selectAllChk.CheckedChanged += OnSelectAllCheckChanged;
+        Controls.Add(_selectAllChk);
 
-        y += 4;
+        y += vmLabel.PreferredHeight + 8;
 
         // ── VM CheckedListBox ─────────────────────────────────────────────────
         _vmList = new CheckedListBox
@@ -146,18 +151,13 @@ public class UploadForm : Form
 
     // ── Select All / Deselect All ─────────────────────────────────────────────
 
-    private void OnSelectAllClick(object? s, EventArgs e)
+    private void OnSelectAllCheckChanged(object? s, EventArgs e)
     {
         if (_machines.Count == 0) return;
-
-        // If all are checked → deselect all; otherwise → select all
-        bool allChecked = _vmList.CheckedIndices.Count == _vmList.Items.Count;
-        bool target     = !allChecked;
-
+        bool target = _selectAllChk.Checked;
         for (int i = 0; i < _vmList.Items.Count; i++)
             _vmList.SetItemChecked(i, target);
-
-        UpdateSelectAllLabel();
+        _selectAllChk.Text = target ? "Deselect All" : "Select All";
     }
 
     private void UpdateSelectAllLabel()
@@ -167,7 +167,8 @@ public class UploadForm : Form
         BeginInvoke(() =>
         {
             bool allChecked = _vmList.CheckedIndices.Count == _vmList.Items.Count;
-            _selectAllBtn.Text = allChecked ? "Deselect All" : "Select All";
+            _selectAllChk.Checked = allChecked;
+            _selectAllChk.Text    = allChecked ? "Deselect All" : "Select All";
         });
     }
 
