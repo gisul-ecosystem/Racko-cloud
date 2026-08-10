@@ -92,17 +92,17 @@ public class UploadForm : Form
             FlatStyle = FlatStyle.Flat,
             Font      = new Font("Segoe UI", 8f),
             Height    = 22,
-            Width     = 90,
+            Width     = 110,
             Cursor    = Cursors.Hand,
             BackColor = Color.White,
             ForeColor = Color.FromArgb(185, 28, 28),
             Anchor    = AnchorStyles.Top | AnchorStyles.Right,
         };
         _selectAllBtn.FlatAppearance.BorderColor = Color.FromArgb(185, 28, 28);
-        _selectAllBtn.Left   = vmHeaderRow.Width - 90;
+        _selectAllBtn.Left   = vmHeaderRow.Width - 110;
         _selectAllBtn.Top    = 0;
         _selectAllBtn.Click += OnSelectAllClick;
-        vmHeaderRow.SizeChanged += (_, _) => _selectAllBtn.Left = vmHeaderRow.Width - 90;
+        vmHeaderRow.SizeChanged += (_, _) => _selectAllBtn.Left = vmHeaderRow.Width - 110;
         vmHeaderRow.Controls.AddRange(new Control[] { vmLabel, _selectAllBtn });
         Controls.Add(vmHeaderRow);
         y += 28;
