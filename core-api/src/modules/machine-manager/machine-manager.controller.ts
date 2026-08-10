@@ -634,6 +634,8 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
       next(err);
     }
   }
+  /**
+   * POST /api/v1/machines/reset
    * Returns immediately — reset runs async on the agent.
    * Use the SSE stream to receive live progress.
    */

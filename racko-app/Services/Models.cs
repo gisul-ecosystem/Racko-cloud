@@ -44,7 +44,8 @@ public record ApiListResponse<T>(
 public record ApiListData<T>(
     [property: JsonPropertyName("files")]    IReadOnlyList<T>? Files,
     [property: JsonPropertyName("machines")] IReadOnlyList<T>? Machines,
-    [property: JsonPropertyName("total")]    int               Total
+    [property: JsonPropertyName("total")]    int               Total,
+    [property: JsonPropertyName("inGroup")]  bool?             InGroup
 );
 
 public record ApiFileResponse(
