@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -28,20 +28,16 @@ import { canAccessTenantHubTile } from '@/lib/tenantServicePermissions';
 import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 import type { TenantServiceKey } from '@/types/tenantPortal';
 
-const SERVICE_TILES: Array<{
-  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control';
+type HubTile = {
+  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control' | 'docs';
   name: string;
   href: string;
   description: string;
   icon: typeof Server;
-}> = [
-  {
-    serviceKey: 'projects',
-    name: 'Projects',
-    href: tenantConsole.projects,
-    icon: FolderKanban,
-    description: 'Create client projects to group resources and track costs',
-  },
+};
+
+/** Product entitlements from tenantserviceconfigs. */
+const PRODUCT_TILES: HubTile[] = [
   {
     serviceKey: 'vm-management',
     name: 'VPS Hosting',
@@ -62,13 +58,6 @@ const SERVICE_TILES: Array<{
     href: tenantConsole.dedicatedServer,
     icon: HardDrive,
     description: 'Request and manage dedicated bare-metal servers',
-  },
-  {
-    serviceKey: 'billing',
-    name: 'Billing',
-    href: tenantVps.billing,
-    icon: Wallet,
-    description: 'Manage your wallet balance, top up, and view transaction history',
   },
   {
     serviceKey: 'elastic-servers',
@@ -98,12 +87,30 @@ const SERVICE_TILES: Array<{
     icon: Server,
     description: 'AWS access management, provisioning, and lab environments.',
   },
+];
+
+/** Workspace tools / utilities. */
+const TOOL_TILES: HubTile[] = [
+  {
+    serviceKey: 'projects',
+    name: 'Projects',
+    href: tenantConsole.projects,
+    icon: FolderKanban,
+    description: 'Create client projects to group resources and track costs',
+  },
+  {
+    serviceKey: 'billing',
+    name: 'Billing',
+    href: tenantVps.billing,
+    icon: Wallet,
+    description: 'Manage your wallet balance, top up, and view transaction history',
+  },
   {
     serviceKey: 'docs',
     name: 'Documentation',
     href: tenantConsole.docs,
     icon: BookOpen,
-    description: 'Guides and reference for VPS, Elastic Server, AWS, and Azure services',
+    description: 'Guides for the product services enabled in this workspace',
   },
   {
     serviceKey: 'machine-manager',
@@ -121,6 +128,49 @@ const SERVICE_TILES: Array<{
   },
 ];
 
+function TileGrid({
+  tiles,
+  accentColor,
+}: {
+  tiles: HubTile[];
+  accentColor: string;
+}) {
+  return (
+    <div className="flex flex-wrap justify-center gap-6">
+      {tiles.map((service) => {
+        const Icon = service.icon;
+        return (
+          <Link
+            key={service.serviceKey}
+            href={service.href}
+            className="group flex h-[200px] w-[200px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-5 text-center shadow-sm transition hover:shadow-md"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.borderColor = accentColor;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.borderColor = '';
+            }}
+          >
+            <div
+              className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl transition"
+              style={{
+                backgroundColor: hexToRgba(accentColor, 0.1),
+                color: accentColor,
+              }}
+            >
+              <Icon className="h-7 w-7" />
+            </div>
+            <span className="text-sm font-medium text-gray-900">{service.name}</span>
+            <span className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-gray-500">
+              {service.description}
+            </span>
+          </Link>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function TenantConsolePage() {
   const router = useRouter();
   const { tenantUser } = useTenantAuth();
@@ -130,27 +180,42 @@ export default function TenantConsolePage() {
 
   useEffect(() => {
     if (rbacLoading) return;
-    // Elastic end-users only — console operators stay on the hub.
     if (tenantUser?.role === 'tenant_user' && !isConsoleStaff) {
       router.replace(tenantVps.vms);
     }
   }, [router, tenantUser?.role, isConsoleStaff, rbacLoading]);
 
-  const tiles = SERVICE_TILES.filter((tile) => {
+  const filterTile = (tile: HubTile): boolean => {
     if (isServiceHiddenFromUi(tile.serviceKey)) return false;
+    // Docs is always available; topics inside filter to enabled products.
+    if (tile.serviceKey === 'docs') return true;
     if (
       tile.serviceKey !== 'billing' &&
       tile.serviceKey !== 'projects' &&
       tile.serviceKey !== 'access-control' &&
-      !hasActiveService(tile.serviceKey)
+      !hasActiveService(tile.serviceKey as TenantServiceKey)
     ) {
+      if (tile.serviceKey === 'machine-manager') {
+        return hasActiveService(tile.serviceKey);
+      }
       return false;
     }
     if (tile.serviceKey === 'access-control') {
       return isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
     }
     return canAccessTenantHubTile(tile.serviceKey, hasPermission, isTenantAdmin);
-  });
+  };
+
+  const productTiles = useMemo(() => PRODUCT_TILES.filter(filterTile), [
+    hasActiveService,
+    hasPermission,
+    isTenantAdmin,
+  ]);
+  const toolTiles = useMemo(() => TOOL_TILES.filter(filterTile), [
+    hasActiveService,
+    hasPermission,
+    isTenantAdmin,
+  ]);
 
   if (loading || rbacLoading || (tenantUser?.role === 'tenant_user' && !isConsoleStaff)) {
     return (
@@ -161,42 +226,29 @@ export default function TenantConsolePage() {
   }
 
   return (
-    <div className="mx-auto max-w-screen-xl space-y-8">
+    <div className="mx-auto max-w-screen-xl space-y-10">
       <section>
-        <h1 className="mb-5 text-2xl font-bold text-gray-900">{portalName} services</h1>
-        <div className="flex flex-wrap justify-center gap-6">
-          {tiles.map((service) => {
-            const Icon = service.icon;
-            return (
-              <Link
-                key={service.serviceKey}
-                href={service.href}
-                className="group flex h-[200px] w-[200px] flex-col items-center justify-center rounded-xl border border-gray-200 bg-white px-5 text-center shadow-sm transition hover:shadow-md"
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.borderColor = accentColor;
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = '';
-                }}
-              >
-                <div
-                  className="mb-3 flex h-14 w-14 items-center justify-center rounded-xl transition"
-                  style={{
-                    backgroundColor: hexToRgba(accentColor, 0.1),
-                    color: accentColor,
-                  }}
-                >
-                  <Icon className="h-7 w-7" />
-                </div>
-                <span className="text-sm font-medium text-gray-900">{service.name}</span>
-                <span className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-gray-500">
-                  {service.description}
-                </span>
-              </Link>
-            );
-          })}
-        </div>
+        <h1 className="mb-1 text-2xl font-bold text-gray-900">{portalName} services</h1>
+        <p className="mb-5 text-sm text-gray-500">Product services enabled for this workspace.</p>
+        {productTiles.length === 0 ? (
+          <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            No product services are enabled yet.
+          </p>
+        ) : (
+          <TileGrid tiles={productTiles} accentColor={accentColor} />
+        )}
       </section>
+
+      {toolTiles.length > 0 && (
+        <section>
+          <h2 className="mb-1 text-lg font-semibold text-gray-900">Tools &amp; workspace</h2>
+          <p className="mb-5 text-sm text-gray-500">
+            Billing, projects, documentation, machine manager, and access control.
+          </p>
+          <TileGrid tiles={toolTiles} accentColor={accentColor} />
+        </section>
+      )}
+
       <TenantRecentResources />
     </div>
   );

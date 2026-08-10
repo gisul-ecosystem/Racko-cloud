@@ -81,7 +81,7 @@ export function ServiceNavSidebar({
             {subtitle ? <p className="mt-0.5 text-xs text-gray-400">{subtitle}</p> : null}
           </div>
 
-          <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
+          <nav className="scrollbar-white flex-1 space-y-0.5 overflow-y-auto p-3">
             {links.map((link) => {
               const isActive = defaultIsActive(pathname, link, homeHref);
               return (

@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import type { ServiceKey } from '../../constants/serviceCatalog';
 import { Tenant } from '../../models/tenant.model';
 import {
   TenantServiceConfig,
@@ -23,7 +22,7 @@ import { serviceCatalogService } from '../serviceCatalog/serviceCatalog.service'
 export interface TenantServiceConfigPublic {
   id: string;
   tenantId: string;
-  serviceKey: ServiceKey;
+  serviceKey: string;
   status: TenantServiceConfigStatus;
   limits: Record<string, unknown>;
   pricing: Record<string, unknown>;
@@ -49,7 +48,7 @@ function toPublic(doc: ITenantServiceConfig, label?: string): TenantServiceConfi
 }
 
 function assertValidMergedConfig(
-  serviceKey: ServiceKey,
+  serviceKey: string,
   limits: unknown,
   pricing: unknown
 ): void {
@@ -74,7 +73,7 @@ async function requireTenantExists(tenantId: string): Promise<void> {
 export class TenantServiceConfigService {
   async assignService(
     tenantId: string,
-    serviceKey: ServiceKey,
+    serviceKey: string,
     limits: Record<string, unknown>,
     pricing: Record<string, unknown>,
     createdBy: string
@@ -128,7 +127,7 @@ export class TenantServiceConfigService {
 
   async updateServiceConfig(
     tenantId: string,
-    serviceKey: ServiceKey,
+    serviceKey: string,
     updates: ServiceConfigUpdateInput
   ): Promise<TenantServiceConfigPublic> {
     if (!isValidObjectId(tenantId)) {
@@ -185,9 +184,9 @@ export class TenantServiceConfigService {
 
   async removeService(
     tenantId: string,
-    serviceKey: ServiceKey,
+    serviceKey: string,
     force = false
-  ): Promise<TenantServiceConfigPublic | { deleted: true; serviceKey: ServiceKey }> {
+  ): Promise<TenantServiceConfigPublic | { deleted: true; serviceKey: string }> {
     if (!isValidObjectId(tenantId)) {
       throw new ValidationError('Invalid tenant id format.');
     }
