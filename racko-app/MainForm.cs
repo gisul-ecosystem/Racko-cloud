@@ -3,7 +3,7 @@ using System.IO;
 using System.Windows.Forms;
 using RackoApp.Services;
 using RackoApp.Views;
-
+ 
 namespace RackoApp;
 
 public class MainForm : Form
