@@ -22,6 +22,11 @@ export async function generateMetadata() {
     return {
       title: 'Racko Manage Portal',
       description: 'Manage provisioned lab users and launch cloud consoles.',
+      icons: {
+        icon: '/images/faviconRacko.png',
+        shortcut: '/images/faviconRacko.png',
+        apple: '/images/faviconRacko.png',
+      },
     };
   }
 
