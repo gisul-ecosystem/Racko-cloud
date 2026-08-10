@@ -513,6 +513,8 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
     })();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const updateRow = (i: number, field: keyof VMPushTarget, value: string) => {
     setVmRows((prev) => prev.map((r, idx) => idx === i ? { ...r, [field]: value } : r));
   };
   const addRow = () => setVmRows((p) => [...p, { name: '', ipAddress: '', os: 'linux', username: '', password: '' }]);
