@@ -2,9 +2,11 @@ import {
   fetchCatalogVm,
   fetchVmCatalogOverview,
   fetchVmCatalogPlans,
+  fetchVmCatalogSoftwareOptions,
   fetchVmCatalogVms,
   getCatalogVmConsole,
   submitCatalogVmRequest,
+  type CatalogSoftwareOption,
   type CatalogVmConsoleSession,
   type CatalogVmOverview,
   type CreateCatalogVmRequestDto,
@@ -15,6 +17,7 @@ import {
   fetchTenantCatalogVm,
   fetchTenantVmCatalogOverview,
   fetchTenantVmCatalogPlans,
+  fetchTenantVmCatalogSoftwareOptions,
   fetchTenantVmCatalogVms,
   getTenantCatalogVmConsole,
   submitTenantCatalogVmRequest,
@@ -34,6 +37,7 @@ export interface VmCatalogPortalApi {
   fetchOverview: () => Promise<CatalogVmOverview>;
   fetchVms: () => Promise<ICatalogVm[]>;
   fetchVm: (id: string) => Promise<ICatalogVm>;
+  fetchSoftwareOptions: () => Promise<CatalogSoftwareOption[]>;
   submitRequest: (dto: CreateCatalogVmRequestDto) => Promise<ICatalogVm>;
   getConsole: (
     id: string,
@@ -67,6 +71,7 @@ const adminApi: VmCatalogPortalApi = {
   fetchOverview: fetchVmCatalogOverview,
   fetchVms: fetchVmCatalogVms,
   fetchVm: fetchCatalogVm,
+  fetchSoftwareOptions: fetchVmCatalogSoftwareOptions,
   submitRequest: submitCatalogVmRequest,
   getConsole: getCatalogVmConsole,
 };
@@ -76,6 +81,7 @@ const tenantApi: VmCatalogPortalApi = {
   fetchOverview: fetchTenantVmCatalogOverview,
   fetchVms: fetchTenantVmCatalogVms,
   fetchVm: fetchTenantCatalogVm,
+  fetchSoftwareOptions: fetchTenantVmCatalogSoftwareOptions,
   submitRequest: submitTenantCatalogVmRequest,
   getConsole: getTenantCatalogVmConsole,
 };
