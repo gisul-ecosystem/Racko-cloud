@@ -41,7 +41,8 @@ const computeNextDailyCleanupRunAt = ({
     candidate = candidate.plus({ days: 1 });
   }
 
-  return candidate.toUTC().toISO();
+  // Return a real Date — callers (email templates) call .toUTCString().
+  return candidate.toUTC().toJSDate();
 };
 
 const formatCleanupTimeLabel = (timeHHMM) => {

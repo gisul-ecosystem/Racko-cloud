@@ -8,6 +8,22 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 
+const toDate = (value) => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatUtc = (value) => {
+  const date = toDate(value);
+  return date ? date.toUTCString() : '—';
+};
+
 const buildCleanupNotificationEmailHtml = ({
   requestId,
   requestLabel,
@@ -25,8 +41,8 @@ const buildCleanupNotificationEmailHtml = ({
           <strong>${escapeHtml(requestLabel || `Request #${requestId}`)}</strong>.
         </p>
         <ul style="margin: 0 0 16px; padding-left: 20px;">
-          <li><strong>Cleaned at:</strong> ${escapeHtml(cleanedAt.toUTCString())}</li>
-          <li><strong>Next cleanup:</strong> ${escapeHtml(nextCleanupAt.toUTCString())} (every ${intervalHours} hour${intervalHours > 1 ? 's' : ''})</li>
+          <li><strong>Cleaned at:</strong> ${escapeHtml(formatUtc(cleanedAt))}</li>
+          <li><strong>Next cleanup:</strong> ${escapeHtml(formatUtc(nextCleanupAt))} (every ${intervalHours} hour${intervalHours > 1 ? 's' : ''})</li>
         </ul>
         <p style="margin: 0 0 16px;">
           All Azure resources (VMs, resource groups, user accounts) for this request have been removed.

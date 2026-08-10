@@ -99,6 +99,13 @@ const SERVICE_TILES: Array<{
     description: 'AWS access management, provisioning, and lab environments.',
   },
   {
+    serviceKey: 'gcp',
+    name: 'GCP Services',
+    href: tenantConsole.gcp,
+    icon: Cloud,
+    description: 'Google Cloud access management, provisioning, and lab environments.',
+  },
+  {
     serviceKey: 'docs',
     name: 'Documentation',
     href: tenantConsole.docs,
