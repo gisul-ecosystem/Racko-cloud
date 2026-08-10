@@ -59,10 +59,8 @@ import type {
   SuperAdminOrder,
   SuperAdminTenantVm,
 } from '../../../../../lib/tenantTypes';
-import {
-  fetchServiceCatalog,
-  type ServiceCatalogItem,
-} from '../../../../../lib/serviceCatalogApi';
+import { fetchTenantAssignableCatalog } from '../../../../../lib/adminServicesApi';
+import type { ServiceCatalogItem } from '../../../../../lib/serviceCatalogApi';
 import { isServiceHiddenFromUi } from '../../../../../lib/hiddenServices';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
@@ -187,7 +185,7 @@ export default function TenantDetailPage() {
         fetchTenant(tenantId),
         fetchTenantServices(tenantId),
         fetchTenantAdmins(tenantId),
-        fetchServiceCatalog({ kind: 'product', scope: 'tenant' }),
+        fetchTenantAssignableCatalog(),
       ]);
       setTenant(tenantData);
       setServices(servicesData);

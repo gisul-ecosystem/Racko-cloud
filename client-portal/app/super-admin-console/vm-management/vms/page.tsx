@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import { useAuth } from '../../../../context/AuthContext';
 import { useAllVMsAdmin } from '../../../../hooks/useVMs';
 import { VMStatusBadge, CloneTypeBadge } from '../../../../components/dashboard/VMStatusBadge';
@@ -13,6 +15,9 @@ const selectClass =
   'text-xs border border-gray-200 rounded-lg px-2.5 py-1.5 bg-white text-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500';
 
 export default function SuperAdminVMsPage() {
+  const searchParams = useSearchParams();
+  const adminIdFilter = searchParams.get('adminId') ?? '';
+  const adminEmail = searchParams.get('email') ?? '';
   const { isAuthenticated } = useAuth();
   const [statusFilter, setStatusFilter] = useState('');
   const [nodeFilter, setNodeFilter] = useState('');
@@ -24,6 +29,11 @@ export default function SuperAdminVMsPage() {
     node: nodeFilter || undefined,
     cloneType: cloneFilter || undefined,
   });
+
+  const displayedVms = useMemo(
+    () => (adminIdFilter ? vms.filter((v) => v.adminId === adminIdFilter) : vms),
+    [vms, adminIdFilter]
+  );
 
   useEffect(() => {
     if (vms.length > 0) {
@@ -38,10 +48,24 @@ export default function SuperAdminVMsPage() {
     <div className="max-w-screen-xl">
       <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">All VMs</h1>
+          <h1 className="text-2xl font-bold text-gray-900">
+            {adminIdFilter ? 'Customer VMs' : 'All VMs'}
+          </h1>
           <p className="text-gray-500 text-sm mt-0.5">
-            {loading ? 'Loading…' : `${vms.length} VMs across all admins`}
+            {loading
+              ? 'Loading…'
+              : adminIdFilter
+                ? `${displayedVms.length} VMs for ${adminEmail || adminIdFilter}`
+                : `${displayedVms.length} VMs across all admins`}
           </p>
+          {adminIdFilter ? (
+            <Link
+              href="/super-admin-console/vm-management/vms"
+              className="mt-1 inline-block text-xs font-medium text-[#B91C1C] hover:underline"
+            >
+              Clear customer filter
+            </Link>
+          ) : null}
         </div>
         <button
           onClick={refetch}
@@ -80,7 +104,7 @@ export default function SuperAdminVMsPage() {
 
           {loading ? (
             <TableSkeleton rows={6} cols={8} />
-          ) : vms.length === 0 ? (
+          ) : displayedVms.length === 0 ? (
             <div className="p-16 text-center">
               <div className="w-14 h-14 rounded-full bg-gray-100 flex items-center justify-center mx-auto mb-4">
                 <MonitorCheck className="w-7 h-7 text-gray-400" />
@@ -98,7 +122,7 @@ export default function SuperAdminVMsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {vms.map((vm, i) => (
+                  {displayedVms.map((vm, i) => (
                     <tr key={vm._id} className={`border-b border-gray-50 hover:bg-gray-50 transition-colors ${i % 2 !== 0 ? 'bg-gray-50/40' : ''}`}>
                       <td className="px-6 py-3.5">
                         <p className="font-medium text-gray-900">{vm.name}</p>

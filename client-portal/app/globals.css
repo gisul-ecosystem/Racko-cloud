@@ -124,6 +124,35 @@ body::before {
   scrollbar-width: none;
 }
 
+/** Light sidebars — override global dark scrollbar. */
+.scrollbar-white {
+  scrollbar-width: thin;
+  scrollbar-color: #e5e7eb #ffffff;
+}
+
+.scrollbar-white::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-white::-webkit-scrollbar-track {
+  background: #ffffff;
+}
+
+.scrollbar-white::-webkit-scrollbar-thumb {
+  background: #e5e7eb;
+  border-radius: 999px;
+  border: 1px solid #ffffff;
+}
+
+.scrollbar-white::-webkit-scrollbar-thumb:hover {
+  background: #d1d5db;
+}
+
+.scrollbar-white::-webkit-scrollbar-corner {
+  background: #ffffff;
+}
+
 @keyframes spin {
   to {
     transform: rotate(360deg);
