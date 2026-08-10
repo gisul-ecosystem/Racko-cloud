@@ -1060,7 +1060,12 @@ function TemplateFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 export default function SetupWizardPage() {
   const { isAuthenticated } = useAuth();
   const { toasts, addToast, dismiss } = useToast();
-  const [path, setPath] = useState<SetupPath>(null);
+  const searchParams = useSearchParams();
+  // If a ?session= param is present the user refreshed during a VM push —
+  // auto-select 'vm' so VMFlow mounts and its recovery useEffect can fire.
+  const [path, setPath] = useState<SetupPath>(
+    searchParams.get('session') ? 'vm' : null
+  );
   const [vmStep, setVmStep] = useState(1);
 
   return (
