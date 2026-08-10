@@ -54,6 +54,7 @@ const navItems: NavItem[] = [
     icon: Upload,
     exact: false,
     anyOf: ['elastic_servers.superadmin'] as string[],
+    section: 'services',
   },
   {
     href: '/super-admin-console/vm-management',
