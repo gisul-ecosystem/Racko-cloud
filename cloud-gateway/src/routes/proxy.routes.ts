@@ -253,6 +253,70 @@ router.post('/api/v1/admin-vm-templates/:templateId/stream-ticket', authMiddlewa
 router.delete('/api/v1/admin-vm-templates/:templateId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
 // ─── EXTERNAL VM ROUTES ────────────────────────────────────────────────────────
+router.post(
+  '/api/v1/super-admin/external-vms/bulk-import',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.post(
+  '/api/v1/super-admin/external-vms/bulk-delete',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.get(
+  '/api/v1/super-admin/external-vms/overview',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.get(
+  '/api/v1/super-admin/external-vms/assignees',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.get(
+  '/api/v1/super-admin/external-vms/targets',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.post(
+  '/api/v1/super-admin/external-vms/:id/assignments',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.patch(
+  '/api/v1/super-admin/external-vms/:id/assignments/:assignmentId',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.delete(
+  '/api/v1/super-admin/external-vms/:id/assignments/:assignmentId',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.delete(
+  '/api/v1/super-admin/external-vms/:id',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+
 router.post('/api/v1/external-vms/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/external-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/assign/available', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);

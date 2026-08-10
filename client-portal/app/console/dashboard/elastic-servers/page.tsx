@@ -32,6 +32,7 @@ import {
   type ExternalVMProtocol,
   type IExternalVM,
 } from '@/lib/tenantExternalVmApi';
+import { formatAssignmentHolders, formatAssignmentSchedule } from '@/lib/externalVmAssignmentFormat';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
 import { hexToRgba, tenantAccentButton } from '@/lib/tenantAccentStyles';
@@ -102,10 +103,15 @@ export default function TenantMyServersPage() {
   };
 
   const handleOpenConsole = (vm: IExternalVM) => {
-    // Opened in a new tab so the server list stays available in the original
-    // tab. openTenantUrlWithSession carries the session along explicitly via
-    // a one-time URL param, since sessionStorage cloning into a new tab
-    // isn't guaranteed/instant.
+    if (!isAdmin && vm.myAccess && !vm.myAccess.allowedNow) {
+      addToast(
+        'error',
+        vm.myAccess.nextWindow
+          ? `Outside your access window. Next allowed: ${vm.myAccess.nextWindow}`
+          : 'Outside your access window.'
+      );
+      return;
+    }
     openTenantUrlWithSession(`${tenantConsole.elastic}/${vm._id}/console`);
   };
 
@@ -368,9 +374,20 @@ export default function TenantMyServersPage() {
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Protocol
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                      Access
-                    </th>
+                    {isAdmin ? (
+                      <>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Assigned users
+                        </th>
+                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          When
+                        </th>
+                      </>
+                    ) : (
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Access
+                      </th>
+                    )}
                     <th className="sticky right-0 z-10 bg-gray-50 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Actions
                     </th>
@@ -379,6 +396,8 @@ export default function TenantMyServersPage() {
                 <tbody>
                   {vms.map((vm, i) => {
                     const schedule = toAccessSchedule(vm.accessSchedule);
+                    const holders = formatAssignmentHolders(vm.assignments);
+                    const consoleBlocked = !isAdmin && Boolean(vm.myAccess && !vm.myAccess.allowedNow);
                     const isSelected = selectedIds.has(vm._id);
                     const rowBg = isSelected
                       ? 'bg-blue-50'
@@ -422,21 +441,66 @@ export default function TenantMyServersPage() {
                         <td className="px-4 py-3.5">
                           <ProtocolBadge protocol={vm.protocol} />
                         </td>
-                        <td className="px-4 py-3.5">
-                          <AccessScheduleBadge schedule={schedule} />
-                          <p
-                            className="mt-1 max-w-[14rem] truncate text-[11px] text-gray-400"
-                            title={formatAccessScheduleDigest(schedule)}
-                          >
-                            {formatAccessScheduleDigest(schedule)}
-                          </p>
-                        </td>
+                        {isAdmin ? (
+                          <>
+                            <td className="px-4 py-3.5">
+                              <div className="space-y-0.5">
+                                {holders.labels.map((label) => (
+                                  <p key={label} className="text-xs text-gray-800">
+                                    {label}
+                                  </p>
+                                ))}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3.5">
+                              <div className="space-y-0.5">
+                                {holders.schedules.map((s, idx) => (
+                                  <p
+                                    key={`${vm._id}-when-${idx}`}
+                                    className="max-w-[16rem] truncate text-[11px] text-gray-500"
+                                    title={s}
+                                  >
+                                    {s}
+                                  </p>
+                                ))}
+                              </div>
+                            </td>
+                          </>
+                        ) : (
+                          <td className="px-4 py-3.5">
+                            <AccessScheduleBadge schedule={schedule} />
+                            <p
+                              className="mt-1 max-w-[14rem] truncate text-[11px] text-gray-400"
+                              title={
+                                vm.myAccess?.schedule
+                                  ? formatAssignmentSchedule(vm.myAccess.schedule)
+                                  : formatAccessScheduleDigest(schedule)
+                              }
+                            >
+                              {vm.myAccess?.schedule
+                                ? formatAssignmentSchedule(vm.myAccess.schedule)
+                                : formatAccessScheduleDigest(schedule)}
+                            </p>
+                            {consoleBlocked && vm.myAccess?.nextWindow ? (
+                              <p className="mt-1 text-[11px] text-amber-700">
+                                Next: {vm.myAccess.nextWindow}
+                              </p>
+                            ) : null}
+                          </td>
+                        )}
                         <td className={`sticky right-0 z-10 px-4 py-3.5 ${rowBg}`}>
                           <div className="flex items-center justify-end gap-1.5">
                             <button
                               onClick={() => handleOpenConsole(vm)}
-                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-                              title="Open browser console in a new tab"
+                              disabled={consoleBlocked}
+                              className="inline-flex items-center gap-1 rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-40"
+                              title={
+                                consoleBlocked
+                                  ? vm.myAccess?.nextWindow
+                                    ? `Outside access window. Next: ${vm.myAccess.nextWindow}`
+                                    : 'Outside your access window'
+                                  : 'Open browser console in a new tab'
+                              }
                             >
                               <Monitor className="h-3.5 w-3.5" />
                               Console

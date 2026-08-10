@@ -29,6 +29,7 @@ const STAFF_ROUTE_PERMISSIONS: Array<{ prefix: string; anyOf: string[] }> = [
   { prefix: '/super-admin-console/vm-management', anyOf: ['vm_management.manage'] },
   { prefix: '/super-admin-console/machine-manager', anyOf: ['machine_manager.manage'] },
   { prefix: '/super-admin-console/vm-host-leases', anyOf: ['vm_host_leases.manage'] },
+  { prefix: '/super-admin-console/elastic-servers', anyOf: ['elastic_servers.superadmin'] },
   { prefix: '/super-admin-console/azure', anyOf: ['azure.manage'] },
   { prefix: '/super-admin-console/aws', anyOf: ['aws.manage'] },
   { prefix: '/super-admin-console/white-labelling', anyOf: ['white_labelling.manage'] },

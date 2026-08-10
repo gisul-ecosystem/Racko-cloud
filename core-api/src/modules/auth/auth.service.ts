@@ -299,7 +299,8 @@ export class AuthService {
   }
 
   /**
-   * Login with email and password.
+   * Login with email-or-username identifier and password.
+   * Body field remains `email` for compatibility; value is treated as identifier.
    * Returns access token in body, sets refresh token in HttpOnly cookie.
    */
   async login(data: LoginDto, req: Request, res: Response): Promise<LoginResult> {
@@ -308,7 +309,7 @@ export class AuthService {
     const fingerprint = generateFingerprint(req);
 
     // Always find user with password for timing consistency
-    const user = await User.findByEmail(data.email);
+    const user = await User.findByEmailOrUsername(data.email);
 
     // Timing attack prevention: always run argon2 verify even if user not found
     if (!user) {
