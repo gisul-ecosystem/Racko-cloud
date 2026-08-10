@@ -59,7 +59,11 @@ import type {
   SuperAdminOrder,
   SuperAdminTenantVm,
 } from '../../../../../lib/tenantTypes';
-import { PLATFORM_SERVICE_CATALOG } from '../../../../../lib/tenantTypes';
+import {
+  fetchServiceCatalog,
+  type ServiceCatalogItem,
+} from '../../../../../lib/serviceCatalogApi';
+import { isServiceHiddenFromUi } from '../../../../../lib/hiddenServices';
 import { OrderStatusBadge } from '@/components/tenant/OrderStatusBadge';
 import { VMStatusBadge } from '@/components/dashboard/VMStatusBadge';
 import { AccessScheduleBadge } from '@/components/access-schedule/AccessScheduleBadge';
@@ -127,6 +131,7 @@ export default function TenantDetailPage() {
   const [tab, setTab] = useState<Tab>('general');
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [services, setServices] = useState<TenantServiceConfig[]>([]);
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [admins, setAdmins] = useState<TenantAdmin[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -178,13 +183,15 @@ export default function TenantDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [tenantData, servicesData, adminsData] = await Promise.all([
+      const [tenantData, servicesData, adminsData, catalogData] = await Promise.all([
         fetchTenant(tenantId),
         fetchTenantServices(tenantId),
         fetchTenantAdmins(tenantId),
+        fetchServiceCatalog({ kind: 'product', scope: 'tenant' }),
       ]);
       setTenant(tenantData);
       setServices(servicesData);
+      setServiceCatalog(catalogData.filter((s) => !isServiceHiddenFromUi(s.key)));
       setAdmins(adminsData);
       setGeneralForm({
         name: tenantData.name,
@@ -363,9 +370,11 @@ export default function TenantDetailPage() {
   };
 
   const assignedKeys = new Set(services.map((s) => s.serviceKey));
-  const availableServices: ServiceKey[] = PLATFORM_SERVICE_CATALOG.map((s) => s.key).filter(
-    (k) => !assignedKeys.has(k)
-  );
+  const availableServices: ServiceKey[] = serviceCatalog
+    .map((s) => s.key as ServiceKey)
+    .filter((k) => !assignedKeys.has(k));
+
+  const catalogMeta = (key: string) => serviceCatalog.find((s) => s.key === key);
 
   const openAssignModal = (serviceKey?: ServiceKey) => {
     const nextKey =
@@ -789,9 +798,9 @@ export default function TenantDetailPage() {
           </div>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            {PLATFORM_SERVICE_CATALOG.map((service) => {
+            {serviceCatalog.map((service) => {
               const assigned = services.find((s) => s.serviceKey === service.key);
-              const ServiceIcon = serviceIcon(service.key);
+              const ServiceIcon = serviceIcon(service.key as ServiceKey);
               return (
                 <div
                   key={service.key}
@@ -802,7 +811,7 @@ export default function TenantDetailPage() {
                       <ServiceIcon className="h-5 w-5 text-[#B91C1C]" />
                     </div>
                     <div>
-                      <p className="text-sm font-semibold text-gray-900">{service.name}</p>
+                      <p className="text-sm font-semibold text-gray-900">{service.label}</p>
                       <p className="mt-0.5 font-mono text-xs text-gray-400">{service.key}</p>
                       <p className="mt-1 text-xs text-gray-500">{service.description}</p>
                       {assigned ? (
@@ -826,7 +835,7 @@ export default function TenantDetailPage() {
                     <button
                       type="button"
                       disabled={assigningKey === service.key || saving}
-                      onClick={() => void allowService(service.key)}
+                      onClick={() => void allowService(service.key as ServiceKey)}
                       className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-[#B91C1C] px-3 py-1.5 text-xs font-medium text-[#B91C1C] hover:bg-red-50 disabled:opacity-50"
                     >
                       {assigningKey === service.key ? (
@@ -1535,10 +1544,10 @@ export default function TenantDetailPage() {
                   className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
                 >
                   {availableServices.map((k) => {
-                    const meta = PLATFORM_SERVICE_CATALOG.find((s) => s.key === k);
+                    const meta = catalogMeta(k);
                     return (
                       <option key={k} value={k}>
-                        {meta ? `${meta.name} (${k})` : k}
+                        {meta ? `${meta.label} (${k})` : k}
                       </option>
                     );
                   })}

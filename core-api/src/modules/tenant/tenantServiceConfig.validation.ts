@@ -2,7 +2,8 @@ import { z } from 'zod';
 import { SERVICE_CATALOG } from '../../constants/serviceCatalog';
 import { tenantIdRouteParamSchema } from './tenant.validation';
 
-export const serviceKeyParamSchema = z.enum(SERVICE_CATALOG);
+/** Path param; assignability checked against Mongo catalog on create. */
+export const serviceKeyParamSchema = z.string().min(1).max(100);
 
 const templateItemPricingSchema = z.object({
   cpuRatePerCoreMonthly: z.number().int().nonnegative().default(0),

@@ -17,16 +17,25 @@ import {
   ValidationError,
 } from '../../utils/errors';
 import { logger } from '../../utils/logger';
+import { serviceCatalogService } from '../serviceCatalog/serviceCatalog.service';
 
 export interface AdminServicePublic {
   serviceKey: AdminServiceKey;
   status: AdminServiceConfigStatus;
+  label?: string;
 }
 
-function toPublic(doc: IAdminServiceConfig): AdminServicePublic {
+export interface AdminServiceCatalogItem {
+  serviceKey: string;
+  label: string;
+  description?: string;
+}
+
+function toPublic(doc: IAdminServiceConfig, label?: string): AdminServicePublic {
   return {
     serviceKey: doc.serviceKey,
     status: doc.status,
+    ...(label ? { label } : {}),
   };
 }
 
@@ -56,21 +65,19 @@ async function insertKeys(
     })),
     { ordered: false }
   ).catch((err: unknown) => {
-    // Ignore duplicate-key races
     const code = (err as { code?: number })?.code;
     if (code !== 11000) throw err;
   });
 }
 
 async function markSeeded(adminId: mongoose.Types.ObjectId): Promise<void> {
-  await User.updateOne(
-    { _id: adminId },
-    { $set: { adminServicesSeeded: true } }
-  );
+  await User.updateOne({ _id: adminId }, { $set: { adminServicesSeeded: true } });
 }
 
 class AdminServicesService {
-  async resolveEntitlementAdminId(adminId: mongoose.Types.ObjectId): Promise<mongoose.Types.ObjectId> {
+  async resolveEntitlementAdminId(
+    adminId: mongoose.Types.ObjectId
+  ): Promise<mongoose.Types.ObjectId> {
     const user = await User.findById(adminId).select('role orgOwnerId');
     if (!user || user.role !== 'admin') {
       throw new NotFoundError('Admin user not found.');
@@ -78,7 +85,6 @@ class AdminServicesService {
     return user.orgOwnerId || adminId;
   }
 
-  /** New admin registration — only VM Catalog + Dedicated Server. */
   async seedDefaultsForNewAdmin(
     adminId: mongoose.Types.ObjectId,
     createdBy?: mongoose.Types.ObjectId
@@ -96,11 +102,6 @@ class AdminServicesService {
     });
   }
 
-  /**
-   * Ensure configs exist:
-   * - never seeded → treat as existing admin → all services active
-   * - already seeded but empty → leave empty (intentionally revoked)
-   */
   async ensureServices(adminId: mongoose.Types.ObjectId): Promise<AdminServicePublic[]> {
     const { seeded } = await requirePlatformAdmin(adminId);
     let docs = await AdminServiceConfig.find({ adminId }).sort({ serviceKey: 1 });
@@ -114,7 +115,8 @@ class AdminServicesService {
       });
     }
 
-    return docs.map(toPublic);
+    const labels = await serviceCatalogService.getLabelMap(docs.map((d) => d.serviceKey));
+    return docs.map((d) => toPublic(d, labels[d.serviceKey]));
   }
 
   async listMine(adminId: mongoose.Types.ObjectId): Promise<AdminServicePublic[]> {
@@ -129,13 +131,15 @@ class AdminServicesService {
 
   async assignService(
     adminId: mongoose.Types.ObjectId,
-    serviceKey: AdminServiceKey,
+    serviceKey: string,
     actorId: mongoose.Types.ObjectId
   ): Promise<AdminServicePublic> {
     await requirePlatformAdmin(adminId);
+    await serviceCatalogService.assertAssignable(serviceKey, 'admin');
     await markSeeded(adminId);
 
-    const existing = await AdminServiceConfig.findOne({ adminId, serviceKey });
+    const key = serviceKey as AdminServiceKey;
+    const existing = await AdminServiceConfig.findOne({ adminId, serviceKey: key });
     if (existing) {
       if (existing.status === 'active') {
         throw new ConflictError('Service is already assigned and active.');
@@ -143,39 +147,43 @@ class AdminServicesService {
       existing.status = 'active';
       existing.createdBy = actorId;
       await existing.save();
-      return toPublic(existing);
+      const labels = await serviceCatalogService.getLabelMap([key]);
+      return toPublic(existing, labels[key]);
     }
 
     const doc = await AdminServiceConfig.create({
       adminId,
-      serviceKey,
+      serviceKey: key,
       status: 'active',
       createdBy: actorId,
     });
-    return toPublic(doc);
+    const labels = await serviceCatalogService.getLabelMap([key]);
+    return toPublic(doc, labels[key]);
   }
 
   async updateStatus(
     adminId: mongoose.Types.ObjectId,
-    serviceKey: AdminServiceKey,
+    serviceKey: string,
     status: AdminServiceConfigStatus
   ): Promise<AdminServicePublic> {
     await requirePlatformAdmin(adminId);
-    const doc = await AdminServiceConfig.findOne({ adminId, serviceKey });
+    const key = serviceKey as AdminServiceKey;
+    const doc = await AdminServiceConfig.findOne({ adminId, serviceKey: key });
     if (!doc) {
       throw new NotFoundError('Service config not found. Assign the service first.');
     }
     doc.status = status;
     await doc.save();
-    return toPublic(doc);
+    const labels = await serviceCatalogService.getLabelMap([key]);
+    return toPublic(doc, labels[key]);
   }
 
-  async removeService(
-    adminId: mongoose.Types.ObjectId,
-    serviceKey: AdminServiceKey
-  ): Promise<void> {
+  async removeService(adminId: mongoose.Types.ObjectId, serviceKey: string): Promise<void> {
     await requirePlatformAdmin(adminId);
-    const result = await AdminServiceConfig.deleteOne({ adminId, serviceKey });
+    const result = await AdminServiceConfig.deleteOne({
+      adminId,
+      serviceKey: serviceKey as AdminServiceKey,
+    });
     if (result.deletedCount === 0) {
       throw new NotFoundError('Service config not found.');
     }
@@ -193,8 +201,17 @@ class AdminServicesService {
     }
   }
 
-  catalog(): AdminServiceKey[] {
-    return [...ADMIN_SERVICE_CATALOG];
+  async catalog(): Promise<AdminServiceCatalogItem[]> {
+    const rows = await serviceCatalogService.list({
+      kind: 'product',
+      scope: 'admin',
+      activeOnly: true,
+    });
+    return rows.map((r) => ({
+      serviceKey: r.key,
+      label: r.label,
+      description: r.description,
+    }));
   }
 }
 

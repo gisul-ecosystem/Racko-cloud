@@ -1,10 +1,6 @@
 import type { Request, Response, NextFunction } from 'express';
 import type { AuthenticatedRequest } from '../../types';
 import {
-  ADMIN_SERVICE_LABELS,
-  type AdminServiceKey,
-} from '../../constants/adminServiceCatalog';
-import {
   adminServicesService,
   parseAdminObjectId,
 } from './adminServices.service';
@@ -30,13 +26,8 @@ async function listMine(req: Request, res: Response, next: NextFunction): Promis
 
 async function listCatalog(_req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
-    const keys = adminServicesService.catalog();
-    success(res, 'Admin service catalog retrieved.', {
-      services: keys.map((serviceKey) => ({
-        serviceKey,
-        label: ADMIN_SERVICE_LABELS[serviceKey],
-      })),
-    });
+    const services = await adminServicesService.catalog();
+    success(res, 'Admin service catalog retrieved.', { services });
   } catch (err) {
     next(err);
   }
@@ -45,16 +36,13 @@ async function listCatalog(_req: Request, res: Response, next: NextFunction): Pr
 async function listForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const adminId = parseAdminObjectId(req.params['adminId'] as string);
-    const services = await adminServicesService.listForAdmin(adminId);
+    const [services, catalog] = await Promise.all([
+      adminServicesService.listForAdmin(adminId),
+      adminServicesService.catalog(),
+    ]);
     success(res, 'Admin services retrieved.', {
-      services: services.map((s) => ({
-        ...s,
-        label: ADMIN_SERVICE_LABELS[s.serviceKey],
-      })),
-      catalog: adminServicesService.catalog().map((serviceKey) => ({
-        serviceKey,
-        label: ADMIN_SERVICE_LABELS[serviceKey],
-      })),
+      services,
+      catalog,
     });
   } catch (err) {
     next(err);
@@ -81,7 +69,7 @@ async function assign(req: Request, res: Response, next: NextFunction): Promise<
 async function updateStatus(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const adminId = parseAdminObjectId(req.params['adminId'] as string);
-    const serviceKey = req.params['serviceKey'] as AdminServiceKey;
+    const serviceKey = req.params['serviceKey'] as string;
     const body = req.body as UpdateAdminServiceInput;
     const service = await adminServicesService.updateStatus(adminId, serviceKey, body.status);
     success(res, 'Service status updated.', { service });
@@ -93,7 +81,7 @@ async function updateStatus(req: Request, res: Response, next: NextFunction): Pr
 async function remove(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const adminId = parseAdminObjectId(req.params['adminId'] as string);
-    const serviceKey = req.params['serviceKey'] as AdminServiceKey;
+    const serviceKey = req.params['serviceKey'] as string;
     await adminServicesService.removeService(adminId, serviceKey);
     success(res, 'Service removed.', { removed: true });
   } catch (err) {

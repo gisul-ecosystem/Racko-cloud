@@ -7,10 +7,12 @@ export type ServiceKey =
   | 'azure'
   | 'aws'
   | 'gcp'
+  | 'cloud-labs'
   | 'docs'
   | 'machine-manager';
 export type ServiceConfigStatus = 'active' | 'suspended';
 
+/** @deprecated Prefer fetchServiceCatalog — kept as offline fallback labels only. */
 export const PLATFORM_SERVICE_CATALOG: Array<{
   key: ServiceKey;
   name: string;
@@ -45,6 +47,11 @@ export const PLATFORM_SERVICE_CATALOG: Array<{
     key: 'aws',
     name: 'AWS Services',
     description: 'AWS access management, provisioning, and lab environments.',
+  },
+  {
+    key: 'cloud-labs',
+    name: 'Cloud Labs',
+    description: 'Cloud lab environments and training workspaces',
   },
   // GCP is temporarily hidden from UI until automation is ready (see lib/hiddenServices.ts).
   {
