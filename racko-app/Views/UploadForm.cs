@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.IO.Compression;
 using System.Windows.Forms;
 using RackoApp.Services;
 
@@ -9,6 +10,14 @@ public class UploadForm : Form
     public string   SelectedFilePath   { get; private set; } = "";
     public string   SelectedPermission { get; private set; } = "read";
     public string[] SelectedMachineIds { get; private set; } = [];
+    /// <summary>Display name for folder uploads (e.g. "MyProject.zip"). Null for regular files.</summary>
+    public string?  SelectedDisplayName { get; private set; }
+
+    // When uploading a folder this holds the temp zip path (deleted after upload)
+    private string? _tempZipPath;
+
+    /// <summary>Exposed so MainForm can delete the temp zip after upload completes.</summary>
+    public string? TempZipPath => _tempZipPath;
 
     private readonly IReadOnlyList<MachineDto> _machines;
 
@@ -45,26 +54,33 @@ public class UploadForm : Form
         y += 6;
 
         // ── File picker ───────────────────────────────────────────────────────
-        AddLabel("File", pad, ref y);
+        AddLabel("File or Folder", pad, ref y);
         var fileRow = new Panel { Left = pad, Top = y, Width = ClientSize.Width - pad * 2, Height = 30 };
         _fileLabel = new Label
         {
-            Text      = "No file selected",
+            Text      = "No file or folder selected",
             ForeColor = Color.FromArgb(148, 163, 184),
             AutoSize  = false,
-            Width     = fileRow.Width - 100,
+            Width     = fileRow.Width - 210,
             Height    = 30,
             Left      = 0,
             Top       = 0,
             TextAlign = ContentAlignment.MiddleLeft,
         };
-        var browseBtn = MakeButton("Browse…", secondary: true);
-        browseBtn.Left   = fileRow.Width - 90;
+        var browseFolderBtn = MakeButton("📁 Folder", secondary: true);
+        browseFolderBtn.Left   = fileRow.Width - 210;
+        browseFolderBtn.Top    = 0;
+        browseFolderBtn.Width  = 100;
+        browseFolderBtn.Height = 28;
+        browseFolderBtn.Click += OnBrowseFolderClick;
+
+        var browseBtn = MakeButton("📄 File", secondary: true);
+        browseBtn.Left   = fileRow.Width - 100;
         browseBtn.Top    = 0;
         browseBtn.Width  = 90;
         browseBtn.Height = 28;
         browseBtn.Click += OnBrowseClick;
-        fileRow.Controls.AddRange(new Control[] { _fileLabel, browseBtn });
+        fileRow.Controls.AddRange(new Control[] { _fileLabel, browseFolderBtn, browseBtn });
         Controls.Add(fileRow);
         y += 38;
 
@@ -179,10 +195,43 @@ public class UploadForm : Form
         using var dlg = new OpenFileDialog { Title = "Select a file to share", Filter = "All Files (*.*)|*.*" };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
+        // Clear any previous folder selection
+        if (_tempZipPath is not null)
+        {
+            try { File.Delete(_tempZipPath); } catch { }
+            _tempZipPath = null;
+        }
+
         SelectedFilePath     = dlg.FileName;
         _fileLabel.Text      = Path.GetFileName(dlg.FileName);
         _fileLabel.ForeColor = Color.FromArgb(15, 23, 42);
         _uploadBtn.Enabled   = true;
+    }
+
+    private void OnBrowseFolderClick(object? s, EventArgs e)
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description         = "Select a folder to share",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = false,
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        // Clear any previous folder selection
+        if (_tempZipPath is not null)
+        {
+            try { File.Delete(_tempZipPath); } catch { }
+            _tempZipPath = null;
+        }
+
+        var folderPath = dlg.SelectedPath;
+        var folderName = Path.GetFileName(folderPath);
+        _fileLabel.Text      = $"📁 {folderName}  (will be zipped)";
+        _fileLabel.ForeColor = Color.FromArgb(15, 23, 42);
+        // Store folder path as SelectedFilePath temporarily — OnUploadClick will zip it
+        SelectedFilePath   = folderPath;
+        _uploadBtn.Enabled = true;
     }
 
     private void OnUploadClick(object? s, EventArgs e)
@@ -203,7 +252,40 @@ public class UploadForm : Form
         }
 
         SelectedMachineIds = [.. ids];
-        DialogResult       = DialogResult.OK;
+
+        // If SelectedFilePath is a directory, zip it first (background thread so UI stays responsive)
+        if (Directory.Exists(SelectedFilePath))
+        {
+            _uploadBtn.Enabled = false;
+            _uploadBtn.Text    = "Zipping…";
+            var folderPath = SelectedFilePath;
+            var folderName = Path.GetFileName(folderPath);
+            Task.Run(() =>
+            {
+                // Zip to a temp file — streaming, never fully in memory
+                var tempZip = Path.Combine(Path.GetTempPath(), $"{folderName}_{Guid.NewGuid():N}.zip");
+                ZipFile.CreateFromDirectory(folderPath, tempZip, CompressionLevel.Fastest, includeBaseDirectory: true);
+                return tempZip;
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    _uploadBtn.Enabled = true;
+                    _uploadBtn.Text    = "Upload";
+                    MessageBox.Show($"Failed to zip folder:\n{t.Exception?.InnerException?.Message}",
+                        "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                _tempZipPath        = t.Result;
+                SelectedFilePath    = t.Result;              // temp zip path for upload
+                SelectedDisplayName = $"{folderName}.zip";   // display name shown in inbox/outbox
+                DialogResult        = DialogResult.OK;
+                Close();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+            return;
+        }
+
+        DialogResult = DialogResult.OK;
         Close();
     }
 
