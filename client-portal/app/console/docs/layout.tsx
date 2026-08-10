@@ -7,7 +7,6 @@ import { DocsSidebar } from '../../../components/console/DocsSidebar';
 import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar';
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { useServiceShell } from '../../../components/console/useServiceShell';
-import { RequireAdminService } from '../../../components/console/RequireAdminService';
 
 export default function DocsLayout({ children }: { children: React.ReactNode }) {
   const { user, isLoading, isAuthenticated } = useAuth();
@@ -35,27 +34,26 @@ export default function DocsLayout({ children }: { children: React.ReactNode }) 
 
   if (!isAuthenticated || !user || user.role !== 'admin') return null;
 
+  // Docs is always available; topic sections filter to enabled product services.
   return (
-    <RequireAdminService serviceKey="docs">
-      <ServiceShellLayout
-        sidebarOpen={sidebarOpen}
-        sidebar={
-          <DocsSidebar
-            sidebarOpen={sidebarOpen}
-            onCloseSidebar={() => setSidebarOpen(false)}
-          />
-        }
-        topBar={
-          <RackoGlobalTopBar
-            onToggleSidebar={toggleSidebar}
-            title="Documentation"
-            subtitle="Guides & reference"
-          />
-        }
-        mainClassName="p-6 lg:p-8"
-      >
-        {children}
-      </ServiceShellLayout>
-    </RequireAdminService>
+    <ServiceShellLayout
+      sidebarOpen={sidebarOpen}
+      sidebar={
+        <DocsSidebar
+          sidebarOpen={sidebarOpen}
+          onCloseSidebar={() => setSidebarOpen(false)}
+        />
+      }
+      topBar={
+        <RackoGlobalTopBar
+          onToggleSidebar={toggleSidebar}
+          title="Documentation"
+          subtitle="Guides for your enabled services"
+        />
+      }
+      mainClassName="p-6 lg:p-8"
+    >
+      {children}
+    </ServiceShellLayout>
   );
 }

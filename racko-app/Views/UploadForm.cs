@@ -75,37 +75,35 @@ public class UploadForm : Form
         Controls.AddRange(new Control[] { _rbRead, _rbFull });
         y += 30;
 
-        // ── VM list header row: label + Select All button ─────────────────────
-        var vmHeaderRow = new Panel { Left = pad, Top = y, Width = ClientSize.Width - pad * 2, Height = 22 };
-        var vmLabel = new Label
-        {
-            Text      = "Share with VMs",
-            Left      = 0,
-            Top       = 2,
-            AutoSize  = true,
-            Font      = new Font("Segoe UI", 9f, FontStyle.Bold),
-            ForeColor = Color.FromArgb(15, 23, 42),
-        };
+        // ── VM list header: "Share with VMs" label ───────────────────────────
+        AddLabel("Share with VMs", pad, ref y, bold: true);
+
+        // Select All button — placed directly on the form.
+        // Left position is calculated in the Load event where ClientSize is finalized.
         _selectAllBtn = new Button
         {
             Text      = "Select All",
             FlatStyle = FlatStyle.Flat,
             Font      = new Font("Segoe UI", 8f),
-            Height    = 22,
+            Height    = 24,
             Width     = 90,
+            Top       = y - 24, // aligned with the label row above
             Cursor    = Cursors.Hand,
             BackColor = Color.White,
             ForeColor = Color.FromArgb(185, 28, 28),
             Anchor    = AnchorStyles.Top | AnchorStyles.Right,
         };
         _selectAllBtn.FlatAppearance.BorderColor = Color.FromArgb(185, 28, 28);
-        _selectAllBtn.Left   = vmHeaderRow.Width - 90;
-        _selectAllBtn.Top    = 0;
         _selectAllBtn.Click += OnSelectAllClick;
-        vmHeaderRow.SizeChanged += (_, _) => _selectAllBtn.Left = vmHeaderRow.Width - 90;
-        vmHeaderRow.Controls.AddRange(new Control[] { vmLabel, _selectAllBtn });
-        Controls.Add(vmHeaderRow);
-        y += 28;
+        Controls.Add(_selectAllBtn);
+
+        // Finalize button Left position after the form is fully shown (ClientSize is correct then)
+        Shown += (_, _) =>
+        {
+            _selectAllBtn.Left = ClientSize.Width - pad - _selectAllBtn.Width;
+        };
+
+        y += 4;
 
         // ── VM CheckedListBox ─────────────────────────────────────────────────
         _vmList = new CheckedListBox

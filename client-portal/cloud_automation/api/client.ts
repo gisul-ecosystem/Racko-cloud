@@ -533,6 +533,10 @@ export async function fetchProvisionSnapshot(requestId: number): Promise<Provisi
           : null,
       accountCount:
         typeof provisionRaw.accountCount === 'number' ? provisionRaw.accountCount : null,
+      costingMode:
+        typeof (provisionRaw as { costingMode?: unknown }).costingMode === 'string'
+          ? String((provisionRaw as { costingMode?: string }).costingMode)
+          : null,
       complete: provisionRaw.complete === true,
     },
     services: {
