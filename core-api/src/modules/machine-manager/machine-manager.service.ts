@@ -16,6 +16,7 @@ import type {
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { emitJobStatusEvent } from './job.events';
+import { PushSessionModel } from '../../models/pushSession.model';
 
 // ─── Push session registry ────────────────────────────────────────────────────
 // Maps sessionId → { machineIds, adminId } so heartbeat/WS can emit agent_connected
@@ -720,6 +721,21 @@ class MachineManagerService {
       adminId: adminId.toString(),
     });
 
+    // Persist session to MongoDB so the browser can recover state on page refresh.
+    // Fire-and-forget — never blocks the push flow.
+    void PushSessionModel.create({
+      sessionId,
+      adminId: adminId.toString(),
+      machines: machines.map((m, i) => ({
+        machineId:   m._id,
+        machineName: m.name,
+        ipAddress:   vms[i].ipAddress,
+        agentConnected: false,
+      })),
+    }).catch((err) => {
+      logger.warn('[MachineManager] Failed to persist push session to DB (non-fatal)', { sessionId, err });
+    });
+
     // Fire WinRM/SSH pushes in the background — do NOT await.
     // The HTTP response is returned immediately after machine records are created.
     // Push results are delivered to the frontend via the SSE stream as each push completes.
@@ -743,6 +759,11 @@ class MachineManagerService {
               success: result.success,
               error: result.error,
             });
+            // Persist push_result for page-refresh recovery
+            void PushSessionModel.updateOne(
+              { sessionId, 'machines.machineId': machine._id },
+              { $set: { 'machines.$.pushSuccess': result.success, 'machines.$.pushError': result.error ?? null } }
+            ).catch(() => { /* non-fatal */ });
             completedCount++;
             if (completedCount === totalCount) {
               logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
@@ -777,6 +798,11 @@ class MachineManagerService {
           machineName,
         });
         logger.info('[MachineManager] agent_connected emitted via WS connection', { sessionId, machineId });
+        // Persist agent_connected for page-refresh recovery
+        void PushSessionModel.updateOne(
+          { sessionId, 'machines.machineId': machineId },
+          { $set: { 'machines.$.agentConnected': true } }
+        ).catch(() => { /* non-fatal */ });
 
         // ── Install racko-app via exec over WebSocket ──────────────────────────
         // WinRM only handles the fast part (agent install). Once the agent is
@@ -885,6 +911,16 @@ class MachineManagerService {
     logger.info('[MachineManager] racko_app_installed event emitted', {
       sessionId, machineId, success, exitCode: result.exitCode,
     });
+    // Persist racko_app_installed for page-refresh recovery
+    void PushSessionModel.updateOne(
+      { sessionId, 'machines.machineId': machineId },
+      {
+        $set: {
+          'machines.$.rackoAppInstalled': success,
+          'machines.$.rackoAppError': success ? null : `Exit code ${result.exitCode}: ${result.output.slice(-300)}`,
+        },
+      }
+    ).catch(() => { /* non-fatal */ });
   }
 
   /**
