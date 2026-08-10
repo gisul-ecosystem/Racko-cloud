@@ -97,8 +97,8 @@ public class UploadForm : Form
         _selectAllBtn.Click += OnSelectAllClick;
         Controls.Add(_selectAllBtn);
 
-        // Finalize button Left position after the form loads (ClientSize is correct then)
-        Load += (_, _) =>
+        // Finalize button Left position after the form is fully shown (ClientSize is correct then)
+        Shown += (_, _) =>
         {
             _selectAllBtn.Left = ClientSize.Width - pad - _selectAllBtn.Width;
         };
