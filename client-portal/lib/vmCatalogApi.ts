@@ -77,6 +77,10 @@ export interface ICatalogVm {
   projectId?: string;
   projectName?: string;
   clientName?: string;
+  preferredSoftwareIds?: string[];
+  machineId?: string;
+  postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
+  postReadyError?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -127,6 +131,8 @@ export interface CreateCatalogVmRequestDto {
   };
   /** Required for platform admin purchases. */
   projectId?: string;
+  /** Optional Software Catalog package IDs to install after the VM is ready. */
+  preferredSoftwareIds?: string[];
 }
 
 export interface IVmCatalogPlan {
@@ -224,6 +230,21 @@ export async function seedVmCatalogPlans(): Promise<{ inserted: number; total: n
 export async function fetchVmCatalogOverview(): Promise<CatalogVmOverview> {
   const res = await apiRequest<ApiResponse<CatalogVmOverview>>('/api/v1/vm-catalog/overview');
   return res.data;
+}
+
+export interface CatalogSoftwareOption {
+  _id: string;
+  name: string;
+  version: string;
+  supportedOS: Array<'windows' | 'linux' | 'macos'>;
+  installMethod: string;
+}
+
+export async function fetchVmCatalogSoftwareOptions(): Promise<CatalogSoftwareOption[]> {
+  const res = await apiRequest<
+    ApiResponse<{ catalog: CatalogSoftwareOption[]; total: number }>
+  >('/api/v1/vm-catalog/software-options');
+  return res.data.catalog;
 }
 
 export async function fetchVmCatalogVms(): Promise<ICatalogVm[]> {
