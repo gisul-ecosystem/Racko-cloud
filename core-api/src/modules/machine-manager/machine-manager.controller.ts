@@ -613,8 +613,29 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     });
   }
   /**
+   * GET /api/v1/machines/push-session/:sessionId
+   * Returns persisted push session state so the browser can recover after a page refresh.
+   * Auth: JWT (same as other machine routes).
+   */
+  async getPushSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = (req as AuthenticatedRequest).user.userId;
+      const { sessionId } = req.params as { sessionId: string };
+      const { PushSessionModel } = await import('../../models/pushSession.model');
+
+      const session = await PushSessionModel.findOne({ sessionId, adminId }).lean();
+      if (!session) {
+        res.status(404).json({ success: false, message: 'Push session not found or expired.' });
+        return;
+      }
+
+      success(res, 'Push session retrieved.', { session });
+    } catch (err) {
+      next(err);
+    }
+  }
+  /**
    * POST /api/v1/machines/reset
-   * Initiates a VM reset on one or more machines.
    * Returns immediately — reset runs async on the agent.
    * Use the SSE stream to receive live progress.
    */

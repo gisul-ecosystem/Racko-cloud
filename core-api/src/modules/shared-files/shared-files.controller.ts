@@ -118,30 +118,32 @@ export class SharedFilesController {
       const self = await MachineModel.findOne({ agentId, deleted: { $ne: true } }).lean();
       if (!self) { res.status(404).json({ success: false, message: 'Agent not found.' }); return; }
 
-      // If this machine belongs to a group, return only machines in the same group
-      // Backward compatible: machines without a group return all admin machines
-      let query: Record<string, unknown>;
-      if (self.groupId) {
-        const { MachineGroupModel } = await import('../../models/machineGroup.model');
-        const group = await MachineGroupModel.findById(self.groupId).lean();
-        if (group) {
-          query = {
-            _id: { $in: group.machineIds, $ne: self._id },
-            deleted: { $ne: true },
-          };
-        } else {
-          // Group was deleted, fall back to all admin machines
-          query = { adminId: self.adminId, deleted: { $ne: true }, _id: { $ne: self._id } };
-        }
-      } else {
-        query = { adminId: self.adminId, deleted: { $ne: true }, _id: { $ne: self._id } };
+      // If this machine belongs to a group, return only machines in the same group.
+      // If NOT in any group, return empty list with inGroup=false so the racko-app
+      // can show "Please ask your admin to add this machine to a group."
+      // Never fall back to all-admin machines — that leaks the full machine list.
+      if (!self.groupId) {
+        success(res, 'Machines retrieved.', { machines: [], total: 0, inGroup: false });
+        return;
       }
 
-      const machines = await MachineModel.find(query, { _id: 1, name: 1 }).lean();
+      const { MachineGroupModel } = await import('../../models/machineGroup.model');
+      const group = await MachineGroupModel.findById(self.groupId).lean();
+      if (!group) {
+        // Group was deleted — treat as ungrouped
+        success(res, 'Machines retrieved.', { machines: [], total: 0, inGroup: false });
+        return;
+      }
+
+      const machines = await MachineModel.find(
+        { _id: { $in: group.machineIds, $ne: self._id }, deleted: { $ne: true } },
+        { _id: 1, name: 1 }
+      ).lean();
 
       success(res, 'Machines retrieved.', {
         machines: machines.map((m) => ({ _id: m._id.toString(), name: m.name })),
         total: machines.length,
+        inGroup: true,
       });
     } catch (err) {
       next(err);

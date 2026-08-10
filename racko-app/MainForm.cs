@@ -312,7 +312,19 @@ public class MainForm : Form
     private async Task OnUploadClickAsync()
     {
         IReadOnlyList<MachineDto> machines;
-        try { machines = await _api.ListMachinesAsync(); }
+        try
+        {
+            var (list, inGroup) = await _api.ListMachinesAsync();
+            if (!inGroup)
+            {
+                MessageBox.Show(
+                    "This machine is not assigned to any group.\n\nPlease ask your admin to add it to a group before sharing files.",
+                    "Racko — Not in Group",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            machines = list;
+        }
         catch (Exception ex)
         {
             MessageBox.Show($"Could not load VM list:\n{ex.Message}",
