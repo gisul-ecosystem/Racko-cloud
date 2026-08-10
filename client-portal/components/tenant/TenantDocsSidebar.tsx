@@ -17,10 +17,17 @@ import {
 } from 'lucide-react';
 import { hexToRgba } from '@/lib/tenantAccentStyles';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { useTenantServices } from '@/context/TenantServicesContext';
 import { TENANT_CONSOLE, tenantConsole } from '@/lib/tenantAdminRoutes';
+import { filterDocsTopics, type DocsTopicKey } from '@/lib/docsServiceSections';
 
-const navSections = [
+const navSections: Array<{
+  topic: DocsTopicKey;
+  title: string;
+  links: { href: string; label: string; icon: typeof BookOpen }[];
+}> = [
   {
+    topic: 'vps',
     title: 'VPS Hosting',
     links: [
       { href: `${tenantConsole.docs}/vps/getting-started`, label: 'Getting Started', icon: BookOpen },
@@ -32,6 +39,7 @@ const navSections = [
     ],
   },
   {
+    topic: 'esi',
     title: 'Elastic Server Import',
     links: [
       { href: `${tenantConsole.docs}/esi/getting-started`, label: 'Getting Started', icon: BookOpen },
@@ -41,6 +49,7 @@ const navSections = [
     ],
   },
   {
+    topic: 'azure',
     title: 'Azure Services',
     links: [
       { href: `${tenantConsole.docs}/azure/getting-started`, label: 'Getting Started', icon: BookOpen },
@@ -50,6 +59,7 @@ const navSections = [
     ],
   },
   {
+    topic: 'aws',
     title: 'AWS Services',
     links: [
       { href: `${tenantConsole.docs}/aws/getting-started`, label: 'Getting Started', icon: BookOpen },
@@ -75,6 +85,10 @@ interface Props {
 export function TenantDocsSidebar({ sidebarOpen, onCloseSidebar }: Props) {
   const pathname = usePathname() ?? '';
   const { accentColor } = useTenantBranding();
+  const { hasActiveService, loading } = useTenantServices();
+  const visibleSections = loading
+    ? []
+    : filterDocsTopics(navSections, hasActiveService);
 
   return (
     <>
@@ -94,10 +108,15 @@ export function TenantDocsSidebar({ sidebarOpen, onCloseSidebar }: Props) {
         <div className="flex h-full min-w-[15rem] flex-col">
           <div className="border-b border-gray-100 px-5 py-5">
             <p className="text-sm font-semibold text-gray-900">Documentation</p>
-            <p className="mt-0.5 text-xs text-gray-400">Guides &amp; reference</p>
+            <p className="mt-0.5 text-xs text-gray-400">Guides for your enabled services</p>
           </div>
           <nav className="flex-1 space-y-4 overflow-y-auto p-3">
-            {navSections.map((section) => (
+            {visibleSections.length === 0 && !loading ? (
+              <p className="px-3 text-xs text-gray-500">
+                No docs yet — enable a product service to see related guides.
+              </p>
+            ) : null}
+            {visibleSections.map((section) => (
               <div key={section.title}>
                 <p className="mb-1 px-3 text-[11px] font-semibold uppercase tracking-wider text-gray-400">
                   {section.title}

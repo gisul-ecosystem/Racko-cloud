@@ -1,6 +1,5 @@
 import mongoose from 'mongoose';
 import {
-  ADMIN_SERVICE_CATALOG,
   DEFAULT_NEW_ADMIN_SERVICES,
   type AdminServiceKey,
 } from '../../constants/adminServiceCatalog';
@@ -52,7 +51,7 @@ async function requirePlatformAdmin(adminId: mongoose.Types.ObjectId): Promise<{
 
 async function insertKeys(
   adminId: mongoose.Types.ObjectId,
-  keys: readonly AdminServiceKey[],
+  keys: readonly string[],
   createdBy?: mongoose.Types.ObjectId
 ): Promise<void> {
   if (keys.length === 0) return;
@@ -94,11 +93,17 @@ class AdminServicesService {
       await markSeeded(adminId);
       return;
     }
-    await insertKeys(adminId, DEFAULT_NEW_ADMIN_SERVICES, createdBy);
+    const defaultKeys: string[] = [];
+    for (const key of DEFAULT_NEW_ADMIN_SERVICES) {
+      if (await serviceCatalogService.isAssignableProduct(key, 'admin')) {
+        defaultKeys.push(key);
+      }
+    }
+    await insertKeys(adminId, defaultKeys, createdBy);
     await markSeeded(adminId);
     logger.info('[AdminServices] Seeded default services for new admin', {
       adminId: adminId.toString(),
-      services: [...DEFAULT_NEW_ADMIN_SERVICES],
+      services: defaultKeys,
     });
   }
 
@@ -107,11 +112,13 @@ class AdminServicesService {
     let docs = await AdminServiceConfig.find({ adminId }).sort({ serviceKey: 1 });
 
     if (docs.length === 0 && !seeded) {
-      await insertKeys(adminId, ADMIN_SERVICE_CATALOG);
+      const catalogKeys = await serviceCatalogService.listAssignableKeys('admin');
+      await insertKeys(adminId, catalogKeys);
       await markSeeded(adminId);
       docs = await AdminServiceConfig.find({ adminId }).sort({ serviceKey: 1 });
-      logger.info('[AdminServices] Seeded all services for existing admin', {
+      logger.info('[AdminServices] Seeded services from Mongo catalog for existing admin', {
         adminId: adminId.toString(),
+        services: catalogKeys,
       });
     }
 

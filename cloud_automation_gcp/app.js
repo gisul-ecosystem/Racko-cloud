@@ -1,25 +1,27 @@
 import 'dotenv/config';
+
 import express from 'express';
 import connectDB from './src/config/db.js';
 import { validateGcpConfig } from './src/config/gcp.js';
+import { ensureDefaultCatalog } from './src/services/catalogSeedService.js';
 import healthRoutes from './src/routes/health.js';
+import catalogRoutes from './src/routes/catalog.js';
+import requestRoutes from './src/routes/requests.js';
+import provisionRoutes from './src/routes/provision.routes.js';
 
 const app = express();
 
 app.use(express.json());
 
-// Routes
 app.use('/health', healthRoutes);
+app.use('/api', catalogRoutes);
+app.use('/api', requestRoutes);
+app.use('/api', provisionRoutes);
 
-// 404 handler
 app.all('*', (req, res) => {
-  res.status(404).json({
-    success: false,
-    message: 'Route not found',
-  });
+  res.status(404).json({ success: false, message: 'Route not found' });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   console.error('[error]', err.message);
   res.status(err.statusCode || 500).json({
@@ -28,10 +30,10 @@ app.use((err, req, res, next) => {
   });
 });
 
-// Start
 const start = async () => {
   await connectDB();
   validateGcpConfig();
+  await ensureDefaultCatalog();
 
   const port = Number(process.env.PORT || 3004);
   app.listen(port, () => {

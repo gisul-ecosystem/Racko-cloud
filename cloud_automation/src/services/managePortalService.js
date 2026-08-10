@@ -24,6 +24,7 @@ const {
   startResourceGroupDeletion
 } = require('../provisioners/azure/cleanupProvisioner');
 const { deleteUserBudget } = require('../provisioners/azure/azureBudgetProvisioner');
+const { batchDeleteUsers } = require('../provisioners/azure/graphBatchProvisioner');
 const {
   getCustomRoleAssignmentsForRequest,
   revokeCustomRoleAssignment
@@ -35,7 +36,43 @@ const { getDeleteAzureConcurrency } = require('../utils/provisionConcurrency');
 
 const ACCESS_TOKEN_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 const RETRYABLE_STATUS_CODES = new Set([408, 429, 500, 502, 503, 504]);
-const MAX_ATTEMPTS = 3;
+const MAX_ATTEMPTS = 6;
+
+const isResourceGroupScope = (scope) => /\/resourceGroups\//i.test(String(scope || ''));
+
+const scopeMatchesDeletedResourceGroup = (scope, resourceGroupNames) => {
+  if (!isResourceGroupScope(scope) || !Array.isArray(resourceGroupNames) || resourceGroupNames.length === 0) {
+    return false;
+  }
+
+  const normalizedScope = String(scope || '').toLowerCase();
+  return resourceGroupNames.some((name) => {
+    const rg = String(name || '')
+      .trim()
+      .toLowerCase();
+    return rg && normalizedScope.includes(`/resourcegroups/${rg}`);
+  });
+};
+
+const getRetryDelayMs = (error, attempt) => {
+  const headers = error?.response?.headers || error?.headers || {};
+  const retryAfterHeader =
+    (typeof headers.get === 'function' ? headers.get('retry-after') : null) ||
+    headers['retry-after'] ||
+    headers['Retry-After'];
+  const retryAfterSeconds = Number(retryAfterHeader);
+
+  if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0) {
+    return Math.min(retryAfterSeconds * 1000, 60_000);
+  }
+
+  const statusCode = Number(error?.statusCode || error?.status);
+  if (statusCode === 429) {
+    return Math.min(1000 * 2 ** (attempt - 1), 30_000);
+  }
+
+  return Math.min(400 * 2 ** (attempt - 1), 15_000);
+};
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -1018,7 +1055,7 @@ const deleteAzureUserWithRetry = async (graphClient, azureUserId, requestId) => 
         throw error;
       }
 
-      const delayMs = 500 * 2 ** (attempt - 1);
+      const delayMs = getRetryDelayMs(error, attempt);
 
       logAzureRoleEvent('info', 'portal_user_delete_retry', {
         requestId,
@@ -1063,7 +1100,7 @@ const deleteRoleAssignmentWithRetry = async (authorizationClient, scope, assignm
         throw error;
       }
 
-      const delayMs = 500 * 2 ** (attempt - 1);
+      const delayMs = getRetryDelayMs(error, attempt);
 
       logAzureRoleEvent('info', 'portal_role_delete_retry', {
         requestId,
@@ -1324,11 +1361,13 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
   const costingMode = requestDetails.rows[0]?.costing_mode || null;
   const sharedResourceGroupName = requestDetails.rows[0]?.azure_resource_group_name || null;
 
-  const deleteConcurrency = getDeleteAzureConcurrency();
+  // Keep delete concurrency modest: Azure Graph/ARM throttle hard under fan-out.
+  // Speed comes from skipping RG-scoped RBAC/budgets + Graph /$batch, not raw parallelism.
+  const deleteConcurrency = Math.min(getDeleteAzureConcurrency(), 12);
   const customAssignments = await getCustomRoleAssignmentsForRequest(normalizedRequestId);
   let customRolesRevoked = 0;
 
-  await runWithConcurrency(customAssignments, deleteConcurrency, async (assignment) => {
+  await runWithConcurrency(customAssignments, Math.min(deleteConcurrency, 6), async (assignment) => {
     try {
       await revokeCustomRoleAssignment(assignment.id);
       customRolesRevoked += 1;
@@ -1343,45 +1382,11 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
 
   const roleAssignments = await getUserRoleAssignmentsForRequest(normalizedRequestId);
   let rolesRemoved = 0;
+  let rolesSkippedWithRg = 0;
   const roleErrors = [];
 
   try {
     const { authorizationClient, resourceClient, graphClient } = createCleanupClients();
-
-    const validRoleAssignments = roleAssignments.filter((assignment) => {
-      const assignmentId = assignment.assignment_id || assignment.assignmentId;
-      return Boolean(assignmentId && assignment.scope);
-    });
-
-    await runWithConcurrency(validRoleAssignments, deleteConcurrency, async (assignment) => {
-      const assignmentId = assignment.assignment_id || assignment.assignmentId;
-
-      try {
-        const removed = await deleteRoleAssignmentWithRetry(
-          authorizationClient,
-          assignment.scope,
-          assignmentId,
-          normalizedRequestId
-        );
-
-        if (removed) {
-          rolesRemoved += 1;
-        }
-      } catch (error) {
-        roleErrors.push({
-          scope: assignment.scope,
-          assignmentId,
-          role: assignment.azure_role || null,
-          reason: error?.message || 'Role assignment deletion failed'
-        });
-        logManagePortalEvent('error', 'role_assignment_delete_failed', {
-          requestId: normalizedRequestId,
-          scope: assignment.scope,
-          assignmentId,
-          message: error?.message
-        });
-      }
-    });
 
     const [budgetUsersResult, azureUsers, resourceGroupsToDelete] = await Promise.all([
       db.query(
@@ -1397,17 +1402,84 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
     ]);
 
     let budgetsDeleted = 0;
+    let budgetsSkippedWithRg = 0;
     let usersDeleted = 0;
     let resourceGroupsDeleted = 0;
     const userErrors = [];
     const resourceGroupErrors = [];
 
-    const budgetUsers = budgetUsersResult.rows.filter(
-      (user) => user.budget_id && user.azure_resource_group_name
-    );
+    // Role assignments on RGs we are deleting are removed with the RG — skip them.
+    const validRoleAssignments = roleAssignments.filter((assignment) => {
+      const assignmentId = assignment.assignment_id || assignment.assignmentId;
+      if (!assignmentId || !assignment.scope) {
+        return false;
+      }
 
-    await Promise.all([
-      runWithConcurrency(budgetUsers, deleteConcurrency, async (user) => {
+      if (scopeMatchesDeletedResourceGroup(assignment.scope, resourceGroupsToDelete)) {
+        rolesSkippedWithRg += 1;
+        return false;
+      }
+
+      return true;
+    });
+
+    if (validRoleAssignments.length > 0) {
+      await runWithConcurrency(validRoleAssignments, deleteConcurrency, async (assignment) => {
+        const assignmentId = assignment.assignment_id || assignment.assignmentId;
+
+        try {
+          const removed = await deleteRoleAssignmentWithRetry(
+            authorizationClient,
+            assignment.scope,
+            assignmentId,
+            normalizedRequestId
+          );
+
+          if (removed) {
+            rolesRemoved += 1;
+          }
+        } catch (error) {
+          roleErrors.push({
+            scope: assignment.scope,
+            assignmentId,
+            role: assignment.azure_role || null,
+            reason: error?.message || 'Role assignment deletion failed'
+          });
+          logManagePortalEvent('error', 'role_assignment_delete_failed', {
+            requestId: normalizedRequestId,
+            scope: assignment.scope,
+            assignmentId,
+            message: error?.message
+          });
+        }
+      });
+    }
+
+    // Budgets live on the RG — deleting the RG removes them. Only delete leftovers
+    // when we are not starting an RG delete for that user's group.
+    const rgNameSet = new Set(
+      resourceGroupsToDelete.map((name) =>
+        String(name || '')
+          .trim()
+          .toLowerCase()
+      )
+    );
+    const budgetUsers = budgetUsersResult.rows.filter((user) => {
+      if (!user.budget_id || !user.azure_resource_group_name) {
+        return false;
+      }
+      const rg = String(user.azure_resource_group_name)
+        .trim()
+        .toLowerCase();
+      if (rgNameSet.has(rg)) {
+        budgetsSkippedWithRg += 1;
+        return false;
+      }
+      return true;
+    });
+
+    if (budgetUsers.length > 0) {
+      await runWithConcurrency(budgetUsers, Math.min(deleteConcurrency, 6), async (user) => {
         try {
           await deleteUserBudget({
             resourceGroupName: user.azure_resource_group_name,
@@ -1421,27 +1493,77 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
             message: error?.message
           });
         }
-      }),
-      runWithConcurrency(azureUsers, deleteConcurrency, async (user) => {
-        if (!user.azureUserId) {
-          userErrors.push({
-            username: user.username,
-            reason: 'Missing Azure user ID'
-          });
-          return;
-        }
+      });
+    }
 
-        try {
-          await deleteAzureUserWithRetry(graphClient, user.azureUserId, normalizedRequestId);
-          usersDeleted += 1;
-        } catch (error) {
-          userErrors.push({
-            username: user.username,
-            reason: error?.message || 'Azure user deletion failed'
-          });
-        }
-      }),
-      runWithConcurrency(resourceGroupsToDelete, deleteConcurrency, async (resourceGroupName) => {
+    // Graph /$batch deletes up to 20 users per call — far fewer throttles than N DELETEs.
+    const usersWithAzureId = azureUsers.filter((user) => user.azureUserId);
+    for (const user of azureUsers) {
+      if (!user.azureUserId) {
+        userErrors.push({
+          username: user.username,
+          reason: 'Missing Azure user ID'
+        });
+      }
+    }
+
+    if (usersWithAzureId.length > 0) {
+      const userByAzureId = new Map(
+        usersWithAzureId.map((user) => [String(user.azureUserId), user])
+      );
+      const batchResult = await batchDeleteUsers(
+        graphClient,
+        usersWithAzureId.map((user) => user.azureUserId),
+        `request-${normalizedRequestId}-delete-users`
+      );
+      usersDeleted = batchResult.deleted.length;
+
+      for (const failure of batchResult.failed) {
+        const user = userByAzureId.get(String(failure.azureUserId));
+        userErrors.push({
+          username: user?.username || failure.azureUserId,
+          reason: failure.error || 'Azure user deletion failed'
+        });
+      }
+
+      // Fallback: individually retry any batch failures with Retry-After-aware helper.
+      if (batchResult.failed.length > 0) {
+        await runWithConcurrency(
+          batchResult.failed,
+          Math.min(deleteConcurrency, 6),
+          async (failure) => {
+            const user = userByAzureId.get(String(failure.azureUserId));
+            if (!user?.azureUserId) {
+              return;
+            }
+
+            try {
+              await deleteAzureUserWithRetry(graphClient, user.azureUserId, normalizedRequestId);
+              usersDeleted += 1;
+              const idx = userErrors.findIndex(
+                (entry) => entry.username === (user.username || failure.azureUserId)
+              );
+              if (idx >= 0) {
+                userErrors.splice(idx, 1);
+              }
+            } catch (error) {
+              // keep existing userErrors entry
+              logManagePortalEvent('error', 'user_delete_fallback_failed', {
+                requestId: normalizedRequestId,
+                azureUserId: user.azureUserId,
+                message: error?.message
+              });
+            }
+          }
+        );
+      }
+    }
+
+    // Start RG deletes last (async in Azure). Low concurrency + Retry-After retries.
+    await runWithConcurrency(
+      resourceGroupsToDelete,
+      Math.min(deleteConcurrency, 8),
+      async (resourceGroupName) => {
         const started = await startResourceGroupDeletion(
           resourceClient,
           resourceGroupName,
@@ -1456,8 +1578,19 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
             reason: 'Could not start resource group deletion in Azure'
           });
         }
-      })
-    ]);
+      }
+    );
+
+    logManagePortalEvent('info', 'request_delete_azure_plan', {
+      requestId: normalizedRequestId,
+      costingMode,
+      usersTotal: azureUsers.length,
+      rolesSkippedWithRg,
+      budgetsSkippedWithRg,
+      rolesToDeleteIndividually: validRoleAssignments.length,
+      resourceGroupsToDelete: resourceGroupsToDelete.length,
+      deleteConcurrency
+    });
 
     try {
       const auditClient = await db.connect();
@@ -1475,11 +1608,13 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
             usersTotal: azureUsers.length,
             userErrors,
             rolesRemoved,
+            rolesSkippedWithRg,
             roleErrors,
             customRolesRevoked,
             resourceGroupsDeleted,
             resourceGroupErrors,
             budgetsDeleted,
+            budgetsSkippedWithRg,
             adminEmail,
             resourceGroupDeletionMode: 'async'
           }
@@ -1502,9 +1637,11 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
       usersDeleted,
       usersTotal: azureUsers.length,
       rolesRemoved,
+      rolesSkippedWithRg,
       customRolesRevoked,
       resourceGroupsDeleted,
       budgetsDeleted,
+      budgetsSkippedWithRg,
       actor: 'super_admin'
     });
 
@@ -1517,9 +1654,11 @@ const deleteRequestByOrgAdmin = async ({ adminEmail, requestId }) => {
       roleErrors,
       resourceGroupErrors,
       rolesRemoved,
+      rolesSkippedWithRg,
       customRolesRevoked,
       resourceGroupsDeleted,
       budgetsDeleted,
+      budgetsSkippedWithRg,
       resourceGroupDeletionMode: 'async'
     };
   } catch (error) {

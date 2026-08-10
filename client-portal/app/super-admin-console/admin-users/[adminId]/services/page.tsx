@@ -7,6 +7,7 @@ import { ArrowLeft, Loader2 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   assignAdminService,
+  fetchAdminAssignableCatalog,
   fetchAdminServicesForUser,
   updateAdminServiceStatus,
   type AdminAssignedService,
@@ -33,9 +34,12 @@ export default function AdminUserServicesPage() {
     setLoading(true);
     setError(null);
     try {
-      const data = await fetchAdminServicesForUser(adminId);
+      const [data, catalogData] = await Promise.all([
+        fetchAdminServicesForUser(adminId),
+        fetchAdminAssignableCatalog(),
+      ]);
       setServices(data.services.filter((s) => !isServiceHiddenFromUi(s.serviceKey)));
-      setCatalog(data.catalog.filter((item) => !isServiceHiddenFromUi(item.serviceKey)));
+      setCatalog(catalogData.filter((item) => !isServiceHiddenFromUi(item.serviceKey)));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load services.');
     } finally {

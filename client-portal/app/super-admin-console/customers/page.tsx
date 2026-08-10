@@ -6,16 +6,13 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import {
   ArrowLeft,
   Building2,
-  CheckCircle2,
-  Globe,
   Loader2,
   Mail,
   Plus,
   Trash2,
   UserRound,
   Users,
-  Wallet,
-  XCircle,
+  Globe,
 } from 'lucide-react';
 import { apiRequest, ApiError } from '@/lib/apiClient';
 import { getAdminWalletByUserId } from '@/lib/adminBillingApi';
@@ -24,9 +21,13 @@ import {
   reviewOrganizationRequest,
   type OrganizationAccessRequest,
 } from '@/lib/customerOnboardingApi';
-import { fetchTenants } from '@/lib/tenantApi';
+import { fetchTenants, fetchTenantWalletBalance } from '@/lib/tenantApi';
 import type { Tenant } from '@/lib/tenantTypes';
-import { TenantStatusBadge } from '@/components/super-admin-console/white-labelling/TenantStatusBadge';
+import {
+  CustomerDirectoryCard,
+  directoryActiveStatusBadge,
+  directoryTenantStatusBadge,
+} from '@/components/super-admin-console/CustomerDirectoryCard';
 import { OnboardOrganizationModal } from '@/components/super-admin-console/OnboardOrganizationModal';
 import { DeleteOrganizationModal } from '@/components/super-admin-console/DeleteOrganizationModal';
 import { useAuth } from '@/context/AuthContext';
@@ -43,6 +44,11 @@ interface CustomerUser {
   isEmailVerified: boolean;
   lastLoginAt?: string;
   createdAt: string;
+  walletBalance: number | null;
+  walletLoading: boolean;
+}
+
+interface TenantListItem extends Tenant {
   walletBalance: number | null;
   walletLoading: boolean;
 }
@@ -88,6 +94,10 @@ function parseFilter(raw: string | null): CustomerFilter {
   return 'all';
 }
 
+function tenantTypeBadge(): { label: string; className: string } {
+  return { label: 'Tenant', className: 'bg-emerald-50 text-emerald-700' };
+}
+
 function CustomerDirectoryContent() {
   const { user } = useAuth();
   const router = useRouter();
@@ -96,7 +106,7 @@ function CustomerDirectoryContent() {
 
   const [filter, setFilter] = useState<CustomerFilter>(() => parseFilter(searchParams.get('filter')));
   const [customers, setCustomers] = useState<CustomerUser[]>([]);
-  const [tenants, setTenants] = useState<Tenant[]>([]);
+  const [tenants, setTenants] = useState<TenantListItem[]>([]);
   const [requests, setRequests] = useState<OrganizationAccessRequest[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -147,18 +157,37 @@ function CustomerDirectoryContent() {
         }))
       );
       setRequests(orgRequests);
-      setTenants(tenantsData.tenants);
+      setTenants(
+        tenantsData.tenants.map((t) => ({
+          ...t,
+          walletBalance: null,
+          walletLoading: true,
+        }))
+      );
       setLoading(false);
 
       const adminUsers = relevant.filter((u) => u.role === 'admin');
-      const walletResults = await Promise.allSettled(
-        adminUsers.map((u) => getAdminWalletByUserId(u.id))
-      );
+      const [walletResults, tenantWalletResults] = await Promise.all([
+        Promise.allSettled(adminUsers.map((u) => getAdminWalletByUserId(u.id))),
+        Promise.allSettled(
+          tenantsData.tenants.map((t) => fetchTenantWalletBalance(t.id))
+        ),
+      ]);
       const walletById = new Map<string, number | null>();
       adminUsers.forEach((u, i) => {
         walletById.set(
           u.id,
           walletResults[i]?.status === 'fulfilled' ? walletResults[i].value.balance : null
+        );
+      });
+
+      const tenantWalletById = new Map<string, number | null>();
+      tenantsData.tenants.forEach((t, i) => {
+        tenantWalletById.set(
+          t.id,
+          tenantWalletResults[i]?.status === 'fulfilled'
+            ? tenantWalletResults[i].value.balance
+            : null
         );
       });
 
@@ -173,8 +202,18 @@ function CustomerDirectoryContent() {
             : { ...c, walletLoading: false }
         )
       );
+
+      setTenants((prev) =>
+        prev.map((t) => ({
+          ...t,
+          walletBalance: tenantWalletById.has(t.id) ? tenantWalletById.get(t.id)! : null,
+          walletLoading: false,
+        }))
+      );
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load customers.');
+      setCustomers((prev) => prev.map((c) => ({ ...c, walletLoading: false })));
+      setTenants((prev) => prev.map((t) => ({ ...t, walletLoading: false })));
       setLoading(false);
     }
   }, []);
@@ -443,40 +482,38 @@ function CustomerDirectoryContent() {
           ) : (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               {tenants.map((tenant) => (
-                <Link
+                <CustomerDirectoryCard
                   key={tenant.id}
                   href={`/super-admin-console/customers/tenants/${tenant.id}`}
-                  className="block rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-red-200 hover:shadow-md"
-                >
-                  <div className="mb-3 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-gray-900">{tenant.name}</p>
-                      <p className="mt-0.5 truncate text-xs text-gray-500">{tenant.domain}</p>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        <span className="inline-block rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-semibold text-emerald-700">
-                          Tenant
-                        </span>
-                        <span className="font-mono text-[10px] text-gray-400">{tenant.slug}</span>
-                      </div>
-                    </div>
-                    <TenantStatusBadge status={tenant.status} />
-                  </div>
-                  <dl className="space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <dt className="text-gray-500">Services</dt>
-                      <dd className="font-medium text-gray-700">
-                        {tenant.enabledServices?.length ?? 0}
-                      </dd>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <dt className="text-gray-500">Created</dt>
-                      <dd className="text-gray-700">{formatDate(tenant.createdAt)}</dd>
-                    </div>
-                  </dl>
-                  <div className="mt-4 border-t border-gray-100 pt-3 text-xs font-medium text-[#B91C1C]">
-                    View billing, services, and logs →
-                  </div>
-                </Link>
+                  title={tenant.name}
+                  subtitle={tenant.domain}
+                  typeBadge={tenantTypeBadge()}
+                  statusBadge={directoryTenantStatusBadge(tenant.status)}
+                  rows={[
+                    {
+                      label: 'Allowed services',
+                      value: tenant.enabledServices?.length ?? 0,
+                    },
+                    {
+                      label: 'Slug',
+                      value: <span className="font-mono text-[11px]">{tenant.slug}</span>,
+                    },
+                    {
+                      label: 'Joined',
+                      value: formatDate(tenant.createdAt),
+                    },
+                  ]}
+                  highlightRow={{
+                    label: 'Wallet balance',
+                    value: tenant.walletLoading ? (
+                      <Loader2 className="inline h-3 w-3 animate-spin text-gray-400" />
+                    ) : tenant.walletBalance !== null ? (
+                      formatMoney(tenant.walletBalance)
+                    ) : (
+                      '—'
+                    ),
+                  }}
+                />
               ))}
             </div>
           )}
@@ -536,126 +573,82 @@ function CustomerDirectoryContent() {
             {filteredCustomers.map((customer) => {
               const badge = accountBadge(customer.accountType);
               return (
-                <Link
+                <CustomerDirectoryCard
                   key={customer.id}
                   href={`/super-admin-console/customers/${customer.id}`}
-                  className="block rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition hover:border-red-200 hover:shadow-md"
-                >
-                  <div className="mb-4 flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-gray-900">
-                        {customer.email}
-                      </p>
-                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold ${badge.className}`}
-                        >
-                          {badge.label}
-                        </span>
-                        {customer.onboardingStatus && customer.onboardingStatus !== 'active' ? (
-                          <span className="inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold capitalize text-amber-700">
-                            {customer.onboardingStatus.replace(/_/g, ' ')}
-                          </span>
-                        ) : null}
-                      </div>
-                    </div>
-                    <span
-                      className={`inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ${
-                        customer.isActive
-                          ? 'bg-green-50 text-green-700'
-                          : 'bg-gray-100 text-gray-500'
-                      }`}
-                    >
-                      {customer.isActive ? (
-                        <>
-                          <CheckCircle2 className="h-3 w-3" />
-                          Active
-                        </>
-                      ) : (
-                        <>
-                          <XCircle className="h-3 w-3" />
-                          Inactive
-                        </>
-                      )}
-                    </span>
-                  </div>
-
-                  <dl className="space-y-2 text-xs">
-                    <div className="flex items-center justify-between">
-                      <dt className="text-gray-500">Email verified</dt>
-                      <dd
-                        className={
-                          customer.isEmailVerified
-                            ? 'font-medium text-green-600'
-                            : 'font-medium text-orange-500'
-                        }
-                      >
-                        {customer.isEmailVerified ? 'Yes' : 'No'}
-                      </dd>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <dt className="text-gray-500">Last login</dt>
-                      <dd className="text-gray-700">{formatDate(customer.lastLoginAt)}</dd>
-                    </div>
-                    <div className="flex items-center justify-between">
-                      <dt className="text-gray-500">Joined</dt>
-                      <dd className="text-gray-700">{formatDate(customer.createdAt)}</dd>
-                    </div>
-
-                    {customer.role === 'admin' ? (
-                      <div className="mt-1 flex items-center justify-between border-t border-gray-100 pt-2">
-                        <dt className="flex items-center gap-1 text-gray-500">
-                          <Wallet className="h-3 w-3" />
-                          Wallet balance
-                        </dt>
-                        <dd className="font-semibold text-gray-900">
-                          {customer.walletLoading ? (
-                            <Loader2 className="h-3 w-3 animate-spin text-gray-400" />
+                  title={customer.email}
+                  typeBadge={badge}
+                  extraBadges={
+                    customer.onboardingStatus && customer.onboardingStatus !== 'active' ? (
+                      <span className="inline-block rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-semibold capitalize text-amber-700">
+                        {customer.onboardingStatus.replace(/_/g, ' ')}
+                      </span>
+                    ) : null
+                  }
+                  statusBadge={directoryActiveStatusBadge(customer.isActive)}
+                  rows={[
+                    {
+                      label: 'Email verified',
+                      value: customer.isEmailVerified ? 'Yes' : 'No',
+                      valueClassName: customer.isEmailVerified
+                        ? 'font-medium text-green-600'
+                        : 'font-medium text-orange-500',
+                    },
+                    {
+                      label: 'Last login',
+                      value: formatDate(customer.lastLoginAt),
+                    },
+                    {
+                      label: 'Joined',
+                      value: formatDate(customer.createdAt),
+                    },
+                  ]}
+                  highlightRow={
+                    customer.role === 'admin'
+                      ? {
+                          label: 'Wallet balance',
+                          value: customer.walletLoading ? (
+                            <Loader2 className="inline h-3 w-3 animate-spin text-gray-400" />
                           ) : customer.walletBalance !== null ? (
                             formatMoney(customer.walletBalance)
                           ) : (
                             '—'
-                          )}
-                        </dd>
+                          ),
+                        }
+                      : undefined
+                  }
+                  footerActions={
+                    isSuperAdmin && isOrganization(customer.accountType) ? (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setInviteUser({ id: customer.id, email: customer.email });
+                            setOnboardOpen(true);
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-red-100 bg-red-50 px-2 py-1 text-[11px] font-semibold text-[#B91C1C] hover:bg-red-100"
+                        >
+                          <Mail className="h-3 w-3" />
+                          Send invite
+                        </button>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            setDeleteUser({ id: customer.id, email: customer.email });
+                          }}
+                          className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-50"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                          Delete
+                        </button>
                       </div>
-                    ) : null}
-                  </dl>
-
-                  {customer.role === 'admin' ? (
-                    <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t border-gray-100 pt-3 text-xs font-medium text-[#B91C1C]">
-                      <span>View billing, services, and usage →</span>
-                      {isSuperAdmin && isOrganization(customer.accountType) ? (
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setInviteUser({ id: customer.id, email: customer.email });
-                              setOnboardOpen(true);
-                            }}
-                            className="inline-flex items-center gap-1 rounded-md border border-red-100 bg-red-50 px-2 py-1 text-[11px] font-semibold text-[#B91C1C] hover:bg-red-100"
-                          >
-                            <Mail className="h-3 w-3" />
-                            Send invite
-                          </button>
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              setDeleteUser({ id: customer.id, email: customer.email });
-                            }}
-                            className="inline-flex items-center gap-1 rounded-md border border-red-200 bg-white px-2 py-1 text-[11px] font-semibold text-red-700 hover:bg-red-50"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                            Delete
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </Link>
+                    ) : undefined
+                  }
+                />
               );
             })}
           </div>
