@@ -31,7 +31,11 @@ import type {
   TenantServiceConfig,
   TenantWalletBalance,
 } from '@/lib/tenantTypes';
-import { PLATFORM_SERVICE_CATALOG } from '@/lib/tenantTypes';
+import {
+  fetchServiceCatalog,
+  type ServiceCatalogItem,
+} from '@/lib/serviceCatalogApi';
+import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   fetchCloudLabsForOwner,
   tenantCloudOwnerId,
@@ -138,6 +142,7 @@ export default function CustomerTenantDetailPage() {
 
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [services, setServices] = useState<TenantServiceConfig[]>([]);
+  const [serviceCatalog, setServiceCatalog] = useState<ServiceCatalogItem[]>([]);
   const [wallet, setWallet] = useState<TenantWalletBalance | null>(null);
   const [transactions, setTransactions] = useState<SuperAdminWalletTransaction[]>([]);
   const [txTotal, setTxTotal] = useState(0);
@@ -162,6 +167,7 @@ export default function CustomerTenantDetailPage() {
         vmsData,
         adminsData,
         cloudLabs,
+        catalogData,
       ] = await Promise.all([
         fetchTenant(tenantId),
         fetchTenantServices(tenantId).catch(() => [] as TenantServiceConfig[]),
@@ -180,10 +186,14 @@ export default function CustomerTenantDetailPage() {
           aws: [] as CustomerCloudLabRequest[],
           gcp: [] as CustomerCloudLabRequest[],
         })),
+        fetchServiceCatalog({ kind: 'product', scope: 'tenant' }).catch(
+          () => [] as ServiceCatalogItem[]
+        ),
       ]);
 
       setTenant(tenantData);
       setServices(servicesData);
+      setServiceCatalog(catalogData.filter((s) => !isServiceHiddenFromUi(s.key)));
       setWallet(walletData);
       setTransactions(txData.transactions);
       setTxTotal(txData.total);
@@ -206,12 +216,14 @@ export default function CustomerTenantDetailPage() {
 
   const serviceRows = useMemo(() => {
     // Match white-labelling: assignment configs are source of truth (not tenant.enabledServices).
-    const assigned = new Map(services.map((s) => [s.serviceKey, s]));
-    return PLATFORM_SERVICE_CATALOG.map((catalog) => {
+    const assigned = new Map<string, TenantServiceConfig>(
+      services.map((s) => [s.serviceKey, s])
+    );
+    return serviceCatalog.map((catalog) => {
       const cfg = assigned.get(catalog.key);
       return {
         key: catalog.key,
-        label: catalog.name,
+        label: catalog.label,
         description: catalog.description,
         status: !cfg
           ? ('none' as const)
@@ -220,7 +232,7 @@ export default function CustomerTenantDetailPage() {
             : ('active' as const),
       };
     });
-  }, [services]);
+  }, [services, serviceCatalog]);
 
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'overview', label: 'Overview' },

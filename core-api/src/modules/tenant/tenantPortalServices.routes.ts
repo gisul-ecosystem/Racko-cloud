@@ -12,4 +12,8 @@ router.get('/', (req, res, next) => {
   tenantPortalServicesController.listMyServices(req, res, next);
 });
 
+router.get('/catalog', (req, res, next) => {
+  tenantPortalServicesController.listCatalog(req, res, next);
+});
+
 export default router;
