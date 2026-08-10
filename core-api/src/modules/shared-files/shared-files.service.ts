@@ -68,13 +68,14 @@ class SharedFilesService {
       if (target.adminId.toString() !== adminId.toString()) throw new ForbiddenError(`Machine ${machineId} does not belong to your account.`);
     }
 
-    // Build unique key — client uploads to this exact path in S3
+    // Build unique key — client uploads to this exact path in S3.
+    // We use the storageRef returned by generatePresignedPutUrl as the
+    // single source of truth — so MongoDB and S3 always have the same key.
     const safeFileName = fileName.replace(/[^a-zA-Z0-9._\-]/g, '_');
     const ts           = Date.now().toString();
     const prefix       = `shared-files/${sourceMachine._id.toString()}`;
-    const storageRef   = `${prefix}/${ts}_${safeFileName}`;
 
-    const { presignedUrl } = await seaweedfsService.generatePresignedPutUrl(
+    const { presignedUrl, storageRef } = await seaweedfsService.generatePresignedPutUrl(
       prefix, ts, safeFileName, mimeType, 3600,
     );
 
@@ -260,8 +261,9 @@ class SharedFilesService {
     const isTarget = doc.sharedWithMachineIds.some((id) => id.toString() === machine._id.toString());
     if (!isSource && !isTarget) throw new ForbiddenError('This file is not shared with your machine.');
 
-    // TTL: read = 60s (view only), full = 300s (5 min — enough for large downloads)
-    const ttl = doc.permission === 'full' ? 300 : 60;
+    // TTL: read = 600s (10 min — enough for Office Online Viewer to fetch large files),
+    //      full = 300s (5 min — enough for large downloads)
+    const ttl = doc.permission === 'full' ? 300 : 600;
 
     const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(doc.storageRef, ttl);
 

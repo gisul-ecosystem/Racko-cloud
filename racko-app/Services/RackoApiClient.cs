@@ -33,12 +33,17 @@ public class RackoApiClient
 
     // ── Machines ───────────────────────────────────────────────────────────
 
-    /// <summary>Returns all other VMs for the same admin account (VM selector).</summary>
-    public async Task<IReadOnlyList<MachineDto>> ListMachinesAsync()
+    /// <summary>
+    /// Returns machines in the same group as this VM.
+    /// inGroup = false means this machine is not assigned to any group yet.
+    /// </summary>
+    public async Task<(IReadOnlyList<MachineDto> Machines, bool InGroup)> ListMachinesAsync()
     {
         var resp = await _http.GetFromJsonAsync<ApiListResponse<MachineDto>>(
             "/api/v1/agent/shared-files/machines-for-app", JsonOpts);
-        return resp?.Data.Machines ?? [];
+        var machines = resp?.Data.Machines ?? [];
+        var inGroup  = resp?.Data.InGroup ?? true; // default true for backward compat
+        return (machines, inGroup);
     }
 
     // ── Shared Files ───────────────────────────────────────────────────────

@@ -75,6 +75,7 @@ export type TenantServiceStatus = 'active' | 'suspended';
 export interface TenantAssignedService {
   serviceKey: TenantServiceKey;
   status: TenantServiceStatus;
+  label?: string;
 }
 
 export interface TenantWalletTransaction {

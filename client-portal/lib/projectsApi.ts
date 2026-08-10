@@ -291,3 +291,17 @@ export const PROJECT_SERVICE_LABELS: Record<AdminServiceKey, string> = {
   docs: 'Documentation',
   'machine-manager': 'Machine Manager',
 };
+
+/** Prefer API label when present; fall back to static map / raw key. */
+export function resolveProjectServiceLabel(
+  key: string,
+  apiLabel?: string | null,
+  labelMap?: Record<string, string>
+): string {
+  if (apiLabel) return apiLabel;
+  if (labelMap?.[key]) return labelMap[key];
+  if (key in PROJECT_SERVICE_LABELS) {
+    return PROJECT_SERVICE_LABELS[key as AdminServiceKey];
+  }
+  return key;
+}

@@ -9,7 +9,6 @@ import {
   Cpu,
   ExternalLink,
   HardDrive,
-  Loader2,
   MemoryStick,
   Monitor,
   Network,
@@ -30,6 +29,7 @@ import { useTenantRbac } from '@/context/TenantRbacContext';
 import { ApiError } from '@/lib/apiClient';
 import { tenantAccentButton, hexToRgba } from '@/lib/tenantAccentStyles';
 import { tenantVps } from '@/lib/tenantAdminRoutes';
+import { openTenantUrlWithSession } from '@/lib/tenantPortalApiClient';
 import {
   formatBillingPeriod,
   formatPlanPeriodEnd,
@@ -39,7 +39,6 @@ import {
 import {
   fetchTenantVm,
   fetchTenantVmStatus,
-  openTenantVmConsole,
   restartTenantVm,
   startTenantVm,
   stopTenantVm,
@@ -64,30 +63,8 @@ function formatDateTime(value: string): string {
   return new Date(value).toLocaleString();
 }
 
-function openPopupShell(): Window | null {
-  try {
-    return window.open('', '_blank', 'noopener,noreferrer');
-  } catch {
-    return null;
-  }
-}
-
-async function launchConsole(vmId: string, protocol?: 'rdp' | 'ssh' | 'vnc'): Promise<void> {
-  const popup = openPopupShell();
-  try {
-    const session = await openTenantVmConsole(vmId, protocol, {
-      width: window.innerWidth,
-      height: window.innerHeight,
-    });
-    if (popup) {
-      popup.location.href = session.clientUrl;
-    } else {
-      window.open(session.clientUrl, '_blank', 'noopener,noreferrer');
-    }
-  } catch (error) {
-    if (popup) popup.close();
-    throw error;
-  }
+function launchConsole(vmId: string, protocol?: 'rdp' | 'ssh' | 'vnc'): void {
+  openTenantUrlWithSession(tenantVps.vmConsole(vmId, protocol ?? 'rdp'));
 }
 
 function PageNotice({
@@ -120,7 +97,6 @@ export function TenantVmDetailView() {
   const [error, setError] = useState<string | null>(null);
   const [action, setAction] = useState<PowerAction | null>(null);
   const [actionLoading, setActionLoading] = useState(false);
-  const [consoleLoading, setConsoleLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -285,21 +261,12 @@ export function TenantVmDetailView() {
           </button>
           <button
             type="button"
-            disabled={!canConsole || consoleLoading}
-            onClick={async () => {
-              setConsoleLoading(true);
-              try {
-                await launchConsole(vm.id, vm.consoleProtocol);
-              } catch (err) {
-                addToast('error', err instanceof ApiError ? err.message : 'Failed to open console.');
-              } finally {
-                setConsoleLoading(false);
-              }
-            }}
+            disabled={!canConsole}
+            onClick={() => launchConsole(vm.id, vm.consoleProtocol)}
             className="inline-flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-white disabled:opacity-40"
             style={tenantAccentButton(accentColor)}
           >
-            {consoleLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Monitor className="h-4 w-4" />}
+            <Monitor className="h-4 w-4" />
             Console
           </button>
         </div>

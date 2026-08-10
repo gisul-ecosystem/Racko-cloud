@@ -60,6 +60,7 @@ import accountVmPricingRoutes from './modules/accountVmPricing/accountVmPricing.
 import vmCatalogRoutes from './modules/vmCatalog/vmCatalog.routes';
 import dedicatedServerRoutes from './modules/dedicatedServer/dedicatedServer.routes';
 import adminServicesRoutes from './modules/adminServices/adminServices.routes';
+import serviceCatalogRoutes from './modules/serviceCatalog/serviceCatalog.routes';
 import rbacRoutes from './modules/rbac/rbac.routes';
 import platformRbacRoutes from './modules/platformRbac/platformRbac.routes';
 import tenantRbacRoutes from './modules/tenantRbac/tenantRbac.routes';
@@ -215,6 +216,7 @@ app.use('/api/v1/account-vm-pricing', accountVmPricingRoutes);
   app.use('/api/v1/vm-catalog', vmCatalogRoutes);
   app.use('/api/v1/dedicated-servers', dedicatedServerRoutes);
   app.use('/api/v1/admin-services', adminServicesRoutes);
+  app.use('/api/v1/service-catalog', serviceCatalogRoutes);
   app.use('/api/v1/projects', projectsRoutes);
   app.use('/api/v1/rbac', rbacRoutes);
   app.use('/api/v1/platform-rbac', platformRbacRoutes);

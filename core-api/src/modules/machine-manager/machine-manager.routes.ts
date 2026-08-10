@@ -80,6 +80,13 @@ machineRouter.delete(
   (req, res, next) => machineManagerController.bulkRemove(req, res, next)
 );
 
+// GET /api/v1/machines/push-session/:sessionId — recover push session state after refresh
+machineRouter.get(
+  '/push-session/:sessionId',
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
+  (req, res, next) => machineManagerController.getPushSession(req, res, next)
+);
+
 // POST /api/v1/machines/push-agent — VM push flow (must come before /:id)
 machineRouter.post(
   '/push-agent',

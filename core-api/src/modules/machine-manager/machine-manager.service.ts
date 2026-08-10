@@ -16,6 +16,7 @@ import type {
 import { NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { emitJobStatusEvent } from './job.events';
+import { PushSessionModel } from '../../models/pushSession.model';
 
 // ─── Push session registry ────────────────────────────────────────────────────
 // Maps sessionId → { machineIds, adminId } so heartbeat/WS can emit agent_connected
@@ -720,6 +721,21 @@ class MachineManagerService {
       adminId: adminId.toString(),
     });
 
+    // Persist session to MongoDB so the browser can recover state on page refresh.
+    // Fire-and-forget — never blocks the push flow.
+    void PushSessionModel.create({
+      sessionId,
+      adminId: adminId.toString(),
+      machines: machines.map((m, i) => ({
+        machineId:   m._id,
+        machineName: m.name,
+        ipAddress:   vms[i].ipAddress,
+        agentConnected: false,
+      })),
+    }).catch((err) => {
+      logger.warn('[MachineManager] Failed to persist push session to DB (non-fatal)', { sessionId, err });
+    });
+
     // Fire WinRM/SSH pushes in the background — do NOT await.
     // The HTTP response is returned immediately after machine records are created.
     // Push results are delivered to the frontend via the SSE stream as each push completes.
@@ -743,6 +759,11 @@ class MachineManagerService {
               success: result.success,
               error: result.error,
             });
+            // Persist push_result for page-refresh recovery
+            void PushSessionModel.updateOne(
+              { sessionId, 'machines.machineId': machine._id },
+              { $set: { 'machines.$.pushSuccess': result.success, 'machines.$.pushError': result.error ?? null } }
+            ).catch(() => { /* non-fatal */ });
             completedCount++;
             if (completedCount === totalCount) {
               logger.info('[MachineManager] All push attempts completed', { sessionId, total: totalCount });
@@ -764,6 +785,8 @@ class MachineManagerService {
   /**
    * Called by wsManager when an agent connects via WebSocket.
    * Looks up any active push session containing this machineId and emits agent_connected.
+   * If found, also triggers racko-app installation via exec over the existing WS —
+   * this avoids WinRM timeout issues for large downloads (racko-app.zip is ~72MB).
    */
   async notifyAgentConnected(machineId: string, machineName: string): Promise<void> {
     for (const [sessionId, entry] of pushSessionRegistry) {
@@ -775,9 +798,129 @@ class MachineManagerService {
           machineName,
         });
         logger.info('[MachineManager] agent_connected emitted via WS connection', { sessionId, machineId });
+        // Persist agent_connected for page-refresh recovery
+        void PushSessionModel.updateOne(
+          { sessionId, 'machines.machineId': machineId },
+          { $set: { 'machines.$.agentConnected': true } }
+        ).catch(() => { /* non-fatal */ });
+
+        // ── Install racko-app via exec over WebSocket ──────────────────────────
+        // WinRM only handles the fast part (agent install). Once the agent is
+        // connected, we use the persistent WS channel to run the GUI setup —
+        // no WinRM session, no timeout pressure, runs as SYSTEM on the VM.
+        // Fire-and-forget: we don't await so the WS connect handler returns immediately.
+        void this.installRackoAppViaExec(machineId, sessionId).catch((err) => {
+          logger.warn('[MachineManager] racko-app install via exec failed (non-fatal)', {
+            machineId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+
         break;
       }
     }
+  }
+
+  /**
+   * Sends a PowerShell exec command to the agent to install racko-app + WebView2.
+   * Called after agent connects on WS following a push. Runs as SYSTEM on the VM.
+   * Uses a 10-minute timeout — enough for the 72MB zip download + extract + WebView2.
+   * Emits racko_app_installed SSE event on the push session when done.
+   */
+  private async installRackoAppViaExec(machineId: string, sessionId: string): Promise<void> {
+    const { wsManager } = await import('./websocket/wsManager');
+    const { config } = await import('../../config');
+
+    const machine = await MachineModel.findById(machineId).lean();
+    if (!machine?.agentId) return;
+
+    // Brief delay to let the agent fully initialize its WS read loop
+    await new Promise((r) => setTimeout(r, 3000));
+
+    if (!wsManager.isConnected(machine.agentId)) {
+      logger.warn('[MachineManager] installRackoAppViaExec — agent not connected yet, skipping', {
+        machineId, agentId: machine.agentId,
+      });
+      return;
+    }
+
+    const platformUrl = config.GATEWAY_URL ?? config.FRONTEND_URL ?? 'http://localhost:8000';
+    const installDir = 'C:\\ProgramData\\racko-agent';
+
+    // PowerShell script runs on the VM as SYSTEM:
+    // 1. Download racko-app.zip
+    // 2. Extract to C:\ProgramData\racko-agent\racko-app\
+    // 3. Install WebView2 (skips if already present)
+    // 4. Create desktop shortcut
+    // 5. Launch app for the logged-in user
+    const script = [
+      '$ErrorActionPreference = "Stop"',
+      `$installDir = '${installDir}'`,
+      `$platformUrl = '${platformUrl}'`,
+      '$appZipUrl = "$platformUrl/api/v1/agent/binary/racko-app"',
+      '$appDir = "$installDir\\racko-app"',
+      '$appZip = "$installDir\\racko-app.zip"',
+      'Write-Host "[racko] Downloading Racko App..."',
+      'Invoke-WebRequest -Uri $appZipUrl -OutFile $appZip -UseBasicParsing',
+      'Write-Host "[racko] Extracting Racko App..."',
+      'Expand-Archive -Path $appZip -DestinationPath $appDir -Force',
+      'Remove-Item $appZip -Force -ErrorAction SilentlyContinue',
+      'Write-Host "[racko] Creating desktop shortcut..."',
+      '$wsh = New-Object -ComObject WScript.Shell',
+      '$shortcut = $wsh.CreateShortcut("$env:PUBLIC\\Desktop\\Racko Shared Files.lnk")',
+      '$shortcut.TargetPath = "$appDir\\racko-app.exe"',
+      '$shortcut.WorkingDirectory = $appDir',
+      '$shortcut.Description = "Racko Shared Files"',
+      '$shortcut.Save()',
+      // Install WebView2 if not already present — checks registry first, skips if installed
+      '$wv2Key = "SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"',
+      '$wv2Ver = (Get-ItemProperty -Path "HKLM:\\$wv2Key" -Name pv -ErrorAction SilentlyContinue).pv',
+      'if (-not $wv2Ver -or $wv2Ver -eq "0.0.0.0") {',
+      '  Write-Host "[racko] Installing WebView2 Runtime..."',
+      '  $wv2Path = "$installDir\\WebView2Setup.exe"',
+      '  Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $wv2Path -UseBasicParsing',
+      '  Start-Process $wv2Path -ArgumentList "/silent /install" -Wait',
+      '  Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
+      '  Write-Host "[racko] WebView2 installed."',
+      '} else { Write-Host "[racko] WebView2 already installed, skipping." }',
+      'Write-Host "[racko] Launching Racko App..."',
+      'Start-Process "$appDir\\racko-app.exe"',
+      'Write-Host "[racko] Racko App setup complete."',
+    ].join('; ');
+
+    const commandId = `racko-app-setup-${machineId}`;
+    // 10 minutes — enough for 72MB download + extract + WebView2 on a slow connection
+    const result = await wsManager.sendExec(machine.agentId, commandId, script, 10 * 60 * 1000);
+
+    logger.info('[MachineManager] installRackoAppViaExec completed', {
+      machineId,
+      agentId: machine.agentId,
+      exitCode: result.exitCode,
+      output: result.output.slice(0, 500),
+    });
+
+    // Emit racko_app_installed SSE event — browser shows success/failure in real time
+    const { emitPushEvent } = await import('./push.events');
+    const success = result.exitCode === 0;
+    emitPushEvent(sessionId, {
+      type: 'racko_app_installed',
+      machineId,
+      success,
+      error: success ? undefined : `Exit code ${result.exitCode}: ${result.output.slice(-300)}`,
+    });
+    logger.info('[MachineManager] racko_app_installed event emitted', {
+      sessionId, machineId, success, exitCode: result.exitCode,
+    });
+    // Persist racko_app_installed for page-refresh recovery
+    void PushSessionModel.updateOne(
+      { sessionId, 'machines.machineId': machineId },
+      {
+        $set: {
+          'machines.$.rackoAppInstalled': success,
+          'machines.$.rackoAppError': success ? null : `Exit code ${result.exitCode}: ${result.output.slice(-300)}`,
+        },
+      }
+    ).catch(() => { /* non-fatal */ });
   }
 
   /**

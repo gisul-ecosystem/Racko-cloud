@@ -120,13 +120,19 @@ public class ManageForm : Form
     {
         try
         {
-            _machines = await _api.ListMachinesAsync();
+            var (list, inGroup) = await _api.ListMachinesAsync();
             _vmList.Items.Clear();
-            if (!_machines.Any())
+            if (!inGroup)
             {
-                _vmList.Items.Add("No other VMs found.");
+                _vmList.Items.Add("Not in a group — contact your admin.");
                 return;
             }
+            if (!list.Any())
+            {
+                _vmList.Items.Add("No other VMs in this group.");
+                return;
+            }
+            _machines = list;
             foreach (var m in _machines)
             {
                 _vmList.Items.Add(m.Name, _file.SharedWithMachineIds.Contains(m.Id));
