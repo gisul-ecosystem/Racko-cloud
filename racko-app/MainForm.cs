@@ -3,7 +3,7 @@ using System.IO;
 using System.Windows.Forms;
 using RackoApp.Services;
 using RackoApp.Views;
-
+ 
 namespace RackoApp;
 
 public class MainForm : Form
@@ -368,26 +368,25 @@ public class MainForm : Form
 
         if (viewUrl.Permission == "full")
         {
-            using var save = new SaveFileDialog
-            {
-                FileName         = file.FileName,
-                InitialDirectory = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
-            };
-            if (save.ShowDialog(this) != DialogResult.OK) return;
-
+            // Auto-save to C:\Racko Shared Files\ — created if it doesn't exist.
+            // No SaveFileDialog — files always land in the same known folder.
+            const string downloadDir = @"C:\Racko Shared Files";
             try
             {
+                Directory.CreateDirectory(downloadDir);
+                var destPath = Path.Combine(downloadDir, file.FileName);
+
                 using var http     = new System.Net.Http.HttpClient();
                 using var response = await http.GetAsync(
                     viewUrl.PresignedUrl,
                     System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
                 response.EnsureSuccessStatusCode();
 
-                await using var fs = File.Create(save.FileName);
+                await using var fs = File.Create(destPath);
                 await response.Content.CopyToAsync(fs);
 
-                MessageBox.Show($"Saved to:\n{save.FileName}",
+                MessageBox.Show(
+                    $"Saved to:\n{destPath}",
                     "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)

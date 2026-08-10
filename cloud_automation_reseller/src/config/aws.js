@@ -1,6 +1,6 @@
 import { EC2Client } from '@aws-sdk/client-ec2';
 import { PricingClient } from '@aws-sdk/client-pricing';
-
+ 
 const region = process.env.AWS_REGION || 'ap-south-1';
 
 const credentials =
