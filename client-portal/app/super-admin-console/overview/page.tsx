@@ -1,89 +1,61 @@
 'use client';
 
+import { useCallback, useEffect, useState } from 'react';
 import {
+  AlertCircle,
   ArrowDownRight,
   ArrowUpRight,
   Banknote,
-  Clock3,
-  Link2,
+  Building2,
+  Clock,
+  Database,
+  Loader2,
+  RefreshCw,
   Server,
-  Ticket,
   Users,
+  UserCog,
 } from 'lucide-react';
+import { fetchSuperAdminOverview } from '../../../lib/tenantApi';
+import type { SuperAdminOverview } from '../../../lib/tenantTypes';
+import { ApiError } from '../../../lib/apiClient';
 
-/** Placeholder metrics until live aggregation APIs exist. */
-const MOCK = {
-  lastUpdated: '23rd May',
-  periodLabel: 'vs Apr 12 - May 11, 2025',
-  revenue: { value: 128430.5, changePct: 12.6, previous: 114050.3 },
-  activeServices: { value: 1248, changePct: 18.7 },
-  totalClients: { value: 2340, changePct: 8.3 },
-  openTickets: { value: 32, changePct: -5.6 },
-  newCustomers: [
-    { label: 'Dec', value: 42 },
-    { label: 'Jan', value: 58 },
-    { label: 'Feb', value: 51 },
-    { label: 'Mar', value: 73 },
-    { label: 'Apr', value: 66 },
-    { label: 'May', value: 88 },
-  ],
-  b2b: { amount: 103450.8, pct: 80.6 },
-  b2c: { amount: 24979.7, pct: 19.4 },
-  topClients: [
-    { name: 'NexaCloud Inc.', revenue: 28450, services: 42, up: true },
-    { name: 'Orbit Systems', revenue: 22100, services: 31, up: true },
-    { name: 'Pulse Digital', revenue: 18750, services: 28, up: false },
-    { name: 'Vertex Labs', revenue: 15420, services: 19, up: true },
-    { name: 'Horizon Media', revenue: 12890, services: 15, up: false },
-  ],
-  revenueSeries: {
-    thisPeriod: [72, 78, 74, 86, 91, 88, 95, 102, 98, 110, 118, 128],
-    previousPeriod: [68, 70, 73, 75, 80, 82, 84, 88, 90, 94, 100, 108],
-    labels: ['1', '3', '5', '7', '9', '11', '13', '15', '17', '19', '21', '23'],
-  },
-  streams: [
-    { name: 'VPS Hosting', pct: 32, color: '#EF4444' },
-    { name: 'Dedicated Servers', pct: 21, color: '#F97316' },
-    { name: 'Cloud Services', pct: 16, color: '#EAB308' },
-    { name: 'Elastic Servers', pct: 12, color: '#22C55E' },
-    { name: 'Others', pct: 19, color: '#6366F1' },
-  ],
-  alerts: [
-    {
-      title: 'Contract Renewal',
-      body: 'TechNova Solutions contract expires in 12 days.',
-    },
-    {
-      title: 'High Ticket Volume',
-      body: '3 high priority tickets require attention.',
-    },
-    {
-      title: 'Revenue Share',
-      body: 'Top 2 clients contribute 37% of total revenue.',
-    },
-    {
-      title: 'Revenue Target',
-      body: "You are 84% towards this month's target.",
-    },
-  ],
-  goal: { target: 152000, current: 128430, pct: 84, daysLeft: 23 },
+const SERVICE_LABELS: Record<string, string> = {
+  'vm-management': 'VPS Hosting',
+  'create-vm': 'VM Catalog',
+  'dedicated-server': 'Dedicated Servers',
+  'elastic-servers': 'Elastic Servers',
+  azure: 'Azure',
+  aws: 'AWS',
+  gcp: 'GCP',
+  'cloud-labs': 'Cloud Labs',
+  'machine-manager': 'Machine Manager',
+  docs: 'Documentation',
+  unknown: 'Other',
 };
 
-function formatMoney(n: number): string {
-  return n.toLocaleString('en-US', {
+function formatMoney(amount: number, currency: string): string {
+  return new Intl.NumberFormat('en-IN', {
     style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
+    currency: currency,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(amount);
 }
 
-function formatCompactMoney(n: number): string {
-  if (n >= 1000) return `$${(n / 1000).toFixed(2)}K`;
-  return formatMoney(n);
+function formatCompactMoney(amount: number, currency: string): string {
+  if (amount >= 10000000) {
+    return `${currency} ${(amount / 10000000).toFixed(2)}Cr`;
+  }
+  if (amount >= 100000) {
+    return `${currency} ${(amount / 100000).toFixed(2)}L`;
+  }
+  if (amount >= 1000) {
+    return `${currency} ${(amount / 1000).toFixed(1)}K`;
+  }
+  return formatMoney(amount, currency);
 }
 
-function TrendBadge({ changePct, periodLabel }: { changePct: number; periodLabel: string }) {
+function TrendBadge({ changePct }: { changePct: number }) {
   const up = changePct >= 0;
   return (
     <span
@@ -92,37 +64,37 @@ function TrendBadge({ changePct, periodLabel }: { changePct: number; periodLabel
       }`}
     >
       {up ? <ArrowUpRight className="h-3 w-3" /> : <ArrowDownRight className="h-3 w-3" />}
-      {Math.abs(changePct).toFixed(1)}% {periodLabel}
+      {Math.abs(changePct).toFixed(1)}%
     </span>
   );
 }
 
-function KpiCard({
-  title,
-  value,
-  changePct,
-  periodLabel,
-  icon: Icon,
-  iconWrap,
-}: {
+interface KpiCardProps {
   title: string;
-  value: string;
-  changePct: number;
-  periodLabel: string;
+  value: string | number;
+  subtitle?: string;
+  trend?: number;
   icon: typeof Banknote;
-  iconWrap: string;
-}) {
+  iconColor: string;
+}
+
+function KpiCard({ title, value, subtitle, trend, icon: Icon, iconColor }: KpiCardProps) {
   return (
-    <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+    <div className="rounded-xl border border-gray-100 bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="text-sm text-gray-500">{title}</p>
-          <p className="mt-2 text-2xl font-semibold tracking-tight text-gray-900">{value}</p>
-          <div className="mt-3">
-            <TrendBadge changePct={changePct} periodLabel={periodLabel} />
-          </div>
+        <div className="flex-1">
+          <p className="text-xs text-gray-500">{title}</p>
+          <p className="mt-1.5 text-xl font-semibold tracking-tight text-gray-900">
+            {typeof value === 'number' ? value.toLocaleString() : value}
+          </p>
+          {subtitle && <p className="mt-0.5 text-xs text-gray-400">{subtitle}</p>}
+          {trend !== undefined && (
+            <div className="mt-2">
+              <TrendBadge changePct={trend} />
+            </div>
+          )}
         </div>
-        <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${iconWrap}`}>
+        <div className={`flex h-10 w-10 items-center justify-center rounded-lg ${iconColor}`}>
           <Icon className="h-5 w-5" />
         </div>
       </div>
@@ -130,330 +102,587 @@ function KpiCard({
   );
 }
 
-function NewCustomersChart() {
-  const max = Math.max(...MOCK.newCustomers.map((d) => d.value));
+function NewTenantSignupsChart({ data }: { data: Array<{ month: string; count: number }> }) {
+  const max = Math.max(...data.map((d) => d.count), 1);
+  const hasData = data.some((d) => d.count > 0);
+  
+  if (!hasData) {
+    return (
+      <div className="flex h-40 items-center justify-center text-center">
+        <div>
+          <Building2 className="mx-auto h-8 w-8 text-gray-300" />
+          <p className="mt-2 text-sm text-gray-500">No new tenants in last 6 months</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-44 items-end gap-3 px-1 pt-4">
-      {MOCK.newCustomers.map((d) => (
-        <div key={d.label} className="flex flex-1 flex-col items-center gap-2">
+    <div className="flex h-40 items-end gap-2 px-1 pt-4">
+      {data.map((d) => (
+        <div key={d.month} className="flex flex-1 flex-col items-center gap-2">
           <div
-            className="w-full max-w-[36px] rounded-t-md bg-gradient-to-t from-[#B91C1C] to-[#F87171]"
-            style={{ height: `${Math.max(12, (d.value / max) * 100)}%` }}
-            title={`${d.value}`}
+            className="w-full max-w-[32px] rounded-t bg-gradient-to-t from-[#B91C1C] to-[#F87171]"
+            style={{ height: `${Math.max(8, (d.count / max) * 100)}%` }}
+            title={`${d.count} tenants`}
           />
-          <span className="text-[11px] text-gray-400">{d.label}</span>
+          <span className="text-[10px] text-gray-400">{d.month}</span>
         </div>
       ))}
     </div>
   );
 }
 
-function RevenueLineChart() {
-  const w = 560;
-  const h = 180;
-  const pad = 12;
-  const series = MOCK.revenueSeries;
-  const all = [...series.thisPeriod, ...series.previousPeriod];
-  const min = Math.min(...all) * 0.9;
-  const max = Math.max(...all) * 1.05;
+function RevenueByServiceDonut({
+  data,
+  totalRevenue,
+  currency,
+}: {
+  data: Array<{ serviceKey: string; amount: number; percentage: number }>;
+  totalRevenue: number;
+  currency: string;
+}) {
+  if (totalRevenue === 0 || data.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-8 text-center">
+        <Banknote className="h-12 w-12 text-gray-300" />
+        <h3 className="mt-4 text-sm font-medium text-gray-900">No revenue data</h3>
+        <p className="mt-1 text-sm text-gray-500">
+          No revenue has been generated yet or all services have zero revenue.
+        </p>
+      </div>
+    );
+  }
 
-  const toPoints = (values: number[]) =>
-    values
-      .map((v, i) => {
-        const x = pad + (i / (values.length - 1)) * (w - pad * 2);
-        const y = h - pad - ((v - min) / (max - min)) * (h - pad * 2);
-        return `${x},${y}`;
-      })
-      .join(' ');
-
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} className="h-48 w-full" role="img" aria-label="Revenue overview">
-      <polyline
-        fill="none"
-        stroke="#D1D5DB"
-        strokeWidth="2"
-        strokeDasharray="5 5"
-        points={toPoints(series.previousPeriod)}
-      />
-      <polyline
-        fill="none"
-        stroke="#B91C1C"
-        strokeWidth="2.5"
-        points={toPoints(series.thisPeriod)}
-      />
-    </svg>
-  );
-}
-
-function DonutChart() {
-  const size = 180;
-  const stroke = 28;
+  const size = 160;
+  const stroke = 24;
   const r = (size - stroke) / 2;
   const c = 2 * Math.PI * r;
   let offset = 0;
 
+  const colors = ['#EF4444', '#F97316', '#EAB308', '#22C55E', '#6366F1', '#0EA5E9', '#A855F7'];
+
   return (
-    <div className="relative mx-auto h-[180px] w-[180px]">
-      <svg width={size} height={size} className="-rotate-90">
-        {MOCK.streams.map((s) => {
-          const len = (s.pct / 100) * c;
-          const dash = `${len} ${c - len}`;
-          const el = (
-            <circle
-              key={s.name}
-              cx={size / 2}
-              cy={size / 2}
-              r={r}
-              fill="transparent"
-              stroke={s.color}
-              strokeWidth={stroke}
-              strokeDasharray={dash}
-              strokeDashoffset={-offset}
-            />
-          );
-          offset += len;
-          return el;
-        })}
-      </svg>
-      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-        <p className="text-lg font-semibold text-gray-900">{formatCompactMoney(MOCK.revenue.value)}</p>
-        <p className="text-[11px] text-gray-400">Total Revenue</p>
+    <div className="space-y-4">
+      <div className="relative mx-auto h-[160px] w-[160px]">
+        <svg width={size} height={size} className="-rotate-90">
+          {data.slice(0, 7).map((item, idx) => {
+            const pct = item.percentage;
+            const len = (pct / 100) * c;
+            const dash = `${len} ${c - len}`;
+            const el = (
+              <circle
+                key={item.serviceKey}
+                cx={size / 2}
+                cy={size / 2}
+                r={r}
+                fill="transparent"
+                stroke={colors[idx % colors.length]}
+                strokeWidth={stroke}
+                strokeDasharray={dash}
+                strokeDashoffset={-offset}
+              />
+            );
+            offset += len;
+            return el;
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+          <p className="text-base font-semibold text-gray-900">
+            {formatCompactMoney(totalRevenue, currency)}
+          </p>
+          <p className="text-[10px] text-gray-400">Total Revenue</p>
+        </div>
       </div>
+      <ul className="space-y-1.5">
+        {data.slice(0, 7).map((item, idx) => (
+          <li key={item.serviceKey} className="flex items-center justify-between gap-2 text-xs">
+            <span className="inline-flex items-center gap-1.5 text-gray-600">
+              <span
+                className="h-2 w-2 rounded-full"
+                style={{ background: colors[idx % colors.length] }}
+              />
+              <span className="truncate">{SERVICE_LABELS[item.serviceKey] || item.serviceKey}</span>
+            </span>
+            <span className="font-medium text-gray-800">{item.percentage.toFixed(1)}%</span>
+          </li>
+        ))}
+      </ul>
     </div>
   );
 }
 
 export default function SuperAdminOverviewPage() {
-  const goalWidth = `${MOCK.goal.pct}%`;
+  const [data, setData] = useState<SuperAdminOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const overview = await fetchSuperAdminOverview();
+      setData(overview);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Failed to load overview');
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  if (loading && !data) {
+    return (
+      <div className="flex min-h-[60vh] items-center justify-center">
+        <Loader2 className="h-8 w-8 animate-spin text-[#B91C1C]" />
+      </div>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-4">
+        <AlertCircle className="h-12 w-12 text-red-500" />
+        <p className="text-sm text-gray-600">{error}</p>
+        <button
+          type="button"
+          onClick={() => void load()}
+          className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm text-white hover:bg-[#991B1B]"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  if (!data) return null;
+
+  const lastUpdated = new Date(data.generatedAt).toLocaleString('en-US', {
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 
   return (
     <div className="space-y-6 pb-8">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-semibold tracking-tight text-gray-900">
+            Platform Overview
+          </h1>
+          <p className="mt-1 text-sm text-gray-500">Last updated: {lastUpdated}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void load()}
+          disabled={loading}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 shadow-sm hover:bg-gray-50 disabled:opacity-50"
+        >
+          <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+          Refresh
+        </button>
+      </div>
+
+      {/* KPI Cards Row 1 - Revenue Metrics */}
       <div>
-        <h1 className="text-2xl font-semibold tracking-tight text-gray-900">Overview</h1>
-        <p className="mt-1 text-sm text-gray-500">Last updated on {MOCK.lastUpdated}</p>
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">Revenue & Billing</h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard
+            title="Total Platform Revenue"
+            value={formatMoney(data.totalPlatformRevenue, data.currency)}
+            icon={Banknote}
+            iconColor="bg-blue-50 text-blue-600"
+          />
+          <KpiCard
+            title="Revenue This Month"
+            value={formatMoney(data.revenueThisMonth, data.currency)}
+            trend={data.revenueChangePct}
+            icon={Banknote}
+            iconColor="bg-emerald-50 text-emerald-600"
+          />
+          <KpiCard
+            title="B2B Revenue"
+            value={formatMoney(data.b2bRevenue, data.currency)}
+            subtitle={`${data.b2bPercentage}% of total`}
+            icon={Building2}
+            iconColor="bg-purple-50 text-purple-600"
+          />
+          <KpiCard
+            title="Pending Payments"
+            value={formatMoney(data.pendingPaymentAmount, data.currency)}
+            subtitle={`${data.pendingPaymentOrders} orders`}
+            icon={Clock}
+            iconColor="bg-amber-50 text-amber-600"
+          />
+        </div>
       </div>
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <KpiCard
-          title="Total Revenue"
-          value={formatMoney(MOCK.revenue.value)}
-          changePct={MOCK.revenue.changePct}
-          periodLabel={MOCK.periodLabel}
-          icon={Banknote}
-          iconWrap="bg-blue-50 text-blue-600"
-        />
-        <KpiCard
-          title="Active Services"
-          value={MOCK.activeServices.value.toLocaleString()}
-          changePct={MOCK.activeServices.changePct}
-          periodLabel={MOCK.periodLabel}
-          icon={Server}
-          iconWrap="bg-emerald-50 text-emerald-600"
-        />
-        <KpiCard
-          title="Total Clients"
-          value={MOCK.totalClients.value.toLocaleString()}
-          changePct={MOCK.totalClients.changePct}
-          periodLabel={MOCK.periodLabel}
-          icon={Users}
-          iconWrap="bg-violet-50 text-violet-600"
-        />
-        <KpiCard
-          title="Open Tickets"
-          value={String(MOCK.openTickets.value)}
-          changePct={MOCK.openTickets.changePct}
-          periodLabel={MOCK.periodLabel}
-          icon={Ticket}
-          iconWrap="bg-red-50 text-red-600"
-        />
+      {/* KPI Cards Row 2 - Tenant Metrics */}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">Tenants & Users</h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard
+            title="Total Tenants"
+            value={data.totalTenants}
+            subtitle={`${data.tenantsByStatus.active} active`}
+            icon={Building2}
+            iconColor="bg-indigo-50 text-indigo-600"
+          />
+          <KpiCard
+            title="Active Tenants (30d)"
+            value={data.activeTenantsLast30Days}
+            icon={Building2}
+            iconColor="bg-green-50 text-green-600"
+          />
+          <KpiCard
+            title="Tenant Admins"
+            value={data.totalTenantAdmins}
+            icon={UserCog}
+            iconColor="bg-cyan-50 text-cyan-600"
+          />
+          <KpiCard
+            title="Managed Users"
+            value={data.managedUsers}
+            subtitle={`End users managed by platform`}
+            icon={Users}
+            iconColor="bg-rose-50 text-rose-600"
+          />
+        </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-3">
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm xl:col-span-1">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-gray-900">New Customers (Monthly)</h2>
-            <span className="rounded-md border border-gray-200 px-2 py-1 text-[11px] text-gray-500">
+      {/* KPI Cards Row 3 - Infrastructure Metrics */}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">Infrastructure</h2>
+        <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <KpiCard
+            title="Active VMs"
+            value={data.totalActiveVms}
+            icon={Server}
+            iconColor="bg-emerald-50 text-emerald-600"
+          />
+          <KpiCard
+            title="Catalog VM Requests"
+            value={data.totalCatalogVmRequests}
+            icon={Database}
+            iconColor="bg-orange-50 text-orange-600"
+          />
+          <KpiCard
+            title="External/Elastic VMs"
+            value={data.totalExternalVms}
+            icon={Server}
+            iconColor="bg-teal-50 text-teal-600"
+          />
+          <KpiCard
+            title="VMs Expiring Soon"
+            value={data.totalVmsExpiringSoon}
+            subtitle="Next 14 days"
+            icon={Clock}
+            iconColor="bg-red-50 text-red-600"
+          />
+        </div>
+      </div>
+
+      {/* Charts & Visual Data */}
+      <div className="grid gap-4 lg:grid-cols-3">
+        {/* New Tenant Signups */}
+        <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold text-gray-900">New Tenant Signups</h2>
+            <span className="rounded-md border border-gray-200 px-2 py-0.5 text-[10px] text-gray-500">
               Last 6 Months
             </span>
           </div>
-          <NewCustomersChart />
+          <NewTenantSignupsChart data={data.newTenantSignups} />
         </div>
 
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
+        {/* B2B vs B2C Revenue Split */}
+        <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
           <h2 className="text-sm font-semibold text-gray-900">B2B vs B2C Revenue</h2>
-          <div className="mt-5 space-y-4">
-            <div className="flex items-center justify-between gap-3">
+          <div className="mt-6 space-y-4">
+            <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-medium text-gray-500">B2B</p>
-                <p className="text-sm font-semibold text-gray-900">{formatMoney(MOCK.b2b.amount)}</p>
+                <p className="mt-0.5 text-sm font-semibold text-gray-900">
+                  {formatMoney(data.b2bRevenue, data.currency)}
+                </p>
               </div>
-              <span className="text-sm font-semibold text-gray-700">{MOCK.b2b.pct}%</span>
+              <span className="text-sm font-semibold text-gray-700">
+                {data.b2bPercentage.toFixed(1)}%
+              </span>
             </div>
-            <div className="flex items-center justify-between gap-3">
+            <div className="flex items-center justify-between">
               <div>
                 <p className="text-xs font-medium text-gray-500">B2C</p>
-                <p className="text-sm font-semibold text-gray-900">{formatMoney(MOCK.b2c.amount)}</p>
+                <p className="mt-0.5 text-sm font-semibold text-gray-900">
+                  {formatMoney(data.b2cRevenue, data.currency)}
+                </p>
               </div>
-              <span className="text-sm font-semibold text-gray-700">{MOCK.b2c.pct}%</span>
+              <span className="text-sm font-semibold text-gray-700">
+                {data.b2cPercentage.toFixed(1)}%
+              </span>
             </div>
             <div className="flex h-3 overflow-hidden rounded-full bg-gray-100">
-              <div className="bg-[#B91C1C]" style={{ width: `${MOCK.b2b.pct}%` }} />
-              <div className="bg-[#FCA5A5]" style={{ width: `${MOCK.b2c.pct}%` }} />
+              <div
+                className="bg-[#B91C1C]"
+                style={{ width: `${data.b2bPercentage}%` }}
+                title={`B2B: ${data.b2bPercentage.toFixed(1)}%`}
+              />
+              <div
+                className="bg-[#FCA5A5]"
+                style={{ width: `${data.b2cPercentage}%` }}
+                title={`B2C: ${data.b2cPercentage.toFixed(1)}%`}
+              />
             </div>
           </div>
         </div>
 
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-gray-900">Top 5 Clients by Revenue</h2>
-            <span className="text-xs font-medium text-[#B91C1C]">View all</span>
-          </div>
-          <div className="mt-4 overflow-x-auto">
-            <table className="w-full min-w-[280px] text-left text-sm">
-              <thead>
-                <tr className="text-[11px] uppercase tracking-wide text-gray-400">
-                  <th className="pb-2 font-medium">Client</th>
-                  <th className="pb-2 font-medium">Revenue</th>
-                  <th className="pb-2 font-medium">Services</th>
-                  <th className="pb-2 font-medium">Trend</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-50">
-                {MOCK.topClients.map((c) => (
-                  <tr key={c.name}>
-                    <td className="py-2.5 font-medium text-gray-800">{c.name}</td>
-                    <td className="py-2.5 text-gray-600">{formatMoney(c.revenue)}</td>
-                    <td className="py-2.5 text-gray-600">{c.services}</td>
-                    <td className="py-2.5">
-                      {c.up ? (
-                        <ArrowUpRight className="h-4 w-4 text-emerald-500" />
-                      ) : (
-                        <ArrowDownRight className="h-4 w-4 text-red-500" />
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {/* Revenue by Service */}
+        <div className="rounded-xl border border-gray-100 bg-white p-5 shadow-sm">
+          <h2 className="text-sm font-semibold text-gray-900">Revenue by Service</h2>
+          <div className="mt-3">
+            <RevenueByServiceDonut
+              data={data.revenueByService}
+              totalRevenue={data.totalPlatformRevenue}
+              currency={data.currency}
+            />
           </div>
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-5">
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm xl:col-span-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold text-gray-900">Revenue Overview</h2>
-            <div className="flex items-center gap-3 text-[11px] text-gray-500">
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-0.5 w-4 bg-[#B91C1C]" /> This Period
-              </span>
-              <span className="inline-flex items-center gap-1.5">
-                <span className="h-0.5 w-4 border-t border-dashed border-gray-400" /> Previous Period
-              </span>
-              <span className="rounded-md border border-gray-200 px-2 py-1">Daily</span>
+      {/* Pending Requests Queue */}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">Pending Requests Queue</h2>
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+          {data.pendingRequests.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                    <th className="px-4 py-3 font-medium">Type</th>
+                    <th className="px-4 py-3 font-medium">Tenant</th>
+                    <th className="px-4 py-3 font-medium">Status</th>
+                    <th className="px-4 py-3 font-medium">Amount</th>
+                    <th className="px-4 py-3 font-medium">Created</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {data.pendingRequests.slice(0, 10).map((req) => (
+                    <tr key={req.id} className="hover:bg-gray-50">
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            req.type === 'webyne_vm'
+                              ? 'bg-blue-50 text-blue-700'
+                              : req.type === 'dedicated_server'
+                                ? 'bg-purple-50 text-purple-700'
+                                : 'bg-gray-50 text-gray-700'
+                          }`}
+                        >
+                          {req.type === 'webyne_vm'
+                            ? 'Webyne VM'
+                            : req.type === 'dedicated_server'
+                              ? 'Dedicated'
+                              : 'VM Order'}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 font-medium text-gray-900">{req.tenantName}</td>
+                      <td className="px-4 py-3 text-gray-600">{req.status}</td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {req.amount ? formatMoney(req.amount, data.currency) : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-gray-500">
+                        {new Date(req.createdAt).toLocaleDateString()}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          </div>
-          <RevenueLineChart />
-          <div className="mt-2 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-              <p className="text-xs text-gray-500">This Period</p>
-              <div className="mt-1 flex flex-wrap items-center gap-2">
-                <p className="text-base font-semibold text-gray-900">
-                  {formatMoney(MOCK.revenue.value)}
-                </p>
-                <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                  +{MOCK.revenue.changePct}%
-                </span>
-              </div>
-            </div>
-            <div className="rounded-xl border border-gray-100 bg-gray-50 px-4 py-3">
-              <p className="text-xs text-gray-500">Previous Period</p>
-              <p className="mt-1 text-base font-semibold text-gray-900">
-                {formatMoney(MOCK.revenue.previous)}
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Clock className="h-12 w-12 text-gray-300" />
+              <h3 className="mt-4 text-sm font-medium text-gray-900">No pending requests</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                All requests have been processed or no requests have been submitted yet.
               </p>
             </div>
-          </div>
-        </div>
-
-        <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm xl:col-span-2">
-          <h2 className="text-sm font-semibold text-gray-900">Revenue Stream By Service</h2>
-          <div className="mt-4">
-            <DonutChart />
-          </div>
-          <ul className="mt-4 space-y-2">
-            {MOCK.streams.map((s) => (
-              <li key={s.name} className="flex items-center justify-between gap-2 text-sm">
-                <span className="inline-flex items-center gap-2 text-gray-600">
-                  <span className="h-2.5 w-2.5 rounded-full" style={{ background: s.color }} />
-                  {s.name}
-                </span>
-                <span className="font-medium text-gray-800">{s.pct}%</span>
-              </li>
-            ))}
-          </ul>
-          <p className="mt-4 text-center text-xs font-medium text-[#B91C1C]">View all services</p>
+          )}
         </div>
       </div>
 
-      <div>
-        <h2 className="mb-3 text-sm font-semibold text-gray-900">Needs Your Attention</h2>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {MOCK.alerts.map((a) => (
-            <div
-              key={a.title}
-              className="rounded-2xl border border-red-100 bg-white p-4 shadow-sm"
-            >
-              <p className="text-sm font-semibold text-gray-900">{a.title}</p>
-              <p className="mt-1 text-xs leading-relaxed text-gray-500">{a.body}</p>
-              <button type="button" className="mt-3 text-xs font-medium text-[#B91C1C]">
-                View Details
-              </button>
+      {/* Top Tenants Tables */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        {/* Top Tenants by Revenue */}
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-5 py-4">
+            <h2 className="text-sm font-semibold text-gray-900">Top Tenants by Revenue</h2>
+          </div>
+          {data.topTenantsByRevenue.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                    <th className="px-5 py-3 font-medium">Tenant</th>
+                    <th className="px-5 py-3 font-medium">Revenue</th>
+                    <th className="px-5 py-3 font-medium">VMs</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {data.topTenantsByRevenue.slice(0, 10).map((tenant) => (
+                    <tr key={tenant.tenantId} className="hover:bg-gray-50">
+                      <td className="px-5 py-3">
+                        <div>
+                          <p className="font-medium text-gray-900">{tenant.tenantName}</p>
+                          <p className="text-xs text-gray-500">{tenant.tenantSlug}</p>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 font-semibold text-gray-900">
+                        {formatMoney(tenant.revenue, data.currency)}
+                      </td>
+                      <td className="px-5 py-3 text-gray-600">{tenant.vmCount}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Building2 className="h-12 w-12 text-gray-300" />
+              <h3 className="mt-4 text-sm font-medium text-gray-900">No revenue data</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                No tenant revenue found or no transactions have occurred yet.
+              </p>
+            </div>
+          )}
         </div>
-      </div>
 
-      <div className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900">Goal Progress</h2>
-            <p className="mt-1 text-xs text-gray-500">
-              Monthly Revenue Target · {formatMoney(MOCK.goal.target)}
-            </p>
+        {/* Top Tenants by Resources */}
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+          <div className="border-b border-gray-100 px-5 py-4">
+            <h2 className="text-sm font-semibold text-gray-900">Top Tenants by Resources</h2>
           </div>
-          <span className="inline-flex items-center gap-1 text-xs text-gray-500">
-            <Clock3 className="h-3.5 w-3.5" />
-            {MOCK.goal.daysLeft} days left
-          </span>
+          {data.topTenantsByResources.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                    <th className="px-5 py-3 font-medium">Tenant</th>
+                    <th className="px-5 py-3 font-medium">VMs</th>
+                    <th className="px-5 py-3 font-medium">vCPU</th>
+                    <th className="px-5 py-3 font-medium">RAM (GB)</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {data.topTenantsByResources.slice(0, 10).map((tenant) => (
+                    <tr key={tenant.tenantId} className="hover:bg-gray-50">
+                      <td className="px-5 py-3">
+                        <div>
+                          <p className="font-medium text-gray-900">{tenant.tenantName}</p>
+                          <p className="text-xs text-gray-500">{tenant.tenantSlug}</p>
+                        </div>
+                      </td>
+                      <td className="px-5 py-3 text-gray-900">{tenant.vmCount}</td>
+                      <td className="px-5 py-3 text-gray-600">{tenant.totalVCpu}</td>
+                      <td className="px-5 py-3 text-gray-600">{tenant.totalMemoryGb.toFixed(0)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Server className="h-12 w-12 text-gray-300" />
+              <h3 className="mt-4 text-sm font-medium text-gray-900">No resource data</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                No tenant VMs found or no resources have been allocated yet.
+              </p>
+            </div>
+          )}
         </div>
-        <div className="mt-4 h-3 overflow-hidden rounded-full bg-gray-100">
-          <div className="h-full rounded-full bg-emerald-500" style={{ width: goalWidth }} />
-        </div>
-        <p className="mt-2 text-sm text-gray-700">
-          {formatMoney(MOCK.goal.current)}{' '}
-          <span className="text-gray-400">({MOCK.goal.pct}%)</span>
-        </p>
       </div>
 
-      <div className="grid gap-3 rounded-2xl border border-gray-100 bg-white p-4 text-xs text-gray-600 shadow-sm sm:grid-cols-2 xl:grid-cols-4">
+      {/* VMs Expiring Soon */}
+      <div>
+        <h2 className="mb-3 text-sm font-semibold text-gray-900">VMs Expiring Soon</h2>
+        <div className="rounded-xl border border-gray-100 bg-white shadow-sm">
+          {data.vmsExpiringSoon.length > 0 ? (
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-sm">
+                <thead>
+                  <tr className="border-b border-gray-100 bg-gray-50 text-xs uppercase tracking-wide text-gray-500">
+                    <th className="px-4 py-3 font-medium">VM Name</th>
+                    <th className="px-4 py-3 font-medium">Tenant</th>
+                    <th className="px-4 py-3 font-medium">Provider</th>
+                    <th className="px-4 py-3 font-medium">Expiry Date</th>
+                    <th className="px-4 py-3 font-medium">Days Left</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-50">
+                  {data.vmsExpiringSoon.slice(0, 15).map((vm) => (
+                    <tr key={vm.vmId} className="hover:bg-gray-50">
+                      <td className="px-4 py-3 font-medium text-gray-900">{vm.vmName}</td>
+                      <td className="px-4 py-3 text-gray-600">{vm.tenantName}</td>
+                      <td className="px-4 py-3">
+                        <span className="inline-flex rounded-full bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                          {vm.provider}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3 text-gray-600">
+                        {new Date(vm.expiryDate).toLocaleDateString()}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`inline-flex rounded-full px-2 py-0.5 text-xs font-medium ${
+                            vm.daysUntilExpiry <= 3
+                              ? 'bg-red-50 text-red-700'
+                              : vm.daysUntilExpiry <= 7
+                                ? 'bg-amber-50 text-amber-700'
+                                : 'bg-gray-50 text-gray-700'
+                          }`}
+                        >
+                          {vm.daysUntilExpiry} {vm.daysUntilExpiry === 1 ? 'day' : 'days'}
+                        </span>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              <Clock className="h-12 w-12 text-gray-300" />
+              <h3 className="mt-4 text-sm font-medium text-gray-900">No VMs expiring soon</h3>
+              <p className="mt-1 text-sm text-gray-500">
+                No VMs are scheduled to expire in the next 14 days.
+              </p>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Summary Stats */}
+      <div className="grid gap-3 rounded-xl border border-gray-100 bg-white p-4 text-xs text-gray-600 shadow-sm sm:grid-cols-2 lg:grid-cols-4">
         <p>
           <span className="font-semibold text-gray-800">Revenue trend: </span>
-          Revenue is up {MOCK.revenue.changePct}% versus the previous period.
+          {data.revenueChangePct >= 0 ? 'Up' : 'Down'} {Math.abs(data.revenueChangePct).toFixed(1)}%
+          this month vs previous month.
         </p>
         <p>
-          <span className="font-semibold text-gray-800">Client growth: </span>
-          Total clients increased by {MOCK.totalClients.changePct}% in the same window.
+          <span className="font-semibold text-gray-800">Active tenants: </span>
+          {data.activeTenantsLast30Days} tenants had activity in the last 30 days.
         </p>
         <p>
-          <span className="font-semibold text-gray-800">Top contributor: </span>
-          VPS Hosting contributes {MOCK.streams[0].pct}% of service revenue.
+          <span className="font-semibold text-gray-800">Pending requests: </span>
+          {data.pendingDedicatedServers} dedicated servers + {data.pendingPaymentOrders} orders awaiting action.
         </p>
-        <p className="inline-flex items-start gap-1.5">
-          <Link2 className="mt-0.5 h-3.5 w-3.5 shrink-0 text-gray-400" />
-          <span>
-            <span className="font-semibold text-gray-800">Ticket status: </span>
-            {MOCK.openTickets.value} tickets are currently open.
-          </span>
+        <p>
+          <span className="font-semibold text-gray-800">Infrastructure: </span>
+          {data.totalActiveVms} active VMs, {data.totalVmsExpiringSoon} expiring in 14 days.
         </p>
       </div>
     </div>
