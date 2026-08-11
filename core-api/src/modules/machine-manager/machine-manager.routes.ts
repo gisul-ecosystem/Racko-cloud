@@ -285,6 +285,15 @@ agentRouter.post(
   (req, res, next) => machineManagerController.agentJobResult(req, res, next)
 );
 
+// POST /api/v1/agent/reset-result — agent reports reset outcome via HTTP (authoritative path)
+// Works even when the WebSocket was dropped during a long reset.
+// Auth: X-Agent-ID header (same as other agent routes — no JWT required).
+agentRouter.post(
+  '/reset-result',
+  requireAgentAuth,
+  (req, res, next) => machineManagerController.agentResetResult(req, res, next)
+);
+
 // POST /api/v1/agent/heartbeat
 agentRouter.post(
   '/heartbeat',

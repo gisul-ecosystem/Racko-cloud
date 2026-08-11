@@ -681,6 +681,12 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
    * GET /api/v1/machines/reset-stream/:sessionId?streamToken=xxx
    * SSE stream for real-time reset status updates.
    * Auth via short-lived streamToken (EventSource cannot set auth headers).
+   *
+   * On open, immediately checks MongoDB for a persisted reset result.
+   * If one exists (reset finished while browser was loading the stream),
+   * it delivers reset_complete instantly and closes — no need to subscribe.
+   * This handles the common case where the reset finishes before the SSE stream
+   * is opened, or when the browser refreshes after the reset completes.
    */
   async streamResetStatus(req: Request, res: Response): Promise<void> {
     const sessionId = req.params['sessionId'] as string;
@@ -708,6 +714,28 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     // Confirm stream is alive
     send({ type: 'ping', sessionId });
 
+    // ── Check if reset already completed (persisted result in DB) ────────────
+    // Handles: reset finished before stream opened, browser refresh after reset,
+    // or slow SSE connection establishment.
+    const existingResult = await machineManagerService.getResetResult(sessionId);
+    if (existingResult) {
+      logger.info('[ResetStream] Reset already completed — sending persisted result', {
+        sessionId,
+        machineId: existingResult.machineId,
+        success: existingResult.success,
+      });
+      send({
+        type:        'reset_complete',
+        machineId:   existingResult.machineId,
+        machineName: existingResult.machineName,
+        success:     existingResult.success,
+        error:       existingResult.error,
+      });
+      res.end();
+      return;
+    }
+
+    // ── Subscribe to live emitter for in-progress resets ─────────────────────
     const { resetSessionEmitter } = await import('./reset.events');
 
     const listener = (event: object) => send(event);
@@ -718,6 +746,42 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
       machineManagerService.removeResetSession(sessionId);
     });
   }
+
+  /**
+   * POST /api/v1/agent/reset-result
+   * Agent POSTs reset outcome via HTTP after the script completes.
+   * Auth: X-Agent-ID header (same as heartbeat, no JWT required).
+   *
+   * This is the authoritative delivery path for reset_complete — it works
+   * even when the WebSocket connection was dropped during the long reset.
+   */
+  async agentResetResult(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const agentId = req.headers['x-agent-id'] as string;
+      if (!agentId) {
+        res.status(400).json({ success: false, message: 'X-Agent-ID header required.' });
+        return;
+      }
+
+      const { sessionId, success: resetSuccess, error } = req.body as {
+        sessionId: string;
+        success:   boolean;
+        error?:    string;
+      };
+
+      if (!sessionId || typeof resetSuccess !== 'boolean') {
+        res.status(400).json({ success: false, message: 'sessionId and success are required.' });
+        return;
+      }
+
+      await machineManagerService.agentResetResult({ agentId, sessionId, success: resetSuccess, error });
+
+      res.status(200).json({ success: true, message: 'Reset result recorded.' });
+    } catch (err) {
+      next(err);
+    }
+  }
+
 
   /**
    * PATCH /api/v1/machines/tracking
