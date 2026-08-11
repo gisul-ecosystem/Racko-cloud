@@ -5,7 +5,7 @@ import {
   Cloud,
   ClipboardList,
   Calculator,
-  FileSpreadsheet,
+  Database,
   IndianRupee,
   Monitor,
   MonitorCheck,
@@ -106,12 +106,12 @@ const platformTools: ServiceTile[] = [
     anyOf: ['machine_manager.manage'],
   },
   {
-    id: 'vm-host-leases',
-    name: 'Vm Inventory',
-    href: '/super-admin-console/vm-host-leases',
-    icon: FileSpreadsheet,
-    description: 'Upload Excel inventory of leased VM hosts and track expiry dates',
-    anyOf: ['vm_host_leases.manage'],
+    id: 'vm-inventory',
+    name: 'VM Inventory',
+    href: '/super-admin-console/vm-inventory',
+    icon: Database,
+    description: 'Unified inventory across VPS, VM Catalog, and imported servers',
+    anyOf: ['vm_inventory.read'],
   },
   {
     id: 'elastic-servers',
@@ -272,7 +272,7 @@ export default function SuperAdminConsolePage() {
         <section>
           <h2 className="mb-1 text-lg font-semibold text-gray-900">Platform &amp; tools</h2>
           <p className="mb-5 text-sm text-gray-500">
-            Admin utilities (pricing, inventory, machine manager) and platform management.
+            Admin utilities (pricing, machine manager) and platform management.
           </p>
           <TileGrid
             tiles={visiblePlatform}

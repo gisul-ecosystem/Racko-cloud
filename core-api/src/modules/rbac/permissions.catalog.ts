@@ -11,12 +11,9 @@ export interface PermissionDef {
 export const PERMISSION_CATALOG: PermissionDef[] = [
   // VM management / cluster control
   { key: 'vm_management.manage', label: 'Manage VM management dashboard', group: 'VM Management' },
+  { key: 'vm_inventory.read', label: 'View unified VM inventory', group: 'VM Management' },
+  { key: 'vm_inventory.write', label: 'Import provider metadata for VM inventory', group: 'VM Management' },
   { key: 'machine_manager.manage', label: 'Manage machine manager', group: 'Machine Manager' },
-  {
-    key: 'vm_host_leases.manage',
-    label: 'Manage VM host leases (Excel inventory)',
-    group: 'VM Host Leases',
-  },
   {
     key: 'elastic_servers.superadmin',
     label: 'Bulk import, assign & overview elastic servers',
@@ -115,8 +112,9 @@ export const SYSTEM_ROLE_SEEDS: Array<{
     description: 'Access platform operations dashboards and service consoles.',
     permissions: [
       'vm_management.manage',
+      'vm_inventory.read',
+      'vm_inventory.write',
       'machine_manager.manage',
-      'vm_host_leases.manage',
       'elastic_servers.superadmin',
       'admin_users.manage',
       'white_labelling.manage',
