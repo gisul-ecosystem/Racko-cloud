@@ -191,14 +191,12 @@ export default function MachineDetailPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [m, allJobs, machines] = await Promise.all([
+      const [m, allJobs] = await Promise.all([
         fetchMachine(id),
         fetchJobs(),
-        fetchMachines(),
       ]);
       setMachine(m);
       setJobs(allJobs.filter((j) => j.machineId === id));
-      setAllMachines(machines);
     } catch {
       addToast('error', 'Failed to load machine.');
     } finally {
