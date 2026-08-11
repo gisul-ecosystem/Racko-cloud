@@ -695,9 +695,12 @@ class VmCatalogService {
       };
     }
 
-    const autoProvisioned =
-      Boolean(selection.autoProvisioned) && isAutoCloudProvider(selection.provider);
-    const provider = autoProvisioned ? selection.provider : 'webyne';
+    // Always route through Webyne (Super Admin manual flow).
+    // Cloud auto-provision (Azure/AWS/OCI/GCP) is disabled intentionally so that
+    // provider credentials can remain configured for other services without
+    // the reseller selection triggering auto-VM creation here.
+    const autoProvisioned = false;
+    const provider = 'webyne';
 
     const projectCtx = dto.projectId
       ? await projectsService.assertUsableForService({
