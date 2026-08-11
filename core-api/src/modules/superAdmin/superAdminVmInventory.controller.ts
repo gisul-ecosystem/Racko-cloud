@@ -16,6 +16,8 @@ export class SuperAdminVmInventoryController {
       const body = req.body as {
         rows: Array<{
           ipAddress: string;
+          name?: string;
+          protocol?: 'rdp' | 'ssh';
           planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
           username?: string;
           password?: string;
@@ -30,6 +32,24 @@ export class SuperAdminVmInventoryController {
       );
 
       success(res, 'Provider metadata imported.', result, 201);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async updateProviderMetadata(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const body = req.body as {
+        ipAddress: string;
+        providerStartDate?: string | null;
+        providerEndDate?: string | null;
+        planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
+      };
+
+      const result = await superAdminVmInventoryService.updateProviderMetadata(body, authReq.user.userId);
+
+      success(res, 'Provider metadata updated.', result);
     } catch (error) {
       next(error);
     }

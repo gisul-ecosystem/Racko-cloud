@@ -19,9 +19,14 @@ export interface SuperAdminVmInventoryItem {
   ipAddress?: string;
   protocol?: 'rdp' | 'ssh';
   status: InventoryStatus;
-  originServiceKey: 'vm-management' | 'create-vm' | 'elastic-servers';
-  originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'Elastic Server Import';
+  originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
+  originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
   originChannel: string;
+  providerPlanDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
+  providerUsername?: string | null;
+  providerPassword?: string | null;
+  providerStartDate?: string | null;
+  providerEndDate?: string | null;
   ownerScope: InventoryOwnerScope;
   ownerAdminId?: string;
   ownerAdminEmail?: string;
@@ -67,6 +72,8 @@ export interface SuperAdminVmInventoryOwnerOption {
 
 export interface VmProviderMetadataImportRow {
   ipAddress: string;
+  name?: string;
+  protocol?: 'rdp' | 'ssh';
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
   username?: string;
   password?: string;
@@ -77,11 +84,12 @@ export interface VmProviderMetadataImportRow {
 export interface VmProviderMetadataImportResult {
   total: number;
   updated: number;
+  created: number;
 }
 
 export interface SuperAdminVmInventoryQuery {
   resourceType?: InventoryResourceType;
-  originServiceKey?: 'vm-management' | 'create-vm' | 'elastic-servers';
+  originServiceKey?: 'vm-management' | 'create-vm' | 'external-vm';
   ownerScope?: InventoryOwnerScope;
   tenantId?: string;
   adminId?: string;

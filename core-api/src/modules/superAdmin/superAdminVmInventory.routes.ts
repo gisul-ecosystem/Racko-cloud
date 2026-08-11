@@ -6,6 +6,7 @@ import { superAdminVmInventoryController } from './superAdminVmInventory.control
 import {
   superAdminVmInventoryQuerySchema,
   superAdminVmProviderMetadataImportSchema,
+  superAdminVmProviderMetadataUpdateSchema,
 } from './superAdminVmInventory.validation';
 
 const router = Router();
@@ -19,6 +20,15 @@ router.post(
   validateRequest(superAdminVmProviderMetadataImportSchema),
   (req, res, next) => {
     superAdminVmInventoryController.importProviderMetadata(req, res, next);
+  }
+);
+
+router.patch(
+  '/provider-metadata',
+  requirePermission('vm_inventory.write'),
+  validateRequest(superAdminVmProviderMetadataUpdateSchema),
+  (req, res, next) => {
+    superAdminVmInventoryController.updateProviderMetadata(req, res, next);
   }
 );
 

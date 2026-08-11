@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Database, RefreshCw, Search, Upload } from 'lucide-react';
+import { ChevronLeft, Database, Pencil, Search, Upload } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchSuperAdminVmInventory,
@@ -15,15 +15,21 @@ import {
   type SuperAdminVmInventoryOwnerOption,
   type VmProviderMetadataImportRow,
 } from '@/lib/superAdminVmInventoryApi';
+import {
+  fetchSuperAdminExternalVmOverview,
+  type SuperAdminExternalVmOverviewRow,
+} from '@/lib/superAdminExternalVmApi';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { ErrorState } from '@/components/dashboard/ErrorState';
+import { ManageExternalVmAssignmentsModal } from '@/components/super-admin-console/ManageExternalVmAssignmentsModal';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
 
-type ServiceKey = '' | 'vm-management' | 'create-vm' | 'elastic-servers';
+type ServiceKey = '' | 'vm-management' | 'create-vm' | 'external-vm';
 type SortBy = 'createdAt' | 'owner' | 'service';
 type SortDirection = 'asc' | 'desc';
+type AssignmentSortBy = 'providerEndDate' | 'clientEndDate';
 type FlashMessage = { type: 'success' | 'error'; text: string } | null;
 
 type AssignmentEntry = {
@@ -44,6 +50,8 @@ type AssignmentRow = {
   ipAddress: string;
   vmNames: string[];
   assignments: AssignmentEntry[];
+  editableExternalVmId?: string;
+  providerDetails?: AssignmentEntry;
 };
 
 function StatusBadge({ status }: { status: InventoryStatus }) {
@@ -77,6 +85,60 @@ function formatDate(value?: string | Date | null): string {
   return date.toLocaleDateString();
 }
 
+function getDueDateBadge(value?: string | Date | null): { label: string; tone: string } | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const dueDate = new Date(date);
+  dueDate.setHours(0, 0, 0, 0);
+
+  const diffDays = Math.ceil((dueDate.getTime() - today.getTime()) / 86_400_000);
+
+  if (diffDays < 0) {
+    return { label: `Overdue by ${Math.abs(diffDays)}d`, tone: 'border-rose-200 bg-rose-50 text-rose-700' };
+  }
+  if (diffDays === 0) {
+    return { label: 'Due today', tone: 'border-amber-200 bg-amber-50 text-amber-700' };
+  }
+  if (diffDays <= 7) {
+    return { label: `Due in ${diffDays}d`, tone: 'border-amber-200 bg-amber-50 text-amber-700' };
+  }
+
+  return null;
+}
+
+function DueDateCell({ value }: { value?: string | Date | null }) {
+  const badge = getDueDateBadge(value);
+
+  return (
+    <div className="space-y-1">
+      <p className="text-gray-700">{formatDate(value)}</p>
+      {badge ? (
+        <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${badge.tone}`}>
+          {badge.label}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function formatInventorySubtitle(item: SuperAdminVmInventoryItem): string | null {
+  if (item.resourceType !== 'external_vm') return null;
+
+  const parts = [
+    item.providerUsername?.trim() || null,
+    item.providerPlanDuration || null,
+    item.providerStartDate ? `from ${formatDate(item.providerStartDate)}` : null,
+    item.providerEndDate ? `to ${formatDate(item.providerEndDate)}` : null,
+  ].filter((value): value is string => Boolean(value));
+
+  return parts.length > 0 ? parts.join(' · ') : null;
+}
+
 function readCell(row: Record<string, unknown>, keys: string[]): unknown {
   for (const key of keys) {
     if (key in row) return row[key];
@@ -96,6 +158,40 @@ function normalizeDateCell(value: unknown): string | undefined {
   return undefined;
 }
 
+function toSortDate(value?: string | null): number | null {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date.getTime();
+}
+
+function getRowSortDate(row: AssignmentRow, sortBy: AssignmentSortBy): number | null {
+  const sourceEntries = row.assignments.length > 0 ? row.assignments : row.providerDetails ? [row.providerDetails] : [];
+  const values = sourceEntries
+    .map((entry) => (sortBy === 'providerEndDate' ? entry.providerEndDate : entry.endDate))
+    .map((value) => toSortDate(value))
+    .filter((value): value is number => value !== null);
+
+  if (values.length === 0) return null;
+  return Math.min(...values);
+}
+
+function sortAssignmentRows(rows: AssignmentRow[], sortBy: AssignmentSortBy, sortDirection: SortDirection): AssignmentRow[] {
+  const direction = sortDirection === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const aDate = getRowSortDate(a, sortBy);
+    const bDate = getRowSortDate(b, sortBy);
+
+    if (aDate === null && bDate === null) return a.rowKey.localeCompare(b.rowKey);
+    if (aDate === null) return 1;
+    if (bDate === null) return -1;
+
+    const diff = aDate - bDate;
+    if (diff !== 0) return diff * direction;
+
+    return a.rowKey.localeCompare(b.rowKey);
+  });
+}
+
 function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[] {
   const grouped = new Map<string, AssignmentRow>();
 
@@ -110,6 +206,25 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
 
     if (!current.vmNames.includes(item.name)) {
       current.vmNames.push(item.name);
+    }
+
+    if (!current.editableExternalVmId && item.resourceType === 'external_vm') {
+      current.editableExternalVmId = item.sourceId;
+    }
+
+    if (item.resourceType === 'external_vm' && !current.providerDetails) {
+      current.providerDetails = {
+        username: item.providerUsername?.trim() || item.name,
+        isTenantUser: false,
+        tenantName: undefined,
+        planDuration: item.providerPlanDuration ?? null,
+        vmUsername: item.providerUsername ?? null,
+        vmPassword: item.providerPassword ?? null,
+        providerStartDate: item.providerStartDate ?? null,
+        providerEndDate: item.providerEndDate ?? null,
+        startDate: null,
+        endDate: null,
+      };
     }
 
     for (const assignment of item.mappedAssignments) {
@@ -213,7 +328,7 @@ function InventoryTable(props: {
                         <option value="">All services</option>
                         <option value="vm-management">VPS Hosting</option>
                         <option value="create-vm">VM Catalog</option>
-                        <option value="elastic-servers">Elastic Server Import</option>
+                        <option value="external-vm">External VM Import</option>
                       </select>
                     </div>
                   </th>
@@ -261,6 +376,7 @@ function InventoryTable(props: {
                   <tr key={item.inventoryId} className={`border-b border-gray-50 align-top hover:bg-gray-50 ${idx % 2 !== 0 ? 'bg-gray-50/40' : ''}`}>
                     <td className="px-6 py-3.5">
                       <p className="font-medium text-gray-900">{item.name}</p>
+                      {formatInventorySubtitle(item) ? <p className="mt-0.5 text-[11px] text-gray-500">{formatInventorySubtitle(item)}</p> : null}
                       {typeof item.vmid === 'number' ? <p className="mt-0.5 text-[11px] text-gray-500">VMID #{item.vmid}</p> : null}
                     </td>
                     <td className="px-4 py-3.5 text-xs text-gray-700">{item.originServiceLabel}</td>
@@ -315,11 +431,22 @@ function AssignmentTable(props: {
   rows: AssignmentRow[];
   showVmNames: boolean;
   showUsers: boolean;
+  sortBy: AssignmentSortBy;
+  sortDirection: SortDirection;
   onShowVmNames: () => void;
   onHideVmNames: () => void;
   onShowUsers: () => void;
   onHideUsers: () => void;
+  onToggleSort: (value: AssignmentSortBy) => void;
+  onEditRow: (row: AssignmentRow) => void;
 }) {
+  const entryList = (row: AssignmentRow): AssignmentEntry[] =>
+    row.assignments.length > 0 ? row.assignments : row.providerDetails ? [row.providerDetails] : [];
+  const sortIndicator = (column: AssignmentSortBy) => {
+    if (props.sortBy !== column) return '↕';
+    return props.sortDirection === 'asc' ? '↑' : '↓';
+  };
+
   return (
     <div className="mt-6 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-5 py-3">
@@ -368,9 +495,28 @@ function AssignmentTable(props: {
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">VM username</th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">VM password</th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Provider start date</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Provider end date</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <button
+                  type="button"
+                  onClick={() => props.onToggleSort('providerEndDate')}
+                  className="inline-flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
+                >
+                  Provider end date
+                  <span className="text-gray-400">{sortIndicator('providerEndDate')}</span>
+                </button>
+              </th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Client start date</th>
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Client end date</th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <button
+                  type="button"
+                  onClick={() => props.onToggleSort('clientEndDate')}
+                  className="inline-flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
+                >
+                  Client end date
+                  <span className="text-gray-400">{sortIndicator('clientEndDate')}</span>
+                </button>
+              </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Actions</th>
             </tr>
           </thead>
           <tbody>
@@ -384,23 +530,37 @@ function AssignmentTable(props: {
                 ) : null}
                 {props.showUsers ? (
                   <td className="px-4 py-3.5 text-xs">
-                    {row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => (
+                    {entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => (
                       <div key={`${row.rowKey}:assignment:${assignmentIndex}`} className="flex items-center gap-2">
                         <span className="text-gray-700">{assignment.username}</span>
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${assignment.isTenantUser ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
                           {assignment.isTenantUser ? assignment.tenantName || 'Tenant' : 'Platform'}
                         </span>
                       </div>
-                    )) : <p className="text-[11px] text-gray-400">No mapped users</p>}
+                    )) : <p className="text-[11px] text-gray-400">—</p>}
                   </td>
                 ) : null}
-                <td className="px-4 py-3.5 text-xs">{row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => <p key={`${row.rowKey}:plan:${assignmentIndex}`} className="text-gray-700">{assignment.planDuration || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
-                <td className="px-4 py-3.5 text-xs">{row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmuser:${assignmentIndex}`} className="text-gray-700">{assignment.vmUsername || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
-                <td className="px-4 py-3.5 text-xs">{row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmpass:${assignmentIndex}`} className="text-gray-700">{assignment.vmPassword || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
-                <td className="px-4 py-3.5 text-xs">{row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => <p key={`${row.rowKey}:provider-start:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.providerStartDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
-                <td className="px-4 py-3.5 text-xs">{row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => <p key={`${row.rowKey}:provider-end:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.providerEndDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
-                <td className="px-4 py-3.5 text-xs">{row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => <p key={`${row.rowKey}:client-start:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.startDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
-                <td className="px-4 py-3.5 text-xs">{row.assignments.length > 0 ? row.assignments.map((assignment, assignmentIndex) => <p key={`${row.rowKey}:client-end:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.endDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:plan:${assignmentIndex}`} className="text-gray-700">{assignment.planDuration || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmuser:${assignmentIndex}`} className="text-gray-700">{assignment.vmUsername || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmpass:${assignmentIndex}`} className="text-gray-700">{assignment.vmPassword || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:provider-start:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.providerStartDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <DueDateCell key={`${row.rowKey}:provider-end:${assignmentIndex}`} value={assignment.providerEndDate} />) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:client-start:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.startDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <DueDateCell key={`${row.rowKey}:client-end:${assignmentIndex}`} value={assignment.endDate} />) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">
+                  {row.editableExternalVmId ? (
+                    <button
+                      type="button"
+                      onClick={() => props.onEditRow(row)}
+                      className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                      Edit
+                    </button>
+                  ) : (
+                    <span className="text-[11px] text-gray-400">—</span>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>
@@ -426,9 +586,13 @@ export default function SuperAdminVmInventoryPage() {
   const [status, setStatus] = useState<'' | InventoryStatus>('');
   const [sortBy, setSortBy] = useState<SortBy>('createdAt');
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
+  const [assignmentSortBy, setAssignmentSortBy] = useState<AssignmentSortBy>('providerEndDate');
+  const [assignmentSortDirection, setAssignmentSortDirection] = useState<SortDirection>('asc');
   const [showAssignmentView, setShowAssignmentView] = useState(false);
-  const [showAssignmentVmNames, setShowAssignmentVmNames] = useState(true);
+  const [showAssignmentVmNames, setShowAssignmentVmNames] = useState(false);
   const [showAssignmentUsers, setShowAssignmentUsers] = useState(true);
+  const [externalVmRows, setExternalVmRows] = useState<SuperAdminExternalVmOverviewRow[]>([]);
+  const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
   const [importingProviderMeta, setImportingProviderMeta] = useState(false);
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null);
   const [loading, setLoading] = useState(true);
@@ -442,26 +606,30 @@ export default function SuperAdminVmInventoryPage() {
     return () => window.clearTimeout(timer);
   }, [search]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (options?: { page?: number; limit?: number }) => {
     setLoading(true);
     setError(null);
     try {
-      const requestedPage = showAssignmentView ? 1 : page;
-      const requestedLimit = showAssignmentView ? 5000 : limit;
-      const result = await fetchSuperAdminVmInventory({
-        resourceType: resourceType || undefined,
-        ownerScope: ownerScope || undefined,
-        originServiceKey: showAssignmentView ? undefined : serviceKey || undefined,
-        status: status || undefined,
-        search: debouncedSearch || undefined,
-        ownerSearch: selectedOwner || undefined,
-        sortBy,
-        sortDirection,
-        page: requestedPage,
-        limit: requestedLimit,
-      });
+      const requestedPage = options?.page ?? (showAssignmentView ? 1 : page);
+      const requestedLimit = options?.limit ?? (showAssignmentView ? 5000 : limit);
+      const [result, overviewRows] = await Promise.all([
+        fetchSuperAdminVmInventory({
+          resourceType: resourceType || undefined,
+          ownerScope: ownerScope || undefined,
+          originServiceKey: showAssignmentView ? undefined : serviceKey || undefined,
+          status: status || undefined,
+          search: debouncedSearch || undefined,
+          ownerSearch: selectedOwner || undefined,
+          sortBy,
+          sortDirection,
+          page: requestedPage,
+          limit: requestedLimit,
+        }),
+        showAssignmentView ? fetchSuperAdminExternalVmOverview() : Promise.resolve([]),
+      ]);
       setItems(result.items);
       setTotal(result.total);
+      setExternalVmRows(overviewRows);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load VM inventory.');
     } finally {
@@ -494,6 +662,25 @@ export default function SuperAdminVmInventoryPage() {
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
   const assignmentRows = useMemo(() => buildAssignmentRows(items), [items]);
+  const sortedAssignmentRows = useMemo(
+    () => sortAssignmentRows(assignmentRows, assignmentSortBy, assignmentSortDirection),
+    [assignmentRows, assignmentSortBy, assignmentSortDirection]
+  );
+  const externalVmById = useMemo(
+    () => new Map(externalVmRows.map((row) => [row.externalVmId, row] as const)),
+    [externalVmRows]
+  );
+
+  const handleEditAssignmentRow = useCallback(
+    (row: AssignmentRow) => {
+      if (!row.editableExternalVmId) return;
+      const target = externalVmById.get(row.editableExternalVmId);
+      if (target) {
+        setManageRow(target);
+      }
+    },
+    [externalVmById]
+  );
 
   const toggleSort = (nextSortBy: SortBy) => {
     if (sortBy === nextSortBy) {
@@ -503,6 +690,15 @@ export default function SuperAdminVmInventoryPage() {
       setSortDirection(nextSortBy === 'createdAt' ? 'desc' : 'asc');
     }
     setPage(1);
+  };
+
+  const toggleAssignmentSort = (nextSortBy: AssignmentSortBy) => {
+    if (assignmentSortBy === nextSortBy) {
+      setAssignmentSortDirection((current) => (current === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setAssignmentSortBy(nextSortBy);
+      setAssignmentSortDirection('asc');
+    }
   };
 
   const handleProviderMetadataUpload = async (file: File) => {
@@ -518,11 +714,16 @@ export default function SuperAdminVmInventoryPage() {
       const parsedRows: VmProviderMetadataImportRow[] = rows
         .map((row) => {
           const ipAddress = String(readCell(row, ['IP', 'Ip', 'IP Address', 'Ip Address', 'ip', 'ipAddress']) ?? '').trim();
+          const name = String(readCell(row, ['Name', 'Server Name', 'VM Name', 'Hostname', 'Host Name', 'name']) ?? '').trim();
+          const rawProtocol = String(readCell(row, ['Protocol', 'protocol']) ?? '').trim().toLowerCase();
           const rawDuration = String(readCell(row, ['Plan Duration', 'Duration', 'Billing Period', 'planDuration']) ?? '').trim().toLowerCase();
           const username = String(readCell(row, ['Username', 'User Name', 'username']) ?? '').trim();
           const password = String(readCell(row, ['Password', 'password']) ?? '').trim();
           const providerStartDate = normalizeDateCell(readCell(row, ['Start Date', 'Provider Start Date', 'startDate']));
           const providerEndDate = normalizeDateCell(readCell(row, ['End Date', 'Provider End Date', 'endDate']));
+
+          const protocol: VmProviderMetadataImportRow['protocol'] =
+            rawProtocol === 'rdp' || rawProtocol === 'ssh' ? rawProtocol : undefined;
 
           let planDuration: VmProviderMetadataImportRow['planDuration'];
           if (rawDuration === 'monthly' || rawDuration === 'month' || rawDuration === 'mon') planDuration = 'monthly';
@@ -532,6 +733,8 @@ export default function SuperAdminVmInventoryPage() {
 
           return {
             ipAddress,
+            name: name || undefined,
+            protocol,
             planDuration,
             username: username || undefined,
             password: password || undefined,
@@ -547,8 +750,12 @@ export default function SuperAdminVmInventoryPage() {
       }
 
       const result = await importVmProviderMetadata(parsedRows);
-      setFlashMessage({ type: 'success', text: `Imported provider metadata for ${result.updated} of ${result.total} row(s).` });
-      await load();
+      setFlashMessage({
+        type: 'success',
+        text: `Imported provider metadata for ${result.updated} of ${result.total} row(s)${result.created > 0 ? ` and created ${result.created} new VM record(s)` : ''}.`,
+      });
+      setPage(1);
+      await load({ page: 1 });
     } catch (uploadError) {
       setFlashMessage({ type: 'error', text: uploadError instanceof ApiError ? uploadError.message : 'Failed to import provider metadata Excel.' });
     } finally {
@@ -559,13 +766,27 @@ export default function SuperAdminVmInventoryPage() {
 
   return (
     <div className="mx-auto max-w-7xl">
+      {manageRow ? (
+        <ManageExternalVmAssignmentsModal
+          row={manageRow}
+          onClose={() => setManageRow(null)}
+          onUpdated={(updated) => {
+            setExternalVmRows((prev) =>
+              prev.map((row) => (row.externalVmId === updated.externalVmId ? updated : row))
+            );
+            setManageRow(updated);
+            void load();
+          }}
+        />
+      ) : null}
+
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <Link href="/super-admin-console" className="mb-2 inline-flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-900">
             <ChevronLeft className="h-4 w-4" /> All services
           </Link>
           <h1 className="text-2xl font-bold text-gray-900">VM Inventory</h1>
-          <p className="mt-0.5 text-sm text-gray-500">Unique VM list across VPS, VM Catalog, and Elastic Server Import.</p>
+          <p className="mt-0.5 text-sm text-gray-500">Unique VM list across VPS, VM Catalog, and External VM Import.</p>
         </div>
         <div className="flex flex-col gap-2">
           <input
@@ -578,16 +799,12 @@ export default function SuperAdminVmInventoryPage() {
               if (file) void handleProviderMetadataUpload(file);
             }}
           />
-          <button type="button" disabled={importingProviderMeta} onClick={() => uploadInputRef.current?.click()} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
-            <Upload className="h-4 w-4" />
-            {importingProviderMeta ? 'Importing provider Excel…' : 'Upload provider Excel'}
-          </button>
-          <button type="button" onClick={() => setShowAssignmentView((prev) => !prev)} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-            {showAssignmentView ? 'Inventory records view' : 'VM assignment view'}
-          </button>
-          <button type="button" onClick={() => void load()} className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50">
-            <RefreshCw className="h-4 w-4" /> Refresh
-          </button>
+          {showAssignmentView ? (
+            <button type="button" disabled={importingProviderMeta} onClick={() => uploadInputRef.current?.click()} className="mt-4 inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50">
+              <Upload className="h-4 w-4" />
+              {importingProviderMeta ? 'Importing provider Excel…' : 'Upload provider Excel'}
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -597,9 +814,14 @@ export default function SuperAdminVmInventoryPage() {
             {flashMessage.text}
           </div>
         ) : null}
-        <div className="relative max-w-xl">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
-          <input className={`${inputClass} pl-9`} placeholder="Search name, IP, owner..." value={search} onChange={(e) => setSearch(e.target.value)} />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="relative min-w-[16rem] max-w-xl flex-1">
+            <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+            <input className={`${inputClass} pl-9`} placeholder="Search name, IP, owner..." value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
+          <button type="button" onClick={() => setShowAssignmentView((prev) => !prev)} className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-2 text-sm font-medium text-white hover:opacity-90">
+            {showAssignmentView ? 'Inventory records view' : 'VM assignment view'}
+          </button>
         </div>
       </div>
 
@@ -636,15 +858,19 @@ export default function SuperAdminVmInventoryPage() {
         />
       ) : null}
 
-      {showAssignmentView && !loading && !error && assignmentRows.length > 0 ? (
+      {showAssignmentView && !loading && !error && sortedAssignmentRows.length > 0 ? (
         <AssignmentTable
-          rows={assignmentRows}
+          rows={sortedAssignmentRows}
           showVmNames={showAssignmentVmNames}
           showUsers={showAssignmentUsers}
+          sortBy={assignmentSortBy}
+          sortDirection={assignmentSortDirection}
           onShowVmNames={() => setShowAssignmentVmNames(true)}
           onHideVmNames={() => setShowAssignmentVmNames(false)}
           onShowUsers={() => setShowAssignmentUsers(true)}
           onHideUsers={() => setShowAssignmentUsers(false)}
+          onToggleSort={toggleAssignmentSort}
+          onEditRow={handleEditAssignmentRow}
         />
       ) : null}
     </div>

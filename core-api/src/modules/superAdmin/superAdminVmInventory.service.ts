@@ -22,13 +22,13 @@ type InventoryOriginChannel =
   | 'catalog_admin_request'
   | 'catalog_tenant_request'
   | 'catalog_auto_provision'
-  | 'elastic_admin_import'
-  | 'elastic_tenant_import'
-  | 'elastic_superadmin_bulk';
+  | 'external_admin_import'
+  | 'external_tenant_import'
+  | 'external_superadmin_bulk';
 
 export interface SuperAdminVmInventoryFilters {
   resourceType?: InventoryResourceType;
-  originServiceKey?: 'vm-management' | 'create-vm' | 'elastic-servers';
+  originServiceKey?: 'vm-management' | 'create-vm' | 'external-vm';
   ownerScope?: InventoryOwnerScope;
   tenantId?: string;
   adminId?: string;
@@ -53,9 +53,14 @@ export interface VmInventoryRecord {
   ipAddress?: string;
   protocol?: 'rdp' | 'ssh';
   status: InventoryStatus;
-  originServiceKey: 'vm-management' | 'create-vm' | 'elastic-servers';
-  originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'Elastic Server Import';
+  originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
+  originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
   originChannel: InventoryOriginChannel;
+  providerPlanDuration?: ProviderPlanDuration | null;
+  providerUsername?: string | null;
+  providerPassword?: string | null;
+  providerStartDate?: Date | null;
+  providerEndDate?: Date | null;
   ownerScope: InventoryOwnerScope;
   ownerAdminId?: string;
   ownerAdminEmail?: string;
@@ -101,6 +106,8 @@ export interface SuperAdminVmInventoryOwnerOption {
 
 export interface VmProviderMetadataImportRow {
   ipAddress: string;
+  name?: string;
+  protocol?: 'rdp' | 'ssh';
   planDuration?: ProviderPlanDuration;
   username?: string;
   password?: string;
@@ -111,10 +118,35 @@ export interface VmProviderMetadataImportRow {
 export interface VmProviderMetadataImportResult {
   total: number;
   updated: number;
+  created: number;
+}
+
+export interface VmProviderMetadataUpdateRow {
+  ipAddress: string;
+  providerStartDate?: string | null;
+  providerEndDate?: string | null;
+  planDuration?: ProviderPlanDuration;
+}
+
+export interface VmProviderMetadataUpdateResult {
+  updated: boolean;
 }
 
 function normalizeIpAddress(ipAddress: string): string {
   return ipAddress.trim();
+}
+
+function inferExternalVmProtocol(row: VmProviderMetadataImportRow): 'rdp' | 'ssh' {
+  if (row.protocol === 'rdp' || row.protocol === 'ssh') {
+    return row.protocol;
+  }
+
+  const username = row.username?.trim().toLowerCase();
+  if (username === 'root' || username === 'ubuntu' || username === 'ec2-user' || username === 'admin') {
+    return 'ssh';
+  }
+
+  return 'rdp';
 }
 
 function toObjectId(id?: string): mongoose.Types.ObjectId | undefined {
@@ -140,9 +172,9 @@ function normalizeCatalogStatus(status: string): InventoryStatus {
 }
 
 function externalSourceToChannel(source: ExternalVMSource): InventoryOriginChannel {
-  if (source === 'tenant_import') return 'elastic_tenant_import';
-  if (source === 'superadmin_bulk') return 'elastic_superadmin_bulk';
-  return 'elastic_admin_import';
+  if (source === 'tenant_import') return 'external_tenant_import';
+  if (source === 'superadmin_bulk') return 'external_superadmin_bulk';
+  return 'external_admin_import';
 }
 
 export class SuperAdminVmInventoryService {
@@ -669,9 +701,14 @@ export class SuperAdminVmInventoryService {
         ipAddress: vm.ipAddress,
         protocol: vm.protocol,
         status: 'active',
-        originServiceKey: 'elastic-servers',
-        originServiceLabel: 'Elastic Server Import',
+        originServiceKey: 'external-vm',
+        originServiceLabel: 'External VM Import',
         originChannel: externalSourceToChannel(vm.source),
+        providerPlanDuration: providerMeta?.planDuration ?? null,
+        providerUsername: providerMeta?.providerUsername ?? null,
+        providerPassword,
+        providerStartDate: providerMeta?.providerStartDate ?? null,
+        providerEndDate: providerMeta?.providerEndDate ?? null,
         ownerScope,
         ownerAdminId,
         ownerAdminEmail: ownerAdminId ? adminEmailById.get(ownerAdminId) : undefined,
@@ -772,10 +809,43 @@ export class SuperAdminVmInventoryService {
     updatedByUserId: string
   ): Promise<VmProviderMetadataImportResult> {
     let updated = 0;
+    let created = 0;
 
-    for (const row of rows) {
-      const ipAddress = normalizeIpAddress(row.ipAddress);
-      if (!ipAddress) continue;
+    const normalizedRows = rows
+      .map((row) => ({
+        ...row,
+        ipAddress: normalizeIpAddress(row.ipAddress),
+      }))
+      .filter((row) => Boolean(row.ipAddress));
+
+    const ipAddresses = [...new Set(normalizedRows.map((row) => row.ipAddress))];
+
+    const [existingPlatformVms, existingCatalogVms, existingExternalVms] = await Promise.all([
+      ipAddresses.length > 0
+        ? VM.find({ ipAddress: { $in: ipAddresses } }).select('_id ipAddress').lean()
+        : Promise.resolve([]),
+      ipAddresses.length > 0
+        ? CatalogVmModel.find({ ipAddress: { $in: ipAddresses } }).select('_id ipAddress').lean()
+        : Promise.resolve([]),
+      ipAddresses.length > 0
+        ? ExternalVMModel.find({ ipAddress: { $in: ipAddresses } }).select('_id ipAddress').lean()
+        : Promise.resolve([]),
+    ]);
+
+    const existingIpAddresses = new Set<string>([
+      ...existingPlatformVms
+        .map((vm) => vm.ipAddress)
+        .filter((ip): ip is string => Boolean(ip?.trim()))
+        .map((ip) => normalizeIpAddress(ip)),
+      ...existingCatalogVms
+        .map((vm) => vm.ipAddress)
+        .filter((ip): ip is string => Boolean(ip?.trim()))
+        .map((ip) => normalizeIpAddress(ip)),
+      ...existingExternalVms.map((vm) => normalizeIpAddress(vm.ipAddress)),
+    ]);
+
+    for (const row of normalizedRows) {
+      const ipAddress = row.ipAddress;
 
       await VmProviderMetadataModel.findOneAndUpdate(
         { ipAddress },
@@ -793,12 +863,66 @@ export class SuperAdminVmInventoryService {
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
       updated += 1;
+
+      if (existingIpAddresses.has(ipAddress)) {
+        continue;
+      }
+
+      const name = row.name?.trim() || ipAddress;
+      const protocol = inferExternalVmProtocol(row);
+      const password = row.password?.trim() || row.username?.trim() || ipAddress;
+
+      await ExternalVMModel.create({
+        name,
+        ipAddress,
+        protocol,
+        username: row.username?.trim() || undefined,
+        password: encrypt(password),
+        source: 'superadmin_bulk',
+        adminId: new mongoose.Types.ObjectId(updatedByUserId),
+      });
+      existingIpAddresses.add(ipAddress);
+      created += 1;
     }
 
     return {
       total: rows.length,
       updated,
+      created,
     };
+  }
+
+  async updateProviderMetadata(
+    row: VmProviderMetadataUpdateRow,
+    updatedByUserId: string
+  ): Promise<VmProviderMetadataUpdateResult> {
+    const ipAddress = normalizeIpAddress(row.ipAddress);
+    if (!ipAddress) {
+      return { updated: false };
+    }
+
+    const set: Record<string, unknown> = {
+      updatedBy: new mongoose.Types.ObjectId(updatedByUserId),
+    };
+
+    if (row.planDuration !== undefined) set['planDuration'] = row.planDuration ?? null;
+    if (row.providerStartDate !== undefined) {
+      set['providerStartDate'] = row.providerStartDate ? new Date(row.providerStartDate) : null;
+    }
+    if (row.providerEndDate !== undefined) {
+      set['providerEndDate'] = row.providerEndDate ? new Date(row.providerEndDate) : null;
+    }
+
+    const result = await VmProviderMetadataModel.findOneAndUpdate(
+      { ipAddress },
+      {
+        $set: set,
+        $setOnInsert: { ipAddress },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    return { updated: Boolean(result) };
   }
 }
 

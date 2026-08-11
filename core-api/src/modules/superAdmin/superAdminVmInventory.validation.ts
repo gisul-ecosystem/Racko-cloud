@@ -5,7 +5,7 @@ const objectIdRegex = /^[a-fA-F0-9]{24}$/;
 export const superAdminVmInventoryQuerySchema = z.object({
   query: z.object({
     resourceType: z.enum(['platform_vm', 'catalog_vm', 'external_vm']).optional(),
-    originServiceKey: z.enum(['vm-management', 'create-vm', 'elastic-servers']).optional(),
+    originServiceKey: z.enum(['vm-management', 'create-vm', 'external-vm']).optional(),
     ownerScope: z.enum(['admin', 'tenant']).optional(),
     tenantId: z.string().regex(objectIdRegex, 'Invalid tenantId').optional(),
     adminId: z.string().regex(objectIdRegex, 'Invalid adminId').optional(),
@@ -41,6 +41,8 @@ export const superAdminVmProviderMetadataImportSchema = z.object({
     rows: z.array(
       z.object({
         ipAddress: z.string().trim().min(1, 'ipAddress is required'),
+        name: z.string().trim().optional(),
+        protocol: z.enum(['rdp', 'ssh']).optional(),
         planDuration: providerPlanDurationSchema.optional(),
         username: z.string().trim().optional(),
         password: z.string().optional(),
@@ -48,5 +50,14 @@ export const superAdminVmProviderMetadataImportSchema = z.object({
         providerEndDate: z.string().datetime().optional(),
       })
     ).min(1, 'Provide at least one row').max(5000, 'Too many rows'),
+  }),
+});
+
+export const superAdminVmProviderMetadataUpdateSchema = z.object({
+  body: z.object({
+    ipAddress: z.string().trim().min(1, 'ipAddress is required'),
+    providerStartDate: z.string().datetime().nullable().optional(),
+    providerEndDate: z.string().datetime().nullable().optional(),
+    planDuration: providerPlanDurationSchema.optional(),
   }),
 });
