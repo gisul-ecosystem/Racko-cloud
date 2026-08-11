@@ -5,7 +5,7 @@ using System.Text.Json.Serialization;
 namespace RackoApp.Services;
 
 /// <summary>
-/// Reads the config.json and agent.json written by the Go agent installer.
+/// Reads the config.json and agent.json written by the Go agent installer. 
 /// These files live in C:\ProgramData\racko-agent\ on Windows.
 /// </summary>
 public class AgentConfig

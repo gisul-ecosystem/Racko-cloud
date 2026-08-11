@@ -22,10 +22,16 @@ export default function GroupDetailPage() {
   const [groupMachines, setGroupMachines] = useState<GroupMachine[]>([]);
   const [allMachines, setAllMachines]     = useState<IMachine[]>([]);
   const [loading, setLoading]             = useState(true);
+
+  // ── Add flow ──────────────────────────────────────────────────────────────
   const [showAdd, setShowAdd]             = useState(false);
   const [addLoading, setAddLoading]       = useState(false);
   const [selectedToAdd, setSelectedToAdd] = useState<Set<string>>(new Set());
-  const [removeLoading, setRemoveLoading] = useState<string | null>(null);
+
+  // ── Remove flow ───────────────────────────────────────────────────────────
+  const [selectedToRemove, setSelectedToRemove] = useState<Set<string>>(new Set());
+  const [removeLoading, setRemoveLoading]       = useState<string | null>(null); // per-row loader
+  const [bulkRemoveLoading, setBulkRemoveLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!isAuthenticated || !id) return;
@@ -34,6 +40,8 @@ export default function GroupDetailPage() {
       const [gm, all] = await Promise.all([fetchGroupMachines(id), fetchMachines()]);
       setGroupMachines(gm);
       setAllMachines(all);
+      // Reset selections when data refreshes
+      setSelectedToRemove(new Set());
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to load machines.');
     } finally {
@@ -46,6 +54,18 @@ export default function GroupDetailPage() {
   // Machines not already in group
   const groupIds = new Set(groupMachines.map((m) => m._id));
   const available = allMachines.filter((m) => !groupIds.has(m._id));
+
+  // ── Add helpers ────────────────────────────────────────────────────────────
+  const allAddSelected   = available.length > 0 && selectedToAdd.size === available.length;
+  const someAddSelected  = selectedToAdd.size > 0 && !allAddSelected;
+
+  const toggleSelectAllToAdd = () => {
+    if (allAddSelected) {
+      setSelectedToAdd(new Set());
+    } else {
+      setSelectedToAdd(new Set(available.map((m) => m._id)));
+    }
+  };
 
   const handleAdd = async () => {
     if (!selectedToAdd.size) return;
@@ -63,11 +83,49 @@ export default function GroupDetailPage() {
     }
   };
 
+  // ── Remove helpers ─────────────────────────────────────────────────────────
+  const allRemoveSelected  = groupMachines.length > 0 && selectedToRemove.size === groupMachines.length;
+  const someRemoveSelected = selectedToRemove.size > 0 && !allRemoveSelected;
+
+  const toggleSelectAllToRemove = () => {
+    if (allRemoveSelected) {
+      setSelectedToRemove(new Set());
+    } else {
+      setSelectedToRemove(new Set(groupMachines.map((m) => m._id)));
+    }
+  };
+
+  const toggleRemoveOne = (machineId: string) => {
+    setSelectedToRemove((prev) => {
+      const next = new Set(prev);
+      next.has(machineId) ? next.delete(machineId) : next.add(machineId);
+      return next;
+    });
+  };
+
+  // Bulk remove — called by the toolbar button
+  const handleBulkRemove = async () => {
+    if (!selectedToRemove.size) return;
+    setBulkRemoveLoading(true);
+    try {
+      await removeMachinesFromGroup(id, [...selectedToRemove]);
+      addToast('success', `${selectedToRemove.size} machine(s) removed from group.`);
+      setSelectedToRemove(new Set());
+      void load();
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to remove machines.');
+    } finally {
+      setBulkRemoveLoading(false);
+    }
+  };
+
+  // Single-row remove — keeps individual Remove button working as before
   const handleRemove = async (machineId: string, machineName: string) => {
     setRemoveLoading(machineId);
     try {
       await removeMachinesFromGroup(id, [machineId]);
       addToast('success', `"${machineName}" removed from group.`);
+      setSelectedToRemove((prev) => { const n = new Set(prev); n.delete(machineId); return n; });
       void load();
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to remove machine.');
@@ -97,7 +155,20 @@ export default function GroupDetailPage() {
           Group Machines
           <span className="ml-2 text-base font-normal text-gray-500">({groupMachines.length})</span>
         </h1>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Bulk Remove button — appears when machines are selected */}
+          {selectedToRemove.size > 0 && (
+            <button
+              onClick={() => void handleBulkRemove()}
+              disabled={bulkRemoveLoading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-50"
+            >
+              {bulkRemoveLoading
+                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                : <Trash2 className="h-3.5 w-3.5" />}
+              Remove {selectedToRemove.size} Machine{selectedToRemove.size !== 1 ? 's' : ''}
+            </button>
+          )}
           <button onClick={load} disabled={loading}
             className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40">
             <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -113,10 +184,24 @@ export default function GroupDetailPage() {
         </div>
       </div>
 
-      {/* Add machines panel */}
+      {/* ── Add machines panel ────────────────────────────────────────────────── */}
       {showAdd && (
         <div className="mb-4 rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-          <p className="mb-3 text-sm font-semibold text-gray-900">Select machines to add:</p>
+          <div className="mb-3 flex items-center justify-between">
+            <p className="text-sm font-semibold text-gray-900">Select machines to add:</p>
+            {available.length > 0 && (
+              <label className="flex cursor-pointer items-center gap-2 text-xs text-gray-500 select-none">
+                <input
+                  type="checkbox"
+                  className="accent-[#B91C1C]"
+                  checked={allAddSelected}
+                  ref={(el) => { if (el) el.indeterminate = someAddSelected; }}
+                  onChange={toggleSelectAllToAdd}
+                />
+                Select All ({available.length})
+              </label>
+            )}
+          </div>
           {available.length === 0 ? (
             <p className="text-sm text-gray-400">All machines are already in this group.</p>
           ) : (
@@ -161,7 +246,7 @@ export default function GroupDetailPage() {
         </div>
       )}
 
-      {/* Machines table */}
+      {/* ── Machines table ────────────────────────────────────────────────────── */}
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
         {loading ? (
           <div className="p-12 text-center text-sm text-gray-400">Loading…</div>
@@ -180,35 +265,57 @@ export default function GroupDetailPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="border-b border-gray-100 bg-gray-50">
+                {/* Select-all checkbox in header */}
+                <th className="w-10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300 accent-[#B91C1C] cursor-pointer"
+                    checked={allRemoveSelected}
+                    ref={(el) => { if (el) el.indeterminate = someRemoveSelected; }}
+                    onChange={toggleSelectAllToRemove}
+                    title="Select all"
+                  />
+                </th>
                 {['Name', 'IP Address', 'OS', 'Status', ''].map((h) => (
                   <th key={h} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
                 ))}
               </tr>
             </thead>
             <tbody>
-              {groupMachines.map((m) => (
-                <tr key={m._id} className="border-b border-gray-50 hover:bg-gray-50">
-                  <td className="px-5 py-3 font-medium text-gray-900">{m.name}</td>
-                  <td className="px-5 py-3 font-mono text-xs text-gray-600">{m.ipAddress}</td>
-                  <td className="px-5 py-3 capitalize text-gray-600">{m.os}</td>
-                  <td className="px-5 py-3">
-                    <span className="inline-flex items-center gap-1.5 text-xs">
-                      <span className={`h-1.5 w-1.5 rounded-full ${statusDot[m.status] ?? 'bg-gray-400'}`} />
-                      <span className="capitalize text-gray-600">{m.status}</span>
-                    </span>
-                  </td>
-                  <td className="px-5 py-3 text-right">
-                    <button
-                      onClick={() => void handleRemove(m._id, m.name)}
-                      disabled={removeLoading === m._id}
-                      className="inline-flex items-center gap-1 rounded border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
-                    >
-                      {removeLoading === m._id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
-                      Remove
-                    </button>
-                  </td>
-                </tr>
-              ))}
+              {groupMachines.map((m) => {
+                const isSelected = selectedToRemove.has(m._id);
+                return (
+                  <tr key={m._id} className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${isSelected ? 'bg-red-50/40' : ''}`}>
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-gray-300 accent-[#B91C1C] cursor-pointer"
+                        checked={isSelected}
+                        onChange={() => toggleRemoveOne(m._id)}
+                      />
+                    </td>
+                    <td className="px-5 py-3 font-medium text-gray-900">{m.name}</td>
+                    <td className="px-5 py-3 font-mono text-xs text-gray-600">{m.ipAddress}</td>
+                    <td className="px-5 py-3 capitalize text-gray-600">{m.os}</td>
+                    <td className="px-5 py-3">
+                      <span className="inline-flex items-center gap-1.5 text-xs">
+                        <span className={`h-1.5 w-1.5 rounded-full ${statusDot[m.status] ?? 'bg-gray-400'}`} />
+                        <span className="capitalize text-gray-600">{m.status}</span>
+                      </span>
+                    </td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => void handleRemove(m._id, m.name)}
+                        disabled={removeLoading === m._id || bulkRemoveLoading}
+                        className="inline-flex items-center gap-1 rounded border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
+                      >
+                        {removeLoading === m._id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                        Remove
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

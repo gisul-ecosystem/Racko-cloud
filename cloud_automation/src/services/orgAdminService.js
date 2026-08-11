@@ -30,6 +30,11 @@ const {
 } = require('./azureCostManagementService');
 const { formatMinutes } = require('../utils/formatMinutes');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const {
+  createAuthorizationClient,
+  getSubscriptionAssignmentCount,
+  SUBSCRIPTION_ROLE_ASSIGNMENT_LIMIT
+} = require('../provisioners/azure/roleProvisioner');
 const { filterResourcesForUser, expandDeploymentResources } = require('../utils/resourceOwnership');
 const { listResourcesInResourceGroup } = require('./resourceCleanupService');
 const {
@@ -3533,9 +3538,31 @@ const listAzureRoles = () => [
   { name: 'Monitoring Reader', definitionId: '43d0d8ad-25c7-4714-9337-8ba259a9fe05' }
 ];
 
+const getSubscriptionRoleQuota = async () => {
+  const { authorizationClient, subscriptionId } = createAuthorizationClient();
+  const counted = await getSubscriptionAssignmentCount(authorizationClient, subscriptionId);
+  const limit = SUBSCRIPTION_ROLE_ASSIGNMENT_LIMIT;
+  const exhausted = counted >= limit;
+  const used = exhausted ? limit : counted;
+  const remaining = Math.max(0, limit - counted);
+  const percentUsed = limit > 0 ? Math.min(100, Math.round((counted / limit) * 100)) : 0;
+
+  return {
+    subscriptionId,
+    used,
+    usedAtLeast: counted,
+    limit,
+    remaining,
+    percentUsed,
+    exhausted,
+    warning: !exhausted && remaining <= 200
+  };
+};
+
 module.exports = {
   listResourceGroups,
   listRequests,
+  getSubscriptionRoleQuota,
   getResourceGroupDetail,
   getUserLiveResources,
   getMonitoringLogs,

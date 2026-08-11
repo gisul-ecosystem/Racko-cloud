@@ -96,8 +96,9 @@ const inlinePortalUserBody = z.object({
 /**
  * One bulk-import row. Accepts `ip` (Bulk Import JSON shape) or `ipAddress`.
  *
- * Legacy: `{ target, assignments? }`
- * Extended: `{ tenantName, user?, schedule? }` — creates tenant user inline when `user` is set.
+ * Legacy:           `{ target, assignments? }`
+ * Extended tenant:  `{ tenantName, user?, schedule? }`
+ * Extended admin:   `{ adminEmail, user?, schedule? }`
  */
 const bulkImportRowBody = z
   .object({
@@ -110,6 +111,7 @@ const bulkImportRowBody = z
     target: targetBody.optional(),
     assignments: z.array(assignmentBody).max(50).optional(),
     tenantName: z.string().trim().min(1).optional(),
+    adminEmail: z.string().email().trim().toLowerCase().optional(),
     user: inlinePortalUserBody.optional(),
     schedule: optionalAssignmentScheduleBody,
   })
@@ -127,28 +129,30 @@ const bulkImportRowBody = z
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Invalid IP address', path: ['ip'] });
     }
 
-    const hasExtended = Boolean(data.tenantName);
+    const hasExtendedTenant = Boolean(data.tenantName);
+    const hasExtendedAdmin = Boolean(data.adminEmail);
     const hasLegacy = Boolean(data.target);
+    const modeCount = [hasExtendedTenant, hasExtendedAdmin, hasLegacy].filter(Boolean).length;
 
-    if (!hasExtended && !hasLegacy) {
+    if (modeCount === 0) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Each row needs either target (legacy) or tenantName (extended tenant import)',
+        message: 'Each row needs exactly one of: tenantName, adminEmail, or target',
         path: ['tenantName'],
       });
       return;
     }
 
-    if (hasExtended && hasLegacy) {
+    if (modeCount > 1) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Use tenantName (extended) or target (legacy), not both',
-        path: ['target'],
+        message: 'Use exactly one of tenantName, adminEmail, or target — not multiple',
+        path: ['tenantName'],
       });
       return;
     }
 
-    if (hasExtended && data.assignments?.length) {
+    if ((hasExtendedTenant || hasExtendedAdmin) && data.assignments?.length) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'Extended rows use user + schedule, not assignments[]',
@@ -157,7 +161,7 @@ const bulkImportRowBody = z
       return;
     }
 
-    if (hasExtended && data.schedule && !data.user) {
+    if ((hasExtendedTenant || hasExtendedAdmin) && data.schedule && !data.user) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message: 'schedule requires user on extended rows',
@@ -165,7 +169,7 @@ const bulkImportRowBody = z
       });
     }
 
-    if (!hasExtended && data.target) {
+    if (hasLegacy && data.target) {
       const isTenant = Boolean(data.target.tenantId || data.target.tenantSlug);
       for (let i = 0; i < (data.assignments?.length ?? 0); i++) {
         const a = data.assignments![i]!;
@@ -207,6 +211,16 @@ const bulkImportRowBody = z
       };
     }
 
+    if (data.adminEmail) {
+      return {
+        ...base,
+        mode: 'extended_admin' as const,
+        adminEmail: data.adminEmail,
+        user: data.user,
+        schedule: data.schedule,
+      };
+    }
+
     return {
       ...base,
       mode: 'legacy' as const,
@@ -220,7 +234,7 @@ export const superAdminBulkImportExternalVmSchema = z.object({
     vms: z
       .array(bulkImportRowBody)
       .min(1, 'At least one VM is required')
-      .max(100, 'Cannot import more than 100 VMs at once'),
+      .max(300, 'Cannot import more than 300 VMs at once'),
   }),
 });
 

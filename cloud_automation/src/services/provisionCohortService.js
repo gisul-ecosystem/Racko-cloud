@@ -137,7 +137,9 @@ const resolveActiveCohort = async (
   }
 
   const failed = cohorts.find((c) => c.status === 'failed');
-  if (failed && reviveFailed) {
+  // POST work (claimPending) auto-revives failed waves so long steps (roles)
+  // can continue after transient 5xx/timeouts without a manual retry click.
+  if (failed && (reviveFailed || claimPending)) {
     await client.query(
       `
         UPDATE provision_cohorts

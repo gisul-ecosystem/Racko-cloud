@@ -9,6 +9,7 @@ export type PlatformServiceEntitlementKey =
   | 'dedicated-server'
   | 'vm-management'
   | 'elastic-servers'
+  | 'my-vms'
   | 'azure'
   | 'aws'
   | 'gcp'
@@ -30,6 +31,7 @@ export const PLATFORM_PERMISSION_CATALOG: OrgPermissionDef[] = [
   { key: 'dedicated.request', label: 'Submit dedicated server requests', group: 'Dedicated Server' },
   { key: 'elastic.read', label: 'View elastic servers', group: 'Elastic Servers' },
   { key: 'elastic.manage', label: 'Manage elastic servers & users', group: 'Elastic Servers' },
+  { key: 'my_vms.read', label: 'View My VM Dashboard', group: 'My VM Dashboard' },
   { key: 'azure.read', label: 'View Azure labs', group: 'Azure' },
   { key: 'azure.manage', label: 'Create & manage Azure labs', group: 'Azure' },
   { key: 'aws.read', label: 'View AWS labs', group: 'AWS' },
@@ -64,6 +66,7 @@ const SERVICE_PERMISSION_KEYS: Record<PlatformServiceEntitlementKey, string[]> =
   'dedicated-server': ['dedicated.read', 'dedicated.request'],
   'vm-management': ['vms.read', 'vms.manage', 'vms.assign', 'team.manage'],
   'elastic-servers': ['elastic.read', 'elastic.manage'],
+  'my-vms': ['my_vms.read'],
   azure: ['azure.read', 'azure.manage'],
   aws: ['aws.read', 'aws.manage'],
   gcp: ['gcp.read', 'gcp.manage'],

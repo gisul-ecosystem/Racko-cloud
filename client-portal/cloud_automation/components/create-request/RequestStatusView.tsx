@@ -525,7 +525,12 @@ export function RequestStatusView({
                           ) : null}
                           {step.status === 'failed' ? (
                             <p className="mt-1 text-xs text-red-600/80">
-                              Auto-retry paused. Use Retry step after fixing the issue.
+                              {step.key === 'roles' ||
+                              step.key === 'services' ||
+                              step.key === 'users' ||
+                              step.key === 'resourceGroup'
+                                ? 'Step paused. Use Retry step if provisioning does not resume automatically.'
+                                : 'Auto-retry paused. Use Retry step after fixing the issue.'}
                             </p>
                           ) : null}
                         </div>
@@ -540,7 +545,7 @@ export function RequestStatusView({
                 <div className="border-b border-gray-100 px-6 py-4">
                   <h2 className="text-base font-semibold text-gray-900">Activity log</h2>
                   <p className="mt-0.5 text-xs text-gray-400">
-                    Live step progress for this request (errors stop here until you retry)
+                    Live step progress for this request (transient errors on long steps retry automatically)
                   </p>
                 </div>
                 <div className="max-h-96 overflow-y-auto px-6 py-4">

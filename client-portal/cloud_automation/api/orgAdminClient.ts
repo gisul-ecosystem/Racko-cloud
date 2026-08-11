@@ -21,6 +21,7 @@ import type {
   OrgAdminUserAzureCostResponse,
   OrgAdminSharedAzureCostSummary,
   OrgAdminSharedAzureCostResponse,
+  OrgAdminSubscriptionRoleQuota,
 } from '../types/orgAdmin';
 
 export class OrgAdminError extends Error {
@@ -81,6 +82,14 @@ export async function listOrgRequests(): Promise<OrgAdminRequestSummary[]> {
     data: OrgAdminRequestSummary[];
   }>('/requests');
   return response.data ?? [];
+}
+
+export async function getOrgSubscriptionRoleQuota(): Promise<OrgAdminSubscriptionRoleQuota | null> {
+  const response = await orgAdminRequest<{
+    success: boolean;
+    quota: OrgAdminSubscriptionRoleQuota;
+  }>('/subscription-role-quota');
+  return response.quota ?? null;
 }
 
 export async function getOrgResourceGroupDetail(

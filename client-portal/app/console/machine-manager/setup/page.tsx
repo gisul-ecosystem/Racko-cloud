@@ -420,6 +420,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
   const [vmRows, setVmRows] = useState<VMPushTarget[]>([{ name: '', ipAddress: '', os: 'linux', username: '', password: '' }]);
   const [machines, setMachines] = useState<IMachine[]>([]);
   const [pushing, setPushing] = useState(false);
+  const [installRackoApp, setInstallRackoApp] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [recovering, setRecovering] = useState(false);
 
@@ -467,7 +468,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
           _id: m.machineId, name: m.machineName, ipAddress: m.ipAddress,
           os: 'windows' as MachineOS, agentId: '', accountToken: '',
           status: m.agentConnected ? 'online' as const : 'offline' as const,
-          adminId: session.adminId, trackingEnabled: false,
+          adminId: session.adminId,
           createdAt: session.createdAt, updatedAt: session.updatedAt,
         }));
         setMachines(restoredMachines);
@@ -638,7 +639,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
       };
 
       // Trigger the actual push (runs in parallel with SSE receiving events)
-      const result = await pushAgentToVMs(valid, sessionId);
+      const result = await pushAgentToVMs(valid, sessionId, installRackoApp);
       setMachines(result.machines);
 
       // Initialize status map — merge with any SSE events already received before API returned
@@ -735,7 +736,21 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
             </button>
           </div>
 
-          <div className="mt-6 flex justify-end border-t border-gray-100 pt-5">
+          <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-5">
+            {/* Racko App install toggle */}
+            <label className="flex cursor-pointer items-center gap-3 select-none">
+              <input
+                type="checkbox"
+                checked={installRackoApp}
+                onChange={(e) => setInstallRackoApp(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+              />
+              <div>
+                <p className="text-sm font-medium text-gray-700">Install Racko App</p>
+                <p className="text-xs text-gray-400">Desktop shared-files app + WebView2 (~72 MB). Uncheck for agent-only installs.</p>
+              </div>
+            </label>
+
             <button onClick={() => void handlePush()} disabled={pushing}
               className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:opacity-50">
               {pushing && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />}
@@ -842,7 +857,10 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
                       </td>
                       {/* Racko App column — shows status of racko-app GUI installation via exec */}
                       <td className="px-4 py-3">
-                        {st?.pushSuccess === false ? (
+                        {!installRackoApp ? (
+                          // Admin opted out of racko-app install
+                          <span className="text-xs text-gray-400">Skipped</span>
+                        ) : st?.pushSuccess === false ? (
                           // Push failed — agent never started, racko-app can't install
                           <span className="text-xs text-gray-400">—</span>
                         ) : st?.rackoAppInstalled === true ? (

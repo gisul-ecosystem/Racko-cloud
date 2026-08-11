@@ -4,6 +4,7 @@ import { TenantUser } from '../../models/tenantUser.model';
 import { User } from '../../models/user.model';
 import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
 import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
+import { VmProviderMetadataModel, type ProviderPlanDuration } from '../../models/vmProviderMetadata.model';
 import { decrypt } from '../../utils/crypto';
 import { ValidationError } from '../../utils/errors';
 import { ExternalVMModel } from './external-vm.model';
@@ -35,6 +36,10 @@ export interface SuperAdminExternalVmOverviewRow {
   username: string;
   /** Decrypted — super_admin overview only. */
   password: string;
+  providerPlanDuration?: ProviderPlanDuration | null;
+  providerUsername?: string | null;
+  providerStartDate?: string | null;
+  providerEndDate?: string | null;
   source: string;
   stack: 'platform' | 'tenant';
   adminId: string | null;
@@ -99,6 +104,16 @@ class SuperAdminExternalVmOverviewService {
       return { rows: [], total: 0 };
     }
 
+    const ipAddresses = [...new Set(docs.map((doc) => doc.ipAddress).filter(Boolean))];
+    const providerMetadata = ipAddresses.length
+      ? await VmProviderMetadataModel.find({ ipAddress: { $in: ipAddresses } })
+        .select('ipAddress planDuration providerUsername providerStartDate providerEndDate')
+        .lean()
+      : [];
+    const providerByIp = new Map(
+      providerMetadata.map((item) => [item.ipAddress, item])
+    );
+
     const vmIds = docs.map((d) => d._id);
     const adminIds = [
       ...new Set(docs.filter((d) => d.adminId).map((d) => d.adminId!.toString())),
@@ -158,6 +173,7 @@ class SuperAdminExternalVmOverviewService {
       const isTenant = Boolean(doc.tenantId);
       const admin = doc.adminId ? adminById.get(doc.adminId.toString()) : undefined;
       const tenant = doc.tenantId ? tenantById.get(doc.tenantId.toString()) : undefined;
+      const provider = providerByIp.get(doc.ipAddress);
 
       let password = '';
       try {
@@ -232,6 +248,10 @@ class SuperAdminExternalVmOverviewService {
         protocol: doc.protocol,
         username: doc.username,
         password,
+        providerPlanDuration: provider?.planDuration ?? null,
+        providerUsername: provider?.providerUsername ?? null,
+        providerStartDate: provider?.providerStartDate ? new Date(provider.providerStartDate).toISOString() : null,
+        providerEndDate: provider?.providerEndDate ? new Date(provider.providerEndDate).toISOString() : null,
         source: doc.source ?? 'admin_import',
         stack: isTenant ? 'tenant' : 'platform',
         adminId: doc.adminId?.toString() ?? null,
