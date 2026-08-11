@@ -11,6 +11,7 @@ import {
   Palette,
   Server,
   Shield,
+  Upload,
   Users,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -46,6 +47,14 @@ const navItems: NavItem[] = [
     icon: LayoutGrid,
     exact: true,
     section: 'top',
+  },
+  {
+    href: '/super-admin-console/elastic-servers',
+    label: 'Server Import & Assign',
+    icon: Upload,
+    exact: false,
+    anyOf: ['elastic_servers.superadmin'] as string[],
+    section: 'services',
   },
   {
     href: '/super-admin-console/vm-management',

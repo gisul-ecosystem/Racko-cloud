@@ -3,6 +3,9 @@ import type { WeeklyScheduleDay } from '../vmAccessSchedule/weeklySchedule';
 
 export type ExternalVMProtocol = 'rdp' | 'ssh';
 
+/** Billing / provenance: which console imported this elastic server. */
+export type ExternalVMSource = 'admin_import' | 'tenant_import' | 'superadmin_bulk';
+
 export interface IExternalVM extends Document {
   _id: mongoose.Types.ObjectId;
 
@@ -13,6 +16,12 @@ export interface IExternalVM extends Document {
   username: string;
   /** AES-256-CBC encrypted password (encrypt/decrypt handled in the service). */
   password: string;
+
+  /**
+   * Where this VM record originated (billing attribution).
+   * Set explicitly on each create path; backfilled by migrateExternalVmSource.
+   */
+  source: ExternalVMSource;
 
   /** Platform admin owner (admin console). Mutually exclusive with tenantId. */
   adminId?: mongoose.Types.ObjectId;
@@ -73,6 +82,12 @@ const externalVMSchema = new Schema<IExternalVM>(
     password: {
       type: String,
       required: true,
+    },
+    source: {
+      type: String,
+      enum: ['admin_import', 'tenant_import', 'superadmin_bulk'],
+      required: true,
+      index: true,
     },
     adminId: {
       type: Schema.Types.ObjectId,

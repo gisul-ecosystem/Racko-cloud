@@ -198,9 +198,25 @@ export default function UserDashboard() {
                         <td className="px-4 py-3.5 text-xs text-gray-400">—</td>
                         <td className="px-4 py-3.5 text-xs font-mono text-gray-600">{s.ipAddress}</td>
                         <td className="px-4 py-3.5 text-right">
-                          <Link href={`/dashboard/user/servers/${s._id}/console`} className="inline-flex items-center gap-0.5 text-xs font-medium text-gray-500 hover:text-[#B91C1C]">
-                            Console <ChevronRight className="w-3.5 h-3.5" />
-                          </Link>
+                          {s.myAccess && !s.myAccess.allowedNow ? (
+                            <span
+                              className="inline-flex cursor-not-allowed items-center gap-0.5 text-xs font-medium text-gray-300"
+                              title={
+                                s.myAccess.nextWindow
+                                  ? `Outside access window. Next: ${s.myAccess.nextWindow}`
+                                  : 'Outside your access window'
+                              }
+                            >
+                              Console <ChevronRight className="w-3.5 h-3.5" />
+                            </span>
+                          ) : (
+                            <Link
+                              href={`/dashboard/user/servers/${s._id}/console`}
+                              className="inline-flex items-center gap-0.5 text-xs font-medium text-gray-500 hover:text-[#B91C1C]"
+                            >
+                              Console <ChevronRight className="w-3.5 h-3.5" />
+                            </Link>
+                          )}
                         </td>
                       </tr>
                     ))}

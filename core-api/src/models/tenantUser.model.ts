@@ -6,6 +6,8 @@ export interface ITenantUser extends Document {
   _id: mongoose.Types.ObjectId;
   tenantId: mongoose.Types.ObjectId;
   email: string;
+  /** Optional login alias — unique per tenant when set. */
+  username?: string | null;
   passwordHash: string;
   role: TenantUserRole;
   /**
@@ -40,6 +42,12 @@ const tenantUserSchema = new Schema<ITenantUser>(
       required: true,
       lowercase: true,
       trim: true,
+    },
+    username: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      default: null,
     },
     passwordHash: {
       type: String,
@@ -95,5 +103,6 @@ const tenantUserSchema = new Schema<ITenantUser>(
 );
 
 tenantUserSchema.index({ tenantId: 1, email: 1 }, { unique: true });
+tenantUserSchema.index({ tenantId: 1, username: 1 }, { unique: true, sparse: true });
 
 export const TenantUser = mongoose.model<ITenantUser>('TenantUser', tenantUserSchema);

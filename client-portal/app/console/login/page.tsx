@@ -19,7 +19,7 @@ import { tenantResendVerification } from '@/lib/tenantPortalApi';
 import { getTenantDefaultDashboardPath } from '@/lib/tenantPortalRoutes';
 
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
+  email: z.string().min(1, 'Email or username is required'),
   password: z.string().min(1, 'Password is required'),
 });
 
@@ -108,21 +108,21 @@ export default function ConsoleTenantLoginPage() {
   return (
     <TenantAuthFrame
       title="Welcome back"
-      description="Use your work email after verifying your invite and setting your password. Sign in here for your tenant workspace — not at the platform /login."
+      description="Use your email or username after verifying your invite and setting your password. Sign in here for your tenant workspace — not at the platform /login."
     >
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
         <div>
           <label htmlFor="email" className="mb-1.5 block text-sm font-medium text-gray-700">
-            Email <span className="text-red-500">*</span>
+            Email or username <span className="text-red-500">*</span>
           </label>
           <input
             id="email"
-            type="email"
-            autoComplete="email"
+            type="text"
+            autoComplete="username"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             className={TENANT_AUTH_INPUT}
-            placeholder="you@company.com"
+            placeholder="you@company.com or username"
             disabled={formDisabled}
           />
         </div>

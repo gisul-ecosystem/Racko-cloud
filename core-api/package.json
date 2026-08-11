@@ -9,6 +9,7 @@
     "dev": "node --watch -r ts-node/register src/server.ts",
     "seed": "ts-node src/scripts/seedSuperAdmin.ts",
     "migrate:vm-leases": "ts-node src/scripts/migrateVmHostLeases.ts",
+    "migrate:external-vm-source": "ts-node src/scripts/migrateExternalVmSource.ts",
     "delete:vm-leases": "ts-node src/scripts/deleteVmHostLease.ts",
     "typecheck": "tsc --noEmit",
     "test": "ts-node --transpile-only src/modules/vm/helpers/hypervGuestOutput.test.ts && ts-node --transpile-only src/modules/vmCatalog/catalogVmSerializer.test.ts"

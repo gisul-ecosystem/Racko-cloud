@@ -12,6 +12,7 @@ import {
   Palette,
   Server,
   Shield,
+  Upload,
   Users,
 } from 'lucide-react';
 import { ServiceTileCard } from '@/components/super-admin-console/ServiceTileCard';
@@ -111,6 +112,15 @@ const platformTools: ServiceTile[] = [
     icon: FileSpreadsheet,
     description: 'Upload Excel inventory of leased VM hosts and track expiry dates',
     anyOf: ['vm_host_leases.manage'],
+  },
+  {
+    id: 'elastic-servers',
+    name: 'Server Import & Assign',
+    href: '/super-admin-console/elastic-servers',
+    icon: Upload,
+    description:
+      'Bulk import external servers and assign to tenants/users with schedules',
+    anyOf: ['elastic_servers.superadmin'],
   },
   {
     id: 'white-labelling',
