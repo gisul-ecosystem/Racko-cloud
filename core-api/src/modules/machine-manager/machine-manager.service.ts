@@ -55,6 +55,8 @@ class MachineManagerService {
       } : undefined,
       trackingEnabled: doc.trackingEnabled ?? false,
       trackingEnabledAt: doc.trackingEnabledAt?.toISOString(),
+      agentVersion: doc.agentVersion,
+      rackoAppVersion: doc.rackoAppVersion,
       createdAt: doc.createdAt.toISOString(),
       updatedAt: doc.updatedAt.toISOString(),
     };
@@ -494,9 +496,12 @@ class MachineManagerService {
         diskGb:    dto.specs.diskGb,
       };
     }
-    // Store the agent version so admins can see which version each machine runs
+    // Store reported versions so admins can see what each machine runs
     if (dto.version) {
-      (machine as any).agentVersion = dto.version;
+      machine.agentVersion = dto.version;
+    }
+    if (dto.rackoAppVersion !== undefined) {
+      machine.rackoAppVersion = dto.rackoAppVersion;
     }
     await machine.save();
 
@@ -516,43 +521,58 @@ class MachineManagerService {
       }
     }
 
-    // ── Auto-update check ─────────────────────────────────────────────────────
-    // Compare the agent's reported version against the published version in config.
-    // If the agent is outdated, tell it to update via the heartbeat response.
     const { config } = await import('../../config');
-    const publishedVersion = config.AGENT_VERSION;
 
-    if (publishedVersion && dto.version && dto.version !== publishedVersion) {
-      const isOutdated = isVersionOutdated(dto.version, publishedVersion);
-      if (isOutdated) {
-        logger.info('[MachineManager] Agent outdated — sending update signal', {
-          agentId: dto.agentId,
-          currentVersion: dto.version,
-          latestVersion: publishedVersion,
-        });
-
-        // Pick the right checksum based on machine OS
-        let checksum = '';
-        const os = machine.os?.toLowerCase() ?? '';
-        if (os === 'windows') checksum = (config.AGENT_CHECKSUM_WINDOWS ?? '').trim();
-        else if (os === 'linux') checksum = (config.AGENT_CHECKSUM_LINUX ?? '').trim();
-        else if (os === 'macos') checksum = (config.AGENT_CHECKSUM_DARWIN ?? '').trim();
-
-        return {
-          updateAvailable: true,
-          latestVersion: publishedVersion,
-          checksum,
-          trackingEnabled: machine.trackingEnabled ?? false,
-        };
-      }
-    }
-
-    return {
+    const response: import('./machine-manager.types').HeartbeatUpdateInfo = {
       updateAvailable: false,
       latestVersion: '',
       checksum: '',
       trackingEnabled: machine.trackingEnabled ?? false,
+      rackoAppUpdateAvailable: false,
+      rackoAppLatestVersion: '',
+      rackoAppChecksum: '',
     };
+
+    // ── Agent auto-update ─────────────────────────────────────────────────────
+    const publishedAgentVersion = config.AGENT_VERSION;
+    if (publishedAgentVersion && dto.version && isVersionOutdated(dto.version, publishedAgentVersion)) {
+      logger.info('[MachineManager] Agent outdated — sending update signal', {
+        agentId: dto.agentId,
+        currentVersion: dto.version,
+        latestVersion: publishedAgentVersion,
+      });
+
+      let checksum = '';
+      const os = machine.os?.toLowerCase() ?? '';
+      if (os === 'windows') checksum = (config.AGENT_CHECKSUM_WINDOWS ?? '').trim();
+      else if (os === 'linux') checksum = (config.AGENT_CHECKSUM_LINUX ?? '').trim();
+      else if (os === 'macos') checksum = (config.AGENT_CHECKSUM_DARWIN ?? '').trim();
+
+      response.updateAvailable = true;
+      response.latestVersion = publishedAgentVersion;
+      response.checksum = checksum;
+    }
+
+    // ── Racko App auto-update (Windows only, app must already be installed) ───
+    const publishedAppVersion = config.RACKO_APP_VERSION;
+    if (
+      machine.os === 'windows' &&
+      publishedAppVersion &&
+      dto.rackoAppVersion &&
+      isVersionOutdated(dto.rackoAppVersion, publishedAppVersion)
+    ) {
+      logger.info('[MachineManager] Racko App outdated — sending update signal', {
+        agentId: dto.agentId,
+        currentVersion: dto.rackoAppVersion,
+        latestVersion: publishedAppVersion,
+      });
+
+      response.rackoAppUpdateAvailable = true;
+      response.rackoAppLatestVersion = publishedAppVersion;
+      response.rackoAppChecksum = (config.RACKO_APP_CHECKSUM ?? '').trim();
+    }
+
+    return response;
   }
 
   /**
@@ -846,6 +866,7 @@ class MachineManagerService {
 
     const platformUrl = config.GATEWAY_URL ?? config.FRONTEND_URL ?? 'http://localhost:8000';
     const installDir = 'C:\\ProgramData\\racko-agent';
+    const appVersion = (config.RACKO_APP_VERSION ?? '').trim();
 
     // PowerShell script runs on the VM as SYSTEM:
     // 1. Download racko-app.zip
@@ -885,6 +906,7 @@ class MachineManagerService {
       '} else { Write-Host "[racko] WebView2 already installed, skipping." }',
       'Write-Host "[racko] Launching Racko App..."',
       'Start-Process "$appDir\\racko-app.exe"',
+      `[System.IO.File]::WriteAllText("$installDir\\racko-app-version.txt", '${appVersion}', [System.Text.UTF8Encoding]::new($false))`,
       'Write-Host "[racko] Racko App setup complete."',
     ].join('; ');
 

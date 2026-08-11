@@ -44,10 +44,13 @@ build-mac:
 # The zip is served from /api/v1/agent/binary/racko-app and downloaded by the
 # VM push script, which extracts it so WebView2Loader.dll is a loose file on disk.
 build-racko-app:
+	$(eval RACKO_APP_VERSION := $(shell cat ../racko-app/VERSION 2>/dev/null | tr -d '[:space:]'))
 	dotnet publish ../racko-app/RackoApp.csproj \
 	  -c Release \
 	  -r win-x64 \
 	  --self-contained true \
+	  -p:Version=$(RACKO_APP_VERSION) \
+	  -p:InformationalVersion=$(RACKO_APP_VERSION) \
 	  -o ../racko-app/publish/
 	mkdir -p dist
 	cd ../racko-app/publish && zip -r ../../agent/$(RACKO_APP_ZIP) .
@@ -61,6 +64,11 @@ checksums:
 	@sha256sum $(BINARY_WINDOWS) | awk '{print "AGENT_CHECKSUM_WINDOWS=" $$1}'
 	@sha256sum $(BINARY_LINUX)   | awk '{print "AGENT_CHECKSUM_LINUX=" $$1}'
 	@sha256sum $(BINARY_MAC)     | awk '{print "AGENT_CHECKSUM_DARWIN=" $$1}'
+	@if [ -f $(RACKO_APP_ZIP) ]; then \
+	  RACKO_APP_VERSION=$$(cat ../racko-app/VERSION 2>/dev/null | tr -d '[:space:]'); \
+	  echo "RACKO_APP_VERSION=$$RACKO_APP_VERSION"; \
+	  sha256sum $(RACKO_APP_ZIP) | awk '{print "RACKO_APP_CHECKSUM=" $$1}'; \
+	fi
 
 clean:
 	rm -rf dist/

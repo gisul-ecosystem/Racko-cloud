@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/appupdater"
+	"github.com/racko-ai/agent/rackoapp"
 	"github.com/racko-ai/agent/updater"
 )
 
@@ -23,10 +25,11 @@ type MachineSpecs struct {
 }
 
 type heartbeatRequest struct {
-	AgentID string       `json:"agentId"`
-	Status  string       `json:"status"`
-	Version string       `json:"version"`
-	Specs   MachineSpecs `json:"specs"`
+	AgentID        string       `json:"agentId"`
+	Status         string       `json:"status"`
+	Version        string       `json:"version"`
+	RackoAppVersion string      `json:"rackoAppVersion,omitempty"`
+	Specs          MachineSpecs `json:"specs"`
 }
 
 // heartbeatResponse is the parsed server response to a heartbeat.
@@ -41,7 +44,11 @@ type heartbeatResponse struct {
 	Checksum        string `json:"checksum"`
 	// TrackingEnabled tells the agent whether it should run the filesystem watcher.
 	// Server is the source of truth — agent obeys unconditionally.
-	TrackingEnabled bool   `json:"trackingEnabled"`
+	TrackingEnabled bool `json:"trackingEnabled"`
+	// RackoAppUpdateAvailable is set when the server has a newer racko-app GUI version.
+	RackoAppUpdateAvailable bool   `json:"rackoAppUpdateAvailable"`
+	RackoAppLatestVersion   string `json:"rackoAppLatestVersion"`
+	RackoAppChecksum        string `json:"rackoAppChecksum"`
 }
 
 // Start sends a heartbeat to the platform every 30 seconds including machine specs.
@@ -79,10 +86,11 @@ func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, canc
 		specs.Hostname, specs.OSVersion, specs.CPUCores, specs.RAMGB, specs.DiskGB)
 
 	payload := heartbeatRequest{
-		AgentID: agentID,
-		Status:  "online",
-		Version: config.Version,
-		Specs:   specs,
+		AgentID:         agentID,
+		Status:          "online",
+		Version:         config.Version,
+		RackoAppVersion: rackoapp.InstalledVersion(),
+		Specs:           specs,
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -116,11 +124,15 @@ func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, canc
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&hbResp); err == nil {
 		if hbResp.Data.UpdateAvailable {
-			log.Printf("[heartbeat] Update available — current=%s latest=%s — triggering self-update",
+			log.Printf("[heartbeat] Agent update available — current=%s latest=%s — triggering self-update",
 				config.Version, hbResp.Data.LatestVersion)
 			// Run update in a goroutine so heartbeat returns cleanly.
 			// The updater will cancel goroutines and exit when done.
 			go updater.Update(cfg, hbResp.Data.Checksum, cancel)
+		} else if hbResp.Data.RackoAppUpdateAvailable {
+			log.Printf("[heartbeat] Racko App update available — current=%s latest=%s",
+				rackoapp.InstalledVersion(), hbResp.Data.RackoAppLatestVersion)
+			go appupdater.Update(cfg, hbResp.Data.RackoAppLatestVersion, hbResp.Data.RackoAppChecksum)
 		}
 
 		// Notify main.go if tracking state changed — server is the source of truth.
