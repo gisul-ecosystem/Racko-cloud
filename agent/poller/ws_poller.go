@@ -1,6 +1,7 @@
 package poller
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -404,11 +405,26 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 			errMsg = errMsg[:2048] + "...(truncated)"
 		}
 		log.Printf("[ws-poller] runReset: script failed: %v", err)
+
+		// ── Authoritative HTTP delivery (survives WS disconnect) ──────────────
+		// POST the result to core-api via HTTP — independent of WebSocket state.
+		// This is the primary delivery path; WS attempt below is a fast-path bonus.
+		p.postResetResult(sessionID, false, errMsg)
+
+		// Also attempt WS delivery as a best-effort fast path
 		sendEvent("reset_complete", 0, "", false, errMsg)
 		return
 	}
 
 	log.Printf("[ws-poller] runReset: script completed successfully, sessionId=%s", sessionID)
+
+	// ── Authoritative HTTP delivery (survives WS disconnect) ──────────────────
+	// POST the result to core-api via HTTP — independent of WebSocket state.
+	// This guarantees delivery even when the WS connection was dropped during
+	// the long-running reset script (which takes 5-10+ minutes).
+	p.postResetResult(sessionID, true, "")
+
+	// Also attempt WS delivery as a best-effort fast path (instant if still connected)
 	sendEvent("reset_complete", 0, "", true, "")
 }
 
@@ -442,6 +458,65 @@ func (p *WSPoller) runCloneReplay(sessionID, sourceMachineID string, safeWrite f
 
 	rep := tracker.NewReplayer(p.agentID, p.cfg, sendEvent)
 	rep.Run(sessionID, sourceMachineID)
+}
+
+// ─── postResetResult ──────────────────────────────────────────────────────────
+// POSTs the reset outcome directly to core-api via HTTP, bypassing the WebSocket.
+// This is the authoritative delivery path — it works even when the WebSocket was
+// dropped during the long-running reset script (which can take 5-10+ minutes).
+// Retries up to 3 times with exponential backoff to handle transient failures.
+func (p *WSPoller) postResetResult(sessionID string, success bool, errMsg string) {
+	type resetResultPayload struct {
+		SessionID string `json:"sessionId"`
+		Success   bool   `json:"success"`
+		Error     string `json:"error,omitempty"`
+	}
+
+	payload := resetResultPayload{
+		SessionID: sessionID,
+		Success:   success,
+		Error:     errMsg,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		log.Printf("[ws-poller] postResetResult: marshal error: %v", err)
+		return
+	}
+
+	url := p.cfg.PlatformURL + "/api/v1/agent/reset-result"
+	client := &http.Client{Timeout: 15 * time.Second}
+
+	delays := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
+	for attempt := 0; attempt <= 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(delays[attempt-1])
+			log.Printf("[ws-poller] postResetResult: retry %d for sessionId=%s", attempt, sessionID)
+		}
+
+		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		if err != nil {
+			log.Printf("[ws-poller] postResetResult: build request error: %v", err)
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Agent-ID", p.agentID)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			log.Printf("[ws-poller] postResetResult: http error (attempt %d): %v", attempt+1, err)
+			continue
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode == http.StatusOK {
+			log.Printf("[ws-poller] postResetResult: delivered successfully, sessionId=%s, success=%v", sessionID, success)
+			return
+		}
+		log.Printf("[ws-poller] postResetResult: server returned %d (attempt %d), sessionId=%s", resp.StatusCode, attempt+1, sessionID)
+	}
+
+	log.Printf("[ws-poller] postResetResult: all attempts failed for sessionId=%s — result may not be delivered", sessionID)
 }
 
 // ─── Uninstall ────────────────────────────────────────────────────────────────

@@ -7,6 +7,7 @@ import {
 } from '../config/specMap.js';
 import { resolveSpecParts } from '../config/specMap.js';
 import { normalizeProviders } from '../config/cloudProviders.js';
+import { filterProvisionReadyProviders } from '../config/provisionReady.js';
 import { ensureSkuMappings } from './dynamicSkuResolver.js';
 import { fetchEc2Hourly, ebsHourly, fetchEbsGbMonth, fetchAwsPublicIpHourly } from './awsPriceFetch.js';
 import {
@@ -445,11 +446,27 @@ export async function selectProvider({
     };
   }
 
+  const provisionReadyProviders = filterProvisionReadyProviders(providersUsed);
+  if (provisionReadyProviders.length === 0) {
+    return {
+      provider: 'webyne',
+      region: null,
+      category: cat,
+      canonicalSpec: spec,
+      pricingMode,
+      nestedVirtualization: pricingMode === 'nested',
+      rawTotalPricePerHr: null,
+      autoProvisioned: false,
+      reason: 'no_provision_ready_providers',
+      providersUsed,
+    };
+  }
+
   const dynamicMeta = await fetchLivePricingRows({
     canonicalSpec: spec,
     category: cat,
     mode,
-    providersUsed,
+    providersUsed: provisionReadyProviders,
     pricingMode,
     parts,
     architecture,
@@ -467,7 +484,9 @@ export async function selectProvider({
           (Number(a.rawTotalPricePerHr) || Number.MAX_SAFE_INTEGER)
           - (Number(b.rawTotalPricePerHr) || Number.MAX_SAFE_INTEGER)
   );
-  const filteredRows = sortedRows;
+  const filteredRows = sortedRows.filter((r) =>
+    provisionReadyProviders.includes(r.provider)
+  );
   const anomalyFiltered = false;
   const row = filteredRows[0];
 

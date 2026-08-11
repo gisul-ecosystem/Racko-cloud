@@ -8,6 +8,7 @@ import {
   HardDrive,
   LayoutDashboard,
   LayoutGrid,
+  LayoutList,
   Monitor,
   PlusCircle,
   Server,
@@ -71,6 +72,13 @@ const SHORTCUTS: Shortcut[] = [
     label: 'Elastic Servers',
     href: tenantConsole.elastic,
     icon: <Boxes className="h-4 w-4 shrink-0" />,
+    section: 'services',
+  },
+  {
+    serviceKey: 'my-vms',
+    label: 'My VM Dashboard',
+    href: tenantConsole.myVmDashboard,
+    icon: <LayoutList className="h-4 w-4 shrink-0" />,
     section: 'services',
   },
   {

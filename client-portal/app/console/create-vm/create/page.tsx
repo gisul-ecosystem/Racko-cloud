@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, Check, Loader2, ShoppingCart, X } from 'lucide-react';
-import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ApiError } from '../../../../lib/apiClient';
 import { useVmCatalogPortal } from '../../../../context/VmCatalogPortalContext';
 import {
@@ -81,6 +81,7 @@ function selectedVmOsLabel(category: VmCatalogCategory): string {
 }
 
 export default function CreateVmPage() {
+  const router = useRouter();
   const { api, routes, isReady } = useVmCatalogPortal();
   const projectPortal = routes.hub === '/console' ? 'org' : 'tenant';
   const [plans, setPlans] = useState<IVmCatalogPlan[]>([]);
@@ -102,7 +103,6 @@ export default function CreateVmPage() {
   const [softwareError, setSoftwareError] = useState<string | null>(null);
   const [buyLoading, setBuyLoading] = useState(false);
   const [buyError, setBuyError] = useState<string | null>(null);
-  const [submittedRequestId, setSubmittedRequestId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -183,14 +183,12 @@ export default function CreateVmPage() {
     setSoftwareOptions([]);
     setSoftwareError(null);
     setBuyError(null);
-    setSubmittedRequestId(null);
   }
 
   function closeDrawer() {
     setSelected(null);
     setDrawerStep('configure');
     setBuyError(null);
-    setSubmittedRequestId(null);
   }
 
   function toggleSoftware(id: string) {
@@ -260,9 +258,8 @@ export default function CreateVmPage() {
 
     setBuyLoading(true);
     setBuyError(null);
-    setSubmittedRequestId(null);
     try {
-      const request = await api.submitRequest({
+      await api.submitRequest({
         category: os,
         planId: selected._id,
         planName: selected.name,
@@ -287,7 +284,9 @@ export default function CreateVmPage() {
         ...(projectId ? { projectId } : {}),
         preferredSoftwareIds,
       });
-      setSubmittedRequestId(request._id);
+      // Navigate to My VMs immediately — the request is queued (Provisioning)
+      closeDrawer();
+      router.push(routes.myVms);
     } catch (err) {
       setBuyError(
         err instanceof ApiError
@@ -403,7 +402,7 @@ export default function CreateVmPage() {
                       setSoftwareSearch('');
                       setBuyError(null);
                     }}
-                    disabled={buyLoading || !!submittedRequestId}
+                    disabled={buyLoading}
                     className="mb-2 inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-800 disabled:opacity-50"
                   >
                     <ArrowLeft className="h-3.5 w-3.5" />
@@ -481,7 +480,7 @@ export default function CreateVmPage() {
                     serviceKey="create-vm"
                     value={projectId}
                     onChange={setProjectId}
-                    disabled={buyLoading || !!submittedRequestId}
+                    disabled={buyLoading}
                     portal={projectPortal}
                   />
 
@@ -528,7 +527,7 @@ export default function CreateVmPage() {
                           name="software-mode"
                           checked={softwareMode === 'select'}
                           onChange={() => setSoftwareMode('select')}
-                          disabled={buyLoading || !!submittedRequestId}
+                          disabled={buyLoading}
                           className="mt-1"
                         />
                         <span>
@@ -555,7 +554,7 @@ export default function CreateVmPage() {
                             setSoftwareMode('skip');
                             setSelectedSoftwareIds([]);
                           }}
-                          disabled={buyLoading || !!submittedRequestId}
+                          disabled={buyLoading}
                           className="mt-1"
                         />
                         <span>
@@ -576,7 +575,7 @@ export default function CreateVmPage() {
                           value={softwareSearch}
                           onChange={(e) => setSoftwareSearch(e.target.value)}
                           placeholder="Search software…"
-                          disabled={buyLoading || !!submittedRequestId}
+                          disabled={buyLoading}
                           className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-[#B91C1C] focus:ring-2 focus:ring-red-100"
                         />
                         {!softwareLoading && !softwareError && softwareForOs.length > 0 ? (
@@ -606,7 +605,7 @@ export default function CreateVmPage() {
                                 <button
                                   key={sw._id}
                                   type="button"
-                                  disabled={buyLoading || !!submittedRequestId}
+                                  disabled={buyLoading}
                                   onClick={() => toggleSoftware(sw._id)}
                                   className={`w-full rounded-xl border p-3 text-left transition ${
                                     sel
@@ -658,15 +657,6 @@ export default function CreateVmPage() {
                   </div>
 
                   {buyError ? <p className="text-sm text-red-600">{buyError}</p> : null}
-                  {submittedRequestId ? (
-                    <p className="text-sm text-green-700">
-                      Request submitted. Track under{' '}
-                      <Link href={routes.myVms} className="underline">
-                        My VM
-                      </Link>
-                      .
-                    </p>
-                  ) : null}
                 </>
               )}
             </div>
@@ -675,7 +665,7 @@ export default function CreateVmPage() {
               {drawerStep === 'configure' ? (
                 <button
                   type="button"
-                  disabled={!configureValid || buyLoading || !!submittedRequestId}
+                  disabled={!configureValid || buyLoading}
                   onClick={goToSoftwareStep}
                   className="w-full rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
                 >
@@ -687,7 +677,6 @@ export default function CreateVmPage() {
                     type="button"
                     disabled={
                       buyLoading ||
-                      !!submittedRequestId ||
                       total <= 0 ||
                       softwareStepBlocked
                     }

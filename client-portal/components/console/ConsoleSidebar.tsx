@@ -15,6 +15,7 @@ import {
   Server,
   Shield,
   SquarePlus,
+  LayoutList,
   Wallet,
 } from 'lucide-react';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
@@ -42,6 +43,12 @@ const PRODUCT_LINKS: NavItem[] = [
     icon: HardDrive,
   },
   { id: 'elastic', label: 'Elastic Servers', href: '/console/elastic-servers', icon: Boxes },
+  {
+    id: 'my-vm-dashboard',
+    label: 'My VM Dashboard',
+    href: '/console/my-vm-dashboard',
+    icon: LayoutList,
+  },
   {
     id: CLOUD_LABS_SERVICE.id,
     label: CLOUD_LABS_SERVICE.name,
