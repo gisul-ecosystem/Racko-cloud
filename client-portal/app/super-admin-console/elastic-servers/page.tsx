@@ -21,6 +21,7 @@ import {
   bulkDeleteSuperAdminExternalVms,
   deleteSuperAdminExternalVm,
   fetchSuperAdminExternalVmOverview,
+  BULK_DELETE_UI_CHUNK_SIZE,
   type SuperAdminExternalVmOverviewRow,
 } from '@/lib/superAdminExternalVmApi';
 import { ManageExternalVmAssignmentsModal } from '@/components/super-admin-console/ManageExternalVmAssignmentsModal';
@@ -91,7 +92,7 @@ function StatusBadge({ status }: { status: string }) {
 }
 
 const DELETE_CONFIRM_MESSAGE =
-  'This removes the VM(s) and all their assignments. User accounts are not deleted.';
+  'This deletes the VM(s) and any user whose only VM this was. Users with other VMs are kept; admins are never deleted.';
 
 export default function SuperAdminElasticServersOverviewPage() {
   const { toasts, addToast, dismiss } = useToast();
@@ -104,6 +105,7 @@ export default function SuperAdminElasticServersOverviewPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{ done: number; total: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -260,17 +262,40 @@ export default function SuperAdminElasticServersOverviewPage() {
     if (!window.confirm(DELETE_CONFIRM_MESSAGE)) return;
 
     setBulkDeleting(true);
+    setBulkDeleteProgress({ done: 0, total: ids.length });
+
+    let totalDeleted = 0;
+    let totalFailed = 0;
+    const failedIds: string[] = [];
+
     try {
-      const result = await bulkDeleteSuperAdminExternalVms(ids);
-      const deletedIds = result.results.filter((r) => r.success).map((r) => r.id);
-      if (deletedIds.length > 0) {
-        removeRowsFromTable(deletedIds);
+      for (let i = 0; i < ids.length; i += BULK_DELETE_UI_CHUNK_SIZE) {
+        const chunk = ids.slice(i, i + BULK_DELETE_UI_CHUNK_SIZE);
+        try {
+          const result = await bulkDeleteSuperAdminExternalVms(chunk);
+          const deletedIds = result.results.filter((r) => r.success).map((r) => r.id);
+          if (deletedIds.length > 0) {
+            removeRowsFromTable(deletedIds);
+          }
+          totalDeleted += result.summary.deleted;
+          totalFailed += result.summary.failed;
+          failedIds.push(...result.results.filter((r) => !r.success).map((r) => r.id));
+        } catch (err) {
+          // Chunk request itself failed; count all ids in chunk as failed.
+          totalFailed += chunk.length;
+          failedIds.push(...chunk);
+        }
+        setBulkDeleteProgress({ done: Math.min(i + BULK_DELETE_UI_CHUNK_SIZE, ids.length), total: ids.length });
       }
-      toastDeleteSummary('Bulk delete', result.summary);
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Bulk delete failed.');
+
+      toastDeleteSummary('Bulk delete', {
+        deleted: totalDeleted,
+        failed: totalFailed,
+        total: ids.length,
+      });
     } finally {
       setBulkDeleting(false);
+      setBulkDeleteProgress(null);
     }
   }
 
@@ -350,11 +375,18 @@ export default function SuperAdminElasticServersOverviewPage() {
             className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
           >
             {bulkDeleting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {bulkDeleteProgress
+                  ? `Deleting ${bulkDeleteProgress.done} of ${bulkDeleteProgress.total}…`
+                  : 'Deleting…'}
+              </>
             ) : (
-              <Trash2 className="h-4 w-4" />
+              <>
+                <Trash2 className="h-4 w-4" />
+                Delete ({selectedIds.size})
+              </>
             )}
-            Delete ({selectedIds.size})
           </button>
         )}
       </div>

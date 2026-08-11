@@ -6,11 +6,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronLeft,
+  Loader2,
   Plus,
   Search,
   Trash2,
   Upload,
-  XCircle,
 } from 'lucide-react';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/lib/apiClient';
@@ -610,6 +610,7 @@ export default function SuperAdminServerImportPage() {
     {}
   );
   const [submitting, setSubmitting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [result, setResult] = useState<SuperAdminBulkImportResult | null>(null);
 
   useEffect(() => {
@@ -736,21 +737,58 @@ export default function SuperAdminServerImportPage() {
   const handleSubmit = async () => {
     const vms = buildPayload();
     if (!vms) return;
+
+    const CHUNK = 15;
+    const total = vms.length;
+
     setSubmitting(true);
+    setImportProgress({ done: 0, total });
     setResult(null);
+
+    const allResults: SuperAdminBulkImportResult['results'] = [];
+    let succeeded = 0;
+    let failed = 0;
+
     try {
-      const data = await bulkImportSuperAdminExternalVms(vms);
-      setResult(data);
+      for (let i = 0; i < vms.length; i += CHUNK) {
+        const chunk = vms.slice(i, i + CHUNK);
+        // Re-index results so index reflects position in the original vms array.
+        const offset = i;
+        try {
+          const data = await bulkImportSuperAdminExternalVms(chunk);
+          for (const r of data.results) {
+            allResults.push({ ...r, index: offset + r.index });
+          }
+          succeeded += data.summary.succeeded;
+          failed += data.summary.failed;
+        } catch (err) {
+          // Chunk call failed — record every row in the chunk as failed.
+          for (let j = 0; j < chunk.length; j++) {
+            const row = chunk[j]!;
+            allResults.push({
+              index: offset + j,
+              success: false,
+              name: 'name' in row ? String(row.name) : undefined,
+              error: err instanceof ApiError ? err.message : 'Request failed',
+              assignments: [],
+            });
+            failed++;
+          }
+        }
+        setImportProgress({ done: Math.min(i + CHUNK, total), total });
+      }
+
+      const summary = { total, succeeded, failed };
+      setResult({ results: allResults, summary });
       addToast(
-        data.summary.failed === 0 ? 'success' : 'error',
-        data.summary.failed === 0
-          ? `Imported ${data.summary.succeeded} server${data.summary.succeeded === 1 ? '' : 's'}.`
-          : `Imported ${data.summary.succeeded}/${data.summary.total} with failures.`
+        failed === 0 ? 'success' : 'error',
+        failed === 0
+          ? `Imported ${succeeded} server${succeeded === 1 ? '' : 's'}.`
+          : `Imported ${succeeded}/${total} with failures.`
       );
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Bulk import failed.');
     } finally {
       setSubmitting(false);
+      setImportProgress(null);
     }
   };
 
@@ -1328,10 +1366,16 @@ export default function SuperAdminServerImportPage() {
             onClick={() => void handleSubmit()}
             className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            {submitting && (
-              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            {submitting ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {importProgress
+                  ? `Importing ${importProgress.done} of ${importProgress.total}…`
+                  : 'Importing…'}
+              </>
+            ) : (
+              'Import & assign'
             )}
-            Import & assign
           </button>
         </div>
       </div>
@@ -1343,57 +1387,82 @@ export default function SuperAdminServerImportPage() {
             {result.summary.succeeded} succeeded · {result.summary.failed} failed ·{' '}
             {result.summary.total} total
           </p>
-          <ul className="mt-4 space-y-2">
-            {result.results.map((r) => (
-              <li
-                key={r.index}
-                className={`rounded-lg border px-3 py-2 text-sm ${
-                  r.success
-                    ? 'border-green-200 bg-green-50 text-green-900'
-                    : 'border-red-200 bg-red-50 text-red-900'
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  {r.success ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                  ) : (
-                    <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                  )}
-                  <div>
-                    <p className="font-medium">
-                      #{r.index + 1} {r.name ?? '—'} {r.ipAddress ? `(${r.ipAddress})` : ''}
-                    </p>
-                    {r.error && <p className="text-xs">{r.error}</p>}
-                    {r.tenantName && (
-                      <p className="text-xs opacity-90">Tenant: {r.tenantName}</p>
-                    )}
-                    {r.userId && (
-                      <p className="text-xs opacity-90">
-                        User: {r.userId}
-                        {r.userCreated ? ' (created)' : r.userReused ? ' (reused)' : ''}
-                      </p>
-                    )}
-                    {r.externalVmId && (
-                      <p className="text-xs opacity-80">VM: {r.externalVmId}</p>
-                    )}
-                    {r.assignmentId && (
-                      <p className="text-xs opacity-80">Assignment: {r.assignmentId}</p>
-                    )}
-                    {r.assignments?.length > 0 && (
-                      <ul className="mt-1 space-y-0.5 text-xs">
-                        {r.assignments.map((a) => (
-                          <li key={a.index}>
-                            Assignment {a.index + 1}:{' '}
-                            {a.success ? 'ok' : a.error ?? 'failed'}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+
+          {result.summary.failed > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-red-700">
+                Failed rows
+              </p>
+              <div className="overflow-hidden rounded-lg border border-red-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-red-50 text-gray-600">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">#</th>
+                      <th className="px-3 py-2 font-semibold">VM</th>
+                      <th className="px-3 py-2 font-semibold">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-red-100">
+                    {result.results
+                      .filter((r) => !r.success)
+                      .map((r) => (
+                        <tr key={r.index} className="align-top">
+                          <td className="px-3 py-2 text-gray-400">{r.index + 1}</td>
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-gray-900">{r.name ?? '—'}</p>
+                            {r.ipAddress && (
+                              <p className="text-gray-400">{r.ipAddress}</p>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-red-700">
+                            <p>{r.error ?? 'Unknown error'}</p>
+                            {r.assignments
+                              .filter((a) => !a.success)
+                              .map((a) => (
+                                <p key={a.index} className="mt-0.5 text-gray-500">
+                                  Assignment {a.index + 1}: {a.error ?? 'failed'}
+                                </p>
+                              ))}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {result.summary.succeeded > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-green-700">
+                Succeeded ({result.summary.succeeded})
+              </p>
+              <ul className="space-y-1">
+                {result.results
+                  .filter((r) => r.success)
+                  .map((r) => (
+                    <li
+                      key={r.index}
+                      className="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs text-green-900"
+                    >
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        #{r.index + 1} {r.name ?? '—'}
+                        {r.tenantName ? ` · ${r.tenantName}` : ''}
+                        {r.userCreated
+                          ? ' · user created'
+                          : r.userReused
+                            ? ' · user reused'
+                            : ''}
+                        {r.assignments.filter((a) => !a.success).length > 0
+                          ? ` · ${r.assignments.filter((a) => !a.success).length} assignment(s) failed`
+                          : ''}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>
