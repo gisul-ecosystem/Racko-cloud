@@ -39,6 +39,8 @@ export interface ProjectPublic {
   sequenceNumber: number;
   clientName: string;
   description: string | null;
+  startDate: string | null;
+  endDate: string | null;
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   createdBy: string;
@@ -73,6 +75,8 @@ function toPublic(doc: IProject, resourceCounts?: Record<string, number>): Proje
     sequenceNumber: doc.sequenceNumber,
     clientName: doc.clientName,
     description: doc.description ?? null,
+    startDate: doc.startDate ? doc.startDate.toISOString() : null,
+    endDate: doc.endDate ? doc.endDate.toISOString() : null,
     enabledServices: [...doc.enabledServices],
     status: doc.status,
     createdBy: doc.createdBy.toString(),
@@ -211,6 +215,8 @@ async function createForOrg(
     sequenceNumber,
     clientName: input.clientName.trim(),
     description: input.description?.trim() || undefined,
+    startDate: input.startDate ?? undefined,
+    endDate: input.endDate ?? undefined,
     enabledServices,
     status: 'active',
     createdBy: new mongoose.Types.ObjectId(createdByUserId),
@@ -242,6 +248,8 @@ async function createForTenant(
     sequenceNumber,
     clientName: input.clientName.trim(),
     description: input.description?.trim() || undefined,
+    startDate: input.startDate ?? undefined,
+    endDate: input.endDate ?? undefined,
     enabledServices,
     status: 'active',
     createdBy: new mongoose.Types.ObjectId(createdByUserId),
@@ -613,6 +621,8 @@ export class ProjectsService {
     if (input.description !== undefined) {
       doc.description = input.description?.trim() || undefined;
     }
+    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
+    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
     await doc.save();
     return toPublic(doc, await resourceCountsByService(doc));
   }
@@ -815,6 +825,8 @@ export class ProjectsService {
     if (input.description !== undefined) {
       doc.description = input.description?.trim() || undefined;
     }
+    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
+    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
     await doc.save();
     const resourceCounts = await resourceCountsByService(doc);
     return toPublic(doc, resourceCounts);

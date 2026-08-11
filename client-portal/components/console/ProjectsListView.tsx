@@ -71,6 +71,8 @@ interface CreateProjectInput {
   clientName: string;
   name?: string;
   description?: string;
+  startDate?: string;
+  endDate?: string;
   enabledServices: AdminServiceKey[];
 }
 
@@ -204,6 +206,8 @@ export function ProjectsListView({
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
   const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
@@ -309,6 +313,8 @@ export function ProjectsListView({
     setCreatedProject(null);
     setClientName('');
     setDescription('');
+    setStartDate('');
+    setEndDate('');
     setSelectedServices([]);
     try {
       const [preview, services] = await Promise.all([
@@ -358,6 +364,8 @@ export function ProjectsListView({
         clientName: clientName.trim(),
         name: projectName.trim() !== previewName ? projectName.trim() : undefined,
         description: description.trim() || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
         enabledServices: selectedServices,
       });
       let detailed = created;
@@ -1064,7 +1072,7 @@ export function ProjectsListView({
                       <textarea
                         value={description}
                         onChange={(event) => setDescription(event.target.value.slice(0, 500))}
-                        rows={4}
+                        rows={3}
                         placeholder="Describe the purpose and workloads for this project."
                         className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
                         style={accentFocus}
@@ -1075,6 +1083,49 @@ export function ProjectsListView({
                           e.currentTarget.style.borderColor = '';
                         }}
                       />
+                    </div>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                          Start Date <span className="font-normal text-gray-400">(Optional)</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={startDate}
+                          onChange={(e) => setStartDate(e.target.value)}
+                          max={endDate || undefined}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">When does this project start?</p>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                          End Date <span className="font-normal text-gray-400">(Optional)</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={endDate}
+                          onChange={(e) => setEndDate(e.target.value)}
+                          min={startDate || undefined}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
+                      </div>
                     </div>
                   </div>
                 </div>

@@ -45,7 +45,13 @@ function ServiceCard({
   saving: boolean;
   onRemove: (key: AdminServiceKey) => void;
 }) {
-  const meta = PROJECT_SERVICE_META[serviceKey];
+  const meta = PROJECT_SERVICE_META[serviceKey] ?? {
+    label: serviceKey,
+    description: '',
+    icon: null,
+    iconBg: 'bg-gray-100',
+    iconColor: 'text-gray-500',
+  };
   const totalCost = costRow?.totalDebit ?? 0;
   const txCount = costRow?.transactionCount ?? 0;
   const href = getServiceLaunchHref(serviceKey, 'org', projectId);
@@ -140,6 +146,8 @@ export default function ProjectDetailPage() {
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
   const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [pendingService, setPendingService] = useState<AdminServiceKey | null>(null);
@@ -160,6 +168,8 @@ export default function ProjectDetailPage() {
       setName(p.name);
       setClientName(p.clientName);
       setDescription(p.description || '');
+      setStartDate(p.startDate ? p.startDate.slice(0, 10) : '');
+      setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
       setAvailable(
         services
           .filter(
@@ -201,6 +211,8 @@ export default function ProjectDetailPage() {
         name: name.trim(),
         clientName: clientName.trim(),
         description: description.trim() || null,
+        startDate: startDate || null,
+        endDate: endDate || null,
       });
       setProject(updated);
       setFlash('Project updated.');
@@ -373,7 +385,13 @@ export default function ProjectDetailPage() {
             </p>
             <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
               {addable.map((key) => {
-                const meta = PROJECT_SERVICE_META[key];
+                const meta = PROJECT_SERVICE_META[key] ?? {
+                  label: key,
+                  description: '',
+                  icon: null,
+                  iconBg: 'bg-gray-100',
+                  iconColor: 'text-gray-500',
+                };
                 return (
                   <div
                     key={key}
@@ -451,6 +469,30 @@ export default function ProjectDetailPage() {
               rows={3}
               className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
             />
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-gray-700">Start Date</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                disabled={archived}
+                max={endDate || undefined}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-gray-700">End Date</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                disabled={archived}
+                min={startDate || undefined}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
+              />
+            </div>
           </div>
           <div className="flex items-center justify-between">
             {!archived ? (

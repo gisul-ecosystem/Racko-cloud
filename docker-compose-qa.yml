@@ -32,6 +32,7 @@ services:
       - cloud-automation/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_PORT:-3002}
+      CORE_API_URL: http://core-api:8001
       # Large-lab defaults (override in cloud-automation/.env). One batch per HTTP request
       # when PROVISION_STEP_TIME_BUDGET_MS=0 so nginx/CDN do not kill 100-user role assign.
       BULK_PROVISION_CONCURRENCY: ${BULK_PROVISION_CONCURRENCY:-30}
@@ -58,6 +59,7 @@ services:
       - cloud-automation-aws/.env
     environment:
       PORT: ${CLOUD_AUTOMATION_AWS_PORT:-3003}
+      CORE_API_URL: http://core-api:8001
     ports:
       - "${CLOUD_AUTOMATION_AWS_PORT:-3003}:3003"
     networks:

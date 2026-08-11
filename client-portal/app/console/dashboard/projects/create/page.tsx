@@ -70,6 +70,8 @@ export default function TenantCreateProjectPage() {
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
   const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [available, setAvailable] = useState<AdminServiceKey[]>([]);
   const [selected, setSelected] = useState<AdminServiceKey[]>([]);
   const [loading, setLoading] = useState(true);
@@ -119,6 +121,8 @@ export default function TenantCreateProjectPage() {
         clientName: clientName.trim(),
         name: name.trim() !== previewName ? name.trim() : undefined,
         description: description.trim() || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
         enabledServices: selected,
       });
       router.push(tenantConsole.project(project.id));
@@ -201,6 +205,36 @@ export default function TenantCreateProjectPage() {
             <p className="mt-1 text-right text-xs text-gray-400">
               {description.length} / {MAX_DESC}
             </p>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="rounded-lg border border-gray-200 p-4">
+              <label className="mb-1 block text-xs font-semibold text-gray-700">
+                Start Date <span className="font-normal text-gray-400">(Optional)</span>
+              </label>
+              <p className="mb-2 text-xs text-gray-400">When does this project start?</p>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                max={endDate || undefined}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+              />
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-4">
+              <label className="mb-1 block text-xs font-semibold text-gray-700">
+                End Date <span className="font-normal text-gray-400">(Optional)</span>
+              </label>
+              <p className="mb-2 text-xs text-gray-400">When does this project end?</p>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                min={startDate || undefined}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+              />
+            </div>
           </div>
         </div>
 
