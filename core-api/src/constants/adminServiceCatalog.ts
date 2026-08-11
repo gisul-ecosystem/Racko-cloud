@@ -3,6 +3,7 @@ export const ADMIN_SERVICE_CATALOG = [
   'dedicated-server',
   'vm-management',
   'elastic-servers',
+  'my-vms',
   'azure',
   'aws',
   'gcp',
@@ -17,6 +18,7 @@ export type AdminServiceKey = (typeof ADMIN_SERVICE_CATALOG)[number];
 export const DEFAULT_NEW_ADMIN_SERVICES: readonly AdminServiceKey[] = [
   'create-vm',
   'dedicated-server',
+  'my-vms',
 ];
 
 export const ADMIN_SERVICE_LABELS: Record<AdminServiceKey, string> = {
@@ -24,6 +26,7 @@ export const ADMIN_SERVICE_LABELS: Record<AdminServiceKey, string> = {
   'dedicated-server': 'Dedicated Server',
   'vm-management': 'VPS Hosting',
   'elastic-servers': 'Elastic Server Import',
+  'my-vms': 'My VM Dashboard',
   azure: 'Azure Lab',
   aws: 'AWS Lab',
   gcp: 'GCP Lab',

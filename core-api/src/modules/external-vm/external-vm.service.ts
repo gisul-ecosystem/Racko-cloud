@@ -427,7 +427,7 @@ class ExternalVMService {
   }
 
   async listExternalVMs(adminId: mongoose.Types.ObjectId): Promise<ExternalVMResponse[]> {
-    const docs = await ExternalVMModel.find({ adminId }).sort({ createdAt: -1 });
+    const docs = await ExternalVMModel.find({ adminId, source: { $in: ['admin_import', 'tenant_import'] } }).sort({ createdAt: -1 });
     const summaries = await this.loadPlatformAssignmentSummaries(docs);
     return docs.map((doc) =>
       this.toResponse(doc, {
@@ -809,7 +809,7 @@ class ExternalVMService {
     const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
     await migrateLegacyExternalVmAssignments(tenantId);
 
-    const query: Record<string, unknown> = { tenantId };
+    const query: Record<string, unknown> = { tenantId, source: { $in: ['admin_import', 'tenant_import'] } };
     if (actor.role === 'tenant_user') {
       const assignedIds = await getExternalVmIdsForTenantUser(
         tenantId,

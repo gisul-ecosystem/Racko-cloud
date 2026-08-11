@@ -102,6 +102,13 @@ const coreApiPricingProxy = createProxyMiddleware({
   proxyTimeout: 0,
 });
 
+/** Bulk import rows serially (argon2 + DB per row) — no proxy timeout. */
+const coreApiBulkImportProxy = createProxyMiddleware({
+  ...sharedProxyOptions,
+  timeout: 0,
+  proxyTimeout: 0,
+});
+
 // Catch-all mounted at /api/v1 — Express strips that prefix from req.url before
 // the proxy runs, so we must restore it for core-api routes like /api/v1/tenants
 const coreApiCatchAllProxy = createProxyMiddleware({
@@ -130,6 +137,7 @@ const tenantDedicatedServersProxy = createMountedCoreApiProxy('/api/v1/tenant-de
 const tenantProjectsProxy = createMountedCoreApiProxy('/api/v1/tenant-projects');
 const tenantRbacProxy = createMountedCoreApiProxy('/api/v1/tenant-rbac');
 const tenantOverviewProxy = createMountedCoreApiProxy('/api/v1/tenant-overview');
+const tenantMyVmsProxy = createMountedCoreApiProxy('/api/v1/tenant-my-vms');
 
 // Role guard middleware factory
 function requireRole(...roles: string[]) {
@@ -258,14 +266,14 @@ router.post(
   authMiddleware,
   verifyMiddleware,
   requireRole('super_admin', 'staff'),
-  coreApiProxy
+  coreApiBulkImportProxy
 );
 router.post(
   '/api/v1/super-admin/external-vms/bulk-delete',
   authMiddleware,
   verifyMiddleware,
   requireRole('super_admin', 'staff'),
-  coreApiProxy
+  coreApiBulkImportProxy
 );
 router.get(
   '/api/v1/super-admin/external-vms/overview',
@@ -604,6 +612,10 @@ router.use('/api/v1/tenant-vm-catalog', requireTenantBearer, tenantVmCatalogProx
 router.use('/api/v1/tenant-dedicated-servers', requireTenantBearer, tenantDedicatedServersProxy);
 router.use('/api/v1/tenant-projects', requireTenantBearer, tenantProjectsProxy);
 router.use('/api/v1/tenant-overview', requireTenantBearer, tenantOverviewProxy);
+router.use('/api/v1/tenant-my-vms', requireTenantBearer, tenantMyVmsProxy);
+
+// Platform admin My VM Dashboard — JWT + role enforced in core-api
+router.get('/api/v1/my-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
 // ─── CATCH-ALL PROTECTED PROXY ────────────────────────────────────────────────
 // Any other /api/v1/* route requires auth + verify
