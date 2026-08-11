@@ -245,11 +245,12 @@ export interface VMPushResult {
 
 export async function pushAgentToVMs(
   vms: VMPushTarget[],
-  sessionId: string
+  sessionId: string,
+  installRackoApp = true
 ): Promise<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }> {
   const res = await apiRequest<ApiResponse<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }>>(
     '/api/v1/machines/push-agent',
-    { method: 'POST', body: JSON.stringify({ vms, sessionId }) }
+    { method: 'POST', body: JSON.stringify({ vms, sessionId, installRackoApp }) }
   );
   return res.data;
 }
@@ -270,6 +271,43 @@ export function openPushStatusStream(
 ): EventSource {
   const url = `${getSseGatewayBaseUrl()}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
   return new EventSource(url, { withCredentials: true });
+}
+
+// ─── Push session recovery ────────────────────────────────────────────────────
+
+export interface PushSessionMachineResult {
+  machineId:          string;
+  machineName:        string;
+  ipAddress:          string;
+  pushSuccess?:       boolean;
+  pushError?:         string;
+  agentConnected:     boolean;
+  rackoAppInstalled?: boolean;
+  rackoAppError?:     string;
+}
+
+export interface PushSessionState {
+  sessionId: string;
+  adminId:   string;
+  machines:  PushSessionMachineResult[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Fetches persisted push session state from MongoDB.
+ * Used to restore the Connection Status page after a browser refresh.
+ * Returns null if session not found or expired (15-min TTL).
+ */
+export async function fetchPushSession(sessionId: string): Promise<PushSessionState | null> {
+  try {
+    const res = await apiRequest<ApiResponse<{ session: PushSessionState }>>(
+      `/api/v1/machines/push-session/${sessionId}`
+    );
+    return res.data.session;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Enrollment Key API ───────────────────────────────────────────────────────

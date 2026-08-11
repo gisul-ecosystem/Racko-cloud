@@ -1,9 +1,10 @@
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Windows.Forms;
 using RackoApp.Services;
 using RackoApp.Views;
-
+ 
 namespace RackoApp;
 
 public class MainForm : Form
@@ -312,7 +313,19 @@ public class MainForm : Form
     private async Task OnUploadClickAsync()
     {
         IReadOnlyList<MachineDto> machines;
-        try { machines = await _api.ListMachinesAsync(); }
+        try
+        {
+            var (list, inGroup) = await _api.ListMachinesAsync();
+            if (!inGroup)
+            {
+                MessageBox.Show(
+                    "This machine is not assigned to any group.\n\nPlease ask your admin to add it to a group before sharing files.",
+                    "Racko — Not in Group",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+                return;
+            }
+            machines = list;
+        }
         catch (Exception ex)
         {
             MessageBox.Show($"Could not load VM list:\n{ex.Message}",
@@ -325,9 +338,17 @@ public class MainForm : Form
 
         try
         {
-            await _api.UploadAsync(dlg.SelectedFilePath, dlg.SelectedPermission, dlg.SelectedMachineIds);
+            // For folder uploads SelectedDisplayName is set to "FolderName.zip"
+            // so the inbox/outbox shows the original folder name instead of the temp uuid zip name.
+            await _api.UploadAsync(
+                dlg.SelectedFilePath,
+                dlg.SelectedPermission,
+                dlg.SelectedMachineIds,
+                dlg.SelectedDisplayName);
+
+            var displayName = dlg.SelectedDisplayName ?? Path.GetFileName(dlg.SelectedFilePath);
             MessageBox.Show(
-                $"'{Path.GetFileName(dlg.SelectedFilePath)}' shared with {dlg.SelectedMachineIds.Length} VM(s).",
+                $"'{displayName}' shared with {dlg.SelectedMachineIds.Length} VM(s).",
                 "Racko — Uploaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
             _ = LoadOutboxAsync();
         }
@@ -335,6 +356,12 @@ public class MainForm : Form
         {
             MessageBox.Show($"Upload failed:\n{ex.Message}",
                 "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            // Clean up temp zip created for folder uploads
+            if (dlg.TempZipPath is not null)
+                try { File.Delete(dlg.TempZipPath); } catch { }
         }
     }
 
@@ -356,27 +383,72 @@ public class MainForm : Form
 
         if (viewUrl.Permission == "full")
         {
-            using var save = new SaveFileDialog
-            {
-                FileName         = file.FileName,
-                InitialDirectory = Path.Combine(
-                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads"),
-            };
-            if (save.ShowDialog(this) != DialogResult.OK) return;
-
+            // Auto-save to C:\Racko Shared Files\ — created if it doesn't exist.
+            // If the file is a .zip (folder upload), extract it as a folder instead.
+            const string downloadDir = @"C:\Racko Shared Files";
             try
             {
-                using var http     = new System.Net.Http.HttpClient();
-                using var response = await http.GetAsync(
-                    viewUrl.PresignedUrl,
-                    System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
-                response.EnsureSuccessStatusCode();
+                Directory.CreateDirectory(downloadDir);
 
-                await using var fs = File.Create(save.FileName);
-                await response.Content.CopyToAsync(fs);
+                if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Download zip to a temp file then extract — preserves full folder structure
+                    var tempZip = Path.Combine(Path.GetTempPath(), $"racko_{Guid.NewGuid():N}.zip");
+                    try
+                    {
+                        using var http     = new System.Net.Http.HttpClient();
+                        using var response = await http.GetAsync(
+                            viewUrl.PresignedUrl,
+                            System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                        response.EnsureSuccessStatusCode();
 
-                MessageBox.Show($"Saved to:\n{save.FileName}",
-                    "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        await using var fs = File.Create(tempZip);
+                        await response.Content.CopyToAsync(fs);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Download failed:\n{ex.Message}",
+                            "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        try { File.Delete(tempZip); } catch { }
+                        return;
+                    }
+
+                    // Extract — ZipFile preserves full nested folder structure
+                    try
+                    {
+                        ZipFile.ExtractToDirectory(tempZip, downloadDir, overwriteFiles: true);
+                        var folderName = Path.GetFileNameWithoutExtension(file.FileName);
+                        MessageBox.Show(
+                            $"Folder extracted to:\n{Path.Combine(downloadDir, folderName)}",
+                            "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Extraction failed:\n{ex.Message}",
+                            "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        try { File.Delete(tempZip); } catch { }
+                    }
+                }
+                else
+                {
+                    // Regular file — save directly
+                    var destPath = Path.Combine(downloadDir, file.FileName);
+                    using var http     = new System.Net.Http.HttpClient();
+                    using var response = await http.GetAsync(
+                        viewUrl.PresignedUrl,
+                        System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                    response.EnsureSuccessStatusCode();
+
+                    await using var fs = File.Create(destPath);
+                    await response.Content.CopyToAsync(fs);
+
+                    MessageBox.Show(
+                        $"Saved to:\n{destPath}",
+                        "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
             }
             catch (Exception ex)
             {

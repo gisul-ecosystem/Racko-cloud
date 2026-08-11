@@ -1,6 +1,7 @@
 BINARY_WINDOWS = dist/racko-agent.exe
 BINARY_LINUX   = dist/racko-agent
 BINARY_MAC     = dist/racko-agent-mac
+RACKO_APP_ZIP  = dist/racko-app.zip
 
 # Physical/VM push build (bake accountToken):
 #   make build-windows PLATFORM_URL=https://api.racko.ai ACCOUNT_TOKEN=<token>
@@ -25,7 +26,7 @@ LDFLAGS = -X github.com/racko-ai/agent/config.LDPlatformURL=$(PLATFORM_URL) \
           -X github.com/racko-ai/agent/config.LDEnrollmentKey=$(ENROLLMENT_KEY) \
           -X github.com/racko-ai/agent/config.Version=$(VERSION)
 
-.PHONY: build-windows build-linux build-mac build-all clean checksums version
+.PHONY: build-windows build-linux build-mac build-all build-racko-app clean checksums version
 
 version:
 	@cat VERSION
@@ -39,7 +40,23 @@ build-linux:
 build-mac:
 	GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o $(BINARY_MAC) .
 
-build-all: build-windows build-linux build-mac
+# Publish racko-app as a self-contained folder then zip it.
+# The zip is served from /api/v1/agent/binary/racko-app and downloaded by the
+# VM push script, which extracts it so WebView2Loader.dll is a loose file on disk.
+build-racko-app:
+	$(eval RACKO_APP_VERSION := $(shell cat ../racko-app/VERSION 2>/dev/null | tr -d '[:space:]'))
+	dotnet publish ../racko-app/RackoApp.csproj \
+	  -c Release \
+	  -r win-x64 \
+	  --self-contained true \
+	  -p:Version=$(RACKO_APP_VERSION) \
+	  -p:InformationalVersion=$(RACKO_APP_VERSION) \
+	  -o ../racko-app/publish/
+	mkdir -p dist
+	cd ../racko-app/publish && zip -r ../../agent/$(RACKO_APP_ZIP) .
+	@echo "racko-app.zip built at $(RACKO_APP_ZIP)"
+
+build-all: build-windows build-linux build-mac build-racko-app
 
 # Print SHA256 checksums for all binaries — these are automatically picked up by CI
 checksums:
@@ -47,6 +64,11 @@ checksums:
 	@sha256sum $(BINARY_WINDOWS) | awk '{print "AGENT_CHECKSUM_WINDOWS=" $$1}'
 	@sha256sum $(BINARY_LINUX)   | awk '{print "AGENT_CHECKSUM_LINUX=" $$1}'
 	@sha256sum $(BINARY_MAC)     | awk '{print "AGENT_CHECKSUM_DARWIN=" $$1}'
+	@if [ -f $(RACKO_APP_ZIP) ]; then \
+	  RACKO_APP_VERSION=$$(cat ../racko-app/VERSION 2>/dev/null | tr -d '[:space:]'); \
+	  echo "RACKO_APP_VERSION=$$RACKO_APP_VERSION"; \
+	  sha256sum $(RACKO_APP_ZIP) | awk '{print "RACKO_APP_CHECKSUM=" $$1}'; \
+	fi
 
 clean:
 	rm -rf dist/

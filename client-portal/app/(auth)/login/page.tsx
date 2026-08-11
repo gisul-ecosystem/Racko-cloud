@@ -3,6 +3,7 @@
 import { useState, type ReactNode } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { z } from 'zod';
 import { AlertCircle, Eye, EyeOff, KeyRound, Mail, MailWarning } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
@@ -11,7 +12,7 @@ import { ApiError, apiRequest } from '../../../lib/apiClient';
 const LINK_ACCENT = 'text-[#EF4444] hover:text-[#DC2626] font-medium';
 
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
+  email: z.string().min(1, 'Email or username is required'),
   password: z.string().min(1, 'Password is required'),
 });
 
@@ -157,6 +158,7 @@ function HeroPanel() {
 
 export default function LoginPage() {
   const { login } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -189,6 +191,12 @@ export default function LoginPage() {
     } catch (err) {
       if (err instanceof ApiError) {
         setErrorCode(err.code ?? null);
+        if (err.code === 'PASSWORD_SETUP_REQUIRED' && err.resetToken) {
+          router.replace(
+            `/reset-password?token=${encodeURIComponent(err.resetToken)}&setup=1`
+          );
+          return;
+        }
         if (err.code === 'ACCOUNT_LOCKED') {
           const match = err.message.match(/(\d+) minute/);
           if (match) {
@@ -260,13 +268,13 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} noValidate className="space-y-3">
             <Field
-              label="Work Email"
+              label="Email or username"
               icon={<Mail className="h-4 w-4" />}
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="your@gmail.com"
-              autoComplete="email"
+              placeholder="you@company.com or username"
+              autoComplete="username"
               disabled={isLoading}
               error={errors.email}
             />

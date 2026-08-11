@@ -18,6 +18,11 @@ export interface CatalogVmResponse {
   projectId?: string;
   projectName?: string;
   clientName?: string;
+  /** Software packages selected at buy time (installed after Attach). */
+  preferredSoftwareIds?: string[];
+  machineId?: string;
+  postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
+  postReadyError?: string;
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
   category: VmCatalogCategory;
@@ -88,6 +93,8 @@ export interface CreateCatalogVmRequestDto {
   canonicalSpec?: string;
   /** Required for platform admin purchases. */
   projectId?: string;
+  /** Optional Software Catalog package IDs to install after the VM is ready. */
+  preferredSoftwareIds?: string[];
 }
 
 export interface CatalogVmRequesterGroup {

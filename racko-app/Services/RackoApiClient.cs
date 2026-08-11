@@ -33,12 +33,17 @@ public class RackoApiClient
 
     // ── Machines ───────────────────────────────────────────────────────────
 
-    /// <summary>Returns all other VMs for the same admin account (VM selector).</summary>
-    public async Task<IReadOnlyList<MachineDto>> ListMachinesAsync()
+    /// <summary>
+    /// Returns machines in the same group as this VM.
+    /// inGroup = false means this machine is not assigned to any group yet.
+    /// </summary>
+    public async Task<(IReadOnlyList<MachineDto> Machines, bool InGroup)> ListMachinesAsync()
     {
         var resp = await _http.GetFromJsonAsync<ApiListResponse<MachineDto>>(
             "/api/v1/agent/shared-files/machines-for-app", JsonOpts);
-        return resp?.Data.Machines ?? [];
+        var machines = resp?.Data.Machines ?? [];
+        var inGroup  = resp?.Data.InGroup ?? true; // default true for backward compat
+        return (machines, inGroup);
     }
 
     // ── Shared Files ───────────────────────────────────────────────────────
@@ -60,17 +65,17 @@ public class RackoApiClient
     }
 
     /// <summary>
-    /// Upload a file using presigned S3 PUT URL — zero server memory usage.
-    /// Step 1: Get presigned URL + pendingId from core-api (no file bytes sent).
-    /// Step 2: PUT file directly to S3 using the presigned URL.
-    /// Step 3: Notify core-api that upload completed (pendingId).
+    /// Upload a file (or a folder that has been pre-zipped) using presigned S3 PUT URL.
+    /// localPath — path to the actual file to upload (may be a temp zip for folder uploads).
+    /// displayFileName — optional override for the file name stored in the DB (e.g. "MyFolder.zip").
     /// </summary>
     public async Task<SharedFileDto> UploadAsync(
         string   localPath,
         string   permission,
-        string[] sharedWithMachineIds)
+        string[] sharedWithMachineIds,
+        string?  displayFileName = null)
     {
-        var fileName = Path.GetFileName(localPath);
+        var fileName = displayFileName ?? Path.GetFileName(localPath);
         var mimeType = GuessMimeType(fileName);
         var fileInfo = new FileInfo(localPath);
 

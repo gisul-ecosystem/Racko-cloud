@@ -50,10 +50,10 @@ export class TenantAuthService {
       throw new TenantAuthError('INVALID_CREDENTIALS', 401);
     }
 
-    const email = dto.email.toLowerCase().trim();
+    const identifier = dto.email.toLowerCase().trim();
     const tenantUser = await TenantUser.findOne({
       tenantId: new mongoose.Types.ObjectId(tenantId),
-      email,
+      $or: [{ email: identifier }, { username: identifier }],
     }).select('+passwordHash');
 
     if (!tenantUser || !tenantUser.isActive) {

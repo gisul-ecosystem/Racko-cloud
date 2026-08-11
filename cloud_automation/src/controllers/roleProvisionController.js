@@ -1,5 +1,6 @@
 const AppError = require('../utils/AppError');
 const roleProvisionService = require('../services/roleProvisionService');
+const { runWithActiveCohort } = require('../services/cohortStepRunner');
 
 const validateRequestId = (requestId) => {
   if (!/^\d+$/.test(requestId)) {
@@ -10,8 +11,19 @@ const validateRequestId = (requestId) => {
 const provisionRolesForRequest = async (req, res, next) => {
   try {
     validateRequestId(req.params.id);
+    const requestId = Number(req.params.id);
 
-    const result = await roleProvisionService.provisionRolesForRequest(Number(req.params.id));
+    const retry =
+      req.body?.retry === true ||
+      req.query?.retry === '1' ||
+      req.query?.retry === 'true';
+
+    const result = await runWithActiveCohort(
+      requestId,
+      'roles',
+      (range) => roleProvisionService.provisionRolesForRequest(requestId, range),
+      { retry }
+    );
 
     res.status(200).json({
       success: true,
@@ -23,7 +35,18 @@ const provisionRolesForRequest = async (req, res, next) => {
       resourceScopedAssignments: result.resourceScopedAssignments,
       permissionFailures: result.permissionFailures,
       complete: result.complete ?? true,
-      remaining: result.remaining ?? 0
+      remaining: result.remaining ?? 0,
+      batchCreated: result.batchCreated ?? result.rolesAssigned ?? null,
+      failures: result.failures || [],
+      failed: result.failed === true,
+      cohortIndex: result.cohortIndex,
+      cohortTotal: result.cohortTotal,
+      userNumberFrom: result.userNumberFrom,
+      userNumberTo: result.userNumberTo,
+      cohortStatus: result.cohortStatus,
+      cohortCurrentStep: result.cohortCurrentStep,
+      cohortLastError: result.cohortLastError || null,
+      allCohortsComplete: result.allCohortsComplete
     });
   } catch (error) {
     next(error);

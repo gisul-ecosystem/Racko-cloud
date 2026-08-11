@@ -250,7 +250,7 @@ async function upsertProvisionState(requestId, patch) {
   );
 }
 
-async function provisionFabricForRequest(requestId) {
+async function provisionFabricForRequest(requestId, options = {}) {
   const context = await loadFabricLabContext(requestId);
   if (!context.required) {
     return {
@@ -262,16 +262,29 @@ async function provisionFabricForRequest(requestId) {
     };
   }
 
+  const cohortFrom =
+    Number.isInteger(Number(options.userNumberFrom)) && Number(options.userNumberFrom) > 0
+      ? Number(options.userNumberFrom)
+      : null;
+  const cohortTo =
+    Number.isInteger(Number(options.userNumberTo)) && Number(options.userNumberTo) > 0
+      ? Number(options.userNumberTo)
+      : null;
+
   const usersResult = await db.query(
     `
-      SELECT id, azure_user_id, username
+      SELECT id, azure_user_id, username, user_number
       FROM azure_users
       WHERE request_id = $1
         AND COALESCE(is_deleted, false) = false
         AND azure_user_id IS NOT NULL
+        AND (
+          $2::int IS NULL
+          OR (user_number >= $2 AND user_number <= $3)
+        )
       ORDER BY user_number ASC NULLS LAST, id ASC
     `,
-    [requestId]
+    [requestId, cohortFrom, cohortTo]
   );
 
   if (!usersResult.rows.length) {
@@ -396,13 +409,12 @@ async function provisionFabricForRequest(requestId) {
     }
 
     const failedRoles = roleAssignments.filter((row) => row.status === 'failed');
-    if (failedRoles.length > 0) {
-      throw new AppError(
-        `Fabric workspace created but ${failedRoles.length} role assignment(s) failed. Check Fabric API permissions for the service principal.`,
-        500
-      );
-    }
+    const failures = failedRoles.map((row) => ({
+      username: row.username,
+      error: row.error || 'Fabric role assignment failed'
+    }));
 
+    // Soft-fail: keep workspace + successful assignments; retry remaining users next wave/call.
     await upsertProvisionState(requestId, {
       enrollmentId: context.enrollment_id,
       certTag,
@@ -413,8 +425,11 @@ async function provisionFabricForRequest(requestId) {
       onelakePermissions: context.onelake_permissions,
       items: createdItems,
       roleAssignments,
-      status: 'complete',
-      errorMessage: null,
+      status: failedRoles.length > 0 ? 'provisioning' : 'complete',
+      errorMessage:
+        failedRoles.length > 0
+          ? `${failedRoles.length} Fabric role assignment(s) failed — retry remaining users.`
+          : null,
     });
 
     if (context.enrollment_id) {
@@ -433,10 +448,10 @@ async function provisionFabricForRequest(requestId) {
     }
 
     return {
-      success: true,
+      success: failedRoles.length === 0,
       required: true,
-      complete: true,
-      status: 'complete',
+      complete: failedRoles.length === 0,
+      status: failedRoles.length === 0 ? 'complete' : 'provisioning',
       capacityId,
       workspaceId,
       workspaceName,
@@ -446,6 +461,10 @@ async function provisionFabricForRequest(requestId) {
       roleAssignments,
       usersProcessed: roleAssignments.length,
       certTag,
+      failures,
+      remaining: failedRoles.length,
+      userNumberFrom: cohortFrom,
+      userNumberTo: cohortTo
     };
   } catch (error) {
     await upsertProvisionState(requestId, {

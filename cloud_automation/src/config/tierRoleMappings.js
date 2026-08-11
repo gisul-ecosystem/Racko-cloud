@@ -14,7 +14,8 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /virtual network|vnet/i,
     mappings: [
-      { instanceOption: 'Small VNet', azureRole: 'Network Reader' },
+      // Azure has no built-in "Network Reader"; Reader is the closest real role.
+      { instanceOption: 'Small VNet', azureRole: 'Reader' },
       { instanceOption: 'Medium VNet', azureRole: 'Network Contributor' },
       { instanceOption: 'Large VNet', azureRole: 'Network Contributor' }
     ]
@@ -30,7 +31,7 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /load balancer/i,
     mappings: [
-      { instanceOption: 'Basic', azureRole: 'Network Reader' },
+      { instanceOption: 'Basic', azureRole: 'Reader' },
       { instanceOption: 'Standard', azureRole: 'Network Contributor' }
     ]
   },
@@ -44,8 +45,8 @@ const TIER_ROLE_FALLBACKS = [
   {
     servicePattern: /expressroute/i,
     mappings: [
-      { instanceOption: '50 Mbps', azureRole: 'Network Reader' },
-      { instanceOption: '100 Mbps', azureRole: 'Network Reader' },
+      { instanceOption: '50 Mbps', azureRole: 'Reader' },
+      { instanceOption: '100 Mbps', azureRole: 'Reader' },
       { instanceOption: '500 Mbps', azureRole: 'Network Contributor' },
       { instanceOption: '1 Gbps', azureRole: 'Network Contributor' }
     ]

@@ -53,6 +53,24 @@ const isRetryableError = (error) => {
 
 const normalizeRoleName = (value) => String(value || '').trim().toLowerCase();
 
+/** Catalog names that are not real Azure built-in role names. */
+const ROLE_NAME_ALIASES = new Map([
+  // Azure has Network Contributor, but no built-in "Network Reader".
+  ['network reader', 'Reader']
+]);
+
+const resolveRoleNameCandidates = (roleName) => {
+  const trimmed = String(roleName || '').trim();
+  if (!trimmed) return [];
+
+  const candidates = [trimmed];
+  const alias = ROLE_NAME_ALIASES.get(normalizeRoleName(trimmed));
+  if (alias && normalizeRoleName(alias) !== normalizeRoleName(trimmed)) {
+    candidates.push(alias);
+  }
+  return candidates;
+};
+
 const escapeODataString = (value) => String(value || '').replace(/'/g, "''");
 
 const createAuthorizationClient = () => {
@@ -128,19 +146,36 @@ const findMatchingRoleDefinition = async (authorizationClient, scope, roleName) 
 
   const loadPromise = (async () => {
     const listScope = `/subscriptions/${subscriptionId}`;
-    const filter = `roleName eq '${escapeODataString(String(roleName).trim())}'`;
     let match = null;
 
-    for await (const roleDefinition of authorizationClient.roleDefinitions.list(listScope, {
-      filter
-    })) {
-      if (normalizeRoleName(roleDefinition.roleName) === normalized) {
-        match = roleDefinition;
+    for (const candidate of resolveRoleNameCandidates(roleName)) {
+      const candidateNormalized = normalizeRoleName(candidate);
+      const filter = `roleName eq '${escapeODataString(candidate)}'`;
+
+      for await (const roleDefinition of authorizationClient.roleDefinitions.list(listScope, {
+        filter
+      })) {
+        if (normalizeRoleName(roleDefinition.roleName) === candidateNormalized) {
+          match = roleDefinition;
+          break;
+        }
+      }
+
+      if (match) {
+        if (candidateNormalized !== normalized) {
+          logAzureRoleEvent('info', 'azure_role_name_aliased', {
+            requestedRole: String(roleName).trim(),
+            resolvedRole: match.roleName
+          });
+        }
         break;
       }
     }
 
-    cache.map.set(normalized, match);
+    // Cache hits only — caching misses permanently blocked recovery after catalog/alias fixes.
+    if (match) {
+      cache.map.set(normalized, match);
+    }
     return match;
   })();
 

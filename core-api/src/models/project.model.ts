@@ -1,6 +1,5 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import type { AdminServiceKey } from '../constants/adminServiceCatalog';
-import { ADMIN_SERVICE_CATALOG } from '../constants/adminServiceCatalog';
 
 export type ProjectStatus = 'active' | 'archived';
 export type ProjectOwnerType = 'org' | 'tenant';
@@ -45,7 +44,6 @@ const projectSchema = new Schema<IProject>(
     description: { type: String, trim: true, maxlength: 1000 },
     enabledServices: {
       type: [String],
-      enum: ADMIN_SERVICE_CATALOG,
       default: [],
     },
     status: {

@@ -302,7 +302,8 @@ export class AuthService {
   }
 
   /**
-   * Login with email and password.
+   * Login with email-or-username identifier and password.
+   * Body field remains `email` for compatibility; value is treated as identifier.
    * Returns access token in body, sets refresh token in HttpOnly cookie.
    */
   async login(data: LoginDto, req: Request, res: Response): Promise<LoginResult> {
@@ -311,7 +312,7 @@ export class AuthService {
     const fingerprint = generateFingerprint(req);
 
     // Always find user with password for timing consistency
-    const user = await User.findByEmail(data.email);
+    const user = await User.findByEmailOrUsername(data.email);
 
     // Timing attack prevention: always run argon2 verify even if user not found
     if (!user) {
@@ -368,11 +369,6 @@ export class AuthService {
       throw new EmailNotVerifiedError();
     }
 
-    if (user.mustSetPassword) {
-      await verifyPassword(DUMMY_HASH, data.password);
-      throw new PasswordSetupRequiredError();
-    }
-
     // Verify password
     const isPasswordValid = await verifyPassword(user.password, data.password);
 
@@ -422,6 +418,27 @@ export class AuthService {
     user.failedLoginAttempts = 0;
     user.isLocked = false;
     user.lockedUntil = undefined;
+
+    // Invited accounts must set their own password before a session is created.
+    if (user.mustSetPassword) {
+      const resetToken = generateSecureToken(32);
+      user.passwordResetToken = hashToken(resetToken);
+      user.passwordResetExpires = new Date(
+        Date.now() + config.EMAIL_VERIFICATION_EXPIRES_HOURS * 60 * 60 * 1000
+      );
+      await user.save();
+
+      await AuditLog.create({
+        userId: user._id,
+        event: 'PASSWORD_RESET_REQUESTED',
+        ipAddress: ip,
+        userAgent,
+        deviceFingerprint: fingerprint,
+        metadata: { reason: 'must_set_password_after_temp_login' },
+      });
+
+      throw new PasswordSetupRequiredError(resetToken);
+    }
 
     // End-user access window gate (assigned VMs with schedule)
     if (user.role === 'user') {

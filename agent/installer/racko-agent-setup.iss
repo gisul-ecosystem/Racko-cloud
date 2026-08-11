@@ -1,6 +1,17 @@
 ; Racko Agent Setup — Inno Setup Script
 ; Produces: racko-agent-setup.exe
 ; Requires: Inno Setup 6+ (https://jrsoftware.org/isinfo.php)
+;
+; Pre-build checklist:
+;   1. Build Go agent:   make build-windows          (outputs dist\racko-agent.exe)
+;   2. Build racko-app:  dotnet publish ..\racko-app\RackoApp.csproj
+;                          -c Release -r win-x64 --self-contained true
+;                          -o ..\dist\racko-app\
+;   3. Run Inno Setup compiler: iscc racko-agent-setup.iss
+;
+; WebView2 Runtime is installed at runtime by the installer itself — no file
+; to download manually. The installer checks the registry; if already present
+; (Win10/11/Server with Edge) it skips the download entirely.
 
 #define MyAppName      "Racko Agent"
 #define MyAppVersion   "1.0.0"
@@ -9,6 +20,7 @@
 #define MyServiceName  "RackoAgent"
 #define MyInstallDir   "{commonappdata}\racko-agent"
 #define MyBinaryName   "racko-agent.exe"
+#define MyAppExe       "racko-app.exe"
 #ifndef PlatformURL
   #define PlatformURL "http://localhost:8000"
 #endif
@@ -35,9 +47,15 @@ WizardSizePercent=120
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Files]
+; Go agent service binary
 Source: "..\dist\{#MyBinaryName}"; DestDir: "{#MyInstallDir}"; Flags: ignoreversion
-; GUI tray app — installed alongside the service
-Source: "..\dist\racko-app.exe"; DestDir: "{#MyInstallDir}"; Flags: ignoreversion
+
+; racko-app — full folder publish so WebView2Loader.dll lands on disk next to the exe.
+; Built by CI: dotnet publish -c Release -r win-x64 --self-contained true -o dist\racko-app\
+; The wildcard copies all DLLs including WebView2Loader.dll and the .NET runtime.
+Source: "..\dist\racko-app\{#MyAppExe}"; DestDir: "{#MyInstallDir}\racko-app"; Flags: ignoreversion
+Source: "..\dist\racko-app\*"; DestDir: "{#MyInstallDir}\racko-app"; \
+  Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "{#MyAppExe}"
 
 [Code]
 var
@@ -45,6 +63,33 @@ var
   TokenEdit: TEdit;
   TokenLabel: TLabel;
   TokenHint: TLabel;
+
+// ── WebView2 registry check ───────────────────────────────────────────────────
+// Returns true if WebView2 Runtime is already installed at the system level.
+// Checks the same registry key the WebView2 loader uses internally.
+// Source: https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution
+function IsWebView2Installed(): Boolean;
+var
+  Version: String;
+begin
+  // 64-bit system-level install (most common — Edge/Win11 ships this)
+  if RegQueryStringValue(HKLM,
+    'SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+    'pv', Version) then
+  begin
+    Result := (Version <> '') and (Version <> '0.0.0.0');
+    Exit;
+  end;
+  // 32-bit or per-user install fallback
+  if RegQueryStringValue(HKCU,
+    'SOFTWARE\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+    'pv', Version) then
+  begin
+    Result := (Version <> '') and (Version <> '0.0.0.0');
+    Exit;
+  end;
+  Result := False;
+end;
 
 // ── Detect old install — show instructions and block ─────────────────────────
 function InitializeSetup(): Boolean;
@@ -140,6 +185,26 @@ begin
   begin
     Exec('sc.exe', 'stop {#MyServiceName}', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
     Sleep(1500);
+
+    // ── Install WebView2 Runtime ───────────────────────────────────────────────
+    // Uses the Microsoft Evergreen Bootstrapper approach:
+    //   1. Check registry — if already installed, skip entirely (no download, no wait)
+    //   2. If not installed — download the ~2MB bootstrapper from Microsoft at runtime
+    //      and run it silently. The bootstrapper then fetches the full ~120MB runtime.
+    // This is Microsoft's documented production deployment method — no file to bundle
+    // in CI, no compile-time dependency, works on any online Windows machine.
+    // Reference: https://learn.microsoft.com/en-us/microsoft-edge/webview2/concepts/distribution
+    if not IsWebView2Installed() then
+    begin
+      Exec('powershell.exe',
+        '-NonInteractive -ExecutionPolicy Bypass -Command ' +
+        '"$p = Join-Path $env:TEMP ''MicrosoftEdgeWebview2Setup.exe''; ' +
+        'Invoke-WebRequest -Uri ''https://go.microsoft.com/fwlink/p/?LinkId=2124703'' ' +
+        '-OutFile $p -UseBasicParsing; ' +
+        'Start-Process $p -ArgumentList ''/silent /install'' -Wait; ' +
+        'Remove-Item $p -Force -ErrorAction SilentlyContinue"',
+        '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    end;
   end;
 
   if CurStep = ssPostInstall then
@@ -188,15 +253,15 @@ end;
 
 [Icons]
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
-; Desktop and Start Menu shortcut to the GUI tray app
-Name: "{commondesktop}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app.exe"; Tasks: desktopicon
-Name: "{group}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app.exe"
+; Desktop and Start Menu shortcut — exe is in the racko-app subfolder
+Name: "{commondesktop}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app\{#MyAppExe}"; Tasks: desktopicon
+Name: "{group}\Racko Shared Files"; Filename: "{#MyInstallDir}\racko-app\{#MyAppExe}"
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut for Racko Shared Files"; GroupDescription: "Additional icons:"
 
 [Run]
 ; Start the GUI app after install (non-blocking, visible to the logged-in user)
-Filename: "{#MyInstallDir}\racko-app.exe"; Description: "Launch Racko Shared Files"; Flags: nowait postinstall skipifsilent
+Filename: "{#MyInstallDir}\racko-app\{#MyAppExe}"; Description: "Launch Racko Shared Files"; Flags: nowait postinstall skipifsilent
 Filename: "{cmd}"; Parameters: "/c echo Racko Agent is running as a Windows service."; \
   Description: "Agent started"; Flags: nowait postinstall skipifsilent

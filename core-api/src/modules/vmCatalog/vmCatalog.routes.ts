@@ -69,6 +69,14 @@ router.delete(
 );
 
 /** Admin: overview + my VMs */
+router.get(
+  '/software-options',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => {
+    vmCatalogController.listSoftwareOptions(req, res, next);
+  }
+);
+
 router.get('/overview', requireRole('admin', 'super_admin'), (req, res, next) => {
   vmCatalogController.overview(req, res, next);
 });

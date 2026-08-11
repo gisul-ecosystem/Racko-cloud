@@ -14,6 +14,7 @@ import {
   type ExternalVMProtocol,
   type IExternalVM,
 } from '../../../lib/externalVmApi';
+import { formatAssignmentHolders } from '../../../lib/externalVmAssignmentFormat';
 import { Server, Plus, Upload, RefreshCw, Monitor, Trash2 } from 'lucide-react';
 
 function ProtocolBadge({ protocol }: { protocol: ExternalVMProtocol }) {
@@ -148,13 +149,21 @@ export default function MyServersPage() {
                     <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Protocol
                     </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      Assigned users
+                    </th>
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      When
+                    </th>
                     <th className="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Actions
                     </th>
                   </tr>
                 </thead>
                 <tbody>
-                  {vms.map((vm, i) => (
+                  {vms.map((vm, i) => {
+                    const holders = formatAssignmentHolders(vm.assignments);
+                    return (
                     <tr
                       key={vm._id}
                       className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${
@@ -172,6 +181,28 @@ export default function MyServersPage() {
                       <td className="px-4 py-3.5 font-mono text-xs text-gray-600">{vm.ipAddress}</td>
                       <td className="px-4 py-3.5">
                         <ProtocolBadge protocol={vm.protocol} />
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="space-y-0.5">
+                          {holders.labels.map((label) => (
+                            <p key={label} className="text-xs text-gray-800">
+                              {label}
+                            </p>
+                          ))}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3.5">
+                        <div className="space-y-0.5">
+                          {holders.schedules.map((s, idx) => (
+                            <p
+                              key={`${vm._id}-s-${idx}`}
+                              className="max-w-[16rem] truncate text-[11px] text-gray-500"
+                              title={s}
+                            >
+                              {s}
+                            </p>
+                          ))}
+                        </div>
                       </td>
                       <td className="px-6 py-3.5">
                         <div className="flex items-center justify-end gap-2">
@@ -194,7 +225,8 @@ export default function MyServersPage() {
                         </div>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

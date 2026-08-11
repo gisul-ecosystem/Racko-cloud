@@ -67,14 +67,23 @@ const buildPolicyAssignmentDisplayName = ({
   return displayName.slice(0, AZURE_POLICY_DISPLAY_NAME_MAX);
 };
 
+let sharedPolicyClientContext = null;
+
 const createPolicyClient = () => {
+  // Reuse one PolicyClient across parallel wave assigns (token refresh is handled by credential).
+  if (sharedPolicyClientContext) {
+    return sharedPolicyClientContext;
+  }
+
   const azureConfig = validateAzureEnv();
   const credential = createAzureCredential(azureConfig);
 
-  return {
+  sharedPolicyClientContext = {
     policyClient: new PolicyClient(credential, azureConfig.subscriptionId),
     subscriptionId: azureConfig.subscriptionId
   };
+
+  return sharedPolicyClientContext;
 };
 
 const buildResourceGroupScope = (subscriptionId, resourceGroupName) =>

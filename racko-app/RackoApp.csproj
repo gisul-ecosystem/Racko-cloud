@@ -10,12 +10,20 @@
     <ApplicationIcon>Assets\racko.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <!-- Single self-contained exe — no .NET runtime needed on the VM -->
+    <!--
+      Self-contained folder publish — no .NET runtime needed on the VM.
+      PublishSingleFile is intentionally NOT set here. WebView2 requires
+      WebView2Loader.dll to exist as a loose file on disk next to the exe.
+      Single-file publish embeds it inside the bundle where the OS DLL loader
+      cannot find it, causing "Dll was not found" at runtime.
+      The Inno Setup installer bundles the entire publish\ folder instead.
+    -->
     <SelfContained>true</SelfContained>
-    <PublishSingleFile>true</PublishSingleFile>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishReadyToRun>true</PublishReadyToRun>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Version is bumped in racko-app/VERSION — CI passes -p:Version= on publish -->
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

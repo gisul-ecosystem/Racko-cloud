@@ -377,36 +377,8 @@ class VMPushService {
       'Write-Host "[racko] Starting service..."',
       'sc.exe start RackoAgent',
       'Write-Host "[racko] Agent installed and started successfully."',
-      // ── Racko App (GUI) ────────────────────────────────────────────────
-      // Download racko-app.exe alongside the agent binary
-      `$appUrl = '${this.platformUrl}/api/v1/agent/binary/racko-app'`,
-      'Write-Host "[racko] Downloading Racko App..."',
-      'Invoke-WebRequest -Uri $appUrl -OutFile "$installDir\\racko-app.exe" -UseBasicParsing',
-      // Create a desktop shortcut visible to all users (C:\Users\Public\Desktop)
-      'Write-Host "[racko] Creating desktop shortcut..."',
-      '$wsh = New-Object -ComObject WScript.Shell',
-      '$shortcut = $wsh.CreateShortcut("$env:PUBLIC\\Desktop\\Racko Shared Files.lnk")',
-      '$shortcut.TargetPath = "$installDir\\racko-app.exe"',
-      '$shortcut.Description = "Racko Shared Files"',
-      '$shortcut.Save()',
-      // Launch the app for the currently logged-in user (non-blocking)
-      'Write-Host "[racko] Launching Racko App..."',
-      'Start-Process "$installDir\\racko-app.exe"',
-      'Write-Host "[racko] Racko App installed successfully."',
-      // ── WebView2 Runtime (required for in-app file viewer) ─────────────────
-      // Silently installs WebView2 Runtime from Microsoft's CDN.
-      // The installer detects if it's already installed and skips — safe to run
-      // on Windows 10/11 (already present) and Windows Server (not pre-installed).
-      'Write-Host "[racko] Installing WebView2 Runtime (required for file viewer)..."',
-      '$wv2Path = "$installDir\\WebView2Setup.exe"',
-      'try {',
-      '    Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $wv2Path -UseBasicParsing',
-      '    & $wv2Path /silent /install | Out-Null',
-      '    Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
-      '    Write-Host "[racko] WebView2 Runtime installed successfully."',
-      '} catch {',
-      '    Write-Host "[racko] WARNING: WebView2 install failed (non-fatal): $_"',
-      '}',
+      // racko-app + WebView2 are installed automatically via WebSocket exec
+      // once the agent connects — no WinRM involvement needed for the heavy downloads.
     ].join('; ');
   }
 }

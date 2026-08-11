@@ -1,4 +1,5 @@
 using System.Drawing;
+using System.IO.Compression;
 using System.Windows.Forms;
 using RackoApp.Services;
 
@@ -9,6 +10,14 @@ public class UploadForm : Form
     public string   SelectedFilePath   { get; private set; } = "";
     public string   SelectedPermission { get; private set; } = "read";
     public string[] SelectedMachineIds { get; private set; } = [];
+    /// <summary>Display name for folder uploads (e.g. "MyProject.zip"). Null for regular files.</summary>
+    public string?  SelectedDisplayName { get; private set; }
+
+    // When uploading a folder this holds the temp zip path (deleted after upload)
+    private string? _tempZipPath;
+
+    /// <summary>Exposed so MainForm can delete the temp zip after upload completes.</summary>
+    public string? TempZipPath => _tempZipPath;
 
     private readonly IReadOnlyList<MachineDto> _machines;
 
@@ -17,7 +26,7 @@ public class UploadForm : Form
     private RadioButton    _rbFull        = null!;
     private CheckedListBox _vmList        = null!;
     private Button         _uploadBtn     = null!;
-    private Button         _selectAllBtn  = null!;   // Select All / Deselect All
+    private CheckBox       _selectAllChk  = null!;   // Select All / Deselect All toggle
 
     public UploadForm(IReadOnlyList<MachineDto> machines)
     {
@@ -45,26 +54,33 @@ public class UploadForm : Form
         y += 6;
 
         // ── File picker ───────────────────────────────────────────────────────
-        AddLabel("File", pad, ref y);
+        AddLabel("File or Folder", pad, ref y);
         var fileRow = new Panel { Left = pad, Top = y, Width = ClientSize.Width - pad * 2, Height = 30 };
         _fileLabel = new Label
         {
-            Text      = "No file selected",
+            Text      = "No file or folder selected",
             ForeColor = Color.FromArgb(148, 163, 184),
             AutoSize  = false,
-            Width     = fileRow.Width - 100,
+            Width     = fileRow.Width - 210,
             Height    = 30,
             Left      = 0,
             Top       = 0,
             TextAlign = ContentAlignment.MiddleLeft,
         };
-        var browseBtn = MakeButton("Browse…", secondary: true);
-        browseBtn.Left   = fileRow.Width - 90;
+        var browseFolderBtn = MakeButton("📁 Folder", secondary: true);
+        browseFolderBtn.Left   = fileRow.Width - 210;
+        browseFolderBtn.Top    = 0;
+        browseFolderBtn.Width  = 100;
+        browseFolderBtn.Height = 28;
+        browseFolderBtn.Click += OnBrowseFolderClick;
+
+        var browseBtn = MakeButton("📄 File", secondary: true);
+        browseBtn.Left   = fileRow.Width - 100;
         browseBtn.Top    = 0;
         browseBtn.Width  = 90;
         browseBtn.Height = 28;
         browseBtn.Click += OnBrowseClick;
-        fileRow.Controls.AddRange(new Control[] { _fileLabel, browseBtn });
+        fileRow.Controls.AddRange(new Control[] { _fileLabel, browseFolderBtn, browseBtn });
         Controls.Add(fileRow);
         y += 38;
 
@@ -75,37 +91,40 @@ public class UploadForm : Form
         Controls.AddRange(new Control[] { _rbRead, _rbFull });
         y += 30;
 
-        // ── VM list header row: label + Select All button ─────────────────────
-        var vmHeaderRow = new Panel { Left = pad, Top = y, Width = ClientSize.Width - pad * 2, Height = 22 };
+        // ── VM list header: "Share with VMs" label + Select All checkbox ────────
         var vmLabel = new Label
         {
             Text      = "Share with VMs",
-            Left      = 0,
-            Top       = 2,
+            Left      = pad,
+            Top       = y,
             AutoSize  = true,
             Font      = new Font("Segoe UI", 9f, FontStyle.Bold),
             ForeColor = Color.FromArgb(15, 23, 42),
         };
-        _selectAllBtn = new Button
+        Controls.Add(vmLabel);
+
+        // CheckBox styled as a button — left-aligned, no right-edge calculation needed.
+        // Appearance.Button makes it look like a toggle button.
+        // No DPI positioning issues — Left is a fixed offset from the label.
+        _selectAllChk = new CheckBox
         {
-            Text      = "Select All",
-            FlatStyle = FlatStyle.Flat,
-            Font      = new Font("Segoe UI", 8f),
-            Height    = 22,
-            Width     = 90,
-            Cursor    = Cursors.Hand,
-            BackColor = Color.White,
-            ForeColor = Color.FromArgb(185, 28, 28),
-            Anchor    = AnchorStyles.Top | AnchorStyles.Right,
+            Text        = "Select All",
+            Appearance  = Appearance.Button,
+            FlatStyle   = FlatStyle.Flat,
+            Font        = new Font("Segoe UI", 8f),
+            AutoSize    = true,
+            Left        = pad + vmLabel.PreferredWidth + 12,
+            Top         = y - 1,
+            Cursor      = Cursors.Hand,
+            BackColor   = Color.White,
+            ForeColor   = Color.FromArgb(185, 28, 28),
         };
-        _selectAllBtn.FlatAppearance.BorderColor = Color.FromArgb(185, 28, 28);
-        _selectAllBtn.Left   = vmHeaderRow.Width - 90;
-        _selectAllBtn.Top    = 0;
-        _selectAllBtn.Click += OnSelectAllClick;
-        vmHeaderRow.SizeChanged += (_, _) => _selectAllBtn.Left = vmHeaderRow.Width - 90;
-        vmHeaderRow.Controls.AddRange(new Control[] { vmLabel, _selectAllBtn });
-        Controls.Add(vmHeaderRow);
-        y += 28;
+        _selectAllChk.FlatAppearance.BorderColor        = Color.FromArgb(185, 28, 28);
+        _selectAllChk.FlatAppearance.CheckedBackColor   = Color.FromArgb(254, 242, 242);
+        _selectAllChk.CheckedChanged += OnSelectAllCheckChanged;
+        Controls.Add(_selectAllChk);
+
+        y += vmLabel.PreferredHeight + 8;
 
         // ── VM CheckedListBox ─────────────────────────────────────────────────
         _vmList = new CheckedListBox
@@ -148,18 +167,13 @@ public class UploadForm : Form
 
     // ── Select All / Deselect All ─────────────────────────────────────────────
 
-    private void OnSelectAllClick(object? s, EventArgs e)
+    private void OnSelectAllCheckChanged(object? s, EventArgs e)
     {
         if (_machines.Count == 0) return;
-
-        // If all are checked → deselect all; otherwise → select all
-        bool allChecked = _vmList.CheckedIndices.Count == _vmList.Items.Count;
-        bool target     = !allChecked;
-
+        bool target = _selectAllChk.Checked;
         for (int i = 0; i < _vmList.Items.Count; i++)
             _vmList.SetItemChecked(i, target);
-
-        UpdateSelectAllLabel();
+        _selectAllChk.Text = target ? "Deselect All" : "Select All";
     }
 
     private void UpdateSelectAllLabel()
@@ -169,7 +183,8 @@ public class UploadForm : Form
         BeginInvoke(() =>
         {
             bool allChecked = _vmList.CheckedIndices.Count == _vmList.Items.Count;
-            _selectAllBtn.Text = allChecked ? "Deselect All" : "Select All";
+            _selectAllChk.Checked = allChecked;
+            _selectAllChk.Text    = allChecked ? "Deselect All" : "Select All";
         });
     }
 
@@ -180,10 +195,43 @@ public class UploadForm : Form
         using var dlg = new OpenFileDialog { Title = "Select a file to share", Filter = "All Files (*.*)|*.*" };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
+        // Clear any previous folder selection
+        if (_tempZipPath is not null)
+        {
+            try { File.Delete(_tempZipPath); } catch { }
+            _tempZipPath = null;
+        }
+
         SelectedFilePath     = dlg.FileName;
         _fileLabel.Text      = Path.GetFileName(dlg.FileName);
         _fileLabel.ForeColor = Color.FromArgb(15, 23, 42);
         _uploadBtn.Enabled   = true;
+    }
+
+    private void OnBrowseFolderClick(object? s, EventArgs e)
+    {
+        using var dlg = new FolderBrowserDialog
+        {
+            Description         = "Select a folder to share",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = false,
+        };
+        if (dlg.ShowDialog(this) != DialogResult.OK) return;
+
+        // Clear any previous folder selection
+        if (_tempZipPath is not null)
+        {
+            try { File.Delete(_tempZipPath); } catch { }
+            _tempZipPath = null;
+        }
+
+        var folderPath = dlg.SelectedPath;
+        var folderName = Path.GetFileName(folderPath);
+        _fileLabel.Text      = $"📁 {folderName}  (will be zipped)";
+        _fileLabel.ForeColor = Color.FromArgb(15, 23, 42);
+        // Store folder path as SelectedFilePath temporarily — OnUploadClick will zip it
+        SelectedFilePath   = folderPath;
+        _uploadBtn.Enabled = true;
     }
 
     private void OnUploadClick(object? s, EventArgs e)
@@ -204,7 +252,40 @@ public class UploadForm : Form
         }
 
         SelectedMachineIds = [.. ids];
-        DialogResult       = DialogResult.OK;
+
+        // If SelectedFilePath is a directory, zip it first (background thread so UI stays responsive)
+        if (Directory.Exists(SelectedFilePath))
+        {
+            _uploadBtn.Enabled = false;
+            _uploadBtn.Text    = "Zipping…";
+            var folderPath = SelectedFilePath;
+            var folderName = Path.GetFileName(folderPath);
+            Task.Run(() =>
+            {
+                // Zip to a temp file — streaming, never fully in memory
+                var tempZip = Path.Combine(Path.GetTempPath(), $"{folderName}_{Guid.NewGuid():N}.zip");
+                ZipFile.CreateFromDirectory(folderPath, tempZip, CompressionLevel.Fastest, includeBaseDirectory: true);
+                return tempZip;
+            }).ContinueWith(t =>
+            {
+                if (t.IsFaulted)
+                {
+                    _uploadBtn.Enabled = true;
+                    _uploadBtn.Text    = "Upload";
+                    MessageBox.Show($"Failed to zip folder:\n{t.Exception?.InnerException?.Message}",
+                        "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+                _tempZipPath        = t.Result;
+                SelectedFilePath    = t.Result;              // temp zip path for upload
+                SelectedDisplayName = $"{folderName}.zip";   // display name shown in inbox/outbox
+                DialogResult        = DialogResult.OK;
+                Close();
+            }, TaskScheduler.FromCurrentSynchronizationContext());
+            return;
+        }
+
+        DialogResult = DialogResult.OK;
         Close();
     }
 

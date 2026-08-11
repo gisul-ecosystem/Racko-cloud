@@ -81,6 +81,15 @@ export const tenantVmCatalogController = {
     }
   },
 
+  async listSoftwareOptions(_req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const catalog = await vmCatalogService.listSoftwareOptions();
+      success(res, 'Software options retrieved.', { catalog, total: catalog.length });
+    } catch (err) {
+      next(err);
+    }
+  },
+
   async createRequest(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as TenantAuthenticatedRequest;

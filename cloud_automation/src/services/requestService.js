@@ -6,7 +6,11 @@ const { assertProvisionableLocation, assertLocationAvailableForServices } = requ
 const { applyTierRolesToAssignments, ensureAutoAssignRolesForServices, applyDependencyRolesToAssignments, finalizeAiFoundryTierRoles } = require('./instanceRoleMappingService');
 const adminAccessRequestService = require('./adminAccessRequestService');
 const privilegedRoleRequestService = require('./privilegedRoleRequestService');
-const { normalizeCostingMode, COSTING_MODE_SHARED } = require('../utils/costingMode');
+const {
+  normalizeCostingMode,
+  COSTING_MODE_SHARED,
+  isPerUserCosting
+} = require('../utils/costingMode');
 const { buildExpiresAtFromParts } = require('../utils/requestExpiry');
 const { parseServiceDateTime } = require('../utils/serviceDateTime');
 const { normalizeWindowTimeForDb } = require('../utils/usageWindowTime');
@@ -807,6 +811,37 @@ async function createRequest({
       requestId,
       client
     });
+
+    // Split per-user labs into provision waves (default 10). Shared labs skip cohorts.
+    if (isPerUserCosting(resolvedCostingMode)) {
+      try {
+        await client.query('SAVEPOINT provision_cohorts_insert');
+        const { createCohortsForRequest } = require('./provisionCohortService');
+        await createCohortsForRequest(requestId, Number(accountCount), client);
+        await client.query('RELEASE SAVEPOINT provision_cohorts_insert');
+      } catch (cohortError) {
+        try {
+          await client.query('ROLLBACK TO SAVEPOINT provision_cohorts_insert');
+        } catch {
+          // ignore
+        }
+        const message = String(cohortError?.message || '');
+        if (!message.includes('provision_cohorts')) {
+          throw cohortError;
+        }
+        console.warn(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            service: 'request-service',
+            level: 'warn',
+            event: 'provision_cohorts_skipped',
+            requestId,
+            message:
+              'provision_cohorts table missing — run migration 20260807_create_provision_cohorts.sql'
+          })
+        );
+      }
+    }
 
     await client.query(
       'COMMIT'

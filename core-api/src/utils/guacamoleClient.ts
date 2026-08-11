@@ -19,6 +19,8 @@ import { InternalError } from './errors';
  *   GET    /api/session/data/{dataSource}/connections
  *   POST   /api/session/data/{dataSource}/connections
  *   PUT    /api/session/data/{dataSource}/connections/{id}
+ *   GET    /api/session/data/{dataSource}/activeConnections
+ *   PATCH  /api/session/data/{dataSource}/activeConnections  (JSON Patch remove)
  *
  * Tested against Guacamole 1.5.x.
  *
@@ -97,6 +99,20 @@ interface GuacConnection {
 }
 
 type GuacConnectionListResponse = Record<string, GuacConnection>;
+
+/** Guacamole active tunnel (admin session view). */
+export interface GuacActiveConnection {
+  /** Active tunnel id (used in PATCH remove path). */
+  identifier: string;
+  /** Underlying connection definition id. */
+  connectionIdentifier: string;
+  /** Guacamole auth username that owns the tunnel. */
+  username?: string;
+  startDate?: number;
+  remoteHost?: string;
+}
+
+type GuacActiveConnectionListResponse = Record<string, GuacActiveConnection>;
 
 // ─── Public types ─────────────────────────────────────────────────────────────
 
@@ -407,6 +423,146 @@ export class GuacamoleClient {
       connectionId: connection.identifier,
       expiresInSec: Math.max(0, Math.floor((token.expiresAt - Date.now()) / 1000)),
     };
+  }
+
+  /**
+   * Resolve a Guacamole connection definition id by its stable name
+   * (e.g. `vm-{id}` / `externalvm-{id}`).
+   */
+  async getConnectionIdentifierByName(name: string): Promise<string | null> {
+    const conn = await findConnectionByName(name);
+    return conn?.identifier ?? null;
+  }
+
+  /**
+   * List live tunnels: GET /api/session/data/{ds}/activeConnections
+   */
+  async listActiveConnections(): Promise<GuacActiveConnection[]> {
+    return withToken(async (t) => {
+      try {
+        const res = await http().get<GuacActiveConnectionListResponse>(
+          `${dsPath(t.dataSource)}/activeConnections`,
+          { params: { token: t.authToken } }
+        );
+        const map = res.data ?? {};
+        return Object.keys(map).map((id) => {
+          const row = map[id]!;
+          return {
+            identifier: row.identifier || id,
+            connectionIdentifier: row.connectionIdentifier,
+            username: row.username,
+            startDate: row.startDate,
+            remoteHost: row.remoteHost,
+          };
+        });
+      } catch (err) {
+        const status = err instanceof AxiosError ? err.response?.status : undefined;
+        if (status === 401 || status === 403) throw err;
+        logger.error('Guacamole list activeConnections failed', {
+          status,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        throw new InternalError('Failed to list Guacamole active connections.');
+      }
+    });
+  }
+
+  /**
+   * Force-kill live tunnels: PATCH .../activeConnections with JSON Patch removes.
+   * Uses the cached admin token.
+   */
+  async killActiveConnections(ids: string[]): Promise<void> {
+    const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    if (unique.length === 0) return;
+
+    return withToken(async (t) => {
+      const body = unique.map((id) => ({
+        op: 'remove' as const,
+        path: `/${id}`,
+      }));
+
+      try {
+        await http().patch(`${dsPath(t.dataSource)}/activeConnections`, body, {
+          params: { token: t.authToken },
+          headers: { 'Content-Type': 'application/json' },
+        });
+        logger.info('Guacamole active connections killed', {
+          count: unique.length,
+          ids: unique,
+        });
+      } catch (err) {
+        const status = err instanceof AxiosError ? err.response?.status : undefined;
+        if (status === 401 || status === 403) throw err;
+        logger.error('Guacamole kill activeConnections failed', {
+          status,
+          count: unique.length,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        throw new InternalError('Failed to kill Guacamole active connections.');
+      }
+    });
+  }
+
+  /**
+   * Kill active tunnels for a named connection (optional Guacamole username filter).
+   * Returns how many tunnels were targeted.
+   */
+  async killActiveSessionsForConnection(
+    connectionName: string,
+    options?: { username?: string }
+  ): Promise<number> {
+    const connectionIdentifier = await this.getConnectionIdentifierByName(connectionName);
+    if (!connectionIdentifier) {
+      logger.info('Guacamole kill skipped — connection not found', { connectionName });
+      return 0;
+    }
+
+    const active = await this.listActiveConnections();
+    const username = options?.username?.trim();
+    const ids = active
+      .filter((a) => a.connectionIdentifier === connectionIdentifier)
+      .filter((a) => !username || a.username === username)
+      .map((a) => a.identifier);
+
+    if (ids.length === 0) return 0;
+    await this.killActiveConnections(ids);
+    return ids.length;
+  }
+
+  /**
+   * Remove a Guacamole connection definition by stable name (e.g. externalvm-{id}).
+   * No-op if the connection does not exist.
+   */
+  async deleteConnectionByName(connectionName: string): Promise<boolean> {
+    const existing = await findConnectionByName(connectionName);
+    if (!existing) {
+      logger.info('Guacamole delete skipped — connection not found', { connectionName });
+      return false;
+    }
+
+    return withToken(async (t) => {
+      try {
+        await http().delete(
+          `${dsPath(t.dataSource)}/connections/${encodeURIComponent(existing.identifier)}`,
+          { params: { token: t.authToken } }
+        );
+        logger.info('Guacamole connection deleted', {
+          connectionName,
+          connectionId: existing.identifier,
+        });
+        return true;
+      } catch (err) {
+        const status = err instanceof AxiosError ? err.response?.status : undefined;
+        if (status === 401 || status === 403) throw err;
+        if (status === 404) return false;
+        logger.error('Guacamole delete connection failed', {
+          status,
+          connectionName,
+          message: err instanceof Error ? err.message : String(err),
+        });
+        throw new InternalError('Failed to delete Guacamole connection.');
+      }
+    });
   }
 
   /**

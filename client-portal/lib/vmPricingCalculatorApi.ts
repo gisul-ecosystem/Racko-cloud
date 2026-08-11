@@ -1,4 +1,5 @@
 import { apiRequest } from './apiClient';
+import { directGatewayRequest } from './directGatewayRequest';
 
 export type CloudProvider = 'aws' | 'azure' | 'oci' | 'gcp';
 export type PricingCategory = 'linux' | 'windows' | 'gpu';
@@ -129,7 +130,8 @@ interface ApiResponse<T> {
 export async function calculateVmPricing(
   input: VmPricingCalculateInput
 ): Promise<VmPricingSelectResult> {
-  const res = await apiRequest<ApiResponse<VmPricingSelectResult>>(
+  // Bypass Next.js rewrite buffering — same pattern as long provision calls.
+  const res = await directGatewayRequest<ApiResponse<VmPricingSelectResult>>(
     '/api/v1/vm-catalog/pricing/calculate',
     {
       method: 'POST',

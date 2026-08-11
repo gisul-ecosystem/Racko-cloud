@@ -31,6 +31,7 @@ import {
   fetchProjects,
   previewProjectName,
   PROJECT_SERVICE_LABELS,
+  resolveProjectServiceLabel,
   type OrgProject,
   type ProjectNamePreview,
   type ProjectReportByProjectRow,
@@ -43,6 +44,7 @@ import {
   fetchTenantProjects,
   previewTenantProjectName,
 } from '@/lib/tenantProjectsApi';
+import { fetchTenantServiceCatalog } from '@/lib/tenantPortalApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { PROJECT_SERVICE_META } from '@/lib/projectServiceMeta';
 import {
@@ -72,13 +74,18 @@ interface CreateProjectInput {
   enabledServices: AdminServiceKey[];
 }
 
+interface AssignableServiceOption {
+  key: AdminServiceKey;
+  label: string;
+}
+
 interface ProjectsPortalAdapter {
   list: () => Promise<OrgProject[]>;
   detail: (id: string) => Promise<OrgProject>;
   costReport: () => Promise<ProjectReportByProjectRow[]>;
   namePreview: () => Promise<ProjectNamePreview>;
   create: (input: CreateProjectInput) => Promise<OrgProject>;
-  assignableServices: () => Promise<AdminServiceKey[]>;
+  assignableServices: () => Promise<AssignableServiceOption[]>;
   projectHref: (id: string) => string;
   reportsHref: string;
 }
@@ -97,9 +104,13 @@ function orgAdapter(): ProjectsPortalAdapter {
           (service) =>
             service.status === 'active'
             && service.serviceKey !== 'docs'
+            && service.serviceKey !== 'machine-manager'
             && !isServiceHiddenFromUi(service.serviceKey)
         )
-        .map((service) => service.serviceKey);
+        .map((service) => ({
+          key: service.serviceKey,
+          label: service.label || PROJECT_SERVICE_LABELS[service.serviceKey] || service.serviceKey,
+        }));
     },
     projectHref: (id) => `/console/projects/${id}`,
     reportsHref: '/console/projects/reports',
@@ -114,8 +125,22 @@ function tenantAdapter(): ProjectsPortalAdapter {
     namePreview: previewTenantProjectName,
     create: createTenantProject,
     assignableServices: async () => {
-      const services = await fetchTenantEligibleProjectServices();
-      return services.filter((key) => key !== 'docs' && !isServiceHiddenFromUi(key));
+      const [services, catalog] = await Promise.all([
+        fetchTenantEligibleProjectServices(),
+        fetchTenantServiceCatalog().catch(() => [] as Array<{ key: string; label: string }>),
+      ]);
+      const labels = Object.fromEntries(catalog.map((c) => [c.key, c.label]));
+      return services
+        .filter(
+          (key) =>
+            key !== 'docs'
+            && key !== 'machine-manager'
+            && !isServiceHiddenFromUi(key)
+        )
+        .map((key) => ({
+          key,
+          label: labels[key] || PROJECT_SERVICE_LABELS[key] || key,
+        }));
     },
     projectHref: (id) => tenantConsole.project(id),
     reportsHref: tenantConsole.projectsReports,
@@ -179,9 +204,17 @@ export function ProjectsListView({
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
   const [description, setDescription] = useState('');
-  const [availableServices, setAvailableServices] = useState<AdminServiceKey[]>([]);
+  const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
+
+  const serviceLabel = useCallback(
+    (key: string) => {
+      const fromAvailable = availableServices.find((s) => s.key === key)?.label;
+      return resolveProjectServiceLabel(key, fromAvailable);
+    },
+    [availableServices]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -546,7 +579,7 @@ export function ProjectsListView({
                                   className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-600"
                                 >
                                   <Server className="h-3 w-3 text-gray-400" />
-                                  {PROJECT_SERVICE_LABELS[service] || service}
+                                  {serviceLabel(service)}
                                   {count > 0 ? ` (${count})` : ''}
                                 </span>
                               );
@@ -734,7 +767,7 @@ export function ProjectsListView({
                                     : 'bg-violet-50 text-violet-700'
                               }`}
                             >
-                              {PROJECT_SERVICE_LABELS[service] || service}
+                              {serviceLabel(service)}
                             </span>
                           ))}
                           {extraServices > 0 && (
@@ -1120,7 +1153,8 @@ export function ProjectsListView({
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                        {availableServices.map((serviceKey) => {
+                        {availableServices.map((option) => {
+                          const serviceKey = option.key;
                           const meta = PROJECT_SERVICE_META[serviceKey];
                           const selected = selectedServices.includes(serviceKey);
                           return (
@@ -1136,9 +1170,9 @@ export function ProjectsListView({
                               style={selected ? tenantAccentSelectedBox(accent) : undefined}
                             >
                               <span
-                                className={`flex h-8 w-8 items-center justify-center rounded-lg ${meta.iconBg} ${meta.iconColor}`}
+                                className={`flex h-8 w-8 items-center justify-center rounded-lg ${meta?.iconBg ?? 'bg-gray-100'} ${meta?.iconColor ?? 'text-gray-600'}`}
                               >
-                                {meta.icon}
+                                {meta?.icon}
                               </span>
                               {selected && (
                                 <span
@@ -1149,10 +1183,10 @@ export function ProjectsListView({
                                 </span>
                               )}
                               <span className="mt-2 text-xs font-semibold text-gray-900">
-                                {meta.label}
+                                {option.label || meta?.label || serviceKey}
                               </span>
                               <span className="mt-1 line-clamp-2 text-[11px] leading-4 text-gray-500">
-                                {meta.description}
+                                {meta?.description || ''}
                               </span>
                             </button>
                           );

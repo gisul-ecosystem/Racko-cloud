@@ -13,6 +13,10 @@ async function bootstrap(): Promise<void> {
   const { rbacService } = await import('./modules/rbac/rbac.service');
   await rbacService.ensureSystemRoles();
 
+  // Master product/utility service list in Mongo (idempotent upsert).
+  const { serviceCatalogService } = await import('./modules/serviceCatalog/serviceCatalog.service');
+  await serviceCatalogService.ensureSeeded();
+
   // Start background cron to reclaim stale IP reservations
   startIpCleanupCron();
 
@@ -22,6 +26,11 @@ async function bootstrap(): Promise<void> {
       port: config.PORT,
     });
   });
+
+  // Live multi-cloud pricing / provision can exceed Node's default 5m requestTimeout.
+  server.requestTimeout = 0;
+  server.headersTimeout = 0;
+  server.timeout = 0;
 
   // Attach WebSocket server for agent connections
   const { wsManager } = await import('./modules/machine-manager/websocket/wsManager');

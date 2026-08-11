@@ -15,9 +15,28 @@ export const GCP_REGIONS = [
   { code: 'australia-southeast1', name: 'Australia Southeast (Sydney)', location: 'Asia Pacific' },
 ];
 
+/** Common IANA timezones for daily usage scheduling. */
+export const COMMON_TIMEZONES = [
+  'UTC',
+  'Asia/Kolkata',
+  'America/New_York',
+  'America/Chicago',
+  'America/Denver',
+  'America/Los_Angeles',
+  'Europe/London',
+  'Europe/Paris',
+  'Asia/Tokyo',
+  'Asia/Singapore',
+  'Australia/Sydney',
+] as const;
+
 /** Client routes for the GCP services area. */
 export const GCP_ROUTES = {
   dashboard: '/console/gcp',
+  createRequest: '/console/gcp/requests/new',
+  requests: '/console/gcp/requests',
+  requestStatus: (id: string) => `/console/gcp/requests/${id}`,
+  orgAdmin: '/super-admin-console/gcp/org-admin',
   consoleHub: '/console',
 } as const;
 

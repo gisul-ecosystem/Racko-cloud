@@ -95,12 +95,11 @@ const sharedProxyOptions = {
 // Explicit routes use the full path — no rewrite needed
 const coreApiProxy = createProxyMiddleware(sharedProxyOptions);
 
-/** Live multi-cloud pricing can take >10s; default REQUEST_TIMEOUT_MS is too short. */
-const PRICING_PROXY_TIMEOUT_MS = Math.max(config.REQUEST_TIMEOUT_MS, 300_000);
+/** Live multi-cloud pricing can run for a long time — no proxy idle timeout. */
 const coreApiPricingProxy = createProxyMiddleware({
   ...sharedProxyOptions,
-  timeout: PRICING_PROXY_TIMEOUT_MS,
-  proxyTimeout: PRICING_PROXY_TIMEOUT_MS,
+  timeout: 0,
+  proxyTimeout: 0,
 });
 
 // Catch-all mounted at /api/v1 — Express strips that prefix from req.url before
@@ -254,6 +253,70 @@ router.post('/api/v1/admin-vm-templates/:templateId/stream-ticket', authMiddlewa
 router.delete('/api/v1/admin-vm-templates/:templateId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
 // ─── EXTERNAL VM ROUTES ────────────────────────────────────────────────────────
+router.post(
+  '/api/v1/super-admin/external-vms/bulk-import',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.post(
+  '/api/v1/super-admin/external-vms/bulk-delete',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.get(
+  '/api/v1/super-admin/external-vms/overview',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.get(
+  '/api/v1/super-admin/external-vms/assignees',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.get(
+  '/api/v1/super-admin/external-vms/targets',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.post(
+  '/api/v1/super-admin/external-vms/:id/assignments',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.patch(
+  '/api/v1/super-admin/external-vms/:id/assignments/:assignmentId',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.delete(
+  '/api/v1/super-admin/external-vms/:id/assignments/:assignmentId',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.delete(
+  '/api/v1/super-admin/external-vms/:id',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+
 router.post('/api/v1/external-vms/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/external-vms', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/external-vms/assign/available', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -311,6 +374,7 @@ router.patch('/api/v1/customer-onboarding/organization-requests/:id', authMiddle
 
 // ─── VM CATALOG ROUTES (admin + control plane) ───────────────────────────────
 router.get('/api/v1/vm-catalog/overview', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
+router.get('/api/v1/vm-catalog/software-options', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.get('/api/v1/vm-catalog/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/vm-catalog/plans', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/vm-catalog/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
@@ -412,6 +476,8 @@ router.post('/api/v1/machines/reset-stream-ticket', authMiddleware, verifyMiddle
 // SSE stream for reset status — NO gateway auth. core-api validates the ?streamToken= ticket internally.
 router.get('/api/v1/machines/reset-stream/:sessionId', sseProxy);
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+// GET push session state (page-refresh recovery) — must come before /:id
+router.get('/api/v1/machines/push-session/:sessionId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 // PATCH /api/v1/machines/tracking — enable/disable file tracking (must come before /:id)
 router.patch('/api/v1/machines/tracking', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
@@ -462,6 +528,9 @@ router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
 router.post('/api/v1/agent/heartbeat', coreApiProxy);
 router.get('/api/v1/agent/software-catalog/:id', coreApiProxy);
+// Agent reset result — POSTed by agent via HTTP after reset script completes (X-Agent-ID auth)
+// This is the authoritative delivery path for reset_complete, bypassing WebSocket.
+router.post('/api/v1/agent/reset-result', coreApiProxy);
 // Tracker agent routes — authenticated by X-Agent-ID header (not JWT)
 // core-api's requireAgentAuth middleware validates agentId against the machines collection
 router.post('/api/v1/agent/baseline', coreApiProxy);

@@ -46,8 +46,16 @@ import type {
 } from './vmCatalog.types';
 import { customerDisplayName } from './vmCatalogPlan.service';
 import { catalogPricingBucket, needsOsTemplateChange } from './webynePlanRouting';
+import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
+import { randomUUID } from 'crypto';
 
 const GST_RATE = 0.18;
+
+function catalogCategoryToMachineOs(
+  category: string
+): 'windows' | 'linux' {
+  return String(category).toLowerCase() === 'windows' ? 'windows' : 'linux';
+}
 const BILLING_PERIODS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
 
 function roundMoney(n: number): number {
@@ -114,6 +122,10 @@ class VmCatalogService {
       ...(doc.projectId ? { projectId: doc.projectId.toString() } : {}),
       ...(opts?.projectName ? { projectName: opts.projectName } : {}),
       ...(opts?.clientName ? { clientName: opts.clientName } : {}),
+      preferredSoftwareIds: (doc.preferredSoftwareIds ?? []).map((id) => id.toString()),
+      ...(doc.machineId ? { machineId: doc.machineId.toString() } : {}),
+      postReadyStatus: doc.postReadyStatus ?? 'none',
+      ...(doc.postReadyError ? { postReadyError: doc.postReadyError } : {}),
       provider: doc.provider,
       category: doc.category,
       planId: doc.planId,
@@ -351,6 +363,256 @@ class VmCatalogService {
     }
   }
 
+  /** Slim software list for Create VM picker (org + tenant). */
+  async listSoftwareOptions(): Promise<
+    Array<{
+      _id: string;
+      name: string;
+      version: string;
+      supportedOS: Array<'windows' | 'linux' | 'macos'>;
+      installMethod: string;
+    }>
+  > {
+    const docs = await SoftwareCatalogModel.find()
+      .select('name version supportedOS installMethod')
+      .sort({ name: 1 })
+      .lean();
+    return docs.map((d) => ({
+      _id: d._id.toString(),
+      name: d.name,
+      version: d.version,
+      supportedOS: d.supportedOS,
+      installMethod: d.installMethod,
+    }));
+  }
+
+  private async resolvePreferredSoftwareIds(
+    ids: string[] | undefined
+  ): Promise<mongoose.Types.ObjectId[]> {
+    const unique = [...new Set((ids ?? []).map((id) => String(id).trim()).filter(Boolean))];
+    if (unique.length === 0) return [];
+    for (const id of unique) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        throw new ValidationError(`Invalid software id: ${id}`);
+      }
+    }
+    const objectIds = unique.map((id) => new mongoose.Types.ObjectId(id));
+    const count = await SoftwareCatalogModel.countDocuments({ _id: { $in: objectIds } });
+    if (count !== objectIds.length) {
+      throw new ValidationError('One or more selected software packages were not found.');
+    }
+    return objectIds;
+  }
+
+  private schedulePostReadySetup(doc: ICatalogVm): void {
+    const softwareIds = doc.preferredSoftwareIds ?? [];
+    if (softwareIds.length === 0) return;
+    if (!doc.adminId) {
+      logger.warn('[VmCatalog] Post-ready install skipped — Machine Manager is org-admin only', {
+        requestId: doc._id.toString(),
+      });
+      void CatalogVmModel.updateOne(
+        { _id: doc._id },
+        {
+          $set: {
+            postReadyStatus: 'failed',
+            postReadyError:
+              'Automatic agent/software install is available for organization VMs only.',
+            updatedAt: new Date(),
+          },
+        }
+      ).catch(() => undefined);
+      return;
+    }
+    void this.runPostReadySetup(doc._id).catch((err: unknown) => {
+      logger.error('[VmCatalog] Post-ready setup failed', {
+        requestId: doc._id.toString(),
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  }
+
+  private async runPostReadySetup(id: mongoose.Types.ObjectId): Promise<void> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) return;
+    if (doc.status !== 'active') return;
+    if (!doc.adminId) return;
+
+    const softwareIds = (doc.preferredSoftwareIds ?? []).map((sid) => sid.toString());
+    if (softwareIds.length === 0) return;
+
+    if (!doc.ipAddress || !doc.username || !doc.password) {
+      doc.postReadyStatus = 'failed';
+      doc.postReadyError = 'Missing IP, username, or password for agent install.';
+      doc.updatedAt = new Date();
+      await doc.save();
+      return;
+    }
+
+    let plainPassword: string;
+    try {
+      plainPassword = decrypt(doc.password);
+    } catch {
+      doc.postReadyStatus = 'failed';
+      doc.postReadyError = 'Stored password could not be decrypted for agent install.';
+      doc.updatedAt = new Date();
+      await doc.save();
+      return;
+    }
+
+    doc.postReadyStatus = 'running';
+    doc.postReadyError = undefined;
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    const { machineManagerService } = await import('../machine-manager/machine-manager.service');
+    const os = catalogCategoryToMachineOs(doc.category);
+    const sessionId = randomUUID();
+    const machineName = `${doc.planName} · ${doc.ipAddress}`.slice(0, 120);
+
+    try {
+      const { machines } = await machineManagerService.pushAgentToVMs(
+        [
+          {
+            name: machineName,
+            ipAddress: doc.ipAddress,
+            os,
+            username: doc.username,
+            password: plainPassword,
+          },
+        ],
+        doc.adminId,
+        sessionId
+      );
+
+      const machine = machines[0];
+      if (!machine) {
+        throw new Error('Machine Manager did not return a machine record.');
+      }
+
+      doc.machineId = new mongoose.Types.ObjectId(machine._id);
+      await doc.save();
+
+      await machineManagerService.createJobs(
+        { machineIds: [machine._id], softwareIds },
+        doc.adminId
+      );
+
+      doc.postReadyStatus = 'done';
+      doc.postReadyError = undefined;
+      doc.updatedAt = new Date();
+      await doc.save();
+
+      logger.info('[VmCatalog] Post-ready agent push + software jobs queued', {
+        requestId: doc._id.toString(),
+        machineId: machine._id,
+        softwareCount: softwareIds.length,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      doc.postReadyStatus = 'failed';
+      doc.postReadyError = message;
+      doc.updatedAt = new Date();
+      await doc.save();
+      throw err;
+    }
+  }
+
+  /** Background auto-provision for hourly cloud SKUs — does not block Buy Now. */
+  private async runAutoProvision(input: {
+    requestId: mongoose.Types.ObjectId;
+    adminId: mongoose.Types.ObjectId;
+    selection: Awaited<ReturnType<typeof resellerSelect>>;
+    canonicalSpec: string;
+    category: string;
+    total: number;
+    planName: string;
+  }): Promise<void> {
+    const { requestId, adminId, selection, canonicalSpec, category, total, planName } = input;
+    const doc = await CatalogVmModel.findById(requestId);
+    if (!doc || doc.status !== 'provisioning' || !doc.autoProvisioned) return;
+
+    try {
+      const provisioned = await resellerProvision({
+        provider: selection.provider,
+        region: selection.region,
+        category,
+        canonicalSpec: selection.canonicalSpec || canonicalSpec,
+        catalogVmId: requestId.toString(),
+      });
+
+      doc.status = 'active';
+      doc.providerInstanceId = provisioned.providerInstanceId;
+      doc.region = provisioned.region || selection.region || undefined;
+      doc.hostname = provisioned.hostname || provisioned.ip || undefined;
+      doc.ipAddress = provisioned.ip || undefined;
+      doc.username = provisioned.username;
+      doc.password = encrypt(provisioned.password);
+      doc.protocol = provisioned.protocol;
+      doc.providerPurchased = true;
+      doc.attachedAt = new Date();
+      doc.updatedAt = new Date();
+      await doc.save();
+
+      this.schedulePostReadySetup(doc);
+
+      await this.notifyRequester(
+        adminId,
+        'Cloud VM is ready',
+        `Your ${doc.quantity}× ${planName} purchase (₹${total}) is active.`,
+        {
+          requestId: requestId.toString(),
+          event: 'active',
+          planName,
+          total,
+        }
+      );
+
+      logger.info('[VmCatalog] Auto-provisioned catalog VM', {
+        requestId: requestId.toString(),
+        provider: doc.provider,
+        region: doc.region,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      doc.status = 'failed';
+      doc.fulfillError = message;
+      doc.updatedAt = new Date();
+      await doc.save();
+
+      await adminBillingService
+        .refundCloudRequestCharge(adminId.toString(), total, requestId.toString())
+        .catch((refundErr: unknown) => {
+          logger.error('[VmCatalog] Refund after auto-provision failure failed', {
+            requestId: requestId.toString(),
+            error: refundErr instanceof Error ? refundErr.message : String(refundErr),
+          });
+        });
+
+      if (doc.walletDebited) {
+        doc.walletDebited = false;
+        await doc.save().catch(() => undefined);
+      }
+
+      await this.notifyRequester(
+        adminId,
+        'Cloud VM provisioning failed',
+        `Your ${planName} purchase failed and was refunded. ${message}`,
+        {
+          requestId: requestId.toString(),
+          event: 'failed',
+          planName,
+          total,
+        }
+      );
+
+      logger.error('[VmCatalog] Auto-provision failed', {
+        requestId: requestId.toString(),
+        error: message,
+      });
+    }
+  }
+
   async createRequest(
     dto: CreateCatalogVmRequestDto,
     adminId: mongoose.Types.ObjectId
@@ -359,6 +621,10 @@ class VmCatalogService {
     if (!admin || admin.role !== 'admin' || !admin.isActive) {
       throw new ForbiddenError('Only active admins can submit catalog VM requests.');
     }
+
+    const preferredSoftwareIds = await this.resolvePreferredSoftwareIds(
+      dto.preferredSoftwareIds
+    );
 
     const plan = await VmCatalogPlan.findById(dto.planId).lean();
     if (!plan || !plan.isActive) {
@@ -429,9 +695,12 @@ class VmCatalogService {
       };
     }
 
-    const autoProvisioned =
-      Boolean(selection.autoProvisioned) && isAutoCloudProvider(selection.provider);
-    const provider = autoProvisioned ? selection.provider : 'webyne';
+    // Always route through Webyne (Super Admin manual flow).
+    // Cloud auto-provision (Azure/AWS/OCI/GCP) is disabled intentionally so that
+    // provider credentials can remain configured for other services without
+    // the reseller selection triggering auto-VM creation here.
+    const autoProvisioned = false;
+    const provider = 'webyne';
 
     const projectCtx = dto.projectId
       ? await projectsService.assertUsableForService({
@@ -459,6 +728,8 @@ class VmCatalogService {
       doc = await CatalogVmModel.create({
         adminId,
         ...(projectCtx ? { projectId: projectCtx.projectId } : {}),
+        preferredSoftwareIds,
+        postReadyStatus: preferredSoftwareIds.length > 0 ? 'pending' : 'none',
         provider,
         category: dto.category,
         planId: plan._id.toString(),
@@ -508,87 +779,41 @@ class VmCatalogService {
     await adminBillingService.patchLatestTransactionJobId(adminId.toString(), doc._id.toString());
 
     if (autoProvisioned) {
-      try {
-        const provisioned = await resellerProvision({
-          provider: selection.provider,
-          region: selection.region,
-          category: dto.category,
-          canonicalSpec: selection.canonicalSpec || canonicalSpec,
-          catalogVmId: doc._id.toString(),
-        });
-
-        doc.status = 'active';
-        doc.providerInstanceId = provisioned.providerInstanceId;
-        doc.region = provisioned.region || selection.region || undefined;
-        doc.hostname = provisioned.hostname || provisioned.ip || undefined;
-        doc.ipAddress = provisioned.ip || undefined;
-        doc.username = provisioned.username;
-        doc.password = encrypt(provisioned.password);
-        doc.protocol = provisioned.protocol;
-        doc.providerPurchased = true;
-        doc.attachedAt = new Date();
-        doc.updatedAt = new Date();
-        await doc.save();
-
-        await this.notifyRequester(
-          adminId,
-          'Cloud VM is ready',
-          `Your ${doc.quantity}× ${doc.planName} purchase (₹${total}) is active.`,
-          {
-            requestId: doc._id.toString(),
-            event: 'active',
-            planName: doc.planName,
-            total,
-          }
-        );
-
-        logger.info('[VmCatalog] Auto-provisioned catalog VM', {
+      const customerPlanName = this.displayNameForPlan(plan);
+      await this.notifyRequester(
+        adminId,
+        'Cloud VM is provisioning',
+        `Your ${doc.quantity}× ${customerPlanName} purchase (₹${total}) was charged. It will be available soon.`,
+        {
           requestId: doc._id.toString(),
-          provider: doc.provider,
-          region: doc.region,
-        });
-
-        return this.toCustomerResponse(doc, { adminEmail: admin.email });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        doc.status = 'failed';
-        doc.fulfillError = message;
-        doc.updatedAt = new Date();
-        await doc.save();
-
-        await adminBillingService
-          .refundCloudRequestCharge(adminId.toString(), total, doc._id.toString())
-          .catch((refundErr: unknown) => {
-            logger.error('[VmCatalog] Refund after auto-provision failure failed', {
-              requestId: doc._id.toString(),
-              error: refundErr instanceof Error ? refundErr.message : String(refundErr),
-            });
-          });
-
-        if (doc.walletDebited) {
-          doc.walletDebited = false;
-          await doc.save().catch(() => undefined);
+          event: 'submitted',
+          planName: customerPlanName,
+          total,
         }
+      );
 
-        await this.notifyRequester(
-          adminId,
-          'Cloud VM provisioning failed',
-          `Your ${doc.planName} purchase failed and was refunded. ${message}`,
-          {
-            requestId: doc._id.toString(),
-            event: 'failed',
-            planName: doc.planName,
-            total,
-          }
-        );
-
-        logger.error('[VmCatalog] Auto-provision failed', {
+      void this.runAutoProvision({
+        requestId: doc._id,
+        adminId,
+        selection,
+        canonicalSpec,
+        category: dto.category,
+        total,
+        planName: doc.planName,
+      }).catch((err: unknown) => {
+        logger.error('[VmCatalog] Background auto-provision crashed', {
           requestId: doc._id.toString(),
-          error: message,
+          error: err instanceof Error ? err.message : String(err),
         });
+      });
 
-        return this.toCustomerResponse(doc, { adminEmail: admin.email });
-      }
+      logger.info('[VmCatalog] Auto-provision scheduled', {
+        requestId: doc._id.toString(),
+        provider: doc.provider,
+        region: doc.region,
+      });
+
+      return this.toCustomerResponse(doc, { adminEmail: admin.email });
     }
 
     await this.notifySuperAdminsOfRequest(doc, admin.email);
@@ -1174,6 +1399,8 @@ class VmCatalogService {
     doc.updatedAt = new Date();
     await doc.save();
 
+    this.schedulePostReadySetup(doc);
+
     const customerNames = await this.resolveCustomerPlanNames([doc]);
     const customerPlanName = customerNames.get(doc.planId) ?? doc.planName;
 
@@ -1468,6 +1695,10 @@ class VmCatalogService {
       throw new ForbiddenError('Only active tenant admins can submit catalog VM requests.');
     }
 
+    const preferredSoftwareIds = await this.resolvePreferredSoftwareIds(
+      dto.preferredSoftwareIds
+    );
+
     const plan = await VmCatalogPlan.findById(dto.planId).lean();
     if (!plan || !plan.isActive) {
       throw new ValidationError('Selected template is not available.');
@@ -1529,6 +1760,8 @@ class VmCatalogService {
         tenantId,
         tenantUserId,
         ...(projectCtx ? { projectId: projectCtx.projectId } : {}),
+        preferredSoftwareIds,
+        postReadyStatus: preferredSoftwareIds.length > 0 ? 'pending' : 'none',
         provider: 'webyne',
         category: dto.category,
         planId: plan._id.toString(),
