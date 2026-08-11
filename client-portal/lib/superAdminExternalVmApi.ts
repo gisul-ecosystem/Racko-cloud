@@ -116,6 +116,10 @@ export interface SuperAdminExternalVmOverviewRow {
   protocol: string;
   username: string;
   password: string;
+  providerPlanDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
+  providerUsername?: string | null;
+  providerStartDate?: string | null;
+  providerEndDate?: string | null;
   source: string;
   stack: 'platform' | 'tenant';
   adminId: string | null;
@@ -278,6 +282,21 @@ export async function patchSuperAdminExternalVmAssignment(
     )
   );
   return data.row;
+}
+
+export async function updateSuperAdminExternalVmProviderMetadata(body: {
+  ipAddress: string;
+  providerStartDate?: string | null;
+  providerEndDate?: string | null;
+  planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
+}): Promise<{ updated: boolean }> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ updated: boolean }>>('/api/v1/super-admin/vm-inventory/provider-metadata', {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    })
+  );
+  return data;
 }
 
 export async function deleteSuperAdminExternalVmAssignment(
