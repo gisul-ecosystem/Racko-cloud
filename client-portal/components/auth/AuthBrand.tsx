@@ -1,6 +1,6 @@
 import Image from 'next/image';
 import Link from 'next/link';
- 
+
 export function AuthBrand() {
   return (
     <div className="text-center mb-8">

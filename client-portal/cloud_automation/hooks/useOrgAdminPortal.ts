@@ -11,6 +11,7 @@ import {
   getOrgResourceGroupDetail,
   getOrgUserAzureCost,
   getOrgSharedAzureCost,
+  getOrgSubscriptionRoleQuota,
   listOrgAccessRequests,
   listOrgAzureRoles,
   listOrgPrivilegedRoleRequests,
@@ -39,6 +40,7 @@ import type {
   OrgAdminUser,
   OrgAdminUserAzureCost,
   OrgAdminSharedAzureCostSummary,
+  OrgAdminSubscriptionRoleQuota,
 } from '../types/orgAdmin';
 
 interface UseOrgAdminPortalResult {
@@ -100,6 +102,9 @@ interface UseOrgAdminPortalResult {
   lastUpdatedAt: Date | null;
   isRefreshing: boolean;
   hasActiveUsers: boolean;
+  subscriptionRoleQuota: OrgAdminSubscriptionRoleQuota | null;
+  subscriptionRoleQuotaLoading: boolean;
+  subscriptionRoleQuotaError: string | null;
 }
 
 function isRequestNotFoundError(err: unknown): boolean {
@@ -133,6 +138,10 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
   const [actionSuccess, setActionSuccess] = useState<string | null>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [subscriptionRoleQuota, setSubscriptionRoleQuota] =
+    useState<OrgAdminSubscriptionRoleQuota | null>(null);
+  const [subscriptionRoleQuotaLoading, setSubscriptionRoleQuotaLoading] = useState(false);
+  const [subscriptionRoleQuotaError, setSubscriptionRoleQuotaError] = useState<string | null>(null);
   const refreshInFlightRef = useRef(false);
 
   const hasActiveUsers = users.some(
@@ -150,12 +159,30 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     setActionError(fallback);
   }, []);
 
+  const refreshSubscriptionRoleQuota = useCallback(async () => {
+    setSubscriptionRoleQuotaLoading(true);
+    setSubscriptionRoleQuotaError(null);
+
+    try {
+      const quota = await getOrgSubscriptionRoleQuota();
+      setSubscriptionRoleQuota(quota);
+    } catch (err) {
+      if (err instanceof OrgAdminError) {
+        setSubscriptionRoleQuotaError(err.message);
+      } else {
+        setSubscriptionRoleQuotaError('Unable to load subscription role quota.');
+      }
+    } finally {
+      setSubscriptionRoleQuotaLoading(false);
+    }
+  }, []);
+
   const refreshOverview = useCallback(async () => {
     setOverviewLoading(true);
     setOverviewError(null);
 
     try {
-      const data = await listOrgRequests();
+      const [data] = await Promise.all([listOrgRequests(), refreshSubscriptionRoleQuota()]);
       setRequests(data);
 
       setSelectedRequestId((current) => {
@@ -179,7 +206,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     } finally {
       setOverviewLoading(false);
     }
-  }, []);
+  }, [refreshSubscriptionRoleQuota]);
 
   const refreshDetail = useCallback(async () => {
     if (selectedRequestId == null) return;
@@ -974,5 +1001,8 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
     lastUpdatedAt,
     isRefreshing,
     hasActiveUsers,
+    subscriptionRoleQuota,
+    subscriptionRoleQuotaLoading,
+    subscriptionRoleQuotaError,
   };
 }

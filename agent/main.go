@@ -17,7 +17,6 @@ import (
 	"github.com/racko-ai/agent/register"
 	"github.com/racko-ai/agent/reporter"
 	"github.com/racko-ai/agent/store"
-	"github.com/racko-ai/agent/tracker"
 	"github.com/racko-ai/agent/winsvc"
 )
 
@@ -110,15 +109,6 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 			log.Fatalf("[agent] Registration failed: %v", err)
 		}
 		log.Printf("[agent] Registered with agentId=%s", agentID)
-
-		// First registration — capture baseline snapshot now.
-		// Baseline is captured regardless of tracking state so it is ready
-		// the moment the admin enables tracking. The watcher itself won't
-		// start until tracking is enabled via heartbeat or WS command.
-		log.Println("[agent] First run — capturing baseline snapshot...")
-		if err := tracker.CaptureAndUpload(agentID, cfg); err != nil {
-			log.Printf("[agent] WARNING: baseline capture failed: %v (continuing)", err)
-		}
 	} else {
 		log.Printf("[agent] Using existing agentId=%s", agentID)
 	}
@@ -147,59 +137,11 @@ func runAgent(cfg *config.Config, done <-chan struct{}) {
 		}
 	}()
 
-	// NOTE: watcher does NOT start here. It starts only when tracking is enabled
-	// by the admin via the platform. The heartbeat and WS tracking_update command
-	// control whether the watcher runs. watcherDone is nil until tracking is enabled.
-	var watcherDone chan struct{}
-
-	// stopWatcher stops the current watcher if it is running.
-	stopWatcher := func() {
-		if watcherDone == nil {
-			return // already stopped
-		}
-		select {
-		case <-watcherDone:
-			// already closed
-		default:
-			close(watcherDone)
-		}
-		watcherDone = nil
-		log.Println("[agent] Watcher stopped")
-	}
-
-	restartWatcher := func() {
-		// Stop any existing watcher first
-		stopWatcher()
-		watcherDone = make(chan struct{})
-		baseline2, _ := tracker.LoadLocal()
-		wtr2 := tracker.NewWatcher(agentID, cfg, baseline2)
-		go wtr2.Start(watcherDone)
-		log.Println("[agent] Watcher started")
-	}
-
-	// heartbeat.Start must come after stopWatcher/restartWatcher are defined
-	// so the tracking callback can reference them.
-	go heartbeat.Start(cfg, agentID, cancelDone, cancel, func(enabled bool) {
-		if enabled {
-			log.Println("[agent] Heartbeat: tracking enabled by server — starting watcher")
-			restartWatcher()
-		} else {
-			log.Println("[agent] Heartbeat: tracking disabled by server — stopping watcher")
-			stopWatcher()
-		}
-	})
+	go heartbeat.Start(cfg, agentID, cancelDone, cancel)
 
 	rep := reporter.New(cfg)
 	exec := executor.New(agentID, cfg, rep)
-	p := poller.NewWS(cfg, agentID, exec.Handle, cancel, stopWatcher, restartWatcher, func(enabled bool) {
-		if enabled {
-			log.Println("[agent] WS: tracking enabled by server — starting watcher")
-			restartWatcher()
-		} else {
-			log.Println("[agent] WS: tracking disabled by server — stopping watcher")
-			stopWatcher()
-		}
-	})
+	p := poller.NewWS(cfg, agentID, exec.Handle, cancel)
 	p.Start(cancelDone)
 
 	log.Println("[agent] Stopped.")

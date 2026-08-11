@@ -7,6 +7,11 @@ const router = express.Router();
 
 router.use(orgAdminCustomRoutes);
 
+router.get(
+  '/subscription-role-quota',
+  requireSuperAdmin,
+  orgAdminController.getSubscriptionRoleQuota
+);
 router.get('/requests', requireSuperAdmin, orgAdminController.listRequests);
 router.get('/resource-groups', requireSuperAdmin, orgAdminController.listResourceGroups);
 router.get(

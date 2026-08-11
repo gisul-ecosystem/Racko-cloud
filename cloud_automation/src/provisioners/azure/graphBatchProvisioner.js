@@ -6,6 +6,42 @@ const MAX_ATTEMPTS = 5;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const GRAPH_GROUP_PERMISSION_HINT =
+  'Grant Microsoft Graph application permissions Group.ReadWrite.All and GroupMember.ReadWrite.All with admin consent (Azure Portal → App registrations → API permissions).';
+
+const isGraphAuthorizationDenied = (error) => {
+  const statusCode = Number(error?.statusCode || error?.status);
+  const code = String(error?.code || '').toLowerCase();
+  return statusCode === 403 || code === 'authorization_requestdenied';
+};
+
+const toGraphGroupError = (error, action) => {
+  if (error instanceof AppError) {
+    return error;
+  }
+
+  if (isGraphAuthorizationDenied(error)) {
+    return new AppError(
+      `Microsoft Graph denied ${action} for shared lab group access. ${GRAPH_GROUP_PERMISSION_HINT} Alternatively, use Per-User resource groups for large labs.`,
+      403
+    );
+  }
+
+  const statusCode = Number(error?.statusCode || error?.status);
+  if (Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599) {
+    let message = error?.message || `Microsoft Graph ${action} failed.`;
+    try {
+      const parsed = JSON.parse(error?.body || '{}');
+      if (parsed?.message) message = parsed.message;
+    } catch {
+      // ignore
+    }
+    return new AppError(message, statusCode);
+  }
+
+  return new AppError(error?.message || `Microsoft Graph ${action} failed.`, 502);
+};
+
 const chunkArray = (items, size = GRAPH_BATCH_SIZE) => {
   const chunks = [];
   const array = Array.isArray(items) ? items : [];
@@ -398,6 +434,49 @@ const batchDeleteUsers = async (graphClient, azureUserIds, context = 'bulk delet
   return { deleted, failed };
 };
 
+const escapeODataString = (value) => String(value || '').replace(/'/g, "''");
+
+const sanitizeMailNickname = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 64);
+
+/**
+ * One Entra security group per lab role — keeps shared-RG RBAC under Azure's
+ * 400 role-assignment limit (assign role to group once, add users via Graph).
+ */
+const ensureLabRoleSecurityGroup = async (graphClient, requestId, roleName) => {
+  const safeRole = String(roleName || 'role')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .slice(0, 48);
+  const displayName = `Racko-Lab-${requestId}-${safeRole}`.slice(0, 256);
+  const mailNickname = sanitizeMailNickname(`rackolab${requestId}${safeRole}`) || `rackolab${requestId}`;
+
+  try {
+    const filter = encodeURIComponent(`displayName eq '${escapeODataString(displayName)}'`);
+    const search = await graphClient
+      .api(`/groups?$filter=${filter}&$select=id,displayName`)
+      .get();
+
+    if (Array.isArray(search?.value) && search.value[0]?.id) {
+      return search.value[0].id;
+    }
+
+    const created = await graphClient.api('/groups').post({
+      displayName,
+      mailEnabled: false,
+      mailNickname,
+      securityEnabled: true,
+      groupTypes: []
+    });
+
+    return created.id;
+  } catch (error) {
+    throw toGraphGroupError(error, 'lab security group create/list');
+  }
+};
+
 module.exports = {
   GRAPH_BATCH_SIZE,
   batchAddUsersToGroups,
@@ -407,6 +486,9 @@ module.exports = {
   batchDeleteUsers,
   chunkArray,
   executeBatchWithRetry,
+  ensureLabRoleSecurityGroup,
+  isGraphAuthorizationDenied,
+  toGraphGroupError,
   isRetryableError,
   getRetryDelayMs
 };

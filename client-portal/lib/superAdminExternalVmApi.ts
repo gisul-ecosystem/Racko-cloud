@@ -338,13 +338,33 @@ export async function deleteSuperAdminExternalVm(
   );
 }
 
+/** Matches the server-side Zod cap on bulk-delete ids. */
+const BULK_DELETE_CHUNK_SIZE = 500;
+
+/** Small chunk size to keep each request well within the gateway timeout. */
+export const BULK_DELETE_UI_CHUNK_SIZE = 25;
+
 export async function bulkDeleteSuperAdminExternalVms(
   ids: string[]
 ): Promise<SuperAdminExternalVmBulkDeleteResult> {
-  return unwrap(
-    apiRequest<ApiEnvelope<SuperAdminExternalVmBulkDeleteResult>>(
-      '/api/v1/super-admin/external-vms/bulk-delete',
-      { method: 'POST', body: JSON.stringify({ ids }) }
-    )
-  );
+  const aggregated: SuperAdminExternalVmBulkDeleteResult = {
+    results: [],
+    summary: { total: 0, deleted: 0, failed: 0 },
+  };
+
+  for (let i = 0; i < ids.length; i += BULK_DELETE_CHUNK_SIZE) {
+    const chunk = ids.slice(i, i + BULK_DELETE_CHUNK_SIZE);
+    const res = await unwrap(
+      apiRequest<ApiEnvelope<SuperAdminExternalVmBulkDeleteResult>>(
+        '/api/v1/super-admin/external-vms/bulk-delete',
+        { method: 'POST', body: JSON.stringify({ ids: chunk }) }
+      )
+    );
+    aggregated.results.push(...res.results);
+    aggregated.summary.total += res.summary.total;
+    aggregated.summary.deleted += res.summary.deleted;
+    aggregated.summary.failed += res.summary.failed;
+  }
+
+  return aggregated;
 }

@@ -96,33 +96,6 @@ class WSManager {
   }
 
   /**
-   * Send a clone_replay command to a connected agent.
-   * Agent fetches the activity manifest from the server and replays all changes.
-   * Returns true if delivered, false if agent is offline.
-   */
-  sendCloneReplay(agentId: string, sessionId: string, sourceMachineId: string): boolean {
-    const conn = this.connections.get(agentId);
-    if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
-      logger.warn('[WSManager] Cannot send clone_replay — agent not connected', { agentId });
-      return false;
-    }
-    try {
-      conn.ws.send(JSON.stringify({
-        type: 'clone_replay',
-        payload: { sessionId, sourceMachineId },
-      }));
-      logger.info('[WSManager] Sent clone_replay command to agent', { agentId, sessionId, sourceMachineId });
-      return true;
-    } catch (err) {
-      logger.error('[WSManager] Failed to send clone_replay command', {
-        agentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    }
-  }
-
-  /**
    * Send a reset command to a connected agent over the existing WebSocket.
    * Agent receives { type: "reset", payload: { sessionId } } and runs the full
    * reset PowerShell script in a background goroutine, sending back progress events.
@@ -140,31 +113,6 @@ class WSManager {
       return true;
     } catch (err) {
       logger.error('[WSManager] Failed to send reset command', {
-        agentId,
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return false;
-    }
-  }
-
-  /**
-   * Send a tracking_update command to a connected agent.
-   * Agent receives { type: "tracking_update", payload: { enabled: boolean } }
-   * and starts/stops the filesystem watcher immediately.
-   * Returns true if delivered, false if agent is offline (heartbeat will sync it).
-   */
-  sendTrackingUpdate(agentId: string, enabled: boolean): boolean {
-    const conn = this.connections.get(agentId);
-    if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
-      logger.warn('[WSManager] Cannot send tracking_update — agent not connected', { agentId });
-      return false;
-    }
-    try {
-      conn.ws.send(JSON.stringify({ type: 'tracking_update', payload: { enabled } }));
-      logger.info('[WSManager] Sent tracking_update command to agent', { agentId, enabled });
-      return true;
-    } catch (err) {
-      logger.error('[WSManager] Failed to send tracking_update command', {
         agentId,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -383,35 +331,6 @@ class WSManager {
         });
       }
 
-      if (msg.type === 'clone_progress' || msg.type === 'clone_complete') {
-        const payload = msg.payload as {
-          sessionId: string;
-          machineId: string;
-          phase?: number;
-          message?: string;
-          success?: boolean;
-          error?: string;
-        };
-        const machine = await MachineModel.findOne({ agentId: payload.machineId }).lean();
-        const resolvedMachineId = machine ? machine._id.toString() : payload.machineId;
-
-        const { emitCloneEvent } = await import('../clone.events');
-        emitCloneEvent(payload.sessionId, {
-          type: msg.type as 'clone_progress' | 'clone_complete',
-          machineId: resolvedMachineId,
-          phase: payload.phase,
-          message: payload.message,
-          success: payload.success,
-          error: payload.error,
-        });
-        logger.info('[WSManager] Clone event forwarded to SSE', {
-          agentId,
-          type: msg.type,
-          sessionId: payload.sessionId,
-          phase: payload.phase,
-          success: payload.success,
-        });
-      }
     } catch {
       logger.warn('[WSManager] Malformed message from agent', { agentId });
     }

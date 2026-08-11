@@ -67,6 +67,8 @@ import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboa
 import projectsRoutes from './modules/projects/projects.routes';
 import tenantProjectsRoutes from './modules/projects/tenantProjects.routes';
 import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes';
+import myVmDashboardRoutes from './modules/myVmDashboard/myVmDashboard.routes';
+import tenantMyVmDashboardRoutes from './modules/myVmDashboard/tenantMyVmDashboard.routes';
 import superAdminVmInventoryRoutes from './modules/superAdmin/superAdminVmInventory.routes';
 
 const app = express();
@@ -191,6 +193,8 @@ app.use('/api/v1/tenant-vm-catalog', tenantVmCatalogRoutes);
 app.use('/api/v1/tenant-dedicated-servers', tenantDedicatedServerRoutes);
 app.use('/api/v1/tenant-projects', tenantProjectsRoutes);
 app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
+app.use('/api/v1/my-vms', myVmDashboardRoutes);
+app.use('/api/v1/tenant-my-vms', tenantMyVmDashboardRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);

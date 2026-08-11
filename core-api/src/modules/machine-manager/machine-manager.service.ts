@@ -54,8 +54,6 @@ class MachineManagerService {
         ramGb:     doc.specs.ramGb,
         diskGb:    doc.specs.diskGb,
       } : undefined,
-      trackingEnabled: doc.trackingEnabled ?? false,
-      trackingEnabledAt: doc.trackingEnabledAt?.toISOString(),
       agentVersion: doc.agentVersion,
       rackoAppVersion: doc.rackoAppVersion,
       createdAt: doc.createdAt.toISOString(),
@@ -194,12 +192,6 @@ class MachineManagerService {
 
     // Clean up all related data so nothing orphans in the database
     await JobModel.deleteMany({ machineId: id });
-
-    const { MachineActivityModel } = await import('../../models/machineActivity.model');
-    await MachineActivityModel.deleteMany({ machineId: id });
-
-    const { MachineBaselineModel } = await import('../../models/machineBaseline.model');
-    await MachineBaselineModel.deleteMany({ machineId: id });
 
     logger.info('[MachineManager] Cleaned up related data for deleted machine', {
       machineId: id.toString(),
@@ -528,7 +520,6 @@ class MachineManagerService {
       updateAvailable: false,
       latestVersion: '',
       checksum: '',
-      trackingEnabled: machine.trackingEnabled ?? false,
       rackoAppUpdateAvailable: false,
       rackoAppLatestVersion: '',
       rackoAppChecksum: '',
@@ -574,48 +565,6 @@ class MachineManagerService {
     }
 
     return response;
-  }
-
-  /**
-   * Enable or disable tracking for one or more machines.
-   * Sends a real-time tracking_update WS command to any connected agents.
-   * Idempotent — safe to call multiple times with the same value.
-   */
-  async setTracking(
-    machineIds: string[],
-    enabled: boolean,
-    adminId: mongoose.Types.ObjectId
-  ): Promise<MachineResponse[]> {
-    const { wsManager } = await import('./websocket/wsManager');
-    const updated: MachineResponse[] = [];
-
-    for (const machineId of machineIds) {
-      const id = new mongoose.Types.ObjectId(machineId);
-      const doc = await this.findOwnedMachine(id, adminId);
-
-      const now = new Date();
-      doc.trackingEnabled = enabled;
-      if (enabled) {
-        doc.trackingEnabledAt = now;
-        doc.trackingEnabledBy = adminId;
-      }
-      await doc.save();
-
-      logger.info('[MachineManager] Tracking updated', {
-        machineId,
-        enabled,
-        adminId: adminId.toString(),
-      });
-
-      // Send real-time command to agent if connected — no need to wait for next heartbeat
-      if (doc.agentId && wsManager.isConnected(doc.agentId)) {
-        wsManager.sendTrackingUpdate(doc.agentId, enabled);
-      }
-
-      updated.push(this.toMachineResponse(doc));
-    }
-
-    return updated;
   }
 
   /**
@@ -882,7 +831,7 @@ class MachineManagerService {
     const appVersion = (config.RACKO_APP_VERSION ?? '').trim();
 
     // PowerShell script runs on the VM as SYSTEM:
-    // 1. Download racko-app.zip
+    // 1. Download racko-app.zip via BITS (resumable, no-hang, retry-on-drop)
     // 2. Extract to C:\ProgramData\racko-agent\racko-app\
     // 3. Install WebView2 (skips if already present)
     // 4. Create desktop shortcut
@@ -894,8 +843,16 @@ class MachineManagerService {
       '$appZipUrl = "$platformUrl/api/v1/agent/binary/racko-app"',
       '$appDir = "$installDir\\racko-app"',
       '$appZip = "$installDir\\racko-app.zip"',
-      'Write-Host "[racko] Downloading Racko App..."',
-      'Invoke-WebRequest -Uri $appZipUrl -OutFile $appZip -UseBasicParsing',
+      // Clean up any partial download from a previous failed attempt
+      'Remove-Item $appZip -Force -ErrorAction SilentlyContinue',
+      'Write-Host "[racko] Downloading Racko App via BITS..."',
+      // BITS: Windows Background Intelligent Transfer Service
+      // - Handles network drops and retries automatically
+      // - Never hangs — fails with a clear error if transfer cannot complete
+      // - Same mechanism Windows Update uses for large downloads
+      // -TransferType Foreground ensures it completes before the script continues
+      // -RetryInterval 30 (seconds) and -RetryTimeout 600 (seconds / 10 min total retry budget)
+      'Start-BitsTransfer -Source $appZipUrl -Destination $appZip -TransferType Foreground -RetryInterval 30 -RetryTimeout 600',
       'Write-Host "[racko] Extracting Racko App..."',
       'Expand-Archive -Path $appZip -DestinationPath $appDir -Force',
       'Remove-Item $appZip -Force -ErrorAction SilentlyContinue',
@@ -912,7 +869,8 @@ class MachineManagerService {
       'if (-not $wv2Ver -or $wv2Ver -eq "0.0.0.0") {',
       '  Write-Host "[racko] Installing WebView2 Runtime..."',
       '  $wv2Path = "$installDir\\WebView2Setup.exe"',
-      '  Invoke-WebRequest -Uri "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -OutFile $wv2Path -UseBasicParsing',
+      '  Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
+      '  Start-BitsTransfer -Source "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -Destination $wv2Path -TransferType Foreground -RetryInterval 30 -RetryTimeout 300',
       '  Start-Process $wv2Path -ArgumentList "/silent /install" -Wait',
       '  Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
       '  Write-Host "[racko] WebView2 installed."',
@@ -924,8 +882,8 @@ class MachineManagerService {
     ].join('; ');
 
     const commandId = `racko-app-setup-${machineId}`;
-    // 10 minutes — enough for 72MB download + extract + WebView2 on a slow connection
-    const result = await wsManager.sendExec(machine.agentId, commandId, script, 10 * 60 * 1000);
+    // 15 minutes — BITS retries on drop (up to 10 min for app + 5 min for WebView2)
+    const result = await wsManager.sendExec(machine.agentId, commandId, script, 15 * 60 * 1000);
 
     logger.info('[MachineManager] installRackoAppViaExec completed', {
       machineId,
@@ -990,10 +948,6 @@ class MachineManagerService {
 
         // Clear job history so machine appears fresh after reset
         await JobModel.deleteMany({ machineId: new mongoose.Types.ObjectId(machineId) });
-
-        // Clear activity log — machine is back to baseline state, slate wiped clean
-        const { clearActivityLog } = await import('./tracker.service');
-        await clearActivityLog(new mongoose.Types.ObjectId(machineId));
 
         logger.info('[MachineManager] Reset initiated', {
           machineId,

@@ -25,8 +25,8 @@ export interface IMachine {
     ramGb?: number;
     diskGb?: number;
   };
-  trackingEnabled: boolean;
-  trackingEnabledAt?: string;
+  agentVersion?: string;
+  rackoAppVersion?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -145,22 +145,6 @@ export async function bulkDeleteMachines(machineIds: string[]): Promise<{
     body: JSON.stringify({ machineIds }),
   });
   return res.data;
-}
-
-/**
- * Enable or disable file tracking on one or more machines.
- * When enabled, the agent starts the filesystem watcher and activity log.
- * When disabled, the watcher stops — no more activity is recorded.
- */
-export async function setMachineTracking(
-  machineIds: string[],
-  enabled: boolean
-): Promise<IMachine[]> {
-  const res = await apiRequest<ApiResponse<{ machines: IMachine[]; total: number }>>(
-    '/api/v1/machines/tracking',
-    { method: 'PATCH', body: JSON.stringify({ machineIds, enabled }) }
-  );
-  return res.data.machines;
 }
 
 export async function execCommand(
@@ -376,51 +360,5 @@ export function openResetStatusStream(
   streamToken: string
 ): EventSource {
   const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
-  return new EventSource(url, { withCredentials: true });
-}
-
-// ─── Clone API ────────────────────────────────────────────────────────────────
-
-export interface ActivityEvent {
-  _id: string;
-  type: string;
-  timestamp: string;
-  payload: Record<string, unknown>;
-  sequence: number;
-}
-
-export async function fetchActivityLog(machineId: string): Promise<ActivityEvent[]> {
-  const res = await apiRequest<{ success: boolean; data: { activities: ActivityEvent[]; total: number } }>(
-    `/api/v1/machines/${machineId}/activity`
-  );
-  return res.data.activities;
-}
-
-export async function cloneMachineTo(
-  sourceMachineId: string,
-  targetMachineId: string
-): Promise<{ sessionId: string }> {
-  const res = await apiRequest<{ success: boolean; message: string; data: { sessionId: string } }>(
-    `/api/v1/machines/${sourceMachineId}/clone-to/${targetMachineId}`,
-    { method: 'POST' }
-  );
-  return res.data;
-}
-
-export async function issueCloneStreamTicket(
-  sessionId: string
-): Promise<{ streamTicket: string; expiresInSeconds: number }> {
-  const res = await apiRequest<{ success: boolean; data: { streamTicket: string; expiresInSeconds: number } }>(
-    '/api/v1/machines/clone-stream-ticket',
-    { method: 'POST', body: JSON.stringify({ sessionId }) }
-  );
-  return res.data;
-}
-
-export function openCloneStatusStream(
-  sessionId: string,
-  streamTicket: string
-): EventSource {
-  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/clone-stream/${sessionId}?ticket=${streamTicket}`;
   return new EventSource(url, { withCredentials: true });
 }

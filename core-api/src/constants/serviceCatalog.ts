@@ -3,6 +3,7 @@ export const SERVICE_CATALOG = [
   'create-vm',
   'dedicated-server',
   'elastic-servers',
+  'my-vms',
   'azure',
   'aws',
   'gcp',
