@@ -64,6 +64,7 @@ export type TenantServiceKey =
   | 'create-vm'
   | 'dedicated-server'
   | 'elastic-servers'
+  | 'my-vms'
   | 'azure'
   | 'aws'
   | 'gcp'

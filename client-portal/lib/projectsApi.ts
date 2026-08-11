@@ -284,6 +284,7 @@ export const PROJECT_SERVICE_LABELS: Record<AdminServiceKey, string> = {
   'dedicated-server': 'Dedicated Server',
   'vm-management': 'VPS Hosting',
   'elastic-servers': 'Elastic Server Import',
+  'my-vms': 'My VM Dashboard',
   azure: 'Azure Lab',
   aws: 'AWS Lab',
   gcp: 'GCP Lab',
