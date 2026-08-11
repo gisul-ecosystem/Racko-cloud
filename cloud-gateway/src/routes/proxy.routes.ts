@@ -478,8 +478,6 @@ router.get('/api/v1/machines/reset-stream/:sessionId', sseProxy);
 router.post('/api/v1/machines/bulk', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 // GET push session state (page-refresh recovery) — must come before /:id
 router.get('/api/v1/machines/push-session/:sessionId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
-// PATCH /api/v1/machines/tracking — enable/disable file tracking (must come before /:id)
-router.patch('/api/v1/machines/tracking', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/machines/jobs', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/machines/jobs/:id/stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
@@ -496,12 +494,6 @@ router.get('/api/v1/machines/:id/download-agent', authMiddleware, verifyMiddlewa
 router.post('/api/v1/machines/:id/exec', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.delete('/api/v1/machines/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
-// Clone + activity log routes
-router.get('/api/v1/machines/:id/activity', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
-router.post('/api/v1/machines/:id/clone-to/:targetId', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
-router.post('/api/v1/machines/clone-stream-ticket', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
-// SSE stream for clone status — NO gateway auth. core-api validates the ?ticket= internally.
-router.get('/api/v1/machines/clone-stream/:sessionId', sseProxy);
 
 // ─── VM HOST LEASES (Excel inventory — super admin / staff) ───────────────────
 router.post('/api/v1/vm-host-leases/upload', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
@@ -531,15 +523,6 @@ router.get('/api/v1/agent/software-catalog/:id', coreApiProxy);
 // Agent reset result — POSTed by agent via HTTP after reset script completes (X-Agent-ID auth)
 // This is the authoritative delivery path for reset_complete, bypassing WebSocket.
 router.post('/api/v1/agent/reset-result', coreApiProxy);
-// Tracker agent routes — authenticated by X-Agent-ID header (not JWT)
-// core-api's requireAgentAuth middleware validates agentId against the machines collection
-router.post('/api/v1/agent/baseline', coreApiProxy);
-router.post('/api/v1/agent/activity', coreApiProxy);
-router.get('/api/v1/agent/upload-url', coreApiProxy);  // presigned PUT URL for direct-to-S3 upload
-router.post('/api/v1/agent/file-upload', coreApiProxy);
-router.get('/api/v1/agent/file-download', coreApiProxy);
-router.get('/api/v1/agent/clone-manifest', coreApiProxy);
-router.post('/api/v1/agent/clone-install', coreApiProxy);
 
 // ─── SHARED FILES AGENT ROUTES (X-Agent-ID auth, used by racko-app GUI) ──────
 router.post('/api/v1/agent/shared-files', coreApiProxy);

@@ -54,8 +54,6 @@ class MachineManagerService {
         ramGb:     doc.specs.ramGb,
         diskGb:    doc.specs.diskGb,
       } : undefined,
-      trackingEnabled: doc.trackingEnabled ?? false,
-      trackingEnabledAt: doc.trackingEnabledAt?.toISOString(),
       agentVersion: doc.agentVersion,
       rackoAppVersion: doc.rackoAppVersion,
       createdAt: doc.createdAt.toISOString(),
@@ -194,12 +192,6 @@ class MachineManagerService {
 
     // Clean up all related data so nothing orphans in the database
     await JobModel.deleteMany({ machineId: id });
-
-    const { MachineActivityModel } = await import('../../models/machineActivity.model');
-    await MachineActivityModel.deleteMany({ machineId: id });
-
-    const { MachineBaselineModel } = await import('../../models/machineBaseline.model');
-    await MachineBaselineModel.deleteMany({ machineId: id });
 
     logger.info('[MachineManager] Cleaned up related data for deleted machine', {
       machineId: id.toString(),
@@ -528,7 +520,6 @@ class MachineManagerService {
       updateAvailable: false,
       latestVersion: '',
       checksum: '',
-      trackingEnabled: machine.trackingEnabled ?? false,
       rackoAppUpdateAvailable: false,
       rackoAppLatestVersion: '',
       rackoAppChecksum: '',
@@ -574,48 +565,6 @@ class MachineManagerService {
     }
 
     return response;
-  }
-
-  /**
-   * Enable or disable tracking for one or more machines.
-   * Sends a real-time tracking_update WS command to any connected agents.
-   * Idempotent — safe to call multiple times with the same value.
-   */
-  async setTracking(
-    machineIds: string[],
-    enabled: boolean,
-    adminId: mongoose.Types.ObjectId
-  ): Promise<MachineResponse[]> {
-    const { wsManager } = await import('./websocket/wsManager');
-    const updated: MachineResponse[] = [];
-
-    for (const machineId of machineIds) {
-      const id = new mongoose.Types.ObjectId(machineId);
-      const doc = await this.findOwnedMachine(id, adminId);
-
-      const now = new Date();
-      doc.trackingEnabled = enabled;
-      if (enabled) {
-        doc.trackingEnabledAt = now;
-        doc.trackingEnabledBy = adminId;
-      }
-      await doc.save();
-
-      logger.info('[MachineManager] Tracking updated', {
-        machineId,
-        enabled,
-        adminId: adminId.toString(),
-      });
-
-      // Send real-time command to agent if connected — no need to wait for next heartbeat
-      if (doc.agentId && wsManager.isConnected(doc.agentId)) {
-        wsManager.sendTrackingUpdate(doc.agentId, enabled);
-      }
-
-      updated.push(this.toMachineResponse(doc));
-    }
-
-    return updated;
   }
 
   /**
@@ -990,10 +939,6 @@ class MachineManagerService {
 
         // Clear job history so machine appears fresh after reset
         await JobModel.deleteMany({ machineId: new mongoose.Types.ObjectId(machineId) });
-
-        // Clear activity log — machine is back to baseline state, slate wiped clean
-        const { clearActivityLog } = await import('./tracker.service');
-        await clearActivityLog(new mongoose.Types.ObjectId(machineId));
 
         logger.info('[MachineManager] Reset initiated', {
           machineId,
