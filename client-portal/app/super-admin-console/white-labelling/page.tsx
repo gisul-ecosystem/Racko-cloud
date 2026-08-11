@@ -112,8 +112,8 @@ export default function WhiteLabellingOverviewPage() {
           accent="blue"
         />
         <OverviewStatCard
-          label="Tenant users"
-          value={overview.totalTenantUsers}
+          label="Managed users"
+          value={overview.managedUsers}
           icon={Users}
           accent="purple"
         />

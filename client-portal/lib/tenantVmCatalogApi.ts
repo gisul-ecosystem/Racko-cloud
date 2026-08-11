@@ -43,6 +43,15 @@ export async function fetchTenantVmCatalogOverview(): Promise<CatalogVmOverview>
   return res.data;
 }
 
+export async function fetchTenantVmCatalogSoftwareOptions(): Promise<
+  import('./vmCatalogApi').CatalogSoftwareOption[]
+> {
+  const res = await tenantPortalRequest<
+    ApiEnvelope<{ catalog: import('./vmCatalogApi').CatalogSoftwareOption[]; total: number }>
+  >('/api/v1/tenant-vm-catalog/software-options');
+  return res.data.catalog;
+}
+
 export async function fetchTenantVmCatalogVms(): Promise<ICatalogVm[]> {
   const res = await tenantPortalRequest<ApiEnvelope<{ vms: ICatalogVm[]; total: number }>>(
     '/api/v1/tenant-vm-catalog/vms'

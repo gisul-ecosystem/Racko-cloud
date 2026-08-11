@@ -3,10 +3,11 @@ import { passwordSchema } from '../tenant/tenant.validation';
 
 export const tenantLoginSchema = z.object({
   body: z.object({
+    // Field name kept as `email` for API compatibility; value may be email OR username.
     email: z
       .string()
-      .min(1, 'Email is required')
-      .email('Invalid email format')
+      .min(1, 'Email or username is required')
+      .max(254, 'Email or username too long')
       .toLowerCase()
       .trim(),
     password: z.string().min(1, 'Password is required'),

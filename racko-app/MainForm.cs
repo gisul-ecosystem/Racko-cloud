@@ -1,5 +1,6 @@
 using System.Drawing;
 using System.IO;
+using System.IO.Compression;
 using System.Windows.Forms;
 using RackoApp.Services;
 using RackoApp.Views;
@@ -337,9 +338,17 @@ public class MainForm : Form
 
         try
         {
-            await _api.UploadAsync(dlg.SelectedFilePath, dlg.SelectedPermission, dlg.SelectedMachineIds);
+            // For folder uploads SelectedDisplayName is set to "FolderName.zip"
+            // so the inbox/outbox shows the original folder name instead of the temp uuid zip name.
+            await _api.UploadAsync(
+                dlg.SelectedFilePath,
+                dlg.SelectedPermission,
+                dlg.SelectedMachineIds,
+                dlg.SelectedDisplayName);
+
+            var displayName = dlg.SelectedDisplayName ?? Path.GetFileName(dlg.SelectedFilePath);
             MessageBox.Show(
-                $"'{Path.GetFileName(dlg.SelectedFilePath)}' shared with {dlg.SelectedMachineIds.Length} VM(s).",
+                $"'{displayName}' shared with {dlg.SelectedMachineIds.Length} VM(s).",
                 "Racko — Uploaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
             _ = LoadOutboxAsync();
         }
@@ -347,6 +356,12 @@ public class MainForm : Form
         {
             MessageBox.Show($"Upload failed:\n{ex.Message}",
                 "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
+        finally
+        {
+            // Clean up temp zip created for folder uploads
+            if (dlg.TempZipPath is not null)
+                try { File.Delete(dlg.TempZipPath); } catch { }
         }
     }
 
@@ -369,25 +384,71 @@ public class MainForm : Form
         if (viewUrl.Permission == "full")
         {
             // Auto-save to C:\Racko Shared Files\ — created if it doesn't exist.
-            // No SaveFileDialog — files always land in the same known folder.
+            // If the file is a .zip (folder upload), extract it as a folder instead.
             const string downloadDir = @"C:\Racko Shared Files";
             try
             {
                 Directory.CreateDirectory(downloadDir);
-                var destPath = Path.Combine(downloadDir, file.FileName);
 
-                using var http     = new System.Net.Http.HttpClient();
-                using var response = await http.GetAsync(
-                    viewUrl.PresignedUrl,
-                    System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
-                response.EnsureSuccessStatusCode();
+                if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
+                {
+                    // Download zip to a temp file then extract — preserves full folder structure
+                    var tempZip = Path.Combine(Path.GetTempPath(), $"racko_{Guid.NewGuid():N}.zip");
+                    try
+                    {
+                        using var http     = new System.Net.Http.HttpClient();
+                        using var response = await http.GetAsync(
+                            viewUrl.PresignedUrl,
+                            System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                        response.EnsureSuccessStatusCode();
 
-                await using var fs = File.Create(destPath);
-                await response.Content.CopyToAsync(fs);
+                        await using var fs = File.Create(tempZip);
+                        await response.Content.CopyToAsync(fs);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Download failed:\n{ex.Message}",
+                            "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                        try { File.Delete(tempZip); } catch { }
+                        return;
+                    }
 
-                MessageBox.Show(
-                    $"Saved to:\n{destPath}",
-                    "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // Extract — ZipFile preserves full nested folder structure
+                    try
+                    {
+                        ZipFile.ExtractToDirectory(tempZip, downloadDir, overwriteFiles: true);
+                        var folderName = Path.GetFileNameWithoutExtension(file.FileName);
+                        MessageBox.Show(
+                            $"Folder extracted to:\n{Path.Combine(downloadDir, folderName)}",
+                            "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    }
+                    catch (Exception ex)
+                    {
+                        MessageBox.Show($"Extraction failed:\n{ex.Message}",
+                            "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                    finally
+                    {
+                        try { File.Delete(tempZip); } catch { }
+                    }
+                }
+                else
+                {
+                    // Regular file — save directly
+                    var destPath = Path.Combine(downloadDir, file.FileName);
+                    using var http     = new System.Net.Http.HttpClient();
+                    using var response = await http.GetAsync(
+                        viewUrl.PresignedUrl,
+                        System.Net.Http.HttpCompletionOption.ResponseHeadersRead);
+                    response.EnsureSuccessStatusCode();
+
+                    await using var fs = File.Create(destPath);
+                    await response.Content.CopyToAsync(fs);
+
+                    MessageBox.Show(
+                        $"Saved to:\n{destPath}",
+                        "Racko — Downloaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
             }
             catch (Exception ex)
             {

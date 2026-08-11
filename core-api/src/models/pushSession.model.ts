@@ -17,11 +17,12 @@ export interface IPushSessionMachineResult {
 }
 
 export interface IPushSession extends Document {
-  sessionId:  string;
-  adminId:    string;
-  machines:   IPushSessionMachineResult[];
-  createdAt:  Date;
-  updatedAt:  Date;
+  sessionId:         string;
+  adminId:           string;
+  machines:          IPushSessionMachineResult[];
+  installRackoApp:   boolean;  // whether racko-app GUI should be installed on each VM
+  createdAt:         Date;
+  updatedAt:         Date;
 }
 
 const MachineResultSchema = new Schema<IPushSessionMachineResult>(
@@ -43,6 +44,9 @@ const PushSessionSchema = new Schema<IPushSession>(
     sessionId: { type: String, required: true, unique: true, index: true },
     adminId:   { type: String, required: true },
     machines:  { type: [MachineResultSchema], default: [] },
+    // Controls whether racko-app GUI + WebView2 are installed after agent connects.
+    // Defaults to true (existing behaviour). Set to false to install agent only.
+    installRackoApp: { type: Boolean, default: true },
   },
   { timestamps: true }
 );

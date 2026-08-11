@@ -21,6 +21,11 @@ ENV AGENT_CHECKSUM_WINDOWS=$AGENT_CHECKSUM_WINDOWS
 ENV AGENT_CHECKSUM_LINUX=$AGENT_CHECKSUM_LINUX
 ENV AGENT_CHECKSUM_DARWIN=$AGENT_CHECKSUM_DARWIN
 
+ARG RACKO_APP_VERSION=""
+ARG RACKO_APP_CHECKSUM=""
+ENV RACKO_APP_VERSION=$RACKO_APP_VERSION
+ENV RACKO_APP_CHECKSUM=$RACKO_APP_CHECKSUM
+
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 apiuser \
   && mkdir -p /data/tenant-assets && chown -R apiuser:nodejs /data/tenant-assets
 COPY --from=builder /app/dist ./dist

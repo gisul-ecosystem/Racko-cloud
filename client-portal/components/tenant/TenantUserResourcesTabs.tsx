@@ -136,7 +136,9 @@ export function TenantUserResourcesTabs() {
                       </td>
                     </tr>
                   ))}
-                  {servers.map((s) => (
+                  {servers.map((s) => {
+                    const blocked = Boolean(s.myAccess && !s.myAccess.allowedNow);
+                    return (
                     <tr key={`srv-${s._id}`} className="border-b border-gray-50">
                       <td className="px-4 py-3 font-medium">{s.name}</td>
                       <td className="px-4 py-3 text-xs text-gray-500">Imported Server</td>
@@ -147,17 +149,27 @@ export function TenantUserResourcesTabs() {
                       <td className="px-4 py-3 text-right">
                         <button
                           type="button"
-                          onClick={() =>
-                            openTenantUrlWithSession(`${tenantConsole.elastic}/${s._id}/console`)
+                          disabled={blocked}
+                          onClick={() => {
+                            if (blocked) return;
+                            openTenantUrlWithSession(`${tenantConsole.elastic}/${s._id}/console`);
+                          }}
+                          className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline disabled:cursor-not-allowed disabled:opacity-40 disabled:no-underline"
+                          style={blocked ? undefined : accentLinkStyle}
+                          title={
+                            blocked
+                              ? s.myAccess?.nextWindow
+                                ? `Outside access window. Next: ${s.myAccess.nextWindow}`
+                                : 'Outside your access window'
+                              : 'Open console'
                           }
-                          className="inline-flex items-center gap-0.5 text-xs font-medium hover:underline"
-                          style={accentLinkStyle}
                         >
                           Console <ChevronRight className="h-3.5 w-3.5" />
                         </button>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

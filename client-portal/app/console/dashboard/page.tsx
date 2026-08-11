@@ -10,6 +10,7 @@ import {
   FlaskConical,
   FolderKanban,
   HardDrive,
+  LayoutList,
   Loader2,
   Monitor,
   PlusCircle,
@@ -65,6 +66,13 @@ const PRODUCT_TILES: HubTile[] = [
     href: tenantConsole.elastic,
     icon: Boxes,
     description: 'Connect to external servers from any provider via secure browser console',
+  },
+  {
+    serviceKey: 'my-vms',
+    name: 'My VM Dashboard',
+    href: tenantConsole.myVmDashboard,
+    icon: LayoutList,
+    description: 'Read-only view of all assigned external servers — assignees, schedules and status',
   },
   {
     serviceKey: 'cloud-labs',
