@@ -29,9 +29,6 @@ export interface IMachine extends Document {
   lastSeen?: Date;
   specs?: IMachineSpecs;
   deleted: boolean;
-  trackingEnabled: boolean;
-  trackingEnabledAt?: Date;
-  trackingEnabledBy?: mongoose.Types.ObjectId;
   agentVersion?: string;
   rackoAppVersion?: string;
   createdAt: Date;
@@ -57,9 +54,6 @@ const machineSchema = new Schema<IMachine>(
     },
     deleted: { type: Boolean, default: false, index: true },
     groupId: { type: Schema.Types.ObjectId, ref: 'MachineGroup', default: null, index: true },
-    trackingEnabled: { type: Boolean, default: false, index: true },
-    trackingEnabledAt: { type: Date },
-    trackingEnabledBy: { type: Schema.Types.ObjectId, ref: 'User' },
     agentVersion: { type: String },
     rackoAppVersion: { type: String },
   },
