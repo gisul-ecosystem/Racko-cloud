@@ -7,6 +7,19 @@ const getSuperAdminActor = (req) => {
   return userId ? `super_admin:${userId}` : 'super_admin';
 };
 
+const getSubscriptionRoleQuota = async (req, res, next) => {
+  try {
+    const quota = await orgAdminService.getSubscriptionRoleQuota();
+
+    res.status(200).json({
+      success: true,
+      quota
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 const listResourceGroups = async (req, res, next) => {
   try {
     const resourceGroups = await orgAdminService.listResourceGroups();
@@ -791,6 +804,7 @@ const repairResourceScopedPermissions = async (req, res, next) => {
 };
 
 module.exports = {
+  getSubscriptionRoleQuota,
   listResourceGroups,
   listRequests,
   getResourceGroupDetail,

@@ -122,11 +122,19 @@ app.use((error, req, res, next) => {
     error?.code === 'TypeError' ||
     /fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND|ECONNREFUSED/i.test(String(error?.message || ''));
 
+  const azureCode = String(
+    error?.code || error?.details?.error?.code || ''
+  ).toLowerCase();
+
   const message = error.isOperational
     ? error.message
-    : isNetworkFailure
-      ? 'Unable to reach Microsoft Graph. Check network connectivity and try again.'
-      : 'Internal server error.';
+    : azureCode === 'roleassignmentlimitexceeded'
+      ? 'Azure role assignment limit reached. If the subscription quota (4000 total) is full, delete failed or unused labs from the Racko portal to release that lab’s assignments — do not bulk-delete roles across the subscription in Azure Portal.'
+      : azureCode === 'authorization_requestdenied'
+        ? 'Microsoft Graph permission denied. For large shared labs, grant Group.ReadWrite.All and GroupMember.ReadWrite.All on the app registration, or use Per-User resource groups.'
+      : isNetworkFailure
+        ? 'Unable to reach Microsoft Graph. Check network connectivity and try again.'
+        : 'Internal server error.';
 
   if (!error.isOperational) {
     console.error('Unhandled error:', error);
