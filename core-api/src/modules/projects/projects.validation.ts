@@ -1,14 +1,12 @@
 import { z } from 'zod';
 import mongoose from 'mongoose';
-import { ADMIN_SERVICE_CATALOG } from '../../constants/adminServiceCatalog';
 
 const mongoObjectId = z
   .string()
   .refine((val) => mongoose.Types.ObjectId.isValid(val), { message: 'Invalid ID format' });
 
-const adminServiceKeySchema = z.enum(
-  ADMIN_SERVICE_CATALOG as unknown as [string, ...string[]]
-);
+/** Catalog membership validated in projects.service. */
+const adminServiceKeySchema = z.string().min(1).max(100);
 
 export const createProjectSchema = z.object({
   body: z.object({

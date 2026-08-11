@@ -144,10 +144,8 @@ const getProvisionedRequest = async (requestId) => {
   };
 };
 
-const provisionSharedResourceGroup = async (client, request) => {
+const provisionSharedResourceGroup = async (request) => {
   if (request.azure_resource_group_name) {
-    await client.query('COMMIT');
-
     logProvisionEvent('info', 'provision_request_reused_existing', {
       requestId: request.id,
       status: request.status,
@@ -180,6 +178,8 @@ const provisionSharedResourceGroup = async (client, request) => {
     costingMode: request.costing_mode
   });
 
+  // Do Azure work outside any DB transaction. Holding FOR UPDATE across ARM
+  // calls caused idle-in-transaction aborts — RG created in Azure, DB left null.
   await preflightAzureManagementAccess({ requestId: request.id });
 
   const provisionedResourceGroup = await provisionResourceGroup({
@@ -188,14 +188,47 @@ const provisionSharedResourceGroup = async (client, request) => {
     location
   });
 
-  await updateProvisionedRequest(
-    client,
-    request.id,
-    provisionedResourceGroup.resourceGroupId,
-    provisionedResourceGroup.resourceGroupName
-  );
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const lockedRequest = await getRequestForProvisioning(client, request.id);
 
-  await client.query('COMMIT');
+    if (!lockedRequest) {
+      throw new AppError('Request not found.', 404);
+    }
+
+    if (lockedRequest.azure_resource_group_name) {
+      await client.query('COMMIT');
+      return {
+        resourceGroup: lockedRequest.azure_resource_group_name,
+        resourceGroupCount: 1,
+        accountCount: Number(lockedRequest.account_count) || 0,
+        costingMode: lockedRequest.costing_mode,
+        complete: true,
+        remaining: 0,
+        batchCreated: 0,
+        failures: [],
+        failed: false
+      };
+    }
+
+    await updateProvisionedRequest(
+      client,
+      request.id,
+      provisionedResourceGroup.resourceGroupId,
+      provisionedResourceGroup.resourceGroupName
+    );
+    await client.query('COMMIT');
+  } catch (error) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // ignore rollback errors on a dead connection
+    }
+    throw error;
+  } finally {
+    client.release();
+  }
 
   logProvisionEvent('info', 'provision_request_completed', {
     requestId: request.id,
@@ -490,27 +523,11 @@ const provisionRequestResourceGroup = async (requestId, options = {}) => {
       return withCohortMeta(result, cohort);
     }
 
-    const client = await db.connect();
-
-    try {
-      await client.query('BEGIN');
-      const lockedRequest = await getRequestForProvisioning(client, requestId);
-
-      if (!lockedRequest) {
-        throw new AppError('Request not found.', 404);
-      }
-
-      if (isSharedCosting(lockedRequest.costing_mode)) {
-        return provisionSharedResourceGroup(client, lockedRequest);
-      }
-
-      throw new AppError('Request costing mode is invalid.', 400);
-    } catch (error) {
-      await client.query('ROLLBACK');
-      throw error;
-    } finally {
-      client.release();
+    if (isSharedCosting(request.costing_mode)) {
+      return provisionSharedResourceGroup(request);
     }
+
+    throw new AppError('Request costing mode is invalid.', 400);
   } catch (error) {
 
     logProvisionEvent('error', 'provision_request_failed', {

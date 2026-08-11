@@ -8,6 +8,22 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 
+const toDate = (value) => {
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+  if (value == null || value === '') {
+    return null;
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+};
+
+const formatUtc = (value) => {
+  const date = toDate(value);
+  return date ? date.toUTCString() : '—';
+};
+
 const buildResourceCleanupEmailHtml = ({
   requestName,
   deletedCount,
@@ -27,20 +43,20 @@ const buildResourceCleanupEmailHtml = ({
     : 'Your lab accounts and access are still active. You can create new resources in Azure until your next daily window closes.';
 
   return `
-  <!doctype html>
-  <html>
-    <body style="font-family: Arial, Helvetica, sans-serif; color: #111827; background: #f8fafc; margin: 0; padding: 24px;">
-      <div style="max-width: 720px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 24px;">
-        <h1 style="margin: 0 0 12px; font-size: 24px;">${title}</h1>
-        <p style="margin: 0 0 16px;">
-          A scheduled resource ${isPause ? 'pause' : 'cleanup'} ran for your lab:
-          <strong>${escapeHtml(requestName)}</strong>.
-        </p>
-        <ul style="margin: 0 0 16px; padding-left: 20px;">
-          ${summaryLine}
-          <li><strong>${isPause ? 'Paused' : 'Cleaned'} at:</strong> ${escapeHtml(cleanedAt.toUTCString())}</li>
-          <li><strong>Next run:</strong> ${escapeHtml(nextCleanupAt.toUTCString())} (every ${intervalHours} hour${intervalHours > 1 ? 's' : ''})</li>
-        </ul>
+    <!doctype html>
+    <html>
+      <body style="font-family: Arial, Helvetica, sans-serif; color: #111827; background: #f8fafc; margin: 0; padding: 24px;">
+        <div style="max-width: 720px; margin: 0 auto; background: #ffffff; border: 1px solid #e5e7eb; border-radius: 16px; padding: 24px;">
+          <h1 style="margin: 0 0 12px; font-size: 24px;">${title}</h1>
+          <p style="margin: 0 0 16px;">
+            A scheduled resource ${isPause ? 'pause' : 'cleanup'} ran for your lab:
+            <strong>${escapeHtml(requestName)}</strong>.
+          </p>
+          <ul style="margin: 0 0 16px; padding-left: 20px;">
+            ${summaryLine}
+            <li><strong>${isPause ? 'Paused' : 'Cleaned'} at:</strong> ${escapeHtml(formatUtc(cleanedAt))}</li>
+            <li><strong>Next run:</strong> ${escapeHtml(formatUtc(nextCleanupAt))} (every ${intervalHours} hour${intervalHours > 1 ? 's' : ''})</li>
+          </ul>
         <p style="margin: 0 0 16px;">
           ${bodyLine}
         </p>

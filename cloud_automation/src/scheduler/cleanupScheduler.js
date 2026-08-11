@@ -114,9 +114,16 @@ const handleScheduledCleanup = async (requestRow) => {
       }
     }
 
+    const nextCleanupIso =
+      result.nextCleanupAt instanceof Date
+        ? result.nextCleanupAt.toISOString()
+        : result.nextCleanupAt
+          ? new Date(result.nextCleanupAt).toISOString()
+          : null;
+
     logSchedulerEvent('info', 'scheduled_cleanup_completed', {
       requestId,
-      nextCleanupAt: result.nextCleanupAt.toISOString()
+      nextCleanupAt: nextCleanupIso
     });
   } catch (error) {
     logSchedulerEvent('error', 'scheduled_cleanup_failed', {

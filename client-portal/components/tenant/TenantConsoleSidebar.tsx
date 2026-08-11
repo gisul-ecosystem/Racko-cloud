@@ -2,7 +2,21 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Boxes, Cloud, HardDrive, LayoutDashboard, LayoutGrid, Monitor, PlusCircle, Server, Shield, Wallet } from 'lucide-react';
+import {
+  Boxes,
+  Cloud,
+  HardDrive,
+  LayoutDashboard,
+  LayoutGrid,
+  LayoutList,
+  Monitor,
+  PlusCircle,
+  Server,
+  Shield,
+  Wallet,
+  FolderKanban,
+  BookOpen,
+} from 'lucide-react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
@@ -23,61 +37,91 @@ function closeIfMobile(onCloseSidebar: () => void) {
   }
 }
 
-const SHORTCUTS: Array<{
-  serviceKey: TenantServiceKey | 'billing';
+type Shortcut = {
+  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control' | 'docs';
   label: string;
   href: string;
   icon: React.ReactNode;
-}> = [
+  section: 'services' | 'tools';
+};
+
+const SHORTCUTS: Shortcut[] = [
   {
     serviceKey: 'vm-management',
     label: 'VPS Hosting',
     href: tenantVps.overview,
     icon: <Server className="h-4 w-4 shrink-0" />,
+    section: 'services',
   },
   {
     serviceKey: 'create-vm',
     label: 'VM Catalog',
     href: tenantConsole.createVm,
     icon: <PlusCircle className="h-4 w-4 shrink-0" />,
+    section: 'services',
   },
   {
     serviceKey: 'dedicated-server',
     label: 'Dedicated Server',
     href: tenantConsole.dedicatedServer,
     icon: <HardDrive className="h-4 w-4 shrink-0" />,
-  },
-  {
-    serviceKey: 'billing',
-    label: 'Billing',
-    href: tenantVps.billing,
-    icon: <Wallet className="h-4 w-4 shrink-0" />,
+    section: 'services',
   },
   {
     serviceKey: 'elastic-servers',
     label: 'Elastic Servers',
     href: tenantConsole.elastic,
     icon: <Boxes className="h-4 w-4 shrink-0" />,
+    section: 'services',
+  },
+  {
+    serviceKey: 'my-vms',
+    label: 'My VM Dashboard',
+    href: tenantConsole.myVmDashboard,
+    icon: <LayoutList className="h-4 w-4 shrink-0" />,
+    section: 'services',
   },
   {
     serviceKey: 'azure',
     label: 'Azure Services',
     href: tenantConsole.azure,
     icon: <Cloud className="h-4 w-4 shrink-0" />,
+    section: 'services',
+  },
+  {
+    serviceKey: 'projects',
+    label: 'Projects',
+    href: tenantConsole.projects,
+    icon: <FolderKanban className="h-4 w-4 shrink-0" />,
+    section: 'tools',
+  },
+  {
+    serviceKey: 'billing',
+    label: 'Billing',
+    href: tenantVps.billing,
+    icon: <Wallet className="h-4 w-4 shrink-0" />,
+    section: 'tools',
+  },
+  {
+    serviceKey: 'docs',
+    label: 'Documentation',
+    href: tenantConsole.docs,
+    icon: <BookOpen className="h-4 w-4 shrink-0" />,
+    section: 'tools',
   },
   {
     serviceKey: 'machine-manager',
     label: 'Machine Manager',
     href: tenantConsole.machineManager,
     icon: <Monitor className="h-4 w-4 shrink-0" />,
+    section: 'tools',
   },
-];
-
-const ADMIN_LINKS = [
   {
+    serviceKey: 'access-control',
     label: 'Access control',
     href: tenantConsole.accessControl,
     icon: <Shield className="h-4 w-4 shrink-0" />,
+    section: 'tools',
   },
 ];
 
@@ -88,20 +132,52 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
   const { isTenantAdmin, hasPermission } = useTenantRbac();
 
   const links = SHORTCUTS.filter((l) => {
-    if (l.serviceKey === 'billing') {
-      return canAccessTenantHubTile('billing', hasPermission, isTenantAdmin);
+    if (l.serviceKey === 'billing' || l.serviceKey === 'projects' || l.serviceKey === 'docs') {
+      return l.serviceKey === 'docs'
+        ? true
+        : canAccessTenantHubTile(l.serviceKey, hasPermission, isTenantAdmin);
+    }
+    if (l.serviceKey === 'access-control') {
+      return isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
     }
     if (!hasActiveService(l.serviceKey)) return false;
     return canAccessTenantService(l.serviceKey, hasPermission, isTenantAdmin);
   });
 
-  const showOverview = isTenantAdmin || hasPermission('overview.read');
-  const showAccessControl =
-    isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
+  const productLinks = links.filter((l) => l.section === 'services');
+  const toolLinks = links.filter((l) => l.section === 'tools');
 
+  // Always show Overview in the hub sidebar for tenant admins/operators.
   const hubActive = pathname === TENANT_CONSOLE || pathname === `${TENANT_CONSOLE}/`;
   const overviewActive =
     pathname === tenantConsole.overview || pathname.startsWith(`${tenantConsole.overview}/`);
+
+  function renderLink(link: Shortcut) {
+    const isActive = pathname === link.href || pathname.startsWith(`${link.href}/`);
+    return (
+      <Link
+        key={link.serviceKey}
+        href={link.href}
+        onClick={() => closeIfMobile(onCloseSidebar)}
+        className={`mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+          isActive ? '' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+        }`}
+        style={
+          isActive
+            ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
+            : undefined
+        }
+      >
+        <span
+          style={isActive ? { color: accentColor } : undefined}
+          className={isActive ? '' : 'text-gray-400'}
+        >
+          {link.icon}
+        </span>
+        {link.label}
+      </Link>
+    );
+  }
 
   return (
     <>
@@ -122,35 +198,31 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
         <div className="flex h-full min-w-[15rem] flex-col">
           <div className="border-b border-gray-100 px-5 py-5">
             <p className="text-sm font-semibold text-gray-900">Services console</p>
-            <p className="mt-0.5 text-xs text-gray-400">Choose an available service</p>
+            <p className="mt-0.5 text-xs text-gray-400">Services and workspace tools</p>
           </div>
 
-          <nav className="flex-1 overflow-y-auto p-3">
-            {showOverview ? (
-              <Link
-                href={tenantConsole.overview}
-                onClick={() => closeIfMobile(onCloseSidebar)}
-                className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
-                style={
-                  overviewActive
-                    ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
-                    : undefined
-                }
-              >
-                <LayoutDashboard
-                  className="h-4 w-4 shrink-0"
-                  style={{ color: overviewActive ? accentColor : undefined }}
-                />
-                <span className={overviewActive ? '' : 'text-gray-600'}>Overview</span>
-              </Link>
-            ) : null}
+          <nav className="scrollbar-white flex-1 overflow-y-auto p-3">
+            <Link
+              href={tenantConsole.overview}
+              onClick={() => closeIfMobile(onCloseSidebar)}
+              className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+              style={
+                overviewActive
+                  ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
+                  : undefined
+              }
+            >
+              <LayoutDashboard
+                className="h-4 w-4 shrink-0"
+                style={{ color: overviewActive ? accentColor : undefined }}
+              />
+              <span className={overviewActive ? '' : 'text-gray-600'}>Overview</span>
+            </Link>
 
             <Link
               href={TENANT_CONSOLE}
               onClick={() => closeIfMobile(onCloseSidebar)}
-              className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                showOverview ? 'mt-0.5' : ''
-              }`}
+              className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
               style={
                 hubActive
                   ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
@@ -164,60 +236,23 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
               <span className={hubActive ? '' : 'text-gray-600'}>All services</span>
             </Link>
 
-            {links.map((link) => {
-              const isActive =
-                pathname === link.href || pathname.startsWith(`${link.href}/`);
-              return (
-                <Link
-                  key={link.serviceKey}
-                  href={link.href}
-                  onClick={() => closeIfMobile(onCloseSidebar)}
-                  className={`mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                    isActive ? '' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                  }`}
-                  style={
-                    isActive
-                      ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
-                      : undefined
-                  }
-                >
-                  <span style={isActive ? { color: accentColor } : undefined} className={isActive ? '' : 'text-gray-400'}>
-                    {link.icon}
-                  </span>
-                  {link.label}
-                </Link>
-              );
-            })}
+            {productLinks.length > 0 && (
+              <div className="mt-3">
+                <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                  Services
+                </p>
+                {productLinks.map(renderLink)}
+              </div>
+            )}
 
-            {showAccessControl
-              ? ADMIN_LINKS.map((link) => {
-                  const isActive =
-                    pathname === link.href || pathname.startsWith(`${link.href}/`);
-                  return (
-                    <Link
-                      key={link.href}
-                      href={link.href}
-                      onClick={() => closeIfMobile(onCloseSidebar)}
-                      className={`mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                        isActive ? '' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                      }`}
-                      style={
-                        isActive
-                          ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
-                          : undefined
-                      }
-                    >
-                      <span
-                        style={isActive ? { color: accentColor } : undefined}
-                        className={isActive ? '' : 'text-gray-400'}
-                      >
-                        {link.icon}
-                      </span>
-                      {link.label}
-                    </Link>
-                  );
-                })
-              : null}
+            {toolLinks.length > 0 && (
+              <div className="mt-3">
+                <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wide text-gray-400">
+                  Tools
+                </p>
+                {toolLinks.map(renderLink)}
+              </div>
+            )}
           </nav>
         </div>
       </aside>

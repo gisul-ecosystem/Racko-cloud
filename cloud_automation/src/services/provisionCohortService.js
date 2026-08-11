@@ -11,7 +11,8 @@ const EMPTY_COHORT_SUMMARY = {
   activeCohort: null,
   cohortTotal: 0,
   cohortsCompleted: 0,
-  allCohortsComplete: true
+  // Must stay false: shared labs have zero cohorts and still need RG creation.
+  allCohortsComplete: false
 };
 
 const mapRow = (row) => {
@@ -136,7 +137,9 @@ const resolveActiveCohort = async (
   }
 
   const failed = cohorts.find((c) => c.status === 'failed');
-  if (failed && reviveFailed) {
+  // POST work (claimPending) auto-revives failed waves so long steps (roles)
+  // can continue after transient 5xx/timeouts without a manual retry click.
+  if (failed && (reviveFailed || claimPending)) {
     await client.query(
       `
         UPDATE provision_cohorts
@@ -332,7 +335,8 @@ const getCohortProgressSummary = async (requestId, client = db) => {
   if (!isPerUserCosting(requestResult.rows[0]?.costing_mode)) {
     // Remove mistakenly created wave rows for shared labs (stops infinite RG POSTs).
     await client.query(`DELETE FROM provision_cohorts WHERE request_id = $1`, [requestId]);
-    return { ...EMPTY_COHORT_SUMMARY };
+    // Shared labs are not cohort-driven — never report allCohortsComplete.
+    return { ...EMPTY_COHORT_SUMMARY, allCohortsComplete: false };
   }
 
   const cohorts = await ensureCohortsForRequest(requestId, client);

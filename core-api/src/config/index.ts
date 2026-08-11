@@ -254,6 +254,9 @@ const envSchema = z.object({
   AGENT_CHECKSUM_WINDOWS: z.string().default(''),
   AGENT_CHECKSUM_LINUX:   z.string().default(''),
   AGENT_CHECKSUM_DARWIN:  z.string().default(''),
+  // Racko App (GUI) auto-update — same pattern as agent.
+  RACKO_APP_VERSION:  z.string().default(''),
+  RACKO_APP_CHECKSUM: z.string().default(''),
 }).superRefine((env, ctx) => {
   if (env.RESEND_EMAIL_ENABLED === env.ZOHO_EMAIL_ENABLED) {
     ctx.addIssue({

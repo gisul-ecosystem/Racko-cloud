@@ -1,12 +1,12 @@
 import mongoose, { Document, Schema } from 'mongoose';
-import { SERVICE_CATALOG } from '../constants/serviceCatalog';
+import type { ServiceKey } from '../constants/serviceCatalog';
 
 export type TenantServiceConfigStatus = 'active' | 'suspended';
 
 export interface ITenantServiceConfig extends Document {
   _id: mongoose.Types.ObjectId;
   tenantId: mongoose.Types.ObjectId;
-  serviceKey: (typeof SERVICE_CATALOG)[number];
+  serviceKey: ServiceKey;
   status: TenantServiceConfigStatus;
   limits: Record<string, unknown>;
   pricing: Record<string, unknown>;
@@ -25,7 +25,6 @@ const tenantServiceConfigSchema = new Schema<ITenantServiceConfig>(
     },
     serviceKey: {
       type: String,
-      enum: [...SERVICE_CATALOG],
       required: true,
     },
     status: {

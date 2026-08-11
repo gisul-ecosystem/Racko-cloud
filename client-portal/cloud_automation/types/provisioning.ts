@@ -78,6 +78,7 @@ export interface ProvisionSnapshot {
     resourceGroupId?: string | null;
     resourceGroupCount?: number | null;
     accountCount?: number | null;
+    costingMode?: string | null;
     complete?: boolean;
   } | null;
   services: {

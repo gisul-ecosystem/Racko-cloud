@@ -35,6 +35,8 @@ export const createCatalogVmRequestSchema = z.object({
     canonicalSpec: z.string().min(1).max(100).trim().optional(),
     /** Required for platform admin purchases; omitted for tenant catalog. */
     projectId: mongoObjectId.optional(),
+    /** Optional Software Catalog package IDs to install after the VM is ready. */
+    preferredSoftwareIds: z.array(mongoObjectId).max(50).optional().default([]),
   }),
 });
 

@@ -13,6 +13,10 @@ async function bootstrap(): Promise<void> {
   const { rbacService } = await import('./modules/rbac/rbac.service');
   await rbacService.ensureSystemRoles();
 
+  // Master product/utility service list in Mongo (idempotent upsert).
+  const { serviceCatalogService } = await import('./modules/serviceCatalog/serviceCatalog.service');
+  await serviceCatalogService.ensureSeeded();
+
   // Start background cron to reclaim stale IP reservations
   startIpCleanupCron();
 

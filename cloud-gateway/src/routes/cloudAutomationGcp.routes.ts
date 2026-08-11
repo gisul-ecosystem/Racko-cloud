@@ -20,6 +20,15 @@ function requireRole(...roles: string[]) {
   };
 }
 
+function forwardVerifiedIdentity(req: Request, _res: Response, next: NextFunction): void {
+  const authReq = req as AuthenticatedRequest;
+  if (authReq.user) {
+    req.headers['x-user-id'] = authReq.user.userId;
+    req.headers['x-user-role'] = authReq.user.role;
+  }
+  next();
+}
+
 function rewriteCloudAutomationGcpPath(path: string): string {
   if (path === '/health' || path === `${GATEWAY_PREFIX}/health`) {
     return '/health';
@@ -66,6 +75,7 @@ router.use(
   authMiddleware,
   verifyMiddleware,
   requireRole('admin', 'super_admin'),
+  forwardVerifiedIdentity,
   cloudAutomationGcpProxy
 );
 

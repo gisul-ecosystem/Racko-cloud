@@ -84,6 +84,9 @@ export const pushAgentSchema = z.object({
     vms: z.array(vmPushBody).min(1).max(50),
     sessionId: z.string().optional(),
     groupId: z.string().optional(),   // optional — assign pushed machines to this group
+    // When false, only the racko agent is installed — racko-app + WebView2 are skipped.
+    // Defaults to true to preserve existing behaviour for all existing integrations.
+    installRackoApp: z.boolean().optional().default(true),
   }),
 });
 
@@ -112,6 +115,7 @@ export const agentHeartbeatSchema = z.object({
     agentId: z.string({ required_error: 'agentId is required' }).min(1),
     status: z.string().min(1).max(32),
     version: z.string().optional(),
+    rackoAppVersion: z.string().optional(),
     specs: z.object({
       hostname:  z.string().optional(),
       osVersion: z.string().optional(),

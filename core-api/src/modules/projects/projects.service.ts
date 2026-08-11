@@ -10,12 +10,12 @@ import { VM } from '../vm/vm.model';
 import { AdminWalletTransaction } from '../../models/adminWalletTransaction.model';
 import { WalletTransaction } from '../../models/walletTransaction.model';
 import {
-  ADMIN_SERVICE_CATALOG,
   type AdminServiceKey,
   isAdminServiceKey,
 } from '../../constants/adminServiceCatalog';
 import { adminServicesService } from '../adminServices/adminServices.service';
 import { tenantServiceConfigService } from '../tenant/tenantServiceConfig.service';
+import { serviceCatalogService } from '../serviceCatalog/serviceCatalog.service';
 import { resolvePlatformOrgOwnerId } from '../platformRbac/platformRbac.service';
 import {
   ForbiddenError,
@@ -251,25 +251,32 @@ async function createForTenant(
 }
 
 async function getActiveOrgServiceKeys(orgId: string): Promise<Set<AdminServiceKey>> {
-  const services = await adminServicesService.listMine(new mongoose.Types.ObjectId(orgId));
+  const [services, assignable] = await Promise.all([
+    adminServicesService.listMine(new mongoose.Types.ObjectId(orgId)),
+    serviceCatalogService.listAssignableKeys('admin'),
+  ]);
+  const assignableSet = new Set(assignable);
   return new Set(
     services
       .filter((s) => s.status === 'active')
       .map((s) => s.serviceKey)
       .filter(isAdminServiceKey)
-      // Documentation is not a billable/resource project service.
-      .filter((key) => key !== 'docs')
+      .filter((key) => assignableSet.has(key))
   );
 }
 
 async function getActiveTenantServiceKeys(tenantId: string): Promise<Set<AdminServiceKey>> {
-  const services = await tenantServiceConfigService.listServicesForTenant(tenantId);
+  const [services, assignable] = await Promise.all([
+    tenantServiceConfigService.listServicesForTenant(tenantId),
+    serviceCatalogService.listAssignableKeys('tenant'),
+  ]);
+  const assignableSet = new Set(assignable);
   return new Set(
     services
       .filter((s) => s.status === 'active')
       .map((s) => s.serviceKey)
       .filter(isAdminServiceKey)
-      .filter((key) => key !== 'docs')
+      .filter((key) => assignableSet.has(key))
   );
 }
 
@@ -1038,8 +1045,9 @@ export class ProjectsService {
     }));
   }
 
-  catalogServices(): AdminServiceKey[] {
-    return [...ADMIN_SERVICE_CATALOG];
+  async catalogServices(): Promise<AdminServiceKey[]> {
+    const keys = await serviceCatalogService.listAssignableKeys('admin');
+    return keys.filter(isAdminServiceKey);
   }
 }
 

@@ -499,6 +499,17 @@ export interface OrgAdminBulkCustomRoleAssignmentResult {
   failed: Array<{ username: string; reason: string }>;
 }
 
+export interface OrgAdminSubscriptionRoleQuota {
+  subscriptionId: string;
+  used: number;
+  usedAtLeast: number;
+  limit: number;
+  remaining: number;
+  percentUsed: number;
+  exhausted: boolean;
+  warning: boolean;
+}
+
 export interface OrgAdminCustomService {
   id: number;
   name: string;

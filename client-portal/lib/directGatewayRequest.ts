@@ -83,9 +83,9 @@ export async function directGatewayRequest<T>(
   const isProvisionCall = fullPath.includes('/provision/request/');
   const maxAttempts = isProvisionCall ? PROVISION_NETWORK_RETRIES + 1 : 1;
 
-  let res: Response | null = null;
-
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    let res: Response;
+
     try {
       res = await fetch(url, {
         ...fetchOptions,
@@ -93,56 +93,61 @@ export async function directGatewayRequest<T>(
         credentials: isTenant ? 'omit' : 'include',
         cache: 'no-store',
       });
-      break;
     } catch (error) {
       if (!isProvisionNetworkFailure(error) || attempt >= maxAttempts) {
         throw new ApiError(
-          'The provisioning request was interrupted before the server responded. This usually means a network or proxy timeout — click Retry step to continue.',
+          'The provisioning request was interrupted before the server responded. This usually means a network or proxy timeout — provisioning will retry automatically.',
           0,
           'NETWORK_ERROR'
         );
       }
 
       await sleep(1500 * attempt);
+      continue;
     }
-  }
 
-  if (!res) {
-    throw new ApiError(
-      'The provisioning request was interrupted before the server responded. Click Retry step to continue.',
-      0,
-      'NETWORK_ERROR'
-    );
-  }
-
-  // Match apiRequest: refresh once on 401 for platform sessions, then retry.
-  if (res.status === 401 && !skipAuth && !isTenant) {
-    const newToken = await refreshPlatformAccessToken();
-    if (newToken) {
-      headers['Authorization'] = `Bearer ${newToken}`;
-      res = await fetch(url, {
-        ...fetchOptions,
-        headers,
-        credentials: 'include',
-        cache: 'no-store',
-      });
-    } else {
-      clearAccessToken();
-      if (typeof window !== 'undefined') {
-        window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+    // Match apiRequest: refresh once on 401 for platform sessions, then retry.
+    if (res.status === 401 && !skipAuth && !isTenant) {
+      const newToken = await refreshPlatformAccessToken();
+      if (newToken) {
+        headers['Authorization'] = `Bearer ${newToken}`;
+        res = await fetch(url, {
+          ...fetchOptions,
+          headers,
+          credentials: 'include',
+          cache: 'no-store',
+        });
+      } else {
+        clearAccessToken();
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+        }
       }
     }
+
+    if (res.status === 401 && !skipAuth && isTenant) {
+      clearTenantAccessToken();
+      emitTenantSessionExpired();
+    }
+
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as { message?: string; code?: string };
+      const retriableStatus = [408, 429, 500, 502, 503, 504].includes(res.status);
+
+      if (isProvisionCall && retriableStatus && attempt < maxAttempts) {
+        await sleep(1500 * attempt);
+        continue;
+      }
+
+      throw new ApiError(data.message || `Request failed (${res.status}).`, res.status, data.code);
+    }
+
+    return res.json() as Promise<T>;
   }
 
-  if (res.status === 401 && !skipAuth && isTenant) {
-    clearTenantAccessToken();
-    emitTenantSessionExpired();
-  }
-
-  if (!res.ok) {
-    const data = (await res.json().catch(() => ({}))) as { message?: string; code?: string };
-    throw new ApiError(data.message || `Request failed (${res.status}).`, res.status, data.code);
-  }
-
-  return res.json() as Promise<T>;
+  throw new ApiError(
+    'The provisioning request was interrupted before the server responded. Provisioning will retry automatically.',
+    0,
+    'NETWORK_ERROR'
+  );
 }

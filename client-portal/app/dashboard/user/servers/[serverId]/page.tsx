@@ -74,8 +74,17 @@ export default function UserExternalServerPage() {
           </div>
           <button
             onClick={() => void openConsole()}
-            disabled={consoleLoading}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-[#B91C1C] hover:bg-red-700 text-white text-sm font-medium rounded-lg transition disabled:opacity-50"
+            disabled={
+              consoleLoading || Boolean(server.myAccess && !server.myAccess.allowedNow)
+            }
+            className="inline-flex items-center gap-2 px-4 py-2 bg-[#B91C1C] hover:bg-red-700 text-white text-sm font-medium rounded-lg transition disabled:cursor-not-allowed disabled:opacity-40"
+            title={
+              server.myAccess && !server.myAccess.allowedNow
+                ? server.myAccess.nextWindow
+                  ? `Outside access window. Next: ${server.myAccess.nextWindow}`
+                  : 'Outside your access window'
+                : 'Open console'
+            }
           >
             {consoleLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Monitor className="w-4 h-4" />}
             Open Console

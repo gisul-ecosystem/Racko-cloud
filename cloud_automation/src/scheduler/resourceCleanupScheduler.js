@@ -128,18 +128,26 @@ async function processResourceCleanup(req) {
 
     const shouldEmail = customer_email && (await isRequestEligibleForCleanupEmail(id));
 
+    // Email failures must not mark a successful Azure cleanup as failed.
     if (shouldEmail) {
-      await sendResourceCleanupEmail({
-        to: customer_email,
-        requestName: requestLabel,
-        deletedCount: totalDeleted,
-        affectedCount: affected.length,
-        action,
-        cleanedAt: now,
-        nextCleanupAt: nextRun,
-        intervalHours: resource_cleanup_interval_hours,
-        cleanupTime: resource_cleanup_time || null
-      });
+      try {
+        await sendResourceCleanupEmail({
+          to: customer_email,
+          requestName: requestLabel,
+          deletedCount: totalDeleted,
+          affectedCount: affected.length,
+          action,
+          cleanedAt: now,
+          nextCleanupAt: nextRun instanceof Date ? nextRun : new Date(nextRun),
+          intervalHours: resource_cleanup_interval_hours,
+          cleanupTime: resource_cleanup_time || null
+        });
+      } catch (emailError) {
+        logEvent('error', 'resource_cleanup_email_failed', {
+          requestId: id,
+          message: emailError?.message
+        });
+      }
     } else {
       logEvent('info', 'resource_cleanup_email_skipped', {
         requestId: id,

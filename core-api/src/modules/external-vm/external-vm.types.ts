@@ -11,6 +11,34 @@ export interface CreateExternalVMDto {
   projectId?: string;
 }
 
+/** Public assignment-window shape (ISO dates). */
+export interface AssignmentSchedulePublic {
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  daysOfWeek: number[];
+  dailyStart: string;
+  dailyEnd: string;
+  timezone: string;
+}
+
+/** Who holds an elastic server and when (no secrets). */
+export interface ExternalVmAssignmentSummary {
+  assignmentId: string;
+  userId?: string;
+  tenantUserId?: string;
+  email: string | null;
+  username: string | null;
+  status: string;
+  schedule: AssignmentSchedulePublic | null;
+}
+
+/** Caller's own access window (end-user lists / detail). */
+export interface ExternalVmMyAccess {
+  allowedNow: boolean;
+  schedule: AssignmentSchedulePublic | null;
+  nextWindow: string | null;
+}
+
 /** API-facing external VM shape. Password is returned DECRYPTED for admins only. */
 export interface ExternalVMResponse {
   _id: string;
@@ -26,6 +54,10 @@ export interface ExternalVMResponse {
   assignedTenantUserId?: string | null;
   /** Tenant end-users with access to this elastic server (multi-share). */
   assignedTenantUserIds?: string[];
+  /** Active assignments with schedules (admin / tenant-admin lists). */
+  assignments?: ExternalVmAssignmentSummary[];
+  /** Caller's assignment window (role=user / tenant_user). */
+  myAccess?: ExternalVmMyAccess;
   accessSchedule?: {
     startDate: string | null;
     endDate: string | null;

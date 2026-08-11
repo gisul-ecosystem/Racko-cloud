@@ -3,6 +3,7 @@
 import { usePathname } from 'next/navigation';
 import { AZURE_ROUTES } from '@/cloud_automation/constants';
 import { AWS_ROUTES } from '@/cloud_automation_aws/constants';
+import { GCP_ROUTES } from '@/cloud_automation_gcp/constants';
 import { CLOUD_LABS_ROUTES } from '@/cloud_automation_training/constants';
 import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
 import { isTenantWorkspacePath } from '@/lib/portalMode';
@@ -51,4 +52,20 @@ export function useAwsRoutes() {
     } as const;
   }
   return AWS_ROUTES;
+}
+
+/** GCP routes under platform /console or tenant /console/dashboard. */
+export function useGcpRoutes() {
+  const pathname = usePathname() ?? '';
+  if (isTenantWorkspacePath(pathname)) {
+    return {
+      ...GCP_ROUTES,
+      dashboard: `${TENANT_CONSOLE}/gcp`,
+      createRequest: `${TENANT_CONSOLE}/gcp/requests/new`,
+      requests: `${TENANT_CONSOLE}/gcp/requests`,
+      requestStatus: (id: string) => `${TENANT_CONSOLE}/gcp/requests/${id}`,
+      consoleHub: TENANT_CONSOLE,
+    } as const;
+  }
+  return GCP_ROUTES;
 }
