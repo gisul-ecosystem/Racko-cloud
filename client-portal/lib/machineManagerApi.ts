@@ -245,11 +245,12 @@ export interface VMPushResult {
 
 export async function pushAgentToVMs(
   vms: VMPushTarget[],
-  sessionId: string
+  sessionId: string,
+  installRackoApp = true
 ): Promise<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }> {
   const res = await apiRequest<ApiResponse<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }>>(
     '/api/v1/machines/push-agent',
-    { method: 'POST', body: JSON.stringify({ vms, sessionId }) }
+    { method: 'POST', body: JSON.stringify({ vms, sessionId, installRackoApp }) }
   );
   return res.data;
 }

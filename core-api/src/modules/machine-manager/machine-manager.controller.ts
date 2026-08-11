@@ -154,9 +154,9 @@ export class MachineManagerController {
   async pushAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
-      const { vms, sessionId, groupId } = req.body as PushAgentInput & { sessionId?: string; groupId?: string };
+      const { vms, sessionId, groupId, installRackoApp } = req.body as PushAgentInput & { sessionId?: string; groupId?: string; installRackoApp?: boolean };
       const sid = sessionId ?? `push-${Date.now()}`;
-      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid, groupId);
+      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid, groupId, installRackoApp ?? true);
       success(res, 'Agent push initiated.', { ...result, sessionId: sid }, 201);
     } catch (err) {
       next(err);

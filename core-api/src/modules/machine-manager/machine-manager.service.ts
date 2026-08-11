@@ -19,10 +19,11 @@ import { emitJobStatusEvent } from './job.events';
 import { PushSessionModel } from '../../models/pushSession.model';
 
 // ─── Push session registry ────────────────────────────────────────────────────
-// Maps sessionId → { machineIds, adminId } so heartbeat/WS can emit agent_connected
+// Maps sessionId → { machineIds, adminId, installRackoApp } so heartbeat/WS can emit agent_connected
 interface PushSessionEntry {
   machineIds: Set<string>;
   adminId: string;
+  installRackoApp: boolean;
 }
 const pushSessionRegistry = new Map<string, PushSessionEntry>();
 
@@ -696,6 +697,7 @@ class MachineManagerService {
     adminId: mongoose.Types.ObjectId,
     sessionId: string,
     groupId?: string,
+    installRackoApp = true,
   ): Promise<{ machines: MachineResponse[]; pushResults: import('./vm-push.service').VMPushResult[] }> {
     const { vmPushService } = await import('./vm-push.service');
     const { emitPushEvent } = await import('./push.events');
@@ -739,6 +741,7 @@ class MachineManagerService {
     pushSessionRegistry.set(sessionId, {
       machineIds: new Set(machines.map((m) => m._id)),
       adminId: adminId.toString(),
+      installRackoApp,
     });
 
     // Persist session to MongoDB so the browser can recover state on page refresh.
@@ -746,6 +749,7 @@ class MachineManagerService {
     void PushSessionModel.create({
       sessionId,
       adminId: adminId.toString(),
+      installRackoApp,
       machines: machines.map((m, i) => ({
         machineId:   m._id,
         machineName: m.name,
@@ -828,13 +832,22 @@ class MachineManagerService {
         // WinRM only handles the fast part (agent install). Once the agent is
         // connected, we use the persistent WS channel to run the GUI setup —
         // no WinRM session, no timeout pressure, runs as SYSTEM on the VM.
+        // Guarded by installRackoApp flag — skip entirely when admin opted out.
         // Fire-and-forget: we don't await so the WS connect handler returns immediately.
-        void this.installRackoAppViaExec(machineId, sessionId).catch((err) => {
-          logger.warn('[MachineManager] racko-app install via exec failed (non-fatal)', {
-            machineId,
-            error: err instanceof Error ? err.message : String(err),
+        if (entry.installRackoApp) {
+          void this.installRackoAppViaExec(machineId, sessionId).catch((err) => {
+            logger.warn('[MachineManager] racko-app install via exec failed (non-fatal)', {
+              sessionId,
+              machineId,
+              error: err instanceof Error ? err.message : String(err),
+            });
           });
-        });
+        } else {
+          logger.info('[MachineManager] Skipping racko-app install — installRackoApp=false', {
+            sessionId,
+            machineId,
+          });
+        }
 
         break;
       }
