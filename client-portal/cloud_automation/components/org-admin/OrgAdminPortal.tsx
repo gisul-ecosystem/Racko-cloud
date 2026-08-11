@@ -17,6 +17,7 @@ import { OrgAdminPrivilegedRoleRequests } from './OrgAdminPrivilegedRoleRequests
 import { OrgAdminLabStatusBadge } from './OrgAdminLabStatusBadge';
 import { OrgAdminRequestDetailPanel } from './OrgAdminRequestDetailPanel';
 import { OrgAdminStatCard } from './OrgAdminStatCard';
+import { OrgAdminSubscriptionRoleQuotaCard } from './OrgAdminSubscriptionRoleQuota';
 import { CostingModeBadge } from './CostingModeBadge';
 
 const STATUS_FILTERS = ['all', 'completed', 'expired', 'provisioning', 'failed'] as const;
@@ -78,6 +79,9 @@ export function OrgAdminPortal() {
     lastUpdatedAt,
     isRefreshing,
     hasActiveUsers,
+    subscriptionRoleQuota,
+    subscriptionRoleQuotaLoading,
+    subscriptionRoleQuotaError,
   } = useOrgAdminPortal();
 
   const stats = useMemo(
@@ -166,6 +170,12 @@ export function OrgAdminPortal() {
           Refresh
         </button>
       </div>
+
+      <OrgAdminSubscriptionRoleQuotaCard
+        quota={subscriptionRoleQuota}
+        loading={subscriptionRoleQuotaLoading}
+        error={subscriptionRoleQuotaError}
+      />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <OrgAdminStatCard

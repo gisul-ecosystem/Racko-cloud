@@ -133,6 +133,8 @@ const ensureAzureManagementAccess = async () => {
  *   Organization.Read.All — optional for organization metadata
  *   User.ReadWrite.All — disable/enable accounts, revoke sessions, assign licenses
  *   LicenseAssignment.ReadWrite.All — preferred for assignLicense / subscribedSkus
+ *   Group.ReadWrite.All — create lab security groups (shared RG labs with 200+ users)
+ *   GroupMember.ReadWrite.All — add lab users to those security groups
  *
  * Verify in Azure Portal → App registrations → API permissions.
  * Smoke test: GET https://graph.microsoft.com/v1.0/auditLogs/signIns?$top=1
