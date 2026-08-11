@@ -32,6 +32,8 @@ export interface MachineResponse {
   };
   trackingEnabled: boolean;
   trackingEnabledAt?: string;
+  agentVersion?: string;
+  rackoAppVersion?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -84,6 +86,7 @@ export interface AgentHeartbeatDto {
   agentId: string;
   status: string;
   version?: string;
+  rackoAppVersion?: string;
   specs?: {
     hostname?: string;
     osVersion?: string;
@@ -98,4 +101,7 @@ export interface HeartbeatUpdateInfo {
   latestVersion: string;
   checksum: string;
   trackingEnabled: boolean;
+  rackoAppUpdateAvailable: boolean;
+  rackoAppLatestVersion: string;
+  rackoAppChecksum: string;
 }
