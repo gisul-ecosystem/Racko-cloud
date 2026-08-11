@@ -404,10 +404,6 @@ class VmCatalogService {
     return objectIds;
   }
 
-  /**
-   * After VM is active (Attach / auto-provision): push Racko agent and queue
-   * selected Software Catalog installs. Fire-and-forget; never blocks Attach.
-   */
   private schedulePostReadySetup(doc: ICatalogVm): void {
     const softwareIds = doc.preferredSoftwareIds ?? [];
     if (softwareIds.length === 0) return;
@@ -519,6 +515,101 @@ class VmCatalogService {
       doc.updatedAt = new Date();
       await doc.save();
       throw err;
+    }
+  }
+
+  /** Background auto-provision for hourly cloud SKUs — does not block Buy Now. */
+  private async runAutoProvision(input: {
+    requestId: mongoose.Types.ObjectId;
+    adminId: mongoose.Types.ObjectId;
+    selection: Awaited<ReturnType<typeof resellerSelect>>;
+    canonicalSpec: string;
+    category: string;
+    total: number;
+    planName: string;
+  }): Promise<void> {
+    const { requestId, adminId, selection, canonicalSpec, category, total, planName } = input;
+    const doc = await CatalogVmModel.findById(requestId);
+    if (!doc || doc.status !== 'provisioning' || !doc.autoProvisioned) return;
+
+    try {
+      const provisioned = await resellerProvision({
+        provider: selection.provider,
+        region: selection.region,
+        category,
+        canonicalSpec: selection.canonicalSpec || canonicalSpec,
+        catalogVmId: requestId.toString(),
+      });
+
+      doc.status = 'active';
+      doc.providerInstanceId = provisioned.providerInstanceId;
+      doc.region = provisioned.region || selection.region || undefined;
+      doc.hostname = provisioned.hostname || provisioned.ip || undefined;
+      doc.ipAddress = provisioned.ip || undefined;
+      doc.username = provisioned.username;
+      doc.password = encrypt(provisioned.password);
+      doc.protocol = provisioned.protocol;
+      doc.providerPurchased = true;
+      doc.attachedAt = new Date();
+      doc.updatedAt = new Date();
+      await doc.save();
+
+      this.schedulePostReadySetup(doc);
+
+      await this.notifyRequester(
+        adminId,
+        'Cloud VM is ready',
+        `Your ${doc.quantity}× ${planName} purchase (₹${total}) is active.`,
+        {
+          requestId: requestId.toString(),
+          event: 'active',
+          planName,
+          total,
+        }
+      );
+
+      logger.info('[VmCatalog] Auto-provisioned catalog VM', {
+        requestId: requestId.toString(),
+        provider: doc.provider,
+        region: doc.region,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      doc.status = 'failed';
+      doc.fulfillError = message;
+      doc.updatedAt = new Date();
+      await doc.save();
+
+      await adminBillingService
+        .refundCloudRequestCharge(adminId.toString(), total, requestId.toString())
+        .catch((refundErr: unknown) => {
+          logger.error('[VmCatalog] Refund after auto-provision failure failed', {
+            requestId: requestId.toString(),
+            error: refundErr instanceof Error ? refundErr.message : String(refundErr),
+          });
+        });
+
+      if (doc.walletDebited) {
+        doc.walletDebited = false;
+        await doc.save().catch(() => undefined);
+      }
+
+      await this.notifyRequester(
+        adminId,
+        'Cloud VM provisioning failed',
+        `Your ${planName} purchase failed and was refunded. ${message}`,
+        {
+          requestId: requestId.toString(),
+          event: 'failed',
+          planName,
+          total,
+        }
+      );
+
+      logger.error('[VmCatalog] Auto-provision failed', {
+        requestId: requestId.toString(),
+        error: message,
+      });
     }
   }
 
@@ -685,89 +776,41 @@ class VmCatalogService {
     await adminBillingService.patchLatestTransactionJobId(adminId.toString(), doc._id.toString());
 
     if (autoProvisioned) {
-      try {
-        const provisioned = await resellerProvision({
-          provider: selection.provider,
-          region: selection.region,
-          category: dto.category,
-          canonicalSpec: selection.canonicalSpec || canonicalSpec,
-          catalogVmId: doc._id.toString(),
-        });
-
-        doc.status = 'active';
-        doc.providerInstanceId = provisioned.providerInstanceId;
-        doc.region = provisioned.region || selection.region || undefined;
-        doc.hostname = provisioned.hostname || provisioned.ip || undefined;
-        doc.ipAddress = provisioned.ip || undefined;
-        doc.username = provisioned.username;
-        doc.password = encrypt(provisioned.password);
-        doc.protocol = provisioned.protocol;
-        doc.providerPurchased = true;
-        doc.attachedAt = new Date();
-        doc.updatedAt = new Date();
-        await doc.save();
-
-        this.schedulePostReadySetup(doc);
-
-        await this.notifyRequester(
-          adminId,
-          'Cloud VM is ready',
-          `Your ${doc.quantity}× ${doc.planName} purchase (₹${total}) is active.`,
-          {
-            requestId: doc._id.toString(),
-            event: 'active',
-            planName: doc.planName,
-            total,
-          }
-        );
-
-        logger.info('[VmCatalog] Auto-provisioned catalog VM', {
+      const customerPlanName = this.displayNameForPlan(plan);
+      await this.notifyRequester(
+        adminId,
+        'Cloud VM is provisioning',
+        `Your ${doc.quantity}× ${customerPlanName} purchase (₹${total}) was charged. It will be available soon.`,
+        {
           requestId: doc._id.toString(),
-          provider: doc.provider,
-          region: doc.region,
-        });
-
-        return this.toCustomerResponse(doc, { adminEmail: admin.email });
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        doc.status = 'failed';
-        doc.fulfillError = message;
-        doc.updatedAt = new Date();
-        await doc.save();
-
-        await adminBillingService
-          .refundCloudRequestCharge(adminId.toString(), total, doc._id.toString())
-          .catch((refundErr: unknown) => {
-            logger.error('[VmCatalog] Refund after auto-provision failure failed', {
-              requestId: doc._id.toString(),
-              error: refundErr instanceof Error ? refundErr.message : String(refundErr),
-            });
-          });
-
-        if (doc.walletDebited) {
-          doc.walletDebited = false;
-          await doc.save().catch(() => undefined);
+          event: 'submitted',
+          planName: customerPlanName,
+          total,
         }
+      );
 
-        await this.notifyRequester(
-          adminId,
-          'Cloud VM provisioning failed',
-          `Your ${doc.planName} purchase failed and was refunded. ${message}`,
-          {
-            requestId: doc._id.toString(),
-            event: 'failed',
-            planName: doc.planName,
-            total,
-          }
-        );
-
-        logger.error('[VmCatalog] Auto-provision failed', {
+      void this.runAutoProvision({
+        requestId: doc._id,
+        adminId,
+        selection,
+        canonicalSpec,
+        category: dto.category,
+        total,
+        planName: doc.planName,
+      }).catch((err: unknown) => {
+        logger.error('[VmCatalog] Background auto-provision crashed', {
           requestId: doc._id.toString(),
-          error: message,
+          error: err instanceof Error ? err.message : String(err),
         });
+      });
 
-        return this.toCustomerResponse(doc, { adminEmail: admin.email });
-      }
+      logger.info('[VmCatalog] Auto-provision scheduled', {
+        requestId: doc._id.toString(),
+        provider: doc.provider,
+        region: doc.region,
+      });
+
+      return this.toCustomerResponse(doc, { adminEmail: admin.email });
     }
 
     await this.notifySuperAdminsOfRequest(doc, admin.email);
