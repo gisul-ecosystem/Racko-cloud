@@ -997,6 +997,81 @@ class MachineManagerService {
     logger.info('[MachineManager] Reset session removed', { sessionId });
   }
 
+  /**
+   * Called by agent via POST /api/v1/agent/reset-result (HTTP, not WebSocket).
+   *
+   * Persists the reset outcome to MongoDB and fires the SSE event so any open
+   * browser stream receives reset_complete immediately. This is the authoritative
+   * delivery path — it works even when the WebSocket was dropped during the reset.
+   *
+   * The WS path in runReset() still attempts delivery as a fast path, but this
+   * HTTP path is the one that always succeeds regardless of connection state.
+   */
+  async agentResetResult(dto: {
+    agentId:   string;
+    sessionId: string;
+    success:   boolean;
+    error?:    string;
+  }): Promise<void> {
+    const machine = await MachineModel.findOne({ agentId: dto.agentId });
+    if (!machine) throw new NotFoundError(`Agent not found: ${dto.agentId}`);
+
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+
+    // Upsert — idempotent if agent retries (e.g. on reconnect)
+    await ResetResultModel.findOneAndUpdate(
+      { sessionId: dto.sessionId, agentId: dto.agentId },
+      {
+        sessionId:   dto.sessionId,
+        machineId:   machine._id,
+        machineName: machine.name,
+        agentId:     dto.agentId,
+        success:     dto.success,
+        error:       dto.error,
+        completedAt: new Date(),
+      },
+      { upsert: true, new: true }
+    );
+
+    logger.info('[MachineManager] Reset result persisted via HTTP', {
+      sessionId:  dto.sessionId,
+      machineId:  machine._id.toString(),
+      agentId:    dto.agentId,
+      success:    dto.success,
+    });
+
+    // Fire SSE event — delivers to any open browser SSE stream immediately
+    const { emitResetEvent } = await import('./reset.events');
+    emitResetEvent(dto.sessionId, {
+      type:        'reset_complete',
+      machineId:   machine._id.toString(),
+      machineName: machine.name,
+      success:     dto.success,
+      error:       dto.error,
+    });
+  }
+
+  /**
+   * Returns the persisted reset result for a session, or null if not yet complete.
+   * Used by the SSE stream on open to deliver already-completed results instantly.
+   */
+  async getResetResult(sessionId: string): Promise<{
+    machineId: string;
+    machineName: string;
+    success: boolean;
+    error?: string;
+  } | null> {
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+    const result = await ResetResultModel.findOne({ sessionId }).lean();
+    if (!result) return null;
+    return {
+      machineId:   result.machineId.toString(),
+      machineName: result.machineName,
+      success:     result.success,
+      error:       result.error,
+    };
+  }
+
   async execCommand(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
