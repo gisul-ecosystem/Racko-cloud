@@ -7,6 +7,8 @@ export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
   email: string;
   password: string;
+  name?: string;
+  phone?: string;
   role: UserRole;
   accountType: AccountType;
   onboardingStatus: OnboardingStatus;
@@ -50,6 +52,16 @@ const userSchema = new Schema<IUser, IUserModel>(
       lowercase: true,
       trim: true,
       index: true,
+    },
+    name: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: 15,
     },
     password: {
       type: String,

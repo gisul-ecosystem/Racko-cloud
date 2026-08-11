@@ -1,4 +1,5 @@
 import type { Request, Response } from 'express';
+import { promises as dns } from 'dns';
 import mongoose from 'mongoose';
 import { User } from '../../models/user.model';
 import { Token } from '../../models/token.model';
@@ -151,6 +152,8 @@ export class AuthService {
     const user = new User({
       email: data.email,
       password: data.password, // pre-save hook hashes with argon2id
+      ...(data.name ? { name: data.name.trim() } : {}),
+      ...(data.phone ? { phone: data.phone.trim() } : {}),
       role,
       accountType,
       onboardingStatus,
@@ -881,6 +884,29 @@ export class AuthService {
     }
 
     return user;
+  }
+
+  /** Validates email format then checks the domain has MX records (can receive mail). */
+  async checkEmail(email: string): Promise<{ valid: boolean; reason?: string }> {
+    const domain = email.split('@')[1];
+    if (!domain) return { valid: false, reason: 'Invalid email format.' };
+
+    try {
+      const records = await dns.resolveMx(domain);
+      if (records.length === 0) {
+        return { valid: false, reason: `The domain "${domain}" does not accept email.` };
+      }
+      return { valid: true };
+    } catch (err: unknown) {
+      // Only reject when we are certain the domain does not exist or has no mail servers.
+      // All other errors (timeout, DNS server unreachable, SERVFAIL, etc.) fail-open so
+      // valid addresses like gmail.com are never blocked by infra issues.
+      const code = (err as NodeJS.ErrnoException).code ?? '';
+      if (code === 'ENOTFOUND' || code === 'ENODATA') {
+        return { valid: false, reason: `The domain "${domain}" was not found or cannot receive email.` };
+      }
+      return { valid: true };
+    }
   }
 }
 
