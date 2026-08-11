@@ -463,6 +463,9 @@ router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
 router.post('/api/v1/agent/heartbeat', coreApiProxy);
 router.get('/api/v1/agent/software-catalog/:id', coreApiProxy);
+// Agent reset result — POSTed by agent via HTTP after reset script completes (X-Agent-ID auth)
+// This is the authoritative delivery path for reset_complete, bypassing WebSocket.
+router.post('/api/v1/agent/reset-result', coreApiProxy);
 // Tracker agent routes — authenticated by X-Agent-ID header (not JWT)
 // core-api's requireAgentAuth middleware validates agentId against the machines collection
 router.post('/api/v1/agent/baseline', coreApiProxy);
