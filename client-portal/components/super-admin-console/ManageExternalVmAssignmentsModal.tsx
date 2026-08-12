@@ -4,22 +4,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Loader2,
-  Plus,
-  Search,
   Settings2,
   X,
 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   clientSchedulesOverlap,
-  createSuperAdminExternalVmAssignment,
   deleteSuperAdminExternalVmAssignment,
-  fetchSuperAdminExternalVmAssignees,
   patchSuperAdminExternalVmAssignment,
   type AssignmentScheduleDto,
-  type SuperAdminAssigneeOption,
   type SuperAdminExternalVmAssigneeView,
   type SuperAdminExternalVmOverviewRow,
+  updateSuperAdminExternalVmProviderMetadata,
 } from '@/lib/superAdminExternalVmApi';
 
 const inputClass =
@@ -94,90 +90,6 @@ function assigneeLabel(a: SuperAdminExternalVmAssigneeView): string {
 
 function isManageableAssignment(a: SuperAdminExternalVmAssigneeView): boolean {
   return !a.assignmentId.startsWith('legacy:') && a.assignmentId !== 'none';
-}
-
-interface PickerOption {
-  id: string;
-  label: string;
-  searchText: string;
-}
-
-function FilterableSelect({
-  value,
-  onChange,
-  options,
-  placeholder,
-  disabled,
-}: {
-  value: string;
-  onChange: (value: string) => void;
-  options: PickerOption[];
-  placeholder: string;
-  disabled?: boolean;
-}) {
-  const [query, setQuery] = useState('');
-  const [open, setOpen] = useState(false);
-
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!needle) return options;
-    return options.filter((o) => o.searchText.includes(needle));
-  }, [options, query]);
-
-  const selected = options.find((o) => o.id === value);
-
-  return (
-    <div className="relative">
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={() => setOpen((v) => !v)}
-        className={`${inputClass} flex items-center justify-between text-left disabled:opacity-50`}
-      >
-        <span className={selected ? 'text-gray-900' : 'text-gray-400'}>
-          {selected?.label ?? placeholder}
-        </span>
-        <Search className="h-4 w-4 shrink-0 text-gray-400" />
-      </button>
-      {open && (
-        <>
-          <div className="fixed inset-0 z-[60]" onClick={() => setOpen(false)} />
-          <div className="absolute z-[70] mt-1 max-h-56 w-full overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
-            <div className="border-b border-gray-100 p-2">
-              <input
-                autoFocus
-                className={inputClass}
-                placeholder="Search…"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-            </div>
-            <ul className="max-h-40 overflow-y-auto py-1">
-              {filtered.length === 0 ? (
-                <li className="px-3 py-2 text-sm text-gray-400">No matches</li>
-              ) : (
-                filtered.map((o) => (
-                  <li key={o.id}>
-                    <button
-                      type="button"
-                      className="w-full px-3 py-2 text-left text-sm hover:bg-gray-50"
-                      onClick={() => {
-                        onChange(o.id);
-                        setOpen(false);
-                        setQuery('');
-                      }}
-                    >
-                      {o.label}
-                    </button>
-                  </li>
-                ))
-              )}
-            </ul>
-          </div>
-        </>
-      )}
-    </div>
-  );
 }
 
 function SchedulePicker({
@@ -289,6 +201,18 @@ function overlapWarningsForAssignments(
   return warnings;
 }
 
+interface ProviderEditorState {
+  providerStartDate: string;
+  providerEndDate: string;
+}
+
+function providerEditorFromRow(row: SuperAdminExternalVmOverviewRow): ProviderEditorState {
+  return {
+    providerStartDate: row.providerStartDate ? row.providerStartDate.slice(0, 10) : '',
+    providerEndDate: row.providerEndDate ? row.providerEndDate.slice(0, 10) : '',
+  };
+}
+
 export function ManageExternalVmAssignmentsModal({
   row,
   onClose,
@@ -299,67 +223,17 @@ export function ManageExternalVmAssignmentsModal({
   onUpdated: (row: SuperAdminExternalVmOverviewRow) => void;
 }) {
   const [localRow, setLocalRow] = useState(row);
-  const [assignees, setAssignees] = useState<SuperAdminAssigneeOption[]>([]);
-  const [loadingAssignees, setLoadingAssignees] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-
-  const [showAdd, setShowAdd] = useState(false);
-  const [newAssigneeId, setNewAssigneeId] = useState('');
-  const [newSchedule, setNewSchedule] = useState(defaultScheduleEditor);
-  const [adding, setAdding] = useState(false);
-
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editSchedule, setEditSchedule] = useState(defaultScheduleEditor);
+  const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(() => providerEditorFromRow(row));
+  const [savingProvider, setSavingProvider] = useState(false);
 
   useEffect(() => {
     setLocalRow(row);
+    setProviderEditor(providerEditorFromRow(row));
   }, [row]);
-
-  const loadAssignees = useCallback(async () => {
-    setLoadingAssignees(true);
-    try {
-      const list = await fetchSuperAdminExternalVmAssignees(
-        localRow.stack === 'tenant'
-          ? { tenantId: localRow.tenantId! }
-          : { adminId: localRow.adminId! }
-      );
-      setAssignees(list);
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to load assignees.');
-    } finally {
-      setLoadingAssignees(false);
-    }
-  }, [localRow.adminId, localRow.stack, localRow.tenantId]);
-
-  useEffect(() => {
-    void loadAssignees();
-  }, [loadAssignees]);
-
-  const assignedIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const a of localRow.assignments) {
-      if (a.status !== 'active') continue;
-      if (a.userId) ids.add(a.userId);
-      if (a.tenantUserId) ids.add(a.tenantUserId);
-    }
-    return ids;
-  }, [localRow.assignments]);
-
-  const pickerOptions: PickerOption[] = useMemo(
-    () =>
-      assignees
-        .filter((a) => a.isActive && !assignedIds.has(a.id))
-        .map((a) => {
-          const label = a.username ? `${a.username} (${a.email})` : a.email;
-          return {
-            id: a.id,
-            label,
-            searchText: [a.email, a.username ?? ''].join(' ').toLowerCase(),
-          };
-        }),
-    [assignees, assignedIds]
-  );
 
   const manageable = localRow.assignments.filter(isManageableAssignment);
   const legacy = localRow.assignments.filter((a) => a.assignmentId.startsWith('legacy:'));
@@ -376,24 +250,11 @@ export function ManageExternalVmAssignmentsModal({
               ? toScheduleDto(editSchedule)
               : a.schedule,
         }));
-
-    if (showAdd && newAssigneeId) {
-      const opt = assignees.find((x) => x.id === newAssigneeId);
-      items.push({
-        key: 'new',
-        label: opt ? (opt.username ? opt.email : opt.email) : 'New assignee',
-        schedule: toScheduleDto(newSchedule),
-      });
-    }
     return items;
   }, [
     manageable,
     editingId,
     editSchedule,
-    showAdd,
-    newAssigneeId,
-    newSchedule,
-    assignees,
   ]);
 
   const overlapWarnings = useMemo(
@@ -406,39 +267,45 @@ export function ManageExternalVmAssignmentsModal({
     onUpdated(next);
   }
 
-  async function handleAdd() {
-    if (!newAssigneeId) {
-      setError('Select an assignee.');
-      return;
-    }
-    const schedule = toScheduleDto(newSchedule);
-    if (newSchedule.useSchedule && !schedule) {
-      setError('Complete the schedule fields or turn off restricted hours.');
-      return;
-    }
-    setAdding(true);
-    setError(null);
-    try {
-      const body =
-        localRow.stack === 'tenant'
-          ? { tenantUserId: newAssigneeId, schedule }
-          : { userId: newAssigneeId, schedule };
-      const updated = await createSuperAdminExternalVmAssignment(localRow.externalVmId, body);
-      applyRow(updated);
-      setShowAdd(false);
-      setNewAssigneeId('');
-      setNewSchedule(defaultScheduleEditor());
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to create assignment.');
-    } finally {
-      setAdding(false);
-    }
-  }
-
   function startEdit(a: SuperAdminExternalVmAssigneeView) {
     setEditingId(a.assignmentId);
     setEditSchedule(scheduleFromDto(a.schedule));
     setError(null);
+  }
+
+  async function saveProviderMetadata() {
+    setSavingProvider(true);
+    setError(null);
+    try {
+      const updated = await updateSuperAdminExternalVmProviderMetadata({
+        ipAddress: localRow.ipAddress,
+        providerStartDate: providerEditor.providerStartDate
+          ? new Date(`${providerEditor.providerStartDate}T00:00:00.000Z`).toISOString()
+          : null,
+        providerEndDate: providerEditor.providerEndDate
+          ? new Date(`${providerEditor.providerEndDate}T00:00:00.000Z`).toISOString()
+          : null,
+      });
+
+      if (!updated.updated) {
+        throw new Error('Provider metadata was not updated.');
+      }
+
+      const nextRow = {
+        ...localRow,
+        providerStartDate: providerEditor.providerStartDate
+          ? new Date(`${providerEditor.providerStartDate}T00:00:00.000Z`).toISOString()
+          : null,
+        providerEndDate: providerEditor.providerEndDate
+          ? new Date(`${providerEditor.providerEndDate}T00:00:00.000Z`).toISOString()
+          : null,
+      };
+      applyRow(nextRow);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Failed to update provider metadata.');
+    } finally {
+      setSavingProvider(false);
+    }
   }
 
   async function saveEdit(assignmentId: string) {
@@ -539,14 +406,45 @@ export function ManageExternalVmAssignmentsModal({
             </div>
           )}
 
-          {legacy.length > 0 && (
-            <p className="mb-4 text-xs text-gray-500">
-              Legacy assignee rows (from <code className="rounded bg-gray-100 px-1">assignedTo</code>)
-              are read-only here. Add a new assignment to migrate to junction records.
-            </p>
-          )}
+          <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Provider details</h3>
+                <p className="text-xs text-gray-500">Edit provider start and end dates for this VM.</p>
+              </div>
+              <button
+                type="button"
+                disabled={savingProvider}
+                onClick={() => void saveProviderMetadata()}
+                className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+              >
+                {savingProvider && <Loader2 className="h-4 w-4 animate-spin" />}
+                Save provider dates
+              </button>
+            </div>
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className={labelClass}>Provider start date</label>
+                <input
+                  type="date"
+                  className={inputClass}
+                  value={providerEditor.providerStartDate}
+                  onChange={(e) => setProviderEditor((current) => ({ ...current, providerStartDate: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className={labelClass}>Provider end date</label>
+                <input
+                  type="date"
+                  className={inputClass}
+                  value={providerEditor.providerEndDate}
+                  onChange={(e) => setProviderEditor((current) => ({ ...current, providerEndDate: e.target.value }))}
+                />
+              </div>
+            </div>
+          </section>
 
-          <section className="space-y-3">
+          <section className="mt-6 space-y-3">
             <h3 className="text-xs font-semibold uppercase tracking-wide text-gray-500">
               Current assignees
             </h3>
@@ -652,76 +550,9 @@ export function ManageExternalVmAssignmentsModal({
                 className="rounded-lg border border-gray-100 bg-gray-50 p-3 opacity-80"
               >
                 <p className="text-sm text-gray-800">{assigneeLabel(a)}</p>
-                <p className="text-xs text-gray-500">Legacy — add a new assignment to replace</p>
+                <p className="text-xs text-gray-500">Legacy assignment</p>
               </div>
             ))}
-          </section>
-
-          <section className="mt-6 border-t border-gray-100 pt-6">
-            {!showAdd ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setShowAdd(true);
-                  setError(null);
-                }}
-                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-              >
-                <Plus className="h-4 w-4" />
-                Add assignee
-              </button>
-            ) : (
-              <div className="space-y-3 rounded-lg border border-gray-200 p-4">
-                <h3 className="text-sm font-semibold text-gray-900">New assignee</h3>
-                {loadingAssignees ? (
-                  <div className="flex justify-center py-4">
-                    <Loader2 className="h-5 w-5 animate-spin text-[#B91C1C]" />
-                  </div>
-                ) : (
-                  <FilterableSelect
-                    value={newAssigneeId}
-                    onChange={setNewAssigneeId}
-                    options={pickerOptions}
-                    placeholder="Search users…"
-                  />
-                )}
-                <label className="flex items-center gap-2 text-sm text-gray-700">
-                  <input
-                    type="checkbox"
-                    checked={!newSchedule.useSchedule}
-                    onChange={(e) =>
-                      setNewSchedule((s) => ({ ...s, useSchedule: !e.target.checked }))
-                    }
-                  />
-                  Always on (no schedule restriction)
-                </label>
-                {newSchedule.useSchedule && (
-                  <SchedulePicker value={newSchedule} onChange={setNewSchedule} />
-                )}
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    disabled={adding}
-                    onClick={() => void handleAdd()}
-                    className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
-                  >
-                    {adding && <Loader2 className="h-4 w-4 animate-spin" />}
-                    Assign
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowAdd(false);
-                      setNewAssigneeId('');
-                      setNewSchedule(defaultScheduleEditor());
-                    }}
-                    className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            )}
           </section>
         </div>
       </div>

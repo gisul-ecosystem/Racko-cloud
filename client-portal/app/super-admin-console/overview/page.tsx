@@ -17,7 +17,6 @@ import {
   Server,
   TrendingUp,
   Vault,
-  CalendarClock,
   type LucideIcon,
 } from 'lucide-react';
 import { fetchSuperAdminOverview } from '../../../lib/tenantApi';
@@ -1099,9 +1098,9 @@ export default function SuperAdminOverviewPage() {
               icon={Database}
             />
             <SectionLink
-              href="/super-admin-console/vm-host-leases"
-              label="Inspect expirations"
-              icon={CalendarClock}
+              href="/super-admin-console/vm-inventory"
+              label="Open VM inventory"
+              icon={Server}
             />
           </div>
         </Surface>

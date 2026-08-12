@@ -10,7 +10,7 @@ namespace RackoApp.Views;
 /// In-app file viewer using embedded Chromium (WebView2).
 ///
 /// File type routing (read-only permission):
-///   Office files (docx, xlsx, pptx, etc.) → Microsoft Office Online Viewer
+///   Office files (docx, xlsx, pptx, etc.) → Microsoft Office Online Viewer 
 ///       URL: https://view.officeapps.live.com/op/view.aspx?src=&lt;presignedUrl&gt;
 ///       Microsoft fetches the file from S3 server-side — zero server memory.
 ///       Strictly read-only — uses /op/view.aspx not /op/edit.aspx.
