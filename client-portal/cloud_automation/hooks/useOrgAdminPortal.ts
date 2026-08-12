@@ -809,13 +809,9 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
           resetUsage: options.resetUsage !== false,
           pauseWindowEnforcement: options.pauseWindowEnforcement !== false,
         });
-        const pauseNote = result.windowEnforcementPausedUntil
-          ? ' Usage window enforcement paused for 24 hours.'
-          : '';
-        const passwordNote = result.temporaryPassword
-          ? ` New password: ${result.temporaryPassword}`
-          : '';
-        setActionSuccess(`User "${result.username}" unblocked.${pauseNote}${passwordNote}`);
+        setActionSuccess(
+          `User "${result.username}" unblocked in Azure. Sign in with the same credentials as before.`
+        );
         await refreshDetailSilent();
         return true;
       } catch (err) {
@@ -841,7 +837,7 @@ export function useOrgAdminPortal(): UseOrgAdminPortalResult {
         pauseWindowEnforcement: true,
       });
       setActionSuccess(
-        `Unblocked ${result.unblockedCount} of ${result.totalUsers} user(s) immediately.` +
+        `Unblocked ${result.unblockedCount} of ${result.totalUsers} user(s) in Azure. Users can sign in with their original credentials.` +
           (result.failedCount > 0 ? ` ${result.failedCount} failed.` : '')
       );
       await refreshDetailSilent();

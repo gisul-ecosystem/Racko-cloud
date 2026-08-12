@@ -400,6 +400,79 @@ const createOrAdoptGraphUser = async (graphClient, { payload, temporaryPassword 
   }
 };
 
+/**
+ * Re-enable an Entra user for sign-in without changing known credentials.
+ * Revokes sessions, enables the account, and optionally re-applies the stored
+ * password to clear Microsoft smart lockout while keeping the same login password.
+ */
+const restoreAzureUserSignInAccess = async (
+  graphClient,
+  azureUserId,
+  { existingPassword = null } = {}
+) => {
+  const normalizedAzureUserId = String(azureUserId || '').trim();
+  if (!normalizedAzureUserId) {
+    throw new AppError('Azure user id is required to restore sign-in access.', 400);
+  }
+
+  try {
+    await graphClient.api(`/users/${normalizedAzureUserId}/revokeSignInSessions`).post({});
+  } catch (revokeError) {
+    console.warn(
+      `[AZURE_UNBLOCK] Could not revoke sign-in sessions for ${normalizedAzureUserId}: ${revokeError.message}`
+    );
+  }
+
+  const storedPassword = String(existingPassword || '').trim();
+  let passwordReapplied = false;
+
+  if (storedPassword) {
+    try {
+      await graphClient.api(`/users/${normalizedAzureUserId}`).patch({
+        accountEnabled: true,
+        passwordProfile: {
+          forceChangePasswordNextSignIn: false,
+          password: storedPassword
+        },
+        passwordPolicies: 'DisablePasswordExpiration'
+      });
+      passwordReapplied = true;
+    } catch (passwordError) {
+      const insufficientPrivileges = /insufficient privileges/i.test(passwordError.message || '');
+      console.warn(
+        `[AZURE_UNBLOCK] Could not re-apply stored password for ${normalizedAzureUserId}: ${passwordError.message}` +
+          (insufficientPrivileges ? ' (falling back to account enable only)' : '')
+      );
+
+      if (!insufficientPrivileges) {
+        throw passwordError;
+      }
+
+      await graphClient.api(`/users/${normalizedAzureUserId}`).patch({ accountEnabled: true });
+    }
+  } else {
+    await graphClient.api(`/users/${normalizedAzureUserId}`).patch({ accountEnabled: true });
+  }
+
+  const verifiedState = await graphClient
+    .api(`/users/${normalizedAzureUserId}`)
+    .select('accountEnabled,userPrincipalName')
+    .get();
+
+  if (verifiedState.accountEnabled === false) {
+    throw new AppError(
+      'Azure account is still disabled after unblock. Check Graph API User.ReadWrite.All permission.',
+      502
+    );
+  }
+
+  return {
+    passwordReset: false,
+    passwordReapplied,
+    userPrincipalName: verifiedState.userPrincipalName || null
+  };
+};
+
 module.exports = {
   buildUserPayload,
   buildBulkUserPayload,
@@ -412,5 +485,6 @@ module.exports = {
   getRetryDelayMs,
   isRetryableError,
   isUpnConflictError,
-  toGraphProvisionError
+  toGraphProvisionError,
+  restoreAzureUserSignInAccess
 };
