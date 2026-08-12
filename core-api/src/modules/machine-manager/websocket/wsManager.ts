@@ -23,6 +23,11 @@ interface PendingExec {
   timer: ReturnType<typeof setTimeout>;
 }
 
+interface PendingInstall {
+  resolve: (result: { success: boolean; error: string }) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 export interface ExecResult {
   commandId: string;
   output: string;
@@ -34,6 +39,8 @@ class WSManager {
   private connections = new Map<string, AgentConnection>();
   // Pending exec commands awaiting result from agent — keyed by commandId
   private pendingExecs = new Map<string, PendingExec>();
+  // Pending racko-app installs awaiting result from agent — keyed by agentId
+  private pendingInstalls = new Map<string, PendingInstall>();
 
   /**
    * Attach to an existing HTTP server.
@@ -118,6 +125,46 @@ class WSManager {
       });
       return false;
     }
+  }
+
+  /**
+   * Send an install_racko_app command to the agent.
+   * The agent's Go-native installer runs the full install flow (download, extract,
+   * WebView2, shortcut, launch) using net/http with a 10-minute timeout.
+   * Returns a Promise that resolves with { success, error } when the agent responds.
+   * Times out after 12 minutes (gives the agent's 10-min download + install time).
+   */
+  sendInstallRackoApp(agentId: string, appVersion: string): Promise<{ success: boolean; error: string }> {
+    return new Promise((resolve) => {
+      const conn = this.connections.get(agentId);
+      if (!conn || conn.ws.readyState !== WebSocket.OPEN) {
+        resolve({ success: false, error: 'Agent is not connected.' });
+        return;
+      }
+
+      // Cancel any existing pending install for this agent (e.g. from a retry)
+      const existing = this.pendingInstalls.get(agentId);
+      if (existing) {
+        clearTimeout(existing.timer);
+        this.pendingInstalls.delete(agentId);
+      }
+
+      const timer = setTimeout(() => {
+        this.pendingInstalls.delete(agentId);
+        resolve({ success: false, error: 'Install timed out after 12 minutes.' });
+      }, 12 * 60 * 1000);
+
+      this.pendingInstalls.set(agentId, { resolve, timer });
+
+      try {
+        conn.ws.send(JSON.stringify({ type: 'install_racko_app', payload: { appVersion } }));
+        logger.info('[WSManager] Sent install_racko_app command', { agentId, appVersion });
+      } catch (err) {
+        clearTimeout(timer);
+        this.pendingInstalls.delete(agentId);
+        resolve({ success: false, error: `Failed to send command: ${err instanceof Error ? err.message : String(err)}` });
+      }
+    });
   }
 
   /**
@@ -294,6 +341,17 @@ class WSManager {
           this.pendingExecs.delete(result.commandId);
           pending.resolve(result);
           logger.info('[WSManager] Exec result received', { agentId, commandId: result.commandId, exitCode: result.exitCode });
+        }
+      }
+
+      if (msg.type === 'install_racko_app_result') {
+        const result = msg.payload as { success: boolean; error: string };
+        const pending = this.pendingInstalls.get(agentId);
+        if (pending) {
+          clearTimeout(pending.timer);
+          this.pendingInstalls.delete(agentId);
+          pending.resolve(result);
+          logger.info('[WSManager] install_racko_app_result received', { agentId, success: result.success, error: result.error });
         }
       }
 

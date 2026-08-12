@@ -1,6 +1,6 @@
 import { randomBytes } from 'crypto';
 
-const TICKET_TTL_MS = 120_000; // 2 minutes — enough to open the SSE stream
+const TICKET_TTL_MS = 15 * 60_000; // 15 minutes — covers full reset duration including reconnects
 
 interface ResetStreamTicket {
   sessionId: string;
@@ -27,7 +27,8 @@ export function consumeResetStreamTicket(
   if (!ticket) return null;
   if (ticket.expiresAt < Date.now()) { tickets.delete(streamToken); return null; }
   if (ticket.sessionId !== sessionId) return null;
-  tickets.delete(streamToken); // single-use
+  // Not deleted — reusable within TTL to support reconnect on network drops.
+  // Ticket expires naturally after TICKET_TTL_MS via the cleanup interval.
   return ticket;
 }
 

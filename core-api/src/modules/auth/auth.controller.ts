@@ -1,6 +1,7 @@
 import type { Request, Response, NextFunction } from 'express';
 import { authService } from './auth.service';
 import type { AuthenticatedRequest } from '../../types';
+import type { RegisterDto } from './auth.types';
 import { logger } from '../../utils/logger';
 
 // Consistent response shape
@@ -9,9 +10,19 @@ function success<T>(res: Response, message: string, data?: T, statusCode = 200):
 }
 
 export class AuthController {
+  async checkEmail(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { email } = req.body as { email: string };
+      const result = await authService.checkEmail(email);
+      success(res, result.valid ? 'Email is valid.' : (result.reason ?? 'Invalid email.'), { valid: result.valid, reason: result.reason });
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async register(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const result = await authService.register(req.body as { email: string; password: string }, req);
+      const result = await authService.register(req.body as RegisterDto, req);
       success(res, result.message, undefined, 201);
     } catch (error) {
       next(error);

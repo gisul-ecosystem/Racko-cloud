@@ -268,7 +268,7 @@ export default function Navbar() {
             href="/login"
             className="hidden items-center gap-2 rounded-[6px] border border-[rgba(255,255,255,0.15)] bg-transparent px-5 py-[10px] text-[13px] font-medium text-white transition-all duration-150 hover:border-[rgba(255,255,255,0.3)] hover:bg-[rgba(255,255,255,0.04)] lg:inline-flex"
           >
-            Login
+            Get Started
           </Link>
           <button
             type="button"
@@ -404,7 +404,7 @@ export default function Navbar() {
                   onClick={() => setMobileOpen(false)}
                   className="inline-flex items-center justify-center rounded-[6px] border border-[rgba(255,255,255,0.15)] bg-transparent px-4 py-3 text-sm font-medium text-white hover:bg-[rgba(255,255,255,0.04)]"
                 >
-                  Login
+                  Get Started
                 </Link>
                 <button
                   type="button"

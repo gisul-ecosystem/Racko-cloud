@@ -4,6 +4,7 @@ import { validateRequest } from '../../middleware/validate.middleware';
 import { requireAuth } from '../../middleware/requireAuth.middleware';
 import { requireInternalSecret } from '../../middleware/internalSecret.middleware';
 import {
+  checkEmailSchema,
   registerSchema,
   loginSchema,
   verifyEmailSchema,
@@ -18,6 +19,10 @@ const router = Router();
 // Core-api is not publicly exposed; all traffic goes through the gateway.
 
 // Public routes
+router.post('/check-email', validateRequest(checkEmailSchema), (req, res, next) => {
+  authController.checkEmail(req, res, next);
+});
+
 router.post('/register', validateRequest(registerSchema), (req, res, next) => {
   authController.register(req, res, next);
 });
