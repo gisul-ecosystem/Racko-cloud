@@ -69,6 +69,7 @@ import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboa
 import projectsRoutes from './modules/projects/projects.routes';
 import tenantProjectsRoutes from './modules/projects/tenantProjects.routes';
 import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes';
+import otpRoutes from './modules/otp/otp.routes';
 
 const app = express();
 
@@ -192,6 +193,7 @@ app.use('/api/v1/tenant-dedicated-servers', tenantDedicatedServerRoutes);
 app.use('/api/v1/tenant-projects', tenantProjectsRoutes);
 app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/otp', otpRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
 app.use('/api/v1/vms', vmRoutes);

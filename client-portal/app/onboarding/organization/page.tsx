@@ -37,6 +37,7 @@ import {
   type OrganizationOnboardingForm,
   type OrgRegisterDraft,
 } from '@/lib/organizationOnboardingSchema';
+import { sendPhoneOtp, verifyPhoneOtp } from '@/lib/otpApi';
 
 const TOTAL_PROGRESS_STEPS = 4;
 
@@ -49,7 +50,6 @@ const STEPPER = [
 const EMPTY_FORM: OrganizationOnboardingForm = {
   contactName: '',
   phone: '',
-  officeNumber: '',
   companyName: '',
   companyWebsite: '',
   designation: '',
@@ -65,6 +65,7 @@ const inputClass =
 const textareaClass =
   'w-full rounded-lg border border-gray-700 bg-[#0f172a] px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]';
 const labelClass = 'mb-1.5 block text-sm font-medium text-gray-200';
+const PHONE_OTP_PURPOSE = 'organization_onboarding_phone' as const;
 
 function FieldError({ message }: { message?: string }) {
   if (!message) return null;
@@ -110,6 +111,7 @@ function PhoneField({
   onDialChange,
   onNationalChange,
   error,
+  action,
   placeholder = '**********',
 }: {
   label: string;
@@ -118,6 +120,7 @@ function PhoneField({
   onDialChange: (code: string) => void;
   onNationalChange: (value: string) => void;
   error?: string;
+  action?: ReactNode;
   placeholder?: string;
 }) {
   return (
@@ -144,6 +147,7 @@ function PhoneField({
           placeholder={placeholder}
           className="w-full bg-transparent px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:outline-none"
         />
+        {action ? <div className="shrink-0 border-l border-gray-700">{action}</div> : null}
       </div>
       <FieldError message={error} />
     </div>
@@ -164,8 +168,13 @@ export default function OrganizationOnboardingPage() {
   const [form, setForm] = useState<OrganizationOnboardingForm>(EMPTY_FORM);
   const [phoneDial, setPhoneDial] = useState('+91');
   const [phoneNational, setPhoneNational] = useState('');
-  const [officeDial, setOfficeDial] = useState('+91');
-  const [officeNational, setOfficeNational] = useState('');
+  const [verifiedPhone, setVerifiedPhone] = useState<string | null>(null);
+  const [otpCode, setOtpCode] = useState('');
+  const [otpSentTo, setOtpSentTo] = useState<string | null>(null);
+  const [otpSending, setOtpSending] = useState(false);
+  const [otpVerifying, setOtpVerifying] = useState(false);
+  const [otpMessage, setOtpMessage] = useState<string | null>(null);
+  const [otpError, setOtpError] = useState<string | null>(null);
 
   useEffect(() => {
     if (isLoading) return;
@@ -188,7 +197,6 @@ export default function OrganizationOnboardingPage() {
           next = {
             contactName: existing.contactName ?? '',
             phone: existing.phone ?? '',
-            officeNumber: existing.officeNumber ?? '',
             companyName: existing.companyName ?? '',
             companyWebsite: existing.companyWebsite ?? '',
             designation: existing.designation ?? '',
@@ -219,6 +227,13 @@ export default function OrganizationOnboardingPage() {
                 };
                 localStorage.setItem(draftStorageKey(user.id), JSON.stringify(next));
                 localStorage.removeItem(registerDraftStorageKey(user.email));
+              } else {
+                // Fallback: prefill from sign-in credentials (name + phone from registration)
+                next = {
+                  ...EMPTY_FORM,
+                  contactName: user.name ?? '',
+                  phone: user.phone ?? '',
+                };
               }
             }
           } catch {
@@ -230,9 +245,6 @@ export default function OrganizationOnboardingPage() {
         const phoneParts = splitPhone(next.phone);
         setPhoneDial(phoneParts.dialCode);
         setPhoneNational(phoneParts.national);
-        const officeParts = splitPhone(next.officeNumber);
-        setOfficeDial(officeParts.dialCode);
-        setOfficeNational(officeParts.national);
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Failed to load organization onboarding.');
       } finally {
@@ -254,10 +266,87 @@ export default function OrganizationOnboardingPage() {
 
   function syncPhonesIntoForm(): OrganizationOnboardingForm {
     const phone = joinPhone(phoneDial, phoneNational);
-    const officeNumber = joinPhone(officeDial, officeNational);
-    const next = { ...form, phone, officeNumber };
+    const next = { ...form, phone };
     setForm(next);
     return next;
+  }
+
+  function currentPhone(): string {
+    return joinPhone(phoneDial, phoneNational);
+  }
+
+  function resetPhoneOtpState() {
+    setVerifiedPhone(null);
+    setOtpSentTo(null);
+    setOtpCode('');
+    setOtpMessage(null);
+    setOtpError(null);
+  }
+
+  function handleDialChange(code: string) {
+    setPhoneDial(code);
+    resetPhoneOtpState();
+  }
+
+  function handleNationalChange(value: string) {
+    setPhoneNational(value);
+    resetPhoneOtpState();
+  }
+
+  function validatePhoneForOtp(phone: string): boolean {
+    const result = contactStepSchema.pick({ phone: true }).safeParse({ phone });
+    if (!result.success) {
+      setFieldErrors((prev) => ({ ...prev, phone: result.error.issues[0]?.message ?? 'Enter a valid phone number' }));
+      return false;
+    }
+    setFieldErrors((prev) => {
+      if (!prev.phone) return prev;
+      const next = { ...prev };
+      delete next.phone;
+      return next;
+    });
+    return true;
+  }
+
+  async function handleSendOtp() {
+    const phone = currentPhone();
+    if (!validatePhoneForOtp(phone)) return;
+
+    setOtpSending(true);
+    setOtpError(null);
+    setOtpMessage(null);
+    try {
+      const result = await sendPhoneOtp({ phone, purpose: PHONE_OTP_PURPOSE });
+      setOtpSentTo(phone);
+      setOtpCode('');
+      setOtpMessage(`OTP sent. It expires in ${Math.ceil(result.expiresInSeconds / 60)} minute(s).`);
+    } catch (err) {
+      setOtpError(err instanceof ApiError ? err.message : 'Failed to send OTP.');
+    } finally {
+      setOtpSending(false);
+    }
+  }
+
+  async function handleVerifyOtp() {
+    const phone = currentPhone();
+    if (!validatePhoneForOtp(phone)) return;
+    if (!otpCode.trim()) {
+      setOtpError('Enter the OTP sent to your phone.');
+      return;
+    }
+
+    setOtpVerifying(true);
+    setOtpError(null);
+    setOtpMessage(null);
+    try {
+      await verifyPhoneOtp({ phone, purpose: PHONE_OTP_PURPOSE, code: otpCode.trim() });
+      setVerifiedPhone(phone);
+      setOtpMessage('Phone number verified.');
+    } catch (err) {
+      setOtpError(err instanceof ApiError ? err.message : 'Failed to verify OTP.');
+    } finally {
+      setOtpVerifying(false);
+    }
   }
 
   function validateCurrentStep(data: OrganizationOnboardingForm): boolean {
@@ -283,6 +372,10 @@ export default function OrganizationOnboardingPage() {
   function handleContinue() {
     const data = syncPhonesIntoForm();
     if (!validateCurrentStep(data)) return;
+    if (step === 1 && verifiedPhone !== data.phone) {
+      setOtpError('Verify your phone number before continuing.');
+      return;
+    }
     setStep((s) => Math.min(s + 1, 3));
   }
 
@@ -293,10 +386,15 @@ export default function OrganizationOnboardingPage() {
       setFieldErrors(zodIssuesToFieldErrors(result.error.issues));
       // Jump to first step that has errors
       const keys = result.error.issues.map((i) => String(i.path[0]));
-      if (keys.some((k) => ['contactName', 'phone', 'officeNumber'].includes(k))) setStep(1);
+        if (keys.some((k) => ['contactName', 'phone'].includes(k))) setStep(1);
       else if (keys.some((k) => ['companyName', 'companyWebsite', 'designation', 'companySize'].includes(k)))
         setStep(2);
       else setStep(3);
+      return;
+    }
+    if (verifiedPhone !== result.data.phone) {
+      setStep(1);
+      setOtpError('Verify your phone number before submitting organization details.');
       return;
     }
 
@@ -306,7 +404,6 @@ export default function OrganizationOnboardingPage() {
       const payload = {
         ...result.data,
         companyWebsite: result.data.companyWebsite || undefined,
-        officeNumber: result.data.officeNumber || undefined,
       };
       const next = await submitOrganizationRequest(payload);
       setRequest(next);
@@ -513,10 +610,6 @@ export default function OrganizationOnboardingPage() {
                 <p className="text-xs text-gray-400">{sectionMeta.subtitle}</p>
               </div>
             </div>
-            <span className="inline-flex items-center gap-1.5 rounded-full bg-slate-800/80 px-2.5 py-1 text-[11px] text-slate-300">
-              <Clock className="h-3 w-3" />
-              Takes ~ 1 min
-            </span>
           </div>
 
           {step === 1 ? (
@@ -541,18 +634,53 @@ export default function OrganizationOnboardingPage() {
                 label="Phone Number"
                 dialCode={phoneDial}
                 national={phoneNational}
-                onDialChange={setPhoneDial}
-                onNationalChange={setPhoneNational}
+                onDialChange={handleDialChange}
+                onNationalChange={handleNationalChange}
                 error={fieldErrors.phone}
+                action={
+                  <button
+                    type="button"
+                    onClick={() => void handleSendOtp()}
+                    disabled={otpSending || verifiedPhone === currentPhone()}
+                    className="h-full px-3 text-xs font-semibold text-[#FCA5A5] hover:bg-[#1a2332] disabled:cursor-not-allowed disabled:text-green-400"
+                  >
+                    {verifiedPhone === currentPhone() ? 'Verified' : otpSending ? 'Sending...' : otpSentTo === currentPhone() ? 'Resend' : 'Verify'}
+                  </button>
+                }
               />
-              <PhoneField
-                label="Office Number"
-                dialCode={officeDial}
-                national={officeNational}
-                onDialChange={setOfficeDial}
-                onNationalChange={setOfficeNational}
-                error={fieldErrors.officeNumber}
-              />
+              <div className="sm:col-span-2">
+                {otpSentTo === currentPhone() && verifiedPhone !== currentPhone() ? (
+                  <div className="grid gap-3 rounded-lg border border-gray-800 bg-[#0b1220] p-3 sm:grid-cols-[1fr_auto] sm:items-start">
+                    <div>
+                      <label className={labelClass}>Phone OTP</label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={otpCode}
+                        onChange={(e) => setOtpCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                        placeholder="Enter 6 digit OTP"
+                        className="w-full rounded-lg border border-gray-700 bg-[#0f172a] px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => void handleVerifyOtp()}
+                      disabled={otpVerifying || otpCode.length !== 6}
+                      className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#DC2626] disabled:cursor-not-allowed disabled:opacity-50 sm:mt-6"
+                    >
+                      {otpVerifying ? 'Verifying...' : 'Verify OTP'}
+                    </button>
+                  </div>
+                ) : null}
+                {verifiedPhone === currentPhone() ? (
+                  <p className="mt-2 inline-flex items-center gap-1.5 text-xs font-medium text-green-400">
+                    <Check className="h-3.5 w-3.5" /> Phone number verified
+                  </p>
+                ) : null}
+                {otpMessage ? <p className="mt-2 text-xs text-green-400">{otpMessage}</p> : null}
+                {otpError ? <p className="mt-2 text-xs text-red-400">{otpError}</p> : null}
+              </div>
             </div>
           ) : null}
 
@@ -652,7 +780,7 @@ export default function OrganizationOnboardingPage() {
             </div>
           ) : null}
 
-          <div className="mt-6 flex items-start gap-3 rounded-xl border border-gray-800 bg-[#0b1220] px-4 py-3">
+          {/* <div className="mt-6 flex items-start gap-3 rounded-xl border border-gray-800 bg-[#0b1220] px-4 py-3">
             <Shield className="mt-0.5 h-5 w-5 shrink-0 text-[#EF4444]" />
             <div>
               <p className="text-sm font-semibold text-white">Your data is safe with us</p>
@@ -660,11 +788,11 @@ export default function OrganizationOnboardingPage() {
                 We use industry-standard encryption to protect your information.
               </p>
             </div>
-          </div>
+          </div> */}
         </div>
 
         <div className="flex flex-col gap-4 border-t border-gray-800 bg-[#0d1424] px-6 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8">
-          <button
+          {/* <button
             type="button"
             onClick={handleSaveDraft}
             className="inline-flex items-center gap-2 rounded-lg border border-gray-700 bg-[#1a2332] px-4 py-2.5 text-sm font-medium text-gray-200 hover:bg-[#243044]"
@@ -674,7 +802,7 @@ export default function OrganizationOnboardingPage() {
               <span className="block leading-tight">Save Draft</span>
               <span className="block text-[10px] font-normal text-gray-500">You can continue later.</span>
             </span>
-          </button>
+          </button> */}
 
           <div className="flex flex-col items-center gap-1.5">
             <div className="flex w-full items-center justify-between gap-4 text-[11px] text-gray-400 sm:w-56">
@@ -694,6 +822,18 @@ export default function OrganizationOnboardingPage() {
               ))}
             </div>
           </div>
+
+          {step > 1 ? (
+            <button
+              type="button"
+              onClick={() => setStep((s) => s - 1)}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 bg-[#1a2332] px-5 py-2.5 text-sm font-medium text-gray-200 hover:bg-[#243044]"
+            >
+              ← Back
+            </button>
+          ) : (
+            <div />
+          )}
 
           {step < 3 ? (
             <button

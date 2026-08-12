@@ -11,6 +11,7 @@ import { ValidationError, NotFoundError } from '../../utils/errors';
 import { sendPlainEmail } from '../../utils/email/sender';
 import { generateFingerprint, getClientIp } from '../../utils/deviceFingerprint';
 import { adminOrgOnboardingService } from './adminOrgOnboarding.service';
+import { otpService } from '../otp/otp.service';
 
 const router = Router();
 
@@ -27,16 +28,6 @@ const phoneE164Schema = z
   .string()
   .trim()
   .regex(/^\+[1-9]\d{6,18}$/, 'Enter a valid phone number with country code');
-
-const optionalPhoneSchema = z
-  .string()
-  .trim()
-  .max(40)
-  .refine((v) => v === '' || /^\+[1-9]\d{6,18}$/.test(v), {
-    message: 'Enter a valid phone number with country code',
-  })
-  .optional()
-  .or(z.literal(''));
 
 const optionalWebsiteSchema = z
   .string()
@@ -57,7 +48,6 @@ const organizationDetailsFields = z.object({
     .max(160, 'Company name must be at most 160 characters'),
   companyWebsite: optionalWebsiteSchema,
   phone: phoneE164Schema,
-  officeNumber: optionalPhoneSchema,
   designation: z
     .string()
     .trim()
@@ -193,7 +183,6 @@ router.put(
           $set: {
             ...body,
             companyWebsite: body.companyWebsite || undefined,
-            officeNumber: body.officeNumber || undefined,
             status: 'approved',
             ndaStatus: keepNda,
             reviewerNotes: existing?.reviewerNotes ?? 'Updated by organization admin from profile.',
@@ -230,13 +219,17 @@ router.post(
       }
 
       const body = req.body as z.infer<typeof submitOrganizationDetailsSchema>['body'];
+      await otpService.assertPhoneVerified(
+        authReq.user.userId,
+        body.phone,
+        'organization_onboarding_phone'
+      );
       const requestDoc = await OrganizationAccessRequestModel.findOneAndUpdate(
         { userId: user._id },
         {
           $set: {
             ...body,
             companyWebsite: body.companyWebsite || undefined,
-            officeNumber: body.officeNumber || undefined,
             status: 'pending',
           },
           $setOnInsert: {

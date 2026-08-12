@@ -28,12 +28,6 @@ export const contactStepSchema = z.object({
     .string()
     .trim()
     .regex(phoneE164Regex, 'Enter a valid phone number with country code'),
-  officeNumber: z
-    .string()
-    .trim()
-    .refine((v) => !v || phoneE164Regex.test(v), {
-      message: 'Enter a valid office number with country code',
-    }),
 });
 
 export const companyStepSchema = z.object({

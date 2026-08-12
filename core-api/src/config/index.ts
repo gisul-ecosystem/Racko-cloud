@@ -65,6 +65,13 @@ const envSchema = z.object({
   // Email verification
   EMAIL_VERIFICATION_EXPIRES_HOURS: z.string().regex(/^\d+$/).transform(Number).default('24'),
 
+  // MSG91 phone OTP
+  MSG91_AUTH_KEY: z.string().optional().default(''),
+  MSG91_OTP_TEMPLATE_ID: z.string().optional().default(''),
+  MSG91_SENDER_ID: z.string().optional().default(''),
+  MSG91_OTP_EXPIRY_MINUTES: z.string().regex(/^\d+$/).transform(Number).default('5'),
+  MSG91_OTP_DEV_BYPASS_CODE: z.string().optional().default(''),
+
   // Super admin seed
   SUPER_ADMIN_EMAIL: z.string().email('SUPER_ADMIN_EMAIL must be a valid email'),
   SUPER_ADMIN_PASSWORD: z.string().min(12, 'SUPER_ADMIN_PASSWORD must be at least 12 characters'),

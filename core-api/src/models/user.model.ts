@@ -72,7 +72,6 @@ const userSchema = new Schema<IUser, IUserModel>(
       trim: true,
       sparse: true,
       unique: true,
-      default: null,
     },
     password: {
       type: String,

@@ -26,7 +26,6 @@ export type OrgDetailsInput = {
   companyName: string;
   companyWebsite?: string;
   phone: string;
-  officeNumber?: string;
   designation: string;
   companySize: string;
   registeredAddress: string;
@@ -109,7 +108,6 @@ export class AdminOrgOnboardingService {
         companyName: org.companyName,
         companyWebsite: org.companyWebsite || undefined,
         phone: org.phone,
-        officeNumber: org.officeNumber || undefined,
         designation: org.designation,
         companySize: org.companySize,
         registeredAddress: org.registeredAddress,
