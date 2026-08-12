@@ -33,6 +33,56 @@ import {
 } from '../utils/provisionSnapshot';
 
 const POLL_INTERVAL_MS = 2000;
+const AUTO_RETRY_STEPS = new Set<ProvisionStepKey>([
+  'resourceGroup',
+  'services',
+  'users',
+  'roles',
+  'fabric',
+]);
+const RETRIABLE_HTTP_STATUSES = new Set([0, 408, 429, 500, 502, 503, 504]);
+const AUTO_RETRY_BASE_MS = 2000;
+const AUTO_RETRY_MAX_MS = 15000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isAutoRetryStep(step: ProvisionStepKey | string): boolean {
+  return AUTO_RETRY_STEPS.has(step as ProvisionStepKey);
+}
+
+function isRetriableHttpError(err: unknown): boolean {
+  if (!(err instanceof ApiError)) {
+    return false;
+  }
+  if (err.code === 'NETWORK_ERROR') {
+    return true;
+  }
+  const message = err.message.toLowerCase();
+  if (
+    message.includes('subscription role assignment quota exhausted') ||
+    message.includes('roleassignmentlimitexceeded')
+  ) {
+    return false;
+  }
+  return RETRIABLE_HTTP_STATUSES.has(err.status);
+}
+
+function stepProgressCount(stepResult: ProvisionStepStatus): number {
+  return Math.max(
+    Number(stepResult.batchCreated ?? 0),
+    Number(stepResult.rolesAssigned ?? 0)
+  );
+}
+
+function shouldAutoReviveFailedCohort(snapshot: ProvisionSnapshot): boolean {
+  const active = snapshot.activeCohort;
+  if (!active || String(active.status).toLowerCase() !== 'failed') {
+    return false;
+  }
+  return isAutoRetryStep(String(active.currentStep || ''));
+}
 
 function isAccessLinkDeliveryPending(snapshot: ProvisionSnapshot | null): boolean {
   const status = String(snapshot?.credentials?.deliveryStatus ?? '').toLowerCase();
@@ -42,7 +92,9 @@ function isAccessLinkDeliveryPending(snapshot: ProvisionSnapshot | null): boolea
 function formatStepFailures(stepResult: ProvisionStepStatus): string {
   const failures = Array.isArray(stepResult.failures) ? stepResult.failures : [];
   const messages = failures
-    .map((failure) => String(failure?.message || '').trim())
+    .map((failure) =>
+      String(failure?.message || (failure as { error?: string }).error || '').trim()
+    )
     .filter(Boolean);
   if (messages.length === 0) {
     return (
@@ -59,20 +111,58 @@ function formatStepFailures(stepResult: ProvisionStepStatus): string {
   return `${unique[0]} (+${unique.length - 1} more)`;
 }
 
-function isTerminalStepFailure(stepResult: ProvisionStepStatus): boolean {
-  if (stepResult.failed === true) return true;
-  if (String(stepResult.cohortStatus || '').toLowerCase() === 'failed') return true;
-
+function isTerminalStepFailure(
+  stepResult: ProvisionStepStatus,
+  costingMode?: string | null
+): boolean {
   const failures = Array.isArray(stepResult.failures) ? stepResult.failures : [];
+  const hasSubscriptionLimit = failures.some((failure) => {
+    const limitKind = String((failure as { limitKind?: string }).limitKind || '').toLowerCase();
+    const text = String(
+      failure?.message || (failure as { error?: string }).error || ''
+    ).toLowerCase();
+    return (
+      limitKind === 'subscription' ||
+      text.includes('subscription role assignment quota exhausted')
+    );
+  });
+  if (hasSubscriptionLimit) {
+    return true;
+  }
+
+  const hasRgLimitFailure = failures.some((failure) => {
+    const code = String((failure as { code?: string }).code || '').toLowerCase();
+    const limitKind = String((failure as { limitKind?: string }).limitKind || '').toLowerCase();
+    const text = String(
+      failure?.message || (failure as { error?: string }).error || ''
+    ).toLowerCase();
+    return (
+      limitKind === 'resource_group' ||
+      (code === 'roleassignmentlimitexceeded' && text.includes('resource group')) ||
+      (text.includes('role assignment limit') && text.includes('resource group'))
+    );
+  });
+  if (hasRgLimitFailure && String(costingMode || '').toLowerCase() !== 'per_user') {
+    return true;
+  }
+
+  if (stepResult.failed === true) return true;
+
+  const progress = stepProgressCount(stepResult);
+  const cohortFailed = String(stepResult.cohortStatus || '').toLowerCase() === 'failed';
+  if (cohortFailed) {
+    // Partial role/service progress should keep auto-chaining after a transient stop.
+    return progress === 0;
+  }
+
   if (failures.length === 0) return false;
 
   const complete = stepResult.complete === true;
   if (complete) return false;
 
-  const batchCreated = Number(stepResult.batchCreated ?? 0);
   const remaining = Number(stepResult.remaining ?? NaN);
-  // Soft-fail with zero progress must stop the auto-chain.
-  if (batchCreated === 0 && (!Number.isFinite(remaining) || remaining > 0)) {
+  if (progress > 0) return false;
+  if (!Number.isFinite(remaining) || remaining > 0) {
     return true;
   }
 
@@ -134,6 +224,8 @@ export function useProvisionStatus({
   const snapshotRef = useRef<ProvisionSnapshot | null>(initialSnapshot);
   const lastProgressKeyRef = useRef<string | null>(null);
   const retryNextStepRef = useRef(false);
+  const autoRetryAttemptRef = useRef(0);
+  const startOrchestrationRef = useRef<(() => Promise<void>) | null>(null);
 
   const [snapshot, setSnapshot] = useState<ProvisionSnapshot | null>(initialSnapshot);
   const [overrides, setOverrides] = useState<StepCompletionOverrides>({});
@@ -178,6 +270,16 @@ export function useProvisionStatus({
     }
 
     const step = String(active.currentStep || '') as ProvisionStepKey;
+
+    // Long-running steps auto-retry transient failures — do not flash "failed" in UI.
+    if (isAutoRetryStep(step)) {
+      if (!orchestratingRef.current && !isCompleteRef.current && startOrchestrationRef.current) {
+        retryNextStepRef.current = true;
+        void startOrchestrationRef.current();
+      }
+      return;
+    }
+
     const message = String(active.lastError || '').trim();
     if (
       !message ||
@@ -324,7 +426,8 @@ export function useProvisionStatus({
           ?.label ?? nextStep;
       const waveLabel = getCohortWaveLabel(currentSnapshot);
       const labeledStep = waveLabel ? `${waveLabel}: ${stepLabel}` : stepLabel;
-      const useRetry = retryNextStepRef.current;
+      const useRetry =
+        retryNextStepRef.current || shouldAutoReviveFailedCohort(currentSnapshot);
       retryNextStepRef.current = false;
 
       orchestratingRef.current = true;
@@ -343,7 +446,12 @@ export function useProvisionStatus({
           'complete' in stepResult &&
           stepResult.complete === false;
 
-        if (isTerminalStepFailure(stepResult)) {
+        if (
+          isTerminalStepFailure(
+            stepResult,
+            currentSnapshot.request?.costing_mode ?? currentSnapshot.request?.costingMode
+          )
+        ) {
           const message = formatStepFailures(stepResult);
           setStepErrors((current) => ({ ...current, [nextStep]: message }));
           stepErrorsRef.current = { ...stepErrorsRef.current, [nextStep]: message };
@@ -377,6 +485,7 @@ export function useProvisionStatus({
         stepErrorsRef.current = cleared;
 
         if (partialProgress) {
+          autoRetryAttemptRef.current = 0;
           const remaining =
             'remaining' in stepResult && typeof stepResult.remaining === 'number'
               ? stepResult.remaining
@@ -408,6 +517,7 @@ export function useProvisionStatus({
             );
           }
         } else {
+          autoRetryAttemptRef.current = 0;
           lastProgressKeyRef.current = null;
           appendEvent(
             createOrchestrationEvent(`${labeledStep} — completed successfully.`, 'success', nextStep)
@@ -426,18 +536,51 @@ export function useProvisionStatus({
           shouldChainNextStep = true;
         }
       } catch (err) {
-        const message =
-          err instanceof ApiError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : 'Provisioning step failed.';
+        if (isRetriableHttpError(err) && isAutoRetryStep(nextStep)) {
+          const delay = Math.min(
+            AUTO_RETRY_MAX_MS,
+            AUTO_RETRY_BASE_MS * 1.5 ** autoRetryAttemptRef.current
+          );
+          autoRetryAttemptRef.current += 1;
 
-        setStepErrors((current) => ({ ...current, [nextStep]: message }));
-        stepErrorsRef.current = { ...stepErrorsRef.current, [nextStep]: message };
-        appendEvent(
-          createOrchestrationEvent(`${labeledStep} — ${message}`, 'error', nextStep)
-        );
+          appendEvent(
+            createOrchestrationEvent(
+              `${labeledStep} — interrupted (${err instanceof ApiError ? err.message : 'network error'}), retrying in ${Math.ceil(delay / 1000)}s…`,
+              'info',
+              nextStep
+            )
+          );
+
+          await sleep(delay);
+          retryNextStepRef.current = true;
+
+          setStepErrors((current) => {
+            if (!current[nextStep]) return current;
+            const next = { ...current };
+            delete next[nextStep];
+            return next;
+          });
+          const cleared = { ...stepErrorsRef.current };
+          delete cleared[nextStep];
+          stepErrorsRef.current = cleared;
+
+          shouldChainNextStep = true;
+          refreshedSnapshot = snapshotRef.current ?? currentSnapshot;
+        } else {
+          autoRetryAttemptRef.current = 0;
+          const message =
+            err instanceof ApiError
+              ? err.message
+              : err instanceof Error
+                ? err.message
+                : 'Provisioning step failed.';
+
+          setStepErrors((current) => ({ ...current, [nextStep]: message }));
+          stepErrorsRef.current = { ...stepErrorsRef.current, [nextStep]: message };
+          appendEvent(
+            createOrchestrationEvent(`${labeledStep} — ${message}`, 'error', nextStep)
+          );
+        }
       } finally {
         orchestratingRef.current = false;
       }
@@ -459,6 +602,8 @@ export function useProvisionStatus({
       isCompleteRef.current = true;
     }
   }, [loadSnapshot, runNextStep]);
+
+  startOrchestrationRef.current = startOrchestration;
 
   const refresh = useCallback(
     async (isManual = false) => {
@@ -533,6 +678,7 @@ export function useProvisionStatus({
     snapshotRef.current = initialSnapshot;
     lastProgressKeyRef.current = null;
     retryNextStepRef.current = false;
+    autoRetryAttemptRef.current = 0;
     setOverrides({});
     setStepErrors({});
     setEvents(
@@ -569,9 +715,22 @@ export function useProvisionStatus({
         return;
       }
 
-      void loadSnapshot().catch(() => {
-        // Keep the last known snapshot visible while polling.
-      });
+      void loadSnapshot()
+        .then((snap) => {
+          if (
+            !isCompleteRef.current &&
+            !orchestratingRef.current &&
+            snap &&
+            shouldAutoReviveFailedCohort(snap) &&
+            startOrchestrationRef.current
+          ) {
+            retryNextStepRef.current = true;
+            void startOrchestrationRef.current();
+          }
+        })
+        .catch(() => {
+          // Keep the last known snapshot visible while polling.
+        });
     }, POLL_INTERVAL_MS);
 
     return () => {

@@ -468,7 +468,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
           _id: m.machineId, name: m.machineName, ipAddress: m.ipAddress,
           os: 'windows' as MachineOS, agentId: '', accountToken: '',
           status: m.agentConnected ? 'online' as const : 'offline' as const,
-          adminId: session.adminId, trackingEnabled: false,
+          adminId: session.adminId,
           createdAt: session.createdAt, updatedAt: session.updatedAt,
         }));
         setMachines(restoredMachines);

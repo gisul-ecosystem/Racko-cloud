@@ -1,6 +1,7 @@
 const AppError = require('../utils/AppError');
 const roleProvisionService = require('../services/roleProvisionService');
 const { runWithActiveCohort } = require('../services/cohortStepRunner');
+const { resolveActiveCohort } = require('../services/provisionCohortService');
 
 const validateRequestId = (requestId) => {
   if (!/^\d+$/.test(requestId)) {
@@ -112,9 +113,32 @@ const getRoleAssignmentsForRequest = async (req, res, next) => {
     validateRequestId(req.params.id);
 
     const requestId = Number(req.params.id);
+    let statusOptions = {};
+
+    try {
+      const cohort = await resolveActiveCohort(requestId, { claimPending: false });
+      if (
+        cohort &&
+        !cohort.allComplete &&
+        String(cohort.currentStep || '') === 'roles' &&
+        Number.isInteger(cohort.userNumberFrom) &&
+        Number.isInteger(cohort.userNumberTo)
+      ) {
+        statusOptions = {
+          userNumberFrom: cohort.userNumberFrom,
+          userNumberTo: cohort.userNumberTo
+        };
+      }
+    } catch (cohortError) {
+      const message = String(cohortError?.message || '');
+      if (!message.includes('provision_cohorts')) {
+        throw cohortError;
+      }
+    }
+
     const [roles, status] = await Promise.all([
       roleProvisionService.getUserRoleAssignmentsForRequest(requestId),
-      roleProvisionService.getRoleProvisionStatus(requestId)
+      roleProvisionService.getRoleProvisionStatus(requestId, statusOptions)
     ]);
 
     res.status(200).json({
@@ -122,7 +146,9 @@ const getRoleAssignmentsForRequest = async (req, res, next) => {
       roles,
       count: roles.length,
       complete: status.complete,
-      remaining: status.remaining
+      remaining: status.remaining,
+      rbacRemaining: status.rbacRemaining,
+      resourceScopedRemaining: status.resourceScopedRemaining
     });
   } catch (error) {
     next(error);

@@ -53,6 +53,15 @@ export const SERVICE_CATALOG_SEED: readonly ServiceCatalogSeedRow[] = [
     sortOrder: 40,
   },
   {
+    key: 'my-vms',
+    label: 'My VM Dashboard',
+    description: 'Read-only dashboard of all assigned external servers',
+    kind: 'product',
+    scopes: ['admin', 'tenant'],
+    status: 'active',
+    sortOrder: 45,
+  },
+  {
     key: 'azure',
     label: 'Azure Lab',
     description: 'Azure access management, provisioning, and lab environments',
