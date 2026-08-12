@@ -15,6 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/rackoapp"
 )
 
 // Job represents a pending install job received from the platform.
@@ -191,6 +192,16 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 			} else if msg.Type == "shared_file_added" || msg.Type == "shared_file_updated" || msg.Type == "shared_file_deleted" {
 				log.Printf("[ws-poller] Received %s — notifying racko-app", msg.Type)
 				go writeSharedFileNotify(msg.Type)
+			} else if msg.Type == "install_racko_app" {
+				var installMsg struct {
+					AppVersion string `json:"appVersion"`
+				}
+				if err := json.Unmarshal(msg.Payload, &installMsg); err != nil {
+					log.Printf("[ws-poller] Malformed install_racko_app payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received install_racko_app — version=%s", installMsg.AppVersion)
+				go p.runInstallRackoApp(installMsg.AppVersion, safeWrite)
 			}
 		}
 	}()
@@ -479,4 +490,37 @@ func writeSharedFileNotify(eventType string) {
 		return
 	}
 	log.Printf("[ws-poller] writeSharedFileNotify: notified racko-app of %s", eventType)
+}
+
+// ─── Install Racko App ────────────────────────────────────────────────────────
+
+// runInstallRackoApp runs the Go-native racko-app installer and reports the result
+// back to the server via WebSocket as an install_racko_app_result message.
+// The Go installer uses net/http with a 10-minute timeout — no PowerShell, no hang risk.
+func (p *WSPoller) runInstallRackoApp(appVersion string, safeWrite func(int, []byte) error) {
+	log.Printf("[ws-poller] runInstallRackoApp: starting install, version=%s", appVersion)
+
+	err := rackoapp.Install(p.cfg, appVersion)
+
+	success := err == nil
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+		log.Printf("[ws-poller] runInstallRackoApp: failed: %v", err)
+	} else {
+		log.Printf("[ws-poller] runInstallRackoApp: completed successfully")
+	}
+
+	result := map[string]interface{}{
+		"success": success,
+		"error":   errMsg,
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":    "install_racko_app_result",
+		"payload": result,
+	})
+
+	if err := safeWrite(websocket.TextMessage, payload); err != nil {
+		log.Printf("[ws-poller] runInstallRackoApp: failed to send result: %v", err)
+	}
 }

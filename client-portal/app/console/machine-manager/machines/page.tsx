@@ -8,7 +8,7 @@ import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
-  deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStream,
+  deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStreamWithReconnect,
   bulkDeleteMachines,
   type IMachine, type MachineStatus, type IJob, type JobStatus,
 } from '../../../../lib/machineManagerApi';
@@ -249,7 +249,7 @@ export default function MyMachinesPage() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetStates, setResetStates] = useState<ResetMachineState[] | null>(null);
-  const sseRef = useRef<EventSource | null>(null);
+  const sseRef = useRef<(() => void) | null>(null);
 
   // Jobs keyed by machineId
   const [jobsByMachine, setJobsByMachine] = useState<Record<string, IJob[]>>({});
@@ -270,7 +270,7 @@ export default function MyMachinesPage() {
   useEffect(() => { void loadJobs(); }, [loadJobs, machines]);
 
   // Cleanup SSE on unmount
-  useEffect(() => () => { sseRef.current?.close(); }, []);
+  useEffect(() => () => { sseRef.current?.(); }, []);
 
   const handleRefresh = () => { refetch(); void loadJobs(); };
 
@@ -358,35 +358,40 @@ export default function MyMachinesPage() {
         )
       );
 
-      // Open SSE stream for accepted machines
+      // Open SSE stream with automatic reconnect + exponential backoff.
+      // On reconnect, server delivers persisted result from MongoDB instantly.
       if (result.accepted.length > 0) {
         const ticket = await issueResetStreamTicket(sessionId);
-        const sse = openResetStatusStream(sessionId, ticket.streamToken);
-        sseRef.current = sse;
 
-        sse.onmessage = (e: MessageEvent) => {
-          const event = JSON.parse(e.data as string) as {
-            type: string;
-            machineId?: string;
-            success?: boolean;
-            error?: string;
-          };
-
-          if (event.type === 'reset_complete' && event.machineId) {
+        const stop = openResetStatusStreamWithReconnect(
+          sessionId,
+          ticket.streamToken,
+          // onEvent — called for every SSE event including reset_complete
+          (event) => {
+            if (event.type === 'reset_complete' && event.machineId) {
+              setResetStates((prev) =>
+                prev!.map((s) =>
+                  s.machineId === event.machineId
+                    ? { ...s, status: event.success ? 'success' : 'failed', error: event.error }
+                    : s
+                )
+              );
+            }
+          },
+          // onTerminal — reset_complete received, stop cleanly
+          () => { sseRef.current = null; },
+          // onGiveUp — all retries exhausted (>5 min), mark in-progress as failed
+          () => {
+            sseRef.current = null;
             setResetStates((prev) =>
-              prev!.map((s) =>
-                s.machineId === event.machineId
-                  ? { ...s, status: event.success ? 'success' : 'failed', error: event.error }
-                  : s
-              )
+              prev ? prev.map((s) =>
+                s.status === 'resetting' ? { ...s, status: 'failed', error: 'Connection lost — reset may have completed. Check the machine status.' } : s
+              ) : prev
             );
-          }
-        };
+          },
+        );
 
-        sse.onerror = () => {
-          sse.close();
-          sseRef.current = null;
-        };
+        sseRef.current = stop;
       }
 
       setSelectedIds(new Set());
@@ -450,7 +455,7 @@ export default function MyMachinesPage() {
         <ResetStatusModal
           states={resetStates}
           onClose={() => {
-            sseRef.current?.close();
+            sseRef.current?.();
             sseRef.current = null;
             setResetStates(null);
           }}
