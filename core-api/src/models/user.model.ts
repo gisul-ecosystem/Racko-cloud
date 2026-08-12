@@ -9,6 +9,8 @@ export interface IUser extends Document {
   /** Optional login alias — globally unique when set. */
   username?: string | null;
   password: string;
+  name?: string;
+  phone?: string;
   role: UserRole;
   accountType: AccountType;
   onboardingStatus: OnboardingStatus;
@@ -54,13 +56,22 @@ const userSchema = new Schema<IUser, IUserModel>(
       trim: true,
       index: true,
     },
+    name: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: 15,
+    },
     username: {
       type: String,
       lowercase: true,
       trim: true,
       sparse: true,
       unique: true,
-      default: null,
     },
     password: {
       type: String,
