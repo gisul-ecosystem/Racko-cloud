@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Database, Pencil, Search, Upload } from 'lucide-react';
+import { ChevronLeft, Database, Pencil, Search, Trash2, Upload } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchSuperAdminVmInventory,
@@ -16,6 +16,7 @@ import {
   type VmProviderMetadataImportRow,
 } from '@/lib/superAdminVmInventoryApi';
 import {
+  deleteSuperAdminExternalVm,
   fetchSuperAdminExternalVmOverview,
   type SuperAdminExternalVmOverviewRow,
 } from '@/lib/superAdminExternalVmApi';
@@ -490,9 +491,12 @@ function AssignmentTable(props: {
   onHideUsers: () => void;
   onToggleSort: (value: AssignmentSortBy) => void;
   onEditRow: (row: AssignmentRow) => void;
+  onDeleteRow: (row: AssignmentRow) => void;
+  deletingVmId: string | null;
 }) {
   const entryList = (row: AssignmentRow): AssignmentEntry[] =>
     row.assignments.length > 0 ? row.assignments : row.providerDetails ? [row.providerDetails] : [];
+  const assignedUserList = (row: AssignmentRow): AssignmentEntry[] => row.assignments;
   const sortIndicator = (column: AssignmentSortBy) => {
     if (props.sortBy !== column) return '↕';
     return props.sortDirection === 'asc' ? '↑' : '↓';
@@ -625,14 +629,18 @@ function AssignmentTable(props: {
                 ) : null}
                 {props.showUsers ? (
                   <td className="px-4 py-3.5 text-xs">
-                    {entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => (
+                    {assignedUserList(row).length > 0 ? assignedUserList(row).map((assignment, assignmentIndex) => (
                       <div key={`${row.rowKey}:assignment:${assignmentIndex}`} className="flex items-center gap-2">
                         <span className="text-gray-700">{assignment.username}</span>
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${assignment.isTenantUser ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
                           {assignment.isTenantUser ? assignment.tenantName || 'Tenant' : 'Platform'}
                         </span>
                       </div>
-                    )) : <p className="text-[11px] text-gray-400">—</p>}
+                    )) : (
+                      <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                        Free VM
+                      </span>
+                    )}
                   </td>
                 ) : null}
                 {props.showPlanDuration ? (
@@ -646,14 +654,25 @@ function AssignmentTable(props: {
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <DueDateCell key={`${row.rowKey}:client-end:${assignmentIndex}`} value={assignment.endDate} />) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">
                   {row.editableExternalVmId ? (
-                    <button
-                      type="button"
-                      onClick={() => props.onEditRow(row)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      Edit
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => props.onEditRow(row)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => props.onDeleteRow(row)}
+                        disabled={props.deletingVmId === row.editableExternalVmId}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        {props.deletingVmId === row.editableExternalVmId ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
                   ) : (
                     <span className="text-[11px] text-gray-400">—</span>
                   )}
@@ -693,6 +712,7 @@ export default function SuperAdminVmInventoryPage() {
   const [showAssignmentUsers, setShowAssignmentUsers] = useState(true);
   const [externalVmRows, setExternalVmRows] = useState<SuperAdminExternalVmOverviewRow[]>([]);
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
+  const [deletingAssignmentVmId, setDeletingAssignmentVmId] = useState<string | null>(null);
   const [importingProviderMeta, setImportingProviderMeta] = useState(false);
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null);
   const [loading, setLoading] = useState(true);
@@ -794,6 +814,33 @@ export default function SuperAdminVmInventoryPage() {
       }
     },
     [externalVmById]
+  );
+
+  const handleDeleteAssignmentRow = useCallback(
+    async (row: AssignmentRow) => {
+      const externalVmId = row.editableExternalVmId;
+      if (!externalVmId) return;
+
+      const vmLabel = row.vmNames[0] || row.ipAddress || 'this VM';
+      const confirmed = window.confirm(`Delete ${vmLabel}? This removes the VM record and assignments.`);
+      if (!confirmed) return;
+
+      setDeletingAssignmentVmId(externalVmId);
+      setFlashMessage(null);
+      try {
+        await deleteSuperAdminExternalVm(externalVmId);
+        setFlashMessage({ type: 'success', text: `Deleted ${vmLabel}.` });
+        await load({ page: 1 });
+      } catch (deleteError) {
+        setFlashMessage({
+          type: 'error',
+          text: deleteError instanceof ApiError ? deleteError.message : 'Failed to delete VM.',
+        });
+      } finally {
+        setDeletingAssignmentVmId(null);
+      }
+    },
+    [load]
   );
 
   const toggleSort = (nextSortBy: SortBy) => {
@@ -994,6 +1041,8 @@ export default function SuperAdminVmInventoryPage() {
           onHideUsers={() => setShowAssignmentUsers(false)}
           onToggleSort={toggleAssignmentSort}
           onEditRow={handleEditAssignmentRow}
+          onDeleteRow={handleDeleteAssignmentRow}
+          deletingVmId={deletingAssignmentVmId}
         />
       ) : null}
     </div>
