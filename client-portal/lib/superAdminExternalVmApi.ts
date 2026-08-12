@@ -39,6 +39,7 @@ export interface SuperAdminBulkImportLegacyRowDto {
   protocol?: 'rdp' | 'ssh';
   username?: string;
   password: string;
+  projectId?: string;
   target:
     | { tenantId: string }
     | { adminId: string }
@@ -55,6 +56,7 @@ export interface SuperAdminBulkImportExtendedRowDto {
   protocol?: 'rdp' | 'ssh';
   username?: string;
   password: string;
+  projectId?: string;
   tenantName: string;
   user?: SuperAdminBulkImportInlineUserDto;
   schedule?: AssignmentScheduleDto;

@@ -67,6 +67,7 @@ import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboa
 import projectsRoutes from './modules/projects/projects.routes';
 import tenantProjectsRoutes from './modules/projects/tenantProjects.routes';
 import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes';
+import otpRoutes from './modules/otp/otp.routes';
 import myVmDashboardRoutes from './modules/myVmDashboard/myVmDashboard.routes';
 import tenantMyVmDashboardRoutes from './modules/myVmDashboard/tenantMyVmDashboard.routes';
 import superAdminVmInventoryRoutes from './modules/superAdmin/superAdminVmInventory.routes';
@@ -196,6 +197,7 @@ app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
 app.use('/api/v1/my-vms', myVmDashboardRoutes);
 app.use('/api/v1/tenant-my-vms', tenantMyVmDashboardRoutes);
 app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/otp', otpRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
 app.use('/api/v1/vms', vmRoutes);

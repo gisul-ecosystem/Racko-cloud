@@ -804,10 +804,10 @@ class MachineManagerService {
   }
 
   /**
-   * Sends a PowerShell exec command to the agent to install racko-app + WebView2.
-   * Called after agent connects on WS following a push. Runs as SYSTEM on the VM.
-   * Uses a 10-minute timeout — enough for the 72MB zip download + extract + WebView2.
-   * Emits racko_app_installed SSE event on the push session when done.
+   * Sends an install_racko_app command to the agent over WebSocket.
+   * The agent's Go-native installer handles the full flow:
+   * download (net/http, 10-min timeout) → extract → WebView2 → shortcut → launch → version file.
+   * No PowerShell download — works on every Windows version as SYSTEM service.
    */
   private async installRackoAppViaExec(machineId: string, sessionId: string): Promise<void> {
     const { wsManager } = await import('./websocket/wsManager');
@@ -826,91 +826,42 @@ class MachineManagerService {
       return;
     }
 
-    const platformUrl = config.GATEWAY_URL ?? config.FRONTEND_URL ?? 'http://localhost:8000';
-    const installDir = 'C:\\ProgramData\\racko-agent';
     const appVersion = (config.RACKO_APP_VERSION ?? '').trim();
 
-    // PowerShell script runs on the VM as SYSTEM:
-    // 1. Download racko-app.zip via BITS (resumable, no-hang, retry-on-drop)
-    // 2. Extract to C:\ProgramData\racko-agent\racko-app\
-    // 3. Install WebView2 (skips if already present)
-    // 4. Create desktop shortcut
-    // 5. Launch app for the logged-in user
-    const script = [
-      '$ErrorActionPreference = "Stop"',
-      `$installDir = '${installDir}'`,
-      `$platformUrl = '${platformUrl}'`,
-      '$appZipUrl = "$platformUrl/api/v1/agent/binary/racko-app"',
-      '$appDir = "$installDir\\racko-app"',
-      '$appZip = "$installDir\\racko-app.zip"',
-      // Clean up any partial download from a previous failed attempt
-      'Remove-Item $appZip -Force -ErrorAction SilentlyContinue',
-      'Write-Host "[racko] Downloading Racko App via BITS..."',
-      // BITS: Windows Background Intelligent Transfer Service
-      // - Handles network drops and retries automatically
-      // - Never hangs — fails with a clear error if transfer cannot complete
-      // - Same mechanism Windows Update uses for large downloads
-      // -TransferType Foreground ensures it completes before the script continues
-      // -RetryInterval 30 (seconds) and -RetryTimeout 600 (seconds / 10 min total retry budget)
-      'Start-BitsTransfer -Source $appZipUrl -Destination $appZip -TransferType Foreground -RetryInterval 30 -RetryTimeout 600',
-      'Write-Host "[racko] Extracting Racko App..."',
-      'Expand-Archive -Path $appZip -DestinationPath $appDir -Force',
-      'Remove-Item $appZip -Force -ErrorAction SilentlyContinue',
-      'Write-Host "[racko] Creating desktop shortcut..."',
-      '$wsh = New-Object -ComObject WScript.Shell',
-      '$shortcut = $wsh.CreateShortcut("$env:PUBLIC\\Desktop\\Racko Shared Files.lnk")',
-      '$shortcut.TargetPath = "$appDir\\racko-app.exe"',
-      '$shortcut.WorkingDirectory = $appDir',
-      '$shortcut.Description = "Racko Shared Files"',
-      '$shortcut.Save()',
-      // Install WebView2 if not already present — checks registry first, skips if installed
-      '$wv2Key = "SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"',
-      '$wv2Ver = (Get-ItemProperty -Path "HKLM:\\$wv2Key" -Name pv -ErrorAction SilentlyContinue).pv',
-      'if (-not $wv2Ver -or $wv2Ver -eq "0.0.0.0") {',
-      '  Write-Host "[racko] Installing WebView2 Runtime..."',
-      '  $wv2Path = "$installDir\\WebView2Setup.exe"',
-      '  Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
-      '  Start-BitsTransfer -Source "https://go.microsoft.com/fwlink/p/?LinkId=2124703" -Destination $wv2Path -TransferType Foreground -RetryInterval 30 -RetryTimeout 300',
-      '  Start-Process $wv2Path -ArgumentList "/silent /install" -Wait',
-      '  Remove-Item $wv2Path -Force -ErrorAction SilentlyContinue',
-      '  Write-Host "[racko] WebView2 installed."',
-      '} else { Write-Host "[racko] WebView2 already installed, skipping." }',
-      'Write-Host "[racko] Launching Racko App..."',
-      'Start-Process "$appDir\\racko-app.exe"',
-      `[System.IO.File]::WriteAllText("$installDir\\racko-app-version.txt", '${appVersion}', [System.Text.UTF8Encoding]::new($false))`,
-      'Write-Host "[racko] Racko App setup complete."',
-    ].join('; ');
+    logger.info('[MachineManager] Sending install_racko_app to agent', {
+      machineId, agentId: machine.agentId, appVersion,
+    });
 
-    const commandId = `racko-app-setup-${machineId}`;
-    // 15 minutes — BITS retries on drop (up to 10 min for app + 5 min for WebView2)
-    const result = await wsManager.sendExec(machine.agentId, commandId, script, 15 * 60 * 1000);
+    // sendInstallRackoApp resolves when the agent sends install_racko_app_result back
+    // or times out after 12 minutes (agent's download+install budget is 10 min)
+    const result = await wsManager.sendInstallRackoApp(machine.agentId, appVersion);
 
-    logger.info('[MachineManager] installRackoAppViaExec completed', {
-      machineId,
-      agentId: machine.agentId,
-      exitCode: result.exitCode,
-      output: result.output.slice(0, 500),
+    logger.info('[MachineManager] install_racko_app_result received', {
+      machineId, agentId: machine.agentId,
+      success: result.success,
+      error: result.error,
     });
 
     // Emit racko_app_installed SSE event — browser shows success/failure in real time
     const { emitPushEvent } = await import('./push.events');
-    const success = result.exitCode === 0;
     emitPushEvent(sessionId, {
       type: 'racko_app_installed',
       machineId,
-      success,
-      error: success ? undefined : `Exit code ${result.exitCode}: ${result.output.slice(-300)}`,
+      success: result.success,
+      error: result.success ? undefined : result.error,
     });
+
     logger.info('[MachineManager] racko_app_installed event emitted', {
-      sessionId, machineId, success, exitCode: result.exitCode,
+      sessionId, machineId, success: result.success,
     });
-    // Persist racko_app_installed for page-refresh recovery
+
+    // Persist result for page-refresh recovery
     void PushSessionModel.updateOne(
       { sessionId, 'machines.machineId': machineId },
       {
         $set: {
-          'machines.$.rackoAppInstalled': success,
-          'machines.$.rackoAppError': success ? null : `Exit code ${result.exitCode}: ${result.output.slice(-300)}`,
+          'machines.$.rackoAppInstalled': result.success,
+          'machines.$.rackoAppError': result.success ? null : result.error,
         },
       }
     ).catch(() => { /* non-fatal */ });

@@ -20,13 +20,13 @@ import { logger } from '../../utils/logger';
 import { adminServicesService } from '../adminServices/adminServices.service';
 import { adminBillingService } from '../adminBilling/adminBilling.service';
 import { AuditLog } from '../../models/auditLog.model';
+import { encryptTaxId, serializeOrganizationRequest } from './organizationSensitiveFields';
 
 export type OrgDetailsInput = {
   contactName: string;
   companyName: string;
   companyWebsite?: string;
   phone: string;
-  officeNumber?: string;
   designation: string;
   companySize: string;
   registeredAddress: string;
@@ -109,11 +109,10 @@ export class AdminOrgOnboardingService {
         companyName: org.companyName,
         companyWebsite: org.companyWebsite || undefined,
         phone: org.phone,
-        officeNumber: org.officeNumber || undefined,
         designation: org.designation,
         companySize: org.companySize,
         registeredAddress: org.registeredAddress,
-        taxId: org.taxId,
+        taxId: encryptTaxId(org.taxId),
         useCase: org.useCase,
         expectedUsage: org.expectedUsage,
         status: 'approved',
@@ -166,7 +165,7 @@ export class AdminOrgOnboardingService {
         isEmailVerified: user.isEmailVerified,
         isActive: user.isActive,
       },
-      organizationRequest,
+      organizationRequest: serializeOrganizationRequest(organizationRequest),
       inviteSent,
     };
   }

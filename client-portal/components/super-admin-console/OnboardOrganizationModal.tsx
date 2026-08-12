@@ -20,7 +20,6 @@ import {
 const emptyOrgForm: OrganizationOnboardingForm = {
   contactName: '',
   phone: '',
-  officeNumber: '',
   companyName: '',
   companyWebsite: '',
   designation: '',
@@ -54,8 +53,6 @@ export function OnboardOrganizationModal({ open, onClose, onCreated, inviteUser 
   const [orgForm, setOrgForm] = useState<OrganizationOnboardingForm>(emptyOrgForm);
   const [phoneDial, setPhoneDial] = useState('+91');
   const [phoneNational, setPhoneNational] = useState('');
-  const [officeDial, setOfficeDial] = useState('+91');
-  const [officeNational, setOfficeNational] = useState('');
   const [fieldErrors, setFieldErrors] = useState<FormFieldErrors & { email?: string }>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -75,8 +72,6 @@ export function OnboardOrganizationModal({ open, onClose, onCreated, inviteUser 
     setOrgForm(emptyOrgForm);
     setPhoneDial('+91');
     setPhoneNational('');
-    setOfficeDial('+91');
-    setOfficeNational('');
     setFieldErrors({});
     setError(null);
     onClose();
@@ -103,11 +98,9 @@ export function OnboardOrganizationModal({ open, onClose, onCreated, inviteUser 
     let organization: OrganizationOnboardingForm | undefined;
     if (!isInviteOnly && includeOrgDetails && !skipOrgOnboarding) {
       const phone = joinPhone(phoneDial, phoneNational);
-      const officeNumber = joinPhone(officeDial, officeNational);
       const parsed = organizationOnboardingSchema.safeParse({
         ...orgForm,
         phone,
-        officeNumber,
       });
       if (!parsed.success) {
         Object.assign(nextErrors, zodIssuesToFieldErrors(parsed.error.issues));
@@ -270,30 +263,6 @@ export function OnboardOrganizationModal({ open, onClose, onCreated, inviteUser 
                         />
                       </div>
                       <FieldError message={fieldErrors.phone} />
-                    </div>
-                    <div>
-                      <label className="mb-1 block text-xs font-medium text-gray-700">
-                        Office number
-                      </label>
-                      <div className="flex gap-2">
-                        <select
-                          value={officeDial}
-                          onChange={(e) => setOfficeDial(e.target.value)}
-                          className="rounded-lg border border-gray-200 bg-white px-2 py-2 text-sm"
-                        >
-                          {DIAL_CODES.map((d) => (
-                            <option key={d.code} value={d.code}>
-                              {d.flag} {d.code}
-                            </option>
-                          ))}
-                        </select>
-                        <input
-                          value={officeNational}
-                          onChange={(e) => setOfficeNational(e.target.value)}
-                          className="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm"
-                        />
-                      </div>
-                      <FieldError message={fieldErrors.officeNumber} />
                     </div>
                     <div>
                       <label className="mb-1 block text-xs font-medium text-gray-700">
