@@ -362,3 +362,123 @@ export function openResetStatusStream(
   const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
   return new EventSource(url, { withCredentials: true });
 }
+
+/**
+ * Opens a reset status SSE stream with automatic reconnection and exponential backoff.
+ *
+ * Industry-standard pattern for long-running operations over SSE:
+ * - Uses fetch + ReadableStream instead of native EventSource for reconnect control
+ * - On any network error, waits with exponential backoff then reconnects
+ * - Ticket is reusable within its TTL so reconnects don't need a new auth round-trip
+ * - On reconnect, server checks MongoDB for persisted result and delivers it instantly
+ * - Stops reconnecting once a terminal event (reset_complete) is received or max retries hit
+ *
+ * @param sessionId     The reset session ID
+ * @param streamToken   The reusable stream ticket (valid for 15 minutes)
+ * @param onEvent       Called for every parsed SSE event object
+ * @param onTerminal    Called when a terminal event (reset_complete) is received
+ * @param onGiveUp      Called when all retries are exhausted without a terminal event
+ * @returns             A function to stop the stream (call on component unmount)
+ */
+export function openResetStatusStreamWithReconnect(
+  sessionId: string,
+  streamToken: string,
+  onEvent: (event: { type: string; machineId?: string; success?: boolean; error?: string }) => void,
+  onTerminal: () => void,
+  onGiveUp: () => void,
+): () => void {
+  const BASE_DELAY_MS = 1_000;   // 1s initial backoff
+  const MAX_DELAY_MS  = 30_000;  // 30s max backoff
+  const MAX_ATTEMPTS  = 10;      // ~5 minutes total retry budget
+
+  let stopped = false;
+  let attempt = 0;
+  let currentController: AbortController | null = null;
+
+  const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  const connect = async () => {
+    while (!stopped && attempt <= MAX_ATTEMPTS) {
+      currentController = new AbortController();
+      const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+
+      try {
+        const response = await fetch(url, {
+          credentials: 'include',
+          signal: currentController.signal,
+          headers: { Accept: 'text/event-stream' },
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        // Reset backoff on successful connection
+        attempt = 0;
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (!stopped) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const raw = line.slice(5).trim();
+            if (!raw) continue;
+
+            try {
+              const event = JSON.parse(raw) as {
+                type: string;
+                machineId?: string;
+                success?: boolean;
+                error?: string;
+              };
+
+              onEvent(event);
+
+              // Terminal event — stop reconnecting
+              if (event.type === 'reset_complete') {
+                stopped = true;
+                onTerminal();
+                return;
+              }
+            } catch {
+              // ignore malformed SSE lines
+            }
+          }
+        }
+      } catch (err) {
+        if (stopped) return;
+        // AbortError means caller stopped us — exit cleanly
+        if (err instanceof Error && err.name === 'AbortError') return;
+      }
+
+      if (stopped) return;
+
+      // Exponential backoff before reconnecting
+      attempt++;
+      if (attempt > MAX_ATTEMPTS) {
+        onGiveUp();
+        return;
+      }
+
+      const backoff = Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), MAX_DELAY_MS);
+      await delay(backoff);
+    }
+  };
+
+  void connect();
+
+  // Return a stop function for cleanup on unmount
+  return () => {
+    stopped = true;
+    currentController?.abort();
+  };
+}

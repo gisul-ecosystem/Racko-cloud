@@ -60,9 +60,23 @@ export interface SuperAdminBulkImportExtendedRowDto {
   schedule?: AssignmentScheduleDto;
 }
 
+/** Extended row — admin by email, optional inline user create + schedule. */
+export interface SuperAdminBulkImportExtendedAdminRowDto {
+  name: string;
+  ip?: string;
+  ipAddress?: string;
+  protocol?: 'rdp' | 'ssh';
+  username?: string;
+  password: string;
+  adminEmail: string;
+  user?: SuperAdminBulkImportInlineUserDto;
+  schedule?: AssignmentScheduleDto;
+}
+
 export type SuperAdminBulkImportRowDto =
   | SuperAdminBulkImportLegacyRowDto
-  | SuperAdminBulkImportExtendedRowDto;
+  | SuperAdminBulkImportExtendedRowDto
+  | SuperAdminBulkImportExtendedAdminRowDto;
 
 export interface SuperAdminBulkImportAssignmentResult {
   index: number;

@@ -14,6 +14,8 @@ export interface OrgProject {
   sequenceNumber: number;
   clientName: string;
   description: string | null;
+  startDate: string | null;
+  endDate: string | null;
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   createdBy: string;
@@ -93,7 +95,7 @@ export async function createProject(input: {
 
 export async function updateProject(
   id: string,
-  input: { name?: string; clientName?: string; description?: string | null }
+  input: { name?: string; clientName?: string; description?: string | null; startDate?: string | null; endDate?: string | null }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     apiRequest(`/api/v1/projects/${id}`, {
