@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, ArrowRight, Loader2, X } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, Pencil, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import { fetchMyAdminServices, type AdminServiceKey } from '@/lib/adminServicesApi';
 import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
@@ -150,6 +150,7 @@ export default function ProjectDetailPage() {
   const [endDate, setEndDate] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
   const [pendingService, setPendingService] = useState<AdminServiceKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -216,6 +217,7 @@ export default function ProjectDetailPage() {
       });
       setProject(updated);
       setFlash('Project updated.');
+      setEditOpen(false);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to update project.');
     } finally {
@@ -324,6 +326,16 @@ export default function ProjectDetailPage() {
               <p className="mt-1 text-sm text-gray-500">{project.description}</p>
             )}
           </div>
+          {!archived && (
+            <button
+              type="button"
+              onClick={() => setEditOpen(true)}
+              className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:border-gray-300 hover:bg-gray-50"
+            >
+              <Pencil className="h-4 w-4" />
+              Edit
+            </button>
+          )}
         </div>
       </div>
 
@@ -430,99 +442,132 @@ export default function ProjectDetailPage() {
         )}
       </section>
 
-      <section>
-        <h2 className="mb-4 text-base font-semibold text-gray-900">Project settings</h2>
-        <form
-          onSubmit={handleSave}
-          className="space-y-4 rounded-xl border border-gray-200 bg-white p-6"
+      {/* ── Edit project modal ──────────────────────────────────────────── */}
+      {editOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) setEditOpen(false); }}
         >
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                Project name
-              </label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                disabled={archived}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">
-                Client name
-              </label>
-              <input
-                value={clientName}
-                onChange={(e) => setClientName(e.target.value)}
-                disabled={archived}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-sm font-medium text-gray-700">Description</label>
-            <textarea
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              disabled={archived}
-              rows={3}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
-            />
-          </div>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">Start Date</label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                disabled={archived}
-                max={endDate || undefined}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
-              />
-            </div>
-            <div>
-              <label className="mb-1.5 block text-sm font-medium text-gray-700">End Date</label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                disabled={archived}
-                min={startDate || undefined}
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
-              />
-            </div>
-          </div>
-          <div className="flex items-center justify-between">
-            {!archived ? (
-              <button
-                type="submit"
-                disabled={saving}
-                className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white hover:bg-[#991B1B] disabled:opacity-60"
-              >
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                Save changes
-              </button>
-            ) : (
-              <span className="text-sm text-gray-400">
-                Project is archived and cannot be edited.
-              </span>
-            )}
-
-            {!archived && (
+          <div className="w-full max-w-lg overflow-hidden rounded-2xl bg-white shadow-2xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+              <div>
+                <h2 className="text-base font-semibold text-gray-900">Edit Project</h2>
+                <p className="mt-0.5 text-xs text-gray-500">Update project details and dates.</p>
+              </div>
               <button
                 type="button"
-                onClick={() => void handleArchive()}
-                disabled={saving}
-                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:border-red-300 hover:text-red-600 disabled:opacity-50"
+                onClick={() => setEditOpen(false)}
+                className="rounded-full p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600"
               >
-                Archive project
+                <X className="h-4 w-4" />
               </button>
-            )}
+            </div>
+
+            <form onSubmit={handleSave}>
+              <div className="space-y-4 p-6">
+                {error && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                    {error}
+                  </div>
+                )}
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                      Project name
+                    </label>
+                    <input
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      required
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                      Client name
+                    </label>
+                    <input
+                      value={clientName}
+                      onChange={(e) => setClientName(e.target.value)}
+                      required
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-gray-700">Description</label>
+                  <textarea
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    rows={3}
+                    className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                  />
+                </div>
+
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                      Start Date
+                    </label>
+                    <input
+                      type="date"
+                      value={startDate}
+                      onChange={(e) => setStartDate(e.target.value)}
+                      max={endDate || undefined}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                      End Date
+                    </label>
+                    <input
+                      type="date"
+                      value={endDate}
+                      onChange={(e) => setEndDate(e.target.value)}
+                      min={startDate || undefined}
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4">
+                <button
+                  type="button"
+                  onClick={() => void handleArchive()}
+                  disabled={saving}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:border-red-300 hover:text-red-600 disabled:opacity-50"
+                >
+                  Archive project
+                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditOpen(false)}
+                    disabled={saving}
+                    className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={saving}
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:opacity-60"
+                  >
+                    {saving && <Loader2 className="h-4 w-4 animate-spin" />}
+                    Save changes
+                  </button>
+                </div>
+              </div>
+            </form>
           </div>
-        </form>
-      </section>
+        </div>
+      )}
     </div>
   );
 }

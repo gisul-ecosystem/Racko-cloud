@@ -101,8 +101,8 @@ export default function TenantCreateProjectPage() {
   }, [load]);
 
   const canSubmit = useMemo(
-    () => clientName.trim().length > 0 && selected.length > 0 && name.trim().length > 0,
-    [clientName, selected, name]
+    () => clientName.trim().length > 0 && selected.length > 0 && name.trim().length > 0 && !!startDate && !!endDate,
+    [clientName, selected, name, startDate, endDate]
   );
 
   function toggleService(key: AdminServiceKey) {
@@ -210,7 +210,7 @@ export default function TenantCreateProjectPage() {
           <div className="mt-4 grid gap-4 sm:grid-cols-2">
             <div className="rounded-lg border border-gray-200 p-4">
               <label className="mb-1 block text-xs font-semibold text-gray-700">
-                Start Date <span className="font-normal text-gray-400">(Optional)</span>
+                Start Date <span className="text-red-500">*</span>
               </label>
               <p className="mb-2 text-xs text-gray-400">When does this project start?</p>
               <input
@@ -224,7 +224,7 @@ export default function TenantCreateProjectPage() {
 
             <div className="rounded-lg border border-gray-200 p-4">
               <label className="mb-1 block text-xs font-semibold text-gray-700">
-                End Date <span className="font-normal text-gray-400">(Optional)</span>
+                End Date <span className="text-red-500">*</span>
               </label>
               <p className="mb-2 text-xs text-gray-400">When does this project end?</p>
               <input

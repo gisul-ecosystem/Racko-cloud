@@ -247,6 +247,21 @@ export function ProjectsListView({
     void load();
   }, [load]);
 
+  // Auto-open the create modal when navigated here with ?create=1
+  // (e.g. from ProjectSelect "Create new project" link on service pages).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('create') === '1') {
+      void openCreateModal();
+      // Remove the query param so a refresh doesn't re-open the modal.
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState(null, '', cleanUrl);
+    }
+  // openCreateModal is stable (defined outside render), intentionally omitted from deps.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const activeProjects = projects.filter((project) => project.status === 'active');
   const totalSpend = costRows.reduce((sum, row) => sum + row.totalDebit, 0);
   const totalResources = projects.reduce(
@@ -339,7 +354,7 @@ export function ProjectsListView({
 
   function continueToServices(event: React.FormEvent) {
     event.preventDefault();
-    if (!projectName.trim() || !clientName.trim()) return;
+    if (!projectName.trim() || !clientName.trim() || !startDate || !endDate) return;
     setModalError(null);
     setModalStep('services');
   }
@@ -1088,7 +1103,7 @@ export function ProjectsListView({
                     <div className="mt-4 grid gap-4 sm:grid-cols-2">
                       <div>
                         <label className="mb-1.5 block text-xs font-semibold text-gray-700">
-                          Start Date <span className="font-normal text-gray-400">(Optional)</span>
+                          Start Date <span className="text-red-500">*</span>
                         </label>
                         <input
                           type="date"
@@ -1108,7 +1123,7 @@ export function ProjectsListView({
                       </div>
                       <div>
                         <label className="mb-1.5 block text-xs font-semibold text-gray-700">
-                          End Date <span className="font-normal text-gray-400">(Optional)</span>
+                          End Date <span className="text-red-500">*</span>
                         </label>
                         <input
                           type="date"
@@ -1140,7 +1155,7 @@ export function ProjectsListView({
                   </button>
                   <button
                     type="submit"
-                    disabled={!projectName.trim() || !clientName.trim()}
+                    disabled={!projectName.trim() || !clientName.trim() || !startDate || !endDate}
                     className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     style={tenantAccentButton(accent)}
                   >

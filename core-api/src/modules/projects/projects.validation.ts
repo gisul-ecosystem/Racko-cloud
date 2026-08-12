@@ -13,8 +13,8 @@ export const createProjectSchema = z.object({
     clientName: z.string().min(1).max(200).trim(),
     name: z.string().min(1).max(200).trim().optional(),
     description: z.string().max(1000).trim().optional(),
-    startDate: z.coerce.date().optional(),
-    endDate: z.coerce.date().optional(),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
     enabledServices: z.array(adminServiceKeySchema).min(1),
   }),
 });
@@ -64,8 +64,8 @@ export const createProjectForAdminSchema = z.object({
     clientName: z.string().min(1).max(200).trim(),
     name: z.string().min(1).max(200).trim().optional(),
     description: z.string().max(1000).trim().optional(),
-    startDate: z.coerce.date().optional(),
-    endDate: z.coerce.date().optional(),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
     enabledServices: z.array(adminServiceKeySchema).min(1),
   }),
 });
@@ -80,8 +80,8 @@ export const createProjectForTenantSchema = z.object({
     clientName: z.string().min(1).max(200).trim(),
     name: z.string().min(1).max(200).trim().optional(),
     description: z.string().max(1000).trim().optional(),
-    startDate: z.coerce.date().optional(),
-    endDate: z.coerce.date().optional(),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
     enabledServices: z.array(adminServiceKeySchema).min(1),
   }),
 });
