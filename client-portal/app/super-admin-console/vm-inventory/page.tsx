@@ -2,11 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Database, Pencil, Search, Upload } from 'lucide-react';
+import { ChevronLeft, Database, Pencil, Search, Trash2, Upload } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchSuperAdminVmInventory,
   fetchSuperAdminVmInventoryOwners,
+  clearSuperAdminVmInventoryAssignment,
+  deleteSuperAdminVmInventoryAssignedUser,
   importVmProviderMetadata,
   type InventoryOwnerScope,
   type InventoryResourceType,
@@ -16,6 +18,7 @@ import {
   type VmProviderMetadataImportRow,
 } from '@/lib/superAdminVmInventoryApi';
 import {
+  deleteSuperAdminExternalVm,
   fetchSuperAdminExternalVmOverview,
   type SuperAdminExternalVmOverviewRow,
 } from '@/lib/superAdminExternalVmApi';
@@ -29,7 +32,7 @@ const inputClass =
 type ServiceKey = '' | 'vm-management' | 'create-vm' | 'external-vm';
 type SortBy = 'createdAt' | 'owner' | 'service';
 type SortDirection = 'asc' | 'desc';
-type AssignmentSortBy = 'providerEndDate' | 'clientEndDate';
+type AssignmentSortBy = 'providerEndDate' | 'clientEndDate' | 'assignedUser';
 type FlashMessage = { type: 'success' | 'error'; text: string } | null;
 
 type AssignmentEntry = {
@@ -56,20 +59,36 @@ type AssignmentRow = {
   providerDetails?: AssignmentEntry;
 };
 
-function StatusBadge({ status }: { status: InventoryStatus }) {
-  const tone =
-    status === 'active'
-      ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
-      : status === 'suspended'
-        ? 'border-amber-200 bg-amber-50 text-amber-700'
-        : status === 'failed'
-          ? 'border-rose-200 bg-rose-50 text-rose-700'
-          : status === 'deleted'
-            ? 'border-slate-200 bg-slate-100 text-slate-700'
-            : 'border-blue-200 bg-blue-50 text-blue-700';
-
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}>{status}</span>;
-}
+type ConfirmDialogState =
+  | {
+      kind: 'deleteAssignedUser';
+      item: SuperAdminVmInventoryItem;
+      vmLabel: string;
+      message: string;
+    }
+  | {
+      kind: 'clearAssignedUser';
+      item: SuperAdminVmInventoryItem;
+      vmLabel: string;
+      message: string;
+    }
+  | {
+      kind: 'deleteAssignmentVm';
+      row: AssignmentRow;
+      vmLabel: string;
+      message: string;
+    }
+  | {
+      kind: 'bulkDeleteAssignedUsers';
+      inventoryIds: string[];
+      message: string;
+    }
+  | {
+      kind: 'bulkClearAssignedUsers';
+      inventoryIds: string[];
+      message: string;
+    }
+  | null;
 
 function OwnerChip({ scope }: { scope: InventoryOwnerScope }) {
   const tone =
@@ -85,6 +104,14 @@ function formatDate(value?: string | Date | null): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
   return date.toLocaleDateString();
+}
+
+function hasInventoryAssignee(item: SuperAdminVmInventoryItem): boolean {
+  return (
+    item.mappedAssignments.length > 0 ||
+    item.mappedUsers.length > 0 ||
+    Boolean(item.mappedTenantUserId || item.mappedTenantUserEmail)
+  );
 }
 
 function getDueDateBadge(value?: string | Date | null): { label: string; tone: string } | null {
@@ -128,17 +155,37 @@ function DueDateCell({ value }: { value?: string | Date | null }) {
   );
 }
 
-function formatInventorySubtitle(item: SuperAdminVmInventoryItem): string | null {
-  if (item.resourceType !== 'external_vm') return null;
-
-  const parts = [
-    item.providerUsername?.trim() || null,
-    item.providerPlanDuration || null,
-    item.providerStartDate ? `from ${formatDate(item.providerStartDate)}` : null,
-    item.providerEndDate ? `to ${formatDate(item.providerEndDate)}` : null,
-  ].filter((value): value is string => Boolean(value));
-
-  return parts.length > 0 ? parts.join(' · ') : null;
+function ConfirmActionModal(props: {
+  message: string;
+  onConfirm: () => void;
+  onCancel: () => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+      <div className="w-full max-w-md rounded-xl border border-gray-200 bg-white p-5 shadow-xl">
+        <p className="text-sm text-gray-800">{props.message}</p>
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={props.onCancel}
+            disabled={props.busy}
+            className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={props.onConfirm}
+            disabled={props.busy}
+            className="rounded-md bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {props.busy ? 'Deleting…' : 'OK'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function readCell(row: Record<string, unknown>, keys: string[]): unknown {
@@ -179,6 +226,26 @@ function getRowSortDate(row: AssignmentRow, sortBy: AssignmentSortBy): number | 
 
 function sortAssignmentRows(rows: AssignmentRow[], sortBy: AssignmentSortBy, sortDirection: SortDirection): AssignmentRow[] {
   const direction = sortDirection === 'asc' ? 1 : -1;
+
+  if (sortBy === 'assignedUser') {
+    return [...rows].sort((a, b) => {
+      const aFree = a.assignments.length === 0;
+      const bFree = b.assignments.length === 0;
+
+      if (aFree !== bFree) {
+        // asc => free rows first, desc => assigned rows first
+        return (aFree ? -1 : 1) * direction;
+      }
+
+      const aUser = a.assignments[0]?.username?.toLowerCase() ?? '';
+      const bUser = b.assignments[0]?.username?.toLowerCase() ?? '';
+      const byUser = aUser.localeCompare(bUser);
+      if (byUser !== 0) return byUser * direction;
+
+      return a.rowKey.localeCompare(b.rowKey);
+    });
+  }
+
   return [...rows].sort((a, b) => {
     const aDate = getRowSortDate(a, sortBy);
     const bDate = getRowSortDate(b, sortBy);
@@ -308,6 +375,16 @@ function InventoryTable(props: {
   onLimitChange: (value: number) => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
+  deletingUserInventoryId: string | null;
+  clearingAssignmentInventoryId: string | null;
+  selectedInventoryIds: string[];
+  onToggleInventorySelection: (item: SuperAdminVmInventoryItem, checked: boolean) => void;
+  onToggleAllSelection: (checked: boolean) => void;
+  onBulkDeleteSelectedUsers: () => void;
+  onBulkFreeSelectedVms: () => void;
+  bulkBusy: boolean;
+  onDeleteAssignedUser: (item: SuperAdminVmInventoryItem) => void;
+  onClearAssignedUser: (item: SuperAdminVmInventoryItem) => void;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
@@ -316,19 +393,47 @@ function InventoryTable(props: {
     if (props.sortBy !== column) return '↕';
     return props.sortDirection === 'asc' ? '↑' : '↓';
   };
+  const selectableRows = props.items;
+  const allSelected = selectableRows.length > 0 && selectableRows.every((item) => props.selectedInventoryIds.includes(item.inventoryId));
+  const someSelected = selectableRows.some((item) => props.selectedInventoryIds.includes(item.inventoryId));
 
   return (
     <div className="mt-6 rounded-xl border border-gray-200 bg-white shadow-sm overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-gray-100 px-5 py-3">
-        <p className="text-sm font-semibold text-gray-900">Inventory records</p>
-        <div className="flex items-center gap-2 text-xs text-gray-500">
+        <div className="flex items-center gap-3">
+          <p className="text-sm font-semibold text-gray-900">Inventory IP</p>
+          {props.selectedInventoryIds.length > 0 ? (
+            <span className="text-xs text-gray-500">Selected {props.selectedInventoryIds.length}</span>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
           <span>Total {props.total.toLocaleString()}</span>
           <span>•</span>
           <span>Page {props.page} / {props.totalPages}</span>
+          {props.selectedInventoryIds.length > 0 ? (
+            <>
+              <button
+                type="button"
+                onClick={props.onBulkDeleteSelectedUsers}
+                disabled={props.bulkBusy}
+                className="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Delete selected users
+              </button>
+              <button
+                type="button"
+                onClick={props.onBulkFreeSelectedVms}
+                disabled={props.bulkBusy}
+                className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Unassign selected VMs
+              </button>
+            </>
+          ) : null}
         </div>
       </div>
 
-      {props.loading ? <TableSkeleton rows={8} cols={9} /> : null}
+      {props.loading ? <TableSkeleton rows={8} cols={7} /> : null}
 
       {!props.loading && props.error ? (
         <div className="p-6">
@@ -351,7 +456,19 @@ function InventoryTable(props: {
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b border-gray-100 bg-gray-50">
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 first:px-6">VM</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 first:px-6">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(node) => {
+                        if (node) node.indeterminate = someSelected && !allSelected;
+                      }}
+                      onChange={(e) => props.onToggleAllSelection(e.target.checked)}
+                      className="h-4 w-4 cursor-pointer rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+                      aria-label="Select all inventory rows"
+                    />
+                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 first:px-6">IP</th>
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                     <div className="flex items-center gap-2">
                       <button
@@ -398,44 +515,71 @@ function InventoryTable(props: {
                       </select>
                     </div>
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Tenant map</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Network</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Status</th>
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
-                    <button
-                      type="button"
-                      onClick={() => props.onToggleSort('createdAt')}
-                      className="inline-flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
-                    >
-                      Created
-                      <span className="text-gray-400">{sortIndicator('createdAt')}</span>
-                    </button>
-                  </th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Assigned user name</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {props.items.map((item, idx) => (
                   <tr key={item.inventoryId} className={`border-b border-gray-50 align-top hover:bg-gray-50 ${idx % 2 !== 0 ? 'bg-gray-50/40' : ''}`}>
+                    <td className="px-4 py-3.5 first:px-6">
+                      <input
+                        type="checkbox"
+                        checked={props.selectedInventoryIds.includes(item.inventoryId)}
+                        disabled={props.bulkBusy}
+                        onChange={(e) => props.onToggleInventorySelection(item, e.target.checked)}
+                        className="h-5 w-5 cursor-pointer rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C] disabled:cursor-not-allowed"
+                        aria-label={`Select ${item.name || item.ipAddress || item.inventoryId}`}
+                      />
+                    </td>
                     <td className="px-6 py-3.5">
-                      <p className="font-medium text-gray-900">{item.name}</p>
-                      {formatInventorySubtitle(item) ? <p className="mt-0.5 text-[11px] text-gray-500">{formatInventorySubtitle(item)}</p> : null}
-                      {typeof item.vmid === 'number' ? <p className="mt-0.5 text-[11px] text-gray-500">VMID #{item.vmid}</p> : null}
+                      <p className="font-medium text-gray-900">{item.ipAddress || '—'}</p>
+                      <p className="mt-0.5 text-[11px] text-gray-500">{item.name}</p>
                     </td>
                     <td className="px-4 py-3.5 text-xs text-gray-700">{item.originServiceLabel}</td>
                     <td className="px-4 py-3.5 text-xs">
-                      <OwnerChip scope={item.ownerScope} />
-                      <p className="mt-1 text-gray-700">{item.ownerTenantName || item.ownerAdminEmail || 'Unknown owner'}</p>
-                    </td>
-                    <td className="px-4 py-3.5 text-xs">
-                      <p className="text-gray-700">{item.mappedTenantName || '—'}</p>
-                      {item.mappedTenantUserEmail ? <p className="mt-1 text-[11px] text-gray-500">{item.mappedTenantUserEmail}</p> : null}
+                      {hasInventoryAssignee(item) ? (
+                        <>
+                          <OwnerChip scope={item.ownerScope} />
+                          <p className="mt-1 text-gray-700">{item.ownerTenantName || item.ownerAdminEmail || 'Unknown owner'}</p>
+                        </>
+                      ) : (
+                        <p className="text-[11px] text-gray-400">Unassigned</p>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-xs text-gray-700">
-                      <p>{item.ipAddress || '—'}</p>
-                      <p className="mt-0.5 uppercase tracking-wide text-gray-500">{item.protocol || '—'}</p>
+                      {item.mappedAssignments.length > 0 ? (
+                        item.mappedAssignments.map((assignment, assignmentIndex) => (
+                          <p key={`${item.inventoryId}:assigned-email:${assignmentIndex}`}>{assignment.username}</p>
+                        ))
+                      ) : item.mappedUsers.length > 0 ? (
+                        item.mappedUsers.map((email, emailIndex) => (
+                          <p key={`${item.inventoryId}:assigned-fallback:${emailIndex}`}>{email}</p>
+                        ))
+                      ) : (
+                        <span className="text-[11px] text-gray-400">—</span>
+                      )}
                     </td>
-                    <td className="px-4 py-3.5"><StatusBadge status={item.status} /></td>
-                    <td className="px-4 py-3.5 text-xs text-gray-500">{new Date(item.createdAt).toLocaleString()}</td>
+                    <td className="px-4 py-3.5 text-xs">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => props.onDeleteAssignedUser(item)}
+                          disabled={!hasInventoryAssignee(item) || props.deletingUserInventoryId === item.inventoryId || props.bulkBusy}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Delete user
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => props.onClearAssignedUser(item)}
+                          disabled={props.clearingAssignmentInventoryId === item.inventoryId || props.bulkBusy}
+                          className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Delete user & make VM free
+                        </button>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -490,9 +634,12 @@ function AssignmentTable(props: {
   onHideUsers: () => void;
   onToggleSort: (value: AssignmentSortBy) => void;
   onEditRow: (row: AssignmentRow) => void;
+  onDeleteRow: (row: AssignmentRow) => void;
+  deletingVmId: string | null;
 }) {
   const entryList = (row: AssignmentRow): AssignmentEntry[] =>
     row.assignments.length > 0 ? row.assignments : row.providerDetails ? [row.providerDetails] : [];
+  const assignedUserList = (row: AssignmentRow): AssignmentEntry[] => row.assignments;
   const sortIndicator = (column: AssignmentSortBy) => {
     if (props.sortBy !== column) return '↕';
     return props.sortDirection === 'asc' ? '↑' : '↓';
@@ -569,7 +716,14 @@ function AssignmentTable(props: {
               {props.showUsers ? (
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                   <div className="flex items-center gap-2">
-                    <span>Assigned usernames</span>
+                    <button
+                      type="button"
+                      onClick={() => props.onToggleSort('assignedUser')}
+                      className="inline-flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
+                    >
+                      Assigned usernames
+                      <span className="text-gray-400">{sortIndicator('assignedUser')}</span>
+                    </button>
                     <button type="button" onClick={props.onHideUsers} className="inline-flex h-5 w-5 items-center justify-center rounded border border-gray-200 text-[10px] font-medium normal-case tracking-normal text-gray-600 hover:bg-gray-100" aria-label="Collapse assigned usernames column">-</button>
                   </div>
                 </th>
@@ -625,14 +779,18 @@ function AssignmentTable(props: {
                 ) : null}
                 {props.showUsers ? (
                   <td className="px-4 py-3.5 text-xs">
-                    {entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => (
+                    {assignedUserList(row).length > 0 ? assignedUserList(row).map((assignment, assignmentIndex) => (
                       <div key={`${row.rowKey}:assignment:${assignmentIndex}`} className="flex items-center gap-2">
                         <span className="text-gray-700">{assignment.username}</span>
                         <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium ${assignment.isTenantUser ? 'border-indigo-200 bg-indigo-50 text-indigo-700' : 'border-sky-200 bg-sky-50 text-sky-700'}`}>
                           {assignment.isTenantUser ? assignment.tenantName || 'Tenant' : 'Platform'}
                         </span>
                       </div>
-                    )) : <p className="text-[11px] text-gray-400">—</p>}
+                    )) : (
+                      <span className="inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[10px] font-medium text-emerald-700">
+                        Free VM
+                      </span>
+                    )}
                   </td>
                 ) : null}
                 {props.showPlanDuration ? (
@@ -646,14 +804,25 @@ function AssignmentTable(props: {
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <DueDateCell key={`${row.rowKey}:client-end:${assignmentIndex}`} value={assignment.endDate} />) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">
                   {row.editableExternalVmId ? (
-                    <button
-                      type="button"
-                      onClick={() => props.onEditRow(row)}
-                      className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                    >
-                      <Pencil className="h-3.5 w-3.5" />
-                      Edit
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => props.onEditRow(row)}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 bg-white px-2.5 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => props.onDeleteRow(row)}
+                        disabled={props.deletingVmId === row.editableExternalVmId}
+                        className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                        {props.deletingVmId === row.editableExternalVmId ? 'Deleting…' : 'Delete'}
+                      </button>
+                    </div>
                   ) : (
                     <span className="text-[11px] text-gray-400">—</span>
                   )}
@@ -693,6 +862,12 @@ export default function SuperAdminVmInventoryPage() {
   const [showAssignmentUsers, setShowAssignmentUsers] = useState(true);
   const [externalVmRows, setExternalVmRows] = useState<SuperAdminExternalVmOverviewRow[]>([]);
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
+  const [deletingAssignmentVmId, setDeletingAssignmentVmId] = useState<string | null>(null);
+  const [deletingUserInventoryId, setDeletingUserInventoryId] = useState<string | null>(null);
+  const [clearingAssignmentInventoryId, setClearingAssignmentInventoryId] = useState<string | null>(null);
+  const [bulkActionBusy, setBulkActionBusy] = useState(false);
+  const [selectedInventoryIds, setSelectedInventoryIds] = useState<string[]>([]);
+  const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
   const [importingProviderMeta, setImportingProviderMeta] = useState(false);
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null);
   const [loading, setLoading] = useState(true);
@@ -760,6 +935,11 @@ export default function SuperAdminVmInventoryPage() {
     void loadOwnerOptions();
   }, [loadOwnerOptions]);
 
+  useEffect(() => {
+    const currentIds = new Set(items.map((item) => item.inventoryId));
+    setSelectedInventoryIds((prev) => prev.filter((id) => currentIds.has(id)));
+  }, [items]);
+
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
   const assignmentRows = useMemo(() => buildAssignmentRows(items), [items]);
   const assignmentProjectOptions = useMemo(() => {
@@ -795,6 +975,275 @@ export default function SuperAdminVmInventoryPage() {
     },
     [externalVmById]
   );
+
+  const performDeleteAssignmentRow = useCallback(
+    async (row: AssignmentRow) => {
+      const externalVmId = row.editableExternalVmId;
+      if (!externalVmId) return;
+      const vmLabel = row.vmNames[0] || row.ipAddress || 'this VM';
+
+      setDeletingAssignmentVmId(externalVmId);
+      setFlashMessage(null);
+      try {
+        await deleteSuperAdminExternalVm(externalVmId);
+        setFlashMessage({ type: 'success', text: `Deleted ${vmLabel}.` });
+        await load({ page: 1 });
+      } catch (deleteError) {
+        setFlashMessage({
+          type: 'error',
+          text: deleteError instanceof ApiError ? deleteError.message : 'Failed to delete VM.',
+        });
+      } finally {
+        setDeletingAssignmentVmId(null);
+      }
+    },
+    [load]
+  );
+
+  const handleDeleteAssignmentRow = useCallback((row: AssignmentRow) => {
+    const vmLabel = row.vmNames[0] || row.ipAddress || 'this VM';
+    setConfirmDialog({
+      kind: 'deleteAssignmentVm',
+      row,
+      vmLabel,
+      message: `Delete ${vmLabel}? This removes the VM record and assignments.`,
+    });
+  }, []);
+
+  const performClearAssignedUser = useCallback(
+    async (item: SuperAdminVmInventoryItem) => {
+      const vmLabel = item.name || item.ipAddress || 'this VM';
+
+      setClearingAssignmentInventoryId(item.inventoryId);
+      setFlashMessage(null);
+      try {
+        const result = await clearSuperAdminVmInventoryAssignment({
+          resourceType: item.resourceType,
+          sourceId: item.sourceId,
+        });
+        if (!result.updated) {
+          setFlashMessage({ type: 'success', text: `${vmLabel} is already free.` });
+          await load();
+          return;
+        }
+
+        const deletedUsersCount = (result.deletedPlatformUsers ?? 0) + (result.deletedTenantUsers ?? 0);
+        const detail =
+          deletedUsersCount > 0
+            ? ` Login account${deletedUsersCount > 1 ? 's' : ''} removed: ${deletedUsersCount}.`
+            : ' VM is now free.';
+        setFlashMessage({ type: 'success', text: `Assignment cleared for ${vmLabel}.${detail}` });
+        await load();
+      } catch (clearError) {
+        setFlashMessage({
+          type: 'error',
+          text: clearError instanceof ApiError ? clearError.message : 'Failed to delete assigned user.',
+        });
+      } finally {
+        setClearingAssignmentInventoryId(null);
+      }
+    },
+    [load]
+  );
+
+  const performDeleteAssignedUser = useCallback(
+    async (item: SuperAdminVmInventoryItem) => {
+      if (!hasInventoryAssignee(item)) return;
+      const vmLabel = item.name || item.ipAddress || 'this VM';
+
+      setDeletingUserInventoryId(item.inventoryId);
+      setFlashMessage(null);
+      try {
+        const result = await deleteSuperAdminVmInventoryAssignedUser({
+          resourceType: item.resourceType,
+          sourceId: item.sourceId,
+        });
+
+        if (!result.updated) {
+          setFlashMessage({ type: 'error', text: 'No assigned user found to delete for this row.' });
+          return;
+        }
+
+        const deletedUsersCount = (result.deletedPlatformUsers ?? 0) + (result.deletedTenantUsers ?? 0);
+        setFlashMessage({
+          type: 'success',
+          text: `Deleted user account${deletedUsersCount > 1 ? 's' : ''}: ${deletedUsersCount} for ${vmLabel}.`,
+        });
+        await load();
+      } catch (deleteError) {
+        setFlashMessage({
+          type: 'error',
+          text: deleteError instanceof ApiError ? deleteError.message : 'Failed to delete assigned user.',
+        });
+      } finally {
+        setDeletingUserInventoryId(null);
+      }
+    },
+    [load]
+  );
+
+  const handleDeleteAssignedUser = useCallback((item: SuperAdminVmInventoryItem) => {
+    if (!hasInventoryAssignee(item)) return;
+    const vmLabel = item.name || item.ipAddress || 'this VM';
+    setConfirmDialog({
+      kind: 'deleteAssignedUser',
+      item,
+      vmLabel,
+      message: `Delete user for ${vmLabel}? This removes the login account and unassigns that user everywhere.`,
+    });
+  }, []);
+
+  const handleClearAssignedUser = useCallback((item: SuperAdminVmInventoryItem) => {
+    const vmLabel = item.name || item.ipAddress || 'this VM';
+    setConfirmDialog({
+      kind: 'clearAssignedUser',
+      item,
+      vmLabel,
+      message: `Delete assigned user for ${vmLabel}? This clears assignment records from all linked storage.`,
+    });
+  }, []);
+
+  const handleToggleInventorySelection = useCallback((item: SuperAdminVmInventoryItem, checked: boolean) => {
+    setSelectedInventoryIds((prev) => {
+      if (checked) {
+        return prev.includes(item.inventoryId) ? prev : [...prev, item.inventoryId];
+      }
+      return prev.filter((id) => id !== item.inventoryId);
+    });
+  }, []);
+
+  const handleToggleAllInventorySelection = useCallback((checked: boolean) => {
+    if (!checked) {
+      setSelectedInventoryIds([]);
+      return;
+    }
+    const selectableIds = items
+      .filter((item) => Boolean(item.inventoryId))
+      .map((item) => item.inventoryId);
+    setSelectedInventoryIds(selectableIds);
+  }, [items]);
+
+  const handleBulkDeleteSelectedUsers = useCallback(() => {
+    if (selectedInventoryIds.length === 0) return;
+    setConfirmDialog({
+      kind: 'bulkDeleteAssignedUsers',
+      inventoryIds: [...selectedInventoryIds],
+      message: `Delete user for ${selectedInventoryIds.length} selected row(s)? This removes login accounts and unassigns them everywhere.`,
+    });
+  }, [selectedInventoryIds]);
+
+  const handleBulkFreeSelectedVms = useCallback(() => {
+    if (selectedInventoryIds.length === 0) return;
+    setConfirmDialog({
+      kind: 'bulkClearAssignedUsers',
+      inventoryIds: [...selectedInventoryIds],
+      message: `Delete user & make VM free for ${selectedInventoryIds.length} selected row(s)?`,
+    });
+  }, [selectedInventoryIds]);
+
+  const performBulkDeleteAssignedUsers = useCallback(
+    async (inventoryIds: string[]) => {
+      const rows = items.filter((item) => inventoryIds.includes(item.inventoryId));
+      if (rows.length === 0) return;
+      setBulkActionBusy(true);
+      setFlashMessage(null);
+      let successCount = 0;
+      let failedCount = 0;
+      for (const item of rows) {
+        try {
+          const result = await deleteSuperAdminVmInventoryAssignedUser({
+            resourceType: item.resourceType,
+            sourceId: item.sourceId,
+          });
+          if (result.updated) successCount += 1;
+          else failedCount += 1;
+        } catch {
+          failedCount += 1;
+        }
+      }
+      setSelectedInventoryIds([]);
+      await load();
+      setFlashMessage({
+        type: failedCount > 0 ? 'error' : 'success',
+        text: `Delete user completed. Success: ${successCount}, Failed: ${failedCount}.`,
+      });
+      setBulkActionBusy(false);
+    },
+    [items, load]
+  );
+
+  const performBulkFreeSelectedVms = useCallback(
+    async (inventoryIds: string[]) => {
+      const rows = items.filter((item) => inventoryIds.includes(item.inventoryId));
+      if (rows.length === 0) return;
+      setBulkActionBusy(true);
+      setFlashMessage(null);
+      let successCount = 0;
+      let failedCount = 0;
+      for (const item of rows) {
+        try {
+          const result = await clearSuperAdminVmInventoryAssignment({
+            resourceType: item.resourceType,
+            sourceId: item.sourceId,
+          });
+          if (result.updated) successCount += 1;
+          else successCount += 1;
+        } catch {
+          failedCount += 1;
+        }
+      }
+      setSelectedInventoryIds([]);
+      await load();
+      setFlashMessage({
+        type: failedCount > 0 ? 'error' : 'success',
+        text: `Unassign completed. Success: ${successCount}, Failed: ${failedCount}.`,
+      });
+      setBulkActionBusy(false);
+    },
+    [items, load]
+  );
+
+  const handleConfirmDialog = useCallback(async () => {
+    if (!confirmDialog) return;
+
+    if (confirmDialog.kind === 'deleteAssignedUser') {
+      await performDeleteAssignedUser(confirmDialog.item);
+      setConfirmDialog(null);
+      return;
+    }
+
+    if (confirmDialog.kind === 'bulkDeleteAssignedUsers') {
+      await performBulkDeleteAssignedUsers(confirmDialog.inventoryIds);
+      setConfirmDialog(null);
+      return;
+    }
+
+    if (confirmDialog.kind === 'bulkClearAssignedUsers') {
+      await performBulkFreeSelectedVms(confirmDialog.inventoryIds);
+      setConfirmDialog(null);
+      return;
+    }
+
+    if (confirmDialog.kind === 'deleteAssignmentVm') {
+      await performDeleteAssignmentRow(confirmDialog.row);
+      setConfirmDialog(null);
+      return;
+    }
+
+    await performClearAssignedUser(confirmDialog.item);
+    setConfirmDialog(null);
+  }, [confirmDialog, performBulkDeleteAssignedUsers, performBulkFreeSelectedVms, performClearAssignedUser, performDeleteAssignedUser, performDeleteAssignmentRow]);
+
+  const confirmDialogBusy =
+    confirmDialog?.kind === 'deleteAssignedUser'
+      ? deletingUserInventoryId === confirmDialog.item.inventoryId
+      : confirmDialog?.kind === 'bulkDeleteAssignedUsers' || confirmDialog?.kind === 'bulkClearAssignedUsers'
+        ? bulkActionBusy
+      : confirmDialog?.kind === 'deleteAssignmentVm'
+      ? deletingAssignmentVmId === confirmDialog.row.editableExternalVmId
+      : confirmDialog?.kind === 'clearAssignedUser'
+        ? clearingAssignmentInventoryId === confirmDialog.item.inventoryId
+        : false;
 
   const toggleSort = (nextSortBy: SortBy) => {
     if (sortBy === nextSortBy) {
@@ -880,6 +1329,19 @@ export default function SuperAdminVmInventoryPage() {
 
   return (
     <div className="mx-auto max-w-7xl">
+      {confirmDialog ? (
+        <ConfirmActionModal
+          message={confirmDialog.message}
+          onConfirm={() => {
+            void handleConfirmDialog();
+          }}
+          onCancel={() => {
+            if (!confirmDialogBusy) setConfirmDialog(null);
+          }}
+          busy={confirmDialogBusy}
+        />
+      ) : null}
+
       {manageRow ? (
         <ManageExternalVmAssignmentsModal
           row={manageRow}
@@ -966,6 +1428,16 @@ export default function SuperAdminVmInventoryPage() {
           }}
           onPreviousPage={() => setPage((p) => Math.max(1, p - 1))}
           onNextPage={() => setPage((p) => Math.min(totalPages, p + 1))}
+          deletingUserInventoryId={deletingUserInventoryId}
+          clearingAssignmentInventoryId={clearingAssignmentInventoryId}
+          selectedInventoryIds={selectedInventoryIds}
+          onToggleInventorySelection={handleToggleInventorySelection}
+          onToggleAllSelection={handleToggleAllInventorySelection}
+          onBulkDeleteSelectedUsers={handleBulkDeleteSelectedUsers}
+          onBulkFreeSelectedVms={handleBulkFreeSelectedVms}
+          bulkBusy={bulkActionBusy}
+          onDeleteAssignedUser={handleDeleteAssignedUser}
+          onClearAssignedUser={handleClearAssignedUser}
           loading={loading}
           error={error}
           onRetry={() => void load()}
@@ -994,6 +1466,8 @@ export default function SuperAdminVmInventoryPage() {
           onHideUsers={() => setShowAssignmentUsers(false)}
           onToggleSort={toggleAssignmentSort}
           onEditRow={handleEditAssignmentRow}
+          onDeleteRow={handleDeleteAssignmentRow}
+          deletingVmId={deletingAssignmentVmId}
         />
       ) : null}
     </div>

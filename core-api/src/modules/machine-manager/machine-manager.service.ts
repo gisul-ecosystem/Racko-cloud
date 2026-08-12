@@ -970,24 +970,37 @@ class MachineManagerService {
   }
 
   /**
-   * Returns the persisted reset result for a session, or null if not yet complete.
-   * Used by the SSE stream on open to deliver already-completed results instantly.
+   * Returns ALL persisted reset results for a session, or empty array if none yet.
+   * Multiple machines in one session each write their own record — we must return
+   * all of them so the SSE stream can deliver each reset_complete event.
+   * Previously used findOne which only returned the first — causing the second
+   * machine's result to be silently dropped on reconnect.
    */
+  async getResetResults(sessionId: string): Promise<Array<{
+    machineId: string;
+    machineName: string;
+    success: boolean;
+    error?: string;
+  }>> {
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+    const results = await ResetResultModel.find({ sessionId }).lean();
+    return results.map(r => ({
+      machineId:   r.machineId.toString(),
+      machineName: r.machineName,
+      success:     r.success,
+      error:       r.error,
+    }));
+  }
+
+  /** @deprecated Use getResetResults (plural) — this only returns the first result */
   async getResetResult(sessionId: string): Promise<{
     machineId: string;
     machineName: string;
     success: boolean;
     error?: string;
   } | null> {
-    const { ResetResultModel } = await import('../../models/resetResult.model');
-    const result = await ResetResultModel.findOne({ sessionId }).lean();
-    if (!result) return null;
-    return {
-      machineId:   result.machineId.toString(),
-      machineName: result.machineName,
-      success:     result.success,
-      error:       result.error,
-    };
+    const results = await this.getResetResults(sessionId);
+    return results[0] ?? null;
   }
 
   async execCommand(
