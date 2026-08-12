@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 export const COMPANY_SIZE_OPTIONS = ['1-10', '11-50', '51-200', '201-500', '500+'] as const;
+export const COMPANY_SIZE_SELECT_VALUE = '' as const;
 
 export type CompanySize = (typeof COMPANY_SIZE_OPTIONS)[number];
 
@@ -48,9 +49,14 @@ export const companyStepSchema = z.object({
     .trim()
     .min(2, 'Designation must be at least 2 characters')
     .max(120, 'Designation must be at most 120 characters'),
-  companySize: z.enum(COMPANY_SIZE_OPTIONS, {
-    message: 'Select a company size',
-  }),
+  companySize: z.union([
+    z.enum(COMPANY_SIZE_OPTIONS, {
+      message: 'Select a company size',
+    }),
+    z.literal(COMPANY_SIZE_SELECT_VALUE).refine(() => false, {
+      message: 'Select a company size',
+    }),
+  ]),
 });
 
 export const legalStepSchema = z.object({
@@ -125,6 +131,14 @@ export function joinPhone(dialCode: string, national: string): string {
 
 export function draftStorageKey(userId: string): string {
   return `racko-org-onboarding-draft:${userId}`;
+}
+
+export function stepStorageKey(userId: string): string {
+  return `racko-org-onboarding-step:${userId}`;
+}
+
+export function verifiedPhoneStorageKey(userId: string): string {
+  return `racko-org-onboarding-verified-phone:${userId}`;
 }
 
 /** Prefill from org register before the user has an id (keyed by email). */

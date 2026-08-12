@@ -12,6 +12,11 @@ import { sendPlainEmail } from '../../utils/email/sender';
 import { generateFingerprint, getClientIp } from '../../utils/deviceFingerprint';
 import { adminOrgOnboardingService } from './adminOrgOnboarding.service';
 import { otpService } from '../otp/otp.service';
+import {
+  serializeOrganizationRequest,
+  serializeOrganizationRequests,
+  withEncryptedTaxId,
+} from './organizationSensitiveFields';
 
 const router = Router();
 
@@ -143,7 +148,7 @@ router.get('/me', async (req, res, next) => {
     const request = await OrganizationAccessRequestModel.findOne({
       userId: authReq.user.userId,
     }).lean();
-    success(res, 'Onboarding details retrieved.', { request });
+    success(res, 'Onboarding details retrieved.', { request: serializeOrganizationRequest(request) });
   } catch (err) {
     next(err);
   }
@@ -174,6 +179,7 @@ router.put(
       }
 
       const body = req.body as z.infer<typeof submitOrganizationDetailsSchema>['body'];
+      const encryptedBody = withEncryptedTaxId(body);
       const existing = await OrganizationAccessRequestModel.findOne({ userId: user._id });
       const keepNda = existing?.ndaStatus ?? 'not_started';
 
@@ -181,7 +187,7 @@ router.put(
         { userId: user._id },
         {
           $set: {
-            ...body,
+            ...encryptedBody,
             companyWebsite: body.companyWebsite || undefined,
             status: 'approved',
             ndaStatus: keepNda,
@@ -199,7 +205,7 @@ router.put(
         await user.save();
       }
 
-      success(res, 'Organization profile saved.', { request: requestDoc });
+      success(res, 'Organization profile saved.', { request: serializeOrganizationRequest(requestDoc) });
     } catch (err) {
       next(err);
     }
@@ -219,6 +225,7 @@ router.post(
       }
 
       const body = req.body as z.infer<typeof submitOrganizationDetailsSchema>['body'];
+      const encryptedBody = withEncryptedTaxId(body);
       await otpService.assertPhoneVerified(
         authReq.user.userId,
         body.phone,
@@ -228,7 +235,7 @@ router.post(
         { userId: user._id },
         {
           $set: {
-            ...body,
+            ...encryptedBody,
             companyWebsite: body.companyWebsite || undefined,
             status: 'pending',
           },
@@ -263,7 +270,7 @@ router.post(
       success(
         res,
         'Organization details submitted for review.',
-        { request: requestDoc },
+        { request: serializeOrganizationRequest(requestDoc) },
         201
       );
     } catch (err) {
@@ -279,7 +286,10 @@ router.get('/organization-requests', requireRole('super_admin'), async (_req, re
       .populate('reviewedBy', 'email')
       .sort({ createdAt: -1 })
       .lean();
-    success(res, 'Organization requests retrieved.', { requests, total: requests.length });
+    success(res, 'Organization requests retrieved.', {
+      requests: serializeOrganizationRequests(requests),
+      total: requests.length,
+    });
   } catch (err) {
     next(err);
   }
@@ -321,7 +331,7 @@ router.patch(
         });
       }
 
-      success(res, 'Organization request updated.', { request: requestDoc });
+      success(res, 'Organization request updated.', { request: serializeOrganizationRequest(requestDoc) });
     } catch (err) {
       next(err);
     }

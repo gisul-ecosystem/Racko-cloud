@@ -210,6 +210,15 @@ export const otpService = {
   },
 
   async assertPhoneVerified(userId: string, phone: string, purpose: PhoneOtpPurpose): Promise<void> {
+    if (getDevBypassOtp()) {
+      logger.info('[otp] Development OTP bypass enabled; submit verification check skipped.', {
+        userId,
+        phone: normalizePhone(phone),
+        purpose,
+      });
+      return;
+    }
+
     const verified = await this.isPhoneVerified(userId, phone, purpose);
     if (!verified) {
       throw new ValidationError('Verify your phone number with OTP before submitting organization details.');

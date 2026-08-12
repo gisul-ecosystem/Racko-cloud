@@ -23,6 +23,7 @@ import {
 } from '@/lib/customerOnboardingApi';
 import {
   COMPANY_SIZE_OPTIONS,
+  COMPANY_SIZE_SELECT_VALUE,
   DIAL_CODES,
   companyStepSchema,
   contactStepSchema,
@@ -32,6 +33,8 @@ import {
   legalStepSchema,
   organizationOnboardingSchema,
   splitPhone,
+  stepStorageKey,
+  verifiedPhoneStorageKey,
   zodIssuesToFieldErrors,
   type FormFieldErrors,
   type OrganizationOnboardingForm,
@@ -39,13 +42,15 @@ import {
 } from '@/lib/organizationOnboardingSchema';
 import { sendPhoneOtp, verifyPhoneOtp } from '@/lib/otpApi';
 
-const TOTAL_PROGRESS_STEPS = 4;
-
 const STEPPER = [
   { id: 1, title: 'Contact', subtitle: 'Contact Information' },
   { id: 2, title: 'Company', subtitle: 'Company Details' },
   { id: 3, title: 'Legal', subtitle: 'Legal Information' },
 ] as const;
+
+const TOTAL_PROGRESS_STEPS = STEPPER.length;
+
+type OnboardingStep = (typeof STEPPER)[number]['id'];
 
 const EMPTY_FORM: OrganizationOnboardingForm = {
   contactName: '',
@@ -53,7 +58,7 @@ const EMPTY_FORM: OrganizationOnboardingForm = {
   companyName: '',
   companyWebsite: '',
   designation: '',
-  companySize: '1-10',
+  companySize: COMPANY_SIZE_SELECT_VALUE,
   taxId: '',
   registeredAddress: '',
   expectedUsage: '',
@@ -203,7 +208,7 @@ export default function OrganizationOnboardingPage() {
             companySize:
               (COMPANY_SIZE_OPTIONS as readonly string[]).includes(existing.companySize ?? '')
                 ? (existing.companySize as OrganizationOnboardingForm['companySize'])
-                : '1-10',
+                : COMPANY_SIZE_SELECT_VALUE,
             registeredAddress: existing.registeredAddress ?? '',
             taxId: existing.taxId ?? '',
             useCase: existing.useCase ?? '',
@@ -245,6 +250,14 @@ export default function OrganizationOnboardingPage() {
         const phoneParts = splitPhone(next.phone);
         setPhoneDial(phoneParts.dialCode);
         setPhoneNational(phoneParts.national);
+        const storedVerifiedPhone = localStorage.getItem(verifiedPhoneStorageKey(user.id));
+        if (storedVerifiedPhone && storedVerifiedPhone === next.phone) {
+          setVerifiedPhone(storedVerifiedPhone);
+        }
+        const storedStep = Number(localStorage.getItem(stepStorageKey(user.id)));
+        if (storedStep >= 1 && storedStep <= TOTAL_PROGRESS_STEPS) {
+          setStep(storedStep as OnboardingStep);
+        }
       } catch (err) {
         setError(err instanceof ApiError ? err.message : 'Failed to load organization onboarding.');
       } finally {
@@ -281,6 +294,7 @@ export default function OrganizationOnboardingPage() {
     setOtpCode('');
     setOtpMessage(null);
     setOtpError(null);
+    if (user) localStorage.removeItem(verifiedPhoneStorageKey(user.id));
   }
 
   function handleDialChange(code: string) {
@@ -341,6 +355,7 @@ export default function OrganizationOnboardingPage() {
     try {
       await verifyPhoneOtp({ phone, purpose: PHONE_OTP_PURPOSE, code: otpCode.trim() });
       setVerifiedPhone(phone);
+      if (user) localStorage.setItem(verifiedPhoneStorageKey(user.id), phone);
       setOtpMessage('Phone number verified.');
     } catch (err) {
       setOtpError(err instanceof ApiError ? err.message : 'Failed to verify OTP.');
@@ -376,7 +391,12 @@ export default function OrganizationOnboardingPage() {
       setOtpError('Verify your phone number before continuing.');
       return;
     }
-    setStep((s) => Math.min(s + 1, 3));
+    const nextStep = Math.min(step + 1, TOTAL_PROGRESS_STEPS) as OnboardingStep;
+    setStep(nextStep);
+    if (user) {
+      localStorage.setItem(draftStorageKey(user.id), JSON.stringify(data));
+      localStorage.setItem(stepStorageKey(user.id), String(nextStep));
+    }
   }
 
   async function handleSubmit() {
@@ -386,14 +406,21 @@ export default function OrganizationOnboardingPage() {
       setFieldErrors(zodIssuesToFieldErrors(result.error.issues));
       // Jump to first step that has errors
       const keys = result.error.issues.map((i) => String(i.path[0]));
-        if (keys.some((k) => ['contactName', 'phone'].includes(k))) setStep(1);
-      else if (keys.some((k) => ['companyName', 'companyWebsite', 'designation', 'companySize'].includes(k)))
-        setStep(2);
-      else setStep(3);
+      const nextStep = keys.some((k) => ['contactName', 'phone'].includes(k))
+        ? 1
+        : keys.some((k) => ['companyName', 'companyWebsite', 'designation', 'companySize'].includes(k))
+          ? 2
+          : 3;
+      setStep(nextStep);
+      if (user) {
+        localStorage.setItem(draftStorageKey(user.id), JSON.stringify(data));
+        localStorage.setItem(stepStorageKey(user.id), String(nextStep));
+      }
       return;
     }
     if (verifiedPhone !== result.data.phone) {
       setStep(1);
+      if (user) localStorage.setItem(stepStorageKey(user.id), '1');
       setOtpError('Verify your phone number before submitting organization details.');
       return;
     }
@@ -408,7 +435,11 @@ export default function OrganizationOnboardingPage() {
       const next = await submitOrganizationRequest(payload);
       setRequest(next);
       setJustSubmitted(true);
-      if (user) localStorage.removeItem(draftStorageKey(user.id));
+      if (user) {
+        localStorage.removeItem(draftStorageKey(user.id));
+        localStorage.removeItem(stepStorageKey(user.id));
+        localStorage.removeItem(verifiedPhoneStorageKey(user.id));
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to submit organization request.');
     } finally {
@@ -493,7 +524,7 @@ export default function OrganizationOnboardingPage() {
   }
 
   const progressStep = step;
-  const progressPct = Math.round((progressStep / TOTAL_PROGRESS_STEPS) * 1000) / 10;
+  const completedProgressSteps = Math.max(step - 1, 0);
 
   const sectionMeta =
     step === 1
@@ -522,7 +553,7 @@ export default function OrganizationOnboardingPage() {
         }}
       />
 
-      <div className="relative mx-auto w-full max-w-4xl overflow-hidden rounded-2xl border border-gray-800/80 bg-[#111827]/95 shadow-2xl shadow-black/40">
+      <div className="relative mx-auto flex h-[calc(100vh-4rem)] min-h-[720px] w-full max-w-4xl flex-col overflow-hidden rounded-2xl border border-gray-800/80 bg-[#111827]/95 shadow-2xl shadow-black/40 sm:h-[calc(100vh-6rem)]">
         <div className="border-b border-gray-800 px-6 py-5 sm:px-8">
           <Link href="/" className="inline-flex items-center gap-2.5">
             <span className="relative h-9 w-10 shrink-0 overflow-hidden rounded-md">
@@ -551,13 +582,13 @@ export default function OrganizationOnboardingPage() {
             </p>
           </div>
 
-          <nav className="mt-8 flex items-start justify-between gap-2" aria-label="Onboarding steps">
+          <nav className="mx-auto mt-8 flex w-full max-w-3xl items-start justify-center gap-4" aria-label="Onboarding steps">
             {STEPPER.map((item, idx) => {
               const active = step === item.id;
               const done = step > item.id;
               return (
-                <div key={item.id} className="flex flex-1 items-center">
-                  <div className="flex min-w-0 flex-col items-center text-center sm:flex-row sm:items-center sm:gap-3 sm:text-left">
+                <div key={item.id} className="flex min-w-0 items-center">
+                  <div className="flex w-28 shrink-0 flex-col items-center text-center sm:w-36 sm:flex-row sm:items-center sm:gap-3 sm:text-left">
                     <span
                       className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-sm font-semibold ${
                         active || done
@@ -577,7 +608,7 @@ export default function OrganizationOnboardingPage() {
                     </div>
                   </div>
                   {idx < STEPPER.length - 1 ? (
-                    <div className="mx-2 hidden h-px flex-1 bg-gray-700 sm:block" />
+                    <div className="ml-4 hidden h-px w-20 shrink-0 bg-gray-700 sm:block" />
                   ) : null}
                 </div>
               );
@@ -585,7 +616,7 @@ export default function OrganizationOnboardingPage() {
           </nav>
         </div>
 
-        <div className="px-6 py-6 sm:px-8">
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-6 sm:px-8">
           {error ? (
             <div className="mb-4 rounded-lg bg-red-900/30 px-4 py-3 text-sm text-red-300">{error}</div>
           ) : null}
@@ -721,6 +752,9 @@ export default function OrganizationOnboardingPage() {
                     fieldErrors.companySize ? ' border-red-500' : ' border-gray-700'
                   }`}
                 >
+                  <option value={COMPANY_SIZE_SELECT_VALUE} disabled>
+                    Select
+                  </option>
                   {COMPANY_SIZE_OPTIONS.map((size) => (
                     <option key={size} value={size}>
                       {size}
@@ -791,7 +825,7 @@ export default function OrganizationOnboardingPage() {
           </div> */}
         </div>
 
-        <div className="flex flex-col gap-4 border-t border-gray-800 bg-[#0d1424] px-6 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-8">
+        <div className="grid gap-4 border-t border-gray-800 bg-[#0d1424] px-6 py-4 sm:grid-cols-3 sm:items-center sm:px-8">
           {/* <button
             type="button"
             onClick={handleSaveDraft}
@@ -804,42 +838,45 @@ export default function OrganizationOnboardingPage() {
             </span>
           </button> */}
 
-          <div className="flex flex-col items-center gap-1.5">
+          {step > 1 ? (
+            <button
+              type="button"
+              onClick={() => {
+                const nextStep = Math.max(step - 1, 1) as OnboardingStep;
+                setStep(nextStep);
+                if (user) localStorage.setItem(stepStorageKey(user.id), String(nextStep));
+              }}
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 bg-[#1a2332] px-5 py-2.5 text-sm font-medium text-gray-200 hover:bg-[#243044] sm:justify-self-start"
+            >
+              ← Back
+            </button>
+          ) : (
+            <div className="hidden sm:block" />
+          )}
+
+          <div className="flex flex-col items-center gap-1.5 sm:justify-self-center">
             <div className="flex w-full items-center justify-between gap-4 text-[11px] text-gray-400 sm:w-56">
               <span>
                 Step {progressStep} of {TOTAL_PROGRESS_STEPS}
               </span>
-              <span>{progressPct}% Completed</span>
             </div>
             <div className="flex w-full gap-1 sm:w-56">
               {Array.from({ length: TOTAL_PROGRESS_STEPS }).map((_, i) => (
                 <div
                   key={i}
                   className={`h-1.5 flex-1 rounded-full ${
-                    i < progressStep ? 'bg-[#B91C1C]' : 'bg-gray-700'
+                    i < completedProgressSteps ? 'bg-[#B91C1C]' : 'bg-gray-700'
                   }`}
                 />
               ))}
             </div>
           </div>
 
-          {step > 1 ? (
-            <button
-              type="button"
-              onClick={() => setStep((s) => s - 1)}
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-gray-700 bg-[#1a2332] px-5 py-2.5 text-sm font-medium text-gray-200 hover:bg-[#243044]"
-            >
-              ← Back
-            </button>
-          ) : (
-            <div />
-          )}
-
           {step < 3 ? (
             <button
               type="button"
               onClick={handleContinue}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#DC2626]"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#DC2626] sm:justify-self-end"
             >
               Continue
               <ArrowRight className="h-4 w-4" />
@@ -849,7 +886,7 @@ export default function OrganizationOnboardingPage() {
               type="button"
               disabled={saving}
               onClick={() => void handleSubmit()}
-              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#DC2626] disabled:opacity-50"
+              className="inline-flex items-center justify-center gap-2 rounded-lg bg-[#B91C1C] px-6 py-2.5 text-sm font-semibold text-white hover:bg-[#DC2626] disabled:opacity-50 sm:justify-self-end"
             >
               {saving ? 'Submitting...' : 'Submit'}
               <ArrowRight className="h-4 w-4" />
