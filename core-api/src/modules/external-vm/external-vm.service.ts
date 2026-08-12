@@ -809,7 +809,10 @@ class ExternalVMService {
     const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
     await migrateLegacyExternalVmAssignments(tenantId);
 
-    const query: Record<string, unknown> = { tenantId, source: { $in: ['admin_import', 'tenant_import'] } };
+    const query: Record<string, unknown> = {
+      tenantId,
+      source: { $in: ['admin_import', 'tenant_import', 'superadmin_bulk'] },
+    };
     if (actor.role === 'tenant_user') {
       const assignedIds = await getExternalVmIdsForTenantUser(
         tenantId,
