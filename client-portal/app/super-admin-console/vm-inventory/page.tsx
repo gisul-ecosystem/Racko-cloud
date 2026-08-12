@@ -35,6 +35,7 @@ type FlashMessage = { type: 'success' | 'error'; text: string } | null;
 type AssignmentEntry = {
   username: string;
   isTenantUser: boolean;
+  ownerKey?: string;
   tenantName?: string;
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
   vmUsername?: string | null;
@@ -216,6 +217,9 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       current.providerDetails = {
         username: item.providerUsername?.trim() || item.name,
         isTenantUser: false,
+        ownerKey: item.ownerScope === 'tenant'
+          ? `tenant:${item.ownerTenantId ?? item.ownerTenantName ?? ''}`
+          : `admin:${item.ownerAdminId ?? item.ownerAdminEmail ?? ''}`,
         tenantName: undefined,
         planDuration: item.providerPlanDuration ?? null,
         vmUsername: item.providerUsername ?? null,
@@ -227,21 +231,52 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       };
     }
 
-    for (const assignment of item.mappedAssignments) {
-      const exists = current.assignments.some(
-        (candidate) =>
-          candidate.username === assignment.username &&
-          candidate.isTenantUser === assignment.isTenantUser &&
-          candidate.providerStartDate === assignment.providerStartDate &&
-          candidate.providerEndDate === assignment.providerEndDate &&
-          candidate.startDate === assignment.startDate &&
-          candidate.endDate === assignment.endDate
-      );
+    const latestUpdatedAt = Number.isNaN(new Date(item.updatedAt).getTime())
+      ? 0
+      : new Date(item.updatedAt).getTime();
+    const ownerKey = item.ownerScope === 'tenant'
+      ? `tenant:${item.ownerTenantId ?? item.ownerTenantName ?? ''}`
+      : `admin:${item.ownerAdminId ?? item.ownerAdminEmail ?? ''}`;
+    const assignmentByPriorityKey = new Map<
+      string,
+      { assignment: AssignmentEntry; updatedAtMs: number }
+    >();
 
-      if (!exists) {
-        current.assignments.push(assignment);
+    for (const existing of current.assignments) {
+      const existingIdentity = String(existing.username ?? '').trim().toLowerCase();
+      const existingOwnerKey = existing.ownerKey ?? (existing.isTenantUser
+        ? `tenant:${existing.tenantName ?? ''}`
+        : ownerKey);
+      const dedupeKey = `${existingOwnerKey}|${existingIdentity}|${current.ipAddress.trim().toLowerCase()}`;
+      assignmentByPriorityKey.set(dedupeKey, {
+        assignment: existing,
+        updatedAtMs: 0,
+      });
+    }
+
+    for (const assignment of item.mappedAssignments) {
+      const identity = String(assignment.username ?? '').trim().toLowerCase();
+      const assignmentOwnerKey = assignment.isTenantUser
+        ? `tenant:${assignment.tenantName ?? item.ownerTenantName ?? item.ownerTenantId ?? ''}`
+        : `admin:${item.ownerAdminId ?? item.ownerAdminEmail ?? ''}`;
+      const dedupeKey = `${assignmentOwnerKey}|${identity}|${current.ipAddress.trim().toLowerCase()}`;
+      const currentRecord = assignmentByPriorityKey.get(dedupeKey);
+      const normalizedAssignment: AssignmentEntry = {
+        ...assignment,
+        ownerKey: assignmentOwnerKey,
+      };
+
+      if (!currentRecord || latestUpdatedAt >= currentRecord.updatedAtMs) {
+        assignmentByPriorityKey.set(dedupeKey, {
+          assignment: normalizedAssignment,
+          updatedAtMs: latestUpdatedAt,
+        });
       }
     }
+
+    current.assignments = [...assignmentByPriorityKey.values()]
+      .map((entry) => entry.assignment)
+      .sort((a, b) => a.username.localeCompare(b.username));
 
     grouped.set(key, current);
   }
