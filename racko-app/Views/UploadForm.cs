@@ -201,9 +201,10 @@ public class UploadForm : Form
     {
         using var dlg = new OpenFileDialog
         {
-            Title      = "Select files to share",
-            Filter     = "All Files (*.*)|*.*",
-            Multiselect = true,
+            Title           = "Select files to share",
+            Filter          = "All Files (*.*)|*.*",
+            Multiselect     = true,
+            InitialDirectory = Environment.GetFolderPath(Environment.SpecialFolder.Desktop),
         };
         if (dlg.ShowDialog(this) != DialogResult.OK) return;
 
