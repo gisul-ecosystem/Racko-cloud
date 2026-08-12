@@ -42,7 +42,7 @@ export default function TenantProjectsLayout({ children }: { children: React.Rea
     <ServiceShellLayout
       sidebarOpen={false}
       sidebar={null}
-      topBar={<TenantTopBar title="Projects" subtitle="Client cost containers" />}
+      topBar={<TenantTopBar title="Projects" subtitle="Client cost containers" onToggleSidebar={() => {}} />}
       mainClassName="p-6 lg:p-8"
     >
       {children}
