@@ -13,12 +13,7 @@
 package updater
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
-	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +22,7 @@ import (
 	"time"
 
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/download"
 )
 // Update downloads the new binary, verifies its checksum, replaces the current
 // binary, and exits. The Windows Service Control Manager automatically restarts
@@ -68,36 +64,34 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 
 	// ── Step 2: download new binary ───────────────────────────────────────────
 	log.Printf("[updater] Downloading new binary from %s", cfg.PlatformURL)
-	inFlightSHA, err := downloadBinary(cfg.PlatformURL, tmpPath)
+	url := cfg.PlatformURL + "/api/v1/agent/binary/windows"
+	inFlightSHA, err := download.File(url, tmpPath, "racko-agent.exe")
 	if err != nil {
 		log.Printf("[updater] Download failed: %v — aborting", err)
 		return
 	}
-	// Clean up temp file on any error path
-	downloaded := true
-	defer func() {
-		if downloaded {
-			_ = os.Remove(tmpPath)
-		}
-	}()
 
 	// ── Step 3: verify checksum ───────────────────────────────────────────────
-	// Use the SHA computed during download (via io.TeeReader) — this avoids any
-	// Windows file-system read-after-write race that would occur if we re-opened
-	// the file to hash it separately.
 	if expectedSHA != "" {
-		// Trim any whitespace/newlines that might have been introduced during
-		// CI artifact file reads or environment variable interpolation.
 		expectedSHA = strings.TrimSpace(expectedSHA)
 		log.Printf("[updater] Checksum: expected=%s got=%s", expectedSHA, inFlightSHA)
 		if inFlightSHA != expectedSHA {
 			log.Printf("[updater] Checksum MISMATCH — aborting")
+			_ = os.Remove(tmpPath)
 			return
 		}
 		log.Printf("[updater] Checksum verified OK")
 	} else {
 		log.Printf("[updater] No checksum provided — skipping verification")
 	}
+
+	// Clean up temp file on any error path after this point
+	downloaded := true
+	defer func() {
+		if downloaded {
+			_ = os.Remove(tmpPath)
+		}
+	}()
 
 	// ── Step 4: stop all goroutines ───────────────────────────────────────────
 	// Cancel heartbeat, watcher, poller etc. so they don't interfere.
@@ -148,61 +142,6 @@ func Update(cfg *config.Config, expectedSHA string, cancel func()) {
 	// Exit — SCM detects the exit and restarts with the new binary.
 	log.Printf("[updater] Update complete — exiting so SCM restarts with new binary")
 	os.Exit(0)
-}
-
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-func downloadBinary(platformURL, destPath string) (actualSHA string, err error) {
-	url := platformURL + "/api/v1/agent/binary/windows"
-	client := &http.Client{Timeout: 10 * time.Minute}
-
-	req, reqErr := http.NewRequest(http.MethodGet, url, nil)
-	if reqErr != nil {
-		return "", fmt.Errorf("build request: %w", reqErr)
-	}
-	req.Header.Set("Accept-Encoding", "identity")
-
-	resp, respErr := client.Do(req)
-	if respErr != nil {
-		return "", fmt.Errorf("http get: %w", respErr)
-	}
-	defer resp.Body.Close()
-
-	log.Printf("[updater] Download response: status=%d content-encoding=%q content-length=%d",
-		resp.StatusCode, resp.Header.Get("Content-Encoding"), resp.ContentLength)
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("server returned %d", resp.StatusCode)
-	}
-
-	f, createErr := os.Create(destPath)
-	if createErr != nil {
-		return "", fmt.Errorf("create temp file: %w", createErr)
-	}
-
-	// Hash during download — avoids file system read-after-write race on Windows.
-	// io.TeeReader streams bytes to both the hasher and the file simultaneously.
-	h := sha256.New()
-	tee := io.TeeReader(resp.Body, h)
-
-	written, copyErr := io.Copy(f, tee)
-
-	syncErr := f.Sync()
-	closeErr := f.Close()
-
-	if copyErr != nil {
-		return "", fmt.Errorf("write binary: %w", copyErr)
-	}
-	if syncErr != nil {
-		log.Printf("[updater] Warning: file sync failed: %v", syncErr)
-	}
-	if closeErr != nil {
-		return "", fmt.Errorf("close file: %w", closeErr)
-	}
-
-	computed := hex.EncodeToString(h.Sum(nil))
-	log.Printf("[updater] Download complete: wrote %d bytes, in-flight SHA256=%s", written, computed)
-	return computed, nil
 }
 
 // ─── end of updater.go ────────────────────────────────────────────────────────
