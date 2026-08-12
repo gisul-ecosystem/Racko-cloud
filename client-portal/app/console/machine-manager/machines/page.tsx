@@ -8,34 +8,17 @@ import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
-  deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStream,
-  setMachineTracking, bulkDeleteMachines,
+  deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStreamWithReconnect,
+  bulkDeleteMachines,
   type IMachine, type MachineStatus, type IJob, type JobStatus,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
 import { useJobStream } from '../../../../hooks/useJobStream';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X, Activity,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X,
 } from 'lucide-react';
 import Link from 'next/link';
-
-// ─── Tracking badge ────────────────────────────────────────────────────────────
-function TrackingBadge({ enabled }: { enabled: boolean }) {
-  if (enabled) {
-    return (
-      <span className="inline-flex items-center gap-1.5 rounded-full border border-green-200 bg-green-50 px-2 py-0.5 text-xs font-medium text-green-700">
-        <Activity className="h-3 w-3" />
-        Active
-      </span>
-    );
-  }
-  return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-gray-200 bg-gray-50 px-2 py-0.5 text-xs font-medium text-gray-400">
-      Off
-    </span>
-  );
-}
 
 // ─── Status badge ──────────────────────────────────────────────────────────────
 function MachineStatusBadge({ status }: { status: MachineStatus }) {
@@ -259,17 +242,14 @@ export default function MyMachinesPage() {
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
 
-  // Bulk selection — any machine can be selected for tracking/reset/clone
+  // Bulk selection — any machine can be selected for reset
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-
-  // Tracking
-  const [trackingLoading, setTrackingLoading] = useState(false);
 
   // Reset confirm + status
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [resetting, setResetting] = useState(false);
   const [resetStates, setResetStates] = useState<ResetMachineState[] | null>(null);
-  const sseRef = useRef<EventSource | null>(null);
+  const sseRef = useRef<(() => void) | null>(null);
 
   // Jobs keyed by machineId
   const [jobsByMachine, setJobsByMachine] = useState<Record<string, IJob[]>>({});
@@ -290,7 +270,7 @@ export default function MyMachinesPage() {
   useEffect(() => { void loadJobs(); }, [loadJobs, machines]);
 
   // Cleanup SSE on unmount
-  useEffect(() => () => { sseRef.current?.close(); }, []);
+  useEffect(() => () => { sseRef.current?.(); }, []);
 
   const handleRefresh = () => { refetch(); void loadJobs(); };
 
@@ -354,21 +334,6 @@ export default function MyMachinesPage() {
 
   const selectedMachines = machines.filter((m) => selectedIds.has(m._id));
 
-  const handleTracking = async (enabled: boolean) => {
-    if (!selectedMachines.length) return;
-    setTrackingLoading(true);
-    try {
-      await setMachineTracking(selectedMachines.map((m) => m._id), enabled);
-      addToast('success', `Tracking ${enabled ? 'enabled' : 'disabled'} on ${selectedMachines.length} machine(s).`);
-      setSelectedIds(new Set());
-      refetch();
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to update tracking.');
-    } finally {
-      setTrackingLoading(false);
-    }
-  };
-
   const handleReset = async () => {
     if (!selectedMachines.length) return;
     setResetting(true);
@@ -393,35 +358,40 @@ export default function MyMachinesPage() {
         )
       );
 
-      // Open SSE stream for accepted machines
+      // Open SSE stream with automatic reconnect + exponential backoff.
+      // On reconnect, server delivers persisted result from MongoDB instantly.
       if (result.accepted.length > 0) {
         const ticket = await issueResetStreamTicket(sessionId);
-        const sse = openResetStatusStream(sessionId, ticket.streamToken);
-        sseRef.current = sse;
 
-        sse.onmessage = (e: MessageEvent) => {
-          const event = JSON.parse(e.data as string) as {
-            type: string;
-            machineId?: string;
-            success?: boolean;
-            error?: string;
-          };
-
-          if (event.type === 'reset_complete' && event.machineId) {
+        const stop = openResetStatusStreamWithReconnect(
+          sessionId,
+          ticket.streamToken,
+          // onEvent — called for every SSE event including reset_complete
+          (event) => {
+            if (event.type === 'reset_complete' && event.machineId) {
+              setResetStates((prev) =>
+                prev!.map((s) =>
+                  s.machineId === event.machineId
+                    ? { ...s, status: event.success ? 'success' : 'failed', error: event.error }
+                    : s
+                )
+              );
+            }
+          },
+          // onTerminal — reset_complete received, stop cleanly
+          () => { sseRef.current = null; },
+          // onGiveUp — all retries exhausted (>5 min), mark in-progress as failed
+          () => {
+            sseRef.current = null;
             setResetStates((prev) =>
-              prev!.map((s) =>
-                s.machineId === event.machineId
-                  ? { ...s, status: event.success ? 'success' : 'failed', error: event.error }
-                  : s
-              )
+              prev ? prev.map((s) =>
+                s.status === 'resetting' ? { ...s, status: 'failed', error: 'Connection lost — reset may have completed. Check the machine status.' } : s
+              ) : prev
             );
-          }
-        };
+          },
+        );
 
-        sse.onerror = () => {
-          sse.close();
-          sseRef.current = null;
-        };
+        sseRef.current = stop;
       }
 
       setSelectedIds(new Set());
@@ -485,7 +455,7 @@ export default function MyMachinesPage() {
         <ResetStatusModal
           states={resetStates}
           onClose={() => {
-            sseRef.current?.close();
+            sseRef.current?.();
             sseRef.current = null;
             setResetStates(null);
           }}
@@ -502,30 +472,6 @@ export default function MyMachinesPage() {
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
             <>
-              {/* Enable Tracking — only show if any selected machine has tracking off */}
-              {selectedMachines.some((m) => !m.trackingEnabled) && (
-                <button
-                  onClick={() => void handleTracking(true)}
-                  disabled={trackingLoading}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm font-medium text-green-700 transition hover:bg-green-100 disabled:opacity-50"
-                >
-                  {trackingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5" />}
-                  Enable Tracking
-                </button>
-              )}
-              {/* Disable Tracking — only show if any selected machine has tracking on */}
-              {selectedMachines.some((m) => m.trackingEnabled) && (
-                <button
-                  onClick={() => void handleTracking(false)}
-                  disabled={trackingLoading}
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
-                >
-                  {trackingLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Activity className="h-3.5 w-3.5 opacity-40" />}
-                  Disable Tracking
-                </button>
-              )}
-              {/* Clone — only enabled if all selected machines have tracking on */}
-              {/* Clone button removed — clone is initiated from individual machine view */}
               {/* Reset — only for online machines */}
               {selectedMachines.some((m) => m.status === 'online') && (
                 <button
@@ -602,7 +548,7 @@ export default function MyMachinesPage() {
                         />
                       )}
                     </th>
-                    {['Name', 'IP Address', 'OS', 'Status', 'Tracking', 'Software Progress', 'Last Seen', 'Actions'].map((h) => (
+                    {['Name', 'IP Address', 'OS', 'Status', 'Software Progress', 'Last Seen', 'Actions'].map((h) => (
                       <th key={h} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
                     ))}
                   </tr>
@@ -635,7 +581,6 @@ export default function MyMachinesPage() {
                         <td className="px-5 py-3 font-mono text-xs text-gray-600">{m.ipAddress}</td>
                         <td className="px-5 py-3 capitalize text-gray-600">{m.os}</td>
                         <td className="px-5 py-3"><MachineStatusBadge status={m.status} /></td>
-                        <td className="px-5 py-3"><TrackingBadge enabled={m.trackingEnabled} /></td>
                         <td className="px-5 py-3">
                           <SoftwareProgress jobs={jobsByMachine[m._id] ?? []} isAuthenticated={isAuthenticated} />
                         </td>

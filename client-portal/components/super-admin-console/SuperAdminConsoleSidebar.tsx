@@ -5,6 +5,7 @@ import { usePathname } from 'next/navigation';
 import {
   ClipboardList,
   Cloud,
+  Database,
   LayoutDashboard,
   LayoutGrid,
   MonitorCheck,
@@ -61,6 +62,13 @@ const navItems: NavItem[] = [
     label: 'VM Management',
     icon: MonitorCheck,
     anyOf: ['vm_management.manage'],
+    section: 'services',
+  },
+  {
+    href: '/super-admin-console/vm-inventory',
+    label: 'VM Inventory',
+    icon: Database,
+    anyOf: ['vm_inventory.read'],
     section: 'services',
   },
   {

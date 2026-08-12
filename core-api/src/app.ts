@@ -50,8 +50,6 @@ import tenantDedicatedServerRoutes from './modules/tenantDedicatedServer/tenantD
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
-import { startVmHostLeaseExpiryWarningScheduler } from './modules/vmHostLeases/vmHostLeaseExpiryScheduler';
-import vmHostLeaseRoutes from './modules/vmHostLeases/vmHostLease.routes';
 import { rescheduleFromDb } from './modules/vmAccessSchedule/scheduleManager';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
@@ -69,6 +67,9 @@ import customerOnboardingRoutes from './modules/customerOnboarding/customerOnboa
 import projectsRoutes from './modules/projects/projects.routes';
 import tenantProjectsRoutes from './modules/projects/tenantProjects.routes';
 import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes';
+import myVmDashboardRoutes from './modules/myVmDashboard/myVmDashboard.routes';
+import tenantMyVmDashboardRoutes from './modules/myVmDashboard/tenantMyVmDashboard.routes';
+import superAdminVmInventoryRoutes from './modules/superAdmin/superAdminVmInventory.routes';
 
 const app = express();
 
@@ -178,6 +179,7 @@ app.use('/api/v1/tenant-services', tenantPortalServicesRoutes);
 app.use('/api/v1/tenant-auth', tenantAuthRoutes);
 // More-specific mount before /super-admin so white_labelling.manage does not gate this route.
 app.use('/api/v1/super-admin/external-vms', superAdminExternalVmRoutes);
+app.use('/api/v1/super-admin/vm-inventory', superAdminVmInventoryRoutes);
 app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
 app.use('/api/v1/tenant-wallet', walletRoutes);
@@ -191,6 +193,8 @@ app.use('/api/v1/tenant-vm-catalog', tenantVmCatalogRoutes);
 app.use('/api/v1/tenant-dedicated-servers', tenantDedicatedServerRoutes);
 app.use('/api/v1/tenant-projects', tenantProjectsRoutes);
 app.use('/api/v1/tenant-overview', tenantOverviewRoutes);
+app.use('/api/v1/my-vms', myVmDashboardRoutes);
+app.use('/api/v1/tenant-my-vms', tenantMyVmDashboardRoutes);
 app.use('/api/v1/auth', authRoutes);
 app.use('/api/v1/users', userRoutes);
 app.use('/api/v1/proxmox', proxmoxRoutes);
@@ -209,7 +213,6 @@ app.use('/api/v1/machine-groups', machineGroupsRoutes);
 // machines-for-app is inside agentSharedFilesRouter at /machines-for-app
 // so the full path is /api/v1/agent/shared-files/machines-for-app
 // The Go client is updated to use this path
-app.use('/api/v1/vm-host-leases', vmHostLeaseRoutes);
 app.use('/api/v1/software-catalog', softwareCatalogRoutes);
 app.use('/api/v1/ip-pool', ipPoolRoutes);
 app.use('/api/v1/proxmox-nodes', proxmoxNodeRoutes);
@@ -234,7 +237,6 @@ startVmAutomationScheduler();
 startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
 startCatalogVmExpiryScheduler();
-startVmHostLeaseExpiryWarningScheduler();
 void rescheduleFromDb().catch((err) => {
   logger.error('[accessSchedule] rescheduleFromDb failed', {
     error: err instanceof Error ? err.message : String(err),

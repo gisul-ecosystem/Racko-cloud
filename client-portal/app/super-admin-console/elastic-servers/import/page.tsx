@@ -6,11 +6,11 @@ import {
   AlertTriangle,
   CheckCircle2,
   ChevronLeft,
+  Loader2,
   Plus,
   Search,
   Trash2,
   Upload,
-  XCircle,
 } from 'lucide-react';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/lib/apiClient';
@@ -48,7 +48,6 @@ const BULK_EXAMPLE = `[
     "password": "VmPassword123!",
     "protocol": "rdp",
     "username": "Administrator",
-    "tenantName": "Acme Corp",
     "user": {
       "name": "Jane Doe",
       "email": "jane@acme.example",
@@ -92,7 +91,6 @@ interface EditorRow {
   importShape: ImportShape;
   targetMode: TargetMode;
   targetId: string;
-  tenantName: string;
   createPortalUser: boolean;
   portalUserName: string;
   portalUserEmail: string;
@@ -165,7 +163,6 @@ function emptyRow(defaults?: {
     importShape: defaults?.importShape ?? 'legacy',
     targetMode: defaults?.targetMode ?? 'admin',
     targetId: defaults?.targetId ?? '',
-    tenantName: '',
     createPortalUser: false,
     portalUserName: '',
     portalUserEmail: '',
@@ -194,15 +191,55 @@ function scheduleFromRaw(raw: Record<string, unknown> | undefined): EditorAssign
 
 function rowFromRawJson(
   raw: Record<string, unknown>,
-  defaults: { targetMode: TargetMode; targetId: string }
+  defaults: { targetMode: TargetMode; targetId: string },
+  options: {
+    admins: SuperAdminTargetOption[];
+    tenants: SuperAdminTargetOption[];
+  }
 ): EditorRow {
   const ip = String(raw.ipAddress ?? raw.ip ?? '').trim();
   const tenantName = String(raw.tenantName ?? '').trim();
+  const adminEmail = String(raw.adminEmail ?? '').trim().toLowerCase();
+  const target = raw.target as
+    | { tenantId?: string; adminId?: string; tenantSlug?: string; adminEmail?: string }
+    | undefined;
   const userRaw = raw.user as Record<string, unknown> | undefined;
-  const isExtended = Boolean(tenantName);
+  const rowSchedule = scheduleFromRaw(raw.schedule as Record<string, unknown> | undefined);
+  const isExtended = Boolean(
+    tenantName ||
+      adminEmail ||
+      userRaw ||
+      raw.schedule ||
+      (target && (target.tenantId || target.adminId || target.tenantSlug || target.adminEmail))
+  );
 
   if (isExtended) {
-    const rowSchedule = scheduleFromRaw(raw.schedule as Record<string, unknown> | undefined);
+    let targetMode: TargetMode = defaults.targetMode;
+    let targetId = defaults.targetId;
+
+    const adminIdentifier = String(target?.adminId ?? target?.adminEmail ?? '').trim().toLowerCase();
+    if (adminEmail || adminIdentifier) {
+      targetMode = 'admin';
+      const foundAdmin = options.admins.find(
+        (a) =>
+          a.id === adminIdentifier ||
+          String(a.email ?? '').trim().toLowerCase() === adminEmail ||
+          String(a.email ?? '').trim().toLowerCase() === adminIdentifier
+      );
+      targetId = foundAdmin?.id ?? '';
+    } else if (tenantName || target?.tenantId || target?.tenantSlug) {
+      targetMode = 'tenant';
+      const tenantIdentifier = String(target?.tenantId ?? target?.tenantSlug ?? '').trim().toLowerCase();
+      const foundTenant = options.tenants.find(
+        (t) =>
+          t.id === tenantIdentifier ||
+          String(t.slug ?? '').trim().toLowerCase() === tenantIdentifier ||
+          String(t.name ?? '').trim().toLowerCase() === tenantName.toLowerCase() ||
+          String(t.label ?? '').trim().toLowerCase() === tenantName.toLowerCase()
+      );
+      targetId = foundTenant?.id ?? '';
+    }
+
     return {
       key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: String(raw.name ?? '').trim(),
@@ -211,9 +248,8 @@ function rowFromRawJson(
       protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
       username: String(raw.username ?? '').trim(),
       importShape: 'extended',
-      targetMode: 'tenant',
-      targetId: '',
-      tenantName,
+      targetMode,
+      targetId,
       createPortalUser: Boolean(userRaw),
       portalUserName: String(userRaw?.name ?? '').trim(),
       portalUserEmail: String(userRaw?.email ?? '').trim(),
@@ -234,7 +270,6 @@ function rowFromRawJson(
     importShape: 'legacy',
     targetMode: defaults.targetMode,
     targetId: defaults.targetId,
-    tenantName: '',
     createPortalUser: false,
     portalUserName: '',
     portalUserEmail: '',
@@ -248,14 +283,28 @@ function rowFromRawJson(
 function rowToPayload(
   row: EditorRow,
   defaultMode: TargetMode,
-  defaultTargetId: string
+  defaultTargetId: string,
+  options: {
+    admins: SuperAdminTargetOption[];
+    tenants: SuperAdminTargetOption[];
+  }
 ): SuperAdminBulkImportRowDto | null {
   if (!row.name.trim() || !row.ip.trim() || !row.password) {
     return null;
   }
 
   if (row.importShape === 'extended') {
-    if (!row.tenantName.trim()) return null;
+    const targetId = row.targetId || (row.targetMode === defaultMode ? defaultTargetId : '');
+    if (!targetId) return null;
+
+    const tenant = row.targetMode === 'tenant' ? options.tenants.find((t) => t.id === targetId) : null;
+    const admin = row.targetMode === 'admin' ? options.admins.find((a) => a.id === targetId) : null;
+    const tenantName = String(tenant?.name ?? tenant?.label ?? '').trim();
+    const adminEmail = String(admin?.email ?? '').trim().toLowerCase();
+
+    if (row.targetMode === 'tenant' && !tenantName) return null;
+    if (row.targetMode === 'admin' && !adminEmail) return null;
+
     if (row.createPortalUser) {
       if (!row.portalUserEmail.trim() || !row.portalUserUsername.trim() || !row.portalUserPassword) {
         return null;
@@ -271,7 +320,7 @@ function rowToPayload(
       password: row.password,
       protocol: row.protocol,
       ...(row.username.trim() ? { username: row.username.trim() } : {}),
-      tenantName: row.tenantName.trim(),
+      ...(row.targetMode === 'tenant' ? { tenantName } : { adminEmail }),
       ...(row.createPortalUser
         ? {
             user: {
@@ -313,7 +362,11 @@ function rowToPayload(
 function jsonTextToPayload(
   jsonText: string,
   defaultMode: TargetMode,
-  defaultTargetId: string
+  defaultTargetId: string,
+  options: {
+    admins: SuperAdminTargetOption[];
+    tenants: SuperAdminTargetOption[];
+  }
 ): SuperAdminBulkImportRowDto[] | null {
   let parsed: unknown;
   try {
@@ -326,20 +379,63 @@ function jsonTextToPayload(
   const vms: SuperAdminBulkImportRowDto[] = [];
   for (const raw of parsed as Array<Record<string, unknown>>) {
     const tenantName = String(raw.tenantName ?? '').trim();
-    if (tenantName) {
-      const userRaw = raw.user as Record<string, unknown> | undefined;
-      const schedule = normalizeScheduleForPayload(raw.schedule);
+    const adminEmailFromRow = String(raw.adminEmail ?? '').trim().toLowerCase();
+    const userRaw = raw.user as Record<string, unknown> | undefined;
+    const schedule = normalizeScheduleForPayload(raw.schedule);
+
+    const target = raw.target as
+      | { tenantId: string }
+      | { adminId: string }
+      | { tenantSlug: string }
+      | { adminEmail: string }
+      | undefined;
+
+    const hasInlineUser = Boolean(userRaw || schedule);
+    if (tenantName || adminEmailFromRow || (target && hasInlineUser)) {
+      let extendedTenantName = tenantName;
+      let extendedAdminEmail = adminEmailFromRow;
+
+      if (!extendedTenantName && !extendedAdminEmail && target) {
+        if ('adminEmail' in target && target.adminEmail) {
+          extendedAdminEmail = String(target.adminEmail).trim().toLowerCase();
+        } else if ('adminId' in target && target.adminId) {
+          const foundAdmin = options.admins.find((a) => a.id === String(target.adminId));
+          extendedAdminEmail = String(foundAdmin?.email ?? '').trim().toLowerCase();
+        } else if ('tenantSlug' in target && target.tenantSlug) {
+          const slug = String(target.tenantSlug).trim().toLowerCase();
+          const foundTenant = options.tenants.find(
+            (t) => String(t.slug ?? '').trim().toLowerCase() === slug
+          );
+          extendedTenantName = String(foundTenant?.name ?? foundTenant?.label ?? slug).trim();
+        } else if ('tenantId' in target && target.tenantId) {
+          const foundTenant = options.tenants.find((t) => t.id === String(target.tenantId));
+          extendedTenantName = String(foundTenant?.name ?? foundTenant?.label ?? '').trim();
+        }
+      }
+
+      if (!extendedTenantName && !extendedAdminEmail && hasInlineUser && defaultTargetId) {
+        if (defaultMode === 'tenant') {
+          const foundTenant = options.tenants.find((t) => t.id === defaultTargetId);
+          extendedTenantName = String(foundTenant?.name ?? foundTenant?.label ?? '').trim();
+        } else {
+          const foundAdmin = options.admins.find((a) => a.id === defaultTargetId);
+          extendedAdminEmail = String(foundAdmin?.email ?? '').trim().toLowerCase();
+        }
+      }
+
       if (!raw.name || !(raw.ip ?? raw.ipAddress) || !raw.password) return null;
+      if (!extendedTenantName && !extendedAdminEmail) return null;
       if (userRaw) {
         if (!userRaw.email || !userRaw.username || !userRaw.password) return null;
       }
+
       vms.push({
         name: String(raw.name).trim(),
         ip: String(raw.ipAddress ?? raw.ip).trim(),
         password: String(raw.password),
         protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
         ...(raw.username ? { username: String(raw.username).trim() } : {}),
-        tenantName,
+        ...(extendedTenantName ? { tenantName: extendedTenantName } : { adminEmail: extendedAdminEmail }),
         ...(userRaw
           ? {
               user: {
@@ -355,12 +451,6 @@ function jsonTextToPayload(
       continue;
     }
 
-    const target = raw.target as
-      | { tenantId: string }
-      | { adminId: string }
-      | { tenantSlug: string }
-      | { adminEmail: string }
-      | undefined;
     if (target) {
       if (!raw.name || !(raw.ip ?? raw.ipAddress) || !raw.password) return null;
       vms.push({
@@ -610,6 +700,7 @@ export default function SuperAdminServerImportPage() {
     {}
   );
   const [submitting, setSubmitting] = useState(false);
+  const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [result, setResult] = useState<SuperAdminBulkImportResult | null>(null);
 
   useEffect(() => {
@@ -667,7 +758,11 @@ export default function SuperAdminServerImportPage() {
     const next: EditorRow[] = [];
     for (const raw of parsed as Array<Record<string, unknown>>) {
       next.push(
-        rowFromRawJson(raw, { targetMode: defaultMode, targetId: defaultTargetId })
+        rowFromRawJson(
+          raw,
+          { targetMode: defaultMode, targetId: defaultTargetId },
+          { admins, tenants }
+        )
       );
     }
     setRows(next);
@@ -688,7 +783,10 @@ export default function SuperAdminServerImportPage() {
   const buildPayload = (): SuperAdminBulkImportRowDto[] | null => {
     const hasEditorContent = rows.some((r) => r.name.trim() && r.ip.trim());
     if (!hasEditorContent) {
-      const fromJson = jsonTextToPayload(jsonText, defaultMode, defaultTargetId);
+      const fromJson = jsonTextToPayload(jsonText, defaultMode, defaultTargetId, {
+        admins,
+        tenants,
+      });
       if (fromJson?.length) return fromJson;
     }
 
@@ -700,8 +798,9 @@ export default function SuperAdminServerImportPage() {
       }
 
       if (row.importShape === 'extended') {
-        if (!row.tenantName.trim()) {
-          addToast('error', `Row "${row.name}" needs a tenant name.`);
+        const resolvedTargetId = row.targetId || (row.targetMode === defaultMode ? defaultTargetId : '');
+        if (!resolvedTargetId) {
+          addToast('error', `Row "${row.name}" needs a target admin or tenant.`);
           return null;
         }
         if (row.createPortalUser) {
@@ -723,9 +822,9 @@ export default function SuperAdminServerImportPage() {
         }
       }
 
-      const payload = rowToPayload(row, defaultMode, defaultTargetId);
+      const payload = rowToPayload(row, defaultMode, defaultTargetId, { admins, tenants });
       if (!payload) {
-        addToast('error', `Row "${row.name}" could not be built.`);
+        addToast('error', `Row "${row.name}" could not be built. Check selected target/admin details.`);
         return null;
       }
       vms.push(payload);
@@ -736,21 +835,64 @@ export default function SuperAdminServerImportPage() {
   const handleSubmit = async () => {
     const vms = buildPayload();
     if (!vms) return;
+
+    const CHUNK = 15;
+    const total = vms.length;
+
     setSubmitting(true);
+    setImportProgress({ done: 0, total });
     setResult(null);
+
+    const allResults: SuperAdminBulkImportResult['results'] = [];
+    let succeeded = 0;
+    let failed = 0;
+
     try {
-      const data = await bulkImportSuperAdminExternalVms(vms);
-      setResult(data);
+      for (let i = 0; i < vms.length; i += CHUNK) {
+        const chunk = vms.slice(i, i + CHUNK);
+        // Re-index results so index reflects position in the original vms array.
+        const offset = i;
+        try {
+          const data = await bulkImportSuperAdminExternalVms(chunk);
+          for (const r of data.results) {
+            allResults.push({ ...r, index: offset + r.index });
+          }
+          succeeded += data.summary.succeeded;
+          failed += data.summary.failed;
+        } catch (err) {
+          // Chunk call failed — record every row in the chunk as failed.
+          for (let j = 0; j < chunk.length; j++) {
+            const row = chunk[j]!;
+            allResults.push({
+              index: offset + j,
+              success: false,
+              name: 'name' in row ? String(row.name) : undefined,
+              error: err instanceof ApiError ? err.message : 'Request failed',
+              assignments: [],
+            });
+            failed++;
+          }
+        }
+        setImportProgress({ done: Math.min(i + CHUNK, total), total });
+      }
+
+      const summary = { total, succeeded, failed };
+      setResult({ results: allResults, summary });
+
+      if (failed === 0) {
+        setRows([emptyRow({ targetMode: defaultMode, targetId: defaultTargetId })]);
+        setAssigneesByKey({});
+      }
+
       addToast(
-        data.summary.failed === 0 ? 'success' : 'error',
-        data.summary.failed === 0
-          ? `Imported ${data.summary.succeeded} server${data.summary.succeeded === 1 ? '' : 's'}.`
-          : `Imported ${data.summary.succeeded}/${data.summary.total} with failures.`
+        failed === 0 ? 'success' : 'error',
+        failed === 0
+          ? `Imported ${succeeded} server${succeeded === 1 ? '' : 's'}.`
+          : `Imported ${succeeded}/${total} with failures.`
       );
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Bulk import failed.');
     } finally {
       setSubmitting(false);
+      setImportProgress(null);
     }
   };
 
@@ -780,6 +922,33 @@ export default function SuperAdminServerImportPage() {
       <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-gray-900">1. JSON source</h2>
         <div className="mt-4 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>Default stack</label>
+              <select
+                className={inputClass}
+                value={defaultMode}
+                onChange={(e) => {
+                  setDefaultMode(e.target.value as TargetMode);
+                  setDefaultTargetId('');
+                }}
+              >
+                <option value="admin">Platform admin</option>
+                <option value="tenant">Tenant</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>{defaultMode === 'admin' ? 'Admin' : 'Tenant'}</label>
+              <FilterableSelect
+                value={defaultTargetId}
+                onChange={setDefaultTargetId}
+                options={targetOptions}
+                placeholder={`Select ${defaultMode === 'admin' ? 'admin' : 'tenant'}…`}
+                searchPlaceholder={`Search ${defaultMode === 'admin' ? 'admin by email/username' : 'tenant by name/slug'}…`}
+                emptyText={`No ${defaultMode === 'admin' ? 'admins' : 'tenants'} match your search.`}
+              />
+            </div>
+          </div>
           <div>
             <label className={labelClass}>Upload .json file</label>
             <input
@@ -801,10 +970,6 @@ export default function SuperAdminServerImportPage() {
               rows={12}
               className={`${inputClass} font-mono text-xs leading-relaxed`}
             />
-            <p className="mt-1 text-xs text-gray-500">
-              Extended rows: VM fields plus `tenantName`, optional `user` (portal login), and
-              `schedule`. Legacy rows: VM fields only — pick target/assignees in the form below.
-            </p>
           </div>
           <button
             type="button"
@@ -820,9 +985,9 @@ export default function SuperAdminServerImportPage() {
       <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-gray-900">2. Default target</h2>
+            <h2 className="text-sm font-semibold text-gray-900">2. Rows & assignments</h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              Applied when a row has no target, and as the default for new rows.
+              Review imported rows and configure row-level targets/assignments if needed.
             </p>
           </div>
           <button
@@ -838,34 +1003,6 @@ export default function SuperAdminServerImportPage() {
             <Plus className="h-4 w-4" />
             Add row
           </button>
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className={labelClass}>Stack</label>
-            <select
-              className={inputClass}
-              value={defaultMode}
-              onChange={(e) => {
-                setDefaultMode(e.target.value as TargetMode);
-                setDefaultTargetId('');
-              }}
-            >
-              <option value="admin">Platform admin</option>
-              <option value="tenant">Tenant</option>
-            </select>
-          </div>
-          <div>
-            <label className={labelClass}>{defaultMode === 'admin' ? 'Admin' : 'Tenant'}</label>
-            <FilterableSelect
-              value={defaultTargetId}
-              onChange={setDefaultTargetId}
-              options={targetOptions}
-              placeholder={`Select ${defaultMode === 'admin' ? 'admin' : 'tenant'}…`}
-              searchPlaceholder={`Search ${defaultMode === 'admin' ? 'admin by email/username' : 'tenant by name/slug'}…`}
-              emptyText={`No ${defaultMode === 'admin' ? 'admins' : 'tenants'} match your search.`}
-            />
-          </div>
         </div>
 
         <div className="mt-6 space-y-4">
@@ -987,24 +1124,46 @@ export default function SuperAdminServerImportPage() {
                       }}
                     >
                       <option value="legacy">Legacy (form target + assignees)</option>
-                      <option value="extended">Extended (tenantName + create user)</option>
+                      <option value="extended">Extended (target + create user)</option>
                     </select>
                   </div>
                   {row.importShape === 'extended' ? (
                     <>
-                      <div className="sm:col-span-2">
-                        <label className={labelClass}>Tenant name</label>
-                        <input
+                      <div>
+                        <label className={labelClass}>Target stack</label>
+                        <select
                           className={inputClass}
-                          value={row.tenantName}
-                          placeholder="Acme Corp (matches name or slug)"
-                          onChange={(e) =>
+                          value={row.targetMode}
+                          onChange={(e) => {
+                            const mode = e.target.value as TargetMode;
                             setRows((prev) =>
                               prev.map((r) =>
-                                r.key === row.key ? { ...r, tenantName: e.target.value } : r
+                                r.key === row.key
+                                  ? { ...r, targetMode: mode, targetId: '' }
+                                  : r
                               )
+                            );
+                          }}
+                        >
+                          <option value="admin">Platform admin</option>
+                          <option value="tenant">Tenant</option>
+                        </select>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className={labelClass}>
+                          {row.targetMode === 'admin' ? 'Admin' : 'Tenant'}
+                        </label>
+                        <FilterableSelect
+                          value={row.targetId}
+                          onChange={(targetId) =>
+                            setRows((prev) =>
+                              prev.map((r) => (r.key === row.key ? { ...r, targetId } : r))
                             )
                           }
+                          options={rowTargets}
+                          placeholder={`Select ${row.targetMode === 'admin' ? 'admin' : 'tenant'}…`}
+                          searchPlaceholder={`Search ${row.targetMode === 'admin' ? 'admin by email/username' : 'tenant by name/slug'}…`}
+                          emptyText={`No ${row.targetMode === 'admin' ? 'admins' : 'tenants'} match your search.`}
                         />
                       </div>
                       <div className="sm:col-span-2">
@@ -1328,10 +1487,16 @@ export default function SuperAdminServerImportPage() {
             onClick={() => void handleSubmit()}
             className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
-            {submitting && (
-              <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />
+            {submitting ? (
+              <>
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {importProgress
+                  ? `Importing ${importProgress.done} of ${importProgress.total}…`
+                  : 'Importing…'}
+              </>
+            ) : (
+              'Import & assign'
             )}
-            Import & assign
           </button>
         </div>
       </div>
@@ -1343,57 +1508,82 @@ export default function SuperAdminServerImportPage() {
             {result.summary.succeeded} succeeded · {result.summary.failed} failed ·{' '}
             {result.summary.total} total
           </p>
-          <ul className="mt-4 space-y-2">
-            {result.results.map((r) => (
-              <li
-                key={r.index}
-                className={`rounded-lg border px-3 py-2 text-sm ${
-                  r.success
-                    ? 'border-green-200 bg-green-50 text-green-900'
-                    : 'border-red-200 bg-red-50 text-red-900'
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  {r.success ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
-                  ) : (
-                    <XCircle className="mt-0.5 h-4 w-4 shrink-0" />
-                  )}
-                  <div>
-                    <p className="font-medium">
-                      #{r.index + 1} {r.name ?? '—'} {r.ipAddress ? `(${r.ipAddress})` : ''}
-                    </p>
-                    {r.error && <p className="text-xs">{r.error}</p>}
-                    {r.tenantName && (
-                      <p className="text-xs opacity-90">Tenant: {r.tenantName}</p>
-                    )}
-                    {r.userId && (
-                      <p className="text-xs opacity-90">
-                        User: {r.userId}
-                        {r.userCreated ? ' (created)' : r.userReused ? ' (reused)' : ''}
-                      </p>
-                    )}
-                    {r.externalVmId && (
-                      <p className="text-xs opacity-80">VM: {r.externalVmId}</p>
-                    )}
-                    {r.assignmentId && (
-                      <p className="text-xs opacity-80">Assignment: {r.assignmentId}</p>
-                    )}
-                    {r.assignments?.length > 0 && (
-                      <ul className="mt-1 space-y-0.5 text-xs">
-                        {r.assignments.map((a) => (
-                          <li key={a.index}>
-                            Assignment {a.index + 1}:{' '}
-                            {a.success ? 'ok' : a.error ?? 'failed'}
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </div>
-                </div>
-              </li>
-            ))}
-          </ul>
+
+          {result.summary.failed > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-red-700">
+                Failed rows
+              </p>
+              <div className="overflow-hidden rounded-lg border border-red-200">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-red-50 text-gray-600">
+                    <tr>
+                      <th className="px-3 py-2 font-semibold">#</th>
+                      <th className="px-3 py-2 font-semibold">VM</th>
+                      <th className="px-3 py-2 font-semibold">Error</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-red-100">
+                    {result.results
+                      .filter((r) => !r.success)
+                      .map((r) => (
+                        <tr key={r.index} className="align-top">
+                          <td className="px-3 py-2 text-gray-400">{r.index + 1}</td>
+                          <td className="px-3 py-2">
+                            <p className="font-medium text-gray-900">{r.name ?? '—'}</p>
+                            {r.ipAddress && (
+                              <p className="text-gray-400">{r.ipAddress}</p>
+                            )}
+                          </td>
+                          <td className="px-3 py-2 text-red-700">
+                            <p>{r.error ?? 'Unknown error'}</p>
+                            {r.assignments
+                              .filter((a) => !a.success)
+                              .map((a) => (
+                                <p key={a.index} className="mt-0.5 text-gray-500">
+                                  Assignment {a.index + 1}: {a.error ?? 'failed'}
+                                </p>
+                              ))}
+                          </td>
+                        </tr>
+                      ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {result.summary.succeeded > 0 && (
+            <div className="mt-4">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-green-700">
+                Succeeded ({result.summary.succeeded})
+              </p>
+              <ul className="space-y-1">
+                {result.results
+                  .filter((r) => r.success)
+                  .map((r) => (
+                    <li
+                      key={r.index}
+                      className="flex items-start gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs text-green-900"
+                    >
+                      <CheckCircle2 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span>
+                        #{r.index + 1} {r.name ?? '—'}
+                        {r.tenantName ? ` · ${r.tenantName}` : ''}
+                        {r.userCreated
+                          ? ' · user created'
+                          : r.userReused
+                            ? ' · user reused'
+                            : ''}
+                        {r.assignments.filter((a) => !a.success).length > 0
+                          ? ` · ${r.assignments.filter((a) => !a.success).length} assignment(s) failed`
+                          : ''}
+                      </span>
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
         </div>
       )}
     </div>

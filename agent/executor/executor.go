@@ -16,7 +16,7 @@ import (
 )
 
 // installMu serializes all installs — one package at a time.
-// Package managers share OS-level locks and bandwidth; running them
+// Package managers share OS-level locks and bandwidth; running them 
 // concurrently causes contention, slower downloads, and hangs.
 var installMu sync.Mutex
 

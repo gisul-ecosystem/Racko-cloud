@@ -11,14 +11,11 @@ import {
 import { fetchTenantProjectsForService } from '@/lib/tenantProjectsApi';
 import type { AdminServiceKey } from '@/lib/adminServicesApi';
 
-type AttributionMode = 'assign' | 'skip';
-
 export function ProjectSelect({
   serviceKey,
   value,
   onChange,
   disabled,
-  /** When true, a project must be selected (no skip option). Default optional. */
   required = false,
   portal = 'org',
   seedFromQuery = true,
@@ -36,10 +33,14 @@ export function ProjectSelect({
   const [projects, setProjects] = useState<OrgProject[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [mode, setMode] = useState<AttributionMode>(required ? 'assign' : 'skip');
   const seededRef = useRef(false);
+
+  // Org: navigate to projects page with ?create=1 so modal auto-opens.
+  // Tenant: navigate to the standalone create project page.
   const createHref =
-    portal === 'tenant' ? '/console/dashboard/projects/create' : '/console/projects';
+    portal === 'tenant'
+      ? '/console/dashboard/projects/create'
+      : '/console/projects?create=1';
 
   useEffect(() => {
     let cancelled = false;
@@ -71,28 +72,9 @@ export function ProjectSelect({
     const fromQuery = new URLSearchParams(window.location.search).get('projectId');
     if (fromQuery && projects.some((p) => p.id === fromQuery)) {
       seededRef.current = true;
-      setMode('assign');
       if (!value) onChange(fromQuery);
     }
   }, [seedFromQuery, loading, value, projects, onChange]);
-
-  // Keep mode in sync if parent clears/sets value externally.
-  useEffect(() => {
-    if (value) {
-      setMode('assign');
-    } else if (required) {
-      setMode('assign');
-    }
-  }, [value, required]);
-
-  function chooseAssign() {
-    setMode('assign');
-  }
-
-  function chooseSkip() {
-    setMode('skip');
-    if (value) onChange('');
-  }
 
   if (loading) {
     return (
@@ -107,9 +89,6 @@ export function ProjectSelect({
     return <p className="text-sm text-red-600">{error}</p>;
   }
 
-  const seededProject = value ? projects.find((p) => p.id === value) : undefined;
-  const showSkip = !required;
-
   return (
     <div className="space-y-3">
       <div>
@@ -117,106 +96,48 @@ export function ProjectSelect({
           Project / client{required ? ' *' : ''}
         </p>
         <p className="text-xs text-gray-500">
-          {required
-            ? 'Charges stay on your main wallet and are tracked on this project in Reports.'
-            : 'Optional. Assign spend to a project for Reports, or continue without one.'}
+          Assign this resource to a project for spend tracking in Reports.
         </p>
       </div>
 
-      {showSkip ? (
-        <div className="space-y-2">
-          <label
-            className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition ${
-              mode === 'assign'
-                ? 'border-[#B91C1C] bg-red-50/50'
-                : 'border-gray-200 bg-white hover:border-gray-300'
-            } ${disabled ? 'pointer-events-none opacity-60' : ''}`}
+      {projects.length === 0 ? (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <p className="font-medium">No active project has this service enabled.</p>
+          <p className="mt-1 text-xs text-amber-700">
+            Create a project with this service to continue.
+          </p>
+          <Link
+            href={createHref}
+            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#991B1B]"
           >
-            <input
-              type="radio"
-              name={`project-attribution-${serviceKey}`}
-              className="mt-1"
-              checked={mode === 'assign'}
-              disabled={disabled}
-              onChange={chooseAssign}
-            />
-            <span className="min-w-0">
-              <span className="block text-sm font-medium text-gray-900">
-                Assign to an existing project
-              </span>
-              <span className="mt-0.5 block text-xs text-gray-500">
-                {seededProject
-                  ? `Preselected from project: ${seededProject.name}`
-                  : 'Pick a project that has this service enabled.'}
-              </span>
-            </span>
-          </label>
-
-          <label
-            className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2.5 transition ${
-              mode === 'skip'
-                ? 'border-[#B91C1C] bg-red-50/50'
-                : 'border-gray-200 bg-white hover:border-gray-300'
-            } ${disabled ? 'pointer-events-none opacity-60' : ''}`}
-          >
-            <input
-              type="radio"
-              name={`project-attribution-${serviceKey}`}
-              className="mt-1"
-              checked={mode === 'skip'}
-              disabled={disabled}
-              onChange={chooseSkip}
-            />
-            <span className="min-w-0">
-              <span className="block text-sm font-medium text-gray-900">
-                Continue without a project
-              </span>
-              <span className="mt-0.5 block text-xs text-gray-500">
-                Resource is created unassigned. You can still tag it later from Projects if needed.
-              </span>
-            </span>
-          </label>
+            + Create new project
+          </Link>
         </div>
-      ) : null}
+      ) : (
+        <div className="space-y-2">
+          <select
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            required={required}
+            disabled={disabled}
+            className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
+          >
+            <option value="">Select a project</option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name} — {p.clientName}
+              </option>
+            ))}
+          </select>
 
-      {mode === 'assign' ? (
-        projects.length === 0 ? (
-          <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-            No active project has this service enabled.{' '}
-            <Link href={createHref} className="font-semibold underline">
-              Create a project
-            </Link>
-            {showSkip ? ', or choose “Continue without a project”.' : ' first.'}
-          </div>
-        ) : (
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wide text-gray-500">
-              Existing project
-            </label>
-            <select
-              value={value}
-              onChange={(e) => onChange(e.target.value)}
-              required={required || mode === 'assign'}
-              disabled={disabled}
-              className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:bg-gray-50"
-            >
-              <option value="">Select a project</option>
-              {projects.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} — {p.clientName}
-                </option>
-              ))}
-            </select>
-          </div>
-        )
-      ) : null}
-
-      {mode === 'skip' && !required ? (
-        <p className="text-xs text-gray-500">
-          This request will show as <span className="font-medium text-gray-700">Unassigned</span> in
-          service lists.
-        </p>
-      ) : null}
+          <Link
+            href={createHref}
+            className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C] hover:underline"
+          >
+            + Create new project
+          </Link>
+        </div>
+      )}
     </div>
   );
 }

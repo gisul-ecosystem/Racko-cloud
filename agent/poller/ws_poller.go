@@ -15,7 +15,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/racko-ai/agent/config"
-	"github.com/racko-ai/agent/tracker"
+	"github.com/racko-ai/agent/rackoapp"
 )
 
 // Job represents a pending install job received from the platform.
@@ -34,14 +34,11 @@ type JobHandler func(job Job)
 // WSPoller connects to the platform via WebSocket and receives jobs in real-time.
 // It implements infinite reconnection with exponential backoff.
 type WSPoller struct {
-	cfg              *config.Config
-	agentID          string
-	handler          JobHandler
-	backoff          *backoffState
-	cancel           func() // called on uninstall to stop all goroutines cleanly
-	stopWatcher      func() // called before reset to pause filesystem tracking
-	restartWatcher   func() // called after reset to resume filesystem tracking
-	onTrackingUpdate func(enabled bool) // called when server sends tracking_update command
+	cfg     *config.Config
+	agentID string
+	handler JobHandler
+	backoff *backoffState
+	cancel  func() // called on uninstall to stop all goroutines cleanly
 }
 
 type backoffState struct {
@@ -50,15 +47,12 @@ type backoffState struct {
 }
 
 // NewWS creates a WebSocket poller.
-func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func(), stopWatcher func(), restartWatcher func(), onTrackingUpdate func(bool)) *WSPoller {
+func NewWS(cfg *config.Config, agentID string, handler JobHandler, cancel func()) *WSPoller {
 	return &WSPoller{
-		cfg:              cfg,
-		agentID:          agentID,
-		handler:          handler,
-		cancel:           cancel,
-		stopWatcher:      stopWatcher,
-		restartWatcher:   restartWatcher,
-		onTrackingUpdate: onTrackingUpdate,
+		cfg:     cfg,
+		agentID: agentID,
+		handler: handler,
+		cancel:  cancel,
 		backoff: &backoffState{
 			current: 5 * time.Second,
 			max:     60 * time.Second,
@@ -132,16 +126,12 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 		return conn.WriteMessage(messageType, data)
 	}
 
-	// Pong handler: called from the read goroutine — safe to reset deadline,
-	// but sends pong via safeWrite to avoid concurrent write conflict.
 	conn.SetPongHandler(func(appData string) error {
 		log.Println("[ws-poller] Pong received")
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
 		return nil
 	})
 
-	// Server pings arrive as ping frames — gorilla auto-sends pong by default,
-	// but we override to use our write mutex.
 	conn.SetPingHandler(func(appData string) error {
 		log.Println("[ws-poller] Ping received from server, sending pong")
 		conn.SetReadDeadline(time.Now().Add(5 * time.Minute))
@@ -156,7 +146,6 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 	pingTicker := time.NewTicker(30 * time.Second)
 	defer pingTicker.Stop()
 
-	// Read loop runs in a goroutine — only one reader, only one writer at a time.
 	errChan := make(chan error, 1)
 	go func() {
 		for {
@@ -200,33 +189,19 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 				}
 				log.Printf("[ws-poller] Received exec commandId=%s", execMsg.CommandID)
 				go p.runExec(execMsg.CommandID, execMsg.Command, safeWrite)
-			} else if msg.Type == "clone_replay" {
-				var cloneMsg struct {
-					SessionID       string `json:"sessionId"`
-					SourceMachineID string `json:"sourceMachineId"`
-				}
-				if err := json.Unmarshal(msg.Payload, &cloneMsg); err != nil {
-					log.Printf("[ws-poller] Malformed clone_replay payload: %v", err)
-					continue
-				}
-				log.Printf("[ws-poller] Received clone_replay sessionId=%s sourceMachineId=%s",
-					cloneMsg.SessionID, cloneMsg.SourceMachineID)
-				go p.runCloneReplay(cloneMsg.SessionID, cloneMsg.SourceMachineID, safeWrite)
-			} else if msg.Type == "tracking_update" {
-				var trackMsg struct {
-					Enabled bool `json:"enabled"`
-				}
-				if err := json.Unmarshal(msg.Payload, &trackMsg); err != nil {
-					log.Printf("[ws-poller] Malformed tracking_update payload: %v", err)
-					continue
-				}
-				log.Printf("[ws-poller] Received tracking_update enabled=%v", trackMsg.Enabled)
-				if p.onTrackingUpdate != nil {
-					go p.onTrackingUpdate(trackMsg.Enabled)
-				}
 			} else if msg.Type == "shared_file_added" || msg.Type == "shared_file_updated" || msg.Type == "shared_file_deleted" {
 				log.Printf("[ws-poller] Received %s — notifying racko-app", msg.Type)
 				go writeSharedFileNotify(msg.Type)
+			} else if msg.Type == "install_racko_app" {
+				var installMsg struct {
+					AppVersion string `json:"appVersion"`
+				}
+				if err := json.Unmarshal(msg.Payload, &installMsg); err != nil {
+					log.Printf("[ws-poller] Malformed install_racko_app payload: %v", err)
+					continue
+				}
+				log.Printf("[ws-poller] Received install_racko_app — version=%s", installMsg.AppVersion)
+				go p.runInstallRackoApp(installMsg.AppVersion, safeWrite)
 			}
 		}
 	}()
@@ -264,8 +239,6 @@ func (p *WSPoller) resetBackoff() {
 
 // ─── Exec ─────────────────────────────────────────────────────────────────────
 
-// runExec runs a PowerShell command and sends the result back over WebSocket.
-// Uses cmd.Output() (blocking) — runs in its own goroutine so it doesn't block the read loop.
 func (p *WSPoller) runExec(commandID, command string, safeWrite func(int, []byte) error) {
 	cmd := exec.Command("powershell.exe", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command)
 	out, err := cmd.CombinedOutput()
@@ -305,6 +278,8 @@ func (p *WSPoller) runExec(commandID, command string, safeWrite func(int, []byte
 // runReset downloads the reset PowerShell script from the platform server,
 // saves it to a temp file, runs it with -File (required by the script's safety guard),
 // then deletes the temp file. Sends reset_progress on start and reset_complete when done.
+// Also POSTs the result directly to core-api via HTTP for guaranteed delivery even
+// if the WebSocket was dropped during the long-running reset script.
 func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error) {
 	sendEvent := func(eventType string, phase int, message string, success bool, errMsg string) {
 		payload := map[string]interface{}{
@@ -331,7 +306,6 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 
 	sendEvent("reset_progress", 0, "Downloading reset script from server...", false, "")
 
-	// ── Step 1: Download the reset script from the platform server ────────────
 	scriptURL := p.cfg.PlatformURL + "/api/v1/agent/reset-script"
 	log.Printf("[ws-poller] runReset: downloading script from %s", scriptURL)
 
@@ -340,6 +314,7 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to download reset script: %v", err)
 		log.Printf("[ws-poller] runReset: %s", errMsg)
+		p.postResetResult(sessionID, false, errMsg)
 		sendEvent("reset_complete", 0, "", false, errMsg)
 		return
 	}
@@ -348,6 +323,7 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	if resp.StatusCode != 200 {
 		errMsg := fmt.Sprintf("Server returned %d when fetching reset script", resp.StatusCode)
 		log.Printf("[ws-poller] runReset: %s", errMsg)
+		p.postResetResult(sessionID, false, errMsg)
 		sendEvent("reset_complete", 0, "", false, errMsg)
 		return
 	}
@@ -356,32 +332,24 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	if err != nil {
 		errMsg := fmt.Sprintf("Failed to read reset script: %v", err)
 		log.Printf("[ws-poller] runReset: %s", errMsg)
+		p.postResetResult(sessionID, false, errMsg)
 		sendEvent("reset_complete", 0, "", false, errMsg)
 		return
 	}
 
-	// ── Step 2: Write to temp file ─────────────────────────────────────────────
 	tmpPath := `C:\Windows\Temp\racko-reset.ps1`
 	if err := os.WriteFile(tmpPath, scriptContent, 0644); err != nil {
 		errMsg := fmt.Sprintf("Failed to write reset script to temp: %v", err)
 		log.Printf("[ws-poller] runReset: %s", errMsg)
+		p.postResetResult(sessionID, false, errMsg)
 		sendEvent("reset_complete", 0, "", false, errMsg)
 		return
 	}
-	defer os.Remove(tmpPath) // always clean up temp file
+	defer os.Remove(tmpPath)
 
 	sendEvent("reset_progress", 1, "Running reset script...", false, "")
 	log.Printf("[ws-poller] runReset: executing script, sessionId=%s", sessionID)
 
-	// Stop the watcher BEFORE running the reset script.
-	// Without this, the watcher detects every file the reset script deletes
-	// and records them as file_delete activity events — polluting the change log
-	// with 300+ fake deletions that represent the reset, not user changes.
-	if p.stopWatcher != nil {
-		p.stopWatcher()
-	}
-
-	// ── Step 3: Run with -File flag (required by the script's safety guard) ───
 	cmd := exec.Command("powershell.exe",
 		"-NonInteractive",
 		"-ExecutionPolicy", "Bypass",
@@ -389,82 +357,30 @@ func (p *WSPoller) runReset(sessionID string, safeWrite func(int, []byte) error)
 	)
 	out, err := cmd.CombinedOutput()
 
-	// Restart the watcher AFTER reset completes — whether success or failure.
-	// The watcher will now track changes from the clean post-reset state.
-	if p.restartWatcher != nil {
-		p.restartWatcher()
-	}
-
 	if err != nil {
 		errMsg := string(out)
 		if errMsg == "" {
 			errMsg = err.Error()
 		}
-		// Trim to 2KB to avoid oversized WS messages
 		if len(errMsg) > 2048 {
 			errMsg = errMsg[:2048] + "...(truncated)"
 		}
 		log.Printf("[ws-poller] runReset: script failed: %v", err)
-
-		// ── Authoritative HTTP delivery (survives WS disconnect) ──────────────
-		// POST the result to core-api via HTTP — independent of WebSocket state.
-		// This is the primary delivery path; WS attempt below is a fast-path bonus.
 		p.postResetResult(sessionID, false, errMsg)
-
-		// Also attempt WS delivery as a best-effort fast path
 		sendEvent("reset_complete", 0, "", false, errMsg)
 		return
 	}
 
 	log.Printf("[ws-poller] runReset: script completed successfully, sessionId=%s", sessionID)
-
-	// ── Authoritative HTTP delivery (survives WS disconnect) ──────────────────
-	// POST the result to core-api via HTTP — independent of WebSocket state.
-	// This guarantees delivery even when the WS connection was dropped during
-	// the long-running reset script (which takes 5-10+ minutes).
 	p.postResetResult(sessionID, true, "")
-
-	// Also attempt WS delivery as a best-effort fast path (instant if still connected)
 	sendEvent("reset_complete", 0, "", true, "")
 }
 
-// ─── Clone Replay ─────────────────────────────────────────────────────────────
-
-// runCloneReplay fetches the source VM's activity log and replays it onto this VM.
-// Sends clone_progress events during execution and clone_complete when done.
-func (p *WSPoller) runCloneReplay(sessionID, sourceMachineID string, safeWrite func(int, []byte) error) {
-	sendEvent := func(eventType string, phase int, message string, success bool, errMsg string) {
-		payload := map[string]interface{}{
-			"sessionId": sessionID,
-			"machineId": p.agentID,
-		}
-		if eventType == "clone_progress" {
-			payload["phase"] = phase
-			payload["message"] = message
-		} else {
-			payload["success"] = success
-			if errMsg != "" {
-				payload["error"] = errMsg
-			}
-		}
-		msg, _ := json.Marshal(map[string]interface{}{
-			"type":    eventType,
-			"payload": payload,
-		})
-		if err := safeWrite(websocket.TextMessage, msg); err != nil {
-			log.Printf("[ws-poller] runCloneReplay: failed to send %s: %v", eventType, err)
-		}
-	}
-
-	rep := tracker.NewReplayer(p.agentID, p.cfg, sendEvent)
-	rep.Run(sessionID, sourceMachineID)
-}
-
 // ─── postResetResult ──────────────────────────────────────────────────────────
-// POSTs the reset outcome directly to core-api via HTTP, bypassing the WebSocket.
-// This is the authoritative delivery path — it works even when the WebSocket was
-// dropped during the long-running reset script (which can take 5-10+ minutes).
-// Retries up to 3 times with exponential backoff to handle transient failures.
+
+// postResetResult POSTs the reset outcome directly to core-api via HTTP, bypassing
+// the WebSocket. This guarantees delivery even when the WS connection was dropped
+// during the long-running reset script. Retries up to 3 times with backoff.
 func (p *WSPoller) postResetResult(sessionID string, success bool, errMsg string) {
 	type resetResultPayload struct {
 		SessionID string `json:"sessionId"`
@@ -472,29 +388,24 @@ func (p *WSPoller) postResetResult(sessionID string, success bool, errMsg string
 		Error     string `json:"error,omitempty"`
 	}
 
-	payload := resetResultPayload{
-		SessionID: sessionID,
-		Success:   success,
-		Error:     errMsg,
-	}
-
+	payload := resetResultPayload{SessionID: sessionID, Success: success, Error: errMsg}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		log.Printf("[ws-poller] postResetResult: marshal error: %v", err)
 		return
 	}
 
-	url := p.cfg.PlatformURL + "/api/v1/agent/reset-result"
+	endpoint := p.cfg.PlatformURL + "/api/v1/agent/reset-result"
 	client := &http.Client{Timeout: 15 * time.Second}
-
 	delays := []time.Duration{2 * time.Second, 5 * time.Second, 10 * time.Second}
+
 	for attempt := 0; attempt <= 3; attempt++ {
 		if attempt > 0 {
 			time.Sleep(delays[attempt-1])
 			log.Printf("[ws-poller] postResetResult: retry %d for sessionId=%s", attempt, sessionID)
 		}
 
-		req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+		req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(body))
 		if err != nil {
 			log.Printf("[ws-poller] postResetResult: build request error: %v", err)
 			continue
@@ -502,32 +413,29 @@ func (p *WSPoller) postResetResult(sessionID string, success bool, errMsg string
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("X-Agent-ID", p.agentID)
 
-		resp, err := client.Do(req)
+		r, err := client.Do(req)
 		if err != nil {
 			log.Printf("[ws-poller] postResetResult: http error (attempt %d): %v", attempt+1, err)
 			continue
 		}
-		resp.Body.Close()
+		r.Body.Close()
 
-		if resp.StatusCode == http.StatusOK {
-			log.Printf("[ws-poller] postResetResult: delivered successfully, sessionId=%s, success=%v", sessionID, success)
+		if r.StatusCode == http.StatusOK {
+			log.Printf("[ws-poller] postResetResult: delivered, sessionId=%s success=%v", sessionID, success)
 			return
 		}
-		log.Printf("[ws-poller] postResetResult: server returned %d (attempt %d), sessionId=%s", resp.StatusCode, attempt+1, sessionID)
+		log.Printf("[ws-poller] postResetResult: server returned %d (attempt %d), sessionId=%s", r.StatusCode, attempt+1, sessionID)
 	}
 
-	log.Printf("[ws-poller] postResetResult: all attempts failed for sessionId=%s — result may not be delivered", sessionID)
+	log.Printf("[ws-poller] postResetResult: all attempts failed for sessionId=%s", sessionID)
 }
 
 // ─── Uninstall ────────────────────────────────────────────────────────────────
-// launches the cleanup script. Using cancel() ensures heartbeat stops
-// immediately so it cannot re-launch selfUninstall on the next tick.
+
 func (p *WSPoller) runUninstall() {
-	// Cancel the shared done channel — stops heartbeat and all other goroutines
 	if p.cancel != nil {
 		p.cancel()
 	}
-	// Small delay to let goroutines observe the cancel before the binary is deleted
 	time.Sleep(500 * time.Millisecond)
 
 	script := `
@@ -570,15 +478,8 @@ func parseCloseError(err error) *websocket.CloseError {
 }
 
 // ─── Shared File Notification ─────────────────────────────────────────────────
-//
-// writeSharedFileNotify writes a trigger file to the agent's data directory.
-// The racko-app GUI watches this file with FileSystemWatcher and reloads
-// the inbox immediately when it changes — zero-latency real-time updates.
-//
-// Protocol:
-//   C:\ProgramData\racko-agent\racko-notify.json
-//   Content: {"event":"shared_file_added","ts":1234567890}
 
+// writeSharedFileNotify writes a trigger file so racko-app reloads the inbox instantly.
 func writeSharedFileNotify(eventType string) {
 	const notifyPath = `C:\ProgramData\racko-agent\racko-notify.json`
 
@@ -589,4 +490,37 @@ func writeSharedFileNotify(eventType string) {
 		return
 	}
 	log.Printf("[ws-poller] writeSharedFileNotify: notified racko-app of %s", eventType)
+}
+
+// ─── Install Racko App ────────────────────────────────────────────────────────
+
+// runInstallRackoApp runs the Go-native racko-app installer and reports the result
+// back to the server via WebSocket as an install_racko_app_result message.
+// The Go installer uses net/http with a 10-minute timeout — no PowerShell, no hang risk.
+func (p *WSPoller) runInstallRackoApp(appVersion string, safeWrite func(int, []byte) error) {
+	log.Printf("[ws-poller] runInstallRackoApp: starting install, version=%s", appVersion)
+
+	err := rackoapp.Install(p.cfg, appVersion)
+
+	success := err == nil
+	errMsg := ""
+	if err != nil {
+		errMsg = err.Error()
+		log.Printf("[ws-poller] runInstallRackoApp: failed: %v", err)
+	} else {
+		log.Printf("[ws-poller] runInstallRackoApp: completed successfully")
+	}
+
+	result := map[string]interface{}{
+		"success": success,
+		"error":   errMsg,
+	}
+	payload, _ := json.Marshal(map[string]interface{}{
+		"type":    "install_racko_app_result",
+		"payload": result,
+	})
+
+	if err := safeWrite(websocket.TextMessage, payload); err != nil {
+		log.Printf("[ws-poller] runInstallRackoApp: failed to send result: %v", err)
+	}
 }

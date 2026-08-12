@@ -8,8 +8,8 @@
     "start": "node dist/server.js",
     "dev": "node --watch -r ts-node/register src/server.ts",
     "seed": "ts-node src/scripts/seedSuperAdmin.ts",
-    "migrate:vm-leases": "ts-node src/scripts/migrateVmHostLeases.ts",
     "migrate:external-vm-source": "ts-node src/scripts/migrateExternalVmSource.ts",
+    "migrate:backfill-my-vms": "ts-node src/scripts/migrateBackfillMyVms.ts",
     "delete:vm-leases": "ts-node src/scripts/deleteVmHostLease.ts",
     "typecheck": "tsc --noEmit",
     "test": "ts-node --transpile-only src/modules/vm/helpers/hypervGuestOutput.test.ts && ts-node --transpile-only src/modules/vmCatalog/catalogVmSerializer.test.ts"
@@ -41,7 +41,6 @@
     "uuid": "^9.0.1",
     "winston": "^3.11.0",
     "ws": "^8.16.0",
-    "xlsx": "^0.18.5",
     "zod": "^3.22.4"
   },
   "devDependencies": {

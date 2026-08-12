@@ -63,9 +63,21 @@ type ResolvedTenant =
   | { tenantId: mongoose.Types.ObjectId; name: string; slug: string }
   | { error: string };
 
+type ResolvedAdmin =
+  | { adminId: mongoose.Types.ObjectId; email: string }
+  | { error: string };
+
 type UpsertTenantUserResult =
   | {
       tenantUserId: mongoose.Types.ObjectId;
+      userCreated: boolean;
+      userReused: boolean;
+    }
+  | { error: string };
+
+type UpsertPlatformUserResult =
+  | {
+      userId: mongoose.Types.ObjectId;
       userCreated: boolean;
       userReused: boolean;
     }
@@ -92,7 +104,7 @@ function findScheduleConflict(
   for (const prev of accepted) {
     if (!prev.schedule) continue;
     if (schedulesOverlap(candidate, prev.schedule)) {
-      return `Schedule overlaps with assignment at index ${prev.index}`;
+      return `Schedule window overlaps with assignment #${prev.index + 1} on this VM`;
     }
   }
   return null;
@@ -136,6 +148,10 @@ class SuperAdminBulkImportService {
 
     if (row.mode === 'extended') {
       return this.processExtendedRow(index, row, base, superAdminUserId);
+    }
+
+    if (row.mode === 'extended_admin') {
+      return this.processExtendedAdminRow(index, row, base, superAdminUserId);
     }
 
     return this.processLegacyRow(index, row, base, superAdminUserId);
@@ -215,7 +231,7 @@ class SuperAdminBulkImportService {
         } catch (err) {
           const message =
             err instanceof Error && (err as { code?: number }).code === 11000
-              ? 'Assignment already exists for this tenant user'
+              ? 'This user already has an assignment to this VM'
               : err instanceof Error
                 ? err.message
                 : 'Failed to create tenant assignment';
@@ -262,11 +278,134 @@ class SuperAdminBulkImportService {
           : {}),
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unexpected error creating external VM';
+      const message = err instanceof Error ? err.message : 'Unexpected error';
       logger.error('[ExternalVM] Super-admin extended bulk import row failed', {
         index,
         name: row.name,
         tenantName: row.tenantName,
+        error: message,
+      });
+      return { ...base, error: message };
+    }
+  }
+
+  private async processExtendedAdminRow(
+    index: number,
+    row: Extract<SuperAdminBulkImportRow, { mode: 'extended_admin' }>,
+    base: SuperAdminBulkImportRowResult,
+    superAdminUserId: mongoose.Types.ObjectId
+  ): Promise<SuperAdminBulkImportRowResult> {
+    try {
+      const adminResolved = await this.resolveAdminByEmail(row.adminEmail);
+      if ('error' in adminResolved) {
+        return { ...base, error: adminResolved.error };
+      }
+
+      const { adminId, email: adminEmailLabel } = adminResolved;
+      let userId: mongoose.Types.ObjectId | undefined;
+      let userCreated = false;
+      let userReused = false;
+
+      if (row.user) {
+        const upsert = await this.upsertInlinePlatformUser(adminId, row.user, superAdminUserId);
+        if ('error' in upsert) {
+          return { ...base, error: upsert.error };
+        }
+        userId = upsert.userId;
+        userCreated = upsert.userCreated;
+        userReused = upsert.userReused;
+      }
+
+      const doc = await ExternalVMModel.create({
+        name: row.name,
+        ipAddress: row.ipAddress,
+        protocol: row.protocol,
+        username: row.username,
+        password: encrypt(row.password),
+        source: 'superadmin_bulk',
+        adminId,
+      });
+
+      let assignmentId: string | undefined;
+
+      if (userId) {
+        const schedule = row.schedule ? toSchedule(row.schedule) : null;
+        try {
+          const created = await ExternalVmUserAssignmentModel.create({
+            externalVmId: doc._id,
+            userId,
+            adminId,
+            schedule,
+            status: 'active',
+            assignedBy: superAdminUserId,
+          });
+          assignmentId = created._id.toString();
+          // Mirror processLegacyRow: keep legacy assignedTo in sync.
+          await ExternalVMModel.updateOne(
+            { _id: doc._id },
+            { $set: { assignedTo: userId } }
+          );
+          if (schedule) {
+            const { scheduleExternalAssignmentDisconnect } = await import(
+              '../vmAccessSchedule/scheduleManager'
+            );
+            scheduleExternalAssignmentDisconnect({
+              assignmentId: created._id.toString(),
+              externalVmId: doc._id.toString(),
+              assigneeUserId: userId.toString(),
+              schedule,
+              kind: 'platform',
+            });
+          }
+        } catch (err) {
+          const message =
+            err instanceof Error && (err as { code?: number }).code === 11000
+              ? 'This user already has an assignment to this VM'
+              : err instanceof Error
+                ? err.message
+                : 'Failed to create platform assignment';
+          return {
+            ...base,
+            externalVmId: doc._id.toString(),
+            userId: userId.toString(),
+            userCreated,
+            userReused,
+            error: message,
+          };
+        }
+      }
+
+      logger.info('[ExternalVM] Super-admin bulk import (extended admin)', {
+        index,
+        externalVmId: doc._id.toString(),
+        adminId: adminId.toString(),
+        adminEmail: adminEmailLabel,
+        userId: userId?.toString(),
+        userCreated,
+        userReused,
+        assignmentId,
+        superAdminUserId: superAdminUserId.toString(),
+      });
+
+      return {
+        ...base,
+        success: true,
+        externalVmId: doc._id.toString(),
+        ...(userId
+          ? {
+              userId: userId.toString(),
+              userCreated,
+              userReused,
+              assignmentId,
+            }
+          : {}),
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Unexpected error';
+      logger.error('[ExternalVM] Super-admin extended admin bulk import row failed', {
+        index,
+        name: row.name,
+        adminEmail: row.adminEmail,
         error: message,
       });
       return { ...base, error: message };
@@ -362,7 +501,7 @@ class SuperAdminBulkImportService {
         assignments: assignmentResults,
       };
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unexpected error creating external VM';
+      const message = err instanceof Error ? err.message : 'Unexpected error';
       logger.error('[ExternalVM] Super-admin bulk import row failed', {
         index,
         name: row.name,
@@ -394,10 +533,10 @@ class SuperAdminBulkImportService {
     }
 
     if (byName.length === 0 && bySlug.length === 0) {
-      return { error: `Tenant not found: ${tenantName}` };
+      return { error: `Tenant "${tenantName}" not found` };
     }
 
-    return { error: `Tenant ambiguous or not found: ${tenantName}` };
+    return { error: `Tenant "${tenantName}" is ambiguous — use the exact slug` };
   }
 
   private async upsertInlineTenantUser(
@@ -415,7 +554,7 @@ class SuperAdminBulkImportService {
 
     if (byEmail && byUsername && byEmail._id.toString() !== byUsername._id.toString()) {
       return {
-        error: `Email ${email} and username ${username} belong to different tenant users`,
+        error: `Email "${email}" and username "${username}" belong to different users in this tenant`,
       };
     }
 
@@ -424,12 +563,12 @@ class SuperAdminBulkImportService {
       const existingUsername = existing.username?.toLowerCase() ?? null;
       if (byEmail && existingUsername && existingUsername !== username) {
         return {
-          error: `Email ${email} already exists in this tenant with username ${existing.username}`,
+          error: `Email "${email}" already exists with username "${existing.username}" (not "${username}")`,
         };
       }
       if (byUsername && existing.email.toLowerCase() !== email) {
         return {
-          error: `Username ${username} already exists in this tenant with email ${existing.email}`,
+          error: `Username "${username}" already exists with email "${existing.email}" (not "${email}")`,
         };
       }
       return {
@@ -443,12 +582,12 @@ class SuperAdminBulkImportService {
       .select('_id')
       .lean();
     if (usernameTaken) {
-      return { error: `Username ${username} already exists in this tenant` };
+      return { error: `Username "${username}" is already taken in this tenant` };
     }
 
     const emailTaken = await TenantUser.findOne({ tenantId, email }).select('_id').lean();
     if (emailTaken) {
-      return { error: `Email ${email} already exists in this tenant` };
+      return { error: `Email "${email}" is already taken in this tenant` };
     }
 
     try {
@@ -473,6 +612,75 @@ class SuperAdminBulkImportService {
         return {
           error: 'Tenant user email or username conflict in this tenant',
         };
+      }
+      throw err;
+    }
+  }
+
+  private async resolveAdminByEmail(email: string): Promise<ResolvedAdmin> {
+    const admin = await User.findOne({ email, role: 'admin', orgOwnerId: null })
+      .select('_id email')
+      .lean();
+    if (!admin) {
+      return { error: `Admin "${email}" not found` };
+    }
+    return { adminId: admin._id, email: admin.email };
+  }
+
+  private async upsertInlinePlatformUser(
+    adminId: mongoose.Types.ObjectId,
+    user: SuperAdminBulkImportInlineUser,
+    _createdBy: mongoose.Types.ObjectId
+  ): Promise<UpsertPlatformUserResult> {
+    const email = user.email.trim().toLowerCase();
+    const username = user.username.trim().toLowerCase();
+
+    const [byEmail, byUsername] = await Promise.all([
+      User.findOne({ email }).select('_id email username createdBy role').lean(),
+      User.findOne({ username }).select('_id email username createdBy role').lean(),
+    ]);
+
+    if (byEmail && byUsername && byEmail._id.toString() !== byUsername._id.toString()) {
+      return {
+        error: `Email "${email}" and username "${username}" belong to different platform users`,
+      };
+    }
+
+    const existing = byEmail ?? byUsername;
+    if (existing) {
+      if (existing.role !== 'user') {
+        return { error: `Account "${email}" is not a managed user (role: ${existing.role})` };
+      }
+      if (existing.createdBy?.toString() !== adminId.toString()) {
+        return { error: `User "${email}" belongs to a different admin` };
+      }
+      if (byEmail && existing.username && existing.username.toLowerCase() !== username) {
+        return {
+          error: `Email "${email}" already registered with username "${existing.username}" (not "${username}")`,
+        };
+      }
+      if (byUsername && existing.email.toLowerCase() !== email) {
+        return {
+          error: `Username "${username}" already registered with email "${existing.email}" (not "${email}")`,
+        };
+      }
+      return { userId: existing._id, userCreated: false, userReused: true };
+    }
+
+    try {
+      const created = await User.create({
+        email,
+        username,
+        password: user.password,
+        role: 'user',
+        isEmailVerified: true,
+        isActive: true,
+        createdBy: adminId,
+      });
+      return { userId: created._id, userCreated: true, userReused: false };
+    } catch (err) {
+      if (err instanceof Error && (err as { code?: number }).code === 11000) {
+        return { error: `Email "${email}" or username "${username}" is already taken` };
       }
       throw err;
     }
@@ -600,7 +808,7 @@ class SuperAdminBulkImportService {
       } catch (err) {
         const message =
           err instanceof Error && (err as { code?: number }).code === 11000
-            ? `Assignment already exists for tenant user ${tenantUser._id.toString()}`
+            ? `This user already has an assignment to this VM`
             : err instanceof Error
               ? err.message
               : 'Failed to create tenant assignment';
@@ -678,7 +886,7 @@ class SuperAdminBulkImportService {
       } catch (err) {
         const message =
           err instanceof Error && (err as { code?: number }).code === 11000
-            ? `Assignment already exists for user ${user._id.toString()}`
+            ? `This user already has an assignment to this VM`
             : err instanceof Error
               ? err.message
               : 'Failed to create user assignment';

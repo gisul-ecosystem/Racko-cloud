@@ -8,10 +8,6 @@ import { buildLoginAlertTemplate, type LoginAlertTemplateData } from './template
 import { buildAccountLockedTemplate, type AccountLockedTemplateData } from './templates/accountLocked';
 import { buildPasswordResetTemplate } from './templates/passwordReset';
 import { buildStaffInviteTemplate } from './templates/staffInvite';
-import {
-  buildVmHostLeaseExpiryTemplate,
-  type VmHostLeaseExpiryTemplateData,
-} from './templates/vmHostLeaseExpiry';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
 import type { EmailBrand } from './templates/brandedLayout';
@@ -332,16 +328,4 @@ export async function sendTenantVerificationEmail(input: {
     verifyUrl,
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
-}
-
-export async function sendVmHostLeaseExpiryEmail(input: {
-  to: string;
-  leases: VmHostLeaseExpiryTemplateData['leases'];
-  warningDays: number;
-}): Promise<void> {
-  const template = buildVmHostLeaseExpiryTemplate({
-    leases: input.leases,
-    warningDays: input.warningDays,
-  });
-  await sendEmail({ to: input.to, ...template });
 }
