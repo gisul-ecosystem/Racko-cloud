@@ -6,11 +6,9 @@ import {
   ChevronLeft,
   Eye,
   EyeOff,
-  Loader2,
   RefreshCw,
   Search,
   Settings2,
-  Trash2,
   Upload,
 } from 'lucide-react';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
@@ -18,10 +16,7 @@ import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { ApiError } from '@/lib/apiClient';
 import {
-  bulkDeleteSuperAdminExternalVms,
-  deleteSuperAdminExternalVm,
   fetchSuperAdminExternalVmOverview,
-  BULK_DELETE_UI_CHUNK_SIZE,
   type SuperAdminExternalVmOverviewRow,
 } from '@/lib/superAdminExternalVmApi';
 import { ManageExternalVmAssignmentsModal } from '@/components/super-admin-console/ManageExternalVmAssignmentsModal';
@@ -91,9 +86,6 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-const DELETE_CONFIRM_MESSAGE =
-  'This deletes the VM(s) and any user whose only VM this was. Users with other VMs are kept; admins are never deleted.';
-
 export default function SuperAdminElasticServersOverviewPage() {
   const { toasts, addToast, dismiss } = useToast();
   const [rows, setRows] = useState<SuperAdminExternalVmOverviewRow[]>([]);
@@ -102,10 +94,6 @@ export default function SuperAdminElasticServersOverviewPage() {
   const [search, setSearch] = useState('');
   const [stackFilter, setStackFilter] = useState<'all' | 'platform' | 'tenant'>('all');
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [deletingIds, setDeletingIds] = useState<Set<string>>(new Set());
-  const [bulkDeleting, setBulkDeleting] = useState(false);
-  const [bulkDeleteProgress, setBulkDeleteProgress] = useState<{ done: number; total: number } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -169,135 +157,6 @@ export default function SuperAdminElasticServersOverviewPage() {
       return hay.includes(q);
     });
   }, [rows, search, stackFilter]);
-
-  const filteredIds = useMemo(
-    () => filtered.map((row) => row.externalVmId),
-    [filtered]
-  );
-
-  const allFilteredSelected =
-    filteredIds.length > 0 && filteredIds.every((id) => selectedIds.has(id));
-  const someFilteredSelected =
-    filteredIds.some((id) => selectedIds.has(id)) && !allFilteredSelected;
-
-  function toggleSelectAll() {
-    if (allFilteredSelected) {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        for (const id of filteredIds) next.delete(id);
-        return next;
-      });
-    } else {
-      setSelectedIds((prev) => {
-        const next = new Set(prev);
-        for (const id of filteredIds) next.add(id);
-        return next;
-      });
-    }
-  }
-
-  function toggleSelectRow(id: string) {
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function removeRowsFromTable(ids: string[]) {
-    const gone = new Set(ids);
-    setRows((prev) => prev.filter((r) => !gone.has(r.externalVmId)));
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      for (const id of ids) next.delete(id);
-      return next;
-    });
-    if (manageRow && gone.has(manageRow.externalVmId)) {
-      setManageRow(null);
-    }
-  }
-
-  function toastDeleteSummary(
-    label: string,
-    summary: { deleted: number; failed: number; total: number }
-  ) {
-    if (summary.failed === 0) {
-      addToast('success', `${label}: deleted ${summary.deleted} VM(s).`);
-    } else if (summary.deleted > 0) {
-      addToast(
-        'success',
-        `${label}: deleted ${summary.deleted}, failed ${summary.failed} of ${summary.total}.`
-      );
-    } else {
-      addToast('error', `${label}: failed to delete ${summary.failed} VM(s).`);
-    }
-  }
-
-  async function handleDeleteOne(row: SuperAdminExternalVmOverviewRow) {
-    if (!window.confirm(DELETE_CONFIRM_MESSAGE)) return;
-
-    const id = row.externalVmId;
-    setDeletingIds((prev) => new Set(prev).add(id));
-    try {
-      const result = await deleteSuperAdminExternalVm(id);
-      if (result.summary.deleted > 0) {
-        removeRowsFromTable([id]);
-      }
-      toastDeleteSummary(`Delete ${row.name}`, result.summary);
-    } catch (err) {
-      addToast('error', err instanceof ApiError ? err.message : 'Failed to delete VM.');
-    } finally {
-      setDeletingIds((prev) => {
-        const next = new Set(prev);
-        next.delete(id);
-        return next;
-      });
-    }
-  }
-
-  async function handleBulkDelete() {
-    const ids = Array.from(selectedIds);
-    if (ids.length === 0) return;
-    if (!window.confirm(DELETE_CONFIRM_MESSAGE)) return;
-
-    setBulkDeleting(true);
-    setBulkDeleteProgress({ done: 0, total: ids.length });
-
-    let totalDeleted = 0;
-    let totalFailed = 0;
-    const failedIds: string[] = [];
-
-    try {
-      for (let i = 0; i < ids.length; i += BULK_DELETE_UI_CHUNK_SIZE) {
-        const chunk = ids.slice(i, i + BULK_DELETE_UI_CHUNK_SIZE);
-        try {
-          const result = await bulkDeleteSuperAdminExternalVms(chunk);
-          const deletedIds = result.results.filter((r) => r.success).map((r) => r.id);
-          if (deletedIds.length > 0) {
-            removeRowsFromTable(deletedIds);
-          }
-          totalDeleted += result.summary.deleted;
-          totalFailed += result.summary.failed;
-          failedIds.push(...result.results.filter((r) => !r.success).map((r) => r.id));
-        } catch (err) {
-          // Chunk request itself failed; count all ids in chunk as failed.
-          totalFailed += chunk.length;
-          failedIds.push(...chunk);
-        }
-        setBulkDeleteProgress({ done: Math.min(i + BULK_DELETE_UI_CHUNK_SIZE, ids.length), total: ids.length });
-      }
-
-      toastDeleteSummary('Bulk delete', {
-        deleted: totalDeleted,
-        failed: totalFailed,
-        total: ids.length,
-      });
-    } finally {
-      setBulkDeleting(false);
-      setBulkDeleteProgress(null);
-    }
-  }
 
   return (
     <div className="mx-auto max-w-7xl">
@@ -367,28 +226,6 @@ export default function SuperAdminElasticServersOverviewPage() {
           <option value="platform">Platform</option>
           <option value="tenant">Tenant</option>
         </select>
-        {selectedIds.size > 0 && (
-          <button
-            type="button"
-            disabled={bulkDeleting}
-            onClick={() => void handleBulkDelete()}
-            className="inline-flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-4 py-2 text-sm font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
-          >
-            {bulkDeleting ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                {bulkDeleteProgress
-                  ? `Deleting ${bulkDeleteProgress.done} of ${bulkDeleteProgress.total}…`
-                  : 'Deleting…'}
-              </>
-            ) : (
-              <>
-                <Trash2 className="h-4 w-4" />
-                Delete ({selectedIds.size})
-              </>
-            )}
-          </button>
-        )}
       </div>
 
       <div className="mt-4 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -409,18 +246,6 @@ export default function SuperAdminElasticServersOverviewPage() {
             <table className="min-w-full divide-y divide-gray-100 text-left text-sm">
               <thead className="bg-gray-50 text-xs font-semibold uppercase tracking-wide text-gray-500">
                 <tr>
-                  <th className="w-10 px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={allFilteredSelected}
-                      ref={(el) => {
-                        if (el) el.indeterminate = someFilteredSelected;
-                      }}
-                      onChange={toggleSelectAll}
-                      aria-label="Select all visible VMs"
-                      className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]/30"
-                    />
-                  </th>
                   <th className="px-4 py-3">VM</th>
                   <th className="px-4 py-3">Stack / Owner</th>
                   <th className="px-4 py-3">Assignee(s)</th>
@@ -451,15 +276,6 @@ export default function SuperAdminElasticServersOverviewPage() {
                     <tr key={`${row.externalVmId}-${asg.assignmentId}-${idx}`} className="align-top">
                       {idx === 0 ? (
                         <>
-                          <td className="px-4 py-3" rowSpan={assignees.length}>
-                            <input
-                              type="checkbox"
-                              checked={selectedIds.has(row.externalVmId)}
-                              onChange={() => toggleSelectRow(row.externalVmId)}
-                              aria-label={`Select ${row.name}`}
-                              className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]/30"
-                            />
-                          </td>
                           <td className="px-4 py-3" rowSpan={assignees.length}>
                             <p className="font-medium text-gray-900">{row.name}</p>
                             <p className="font-mono text-xs text-gray-500">{row.ipAddress}</p>
@@ -515,19 +331,6 @@ export default function SuperAdminElasticServersOverviewPage() {
                               >
                                 <Settings2 className="h-3.5 w-3.5" />
                                 Manage
-                              </button>
-                              <button
-                                type="button"
-                                disabled={deletingIds.has(row.externalVmId)}
-                                onClick={() => void handleDeleteOne(row)}
-                                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
-                              >
-                                {deletingIds.has(row.externalVmId) ? (
-                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                ) : (
-                                  <Trash2 className="h-3.5 w-3.5" />
-                                )}
-                                Delete
                               </button>
                             </div>
                           </td>
