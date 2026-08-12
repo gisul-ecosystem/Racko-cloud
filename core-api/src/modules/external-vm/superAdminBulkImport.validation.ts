@@ -114,6 +114,7 @@ const bulkImportRowBody = z
     adminEmail: z.string().email().trim().toLowerCase().optional(),
     user: inlinePortalUserBody.optional(),
     schedule: optionalAssignmentScheduleBody,
+    projectId: mongoObjectId.optional(),
   })
   .superRefine((data, ctx) => {
     const ip = data.ipAddress ?? data.ip;
@@ -199,6 +200,7 @@ const bulkImportRowBody = z
       protocol: data.protocol,
       username: data.username,
       password: data.password,
+      projectId: data.projectId,
     };
 
     if (data.tenantName) {

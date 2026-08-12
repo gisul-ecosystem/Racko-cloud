@@ -201,6 +201,7 @@ class SuperAdminBulkImportService {
         password: encrypt(row.password),
         source: 'superadmin_bulk',
         tenantId,
+        ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
       });
 
       let assignmentId: string | undefined;
@@ -324,6 +325,7 @@ class SuperAdminBulkImportService {
         password: encrypt(row.password),
         source: 'superadmin_bulk',
         adminId,
+        ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
       });
 
       let assignmentId: string | undefined;
@@ -434,6 +436,7 @@ class SuperAdminBulkImportService {
           password: encrypt(row.password),
           source: 'superadmin_bulk',
           tenantId,
+          ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
         });
 
         const assignmentResults = await this.applyTenantAssignments({
@@ -470,6 +473,7 @@ class SuperAdminBulkImportService {
         password: encrypt(row.password),
         source: 'superadmin_bulk',
         adminId,
+        ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
       });
 
       const assignmentResults = await this.applyPlatformAssignments({
