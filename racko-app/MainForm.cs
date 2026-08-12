@@ -336,33 +336,58 @@ public class MainForm : Form
         using var dlg = new UploadForm(machines) { Owner = this };
         if (dlg.ShowDialog() != DialogResult.OK) return;
 
-        try
-        {
-            // For folder uploads SelectedDisplayName is set to "FolderName.zip"
-            // so the inbox/outbox shows the original folder name instead of the temp uuid zip name.
-            await _api.UploadAsync(
-                dlg.SelectedFilePath,
-                dlg.SelectedPermission,
-                dlg.SelectedMachineIds,
-                dlg.SelectedDisplayName);
+        var entries    = dlg.SelectedEntries;
+        var permission = dlg.SelectedPermission;
+        var machineIds = dlg.SelectedMachineIds;
 
-            var displayName = dlg.SelectedDisplayName ?? Path.GetFileName(dlg.SelectedFilePath);
+        if (entries.Count == 0) return;
+
+        // Show progress in status label while uploads run
+        _statusLabel.Text    = $"Uploading 0 of {entries.Count} file{(entries.Count != 1 ? "s" : "")}…";
+        _statusLabel.Visible = true;
+
+        int completed = 0;
+        var failed    = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        // Upload all files in parallel — each is an independent presigned PUT request
+        await Task.WhenAll(entries.Select(async entry =>
+        {
+            try
+            {
+                await _api.UploadAsync(entry.FilePath, permission, machineIds, entry.DisplayName);
+                Interlocked.Increment(ref completed);
+                BeginInvoke(() =>
+                    _statusLabel.Text = $"Uploading {completed} of {entries.Count} file{(entries.Count != 1 ? "s" : "")}…");
+            }
+            catch (Exception ex)
+            {
+                failed.Add($"{entry.DisplayName}: {ex.Message}");
+            }
+            finally
+            {
+                // Clean up temp zip created for folder uploads
+                if (entry.TempZipPath is not null)
+                    try { File.Delete(entry.TempZipPath); } catch { }
+            }
+        }));
+
+        _statusLabel.Visible = false;
+
+        if (failed.Count > 0)
+        {
+            var failMsg = string.Join("\n", failed);
             MessageBox.Show(
-                $"'{displayName}' shared with {dlg.SelectedMachineIds.Length} VM(s).",
+                $"Uploaded {completed} of {entries.Count} file(s).\n\nFailed:\n{failMsg}",
+                "Racko — Partial Upload", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+        else
+        {
+            MessageBox.Show(
+                $"{entries.Count} file{(entries.Count != 1 ? "s" : "")} shared with {machineIds.Length} VM(s).",
                 "Racko — Uploaded", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            _ = LoadOutboxAsync();
         }
-        catch (Exception ex)
-        {
-            MessageBox.Show($"Upload failed:\n{ex.Message}",
-                "Racko — Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        }
-        finally
-        {
-            // Clean up temp zip created for folder uploads
-            if (dlg.TempZipPath is not null)
-                try { File.Delete(dlg.TempZipPath); } catch { }
-        }
+
+        _ = LoadOutboxAsync();
     }
 
     // ── Inbox: permission-based action ─────────────────────────────────────────
