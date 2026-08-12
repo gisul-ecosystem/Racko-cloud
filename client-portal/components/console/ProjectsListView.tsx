@@ -71,6 +71,8 @@ interface CreateProjectInput {
   clientName: string;
   name?: string;
   description?: string;
+  startDate?: string;
+  endDate?: string;
   enabledServices: AdminServiceKey[];
 }
 
@@ -204,6 +206,8 @@ export function ProjectsListView({
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
   const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
@@ -242,6 +246,21 @@ export function ProjectsListView({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Auto-open the create modal when navigated here with ?create=1
+  // (e.g. from ProjectSelect "Create new project" link on service pages).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('create') === '1') {
+      void openCreateModal();
+      // Remove the query param so a refresh doesn't re-open the modal.
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState(null, '', cleanUrl);
+    }
+  // openCreateModal is stable (defined outside render), intentionally omitted from deps.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const activeProjects = projects.filter((project) => project.status === 'active');
   const totalSpend = costRows.reduce((sum, row) => sum + row.totalDebit, 0);
@@ -309,6 +328,8 @@ export function ProjectsListView({
     setCreatedProject(null);
     setClientName('');
     setDescription('');
+    setStartDate('');
+    setEndDate('');
     setSelectedServices([]);
     try {
       const [preview, services] = await Promise.all([
@@ -333,7 +354,7 @@ export function ProjectsListView({
 
   function continueToServices(event: React.FormEvent) {
     event.preventDefault();
-    if (!projectName.trim() || !clientName.trim()) return;
+    if (!projectName.trim() || !clientName.trim() || !startDate || !endDate) return;
     setModalError(null);
     setModalStep('services');
   }
@@ -358,6 +379,8 @@ export function ProjectsListView({
         clientName: clientName.trim(),
         name: projectName.trim() !== previewName ? projectName.trim() : undefined,
         description: description.trim() || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
         enabledServices: selectedServices,
       });
       let detailed = created;
@@ -1064,7 +1087,7 @@ export function ProjectsListView({
                       <textarea
                         value={description}
                         onChange={(event) => setDescription(event.target.value.slice(0, 500))}
-                        rows={4}
+                        rows={3}
                         placeholder="Describe the purpose and workloads for this project."
                         className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
                         style={accentFocus}
@@ -1075,6 +1098,49 @@ export function ProjectsListView({
                           e.currentTarget.style.borderColor = '';
                         }}
                       />
+                    </div>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                          Start Date <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={startDate}
+                          onChange={(e) => setStartDate(e.target.value)}
+                          max={endDate || undefined}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">When does this project start?</p>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                          End Date <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={endDate}
+                          onChange={(e) => setEndDate(e.target.value)}
+                          min={startDate || undefined}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1089,7 +1155,7 @@ export function ProjectsListView({
                   </button>
                   <button
                     type="submit"
-                    disabled={!projectName.trim() || !clientName.trim()}
+                    disabled={!projectName.trim() || !clientName.trim() || !startDate || !endDate}
                     className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     style={tenantAccentButton(accent)}
                   >

@@ -75,13 +75,6 @@ const SHORTCUTS: Shortcut[] = [
     section: 'services',
   },
   {
-    serviceKey: 'my-vms',
-    label: 'My VM Dashboard',
-    href: tenantConsole.myVmDashboard,
-    icon: <LayoutList className="h-4 w-4 shrink-0" />,
-    section: 'services',
-  },
-  {
     serviceKey: 'azure',
     label: 'Azure Services',
     href: tenantConsole.azure,
@@ -146,11 +139,16 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
 
   const productLinks = links.filter((l) => l.section === 'services');
   const toolLinks = links.filter((l) => l.section === 'tools');
+  const showMyVirtualMachines =
+    hasActiveService('my-vms') && canAccessTenantService('my-vms', hasPermission, isTenantAdmin);
 
   // Always show Overview in the hub sidebar for tenant admins/operators.
   const hubActive = pathname === TENANT_CONSOLE || pathname === `${TENANT_CONSOLE}/`;
   const overviewActive =
     pathname === tenantConsole.overview || pathname.startsWith(`${tenantConsole.overview}/`);
+  const myVirtualMachinesActive =
+    pathname === tenantConsole.myVmDashboard ||
+    pathname.startsWith(`${tenantConsole.myVmDashboard}/`);
 
   function renderLink(link: Shortcut) {
     const isActive = pathname === link.href || pathname.startsWith(`${link.href}/`);
@@ -218,6 +216,27 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
               />
               <span className={overviewActive ? '' : 'text-gray-600'}>Overview</span>
             </Link>
+
+            {showMyVirtualMachines && (
+              <Link
+                href={tenantConsole.myVmDashboard}
+                onClick={() => closeIfMobile(onCloseSidebar)}
+                className="mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors"
+                style={
+                  myVirtualMachinesActive
+                    ? { backgroundColor: hexToRgba(accentColor, 0.1), color: accentColor }
+                    : undefined
+                }
+              >
+                <LayoutList
+                  className="h-4 w-4 shrink-0"
+                  style={{ color: myVirtualMachinesActive ? accentColor : undefined }}
+                />
+                <span className={myVirtualMachinesActive ? '' : 'text-gray-600'}>
+                  My Virtual Machines
+                </span>
+              </Link>
+            )}
 
             <Link
               href={TENANT_CONSOLE}

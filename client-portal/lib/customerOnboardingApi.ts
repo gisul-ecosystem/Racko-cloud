@@ -26,7 +26,6 @@ export interface OrganizationAccessRequest {
   companyName: string;
   companyWebsite?: string;
   phone?: string;
-  officeNumber?: string;
   designation?: string;
   companySize?: string;
   registeredAddress?: string;

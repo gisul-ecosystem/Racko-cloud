@@ -35,6 +35,7 @@ type FlashMessage = { type: 'success' | 'error'; text: string } | null;
 type AssignmentEntry = {
   username: string;
   isTenantUser: boolean;
+  ownerKey?: string;
   tenantName?: string;
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
   vmUsername?: string | null;
@@ -49,6 +50,7 @@ type AssignmentRow = {
   rowKey: string;
   ipAddress: string;
   vmNames: string[];
+  projectNames: string[];
   assignments: AssignmentEntry[];
   editableExternalVmId?: string;
   providerDetails?: AssignmentEntry;
@@ -201,11 +203,17 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       rowKey: key,
       ipAddress: item.ipAddress || '—',
       vmNames: [],
+      projectNames: [],
       assignments: [],
     };
 
     if (!current.vmNames.includes(item.name)) {
       current.vmNames.push(item.name);
+    }
+
+    const projectLabel = String(item.projectName ?? item.projectId ?? '').trim();
+    if (projectLabel && !current.projectNames.includes(projectLabel)) {
+      current.projectNames.push(projectLabel);
     }
 
     if (!current.editableExternalVmId && item.resourceType === 'external_vm') {
@@ -216,6 +224,9 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       current.providerDetails = {
         username: item.providerUsername?.trim() || item.name,
         isTenantUser: false,
+        ownerKey: item.ownerScope === 'tenant'
+          ? `tenant:${item.ownerTenantId ?? item.ownerTenantName ?? ''}`
+          : `admin:${item.ownerAdminId ?? item.ownerAdminEmail ?? ''}`,
         tenantName: undefined,
         planDuration: item.providerPlanDuration ?? null,
         vmUsername: item.providerUsername ?? null,
@@ -227,21 +238,52 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       };
     }
 
-    for (const assignment of item.mappedAssignments) {
-      const exists = current.assignments.some(
-        (candidate) =>
-          candidate.username === assignment.username &&
-          candidate.isTenantUser === assignment.isTenantUser &&
-          candidate.providerStartDate === assignment.providerStartDate &&
-          candidate.providerEndDate === assignment.providerEndDate &&
-          candidate.startDate === assignment.startDate &&
-          candidate.endDate === assignment.endDate
-      );
+    const latestUpdatedAt = Number.isNaN(new Date(item.updatedAt).getTime())
+      ? 0
+      : new Date(item.updatedAt).getTime();
+    const ownerKey = item.ownerScope === 'tenant'
+      ? `tenant:${item.ownerTenantId ?? item.ownerTenantName ?? ''}`
+      : `admin:${item.ownerAdminId ?? item.ownerAdminEmail ?? ''}`;
+    const assignmentByPriorityKey = new Map<
+      string,
+      { assignment: AssignmentEntry; updatedAtMs: number }
+    >();
 
-      if (!exists) {
-        current.assignments.push(assignment);
+    for (const existing of current.assignments) {
+      const existingIdentity = String(existing.username ?? '').trim().toLowerCase();
+      const existingOwnerKey = existing.ownerKey ?? (existing.isTenantUser
+        ? `tenant:${existing.tenantName ?? ''}`
+        : ownerKey);
+      const dedupeKey = `${existingOwnerKey}|${existingIdentity}|${current.ipAddress.trim().toLowerCase()}`;
+      assignmentByPriorityKey.set(dedupeKey, {
+        assignment: existing,
+        updatedAtMs: 0,
+      });
+    }
+
+    for (const assignment of item.mappedAssignments) {
+      const identity = String(assignment.username ?? '').trim().toLowerCase();
+      const assignmentOwnerKey = assignment.isTenantUser
+        ? `tenant:${assignment.tenantName ?? item.ownerTenantName ?? item.ownerTenantId ?? ''}`
+        : `admin:${item.ownerAdminId ?? item.ownerAdminEmail ?? ''}`;
+      const dedupeKey = `${assignmentOwnerKey}|${identity}|${current.ipAddress.trim().toLowerCase()}`;
+      const currentRecord = assignmentByPriorityKey.get(dedupeKey);
+      const normalizedAssignment: AssignmentEntry = {
+        ...assignment,
+        ownerKey: assignmentOwnerKey,
+      };
+
+      if (!currentRecord || latestUpdatedAt >= currentRecord.updatedAtMs) {
+        assignmentByPriorityKey.set(dedupeKey, {
+          assignment: normalizedAssignment,
+          updatedAtMs: latestUpdatedAt,
+        });
       }
     }
+
+    current.assignments = [...assignmentByPriorityKey.values()]
+      .map((entry) => entry.assignment)
+      .sort((a, b) => a.username.localeCompare(b.username));
 
     grouped.set(key, current);
   }
@@ -430,11 +472,20 @@ function InventoryTable(props: {
 function AssignmentTable(props: {
   rows: AssignmentRow[];
   showVmNames: boolean;
+  showProjects: boolean;
+  showPlanDuration: boolean;
+  projectFilter: string;
+  projectOptions: string[];
   showUsers: boolean;
   sortBy: AssignmentSortBy;
   sortDirection: SortDirection;
   onShowVmNames: () => void;
   onHideVmNames: () => void;
+  onShowProjects: () => void;
+  onHideProjects: () => void;
+  onShowPlanDuration: () => void;
+  onHidePlanDuration: () => void;
+  onProjectFilterChange: (value: string) => void;
   onShowUsers: () => void;
   onHideUsers: () => void;
   onToggleSort: (value: AssignmentSortBy) => void;
@@ -461,6 +512,18 @@ function AssignmentTable(props: {
               VM name
             </button>
           ) : null}
+          {!props.showProjects ? (
+            <button type="button" onClick={props.onShowProjects} className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded border border-gray-300 bg-white text-[10px] leading-none">+</span>
+              Project
+            </button>
+          ) : null}
+          {!props.showPlanDuration ? (
+            <button type="button" onClick={props.onShowPlanDuration} className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded border border-gray-300 bg-white text-[10px] leading-none">+</span>
+              Plan duration
+            </button>
+          ) : null}
           {!props.showUsers ? (
             <button type="button" onClick={props.onShowUsers} className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100">
               <span className="inline-flex h-4 w-4 items-center justify-center rounded border border-gray-300 bg-white text-[10px] leading-none">+</span>
@@ -483,6 +546,26 @@ function AssignmentTable(props: {
                   </div>
                 </th>
               ) : null}
+              {props.showProjects ? (
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <div className="flex items-center gap-2">
+                    <span>Project</span>
+                    <button type="button" onClick={props.onHideProjects} className="inline-flex h-5 w-5 items-center justify-center rounded border border-gray-200 text-[10px] font-medium normal-case tracking-normal text-gray-600 hover:bg-gray-100" aria-label="Collapse project column">-</button>
+                    <select
+                      value={props.projectFilter}
+                      onChange={(e) => props.onProjectFilterChange(e.target.value)}
+                      className="w-[130px] rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] font-medium normal-case tracking-normal text-gray-700"
+                    >
+                      <option value="">All projects</option>
+                      {props.projectOptions.map((project) => (
+                        <option key={project} value={project}>
+                          {project}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </th>
+              ) : null}
               {props.showUsers ? (
                 <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                   <div className="flex items-center gap-2">
@@ -491,7 +574,14 @@ function AssignmentTable(props: {
                   </div>
                 </th>
               ) : null}
-              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Plan duration</th>
+              {props.showPlanDuration ? (
+                <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <div className="flex items-center gap-2">
+                    <span>Plan duration</span>
+                    <button type="button" onClick={props.onHidePlanDuration} className="inline-flex h-5 w-5 items-center justify-center rounded border border-gray-200 text-[10px] font-medium normal-case tracking-normal text-gray-600 hover:bg-gray-100" aria-label="Collapse plan duration column">-</button>
+                  </div>
+                </th>
+              ) : null}
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">VM username</th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">VM password</th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Provider start date</th>
@@ -528,6 +618,11 @@ function AssignmentTable(props: {
                     {row.vmNames.length > 0 ? row.vmNames.map((vmName, vmIndex) => <p key={`${row.rowKey}:vmname:${vmIndex}`} className="font-medium text-gray-900">{vmName}</p>) : <p className="text-[11px] text-gray-400">—</p>}
                   </td>
                 ) : null}
+                {props.showProjects ? (
+                  <td className="px-4 py-3.5 text-xs">
+                    {row.projectNames.length > 0 ? row.projectNames.map((projectName, projectIndex) => <p key={`${row.rowKey}:project:${projectIndex}`} className="text-gray-700">{projectName}</p>) : <p className="text-[11px] text-gray-400">—</p>}
+                  </td>
+                ) : null}
                 {props.showUsers ? (
                   <td className="px-4 py-3.5 text-xs">
                     {entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => (
@@ -540,7 +635,9 @@ function AssignmentTable(props: {
                     )) : <p className="text-[11px] text-gray-400">—</p>}
                   </td>
                 ) : null}
-                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:plan:${assignmentIndex}`} className="text-gray-700">{assignment.planDuration || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                {props.showPlanDuration ? (
+                  <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:plan:${assignmentIndex}`} className="text-gray-700">{assignment.planDuration || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                ) : null}
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmuser:${assignmentIndex}`} className="text-gray-700">{assignment.vmUsername || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmpass:${assignmentIndex}`} className="text-gray-700">{assignment.vmPassword || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:provider-start:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.providerStartDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
@@ -590,6 +687,9 @@ export default function SuperAdminVmInventoryPage() {
   const [assignmentSortDirection, setAssignmentSortDirection] = useState<SortDirection>('asc');
   const [showAssignmentView, setShowAssignmentView] = useState(false);
   const [showAssignmentVmNames, setShowAssignmentVmNames] = useState(false);
+  const [showAssignmentProjects, setShowAssignmentProjects] = useState(false);
+  const [showAssignmentPlanDuration, setShowAssignmentPlanDuration] = useState(false);
+  const [assignmentProjectFilter, setAssignmentProjectFilter] = useState('');
   const [showAssignmentUsers, setShowAssignmentUsers] = useState(true);
   const [externalVmRows, setExternalVmRows] = useState<SuperAdminExternalVmOverviewRow[]>([]);
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
@@ -662,9 +762,23 @@ export default function SuperAdminVmInventoryPage() {
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
   const assignmentRows = useMemo(() => buildAssignmentRows(items), [items]);
+  const assignmentProjectOptions = useMemo(() => {
+    const projects = new Set<string>();
+    for (const row of assignmentRows) {
+      for (const project of row.projectNames) {
+        const trimmed = project.trim();
+        if (trimmed) projects.add(trimmed);
+      }
+    }
+    return [...projects].sort((a, b) => a.localeCompare(b));
+  }, [assignmentRows]);
+  const filteredAssignmentRows = useMemo(() => {
+    if (!assignmentProjectFilter) return assignmentRows;
+    return assignmentRows.filter((row) => row.projectNames.includes(assignmentProjectFilter));
+  }, [assignmentRows, assignmentProjectFilter]);
   const sortedAssignmentRows = useMemo(
-    () => sortAssignmentRows(assignmentRows, assignmentSortBy, assignmentSortDirection),
-    [assignmentRows, assignmentSortBy, assignmentSortDirection]
+    () => sortAssignmentRows(filteredAssignmentRows, assignmentSortBy, assignmentSortDirection),
+    [filteredAssignmentRows, assignmentSortBy, assignmentSortDirection]
   );
   const externalVmById = useMemo(
     () => new Map(externalVmRows.map((row) => [row.externalVmId, row] as const)),
@@ -862,11 +976,20 @@ export default function SuperAdminVmInventoryPage() {
         <AssignmentTable
           rows={sortedAssignmentRows}
           showVmNames={showAssignmentVmNames}
+          showProjects={showAssignmentProjects}
+          showPlanDuration={showAssignmentPlanDuration}
+          projectFilter={assignmentProjectFilter}
+          projectOptions={assignmentProjectOptions}
           showUsers={showAssignmentUsers}
           sortBy={assignmentSortBy}
           sortDirection={assignmentSortDirection}
           onShowVmNames={() => setShowAssignmentVmNames(true)}
           onHideVmNames={() => setShowAssignmentVmNames(false)}
+          onShowProjects={() => setShowAssignmentProjects(true)}
+          onHideProjects={() => setShowAssignmentProjects(false)}
+          onShowPlanDuration={() => setShowAssignmentPlanDuration(true)}
+          onHidePlanDuration={() => setShowAssignmentPlanDuration(false)}
+          onProjectFilterChange={setAssignmentProjectFilter}
           onShowUsers={() => setShowAssignmentUsers(true)}
           onHideUsers={() => setShowAssignmentUsers(false)}
           onToggleSort={toggleAssignmentSort}

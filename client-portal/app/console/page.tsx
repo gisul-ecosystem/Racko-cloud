@@ -5,7 +5,6 @@ import {
   Cloud,
   FlaskConical,
   Globe,
-  LayoutList,
   Server,
   Wallet,
   Monitor,
@@ -62,13 +61,6 @@ const productServices: HubTile[] = [
     href: '/console/elastic-servers',
     icon: Globe,
     description: 'Connect to external servers from any provider via secure browser console',
-  },
-  {
-    id: 'my-vm-dashboard',
-    name: 'My VM Dashboard',
-    href: '/console/my-vm-dashboard',
-    icon: LayoutList,
-    description: 'Read-only view of all your assigned external servers — assignees, schedules and status',
   },
   {
     id: CLOUD_LABS_SERVICE.id,

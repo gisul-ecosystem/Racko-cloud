@@ -11,6 +11,7 @@ import {
   Search,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/lib/apiClient';
@@ -26,6 +27,7 @@ import {
   type SuperAdminBulkImportRowDto,
   type SuperAdminTargetOption,
 } from '@/lib/superAdminExternalVmApi';
+import { fetchProjectsForAdmin, fetchProjectsForTenant, createProjectForAdmin, createProjectForTenant, previewProjectNameForAdmin, previewProjectNameForTenant, type OrgProject } from '@/lib/projectsApi';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -48,7 +50,6 @@ const BULK_EXAMPLE = `[
     "password": "VmPassword123!",
     "protocol": "rdp",
     "username": "Administrator",
-    "tenantName": "Acme Corp",
     "user": {
       "name": "Jane Doe",
       "email": "jane@acme.example",
@@ -92,7 +93,6 @@ interface EditorRow {
   importShape: ImportShape;
   targetMode: TargetMode;
   targetId: string;
-  tenantName: string;
   createPortalUser: boolean;
   portalUserName: string;
   portalUserEmail: string;
@@ -165,7 +165,6 @@ function emptyRow(defaults?: {
     importShape: defaults?.importShape ?? 'legacy',
     targetMode: defaults?.targetMode ?? 'admin',
     targetId: defaults?.targetId ?? '',
-    tenantName: '',
     createPortalUser: false,
     portalUserName: '',
     portalUserEmail: '',
@@ -194,15 +193,55 @@ function scheduleFromRaw(raw: Record<string, unknown> | undefined): EditorAssign
 
 function rowFromRawJson(
   raw: Record<string, unknown>,
-  defaults: { targetMode: TargetMode; targetId: string }
+  defaults: { targetMode: TargetMode; targetId: string },
+  options: {
+    admins: SuperAdminTargetOption[];
+    tenants: SuperAdminTargetOption[];
+  }
 ): EditorRow {
   const ip = String(raw.ipAddress ?? raw.ip ?? '').trim();
   const tenantName = String(raw.tenantName ?? '').trim();
+  const adminEmail = String(raw.adminEmail ?? '').trim().toLowerCase();
+  const target = raw.target as
+    | { tenantId?: string; adminId?: string; tenantSlug?: string; adminEmail?: string }
+    | undefined;
   const userRaw = raw.user as Record<string, unknown> | undefined;
-  const isExtended = Boolean(tenantName);
+  const rowSchedule = scheduleFromRaw(raw.schedule as Record<string, unknown> | undefined);
+  const isExtended = Boolean(
+    tenantName ||
+      adminEmail ||
+      userRaw ||
+      raw.schedule ||
+      (target && (target.tenantId || target.adminId || target.tenantSlug || target.adminEmail))
+  );
 
   if (isExtended) {
-    const rowSchedule = scheduleFromRaw(raw.schedule as Record<string, unknown> | undefined);
+    let targetMode: TargetMode = defaults.targetMode;
+    let targetId = defaults.targetId;
+
+    const adminIdentifier = String(target?.adminId ?? target?.adminEmail ?? '').trim().toLowerCase();
+    if (adminEmail || adminIdentifier) {
+      targetMode = 'admin';
+      const foundAdmin = options.admins.find(
+        (a) =>
+          a.id === adminIdentifier ||
+          String(a.email ?? '').trim().toLowerCase() === adminEmail ||
+          String(a.email ?? '').trim().toLowerCase() === adminIdentifier
+      );
+      targetId = foundAdmin?.id ?? '';
+    } else if (tenantName || target?.tenantId || target?.tenantSlug) {
+      targetMode = 'tenant';
+      const tenantIdentifier = String(target?.tenantId ?? target?.tenantSlug ?? '').trim().toLowerCase();
+      const foundTenant = options.tenants.find(
+        (t) =>
+          t.id === tenantIdentifier ||
+          String(t.slug ?? '').trim().toLowerCase() === tenantIdentifier ||
+          String(t.name ?? '').trim().toLowerCase() === tenantName.toLowerCase() ||
+          String(t.label ?? '').trim().toLowerCase() === tenantName.toLowerCase()
+      );
+      targetId = foundTenant?.id ?? '';
+    }
+
     return {
       key: `${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
       name: String(raw.name ?? '').trim(),
@@ -211,9 +250,8 @@ function rowFromRawJson(
       protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
       username: String(raw.username ?? '').trim(),
       importShape: 'extended',
-      targetMode: 'tenant',
-      targetId: '',
-      tenantName,
+      targetMode,
+      targetId,
       createPortalUser: Boolean(userRaw),
       portalUserName: String(userRaw?.name ?? '').trim(),
       portalUserEmail: String(userRaw?.email ?? '').trim(),
@@ -234,7 +272,6 @@ function rowFromRawJson(
     importShape: 'legacy',
     targetMode: defaults.targetMode,
     targetId: defaults.targetId,
-    tenantName: '',
     createPortalUser: false,
     portalUserName: '',
     portalUserEmail: '',
@@ -248,14 +285,28 @@ function rowFromRawJson(
 function rowToPayload(
   row: EditorRow,
   defaultMode: TargetMode,
-  defaultTargetId: string
+  defaultTargetId: string,
+  options: {
+    admins: SuperAdminTargetOption[];
+    tenants: SuperAdminTargetOption[];
+  }
 ): SuperAdminBulkImportRowDto | null {
   if (!row.name.trim() || !row.ip.trim() || !row.password) {
     return null;
   }
 
   if (row.importShape === 'extended') {
-    if (!row.tenantName.trim()) return null;
+    const targetId = row.targetId || (row.targetMode === defaultMode ? defaultTargetId : '');
+    if (!targetId) return null;
+
+    const tenant = row.targetMode === 'tenant' ? options.tenants.find((t) => t.id === targetId) : null;
+    const admin = row.targetMode === 'admin' ? options.admins.find((a) => a.id === targetId) : null;
+    const tenantName = String(tenant?.name ?? tenant?.label ?? '').trim();
+    const adminEmail = String(admin?.email ?? '').trim().toLowerCase();
+
+    if (row.targetMode === 'tenant' && !tenantName) return null;
+    if (row.targetMode === 'admin' && !adminEmail) return null;
+
     if (row.createPortalUser) {
       if (!row.portalUserEmail.trim() || !row.portalUserUsername.trim() || !row.portalUserPassword) {
         return null;
@@ -271,7 +322,7 @@ function rowToPayload(
       password: row.password,
       protocol: row.protocol,
       ...(row.username.trim() ? { username: row.username.trim() } : {}),
-      tenantName: row.tenantName.trim(),
+      ...(row.targetMode === 'tenant' ? { tenantName } : { adminEmail }),
       ...(row.createPortalUser
         ? {
             user: {
@@ -313,7 +364,11 @@ function rowToPayload(
 function jsonTextToPayload(
   jsonText: string,
   defaultMode: TargetMode,
-  defaultTargetId: string
+  defaultTargetId: string,
+  options: {
+    admins: SuperAdminTargetOption[];
+    tenants: SuperAdminTargetOption[];
+  }
 ): SuperAdminBulkImportRowDto[] | null {
   let parsed: unknown;
   try {
@@ -326,20 +381,63 @@ function jsonTextToPayload(
   const vms: SuperAdminBulkImportRowDto[] = [];
   for (const raw of parsed as Array<Record<string, unknown>>) {
     const tenantName = String(raw.tenantName ?? '').trim();
-    if (tenantName) {
-      const userRaw = raw.user as Record<string, unknown> | undefined;
-      const schedule = normalizeScheduleForPayload(raw.schedule);
+    const adminEmailFromRow = String(raw.adminEmail ?? '').trim().toLowerCase();
+    const userRaw = raw.user as Record<string, unknown> | undefined;
+    const schedule = normalizeScheduleForPayload(raw.schedule);
+
+    const target = raw.target as
+      | { tenantId: string }
+      | { adminId: string }
+      | { tenantSlug: string }
+      | { adminEmail: string }
+      | undefined;
+
+    const hasInlineUser = Boolean(userRaw || schedule);
+    if (tenantName || adminEmailFromRow || (target && hasInlineUser)) {
+      let extendedTenantName = tenantName;
+      let extendedAdminEmail = adminEmailFromRow;
+
+      if (!extendedTenantName && !extendedAdminEmail && target) {
+        if ('adminEmail' in target && target.adminEmail) {
+          extendedAdminEmail = String(target.adminEmail).trim().toLowerCase();
+        } else if ('adminId' in target && target.adminId) {
+          const foundAdmin = options.admins.find((a) => a.id === String(target.adminId));
+          extendedAdminEmail = String(foundAdmin?.email ?? '').trim().toLowerCase();
+        } else if ('tenantSlug' in target && target.tenantSlug) {
+          const slug = String(target.tenantSlug).trim().toLowerCase();
+          const foundTenant = options.tenants.find(
+            (t) => String(t.slug ?? '').trim().toLowerCase() === slug
+          );
+          extendedTenantName = String(foundTenant?.name ?? foundTenant?.label ?? slug).trim();
+        } else if ('tenantId' in target && target.tenantId) {
+          const foundTenant = options.tenants.find((t) => t.id === String(target.tenantId));
+          extendedTenantName = String(foundTenant?.name ?? foundTenant?.label ?? '').trim();
+        }
+      }
+
+      if (!extendedTenantName && !extendedAdminEmail && hasInlineUser && defaultTargetId) {
+        if (defaultMode === 'tenant') {
+          const foundTenant = options.tenants.find((t) => t.id === defaultTargetId);
+          extendedTenantName = String(foundTenant?.name ?? foundTenant?.label ?? '').trim();
+        } else {
+          const foundAdmin = options.admins.find((a) => a.id === defaultTargetId);
+          extendedAdminEmail = String(foundAdmin?.email ?? '').trim().toLowerCase();
+        }
+      }
+
       if (!raw.name || !(raw.ip ?? raw.ipAddress) || !raw.password) return null;
+      if (!extendedTenantName && !extendedAdminEmail) return null;
       if (userRaw) {
         if (!userRaw.email || !userRaw.username || !userRaw.password) return null;
       }
+
       vms.push({
         name: String(raw.name).trim(),
         ip: String(raw.ipAddress ?? raw.ip).trim(),
         password: String(raw.password),
         protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
         ...(raw.username ? { username: String(raw.username).trim() } : {}),
-        tenantName,
+        ...(extendedTenantName ? { tenantName: extendedTenantName } : { adminEmail: extendedAdminEmail }),
         ...(userRaw
           ? {
               user: {
@@ -355,12 +453,6 @@ function jsonTextToPayload(
       continue;
     }
 
-    const target = raw.target as
-      | { tenantId: string }
-      | { adminId: string }
-      | { tenantSlug: string }
-      | { adminEmail: string }
-      | undefined;
     if (target) {
       if (!raw.name || !(raw.ip ?? raw.ipAddress) || !raw.password) return null;
       vms.push({
@@ -604,6 +696,18 @@ export default function SuperAdminServerImportPage() {
   const [rows, setRows] = useState<EditorRow[]>([emptyRow()]);
   const [defaultMode, setDefaultMode] = useState<TargetMode>('admin');
   const [defaultTargetId, setDefaultTargetId] = useState('');
+  const [defaultProjectId, setDefaultProjectId] = useState('');
+  const [defaultProjects, setDefaultProjects] = useState<OrgProject[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [cpPreviewName, setCpPreviewName] = useState('');
+  const [cpName, setCpName] = useState('');
+  const [cpClientName, setCpClientName] = useState('');
+  const [cpDescription, setCpDescription] = useState('');
+  const [cpStartDate, setCpStartDate] = useState('');
+  const [cpEndDate, setCpEndDate] = useState('');
+  const [cpSaving, setCpSaving] = useState(false);
+  const [cpError, setCpError] = useState<string | null>(null);
   const [admins, setAdmins] = useState<SuperAdminTargetOption[]>([]);
   const [tenants, setTenants] = useState<SuperAdminTargetOption[]>([]);
   const [assigneesByKey, setAssigneesByKey] = useState<Record<string, SuperAdminAssigneeOption[]>>(
@@ -612,6 +716,29 @@ export default function SuperAdminServerImportPage() {
   const [submitting, setSubmitting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [result, setResult] = useState<SuperAdminBulkImportResult | null>(null);
+
+  // Load projects whenever the selected admin/tenant changes
+  useEffect(() => {
+    setDefaultProjectId('');
+    setDefaultProjects([]);
+    if (!defaultTargetId) return;
+    let cancelled = false;
+    setProjectsLoading(true);
+    (async () => {
+      try {
+        const list =
+          defaultMode === 'admin'
+            ? await fetchProjectsForAdmin(defaultTargetId)
+            : await fetchProjectsForTenant(defaultTargetId);
+        if (!cancelled) setDefaultProjects(list.filter((p) => p.status === 'active'));
+      } catch {
+        if (!cancelled) setDefaultProjects([]);
+      } finally {
+        if (!cancelled) setProjectsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [defaultTargetId, defaultMode]);
 
   useEffect(() => {
     void (async () => {
@@ -668,7 +795,11 @@ export default function SuperAdminServerImportPage() {
     const next: EditorRow[] = [];
     for (const raw of parsed as Array<Record<string, unknown>>) {
       next.push(
-        rowFromRawJson(raw, { targetMode: defaultMode, targetId: defaultTargetId })
+        rowFromRawJson(
+          raw,
+          { targetMode: defaultMode, targetId: defaultTargetId },
+          { admins, tenants }
+        )
       );
     }
     setRows(next);
@@ -689,7 +820,10 @@ export default function SuperAdminServerImportPage() {
   const buildPayload = (): SuperAdminBulkImportRowDto[] | null => {
     const hasEditorContent = rows.some((r) => r.name.trim() && r.ip.trim());
     if (!hasEditorContent) {
-      const fromJson = jsonTextToPayload(jsonText, defaultMode, defaultTargetId);
+      const fromJson = jsonTextToPayload(jsonText, defaultMode, defaultTargetId, {
+        admins,
+        tenants,
+      });
       if (fromJson?.length) return fromJson;
     }
 
@@ -701,8 +835,9 @@ export default function SuperAdminServerImportPage() {
       }
 
       if (row.importShape === 'extended') {
-        if (!row.tenantName.trim()) {
-          addToast('error', `Row "${row.name}" needs a tenant name.`);
+        const resolvedTargetId = row.targetId || (row.targetMode === defaultMode ? defaultTargetId : '');
+        if (!resolvedTargetId) {
+          addToast('error', `Row "${row.name}" needs a target admin or tenant.`);
           return null;
         }
         if (row.createPortalUser) {
@@ -724,9 +859,9 @@ export default function SuperAdminServerImportPage() {
         }
       }
 
-      const payload = rowToPayload(row, defaultMode, defaultTargetId);
+      const payload = rowToDefaultPayload(row);
       if (!payload) {
-        addToast('error', `Row "${row.name}" could not be built.`);
+        addToast('error', `Row "${row.name}" could not be built. Check selected target/admin details.`);
         return null;
       }
       vms.push(payload);
@@ -734,7 +869,61 @@ export default function SuperAdminServerImportPage() {
     return vms;
   };
 
+  async function openCreateProject() {
+    setCpClientName('');
+    setCpDescription('');
+    setCpStartDate('');
+    setCpEndDate('');
+    setCpError(null);
+    setCpPreviewName('');
+    setCpName('');
+    setCreateProjectOpen(true);
+    try {
+      const preview =
+        defaultMode === 'admin'
+          ? await previewProjectNameForAdmin(defaultTargetId)
+          : await previewProjectNameForTenant(defaultTargetId);
+      setCpPreviewName(preview.name);
+      setCpName(preview.name);
+    } catch {
+      // preview is optional — user can still type a name
+    }
+  }
+
+  async function handleCreateProject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!cpClientName.trim() || !cpStartDate || !cpEndDate) return;
+    setCpSaving(true);
+    setCpError(null);
+    try {
+      const input = {
+        clientName: cpClientName.trim(),
+        name: cpName.trim() !== cpPreviewName ? cpName.trim() : undefined,
+        description: cpDescription.trim() || undefined,
+        startDate: cpStartDate,
+        endDate: cpEndDate,
+        enabledServices: ['elastic-servers' as const],
+      };
+      const created =
+        defaultMode === 'admin'
+          ? await createProjectForAdmin(defaultTargetId, input)
+          : await createProjectForTenant(defaultTargetId, input);
+      setDefaultProjects((prev) => [created, ...prev]);
+      setDefaultProjectId(created.id);
+      setCreateProjectOpen(false);
+      addToast('success', `Project "${created.name}" created.`);
+    } catch (err) {
+      setCpError(err instanceof ApiError ? err.message : 'Failed to create project.');
+    } finally {
+      setCpSaving(false);
+    }
+  }
+
   const handleSubmit = async () => {
+    if (defaultTargetId && !defaultProjectId) {
+      addToast('error', 'Select a project before importing.');
+      return;
+    }
     const vms = buildPayload();
     if (!vms) return;
 
@@ -780,6 +969,12 @@ export default function SuperAdminServerImportPage() {
 
       const summary = { total, succeeded, failed };
       setResult({ results: allResults, summary });
+
+      if (failed === 0) {
+        setRows([emptyRow({ targetMode: defaultMode, targetId: defaultTargetId })]);
+      setAssigneesByKey({});
+      }
+
       addToast(
         failed === 0 ? 'success' : 'error',
         failed === 0
@@ -791,6 +986,13 @@ export default function SuperAdminServerImportPage() {
       setImportProgress(null);
     }
   };
+
+  function rowToDefaultPayload(row: EditorRow): SuperAdminBulkImportRowDto | null {
+    const base = rowToPayload(row, defaultMode, defaultTargetId, { admins, tenants });
+    if (!base) return null;
+    if (defaultProjectId) (base as SuperAdminBulkImportLegacyRowDto).projectId = defaultProjectId;
+    return base;
+  }
 
   const targetOptions = useMemo(
     () =>
@@ -818,6 +1020,79 @@ export default function SuperAdminServerImportPage() {
       <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <h2 className="text-sm font-semibold text-gray-900">1. JSON source</h2>
         <div className="mt-4 space-y-4">
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div>
+              <label className={labelClass}>Default stack</label>
+              <select
+                className={inputClass}
+                value={defaultMode}
+                onChange={(e) => {
+                  setDefaultMode(e.target.value as TargetMode);
+                  setDefaultTargetId('');
+                }}
+              >
+                <option value="admin">Platform admin</option>
+                <option value="tenant">Tenant</option>
+              </select>
+            </div>
+            <div>
+              <label className={labelClass}>{defaultMode === 'admin' ? 'Admin' : 'Tenant'}</label>
+              <FilterableSelect
+                value={defaultTargetId}
+                onChange={(v) => { setDefaultTargetId(v); setDefaultProjectId(''); }}
+                options={targetOptions}
+                placeholder={`Select ${defaultMode === 'admin' ? 'admin' : 'tenant'}…`}
+                searchPlaceholder={`Search ${defaultMode === 'admin' ? 'admin by email/username' : 'tenant by name/slug'}…`}
+                emptyText={`No ${defaultMode === 'admin' ? 'admins' : 'tenants'} match your search.`}
+              />
+            </div>
+          </div>
+
+          {/* Project selector — appears after admin/tenant is chosen */}
+          {defaultTargetId && (
+            <div>
+              <label className={labelClass}>Project <span className="text-red-500">*</span></label>
+              {projectsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading projects…
+                </div>
+              ) : defaultProjects.length === 0 ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  No active projects for this {defaultMode === 'admin' ? 'admin' : 'tenant'}.{' '}
+                  <button
+                    type="button"
+                    onClick={openCreateProject}
+                    className="font-semibold underline"
+                  >
+                    Create a project
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <select
+                    className={inputClass}
+                    value={defaultProjectId}
+                    onChange={(e) => setDefaultProjectId(e.target.value)}
+                  >
+                    <option value="">-- Select a project --</option>
+                    {defaultProjects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — {p.clientName}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={openCreateProject}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C] hover:underline"
+                  >
+                    + Create new project
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <label className={labelClass}>Upload .json file</label>
             <input
@@ -839,10 +1114,6 @@ export default function SuperAdminServerImportPage() {
               rows={12}
               className={`${inputClass} font-mono text-xs leading-relaxed`}
             />
-            <p className="mt-1 text-xs text-gray-500">
-              Extended rows: VM fields plus `tenantName`, optional `user` (portal login), and
-              `schedule`. Legacy rows: VM fields only — pick target/assignees in the form below.
-            </p>
           </div>
           <button
             type="button"
@@ -858,9 +1129,9 @@ export default function SuperAdminServerImportPage() {
       <div className="mt-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
-            <h2 className="text-sm font-semibold text-gray-900">2. Default target</h2>
+            <h2 className="text-sm font-semibold text-gray-900">2. Rows & assignments</h2>
             <p className="mt-0.5 text-xs text-gray-500">
-              Applied when a row has no target, and as the default for new rows.
+              Review imported rows and configure row-level targets/assignments if needed.
             </p>
           </div>
           <button
@@ -876,34 +1147,6 @@ export default function SuperAdminServerImportPage() {
             <Plus className="h-4 w-4" />
             Add row
           </button>
-        </div>
-
-        <div className="mt-4 grid gap-3 sm:grid-cols-2">
-          <div>
-            <label className={labelClass}>Stack</label>
-            <select
-              className={inputClass}
-              value={defaultMode}
-              onChange={(e) => {
-                setDefaultMode(e.target.value as TargetMode);
-                setDefaultTargetId('');
-              }}
-            >
-              <option value="admin">Platform admin</option>
-              <option value="tenant">Tenant</option>
-            </select>
-          </div>
-          <div>
-            <label className={labelClass}>{defaultMode === 'admin' ? 'Admin' : 'Tenant'}</label>
-            <FilterableSelect
-              value={defaultTargetId}
-              onChange={setDefaultTargetId}
-              options={targetOptions}
-              placeholder={`Select ${defaultMode === 'admin' ? 'admin' : 'tenant'}…`}
-              searchPlaceholder={`Search ${defaultMode === 'admin' ? 'admin by email/username' : 'tenant by name/slug'}…`}
-              emptyText={`No ${defaultMode === 'admin' ? 'admins' : 'tenants'} match your search.`}
-            />
-          </div>
         </div>
 
         <div className="mt-6 space-y-4">
@@ -1025,24 +1268,46 @@ export default function SuperAdminServerImportPage() {
                       }}
                     >
                       <option value="legacy">Legacy (form target + assignees)</option>
-                      <option value="extended">Extended (tenantName + create user)</option>
+                      <option value="extended">Extended (target + create user)</option>
                     </select>
                   </div>
                   {row.importShape === 'extended' ? (
                     <>
-                      <div className="sm:col-span-2">
-                        <label className={labelClass}>Tenant name</label>
-                        <input
+                      <div>
+                        <label className={labelClass}>Target stack</label>
+                        <select
                           className={inputClass}
-                          value={row.tenantName}
-                          placeholder="Acme Corp (matches name or slug)"
-                          onChange={(e) =>
+                          value={row.targetMode}
+                          onChange={(e) => {
+                            const mode = e.target.value as TargetMode;
                             setRows((prev) =>
                               prev.map((r) =>
-                                r.key === row.key ? { ...r, tenantName: e.target.value } : r
+                                r.key === row.key
+                                  ? { ...r, targetMode: mode, targetId: '' }
+                                  : r
                               )
+                            );
+                          }}
+                        >
+                          <option value="admin">Platform admin</option>
+                          <option value="tenant">Tenant</option>
+                        </select>
+                      </div>
+                      <div className="sm:col-span-2">
+                        <label className={labelClass}>
+                          {row.targetMode === 'admin' ? 'Admin' : 'Tenant'}
+                        </label>
+                        <FilterableSelect
+                          value={row.targetId}
+                          onChange={(targetId) =>
+                            setRows((prev) =>
+                              prev.map((r) => (r.key === row.key ? { ...r, targetId } : r))
                             )
                           }
+                          options={rowTargets}
+                          placeholder={`Select ${row.targetMode === 'admin' ? 'admin' : 'tenant'}…`}
+                          searchPlaceholder={`Search ${row.targetMode === 'admin' ? 'admin by email/username' : 'tenant by name/slug'}…`}
+                          emptyText={`No ${row.targetMode === 'admin' ? 'admins' : 'tenants'} match your search.`}
                         />
                       </div>
                       <div className="sm:col-span-2">
@@ -1362,7 +1627,7 @@ export default function SuperAdminServerImportPage() {
           </Link>
           <button
             type="button"
-            disabled={submitting || rows.length === 0}
+            disabled={submitting || rows.length === 0 || (!!defaultTargetId && !defaultProjectId)}
             onClick={() => void handleSubmit()}
             className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
@@ -1463,6 +1728,147 @@ export default function SuperAdminServerImportPage() {
               </ul>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Create project modal ─────────────────────────────────── */}
+      {createProjectOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[1px]"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !cpSaving) setCreateProjectOpen(false); }}
+        >
+          <div className="w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                  Create Project
+                </p>
+                <h2 className="mt-1 text-xl font-bold text-gray-900">Create New Project</h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  Set up a new project to organize and manage your cloud resources.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={cpSaving}
+                onClick={() => setCreateProjectOpen(false)}
+                aria-label="Close"
+                className="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={(e) => void handleCreateProject(e)}>
+              <div className="space-y-4 p-5">
+                {cpError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{cpError}</div>
+                )}
+
+                <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                  <h3 className="text-sm font-semibold text-gray-900">Project Information</h3>
+
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Project Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpName}
+                        onChange={(e) => setCpName(e.target.value)}
+                        required
+                        placeholder={cpPreviewName || 'Auto-generated'}
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">A unique name to identify your project.</p>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Client Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpClientName}
+                        onChange={(e) => setCpClientName(e.target.value)}
+                        required
+                        placeholder="e.g. Acme Corp"
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="block text-xs font-semibold text-gray-700">
+                        Description <span className="font-normal text-gray-400">(Optional)</span>
+                      </label>
+                      <span className="text-[11px] text-gray-400">{cpDescription.length} / 500</span>
+                    </div>
+                    <textarea
+                      className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                      rows={3}
+                      value={cpDescription}
+                      onChange={(e) => setCpDescription(e.target.value.slice(0, 500))}
+                      placeholder="Describe the purpose and workloads for this project."
+                    />
+                  </div>
+
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Start Date <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpStartDate}
+                        onChange={(e) => setCpStartDate(e.target.value)}
+                        max={cpEndDate || undefined}
+                        required
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">When does this project start?</p>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        End Date <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpEndDate}
+                        onChange={(e) => setCpEndDate(e.target.value)}
+                        min={cpStartDate || undefined}
+                        required
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-gray-100 px-6 py-3">
+                <button
+                  type="button"
+                  disabled={cpSaving}
+                  onClick={() => setCreateProjectOpen(false)}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={cpSaving || !cpClientName.trim() || !cpStartDate || !cpEndDate}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:opacity-60"
+                >
+                  {cpSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Create Project
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>
