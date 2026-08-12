@@ -363,10 +363,10 @@ jobs:
           echo 'Docker login...'
           echo "${DOCKERHUB_TOKEN}" | sudo docker login -u "${DOCKERHUB_USERNAME}" --password-stdin
           echo 'Deploying...'
-          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" down --remove-orphans
-          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" pull
-          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" up -d
-          sudo docker compose -f "${DEPLOY_PATH}/docker-compose.yml" ps
+          sudo docker-compose -f "${DEPLOY_PATH}/docker-compose.yml" down --remove-orphans
+          sudo docker-compose -f "${DEPLOY_PATH}/docker-compose.yml" pull
+          sudo docker-compose -f "${DEPLOY_PATH}/docker-compose.yml" up -d
+          sudo docker-compose -f "${DEPLOY_PATH}/docker-compose.yml" ps
 
       - name: Summary
         run: |
