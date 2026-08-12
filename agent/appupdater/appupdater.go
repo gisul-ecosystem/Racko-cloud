@@ -17,7 +17,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/download"
 )
 
 var updateMu sync.Mutex
@@ -123,34 +123,9 @@ func Update(cfg *config.Config, latestVersion, expectedSHA string) {
 
 func downloadZip(platformURL, destPath string) error {
 	url := platformURL + "/api/v1/agent/binary/racko-app"
-	client := &http.Client{Timeout: 10 * time.Minute}
-
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept-Encoding", "identity")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned %d", resp.StatusCode)
-	}
-
-	f, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		return err
-	}
-	return f.Sync()
+	// download.File handles idle timeout, retry, progress logging, and cleanup.
+	_, err := download.File(url, destPath, "racko-app-update.zip")
+	return err
 }
 
 func fileSHA256(path string) (string, error) {
