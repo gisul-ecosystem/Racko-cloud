@@ -87,6 +87,23 @@ export interface VmProviderMetadataImportResult {
   created: number;
 }
 
+export interface SuperAdminVmInventoryClearAssignmentBody {
+  resourceType: InventoryResourceType;
+  sourceId: string;
+}
+
+export interface SuperAdminVmInventoryClearAssignmentResult {
+  updated: boolean;
+  deletedPlatformUsers?: number;
+  deletedTenantUsers?: number;
+}
+
+export interface SuperAdminVmInventoryDeleteAssignedUserResult {
+  updated: boolean;
+  deletedPlatformUsers: number;
+  deletedTenantUsers: number;
+}
+
 export interface SuperAdminVmInventoryQuery {
   resourceType?: InventoryResourceType;
   originServiceKey?: 'vm-management' | 'create-vm' | 'external-vm';
@@ -172,6 +189,32 @@ export async function importVmProviderMetadata(
     {
       method: 'POST',
       body: JSON.stringify({ rows }),
+    }
+  );
+  return res.data;
+}
+
+export async function clearSuperAdminVmInventoryAssignment(
+  body: SuperAdminVmInventoryClearAssignmentBody
+): Promise<SuperAdminVmInventoryClearAssignmentResult> {
+  const res = await apiRequest<ApiEnvelope<SuperAdminVmInventoryClearAssignmentResult>>(
+    '/api/v1/super-admin/vm-inventory/assignment/clear',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }
+  );
+  return res.data;
+}
+
+export async function deleteSuperAdminVmInventoryAssignedUser(
+  body: SuperAdminVmInventoryClearAssignmentBody
+): Promise<SuperAdminVmInventoryDeleteAssignedUserResult> {
+  const res = await apiRequest<ApiEnvelope<SuperAdminVmInventoryDeleteAssignedUserResult>>(
+    '/api/v1/super-admin/vm-inventory/assignment/delete-user',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
     }
   );
   return res.data;

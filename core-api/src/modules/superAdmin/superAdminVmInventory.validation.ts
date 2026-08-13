@@ -61,3 +61,17 @@ export const superAdminVmProviderMetadataUpdateSchema = z.object({
     planDuration: providerPlanDurationSchema.optional(),
   }),
 });
+
+export const superAdminVmInventoryClearAssignmentSchema = z.object({
+  body: z.object({
+    resourceType: z.enum(['platform_vm', 'catalog_vm', 'external_vm']),
+    sourceId: z.string().regex(objectIdRegex, 'Invalid sourceId'),
+  }),
+});
+
+export const superAdminVmInventoryDeleteAssignedUserSchema = z.object({
+  body: z.object({
+    resourceType: z.enum(['platform_vm', 'catalog_vm', 'external_vm']),
+    sourceId: z.string().regex(objectIdRegex, 'Invalid sourceId'),
+  }),
+});

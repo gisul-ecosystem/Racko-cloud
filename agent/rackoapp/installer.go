@@ -15,15 +15,14 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"github.com/racko-ai/agent/config"
+	"github.com/racko-ai/agent/download"
 )
 
 const (
@@ -101,40 +100,9 @@ func Install(cfg *config.Config, appVersion string) error {
 
 func downloadZip(platformURL, destPath string) error {
 	url := platformURL + "/api/v1/agent/binary/racko-app"
-
-	// 10-minute timeout — same as appupdater. Go's HTTP client never hangs
-	// on stalled connections when a timeout is set.
-	client := &http.Client{Timeout: 10 * time.Minute}
-
-	req, err := http.NewRequest(http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	// Prevent any intermediate proxy from compressing the zip
-	req.Header.Set("Accept-Encoding", "identity")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("server returned HTTP %d", resp.StatusCode)
-	}
-
-	f, err := os.Create(destPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	written, err := io.Copy(f, resp.Body)
-	if err != nil {
-		return fmt.Errorf("write: %w", err)
-	}
-	log.Printf("[rackoapp/installer] Downloaded %d bytes", written)
-	return f.Sync()
+	// download.File handles idle timeout, retry, progress logging, and cleanup.
+	_, err := download.File(url, destPath, "racko-app.zip")
+	return err
 }
 
 // ─── extract ─────────────────────────────────────────────────────────────────
@@ -210,32 +178,17 @@ func ensureWebView2(installDir string) error {
 
 	log.Printf("[rackoapp/installer] WebView2 not found — installing...")
 
-	// Download the evergreen bootstrapper (~1.6MB — not the full runtime)
+	// Download the evergreen bootstrapper using the same resilient downloader
 	wv2Path := filepath.Join(installDir, "WebView2Setup.exe")
 	defer os.Remove(wv2Path)
 
-	client := &http.Client{Timeout: 5 * time.Minute}
-	req, _ := http.NewRequest(http.MethodGet, "https://go.microsoft.com/fwlink/p/?LinkId=2124703", nil)
-	req.Header.Set("Accept-Encoding", "identity")
-	resp, err := client.Do(req)
-	if err != nil {
+	if _, err := download.File(
+		"https://go.microsoft.com/fwlink/p/?LinkId=2124703",
+		wv2Path,
+		"WebView2Setup.exe",
+	); err != nil {
 		return fmt.Errorf("download WebView2 bootstrapper: %w", err)
 	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("WebView2 download returned HTTP %d", resp.StatusCode)
-	}
-
-	f, err := os.Create(wv2Path)
-	if err != nil {
-		return err
-	}
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		f.Close()
-		return err
-	}
-	f.Close()
 
 	// Run silent install — blocks until complete (typically 30-60s on first install)
 	cmd := exec.Command(wv2Path, "/silent", "/install")
