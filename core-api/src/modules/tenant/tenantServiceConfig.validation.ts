@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { SERVICE_CATALOG } from '../../constants/serviceCatalog';
 import { tenantIdRouteParamSchema } from './tenant.validation';
 
-export const serviceKeyParamSchema = z.enum(SERVICE_CATALOG);
+/** Path param; assignability checked against Mongo catalog on create. */
+export const serviceKeyParamSchema = z.string().min(1).max(100);
 
 const templateItemPricingSchema = z.object({
   cpuRatePerCoreMonthly: z.number().int().nonnegative().default(0),
@@ -52,35 +52,32 @@ const vmManagementLimitsSchema = z.object({
   allowedTemplateIds: z.array(z.number().int().positive()).optional().default([]),
 });
 
-const genericLimitsSchema = z.object({}).passthrough();
-const genericPricingSchema = z.object({}).passthrough();
+/** Assignability is enforced in the service layer against Mongo `service_catalog`. */
+export const serviceConfigCreateSchema = z
+  .object({
+    serviceKey: z.string().min(1).max(100),
+    limits: z.record(z.any()).optional().default({}),
+    pricing: z.record(z.any()).optional().default({}),
+  })
+  .superRefine((data, ctx) => {
+    if (data.serviceKey !== 'vm-management') {
+      return;
+    }
 
-function genericServiceCreateSchema<K extends Exclude<(typeof SERVICE_CATALOG)[number], 'vm-management'>>(
-  serviceKey: K
-) {
-  return z.object({
-    serviceKey: z.literal(serviceKey),
-    limits: genericLimitsSchema,
-    pricing: genericPricingSchema,
+    const limits = vmManagementLimitsSchema.safeParse(data.limits);
+    if (!limits.success) {
+      for (const issue of limits.error.issues) {
+        ctx.addIssue({ ...issue, path: ['limits', ...issue.path] });
+      }
+    }
+
+    const pricing = vmManagementPricingSchema.safeParse(data.pricing);
+    if (!pricing.success) {
+      for (const issue of pricing.error.issues) {
+        ctx.addIssue({ ...issue, path: ['pricing', ...issue.path] });
+      }
+    }
   });
-}
-
-export const serviceConfigCreateSchema = z.discriminatedUnion('serviceKey', [
-  z.object({
-    serviceKey: z.literal('vm-management'),
-    limits: vmManagementLimitsSchema,
-    pricing: vmManagementPricingSchema,
-  }),
-  genericServiceCreateSchema('create-vm'),
-  genericServiceCreateSchema('dedicated-server'),
-  genericServiceCreateSchema('elastic-servers'),
-  genericServiceCreateSchema('azure'),
-  genericServiceCreateSchema('aws'),
-  genericServiceCreateSchema('gcp'),
-  genericServiceCreateSchema('cloud-labs'),
-  genericServiceCreateSchema('docs'),
-  genericServiceCreateSchema('machine-manager'),
-]);
 
 export const serviceConfigUpdateSchema = z
   .object({

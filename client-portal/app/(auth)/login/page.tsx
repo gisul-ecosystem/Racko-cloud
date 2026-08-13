@@ -12,7 +12,7 @@ import { ApiError, apiRequest } from '../../../lib/apiClient';
 const LINK_ACCENT = 'text-[#EF4444] hover:text-[#DC2626] font-medium';
 
 const loginSchema = z.object({
-  email: z.string().email('Invalid email address'),
+  email: z.string().min(1, 'Email or username is required'),
   password: z.string().min(1, 'Password is required'),
 });
 
@@ -268,13 +268,13 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} noValidate className="space-y-3">
             <Field
-              label="Work Email"
+              label="Email or username"
               icon={<Mail className="h-4 w-4" />}
-              type="email"
+              type="text"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="your@gmail.com"
-              autoComplete="email"
+              placeholder="you@company.com or username"
+              autoComplete="username"
               disabled={isLoading}
               error={errors.email}
             />

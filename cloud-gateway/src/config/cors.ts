@@ -1,6 +1,6 @@
 import type { CorsOptions } from 'cors';
 import { allowedOrigins, config } from './index';
-
+ 
 export const corsOptions: CorsOptions = {
   origin: (origin, callback) => {
     // Allow no-origin in development (curl, server-to-server)

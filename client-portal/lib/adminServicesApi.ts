@@ -1,10 +1,15 @@
 import { apiRequest } from './apiClient';
+import {
+  fetchServiceCatalog,
+  type ServiceCatalogItem,
+} from './serviceCatalogApi';
 
 export const ADMIN_SERVICE_KEYS = [
   'create-vm',
   'dedicated-server',
   'vm-management',
   'elastic-servers',
+  'my-vms',
   'azure',
   'aws',
   'gcp',
@@ -26,6 +31,7 @@ export interface AdminAssignedService {
 export interface AdminServiceCatalogItem {
   serviceKey: AdminServiceKey;
   label: string;
+  description?: string;
 }
 
 interface ApiResponse<T> {
@@ -39,6 +45,21 @@ export async function fetchMyAdminServices(): Promise<AdminAssignedService[]> {
     '/api/v1/admin-services/me'
   );
   return res.data.services;
+}
+
+/** Product services assignable to org admins — from Mongo `service_catalog`. */
+export async function fetchAdminAssignableCatalog(): Promise<AdminServiceCatalogItem[]> {
+  const items = await fetchServiceCatalog({ kind: 'product', scope: 'admin' });
+  return items.map((item) => ({
+    serviceKey: item.key as AdminServiceKey,
+    label: item.label,
+    description: item.description,
+  }));
+}
+
+/** Product services assignable to tenants — from Mongo `service_catalog`. */
+export async function fetchTenantAssignableCatalog(): Promise<ServiceCatalogItem[]> {
+  return fetchServiceCatalog({ kind: 'product', scope: 'tenant' });
 }
 
 export async function fetchAdminServicesForUser(adminId: string): Promise<{
@@ -90,6 +111,7 @@ export const CONSOLE_TILE_SERVICE_KEY: Record<string, AdminServiceKey | null> = 
   'dedicated-server': 'dedicated-server',
   billing: null,
   elastic: 'elastic-servers',
+  'my-vm-dashboard': 'my-vms',
   azure: 'azure',
   aws: 'aws',
   gcp: 'gcp',

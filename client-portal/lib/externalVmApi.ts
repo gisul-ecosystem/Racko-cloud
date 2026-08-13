@@ -5,6 +5,31 @@ import type { AccessSchedule, AccessScheduleInput } from './accessSchedule';
 
 export type ExternalVMProtocol = 'rdp' | 'ssh';
 
+export interface AssignmentSchedulePublic {
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  daysOfWeek: number[];
+  dailyStart: string;
+  dailyEnd: string;
+  timezone: string;
+}
+
+export interface ExternalVmAssignmentSummary {
+  assignmentId: string;
+  userId?: string;
+  tenantUserId?: string;
+  email: string | null;
+  username: string | null;
+  status: string;
+  schedule: AssignmentSchedulePublic | null;
+}
+
+export interface ExternalVmMyAccess {
+  allowedNow: boolean;
+  schedule: AssignmentSchedulePublic | null;
+  nextWindow: string | null;
+}
+
 export interface IExternalVM {
   _id: string;
   name: string;
@@ -18,6 +43,8 @@ export interface IExternalVM {
   /** @deprecated First assignee — use assignedTenantUserIds */
   assignedTenantUserId?: string | null;
   assignedTenantUserIds?: string[];
+  assignments?: ExternalVmAssignmentSummary[];
+  myAccess?: ExternalVmMyAccess;
   accessSchedule?: AccessSchedule | null;
   createdAt: string;
   updatedAt: string;

@@ -111,11 +111,9 @@ const getRoleProvisionTimeBudgetMs = () => {
 const getMaxProvisionAccountCount = () =>
   parsePositiveInt(process.env.MAX_PROVISION_ACCOUNT_COUNT, 1000);
 
+/** Delete path: lower default to avoid Graph/ARM 429 storms on large labs. */
 const getDeleteAzureConcurrency = () =>
-  parsePositiveInt(
-    process.env.DELETE_AZURE_CONCURRENCY || process.env.BULK_PROVISION_CONCURRENCY,
-    30
-  );
+  parsePositiveInt(process.env.DELETE_AZURE_CONCURRENCY, 10);
 
 const getResourceCleanupConcurrency = () =>
   parsePositiveInt(

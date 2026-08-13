@@ -64,6 +64,7 @@ export type TenantServiceKey =
   | 'create-vm'
   | 'dedicated-server'
   | 'elastic-servers'
+  | 'my-vms'
   | 'azure'
   | 'aws'
   | 'gcp'
@@ -75,6 +76,7 @@ export type TenantServiceStatus = 'active' | 'suspended';
 export interface TenantAssignedService {
   serviceKey: TenantServiceKey;
   status: TenantServiceStatus;
+  label?: string;
 }
 
 export interface TenantWalletTransaction {

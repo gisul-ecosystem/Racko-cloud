@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import mongoose from 'mongoose';
-import { ADMIN_SERVICE_CATALOG } from '../../constants/adminServiceCatalog';
 
 const mongoObjectId = z
   .string()
   .refine((val) => mongoose.Types.ObjectId.isValid(val), { message: 'Invalid ID format' });
 
-const serviceKeySchema = z.enum(ADMIN_SERVICE_CATALOG);
+/** Runtime catalog validation happens in the service layer. */
+const serviceKeySchema = z.string().min(1).max(100);
 
 export const adminIdParamSchema = z.object({
   params: z.object({ adminId: mongoObjectId }),

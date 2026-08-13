@@ -493,7 +493,7 @@ export class VMController {
     try {
       const authReq = req as AuthenticatedRequest;
       const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
-      const query = req.query as { status?: string; cloneType?: string; node?: string; isRestricted?: string };
+      const query = req.query as { status?: string; cloneType?: string; node?: string; isRestricted?: string; projectId?: string };
 
       const filters: VMFilters = {};
       if (query.status) filters.status = query.status;
@@ -501,6 +501,7 @@ export class VMController {
       if (query.node) filters.node = query.node;
       if (query.isRestricted === 'true') filters.isRestricted = true;
       else if (query.isRestricted === 'false') filters.isRestricted = false;
+      if (query.projectId) filters.projectId = query.projectId;
 
       const vms = await vmService.getMyVMs(adminId, filters);
       success(res, 'VMs retrieved.', { vms, total: vms.length });

@@ -49,6 +49,19 @@ export interface ICatalogVm extends Document {
   tenantUserId?: mongoose.Types.ObjectId;
   /** Organization project this VM purchase belongs to. */
   projectId?: mongoose.Types.ObjectId;
+  /**
+   * Software catalog package IDs selected at Buy time (optional).
+   * Installed via Machine Manager agent only after the VM is active.
+   */
+  preferredSoftwareIds?: mongoose.Types.ObjectId[];
+  /** Linked Machine Manager machine created after Attach / auto-provision. */
+  machineId?: mongoose.Types.ObjectId;
+  /**
+   * Post-ready agent/software automation status.
+   * none = skipped or not started; pending/running/done/failed after active.
+   */
+  postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
+  postReadyError?: string;
   provider: VmCatalogProvider;
   category: VmCatalogCategory;
   planId: string;
@@ -146,6 +159,21 @@ const catalogVmSchema = new Schema<ICatalogVm>(
       ref: 'Project',
       index: true,
     },
+    preferredSoftwareIds: {
+      type: [{ type: Schema.Types.ObjectId, ref: 'SoftwareCatalog' }],
+      default: [],
+    },
+    machineId: {
+      type: Schema.Types.ObjectId,
+      ref: 'Machine',
+      index: true,
+    },
+    postReadyStatus: {
+      type: String,
+      enum: ['none', 'pending', 'running', 'done', 'failed'],
+      default: 'none',
+    },
+    postReadyError: { type: String, trim: true },
     provider: {
       type: String,
       enum: ['webyne', 'aws', 'azure', 'gcp', 'oci'],

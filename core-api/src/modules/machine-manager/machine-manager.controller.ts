@@ -154,9 +154,9 @@ export class MachineManagerController {
   async pushAgent(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
-      const { vms, sessionId, groupId } = req.body as PushAgentInput & { sessionId?: string; groupId?: string };
+      const { vms, sessionId, groupId, installRackoApp } = req.body as PushAgentInput & { sessionId?: string; groupId?: string; installRackoApp?: boolean };
       const sid = sessionId ?? `push-${Date.now()}`;
-      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid, groupId);
+      const result = await machineManagerService.pushAgentToVMs(vms, adminId, sid, groupId, installRackoApp ?? true);
       success(res, 'Agent push initiated.', { ...result, sessionId: sid }, 201);
     } catch (err) {
       next(err);
@@ -511,7 +511,6 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   async agentHeartbeat(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const updateInfo = await machineManagerService.handleHeartbeat(req.body as AgentHeartbeatInput);
-      // Always return updateInfo — it now always includes trackingEnabled
       success(res, 'Heartbeat received.', updateInfo);
     } catch (err) {
       next(err);
@@ -613,8 +612,29 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     });
   }
   /**
+   * GET /api/v1/machines/push-session/:sessionId
+   * Returns persisted push session state so the browser can recover after a page refresh.
+   * Auth: JWT (same as other machine routes).
+   */
+  async getPushSession(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = (req as AuthenticatedRequest).user.userId;
+      const { sessionId } = req.params as { sessionId: string };
+      const { PushSessionModel } = await import('../../models/pushSession.model');
+
+      const session = await PushSessionModel.findOne({ sessionId, adminId }).lean();
+      if (!session) {
+        res.status(404).json({ success: false, message: 'Push session not found or expired.' });
+        return;
+      }
+
+      success(res, 'Push session retrieved.', { session });
+    } catch (err) {
+      next(err);
+    }
+  }
+  /**
    * POST /api/v1/machines/reset
-   * Initiates a VM reset on one or more machines.
    * Returns immediately — reset runs async on the agent.
    * Use the SSE stream to receive live progress.
    */
@@ -660,6 +680,12 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
    * GET /api/v1/machines/reset-stream/:sessionId?streamToken=xxx
    * SSE stream for real-time reset status updates.
    * Auth via short-lived streamToken (EventSource cannot set auth headers).
+   *
+   * On open, immediately checks MongoDB for a persisted reset result.
+   * If one exists (reset finished while browser was loading the stream),
+   * it delivers reset_complete instantly and closes — no need to subscribe.
+   * This handles the common case where the reset finishes before the SSE stream
+   * is opened, or when the browser refreshes after the reset completes.
    */
   async streamResetStatus(req: Request, res: Response): Promise<void> {
     const sessionId = req.params['sessionId'] as string;
@@ -687,6 +713,31 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     // Confirm stream is alive
     send({ type: 'ping', sessionId });
 
+    // ── Check if any resets already completed (persisted results in DB) ─────
+    // On reconnect after a network drop, sends ALL results that arrived while
+    // the stream was disconnected. Previously used getResetResult (singular)
+    // which only returned the first result — the second machine's result was
+    // silently dropped, causing inconsistent UI when resetting multiple VMs.
+    const existingResults = await machineManagerService.getResetResults(sessionId);
+    if (existingResults.length > 0) {
+      logger.info('[ResetStream] Sending persisted results on (re)connect', {
+        sessionId,
+        count: existingResults.length,
+      });
+      for (const result of existingResults) {
+        send({
+          type:        'reset_complete',
+          machineId:   result.machineId,
+          machineName: result.machineName,
+          success:     result.success,
+          error:       result.error,
+        });
+      }
+      // Keep the stream open — there may be additional machines still in progress.
+      // The stream will close naturally when the client disconnects (all machines done).
+    }
+
+    // ── Subscribe to live emitter for in-progress resets ─────────────────────
     const { resetSessionEmitter } = await import('./reset.events');
 
     const listener = (event: object) => send(event);
@@ -699,33 +750,40 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
   }
 
   /**
-   * PATCH /api/v1/machines/tracking
-   * Enable or disable file tracking on one or more machines.
-   * Body: { machineIds: string[], enabled: boolean }
+   * POST /api/v1/agent/reset-result
+   * Agent POSTs reset outcome via HTTP after the script completes.
+   * Auth: X-Agent-ID header (same as heartbeat, no JWT required).
+   *
+   * This is the authoritative delivery path for reset_complete — it works
+   * even when the WebSocket connection was dropped during the long reset.
    */
-  async setTracking(req: Request, res: Response, next: NextFunction): Promise<void> {
+  async agentResetResult(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
-      const { machineIds, enabled } = req.body as { machineIds: string[]; enabled: boolean };
-
-      if (!Array.isArray(machineIds) || machineIds.length === 0) {
-        res.status(400).json({ success: false, message: 'machineIds must be a non-empty array.' });
-        return;
-      }
-      if (typeof enabled !== 'boolean') {
-        res.status(400).json({ success: false, message: 'enabled must be a boolean.' });
+      const agentId = req.headers['x-agent-id'] as string;
+      if (!agentId) {
+        res.status(400).json({ success: false, message: 'X-Agent-ID header required.' });
         return;
       }
 
-      const machines = await machineManagerService.setTracking(machineIds, enabled, adminId);
-      success(res, `Tracking ${enabled ? 'enabled' : 'disabled'} on ${machines.length} machine(s).`, {
-        machines,
-        total: machines.length,
-      });
+      const { sessionId, success: resetSuccess, error } = req.body as {
+        sessionId: string;
+        success:   boolean;
+        error?:    string;
+      };
+
+      if (!sessionId || typeof resetSuccess !== 'boolean') {
+        res.status(400).json({ success: false, message: 'sessionId and success are required.' });
+        return;
+      }
+
+      await machineManagerService.agentResetResult({ agentId, sessionId, success: resetSuccess, error });
+
+      res.status(200).json({ success: true, message: 'Reset result recorded.' });
     } catch (err) {
       next(err);
     }
   }
+
 
   /** POST /api/v1/machines/:id/exec */
   async execCommand(req: Request, res: Response, next: NextFunction): Promise<void> {    try {

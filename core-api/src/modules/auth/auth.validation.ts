@@ -10,6 +10,18 @@ const passwordSchema = z
   .regex(/[0-9]/, 'Password must contain at least one number')
   .regex(/[^A-Za-z0-9]/, 'Password must contain at least one special character');
 
+export const checkEmailSchema = z.object({
+  body: z.object({
+    email: z
+      .string()
+      .min(1, 'Email is required')
+      .email('Invalid email format')
+      .max(254, 'Email too long')
+      .toLowerCase()
+      .trim(),
+  }),
+});
+
 export const registerSchema = z.object({
   body: z.object({
     email: z
@@ -21,15 +33,28 @@ export const registerSchema = z.object({
       .trim(),
     password: passwordSchema,
     accountType: accountTypeSchema,
+    name: z
+      .string()
+      .trim()
+      .min(2, 'Name must be at least 2 characters')
+      .max(120)
+      .regex(/^[A-Za-z][A-Za-z .'-]*$/, 'Name contains invalid characters')
+      .optional(),
+    phone: z
+      .string()
+      .trim()
+      .regex(/^\+[1-9]\d{6,18}$/, 'Use format +CountryCodeNumber')
+      .optional(),
   }),
 });
 
 export const loginSchema = z.object({
   body: z.object({
+    // Field name kept as `email` for API compatibility; value may be email OR username.
     email: z
       .string()
-      .min(1, 'Email is required')
-      .email('Invalid email format')
+      .min(1, 'Email or username is required')
+      .max(254, 'Email or username too long')
       .toLowerCase()
       .trim(),
     password: z.string().min(1, 'Password is required'),

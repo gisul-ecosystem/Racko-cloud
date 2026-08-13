@@ -25,8 +25,8 @@ export interface IMachine {
     ramGb?: number;
     diskGb?: number;
   };
-  trackingEnabled: boolean;
-  trackingEnabledAt?: string;
+  agentVersion?: string;
+  rackoAppVersion?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -48,6 +48,7 @@ export interface ISoftwareCatalog {
   _id: string;
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: MachineOS[];
   installMethod: InstallMethod;
   wingetId?: string;
@@ -80,6 +81,7 @@ export interface CreateJobDto {
 export interface CreateSoftwareCatalogDto {
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: MachineOS[];
   installMethod: InstallMethod;
   wingetId?: string;
@@ -145,22 +147,6 @@ export async function bulkDeleteMachines(machineIds: string[]): Promise<{
     body: JSON.stringify({ machineIds }),
   });
   return res.data;
-}
-
-/**
- * Enable or disable file tracking on one or more machines.
- * When enabled, the agent starts the filesystem watcher and activity log.
- * When disabled, the watcher stops — no more activity is recorded.
- */
-export async function setMachineTracking(
-  machineIds: string[],
-  enabled: boolean
-): Promise<IMachine[]> {
-  const res = await apiRequest<ApiResponse<{ machines: IMachine[]; total: number }>>(
-    '/api/v1/machines/tracking',
-    { method: 'PATCH', body: JSON.stringify({ machineIds, enabled }) }
-  );
-  return res.data.machines;
 }
 
 export async function execCommand(
@@ -245,11 +231,12 @@ export interface VMPushResult {
 
 export async function pushAgentToVMs(
   vms: VMPushTarget[],
-  sessionId: string
+  sessionId: string,
+  installRackoApp = true
 ): Promise<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }> {
   const res = await apiRequest<ApiResponse<{ machines: IMachine[]; pushResults: VMPushResult[]; sessionId: string }>>(
     '/api/v1/machines/push-agent',
-    { method: 'POST', body: JSON.stringify({ vms, sessionId }) }
+    { method: 'POST', body: JSON.stringify({ vms, sessionId, installRackoApp }) }
   );
   return res.data;
 }
@@ -270,6 +257,43 @@ export function openPushStatusStream(
 ): EventSource {
   const url = `${getSseGatewayBaseUrl()}/api/v1/machines/push-stream/${sessionId}?streamToken=${streamToken}`;
   return new EventSource(url, { withCredentials: true });
+}
+
+// ─── Push session recovery ────────────────────────────────────────────────────
+
+export interface PushSessionMachineResult {
+  machineId:          string;
+  machineName:        string;
+  ipAddress:          string;
+  pushSuccess?:       boolean;
+  pushError?:         string;
+  agentConnected:     boolean;
+  rackoAppInstalled?: boolean;
+  rackoAppError?:     string;
+}
+
+export interface PushSessionState {
+  sessionId: string;
+  adminId:   string;
+  machines:  PushSessionMachineResult[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Fetches persisted push session state from MongoDB.
+ * Used to restore the Connection Status page after a browser refresh.
+ * Returns null if session not found or expired (15-min TTL).
+ */
+export async function fetchPushSession(sessionId: string): Promise<PushSessionState | null> {
+  try {
+    const res = await apiRequest<ApiResponse<{ session: PushSessionState }>>(
+      `/api/v1/machines/push-session/${sessionId}`
+    );
+    return res.data.session;
+  } catch {
+    return null;
+  }
 }
 
 // ─── Enrollment Key API ───────────────────────────────────────────────────────
@@ -341,48 +365,131 @@ export function openResetStatusStream(
   return new EventSource(url, { withCredentials: true });
 }
 
-// ─── Clone API ────────────────────────────────────────────────────────────────
-
-export interface ActivityEvent {
-  _id: string;
-  type: string;
-  timestamp: string;
-  payload: Record<string, unknown>;
-  sequence: number;
-}
-
-export async function fetchActivityLog(machineId: string): Promise<ActivityEvent[]> {
-  const res = await apiRequest<{ success: boolean; data: { activities: ActivityEvent[]; total: number } }>(
-    `/api/v1/machines/${machineId}/activity`
-  );
-  return res.data.activities;
-}
-
-export async function cloneMachineTo(
-  sourceMachineId: string,
-  targetMachineId: string
-): Promise<{ sessionId: string }> {
-  const res = await apiRequest<{ success: boolean; message: string; data: { sessionId: string } }>(
-    `/api/v1/machines/${sourceMachineId}/clone-to/${targetMachineId}`,
-    { method: 'POST' }
-  );
-  return res.data;
-}
-
-export async function issueCloneStreamTicket(
-  sessionId: string
-): Promise<{ streamTicket: string; expiresInSeconds: number }> {
-  const res = await apiRequest<{ success: boolean; data: { streamTicket: string; expiresInSeconds: number } }>(
-    '/api/v1/machines/clone-stream-ticket',
-    { method: 'POST', body: JSON.stringify({ sessionId }) }
-  );
-  return res.data;
-}
-
-export function openCloneStatusStream(
+/**
+ * Opens a reset status SSE stream with automatic reconnection and exponential backoff.
+ *
+ * Industry-standard pattern for long-running operations over SSE:
+ * - Uses fetch + ReadableStream instead of native EventSource for reconnect control
+ * - On any network error, waits with exponential backoff then reconnects
+ * - Ticket is reusable within its TTL so reconnects don't need a new auth round-trip
+ * - On reconnect, server checks MongoDB for persisted result and delivers it instantly
+ * - Stops reconnecting once a terminal event (reset_complete) is received or max retries hit
+ *
+ * @param sessionId     The reset session ID
+ * @param streamToken   The reusable stream ticket (valid for 15 minutes)
+ * @param onEvent       Called for every parsed SSE event object
+ * @param onTerminal    Called when a terminal event (reset_complete) is received
+ * @param onGiveUp      Called when all retries are exhausted without a terminal event
+ * @returns             A function to stop the stream (call on component unmount)
+ */
+export function openResetStatusStreamWithReconnect(
   sessionId: string,
-  streamTicket: string
-): EventSource {
-  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/clone-stream/${sessionId}?ticket=${streamTicket}`;
-  return new EventSource(url, { withCredentials: true });
+  streamToken: string,
+  onEvent: (event: { type: string; machineId?: string; success?: boolean; error?: string }) => void,
+  onTerminal: () => void,
+  onGiveUp: () => void,
+  expectedCount: number = 1,
+): () => void {
+  const BASE_DELAY_MS = 1_000;
+  const MAX_DELAY_MS  = 30_000;
+  const MAX_ATTEMPTS  = 10;
+
+  let stopped = false;
+  let attempt = 0;
+  let currentController: AbortController | null = null;
+  // Track which machineIds have received reset_complete so we don't double-count on reconnect
+  const completedMachines = new Set<string>();
+
+  const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  const connect = async () => {
+    while (!stopped && attempt <= MAX_ATTEMPTS) {
+      currentController = new AbortController();
+      const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+
+      try {
+        const response = await fetch(url, {
+          credentials: 'include',
+          signal: currentController.signal,
+          headers: { Accept: 'text/event-stream' },
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        attempt = 0;
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (!stopped) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const raw = line.slice(5).trim();
+            if (!raw) continue;
+
+            try {
+              const event = JSON.parse(raw) as {
+                type: string;
+                machineId?: string;
+                success?: boolean;
+                error?: string;
+              };
+
+              if (event.type === 'reset_complete' && event.machineId) {
+                // Deduplicate — on reconnect the server replays all persisted results.
+                // Only fire onEvent for machines not yet processed in this session.
+                if (!completedMachines.has(event.machineId)) {
+                  completedMachines.add(event.machineId);
+                  onEvent(event);
+                }
+
+                // All expected machines done — stop cleanly
+                if (completedMachines.size >= expectedCount) {
+                  stopped = true;
+                  onTerminal();
+                  return;
+                }
+                // More machines still pending — keep stream open
+              } else {
+                onEvent(event);
+              }
+            } catch {
+              // ignore malformed SSE lines
+            }
+          }
+        }
+      } catch (err) {
+        if (stopped) return;
+        if (err instanceof Error && err.name === 'AbortError') return;
+      }
+
+      if (stopped) return;
+
+      attempt++;
+      if (attempt > MAX_ATTEMPTS) {
+        onGiveUp();
+        return;
+      }
+
+      const backoff = Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), MAX_DELAY_MS);
+      await delay(backoff);
+    }
+  };
+
+  void connect();
+
+  return () => {
+    stopped = true;
+    currentController?.abort();
+  };
 }

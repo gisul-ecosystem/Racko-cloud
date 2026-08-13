@@ -1,5 +1,5 @@
 import mongoose, { Document, Schema } from 'mongoose';
-import { ADMIN_SERVICE_CATALOG, type AdminServiceKey } from '../constants/adminServiceCatalog';
+import type { AdminServiceKey } from '../constants/adminServiceCatalog';
 
 export type AdminServiceConfigStatus = 'active' | 'suspended';
 
@@ -23,7 +23,6 @@ const adminServiceConfigSchema = new Schema<IAdminServiceConfig>(
     },
     serviceKey: {
       type: String,
-      enum: [...ADMIN_SERVICE_CATALOG],
       required: true,
     },
     status: {

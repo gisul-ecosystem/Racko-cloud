@@ -30,6 +30,11 @@ const {
 } = require('./azureCostManagementService');
 const { formatMinutes } = require('../utils/formatMinutes');
 const { createAzureCredential, validateAzureEnv } = require('../config/azure');
+const {
+  createAuthorizationClient,
+  getSubscriptionAssignmentCount,
+  SUBSCRIPTION_ROLE_ASSIGNMENT_LIMIT
+} = require('../provisioners/azure/roleProvisioner');
 const { filterResourcesForUser, expandDeploymentResources } = require('../utils/resourceOwnership');
 const { listResourcesInResourceGroup } = require('./resourceCleanupService');
 const {
@@ -2827,7 +2832,7 @@ const unblockUser = async ({
   const { DateTime } = require('luxon');
   const {
     createGraphClient,
-    generateTemporaryPassword
+    restoreAzureUserSignInAccess
   } = require('../provisioners/azure/userProvisioner');
 
   const userResult = await db.query(
@@ -2839,7 +2844,8 @@ const unblockUser = async ({
         au.request_id,
         au.azure_account_enabled,
         au.status,
-        au.blocked_until
+        au.blocked_until,
+        au.temporary_password
       FROM azure_users au
       WHERE au.request_id = $1
         AND au.id = $2
@@ -2879,52 +2885,11 @@ const unblockUser = async ({
           .toUTC()
           .toISO();
 
-  const newPassword = generateTemporaryPassword();
   const { graphClient } = createGraphClient();
 
-  try {
-    await graphClient.api(`/users/${user.azure_user_id}/revokeSignInSessions`).post({});
-  } catch (revokeError) {
-    console.warn(
-      `[UNBLOCK] Could not revoke sign-in sessions for user ${userId}: ${revokeError.message}`
-    );
-  }
-
-  let passwordReset = false;
-  try {
-    await graphClient.api(`/users/${user.azure_user_id}`).patch({
-      accountEnabled: true,
-      passwordProfile: {
-        forceChangePasswordNextSignIn: true,
-        password: newPassword
-      }
-    });
-    passwordReset = true;
-  } catch (passwordError) {
-    const insufficientPrivileges = /insufficient privileges/i.test(passwordError.message || '');
-    console.warn(
-      `[UNBLOCK] Password reset failed for user ${userId}: ${passwordError.message}` +
-        (insufficientPrivileges ? ' (falling back to account enable only)' : '')
-    );
-
-    if (!insufficientPrivileges) {
-      throw passwordError;
-    }
-
-    await graphClient.api(`/users/${user.azure_user_id}`).patch({ accountEnabled: true });
-  }
-
-  const verifiedState = await graphClient
-    .api(`/users/${user.azure_user_id}`)
-    .select('accountEnabled,userPrincipalName')
-    .get();
-
-  if (verifiedState.accountEnabled === false) {
-    throw new AppError(
-      'Azure account is still disabled after unblock. Check Graph API User.ReadWrite.All permission.',
-      502
-    );
-  }
+  const azureRestore = await restoreAzureUserSignInAccess(graphClient, user.azure_user_id, {
+    existingPassword: user.temporary_password
+  });
 
   await db.query(
     `
@@ -2935,12 +2900,11 @@ const unblockUser = async ({
         blocked_reason = NULL,
         blocked_at = NULL,
         window_enforcement_paused_until = $3,
-        temporary_password = CASE WHEN $4 THEN $5 ELSE temporary_password END,
         used_today_minutes = CASE WHEN $2 THEN 0 ELSE used_today_minutes END,
         status = CASE WHEN status = 'Blocked' THEN 'Created' ELSE status END
       WHERE id = $1
     `,
-    [userId, resetUsage, pauseUntil, passwordReset, newPassword]
+    [userId, resetUsage, pauseUntil]
   );
 
   if (resetUsage) {
@@ -3001,7 +2965,7 @@ const unblockUser = async ({
         resetUsage,
         pauseWindowEnforcement,
         pauseUntil,
-        passwordReset
+        passwordReapplied: azureRestore.passwordReapplied === true
       }),
       requestId
     ]
@@ -3013,9 +2977,8 @@ const unblockUser = async ({
     resetUsage,
     pauseWindowEnforcement,
     windowEnforcementPausedUntil: pauseUntil,
-    temporaryPassword: passwordReset ? newPassword : undefined,
-    userPrincipalName: verifiedState.userPrincipalName || null,
-    passwordReset
+    userPrincipalName: azureRestore.userPrincipalName || null,
+    passwordReapplied: azureRestore.passwordReapplied === true
   };
 };
 
@@ -3027,12 +2990,14 @@ const unblockAllUsers = async ({
   pauseWindowHours = 24
 }) => {
   const { DateTime } = require('luxon');
-  const { createGraphClient } = require('../provisioners/azure/userProvisioner');
-  const { batchEnableUsers } = require('../provisioners/azure/graphBatchProvisioner');
+  const {
+    createGraphClient,
+    restoreAzureUserSignInAccess
+  } = require('../provisioners/azure/userProvisioner');
 
   const { rows: users } = await db.query(
     `
-      SELECT id, username, azure_user_id
+      SELECT id, username, azure_user_id, temporary_password
       FROM azure_users
       WHERE request_id = $1
         AND azure_user_id IS NOT NULL
@@ -3067,16 +3032,36 @@ const unblockAllUsers = async ({
           .toISO();
 
   const { graphClient } = createGraphClient();
-  const { enabled: enabledAzureIds, failed: graphFailures } = await batchEnableUsers(
-    graphClient,
-    users.map((user) => user.azure_user_id),
-    `unblock-all request ${requestId}`
+  const azureResults = new Map();
+  const unblockConcurrency = Math.max(
+    1,
+    Math.min(5, Number(process.env.ORG_ADMIN_UNBLOCK_CONCURRENCY || 3))
   );
 
-  const enabledAzureIdSet = new Set(enabledAzureIds.map((id) => String(id).toLowerCase()));
-  const enabledUsers = users.filter((user) =>
-    enabledAzureIdSet.has(String(user.azure_user_id).toLowerCase())
+  await runWithConcurrency(
+    users,
+    unblockConcurrency,
+    async (user) => {
+      try {
+        const restored = await restoreAzureUserSignInAccess(graphClient, user.azure_user_id, {
+          existingPassword: user.temporary_password
+        });
+        azureResults.set(user.id, {
+          success: true,
+          passwordReapplied: restored.passwordReapplied === true,
+          userPrincipalName: restored.userPrincipalName
+        });
+      } catch (error) {
+        azureResults.set(user.id, {
+          success: false,
+          error: error?.message || 'Failed to restore Azure sign-in access'
+        });
+      }
+    },
+    { continueOnError: true }
   );
+
+  const enabledUsers = users.filter((user) => azureResults.get(user.id)?.success === true);
   const enabledUserIds = enabledUsers.map((user) => user.id);
 
   if (enabledUserIds.length) {
@@ -3143,16 +3128,15 @@ const unblockAllUsers = async ({
     }
   }
 
-  const failedByAzureId = new Map(
-    graphFailures.map((entry) => [String(entry.azureUserId).toLowerCase(), entry.error])
-  );
   const results = users.map((user) => {
-    const azureKey = String(user.azure_user_id).toLowerCase();
-    if (enabledAzureIdSet.has(azureKey)) {
+    const restored = azureResults.get(user.id);
+    if (restored?.success) {
       return {
         userId: user.id,
         username: user.username,
-        success: true
+        success: true,
+        passwordReapplied: restored.passwordReapplied === true,
+        userPrincipalName: restored.userPrincipalName || null
       };
     }
 
@@ -3160,7 +3144,7 @@ const unblockAllUsers = async ({
       userId: user.id,
       username: user.username,
       success: false,
-      error: failedByAzureId.get(azureKey) || 'Failed to enable Azure account'
+      error: restored?.error || 'Failed to restore Azure sign-in access'
     };
   });
 
@@ -3189,7 +3173,7 @@ const unblockAllUsers = async ({
 
   if (unblockedCount === 0) {
     throw new AppError(
-      graphFailures[0]?.error ||
+      results.find((entry) => entry.error)?.error ||
         'Could not unblock any users. Microsoft Graph may be rate limiting — wait a moment and try again.',
       502
     );
@@ -3533,9 +3517,31 @@ const listAzureRoles = () => [
   { name: 'Monitoring Reader', definitionId: '43d0d8ad-25c7-4714-9337-8ba259a9fe05' }
 ];
 
+const getSubscriptionRoleQuota = async () => {
+  const { authorizationClient, subscriptionId } = createAuthorizationClient();
+  const counted = await getSubscriptionAssignmentCount(authorizationClient, subscriptionId);
+  const limit = SUBSCRIPTION_ROLE_ASSIGNMENT_LIMIT;
+  const exhausted = counted >= limit;
+  const used = exhausted ? limit : counted;
+  const remaining = Math.max(0, limit - counted);
+  const percentUsed = limit > 0 ? Math.min(100, Math.round((counted / limit) * 100)) : 0;
+
+  return {
+    subscriptionId,
+    used,
+    usedAtLeast: counted,
+    limit,
+    remaining,
+    percentUsed,
+    exhausted,
+    warning: !exhausted && remaining <= 200
+  };
+};
+
 module.exports = {
   listResourceGroups,
   listRequests,
+  getSubscriptionRoleQuota,
   getResourceGroupDetail,
   getUserLiveResources,
   getMonitoringLogs,

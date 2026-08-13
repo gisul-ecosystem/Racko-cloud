@@ -28,6 +28,7 @@ const DATA_PLANE_ONLY_ROLES = new Set([
 ]);
 
 const CONTROL_PLANE_ROLES = new Set([
+  'Reader',
   'Contributor',
   'Owner',
   'Virtual Machine Contributor',

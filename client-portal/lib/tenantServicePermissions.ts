@@ -9,8 +9,10 @@ export const TENANT_SERVICE_PERMISSIONS: Partial<Record<TenantServiceKey, string
   'create-vm': ['create_vm.read', 'create_vm.request'],
   'dedicated-server': ['dedicated.read', 'dedicated.request'],
   'elastic-servers': ['elastic.read', 'elastic.manage'],
+  'my-vms': ['my_vms.read'],
   azure: ['azure.read', 'azure.manage'],
   aws: ['aws.read', 'aws.manage'],
+  gcp: ['gcp.read', 'gcp.manage'],
   'cloud-labs': ['cloud_labs.read', 'cloud_labs.manage'],
 };
 

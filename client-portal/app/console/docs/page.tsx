@@ -1,8 +1,20 @@
+'use client';
+
 import Link from 'next/link';
 import { BookOpen, Server, Globe, Cloud, ArrowRight } from 'lucide-react';
+import { useAdminServices } from '@/context/AdminServicesContext';
+import { filterDocsTopics, type DocsTopicKey } from '@/lib/docsServiceSections';
 
-const sections = [
+const sections: Array<{
+  topic: DocsTopicKey;
+  icon: typeof Server;
+  title: string;
+  description: string;
+  color: string;
+  links: { href: string; label: string }[];
+}> = [
   {
+    topic: 'vps',
     icon: Server,
     title: 'VPS Hosting',
     description: 'Learn how to provision, manage, and access your Racko cloud virtual machines.',
@@ -17,6 +29,7 @@ const sections = [
     ],
   },
   {
+    topic: 'esi',
     icon: Globe,
     title: 'Elastic Server Import',
     description: 'Connect and manage your own external servers through a secure browser console.',
@@ -29,6 +42,7 @@ const sections = [
     ],
   },
   {
+    topic: 'azure',
     icon: Cloud,
     title: 'Azure Services',
     description: 'Provision Azure lab environments, manage access, and track live provisioning.',
@@ -41,6 +55,7 @@ const sections = [
     ],
   },
   {
+    topic: 'aws',
     icon: Server,
     title: 'AWS Services',
     description: 'Provision AWS lab environments, configure IAM access, and monitor spend.',
@@ -55,6 +70,9 @@ const sections = [
 ];
 
 export default function DocsPage() {
+  const { hasActiveService, loading } = useAdminServices();
+  const visible = loading ? [] : filterDocsTopics(sections, hasActiveService);
+
   return (
     <div className="max-w-4xl">
       <div className="mb-8">
@@ -63,40 +81,48 @@ export default function DocsPage() {
         </div>
         <h1 className="text-2xl font-bold text-gray-900">Documentation</h1>
         <p className="mt-1.5 text-sm text-gray-500">
-          Everything you need to know about using Racko services.
+          Guides for the product services enabled on your account.
         </p>
       </div>
 
-      <div className="grid gap-6 sm:grid-cols-2">
-        {sections.map((section) => {
-          const Icon = section.icon;
-          return (
-            <div
-              key={section.title}
-              className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
-            >
-              <div className={`mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg ${section.color}`}>
-                <Icon className="h-5 w-5" />
+      {visible.length === 0 && !loading ? (
+        <p className="rounded-xl border border-dashed border-gray-200 bg-gray-50 px-5 py-8 text-center text-sm text-gray-500">
+          No documentation topics yet. Enable a product service to see related guides.
+        </p>
+      ) : (
+        <div className="grid gap-6 sm:grid-cols-2">
+          {visible.map((section) => {
+            const Icon = section.icon;
+            return (
+              <div
+                key={section.title}
+                className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
+              >
+                <div
+                  className={`mb-4 inline-flex h-10 w-10 items-center justify-center rounded-lg ${section.color}`}
+                >
+                  <Icon className="h-5 w-5" />
+                </div>
+                <h2 className="text-base font-semibold text-gray-900">{section.title}</h2>
+                <p className="mt-1 text-sm text-gray-500">{section.description}</p>
+                <ul className="mt-4 space-y-2">
+                  {section.links.map((link) => (
+                    <li key={link.href}>
+                      <Link
+                        href={link.href}
+                        className="flex items-center gap-2 text-sm text-[#B91C1C] hover:underline"
+                      >
+                        <ArrowRight className="h-3.5 w-3.5 shrink-0" />
+                        {link.label}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
               </div>
-              <h2 className="text-base font-semibold text-gray-900">{section.title}</h2>
-              <p className="mt-1 text-sm text-gray-500">{section.description}</p>
-              <ul className="mt-4 space-y-2">
-                {section.links.map((link) => (
-                  <li key={link.href}>
-                    <Link
-                      href={link.href}
-                      className="flex items-center gap-2 text-sm text-[#B91C1C] hover:underline"
-                    >
-                      <ArrowRight className="h-3.5 w-3.5 shrink-0" />
-                      {link.label}
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

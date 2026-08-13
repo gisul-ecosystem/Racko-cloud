@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { useRouter } from 'next/navigation';import { useAuth } from '../../../../context/AuthContext';
+import { useRouter, useSearchParams } from 'next/navigation';import { useAuth } from '../../../../context/AuthContext';
 import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton';
@@ -13,6 +13,7 @@ import {
   pushAgentToVMs,
   issuePushStreamTicket,
   openPushStatusStream,
+  fetchPushSession,
   fetchEnrollmentKey,
   fetchMachines,
   createJobs,
@@ -23,6 +24,7 @@ import {
   type MachineOS,
   type VMPushTarget,
   type JobStatus,
+  type PushSessionMachineResult,
 } from '../../../../lib/machineManagerApi';
 import {
   Monitor, Server, Layers, Download, Check,
@@ -412,11 +414,15 @@ function PhysicalFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 // ─── FLOW 2: VM (SSH/WinRM Push) ──────────────────────────────────────────────
 function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; onStepChange?: (step: number) => void }) {
   const { addToast } = useToast();
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [step, setStep] = useState(1);
   const [vmRows, setVmRows] = useState<VMPushTarget[]>([{ name: '', ipAddress: '', os: 'linux', username: '', password: '' }]);
   const [machines, setMachines] = useState<IMachine[]>([]);
   const [pushing, setPushing] = useState(false);
+  const [installRackoApp, setInstallRackoApp] = useState(true);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [recovering, setRecovering] = useState(false);
 
   // Notify parent when step changes — used to hide "Change setup type" on steps 2+
   useEffect(() => { onStepChange?.(step); }, [step, onStepChange]);
@@ -425,7 +431,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
   type VMStatus = { pushSuccess?: boolean; pushError?: string; agentConnected: boolean; rackoAppInstalled?: boolean; rackoAppError?: string };
   const [vmStatus, setVmStatus] = useState<Record<string, VMStatus>>({});
   const [timeoutReached, setTimeoutReached] = useState(false);
-  const [secondsLeft, setSecondsLeft] = useState(180);
+  const [secondsLeft, setSecondsLeft] = useState(600);
   const sseRef = useRef<EventSource | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -446,6 +452,68 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
   }, []);
 
   useEffect(() => () => cleanup(), [cleanup]);
+
+  // ── Session recovery on mount ─────────────────────────────────────────────
+  // If the URL has ?session=<id>, restore persisted state from MongoDB and reconnect SSE.
+  useEffect(() => {
+    const sessionId = searchParams.get('session');
+    if (!sessionId) return;
+    void (async () => {
+      setRecovering(true);
+      try {
+        const session = await fetchPushSession(sessionId);
+        if (!session) { setRecovering(false); return; }
+
+        const restoredMachines: IMachine[] = session.machines.map((m) => ({
+          _id: m.machineId, name: m.machineName, ipAddress: m.ipAddress,
+          os: 'windows' as MachineOS, agentId: '', accountToken: '',
+          status: m.agentConnected ? 'online' as const : 'offline' as const,
+          adminId: session.adminId,
+          createdAt: session.createdAt, updatedAt: session.updatedAt,
+        }));
+        setMachines(restoredMachines);
+
+        const restoredStatus: Record<string, VMStatus> = {};
+        for (const m of session.machines) {
+          restoredStatus[m.machineId] = {
+            pushSuccess: m.pushSuccess, pushError: m.pushError,
+            agentConnected: m.agentConnected,
+            rackoAppInstalled: m.rackoAppInstalled, rackoAppError: m.rackoAppError,
+          };
+        }
+        setVmStatus(restoredStatus);
+        setStep(2);
+
+        // Re-open SSE stream to receive any still-pending events
+        try {
+          const { streamToken } = await issuePushStreamTicket(sessionId);
+          const sse = openPushStatusStream(sessionId, streamToken);
+          sseRef.current = sse;
+          setSecondsLeft(600);
+          setTimeoutReached(false);
+          countdownRef.current = setInterval(() => {
+            setSecondsLeft((s) => { if (s <= 1) { clearInterval(countdownRef.current!); return 0; } return s - 1; });
+          }, 1000);
+          timerRef.current = setTimeout(() => { setTimeoutReached(true); cleanup(); }, PUSH_TIMEOUT_MS);
+          sse.onmessage = (e: MessageEvent) => {
+            type PushEvent = { type: string; machineId: string; success?: boolean; error?: string };
+            try {
+              const ev = JSON.parse(e.data as string) as PushEvent;
+              if (ev.type === 'push_result') {
+                setVmStatus((prev) => ({ ...prev, [ev.machineId]: { ...prev[ev.machineId], pushSuccess: ev.success, pushError: ev.error, agentConnected: prev[ev.machineId]?.agentConnected ?? false } }));
+              } else if (ev.type === 'agent_connected') {
+                setVmStatus((prev) => ({ ...prev, [ev.machineId]: { ...prev[ev.machineId], pushSuccess: prev[ev.machineId]?.pushSuccess ?? true, agentConnected: true } }));
+              } else if (ev.type === 'racko_app_installed') {
+                setVmStatus((prev) => ({ ...prev, [ev.machineId]: { ...prev[ev.machineId], agentConnected: prev[ev.machineId]?.agentConnected ?? true, rackoAppInstalled: ev.success, rackoAppError: ev.error } }));
+              }
+            } catch { /* ignore */ }
+          };
+          sse.onerror = () => sse.close();
+        } catch { /* SSE stream may have expired — DB state is enough */ }
+      } catch { /* Recovery failed — start fresh */ } finally { setRecovering(false); }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const updateRow = (i: number, field: keyof VMPushTarget, value: string) => {
     setVmRows((prev) => prev.map((r, idx) => idx === i ? { ...r, [field]: value } : r));
@@ -571,7 +639,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
       };
 
       // Trigger the actual push (runs in parallel with SSE receiving events)
-      const result = await pushAgentToVMs(valid, sessionId);
+      const result = await pushAgentToVMs(valid, sessionId, installRackoApp);
       setMachines(result.machines);
 
       // Initialize status map — merge with any SSE events already received before API returned
@@ -585,6 +653,8 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
 
       // Move to step 2 immediately after push API responds
       setStep(2);
+      // Persist sessionId in URL so page refresh can recover this session
+      router.replace(`/console/machine-manager/setup?session=${sessionId}`, { scroll: false });
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to push agent.');
       cleanup();
@@ -595,6 +665,8 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
 
   const handleContinue = () => {
     cleanup();
+    // Clear session from URL when moving to Install Software step
+    router.replace('/console/machine-manager/setup', { scroll: false });
     setStep(3);
   };
 
@@ -604,8 +676,16 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
     <div>
       <StepIndicator steps={STEPS} current={step} />
 
+      {/* ── Recovering from page refresh ── */}
+      {recovering && (
+        <div className="flex flex-col items-center gap-3 py-16">
+          <span className="h-8 w-8 animate-spin rounded-full border-4 border-[#B91C1C] border-t-transparent" />
+          <p className="text-sm text-gray-500">Restoring session…</p>
+        </div>
+      )}
+
       {/* ── Step 1: Enter VMs ── */}
-      {step === 1 && (
+      {!recovering && step === 1 && (
         <div>
           <h2 className="mb-1 text-lg font-semibold text-gray-900">Add VMs</h2>
           <p className="mb-5 text-sm text-gray-500">Enter VM details. The platform will SSH/WinRM into each VM and install the agent automatically.</p>
@@ -656,7 +736,21 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
             </button>
           </div>
 
-          <div className="mt-6 flex justify-end border-t border-gray-100 pt-5">
+          <div className="mt-6 flex items-center justify-between border-t border-gray-100 pt-5">
+            {/* Racko App install toggle */}
+            <label className="flex cursor-pointer items-center gap-3 select-none">
+              <input
+                type="checkbox"
+                checked={installRackoApp}
+                onChange={(e) => setInstallRackoApp(e.target.checked)}
+                className="h-4 w-4 rounded border-gray-300 text-[#B91C1C] focus:ring-[#B91C1C]"
+              />
+              <div>
+                <p className="text-sm font-medium text-gray-700">Install Racko App</p>
+                <p className="text-xs text-gray-400">Desktop shared-files app + WebView2 (~72 MB). Uncheck for agent-only installs.</p>
+              </div>
+            </label>
+
             <button onClick={() => void handlePush()} disabled={pushing}
               className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:opacity-50">
               {pushing && <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-white border-t-transparent" />}
@@ -667,7 +761,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
       )}
 
       {/* ── Step 2: Live Connection Status ── */}
-      {step === 2 && (
+      {!recovering && step === 2 && (
         <div>
           <div className="mb-4 flex items-center justify-between">
             <div>
@@ -763,7 +857,10 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
                       </td>
                       {/* Racko App column — shows status of racko-app GUI installation via exec */}
                       <td className="px-4 py-3">
-                        {st?.pushSuccess === false ? (
+                        {!installRackoApp ? (
+                          // Admin opted out of racko-app install
+                          <span className="text-xs text-gray-400">Skipped</span>
+                        ) : st?.pushSuccess === false ? (
                           // Push failed — agent never started, racko-app can't install
                           <span className="text-xs text-gray-400">—</span>
                         ) : st?.rackoAppInstalled === true ? (
@@ -809,7 +906,7 @@ function VMFlow({ isAuthenticated, onStepChange }: { isAuthenticated: boolean; o
       )}
 
       {/* ── Step 3: Install Software ── */}
-      {step === 3 && (
+      {!recovering && step === 3 && (
         <div>
           {connectedMachines.length > 0 ? (
             <>
@@ -981,7 +1078,12 @@ function TemplateFlow({ isAuthenticated }: { isAuthenticated: boolean }) {
 export default function SetupWizardPage() {
   const { isAuthenticated } = useAuth();
   const { toasts, addToast, dismiss } = useToast();
-  const [path, setPath] = useState<SetupPath>(null);
+  const searchParams = useSearchParams();
+  // If a ?session= param is present the user refreshed during a VM push —
+  // auto-select 'vm' so VMFlow mounts and its recovery useEffect can fire.
+  const [path, setPath] = useState<SetupPath>(
+    searchParams.get('session') ? 'vm' : null
+  );
   const [vmStep, setVmStep] = useState(1);
 
   return (

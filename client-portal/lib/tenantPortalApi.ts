@@ -162,6 +162,17 @@ export async function getTenantServices(): Promise<TenantAssignedService[]> {
   return data.services;
 }
 
+export async function fetchTenantServiceCatalog(): Promise<
+  Array<{ key: string; label: string; description?: string }>
+> {
+  const data = await unwrap(
+    tenantPortalRequest<
+      ApiEnvelope<{ services: Array<{ key: string; label: string; description?: string }> }>
+    >('/api/v1/tenant-services/catalog')
+  );
+  return data.services;
+}
+
 export async function getTenantWallet(): Promise<TenantWallet> {
   return unwrap(tenantPortalRequest<ApiEnvelope<TenantWallet>>('/api/v1/tenant-wallet'));
 }

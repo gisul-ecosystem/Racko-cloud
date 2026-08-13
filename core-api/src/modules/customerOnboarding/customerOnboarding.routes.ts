@@ -6,11 +6,20 @@ import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import type { AuthenticatedRequest } from '../../types';
 import { User } from '../../models/user.model';
-import { OrganizationAccessRequestModel } from '../../models/organizationAccessRequest.model';
+import {
+  OrganizationAccessRequestModel,
+  nextReadableOrgId,
+} from '../../models/organizationAccessRequest.model';
 import { ValidationError, NotFoundError } from '../../utils/errors';
 import { sendPlainEmail } from '../../utils/email/sender';
 import { generateFingerprint, getClientIp } from '../../utils/deviceFingerprint';
 import { adminOrgOnboardingService } from './adminOrgOnboarding.service';
+import { otpService } from '../otp/otp.service';
+import {
+  serializeOrganizationRequest,
+  serializeOrganizationRequests,
+  withEncryptedTaxId,
+} from './organizationSensitiveFields';
 
 const router = Router();
 
@@ -27,16 +36,6 @@ const phoneE164Schema = z
   .string()
   .trim()
   .regex(/^\+[1-9]\d{6,18}$/, 'Enter a valid phone number with country code');
-
-const optionalPhoneSchema = z
-  .string()
-  .trim()
-  .max(40)
-  .refine((v) => v === '' || /^\+[1-9]\d{6,18}$/.test(v), {
-    message: 'Enter a valid phone number with country code',
-  })
-  .optional()
-  .or(z.literal(''));
 
 const optionalWebsiteSchema = z
   .string()
@@ -57,7 +56,6 @@ const organizationDetailsFields = z.object({
     .max(160, 'Company name must be at most 160 characters'),
   companyWebsite: optionalWebsiteSchema,
   phone: phoneE164Schema,
-  officeNumber: optionalPhoneSchema,
   designation: z
     .string()
     .trim()
@@ -153,7 +151,7 @@ router.get('/me', async (req, res, next) => {
     const request = await OrganizationAccessRequestModel.findOne({
       userId: authReq.user.userId,
     }).lean();
-    success(res, 'Onboarding details retrieved.', { request });
+    success(res, 'Onboarding details retrieved.', { request: serializeOrganizationRequest(request) });
   } catch (err) {
     next(err);
   }
@@ -184,21 +182,23 @@ router.put(
       }
 
       const body = req.body as z.infer<typeof submitOrganizationDetailsSchema>['body'];
+      const encryptedBody = withEncryptedTaxId(body);
       const existing = await OrganizationAccessRequestModel.findOne({ userId: user._id });
       const keepNda = existing?.ndaStatus ?? 'not_started';
+      const orgIdForInsert = existing ? undefined : await nextReadableOrgId();
 
       const requestDoc = await OrganizationAccessRequestModel.findOneAndUpdate(
         { userId: user._id },
         {
           $set: {
-            ...body,
+            ...encryptedBody,
             companyWebsite: body.companyWebsite || undefined,
-            officeNumber: body.officeNumber || undefined,
             status: 'approved',
             ndaStatus: keepNda,
             reviewerNotes: existing?.reviewerNotes ?? 'Updated by organization admin from profile.',
           },
           $setOnInsert: {
+            ...(orgIdForInsert ? { orgId: orgIdForInsert } : {}),
             reviewedAt: new Date(),
           },
         },
@@ -210,7 +210,7 @@ router.put(
         await user.save();
       }
 
-      success(res, 'Organization profile saved.', { request: requestDoc });
+      success(res, 'Organization profile saved.', { request: serializeOrganizationRequest(requestDoc) });
     } catch (err) {
       next(err);
     }
@@ -230,16 +230,26 @@ router.post(
       }
 
       const body = req.body as z.infer<typeof submitOrganizationDetailsSchema>['body'];
+      const encryptedBody = withEncryptedTaxId(body);
+      await otpService.assertPhoneVerified(
+        authReq.user.userId,
+        body.phone,
+        'organization_onboarding_phone'
+      );
+      const existing = await OrganizationAccessRequestModel.findOne({ userId: user._id })
+        .select('_id')
+        .lean();
+      const orgIdForInsert = existing ? undefined : await nextReadableOrgId();
       const requestDoc = await OrganizationAccessRequestModel.findOneAndUpdate(
         { userId: user._id },
         {
           $set: {
-            ...body,
+            ...encryptedBody,
             companyWebsite: body.companyWebsite || undefined,
-            officeNumber: body.officeNumber || undefined,
             status: 'pending',
           },
           $setOnInsert: {
+            ...(orgIdForInsert ? { orgId: orgIdForInsert } : {}),
             ndaStatus: 'not_started',
           },
         },
@@ -270,7 +280,7 @@ router.post(
       success(
         res,
         'Organization details submitted for review.',
-        { request: requestDoc },
+        { request: serializeOrganizationRequest(requestDoc) },
         201
       );
     } catch (err) {
@@ -286,7 +296,10 @@ router.get('/organization-requests', requireRole('super_admin'), async (_req, re
       .populate('reviewedBy', 'email')
       .sort({ createdAt: -1 })
       .lean();
-    success(res, 'Organization requests retrieved.', { requests, total: requests.length });
+    success(res, 'Organization requests retrieved.', {
+      requests: serializeOrganizationRequests(requests),
+      total: requests.length,
+    });
   } catch (err) {
     next(err);
   }
@@ -328,7 +341,7 @@ router.patch(
         });
       }
 
-      success(res, 'Organization request updated.', { request: requestDoc });
+      success(res, 'Organization request updated.', { request: serializeOrganizationRequest(requestDoc) });
     } catch (err) {
       next(err);
     }

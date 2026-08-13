@@ -20,15 +20,15 @@ import {
   getAdminWalletTransactionsByUserId,
 } from '@/lib/adminBillingApi';
 import {
+  fetchAdminAssignableCatalog,
   fetchAdminServicesForUser,
   type AdminAssignedService,
   type AdminServiceCatalogItem,
 } from '@/lib/adminServicesApi';
 import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
-import { fetchCatalogVmRequests, formatCatalogVmStatus } from '@/lib/vmCatalogApi';
+import { fetchCatalogVmRequests } from '@/lib/vmCatalogApi';
 import {
   fetchDedicatedRequests,
-  formatDedicatedStatus,
 } from '@/lib/dedicatedServerApi';
 import { fetchAllVMsAdmin } from '@/lib/vmApi';
 import {
@@ -36,17 +36,20 @@ import {
   fetchCloudLabsForOwner,
   type CustomerCloudLabRequest,
 } from '@/lib/customerCloudLabsApi';
-import { AZURE_ROUTES } from '@/cloud_automation/constants';
-import { AWS_ROUTES } from '@/cloud_automation_aws/constants';
 import type { AdminWallet, AdminWalletTransaction } from '@/types/adminBilling';
 import type { ICatalogVm } from '@/lib/vmCatalogApi';
 import type { IDedicatedServer } from '@/lib/dedicatedServerApi';
 import type { IVM } from '@/lib/vmApi';
 import { CustomerProjectsPanel } from '@/components/super-admin-console/CustomerProjectsPanel';
 import { DeleteOrganizationModal } from '@/components/super-admin-console/DeleteOrganizationModal';
+import { CustomerVmTable } from '@/components/super-admin-console/customer/CustomerVmTable';
+import { CustomerServicesTab } from '@/components/super-admin-console/customer/CustomerServicesTab';
+import { CustomerUsageByServiceTab } from '@/components/super-admin-console/customer/CustomerUsageByServiceTab';
+import type { CustomerUsageBundle } from '@/lib/customerServiceConsole';
+import { getCustomerServiceManageHref } from '@/lib/customerServiceConsole';
 import { useAuth } from '@/context/AuthContext';
 
-type Tab = 'overview' | 'services' | 'projects' | 'billing' | 'usage' | 'team';
+type Tab = 'overview' | 'services' | 'projects' | 'vms' | 'billing' | 'usage' | 'team';
 
 interface CustomerProfile {
   id: string;
@@ -96,75 +99,6 @@ function accountLabel(accountType?: string): string {
   return accountType === 'b2b' ? 'Organization' : 'Individual';
 }
 
-function CloudLabRequestsTable({
-  title,
-  rows,
-  manageHref,
-  emptyLabel,
-}: {
-  title: string;
-  rows: CustomerCloudLabRequest[];
-  manageHref: string;
-  emptyLabel: string;
-}) {
-  return (
-    <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-      <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3">
-        <h2 className="text-sm font-semibold text-gray-900">
-          {title} ({rows.length})
-        </h2>
-        <Link href={manageHref} className="text-xs font-medium text-[#B91C1C] hover:underline">
-          Open org admin →
-        </Link>
-      </div>
-      <table className="w-full text-sm">
-        <thead>
-          <tr className="border-b bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-            <th className="px-5 py-3">Lab / customer</th>
-            <th className="px-4 py-3">Region</th>
-            <th className="px-4 py-3">Mode</th>
-            <th className="px-4 py-3">Users</th>
-            <th className="px-4 py-3">Status</th>
-            <th className="px-4 py-3 text-right">Charged</th>
-            <th className="px-4 py-3">Created</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.length === 0 ? (
-            <tr>
-              <td colSpan={7} className="px-5 py-8 text-center text-gray-500">
-                {emptyLabel}
-              </td>
-            </tr>
-          ) : (
-            rows.map((lab) => (
-              <tr key={`${lab.provider}-${lab.id}`} className="border-b border-gray-50">
-                <td className="px-5 py-3">
-                  <p className="font-medium text-gray-900">{lab.customerEmail}</p>
-                  <p className="mt-0.5 font-mono text-[11px] text-gray-400">
-                    {lab.requestName || `#${lab.id}`}
-                    {lab.fromWalletOnly ? ' · from billing' : ''}
-                  </p>
-                </td>
-                <td className="px-4 py-3 text-gray-700">{lab.region || '—'}</td>
-                <td className="px-4 py-3 capitalize text-gray-700">
-                  {(lab.costingMode || '—').replace(/_/g, ' ')}
-                </td>
-                <td className="px-4 py-3 text-gray-700">{lab.accountCount ?? '—'}</td>
-                <td className="px-4 py-3 capitalize text-gray-700">{lab.status}</td>
-                <td className="px-4 py-3 text-right text-gray-700">
-                  {lab.chargedInr != null ? formatMoney(lab.chargedInr) : '—'}
-                </td>
-                <td className="px-4 py-3 text-gray-700">{formatDate(lab.createdAt || undefined)}</td>
-              </tr>
-            ))
-          )}
-        </tbody>
-      </table>
-    </section>
-  );
-}
-
 export default function CustomerDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -195,7 +129,7 @@ export default function CustomerDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [userRes, walletData, txData, servicesData, catalogReqs, dedicatedReqs, allVms] =
+      const [userRes, walletData, txData, servicesData, catalogData, catalogReqs, dedicatedReqs, allVms] =
         await Promise.all([
           apiRequest<{ success: boolean; data: { user?: CustomerProfile } | CustomerProfile }>(
             `/api/v1/users/${customerId}`
@@ -211,6 +145,7 @@ export default function CustomerDetailPage() {
             services: [] as AdminAssignedService[],
             catalog: [] as AdminServiceCatalogItem[],
           })),
+          fetchAdminAssignableCatalog().catch(() => [] as AdminServiceCatalogItem[]),
           fetchCatalogVmRequests({ adminId: customerId, status: 'all' }).catch(() => []),
           fetchDedicatedRequests({ adminId: customerId, status: 'all' }).catch(() => []),
           fetchAllVMsAdmin().catch(() => [] as IVM[]),
@@ -238,7 +173,7 @@ export default function CustomerDetailPage() {
       setTransactions(txData.transactions);
       setTxTotal(txData.total);
       setServices(servicesData.services.filter((s) => !isServiceHiddenFromUi(s.serviceKey)));
-      setCatalog(servicesData.catalog.filter((item) => !isServiceHiddenFromUi(item.serviceKey)));
+      setCatalog(catalogData.filter((item) => !isServiceHiddenFromUi(item.serviceKey)));
       setCatalogRequests(catalogReqs);
       setDedicatedRequests(dedicatedReqs);
       setVms(allVms.filter((vm) => vm.adminId === customerId));
@@ -255,6 +190,16 @@ export default function CustomerDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const usageTotal = useMemo(
+    () =>
+      catalogRequests.length +
+      dedicatedRequests.length +
+      azureLabs.length +
+      awsLabs.length +
+      gcpLabs.length,
+    [catalogRequests, dedicatedRequests, azureLabs, awsLabs, gcpLabs]
+  );
 
   const serviceRows = useMemo(() => {
     const assigned = new Map(services.map((s) => [s.serviceKey, s]));
@@ -275,24 +220,25 @@ export default function CustomerDetailPage() {
     });
   }, [catalog, services]);
 
+  const usageBundle: CustomerUsageBundle = useMemo(
+    () => ({
+      vms,
+      catalogRequests,
+      dedicatedRequests,
+      azureLabs,
+      awsLabs,
+      gcpLabs,
+    }),
+    [vms, catalogRequests, dedicatedRequests, azureLabs, awsLabs, gcpLabs]
+  );
+
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: 'overview', label: 'Overview' },
     { id: 'services', label: 'Services' },
-    ...(profile?.accountType === 'b2b' || profile?.role === 'admin'
-      ? [{ id: 'projects' as const, label: 'Projects' }]
-      : []),
+    { id: 'projects', label: 'Projects' },
+    { id: 'vms', label: `VMs (${vms.length})` },
     { id: 'billing', label: `Billing (${txTotal})` },
-    {
-      id: 'usage',
-      label: `Usage (${
-        catalogRequests.length +
-        dedicatedRequests.length +
-        vms.length +
-        azureLabs.length +
-        awsLabs.length +
-        gcpLabs.length
-      })`,
-    },
+    { id: 'usage', label: `Usage (${usageTotal})` },
     { id: 'team', label: 'Team' },
   ];
 
@@ -403,51 +349,52 @@ export default function CustomerDetailPage() {
       </div>
 
       {tab === 'overview' ? (
-        <section className="grid gap-4 lg:grid-cols-3">
-          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm lg:col-span-2">
-            <h2 className="text-sm font-semibold text-gray-900">Account details</h2>
-            <dl className="mt-4 grid gap-3 sm:grid-cols-2 text-sm">
-              <div>
-                <dt className="text-xs text-gray-500">Email verified</dt>
-                <dd className="mt-0.5 font-medium text-gray-900">
-                  {profile.isEmailVerified ? 'Yes' : 'No'}
-                </dd>
-              </div>
-              <div>
-                <dt className="text-xs text-gray-500">Role</dt>
-                <dd className="mt-0.5 font-medium capitalize text-gray-900">{profile.role}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-gray-500">Joined</dt>
-                <dd className="mt-0.5 font-medium text-gray-900">{formatDate(profile.createdAt)}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-gray-500">Last login</dt>
-                <dd className="mt-0.5 font-medium text-gray-900">{formatDate(profile.lastLoginAt)}</dd>
-              </div>
-              <div>
-                <dt className="text-xs text-gray-500">Customer ID</dt>
-                <dd className="mt-0.5 font-mono text-xs text-gray-700">{profile.id}</dd>
-              </div>
-            </dl>
-          </div>
-          <div className="space-y-4">
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-semibold text-gray-900">Quick actions</h2>
-              <div className="mt-3 flex flex-col gap-2">
-                <Link
-                  href={`/super-admin-console/admin-users/${profile.id}/services?email=${encodeURIComponent(profile.email)}`}
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Manage services
-                </Link>
-                <Link
-                  href={`/super-admin-console/vm-management/admin-wallets?userId=${profile.id}&email=${encodeURIComponent(profile.email)}`}
-                  className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
-                >
-                  Manage wallet / credit
-                </Link>
-                {(profile.accountType === 'b2b' || profile.role === 'admin') && (
+        <div className="space-y-6">
+          <section className="grid gap-4 lg:grid-cols-3">
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm lg:col-span-2">
+              <h2 className="text-sm font-semibold text-gray-900">Account details</h2>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-2 text-sm">
+                <div>
+                  <dt className="text-xs text-gray-500">Email verified</dt>
+                  <dd className="mt-0.5 font-medium text-gray-900">
+                    {profile.isEmailVerified ? 'Yes' : 'No'}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Role</dt>
+                  <dd className="mt-0.5 font-medium capitalize text-gray-900">{profile.role}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Joined</dt>
+                  <dd className="mt-0.5 font-medium text-gray-900">{formatDate(profile.createdAt)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Last login</dt>
+                  <dd className="mt-0.5 font-medium text-gray-900">{formatDate(profile.lastLoginAt)}</dd>
+                </div>
+                <div>
+                  <dt className="text-xs text-gray-500">Customer ID</dt>
+                  <dd className="mt-0.5 font-mono text-xs text-gray-700">{profile.id}</dd>
+                </div>
+              </dl>
+            </div>
+            <div className="space-y-4">
+              <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                <h2 className="text-sm font-semibold text-gray-900">Quick actions</h2>
+                <div className="mt-3 flex flex-col gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setTab('services')}
+                    className="rounded-lg border border-gray-200 px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Manage services
+                  </button>
+                  <Link
+                    href={`/super-admin-console/vm-management/admin-wallets?userId=${profile.id}&email=${encodeURIComponent(profile.email)}`}
+                    className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    Manage wallet / credit
+                  </Link>
                   <button
                     type="button"
                     onClick={() => setTab('projects')}
@@ -455,103 +402,75 @@ export default function CustomerDetailPage() {
                   >
                     Manage projects
                   </button>
-                )}
+                  <button
+                    type="button"
+                    onClick={() => setTab('vms')}
+                    className="rounded-lg border border-gray-200 px-3 py-2 text-left text-xs font-medium text-gray-700 hover:bg-gray-50"
+                  >
+                    View VMs
+                  </button>
+                </div>
+              </div>
+              <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                <h2 className="text-sm font-semibold text-gray-900">Snapshot</h2>
+                <dl className="mt-3 space-y-2 text-xs">
+                  <div className="flex justify-between">
+                    <dt className="text-gray-500">Active services</dt>
+                    <dd className="font-semibold text-gray-900">
+                      {serviceRows.filter((s) => s.status === 'active').length}
+                    </dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-gray-500">Catalog VM requests</dt>
+                    <dd className="font-semibold text-gray-900">{catalogRequests.length}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-gray-500">Dedicated requests</dt>
+                    <dd className="font-semibold text-gray-900">{dedicatedRequests.length}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-gray-500">VPS VMs</dt>
+                    <dd className="font-semibold text-gray-900">{vms.length}</dd>
+                  </div>
+                  <div className="flex justify-between border-t border-gray-100 pt-2">
+                    <dt className="text-gray-500">Usage items</dt>
+                    <dd className="font-semibold text-gray-900">{usageTotal}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-gray-500">Azure labs</dt>
+                    <dd className="font-semibold text-gray-900">{azureLabs.length}</dd>
+                  </div>
+                  <div className="flex justify-between">
+                    <dt className="text-gray-500">AWS labs</dt>
+                    <dd className="font-semibold text-gray-900">{awsLabs.length}</dd>
+                  </div>
+                </dl>
               </div>
             </div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h2 className="text-sm font-semibold text-gray-900">Snapshot</h2>
-              <dl className="mt-3 space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">Active services</dt>
-                  <dd className="font-semibold text-gray-900">
-                    {serviceRows.filter((s) => s.status === 'active').length}
-                  </dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">Catalog VM requests</dt>
-                  <dd className="font-semibold text-gray-900">{catalogRequests.length}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">Dedicated requests</dt>
-                  <dd className="font-semibold text-gray-900">{dedicatedRequests.length}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">Managed VMs</dt>
-                  <dd className="font-semibold text-gray-900">{vms.length}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">Azure labs</dt>
-                  <dd className="font-semibold text-gray-900">{azureLabs.length}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">AWS labs</dt>
-                  <dd className="font-semibold text-gray-900">{awsLabs.length}</dd>
-                </div>
-                <div className="flex justify-between">
-                  <dt className="text-gray-500">GCP labs</dt>
-                  <dd className="font-semibold text-gray-900">{gcpLabs.length}</dd>
-                </div>
-              </dl>
-            </div>
-          </div>
-        </section>
+          </section>
+        </div>
       ) : null}
 
       {tab === 'services' ? (
-        <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-gray-100 px-5 py-3">
-            <h2 className="text-sm font-semibold text-gray-900">Services in use</h2>
-            <Link
-              href={`/super-admin-console/admin-users/${profile.id}/services?email=${encodeURIComponent(profile.email)}`}
-              className="text-xs font-medium text-[#B91C1C] hover:underline"
-            >
-              Edit entitlements →
-            </Link>
-          </div>
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-                <th className="px-5 py-3">Service</th>
-                <th className="px-4 py-3">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {serviceRows.length === 0 ? (
-                <tr>
-                  <td colSpan={2} className="px-5 py-8 text-center text-gray-500">
-                    No service data available.
-                  </td>
-                </tr>
-              ) : (
-                serviceRows.map((row) => (
-                  <tr key={row.key} className="border-b border-gray-50">
-                    <td className="px-5 py-3.5 font-medium text-gray-900">{row.label}</td>
-                    <td className="px-4 py-3.5">
-                      <span
-                        className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${
-                          row.status === 'active'
-                            ? 'bg-green-50 text-green-700'
-                            : row.status === 'suspended'
-                              ? 'bg-amber-50 text-amber-700'
-                              : 'bg-gray-100 text-gray-500'
-                        }`}
-                      >
-                        {row.status === 'active'
-                          ? 'Active'
-                          : row.status === 'suspended'
-                            ? 'Suspended'
-                            : 'Not assigned'}
-                      </span>
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
-        </section>
+        <CustomerServicesTab
+          customerId={profile.id}
+          email={profile.email}
+          usage={usageBundle}
+          onServicesChanged={load}
+        />
       ) : null}
 
       {tab === 'projects' ? <CustomerProjectsPanel adminId={profile.id} /> : null}
+
+      {tab === 'vms' ? (
+        <CustomerVmTable
+          vms={vms}
+          manageHref={
+            getCustomerServiceManageHref('vm-management', profile.id, profile.email) ?? undefined
+          }
+          emptyMessage="No VPS Hosting VMs for this customer yet. Catalog VM requests, cloud labs, and other usage are on the Usage tab."
+        />
+      ) : null}
 
       {tab === 'billing' ? (
         <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -627,136 +546,13 @@ export default function CustomerDetailPage() {
       ) : null}
 
       {tab === 'usage' ? (
-        <div className="space-y-6">
-          <CloudLabRequestsTable
-            title="Azure labs"
-            rows={azureLabs}
-            manageHref={AZURE_ROUTES.orgAdmin}
-            emptyLabel="No Azure lab requests for this customer."
-          />
-          <CloudLabRequestsTable
-            title="AWS labs"
-            rows={awsLabs}
-            manageHref={AWS_ROUTES.orgAdmin}
-            emptyLabel="No AWS lab requests for this customer."
-          />
-          <CloudLabRequestsTable
-            title="GCP labs"
-            rows={gcpLabs}
-            manageHref="/console/gcp"
-            emptyLabel="No GCP lab requests yet (GCP automation is not provisioned)."
-          />
-
-          <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="border-b border-gray-100 px-5 py-3">
-              <h2 className="text-sm font-semibold text-gray-900">
-                Catalog VM requests ({catalogRequests.length})
-              </h2>
-            </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-                  <th className="px-5 py-3">Plan</th>
-                  <th className="px-4 py-3">Billing</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Requested</th>
-                </tr>
-              </thead>
-              <tbody>
-                {catalogRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-5 py-8 text-center text-gray-500">
-                      No catalog VM requests.
-                    </td>
-                  </tr>
-                ) : (
-                  catalogRequests.map((req) => (
-                    <tr key={req._id} className="border-b border-gray-50">
-                      <td className="px-5 py-3 font-medium text-gray-900">{req.planName}</td>
-                      <td className="px-4 py-3 capitalize text-gray-700">{req.billing}</td>
-                      <td className="px-4 py-3 text-gray-700">
-                        {formatCatalogVmStatus(req.status)}
-                      </td>
-                      <td className="px-4 py-3 text-gray-700">{formatDate(req.createdAt)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </section>
-
-          <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="border-b border-gray-100 px-5 py-3">
-              <h2 className="text-sm font-semibold text-gray-900">
-                Dedicated server requests ({dedicatedRequests.length})
-              </h2>
-            </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-                  <th className="px-5 py-3">Plan</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Requested</th>
-                </tr>
-              </thead>
-              <tbody>
-                {dedicatedRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={3} className="px-5 py-8 text-center text-gray-500">
-                      No dedicated server requests.
-                    </td>
-                  </tr>
-                ) : (
-                  dedicatedRequests.map((req) => (
-                    <tr key={req._id} className="border-b border-gray-50">
-                      <td className="px-5 py-3 font-medium text-gray-900">
-                        {req.planName || req.planId || '—'}
-                      </td>
-                      <td className="px-4 py-3 text-gray-700">
-                        {formatDedicatedStatus(req.status)}
-                      </td>
-                      <td className="px-4 py-3 text-gray-700">{formatDate(req.createdAt)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </section>
-
-          <section className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-            <div className="border-b border-gray-100 px-5 py-3">
-              <h2 className="text-sm font-semibold text-gray-900">Managed VMs ({vms.length})</h2>
-            </div>
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b bg-gray-50 text-left text-xs uppercase tracking-wide text-gray-500">
-                  <th className="px-5 py-3">Name</th>
-                  <th className="px-4 py-3">Template</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Created</th>
-                </tr>
-              </thead>
-              <tbody>
-                {vms.length === 0 ? (
-                  <tr>
-                    <td colSpan={4} className="px-5 py-8 text-center text-gray-500">
-                      No managed VMs.
-                    </td>
-                  </tr>
-                ) : (
-                  vms.map((vm) => (
-                    <tr key={vm._id} className="border-b border-gray-50">
-                      <td className="px-5 py-3 font-medium text-gray-900">{vm.name}</td>
-                      <td className="px-4 py-3 text-gray-700">{vm.templateName}</td>
-                      <td className="px-4 py-3 capitalize text-gray-700">{vm.status}</td>
-                      <td className="px-4 py-3 text-gray-700">{formatDate(vm.createdAt)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </section>
-        </div>
+        <CustomerUsageByServiceTab
+          customerId={profile.id}
+          email={profile.email}
+          usage={usageBundle}
+          services={services}
+          catalog={catalog}
+        />
       ) : null}
 
       {tab === 'team' ? (

@@ -22,6 +22,8 @@
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishReadyToRun>true</PublishReadyToRun>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Version is bumped in racko-app/VERSION — CI passes -p:Version= on publish -->
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

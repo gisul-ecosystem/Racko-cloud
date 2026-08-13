@@ -37,6 +37,8 @@ export type OnboardingStatus =
 export interface AuthUser {
   id: string;
   email: string;
+  name?: string;
+  phone?: string;
   role: UserRole;
   accountType: AccountType;
   onboardingStatus: OnboardingStatus;

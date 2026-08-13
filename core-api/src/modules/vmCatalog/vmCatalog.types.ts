@@ -10,6 +10,10 @@ import type {
 
 export interface CatalogVmResponse {
   _id: string;
+  parentRequestId?: string;
+  instanceId?: string;
+  instanceIndex?: number;
+  instanceTotal?: number;
   adminId?: string;
   tenantId?: string;
   tenantUserId?: string;
@@ -18,6 +22,11 @@ export interface CatalogVmResponse {
   projectId?: string;
   projectName?: string;
   clientName?: string;
+  /** Software packages selected at buy time (installed after Attach). */
+  preferredSoftwareIds?: string[];
+  machineId?: string;
+  postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
+  postReadyError?: string;
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
   category: VmCatalogCategory;
@@ -56,6 +65,20 @@ export interface CatalogVmResponse {
   autoProvisioned?: boolean;
   /** Super-admin only */
   rawProviderCostPerHr?: number;
+  fetchedCount?: number;
+  missingCount?: number;
+  partial?: boolean;
+  instances?: Array<{
+    instanceId: string;
+    instanceIndex: number;
+    status: 'ready_to_attach' | 'active';
+    hostname?: string;
+    ipAddress?: string;
+    username?: string;
+    password?: string;
+    protocol?: VmCatalogProtocol;
+    externalRef?: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 }
@@ -88,6 +111,8 @@ export interface CreateCatalogVmRequestDto {
   canonicalSpec?: string;
   /** Required for platform admin purchases. */
   projectId?: string;
+  /** Optional Software Catalog package IDs to install after the VM is ready. */
+  preferredSoftwareIds?: string[];
 }
 
 export interface CatalogVmRequesterGroup {

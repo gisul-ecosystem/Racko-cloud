@@ -31,12 +31,15 @@ export function getAccountCount(snapshot: ProvisionSnapshot): number {
 }
 
 function isPerUserCostingRequest(snapshot: ProvisionSnapshot): boolean {
-  const mode = snapshot.request?.costing_mode ?? snapshot.request?.costingMode;
-  if (!mode) {
-    return true;
-  }
+  const mode =
+    snapshot.request?.costing_mode ??
+    snapshot.request?.costingMode ??
+    (snapshot.provision as { costingMode?: string } | null | undefined)?.costingMode;
 
-  return mode === 'per_user';
+  // Default to shared when unknown — never assume per-user waves.
+  return String(mode || '')
+    .trim()
+    .toLowerCase() === 'per_user';
 }
 
 export function isResourceGroupStepComplete(snapshot: ProvisionSnapshot): boolean {
@@ -51,7 +54,9 @@ export function isResourceGroupStepComplete(snapshot: ProvisionSnapshot): boolea
     return resourceGroupCount >= accountCount || snapshot.provision?.complete === true;
   }
 
-  return Boolean(snapshot.provision?.resourceGroup) || snapshot.provision?.complete === true;
+  // Shared: require a real RG name. complete:true alone is not enough
+  // (empty cohort summaries used to flip complete incorrectly).
+  return Boolean(snapshot.provision?.resourceGroup);
 }
 
 export function isServicesStepComplete(
@@ -194,7 +199,7 @@ function getCohortRelativeCompletion(
     return null;
   }
 
-  if (snapshot.allCohortsComplete) {
+  if (snapshot.allCohortsComplete && hasCohorts) {
     return {
       resourceGroup: true,
       services: true,

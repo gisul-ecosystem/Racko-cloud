@@ -17,6 +17,11 @@ router.use(requireTenantAuth);
 router.use(requireActiveTenantService('create-vm'));
 
 router.get(
+  '/software-options',
+  requireTenantPermission('create_vm.read'),
+  (req, res, next) => tenantVmCatalogController.listSoftwareOptions(req, res, next)
+);
+router.get(
   '/plans',
   requireTenantPermission('create_vm.read'),
   (req, res, next) => tenantVmCatalogController.listPlans(req, res, next)

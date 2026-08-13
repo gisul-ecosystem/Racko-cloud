@@ -23,7 +23,6 @@ import {
 const EMPTY_FORM: OrganizationOnboardingForm = {
   contactName: '',
   phone: '',
-  officeNumber: '',
   companyName: '',
   companyWebsite: '',
   designation: '',
@@ -49,10 +48,9 @@ export default function ConsoleProfilePage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FormFieldErrors>({});
   const [form, setForm] = useState<OrganizationOnboardingForm>(EMPTY_FORM);
+  const [orgId, setOrgId] = useState<string | null>(null);
   const [phoneDial, setPhoneDial] = useState('+91');
   const [phoneNational, setPhoneNational] = useState('');
-  const [officeDial, setOfficeDial] = useState('+91');
-  const [officeNational, setOfficeNational] = useState('');
 
   const load = useCallback(async () => {
     if (!isOrgAdmin) {
@@ -64,16 +62,13 @@ export default function ConsoleProfilePage() {
     try {
       const request = await fetchMyOnboardingRequest();
       if (request) {
+        setOrgId(request.orgId ?? null);
         const phoneParts = splitPhone(request.phone);
-        const officeParts = splitPhone(request.officeNumber);
         setPhoneDial(phoneParts.dialCode);
         setPhoneNational(phoneParts.national);
-        setOfficeDial(officeParts.dialCode);
-        setOfficeNational(officeParts.national);
         setForm({
           contactName: request.contactName ?? '',
           phone: request.phone ?? '',
-          officeNumber: request.officeNumber ?? '',
           companyName: request.companyName ?? '',
           companyWebsite: request.companyWebsite ?? '',
           designation: request.designation ?? '',
@@ -110,11 +105,9 @@ export default function ConsoleProfilePage() {
     setFieldErrors({});
 
     const phone = joinPhone(phoneDial, phoneNational);
-    const officeNumber = joinPhone(officeDial, officeNational);
     const parsed = organizationOnboardingSchema.safeParse({
       ...form,
       phone,
-      officeNumber,
     });
     if (!parsed.success) {
       setFieldErrors(zodIssuesToFieldErrors(parsed.error.issues));
@@ -123,7 +116,8 @@ export default function ConsoleProfilePage() {
 
     setSaving(true);
     try {
-      await saveOrganizationProfile(parsed.data);
+      const saved = await saveOrganizationProfile(parsed.data);
+      setOrgId(saved.orgId ?? null);
       setSuccess('Organization profile saved.');
       setForm(parsed.data);
     } catch (err) {
@@ -169,8 +163,18 @@ export default function ConsoleProfilePage() {
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Signed in as</p>
-        <p className="mt-1 text-sm font-semibold text-gray-900">{user.email}</p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Signed in as</p>
+            <p className="mt-1 text-sm font-semibold text-gray-900">{user.email}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Organization ID</p>
+            <p className="mt-1 break-all text-sm font-semibold text-gray-900">
+              {orgId ?? 'Generated after details are saved'}
+            </p>
+          </div>
+        </div>
       </div>
 
       {loading ? (
@@ -231,28 +235,6 @@ export default function ConsoleProfilePage() {
                 />
               </div>
               <FieldError message={fieldErrors.phone} />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-gray-700">Office number</label>
-              <div className="flex gap-2">
-                <select
-                  value={officeDial}
-                  onChange={(e) => setOfficeDial(e.target.value)}
-                  className="rounded-lg border border-gray-200 px-2 py-2 text-sm"
-                >
-                  {DIAL_CODES.map((d) => (
-                    <option key={d.code} value={d.code}>
-                      {d.flag} {d.code}
-                    </option>
-                  ))}
-                </select>
-                <input
-                  value={officeNational}
-                  onChange={(e) => setOfficeNational(e.target.value)}
-                  className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm outline-none focus:border-red-300 focus:ring-2 focus:ring-red-100"
-                />
-              </div>
-              <FieldError message={fieldErrors.officeNumber} />
             </div>
             <div>
               <label className="mb-1 block text-xs font-medium text-gray-700">Company name</label>
