@@ -10,6 +10,10 @@ import type {
 
 export interface CatalogVmResponse {
   _id: string;
+  parentRequestId?: string;
+  instanceId?: string;
+  instanceIndex?: number;
+  instanceTotal?: number;
   adminId?: string;
   tenantId?: string;
   tenantUserId?: string;
@@ -61,6 +65,20 @@ export interface CatalogVmResponse {
   autoProvisioned?: boolean;
   /** Super-admin only */
   rawProviderCostPerHr?: number;
+  fetchedCount?: number;
+  missingCount?: number;
+  partial?: boolean;
+  instances?: Array<{
+    instanceId: string;
+    instanceIndex: number;
+    status: 'ready_to_attach' | 'active';
+    hostname?: string;
+    ipAddress?: string;
+    username?: string;
+    password?: string;
+    protocol?: VmCatalogProtocol;
+    externalRef?: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 }

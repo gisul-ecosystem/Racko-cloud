@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '../../../../context/AuthContext';
 import { useMyVMs } from '../../../../hooks/useVMs';
 import { VMStatusBadge, CloneTypeBadge } from '../../../../components/dashboard/VMStatusBadge';
@@ -12,7 +12,7 @@ import { ConfirmModal } from '../../../../components/ui/ConfirmModal';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { bulkDeleteVMs, bulkStartVMs, bulkStopVMs, restrictVM } from '../../../../lib/vmApi';
 import { ApiError } from '../../../../lib/apiClient';
-import { Server, Plus, RefreshCw, Play, Square, Trash2, X, Download, Shield } from 'lucide-react';
+import { Server, Plus, RefreshCw, Play, Square, Trash2, X, Download, Shield, FolderKanban } from 'lucide-react';
 import type { VMStatus, CloneType, IVM } from '../../../../lib/vmApi';
 
 const STATUS_OPTIONS = [
@@ -37,6 +37,8 @@ type BulkAction = 'start' | 'stop' | 'delete' | 'restrict';
 
 export default function VMListPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const projectId = searchParams?.get('projectId') || undefined;
   const { isAuthenticated } = useAuth();
   const [statusFilter, setStatusFilter] = useState('');
   const [cloneFilter, setCloneFilter] = useState('');
@@ -48,6 +50,7 @@ export default function VMListPage() {
   const { vms, loading, error, refetch } = useMyVMs(isAuthenticated, {
     status: statusFilter || undefined,
     cloneType: cloneFilter || undefined,
+    projectId,
   });
 
   // Selection helpers — restricted VMs are never selectable
@@ -191,6 +194,28 @@ export default function VMListPage() {
           onConfirm={() => void executeBulkAction(bulkAction)}
           onCancel={() => setBulkAction(null)}
         />
+      )}
+
+      {/* Project filter banner */}
+      {projectId && (
+        <div className="mb-5 flex items-center gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3">
+          <FolderKanban className="h-4 w-4 shrink-0 text-blue-600" />
+          <p className="flex-1 text-sm text-blue-800">
+            Showing VMs for project <span className="font-semibold">#{projectId.slice(-6)}</span>
+          </p>
+          <Link
+            href="/dashboard/admin/vms"
+            className="inline-flex items-center gap-1 rounded-lg border border-blue-200 bg-white px-3 py-1.5 text-xs font-medium text-blue-700 transition hover:bg-blue-50"
+          >
+            <X className="h-3 w-3" /> Clear filter
+          </Link>
+          <Link
+            href={`/console/projects/${projectId}`}
+            className="inline-flex items-center gap-1 rounded-lg bg-blue-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-blue-700"
+          >
+            View project
+          </Link>
+        </div>
       )}
 
       {/* Header */}

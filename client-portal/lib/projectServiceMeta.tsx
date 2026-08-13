@@ -50,8 +50,8 @@ export const PROJECT_SERVICE_META: Record<AdminServiceKey, ProjectServiceMeta> =
     iconColor: 'text-purple-600',
   },
   'elastic-servers': {
-    label: 'Elastic Server Import',
-    description: 'Connect to external servers via secure browser console.',
+    label: 'External VM',
+    description: 'External servers accessed via secure browser console.',
     icon: <Globe className="h-5 w-5" />,
     iconBg: 'bg-teal-50',
     iconColor: 'text-teal-600',

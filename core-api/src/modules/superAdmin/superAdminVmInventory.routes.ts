@@ -4,6 +4,8 @@ import { requirePermission } from '../../middleware/requirePermission.middleware
 import { validateRequest } from '../../middleware/validate.middleware';
 import { superAdminVmInventoryController } from './superAdminVmInventory.controller';
 import {
+  superAdminVmInventoryDeleteAssignedUserSchema,
+  superAdminVmInventoryClearAssignmentSchema,
   superAdminVmInventoryQuerySchema,
   superAdminVmProviderMetadataImportSchema,
   superAdminVmProviderMetadataUpdateSchema,
@@ -20,6 +22,24 @@ router.post(
   validateRequest(superAdminVmProviderMetadataImportSchema),
   (req, res, next) => {
     superAdminVmInventoryController.importProviderMetadata(req, res, next);
+  }
+);
+
+router.patch(
+  '/assignment/delete-user',
+  requirePermission('vm_inventory.write'),
+  validateRequest(superAdminVmInventoryDeleteAssignedUserSchema),
+  (req, res, next) => {
+    superAdminVmInventoryController.deleteAssignedUser(req, res, next);
+  }
+);
+
+router.patch(
+  '/assignment/clear',
+  requirePermission('vm_inventory.write'),
+  validateRequest(superAdminVmInventoryClearAssignmentSchema),
+  (req, res, next) => {
+    superAdminVmInventoryController.clearAssignment(req, res, next);
   }
 );
 

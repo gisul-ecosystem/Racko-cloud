@@ -137,6 +137,7 @@ export interface VMFilters {
   cloneType?: 'dedicated_storage' | 'dynamic_storage';
   node?: string;
   isRestricted?: boolean;
+  projectId?: string;
 }
 
 /** Per-VM console credential summary returned alongside a job. */

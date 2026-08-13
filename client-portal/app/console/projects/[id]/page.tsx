@@ -114,13 +114,23 @@ function ServiceCard({
         </span>
       ) : (
         <div className="mt-4 flex flex-wrap items-center gap-2">
-          <Link
-            href={href}
-            className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#991B1B]"
-          >
-            Use service
-            <ArrowRight className="h-3.5 w-3.5" />
-          </Link>
+          {serviceKey !== 'elastic-servers' && (
+            <Link
+              href={href}
+              className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#991B1B]"
+            >
+              Use service
+              <ArrowRight className="h-3.5 w-3.5" />
+            </Link>
+          )}
+          {serviceKey === 'vm-management' && resourceCount > 0 && (
+            <Link
+              href={`/dashboard/admin/vms?projectId=${projectId}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
+            >
+              View VMs
+            </Link>
+          )}
           {transactionsHref ? (
             <Link
               href={transactionsHref}

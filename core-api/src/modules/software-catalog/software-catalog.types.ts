@@ -4,6 +4,7 @@ import type { InstallMethod } from './software-catalog.model';
 export interface CreateSoftwareCatalogDto {
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: MachineOS[];
   installMethod: InstallMethod;
   wingetId?: string;
@@ -19,6 +20,7 @@ export interface SoftwareCatalogResponse {
   _id: string;
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: MachineOS[];
   installMethod: InstallMethod;
   wingetId?: string;

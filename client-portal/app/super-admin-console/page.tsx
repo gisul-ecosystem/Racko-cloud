@@ -9,6 +9,7 @@ import {
   IndianRupee,
   Monitor,
   MonitorCheck,
+  Plus,
   Palette,
   Server,
   Shield,
@@ -42,6 +43,14 @@ const productServices: ServiceTile[] = [
     icon: MonitorCheck,
     description: 'Monitor cluster, manage VMs, alerts, software and templates',
     anyOf: ['vm_management.manage'],
+  },
+  {
+    id: 'create-vm',
+    name: 'VM Catalog',
+    href: '/super-admin-console/create-vm',
+    icon: Plus,
+    description: 'Create VM catalog requests from the Racko.ai services hub without wallet debit',
+    anyOf: ['vm_catalog.superadmin'],
   },
   {
     id: 'webyne-vm-requests',

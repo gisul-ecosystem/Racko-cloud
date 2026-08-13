@@ -713,25 +713,28 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
     // Confirm stream is alive
     send({ type: 'ping', sessionId });
 
-    // ── Check if reset already completed (persisted result in DB) ────────────
-    // Handles: reset finished before stream opened, browser refresh after reset,
-    // or slow SSE connection establishment.
-    const existingResult = await machineManagerService.getResetResult(sessionId);
-    if (existingResult) {
-      logger.info('[ResetStream] Reset already completed — sending persisted result', {
+    // ── Check if any resets already completed (persisted results in DB) ─────
+    // On reconnect after a network drop, sends ALL results that arrived while
+    // the stream was disconnected. Previously used getResetResult (singular)
+    // which only returned the first result — the second machine's result was
+    // silently dropped, causing inconsistent UI when resetting multiple VMs.
+    const existingResults = await machineManagerService.getResetResults(sessionId);
+    if (existingResults.length > 0) {
+      logger.info('[ResetStream] Sending persisted results on (re)connect', {
         sessionId,
-        machineId: existingResult.machineId,
-        success: existingResult.success,
+        count: existingResults.length,
       });
-      send({
-        type:        'reset_complete',
-        machineId:   existingResult.machineId,
-        machineName: existingResult.machineName,
-        success:     existingResult.success,
-        error:       existingResult.error,
-      });
-      res.end();
-      return;
+      for (const result of existingResults) {
+        send({
+          type:        'reset_complete',
+          machineId:   result.machineId,
+          machineName: result.machineName,
+          success:     result.success,
+          error:       result.error,
+        });
+      }
+      // Keep the stream open — there may be additional machines still in progress.
+      // The stream will close naturally when the client disconnects (all machines done).
     }
 
     // ── Subscribe to live emitter for in-progress resets ─────────────────────
