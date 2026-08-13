@@ -8,9 +8,15 @@ export type OrganizationAccessRequestStatus =
 
 export type NdaStatus = 'not_started' | 'pending' | 'completed';
 
+interface IReadableIdCounter extends Document {
+  key: string;
+  sequence: number;
+}
+
 export interface IOrganizationAccessRequest extends Document {
   _id: mongoose.Types.ObjectId;
   userId: mongoose.Types.ObjectId;
+  orgId?: string;
   contactName: string;
   companyName: string;
   companyWebsite?: string;
@@ -33,6 +39,7 @@ export interface IOrganizationAccessRequest extends Document {
 const organizationAccessRequestSchema = new Schema<IOrganizationAccessRequest>(
   {
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, unique: true, index: true },
+    orgId: { type: String, trim: true, uppercase: true, unique: true, sparse: true, index: true },
     contactName: { type: String, required: true, trim: true },
     companyName: { type: String, required: true, trim: true },
     companyWebsite: { type: String, trim: true },
@@ -65,6 +72,36 @@ const organizationAccessRequestSchema = new Schema<IOrganizationAccessRequest>(
 );
 
 organizationAccessRequestSchema.index({ status: 1, createdAt: -1 });
+
+const readableIdCounterSchema = new Schema<IReadableIdCounter>(
+  {
+    key: { type: String, required: true, unique: true, index: true },
+    sequence: { type: Number, required: true, min: 0, default: 0 },
+  },
+  {
+    timestamps: true,
+    collection: 'readable_id_counters',
+  }
+);
+
+const ReadableIdCounterModel = mongoose.model<IReadableIdCounter>(
+  'ReadableIdCounter',
+  readableIdCounterSchema
+);
+
+function formatReadableOrgId(sequence: number): string {
+  return `ORG-${String(sequence).padStart(3, '0')}`;
+}
+
+export async function nextReadableOrgId(): Promise<string> {
+  const counter = await ReadableIdCounterModel.findOneAndUpdate(
+    { key: 'b2b_org' },
+    { $inc: { sequence: 1 } },
+    { upsert: true, new: true }
+  ).lean();
+
+  return formatReadableOrgId(counter.sequence);
+}
 
 export const OrganizationAccessRequestModel = mongoose.model<IOrganizationAccessRequest>(
   'OrganizationAccessRequest',
