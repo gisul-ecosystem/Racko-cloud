@@ -162,6 +162,7 @@ export const vmListQuerySchema = z.object({
       .max(63, 'Node name too long')
       .regex(/^[a-zA-Z0-9-]+$/, 'Invalid node name')
       .optional(),
+    projectId: mongoObjectId.optional(),
   }),
 });
 

@@ -48,6 +48,7 @@ export interface ISoftwareCatalog {
   _id: string;
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: MachineOS[];
   installMethod: InstallMethod;
   wingetId?: string;
@@ -80,6 +81,7 @@ export interface CreateJobDto {
 export interface CreateSoftwareCatalogDto {
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: MachineOS[];
   installMethod: InstallMethod;
   wingetId?: string;

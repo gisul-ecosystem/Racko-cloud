@@ -53,6 +53,7 @@ export class SuperAdminVmInventoryController {
         rows: Array<{
           ipAddress: string;
           name?: string;
+          vmSpec?: string;
           protocol?: 'rdp' | 'ssh';
           planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
           username?: string;

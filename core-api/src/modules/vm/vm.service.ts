@@ -2399,6 +2399,7 @@ export class VMService {
     if (typeof filters?.isRestricted === 'boolean') {
       query['isRestricted'] = filters.isRestricted;
     }
+    if (filters?.projectId) query['projectId'] = new mongoose.Types.ObjectId(filters.projectId);
 
     return VM.find(query).sort({ createdAt: -1 }).lean();
   }

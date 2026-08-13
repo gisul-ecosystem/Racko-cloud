@@ -8,6 +8,7 @@ export interface ISoftwareCatalog extends Document {
   _id: mongoose.Types.ObjectId;
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: MachineOS[];
   installMethod: InstallMethod;
   // Package manager IDs (used when installMethod is winget/apt/brew/choco)
@@ -29,6 +30,7 @@ const softwareCatalogSchema = new Schema<ISoftwareCatalog>(
   {
     name: { type: String, required: true, trim: true },
     version: { type: String, default: 'latest', trim: true },
+    iconUrl: { type: String, trim: true },
     supportedOS: {
       type: [{ type: String, enum: ['windows', 'linux', 'macos'] }],
       required: true,

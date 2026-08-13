@@ -496,6 +496,10 @@ export default function OrganizationOnboardingPage() {
               <span className="font-semibold text-white">Company:</span> {request.companyName}
             </p>
             <p className="mt-2">
+              <span className="font-semibold text-white">Organization ID:</span>{' '}
+              {request.orgId ?? 'Generated after submit'}
+            </p>
+            <p className="mt-2">
               <span className="font-semibold text-white">NDA status:</span>{' '}
               {request.ndaStatus.replace(/_/g, ' ')}
             </p>
@@ -660,6 +664,12 @@ export default function OrganizationOnboardingPage() {
                 value={user.email}
                 readOnly
                 placeholder="your@company.com"
+              />
+              <TextInput
+                label="Organization ID"
+                icon={<Building2 className="h-4 w-4" />}
+                value={request?.orgId ?? 'Generated after submit'}
+                readOnly
               />
               <PhoneField
                 label="Phone Number"

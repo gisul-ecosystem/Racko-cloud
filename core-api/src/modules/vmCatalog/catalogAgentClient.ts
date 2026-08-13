@@ -24,7 +24,12 @@ export interface CatalogAgentServerDetails {
 export interface CatalogAgentPurchaseResult {
   purchased: boolean;
   purchase: unknown;
+  requestedCount?: number;
+  fetchedCount?: number;
+  partial?: boolean;
+  missingCount?: number;
   server: CatalogAgentServerDetails;
+  servers?: CatalogAgentServerDetails[];
   fetchedAt: string;
 }
 

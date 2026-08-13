@@ -22,6 +22,7 @@ export interface SuperAdminVmInventoryItem {
   originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
   originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
   originChannel: string;
+  providerVmSpec?: string | null;
   providerPlanDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
   providerUsername?: string | null;
   providerPassword?: string | null;
@@ -52,6 +53,7 @@ export interface SuperAdminVmInventoryItem {
   assignmentLocation: string;
   projectId?: string;
   projectName?: string;
+  projectClientName?: string;
   orderId?: string;
   vmid?: number;
   createdAt: string;
@@ -60,6 +62,7 @@ export interface SuperAdminVmInventoryItem {
 
 export interface SuperAdminVmInventoryListResult {
   items: SuperAdminVmInventoryItem[];
+  owners: SuperAdminVmInventoryOwnerOption[];
   total: number;
   page: number;
   limit: number;
@@ -73,6 +76,7 @@ export interface SuperAdminVmInventoryOwnerOption {
 export interface VmProviderMetadataImportRow {
   ipAddress: string;
   name?: string;
+  vmSpec?: string;
   protocol?: 'rdp' | 'ssh';
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
   username?: string;

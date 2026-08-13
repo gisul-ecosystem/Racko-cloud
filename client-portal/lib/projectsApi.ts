@@ -82,6 +82,8 @@ export async function createProject(input: {
   clientName: string;
   name?: string;
   description?: string;
+  startDate?: string;
+  endDate?: string;
   enabledServices: AdminServiceKey[];
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(

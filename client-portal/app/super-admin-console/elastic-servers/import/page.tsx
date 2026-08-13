@@ -703,6 +703,8 @@ export default function SuperAdminServerImportPage() {
   const [cpPreviewName, setCpPreviewName] = useState('');
   const [cpName, setCpName] = useState('');
   const [cpClientName, setCpClientName] = useState('');
+  const [cpClientMode, setCpClientMode] = useState<'select' | 'new'>('select');
+  const [cpExistingClients, setCpExistingClients] = useState<string[]>([]);
   const [cpDescription, setCpDescription] = useState('');
   const [cpStartDate, setCpStartDate] = useState('');
   const [cpEndDate, setCpEndDate] = useState('');
@@ -877,6 +879,9 @@ export default function SuperAdminServerImportPage() {
     setCpError(null);
     setCpPreviewName('');
     setCpName('');
+    const clients = [...new Set(defaultProjects.map((p) => p.clientName).filter(Boolean))];
+    setCpExistingClients(clients);
+    setCpClientMode(clients.length > 0 ? 'select' : 'new');
     setCreateProjectOpen(true);
     try {
       const preview =
@@ -1789,13 +1794,28 @@ export default function SuperAdminServerImportPage() {
                       <label className="mb-1.5 block text-xs font-semibold text-gray-700">
                         Client Name <span className="text-red-500">*</span>
                       </label>
-                      <input
+                      <select
                         className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                        value={cpClientName}
-                        onChange={(e) => setCpClientName(e.target.value)}
-                        required
-                        placeholder="e.g. Acme Corp"
-                      />
+                        value={cpClientMode === 'new' ? '__new__' : cpClientName}
+                        onChange={(e) => {
+                          if (e.target.value === '__new__') { setCpClientMode('new'); setCpClientName(''); }
+                          else { setCpClientMode('select'); setCpClientName(e.target.value); }
+                        }}
+                      >
+                        <option value="">Select a client…</option>
+                        {cpExistingClients.map((c) => <option key={c} value={c}>{c}</option>)}
+                        <option disabled>────────────────</option>
+                        <option value="__new__">✚ Create new client</option>
+                      </select>
+                      {cpClientMode === 'new' && (
+                        <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
+                          <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
+                          <input
+                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                            value={cpClientName} onChange={(e) => setCpClientName(e.target.value)}
+                            placeholder="e.g. Acme Corp" required autoFocus />
+                        </div>
+                      )}
                       <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
                     </div>
                   </div>

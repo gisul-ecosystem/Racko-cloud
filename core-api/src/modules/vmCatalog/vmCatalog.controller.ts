@@ -71,8 +71,18 @@ async function openConsole(req: Request, res: Response, next: NextFunction): Pro
       width: width && Number.isFinite(width) && width > 0 ? width : undefined,
       height: height && Number.isFinite(height) && height > 0 ? height : undefined,
     };
+    const instanceIdRaw = req.query['instanceId'];
+    const instanceId =
+      typeof instanceIdRaw === 'string' && instanceIdRaw.trim().length > 0
+        ? instanceIdRaw.trim()
+        : undefined;
 
-    const session = await vmCatalogService.openConsole(id, adminId, dimensions);
+    const session = await vmCatalogService.openConsole(
+      id,
+      adminId,
+      dimensions,
+      instanceId
+    );
     success(res, 'Catalog VM console session created.', session);
   } catch (err) {
     next(err);
@@ -86,6 +96,22 @@ async function createRequest(req: Request, res: Response, next: NextFunction): P
     const body = req.body as CreateCatalogVmRequestInput;
     const request = await vmCatalogService.createRequest(body, adminId);
       success(res, 'Catalog VM purchase submitted. Wallet charged; VM is provisioning.', { request }, 201);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function createSuperAdminRequest(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = req.body as CreateCatalogVmRequestInput;
+    const request = await vmCatalogService.createRequestForSuperAdmin(body, superAdminId);
+    success(res, 'Catalog VM request submitted. No wallet deduction applied.', { request }, 201);
   } catch (err) {
     next(err);
   }
@@ -190,8 +216,11 @@ async function changeTemplate(req: Request, res: Response, next: NextFunction): 
 async function powerAction(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const id = new mongoose.Types.ObjectId(req.params['id'] as string);
-    const body = (req.body || {}) as { action: 'virtualizor' | 'start' | 'stop' | 'reboot' };
-    const result = await vmCatalogService.powerAction(id, body.action);
+    const body = (req.body || {}) as {
+      action: 'virtualizor' | 'start' | 'stop' | 'reboot';
+      instanceId?: string;
+    };
+    const result = await vmCatalogService.powerAction(id, body.action, body.instanceId);
     success(res, `Webyne ${body.action} completed.`, result);
   } catch (err) {
     next(err);
@@ -317,4 +346,5 @@ export const vmCatalogController = {
   calculatePricing,
   listPricing,
   listSoftwareOptions,
+  createSuperAdminRequest,
 };

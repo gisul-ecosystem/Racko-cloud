@@ -6,7 +6,10 @@ import { requireRole } from '../../middleware/requireRole.middleware';
 import { validateRequest } from '../../middleware/validate.middleware';
 import type { AuthenticatedRequest } from '../../types';
 import { User } from '../../models/user.model';
-import { OrganizationAccessRequestModel } from '../../models/organizationAccessRequest.model';
+import {
+  OrganizationAccessRequestModel,
+  nextReadableOrgId,
+} from '../../models/organizationAccessRequest.model';
 import { ValidationError, NotFoundError } from '../../utils/errors';
 import { sendPlainEmail } from '../../utils/email/sender';
 import { generateFingerprint, getClientIp } from '../../utils/deviceFingerprint';
@@ -182,6 +185,7 @@ router.put(
       const encryptedBody = withEncryptedTaxId(body);
       const existing = await OrganizationAccessRequestModel.findOne({ userId: user._id });
       const keepNda = existing?.ndaStatus ?? 'not_started';
+      const orgIdForInsert = existing ? undefined : await nextReadableOrgId();
 
       const requestDoc = await OrganizationAccessRequestModel.findOneAndUpdate(
         { userId: user._id },
@@ -194,6 +198,7 @@ router.put(
             reviewerNotes: existing?.reviewerNotes ?? 'Updated by organization admin from profile.',
           },
           $setOnInsert: {
+            ...(orgIdForInsert ? { orgId: orgIdForInsert } : {}),
             reviewedAt: new Date(),
           },
         },
@@ -231,6 +236,10 @@ router.post(
         body.phone,
         'organization_onboarding_phone'
       );
+      const existing = await OrganizationAccessRequestModel.findOne({ userId: user._id })
+        .select('_id')
+        .lean();
+      const orgIdForInsert = existing ? undefined : await nextReadableOrgId();
       const requestDoc = await OrganizationAccessRequestModel.findOneAndUpdate(
         { userId: user._id },
         {
@@ -240,6 +249,7 @@ router.post(
             status: 'pending',
           },
           $setOnInsert: {
+            ...(orgIdForInsert ? { orgId: orgIdForInsert } : {}),
             ndaStatus: 'not_started',
           },
         },

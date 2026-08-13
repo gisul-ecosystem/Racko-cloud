@@ -31,6 +31,10 @@ export type VmCatalogStatus =
 
 export interface ICatalogVm {
   _id: string;
+  parentRequestId?: string;
+  instanceId?: string;
+  instanceIndex?: number;
+  instanceTotal?: number;
   adminId?: string;
   tenantId?: string;
   tenantUserId?: string;
@@ -81,6 +85,20 @@ export interface ICatalogVm {
   machineId?: string;
   postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
   postReadyError?: string;
+  fetchedCount?: number;
+  missingCount?: number;
+  partial?: boolean;
+  instances?: Array<{
+    instanceId: string;
+    instanceIndex: number;
+    status: 'ready_to_attach' | 'active';
+    hostname?: string;
+    ipAddress?: string;
+    username?: string;
+    password?: string;
+    protocol?: 'ssh' | 'rdp';
+    externalRef?: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 }
@@ -236,6 +254,7 @@ export interface CatalogSoftwareOption {
   _id: string;
   name: string;
   version: string;
+  iconUrl?: string;
   supportedOS: Array<'windows' | 'linux' | 'macos'>;
   installMethod: string;
 }
@@ -259,6 +278,19 @@ export async function submitCatalogVmRequest(
 ): Promise<ICatalogVm> {
   const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
     '/api/v1/vm-catalog/requests',
+    {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data.request;
+}
+
+export async function submitSuperAdminCatalogVmRequest(
+  dto: CreateCatalogVmRequestDto
+): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
+    '/api/v1/vm-catalog/super-admin/requests',
     {
       method: 'POST',
       body: JSON.stringify(dto),
@@ -303,11 +335,12 @@ export interface CatalogVmConsoleSession {
 
 export async function getCatalogVmConsole(
   id: string,
-  dimensions?: { width?: number; height?: number }
+  dimensions?: { width?: number; height?: number; instanceId?: string }
 ): Promise<CatalogVmConsoleSession> {
   const params = new URLSearchParams();
   if (dimensions?.width) params.set('width', String(Math.round(dimensions.width)));
   if (dimensions?.height) params.set('height', String(Math.round(dimensions.height)));
+  if (dimensions?.instanceId) params.set('instanceId', dimensions.instanceId);
   const qs = params.toString() ? `?${params.toString()}` : '';
 
   const res = await apiRequest<ApiResponse<CatalogVmConsoleSession>>(
@@ -358,13 +391,14 @@ export type CatalogVmPowerAction = 'virtualizor' | 'start' | 'stop' | 'reboot';
 
 export async function catalogVmPowerAction(
   id: string,
-  action: CatalogVmPowerAction
+  action: CatalogVmPowerAction,
+  instanceId?: string
 ): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }> {
   const res = await apiRequest<
     ApiResponse<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }>
   >(`/api/v1/vm-catalog/requests/${id}/power`, {
     method: 'POST',
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, ...(instanceId ? { instanceId } : {}) }),
   });
   return res.data;
 }

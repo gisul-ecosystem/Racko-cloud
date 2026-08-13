@@ -34,6 +34,8 @@ import {
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 
+const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
+
 function formatMoney(amount: number): string {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -51,6 +53,16 @@ function formatDate(iso: string): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function getAttachDelayRemainingMs(req: ICatalogVm, nowMs: number): number {
+  if (!req.needsOsChange || !req.osTemplateChanged) return 0;
+  if (!req.osTemplateChangedAt) return 0;
+
+  const changedAtMs = new Date(req.osTemplateChangedAt).getTime();
+  if (Number.isNaN(changedAtMs)) return 0;
+
+  return Math.max(0, WINDOWS_ATTACH_DELAY_MS - (nowMs - changedAtMs));
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
@@ -109,6 +121,7 @@ export default function WebyneVmRequestsByAdminPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [powerActionId, setPowerActionId] = useState<string | null>(null);
   const [powerBusy, setPowerBusy] = useState<CatalogVmPowerAction | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!adminId) return;
@@ -134,6 +147,11 @@ export default function WebyneVmRequestsByAdminPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Poll while any request is fulfilling
   useEffect(() => {
@@ -210,13 +228,13 @@ export default function WebyneVmRequestsByAdminPage() {
     }
   }
 
-  async function handlePower(id: string, action: CatalogVmPowerAction) {
-    setPowerActionId(id);
+  async function handlePower(id: string, action: CatalogVmPowerAction, instanceId?: string) {
+    setPowerActionId(instanceId ? `${id}:${instanceId}` : id);
     setPowerBusy(action);
     setSuccessMsg(null);
     setError(null);
     try {
-      const result = await catalogVmPowerAction(id, action);
+      const result = await catalogVmPowerAction(id, action, instanceId);
       if (action === 'virtualizor') {
         if (result.panelUrl) {
           window.open(result.panelUrl, '_blank', 'noopener,noreferrer');
@@ -454,7 +472,7 @@ export default function WebyneVmRequestsByAdminPage() {
                             )}
                             {req.status === 'ready_to_attach' && (
                               <>
-                                {req.needsOsChange && !req.osTemplateChanged ? (
+                                {req.needsOsChange ? (
                                   <button
                                     type="button"
                                     disabled={actionId === req._id}
@@ -467,30 +485,53 @@ export default function WebyneVmRequestsByAdminPage() {
                                     ) : (
                                       <MonitorSmartphone className="h-3.5 w-3.5" />
                                     )}
-                                    Change template to Windows
+                                    {req.osTemplateChanged
+                                      ? 'Try again: change template to Windows'
+                                      : 'Change template to Windows'}
                                   </button>
                                 ) : null}
-                                <button
-                                  type="button"
-                                  disabled={
-                                    actionId === req._id ||
-                                    Boolean(req.needsOsChange && !req.osTemplateChanged)
-                                  }
-                                  onClick={() => void handleAttach(req._id)}
-                                  className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
-                                  title={
+                                {(() => {
+                                  const remainingMs = getAttachDelayRemainingMs(req, nowMs);
+                                  const waitMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+                                  const blockedByOsChange = Boolean(
                                     req.needsOsChange && !req.osTemplateChanged
-                                      ? 'Change template to Windows first'
-                                      : undefined
-                                  }
-                                >
-                                  {actionId === req._id ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  ) : (
-                                    <Link2 className="h-3.5 w-3.5" />
-                                  )}
-                                  Attach
-                                </button>
+                                  );
+                                  const blockedByDelay = remainingMs > 0;
+
+                                  return (
+                                    <div className="inline-flex flex-col items-start gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          actionId === req._id ||
+                                          blockedByOsChange ||
+                                          blockedByDelay
+                                        }
+                                        onClick={() => void handleAttach(req._id)}
+                                        className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
+                                        title={
+                                          blockedByOsChange
+                                            ? 'Change template to Windows first'
+                                            : blockedByDelay
+                                              ? `Attach will be enabled in about ${waitMinutes} minute(s)`
+                                              : undefined
+                                        }
+                                      >
+                                        {actionId === req._id ? (
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <Link2 className="h-3.5 w-3.5" />
+                                        )}
+                                        {blockedByDelay ? `Attach (${waitMinutes}m)` : 'Attach'}
+                                      </button>
+                                      {blockedByDelay ? (
+                                        <p className="text-[11px] text-amber-700">
+                                          Attach available in about {waitMinutes} minute(s).
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })()}
                               </>
                             )}
                             {req.status !== 'active' &&
@@ -521,34 +562,151 @@ export default function WebyneVmRequestsByAdminPage() {
                                 ? 'VM details (attached — visible to admin)'
                                 : 'Fetched from Webyne (admin cannot see this until Attach)'}
                             </p>
-                            <div className="grid gap-2 text-sm text-gray-800 sm:grid-cols-2 lg:grid-cols-3">
-                              <div>
-                                <span className="text-xs text-gray-500">Hostname</span>
-                                <p className="font-mono text-xs">{req.hostname || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">IP</span>
-                                <p className="font-mono text-xs">{req.ipAddress || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Username</span>
-                                <p className="font-mono text-xs">{req.username || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Password</span>
-                                <p className="font-mono text-xs">{req.password || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Protocol</span>
-                                <p className="font-mono text-xs uppercase">{req.protocol || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Webyne ref</span>
-                                <p className="font-mono text-xs">{req.externalRef || '—'}</p>
-                              </div>
+                            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+                              <span className="rounded-full bg-amber-100 px-2.5 py-1 font-semibold text-amber-900">
+                                Fetched {req.fetchedCount ?? req.instances?.length ?? 0} / {req.quantity}
+                              </span>
+                              {(req.missingCount ?? 0) > 0 ? (
+                                <span className="rounded-full bg-red-100 px-2.5 py-1 font-semibold text-red-800">
+                                  {req.missingCount} pending
+                                </span>
+                              ) : (
+                                <span className="rounded-full bg-green-100 px-2.5 py-1 font-semibold text-green-800">
+                                  All VM details fetched
+                                </span>
+                              )}
                             </div>
 
-                            <div className="mt-4 border-t border-amber-100 pt-4">
+                            {req.instances && req.instances.length > 0 ? (
+                              <div className="overflow-x-auto rounded-lg border border-amber-100 bg-white">
+                                <table className="min-w-full text-xs">
+                                  <thead className="bg-amber-50 text-amber-900">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left font-semibold">VM</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Hostname</th>
+                                      <th className="px-3 py-2 text-left font-semibold">IP</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Username</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Password</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Protocol</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Webyne ref</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Controls</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {req.instances.map((instance) => (
+                                      <tr key={instance.instanceId} className="border-t border-amber-100 text-gray-800">
+                                        <td className="px-3 py-2 font-semibold">#{instance.instanceIndex}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.hostname || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.ipAddress || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.username || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.password || '—'}</td>
+                                        <td className="px-3 py-2 font-mono uppercase">{instance.protocol || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.externalRef || '—'}</td>
+                                        <td className="px-3 py-2">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            {(
+                                              [
+                                                {
+                                                  action: 'virtualizor' as const,
+                                                  label: 'Virtualizor',
+                                                  tone: 'bg-slate-600 hover:bg-slate-700',
+                                                  icon: <ToggleLeft className="h-4 w-4" />,
+                                                },
+                                                {
+                                                  action: 'start' as const,
+                                                  label: 'Start',
+                                                  tone: 'bg-emerald-500 hover:bg-emerald-600',
+                                                  icon: <Power className="h-4 w-4" />,
+                                                },
+                                                {
+                                                  action: 'stop' as const,
+                                                  label: 'Stop',
+                                                  tone: 'bg-red-500 hover:bg-red-600',
+                                                  icon: <Power className="h-4 w-4" />,
+                                                },
+                                                {
+                                                  action: 'reboot' as const,
+                                                  label: 'Reboot',
+                                                  tone: 'bg-blue-500 hover:bg-blue-600',
+                                                  icon: <RefreshCw className="h-4 w-4" />,
+                                                },
+                                              ] as const
+                                            ).map((btn) => {
+                                              const busy =
+                                                powerActionId === `${req._id}:${instance.instanceId}` &&
+                                                powerBusy === btn.action;
+                                              return (
+                                                <button
+                                                  key={btn.action}
+                                                  type="button"
+                                                  disabled={
+                                                    !instance.externalRef ||
+                                                    Boolean(powerActionId) ||
+                                                    actionId === req._id
+                                                  }
+                                                  onClick={() =>
+                                                    void handlePower(
+                                                      req._id,
+                                                      btn.action,
+                                                      instance.instanceId
+                                                    )
+                                                  }
+                                                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                                  title={
+                                                    !instance.externalRef
+                                                      ? 'Missing Webyne machine id'
+                                                      : `${btn.label} this VM`
+                                                  }
+                                                >
+                                                  <span className={`inline-flex items-center gap-1 rounded-md px-2 py-1 ${btn.tone}`}>
+                                                    {busy ? (
+                                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                                    ) : (
+                                                      btn.icon
+                                                    )}
+                                                    <span className="text-[11px]">{btn.label}</span>
+                                                  </span>
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <div className="grid gap-2 text-sm text-gray-800 sm:grid-cols-2 lg:grid-cols-3">
+                                <div>
+                                  <span className="text-xs text-gray-500">Hostname</span>
+                                  <p className="font-mono text-xs">{req.hostname || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">IP</span>
+                                  <p className="font-mono text-xs">{req.ipAddress || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Username</span>
+                                  <p className="font-mono text-xs">{req.username || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Password</span>
+                                  <p className="font-mono text-xs">{req.password || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Protocol</span>
+                                  <p className="font-mono text-xs uppercase">{req.protocol || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Webyne ref</span>
+                                  <p className="font-mono text-xs">{req.externalRef || '—'}</p>
+                                </div>
+                              </div>
+                            )}
+
+                            {!(req.instances && req.instances.length > 0) && (
+                              <div className="mt-4 border-t border-amber-100 pt-4">
                               <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-amber-800">
                                 Webyne controls
                               </p>
@@ -581,8 +739,8 @@ export default function WebyneVmRequestsByAdminPage() {
                                     },
                                   ] as const
                                 ).map((btn) => {
-                                  const busy =
-                                    powerActionId === req._id && powerBusy === btn.action;
+                                      const busy =
+                                        powerActionId === req._id && powerBusy === btn.action;
                                   const disabled =
                                     !req.externalRef ||
                                     Boolean(powerActionId) ||
@@ -619,7 +777,8 @@ export default function WebyneVmRequestsByAdminPage() {
                               <p className="mt-2 text-xs text-amber-700/80">
                                 Runs on Webyne machineshow for this VM (via catalog agent).
                               </p>
-                            </div>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       )}
