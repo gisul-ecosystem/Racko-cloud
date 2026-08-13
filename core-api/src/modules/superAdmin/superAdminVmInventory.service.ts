@@ -87,6 +87,7 @@ export interface VmInventoryRecord {
   assignmentLocation: string;
   projectId?: string;
   projectName?: string;
+  projectClientName?: string;
   orderId?: string;
   vmid?: number;
   createdAt: Date;
@@ -687,7 +688,7 @@ export class SuperAdminVmInventoryService {
         : Promise.resolve([]),
       projectIds.size > 0
         ? ProjectModel.find({ _id: { $in: [...projectIds].map((id) => new mongoose.Types.ObjectId(id)) } })
-          .select('_id name')
+          .select('_id name clientName')
           .lean()
         : Promise.resolve([]),
     ]);
@@ -697,6 +698,7 @@ export class SuperAdminVmInventoryService {
     const tenantNameById = new Map(tenants.map((item) => [item._id.toString(), item.name]));
     const tenantUserEmailById = new Map(tenantUsers.map((item) => [item._id.toString(), item.email]));
     const projectNameById = new Map(projects.map((item) => [item._id.toString(), item.name]));
+    const projectClientNameById = new Map(projects.map((item) => [item._id.toString(), item.clientName]));
 
     const externalUsersByVmId = new Map<string, string[]>();
     for (const assignment of externalUserAssignments) {
@@ -809,6 +811,7 @@ export class SuperAdminVmInventoryService {
         assignmentLocation,
         projectId,
         projectName: projectId ? projectNameById.get(projectId) : undefined,
+        projectClientName: projectId ? projectClientNameById.get(projectId) : undefined,
         orderId: vm.orderId?.toString(),
         vmid: vm.vmid,
         createdAt: vm.createdAt,
@@ -905,6 +908,7 @@ export class SuperAdminVmInventoryService {
           assignmentLocation,
           projectId,
           projectName: projectId ? projectNameById.get(projectId) : undefined,
+          projectClientName: projectId ? projectClientNameById.get(projectId) : undefined,
           createdAt: vm.createdAt,
           updatedAt: vm.updatedAt,
         });
@@ -977,6 +981,7 @@ export class SuperAdminVmInventoryService {
           assignmentLocation,
           projectId,
           projectName: projectId ? projectNameById.get(projectId) : undefined,
+          projectClientName: projectId ? projectClientNameById.get(projectId) : undefined,
           createdAt: vm.createdAt,
           updatedAt: instance.updatedAt ?? vm.updatedAt,
         });
@@ -1141,6 +1146,7 @@ export class SuperAdminVmInventoryService {
         assignmentLocation,
         projectId,
         projectName: projectId ? projectNameById.get(projectId) : undefined,
+        projectClientName: projectId ? projectClientNameById.get(projectId) : undefined,
         createdAt: vm.createdAt,
         updatedAt: vm.updatedAt,
       });

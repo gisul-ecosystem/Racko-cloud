@@ -52,6 +52,7 @@ export interface SuperAdminVmInventoryItem {
   assignmentLocation: string;
   projectId?: string;
   projectName?: string;
+  projectClientName?: string;
   orderId?: string;
   vmid?: number;
   createdAt: string;

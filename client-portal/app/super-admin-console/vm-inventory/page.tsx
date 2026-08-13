@@ -54,6 +54,7 @@ type AssignmentRow = {
   ipAddress: string;
   vmNames: string[];
   projectNames: string[];
+  clientNames: string[];
   assignments: AssignmentEntry[];
   editableExternalVmId?: string;
   providerDetails?: AssignmentEntry;
@@ -284,6 +285,7 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       ipAddress: item.ipAddress || '—',
       vmNames: [],
       projectNames: [],
+      clientNames: [],
       assignments: [],
     };
 
@@ -294,6 +296,11 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
     const projectLabel = String(item.projectName ?? item.projectId ?? '').trim();
     if (projectLabel && !current.projectNames.includes(projectLabel)) {
       current.projectNames.push(projectLabel);
+    }
+
+    const clientLabel = String(item.projectClientName ?? '').trim();
+    if (clientLabel && !current.clientNames.includes(clientLabel)) {
+      current.clientNames.push(clientLabel);
     }
 
     if (!current.editableExternalVmId && item.resourceType === 'external_vm') {
@@ -637,9 +644,12 @@ function AssignmentTable(props: {
   rows: AssignmentRow[];
   showVmNames: boolean;
   showProjects: boolean;
+  showClients: boolean;
   showPlanDuration: boolean;
   projectFilter: string;
   projectOptions: string[];
+  clientFilter: string;
+  clientOptions: string[];
   showUsers: boolean;
   sortBy: AssignmentSortBy;
   sortDirection: SortDirection;
@@ -647,9 +657,12 @@ function AssignmentTable(props: {
   onHideVmNames: () => void;
   onShowProjects: () => void;
   onHideProjects: () => void;
+  onShowClients: () => void;
+  onHideClients: () => void;
   onShowPlanDuration: () => void;
   onHidePlanDuration: () => void;
   onProjectFilterChange: (value: string) => void;
+  onClientFilterChange: (value: string) => void;
   onShowUsers: () => void;
   onHideUsers: () => void;
   onToggleSort: (value: AssignmentSortBy) => void;
@@ -683,6 +696,12 @@ function AssignmentTable(props: {
             <button type="button" onClick={props.onShowProjects} className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100">
               <span className="inline-flex h-4 w-4 items-center justify-center rounded border border-gray-300 bg-white text-[10px] leading-none">+</span>
               Project
+            </button>
+          ) : null}
+          {!props.showClients ? (
+            <button type="button" onClick={props.onShowClients} className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-gray-50 px-2 py-1 text-[11px] font-medium text-gray-700 hover:bg-gray-100">
+              <span className="inline-flex h-4 w-4 items-center justify-center rounded border border-gray-300 bg-white text-[10px] leading-none">+</span>
+              Assigned client
             </button>
           ) : null}
           {!props.showPlanDuration ? (
@@ -727,6 +746,28 @@ function AssignmentTable(props: {
                       {props.projectOptions.map((project) => (
                         <option key={project} value={project}>
                           {project}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </th>
+              ) : null}
+              {props.showClients ? (
+                <th className="w-[180px] px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  <div className="flex flex-col items-start gap-1">
+                    <div className="flex items-center gap-2">
+                      <span>Assigned client</span>
+                      <button type="button" onClick={props.onHideClients} className="inline-flex h-5 w-5 items-center justify-center rounded border border-gray-200 text-[10px] font-medium normal-case tracking-normal text-gray-600 hover:bg-gray-100" aria-label="Collapse assigned client column">-</button>
+                    </div>
+                    <select
+                      value={props.clientFilter}
+                      onChange={(e) => props.onClientFilterChange(e.target.value)}
+                      className="w-[108px] rounded-md border border-gray-200 bg-white px-1.5 py-1 text-[10px] font-medium normal-case tracking-normal text-gray-700"
+                    >
+                      <option value="">All clients</option>
+                      {props.clientOptions.map((client) => (
+                        <option key={client} value={client}>
+                          {client}
                         </option>
                       ))}
                     </select>
@@ -795,6 +836,11 @@ function AssignmentTable(props: {
                 {props.showProjects ? (
                   <td className="px-4 py-3.5 text-xs">
                     {row.projectNames.length > 0 ? row.projectNames.map((projectName, projectIndex) => <p key={`${row.rowKey}:project:${projectIndex}`} className="text-gray-700">{projectName}</p>) : <p className="text-[11px] text-gray-400">—</p>}
+                  </td>
+                ) : null}
+                {props.showClients ? (
+                  <td className="max-w-[180px] px-4 py-3.5 text-xs">
+                    {row.clientNames.length > 0 ? row.clientNames.map((clientName, clientIndex) => <p key={`${row.rowKey}:client:${clientIndex}`} className="truncate text-gray-700" title={clientName}>{clientName}</p>) : <p className="text-[11px] text-gray-400">—</p>}
                   </td>
                 ) : null}
                 {props.showUsers ? (
@@ -877,9 +923,11 @@ export default function SuperAdminVmInventoryPage() {
   const [showAssignmentView, setShowAssignmentView] = useState(false);
   const [showAssignmentVmNames, setShowAssignmentVmNames] = useState(false);
   const [showAssignmentProjects, setShowAssignmentProjects] = useState(false);
+  const [showAssignmentClients, setShowAssignmentClients] = useState(false);
   const [showAssignmentPlanDuration, setShowAssignmentPlanDuration] = useState(false);
   const [assignmentProjectFilter, setAssignmentProjectFilter] = useState('');
-  const [showAssignmentUsers, setShowAssignmentUsers] = useState(true);
+  const [assignmentClientFilter, setAssignmentClientFilter] = useState('');
+  const [showAssignmentUsers, setShowAssignmentUsers] = useState(false);
   const [externalVmRows, setExternalVmRows] = useState<SuperAdminExternalVmOverviewRow[]>([]);
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
   const [deletingAssignmentVmId, setDeletingAssignmentVmId] = useState<string | null>(null);
@@ -972,10 +1020,25 @@ export default function SuperAdminVmInventoryPage() {
     }
     return [...projects].sort((a, b) => a.localeCompare(b));
   }, [assignmentRows]);
+  const assignmentClientOptions = useMemo(() => {
+    const clients = new Set<string>();
+    for (const row of assignmentRows) {
+      for (const client of row.clientNames) {
+        const trimmed = client.trim();
+        if (trimmed) clients.add(trimmed);
+      }
+    }
+    return [...clients].sort((a, b) => a.localeCompare(b));
+  }, [assignmentRows]);
   const filteredAssignmentRows = useMemo(() => {
-    if (!assignmentProjectFilter) return assignmentRows;
-    return assignmentRows.filter((row) => row.projectNames.includes(assignmentProjectFilter));
-  }, [assignmentRows, assignmentProjectFilter]);
+    return assignmentRows.filter((row) => {
+      const projectMatches =
+        !assignmentProjectFilter || row.projectNames.includes(assignmentProjectFilter);
+      const clientMatches =
+        !assignmentClientFilter || row.clientNames.includes(assignmentClientFilter);
+      return projectMatches && clientMatches;
+    });
+  }, [assignmentRows, assignmentProjectFilter, assignmentClientFilter]);
   const sortedAssignmentRows = useMemo(
     () => sortAssignmentRows(filteredAssignmentRows, assignmentSortBy, assignmentSortDirection),
     [filteredAssignmentRows, assignmentSortBy, assignmentSortDirection]
@@ -1469,9 +1532,12 @@ export default function SuperAdminVmInventoryPage() {
           rows={sortedAssignmentRows}
           showVmNames={showAssignmentVmNames}
           showProjects={showAssignmentProjects}
+          showClients={showAssignmentClients}
           showPlanDuration={showAssignmentPlanDuration}
           projectFilter={assignmentProjectFilter}
           projectOptions={assignmentProjectOptions}
+          clientFilter={assignmentClientFilter}
+          clientOptions={assignmentClientOptions}
           showUsers={showAssignmentUsers}
           sortBy={assignmentSortBy}
           sortDirection={assignmentSortDirection}
@@ -1479,9 +1545,12 @@ export default function SuperAdminVmInventoryPage() {
           onHideVmNames={() => setShowAssignmentVmNames(false)}
           onShowProjects={() => setShowAssignmentProjects(true)}
           onHideProjects={() => setShowAssignmentProjects(false)}
+          onShowClients={() => setShowAssignmentClients(true)}
+          onHideClients={() => setShowAssignmentClients(false)}
           onShowPlanDuration={() => setShowAssignmentPlanDuration(true)}
           onHidePlanDuration={() => setShowAssignmentPlanDuration(false)}
           onProjectFilterChange={setAssignmentProjectFilter}
+          onClientFilterChange={setAssignmentClientFilter}
           onShowUsers={() => setShowAssignmentUsers(true)}
           onHideUsers={() => setShowAssignmentUsers(false)}
           onToggleSort={toggleAssignmentSort}
