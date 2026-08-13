@@ -57,6 +57,7 @@ export interface VmInventoryRecord {
   originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
   originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
   originChannel: InventoryOriginChannel;
+  providerVmSpec?: string | null;
   providerPlanDuration?: ProviderPlanDuration | null;
   providerUsername?: string | null;
   providerPassword?: string | null;
@@ -96,6 +97,7 @@ export interface VmInventoryRecord {
 
 export interface SuperAdminVmInventoryListResult {
   items: VmInventoryRecord[];
+  owners: SuperAdminVmInventoryOwnerOption[];
   total: number;
   page: number;
   limit: number;
@@ -109,6 +111,7 @@ export interface SuperAdminVmInventoryOwnerOption {
 export interface VmProviderMetadataImportRow {
   ipAddress: string;
   name?: string;
+  vmSpec?: string;
   protocol?: 'rdp' | 'ssh';
   planDuration?: ProviderPlanDuration;
   username?: string;
@@ -611,7 +614,7 @@ export class SuperAdminVmInventoryService {
 
     const providerMetadata = ipAddresses.length > 0
       ? await VmProviderMetadataModel.find({ ipAddress: { $in: ipAddresses } })
-        .select('ipAddress planDuration providerUsername providerPassword providerStartDate providerEndDate')
+        .select('ipAddress vmSpec planDuration providerUsername providerPassword providerStartDate providerEndDate')
         .lean()
       : [];
     const providerMetadataByIp = new Map(
@@ -795,6 +798,7 @@ export class SuperAdminVmInventoryService {
         originServiceKey: 'vm-management',
         originServiceLabel: 'VPS Hosting',
         originChannel,
+        providerVmSpec: providerMeta?.vmSpec ?? null,
         ownerScope,
         ownerAdminId,
         ownerAdminEmail: ownerAdminId ? adminEmailById.get(ownerAdminId) : undefined,
@@ -887,6 +891,7 @@ export class SuperAdminVmInventoryService {
           originServiceKey: 'create-vm',
           originServiceLabel: 'VM Catalog',
           originChannel,
+          providerVmSpec: baseProviderMeta?.vmSpec ?? null,
           providerPlanDuration: baseProviderMeta?.planDuration ?? null,
           providerUsername: vm.username ?? baseProviderMeta?.providerUsername ?? null,
           providerPassword: catalogVmPassword ?? baseProviderPassword,
@@ -947,6 +952,7 @@ export class SuperAdminVmInventoryService {
           originServiceKey: 'create-vm',
           originServiceLabel: 'VM Catalog',
           originChannel,
+          providerVmSpec: providerMeta?.vmSpec ?? baseProviderMeta?.vmSpec ?? null,
           providerPlanDuration: providerMeta?.planDuration ?? baseProviderMeta?.planDuration ?? null,
           providerUsername:
             instance.username ?? vm.username ?? providerMeta?.providerUsername ?? baseProviderMeta?.providerUsername ?? null,
@@ -1125,6 +1131,7 @@ export class SuperAdminVmInventoryService {
         originServiceKey: 'external-vm',
         originServiceLabel: 'External VM Import',
         originChannel: externalSourceToChannel(vm.source),
+        providerVmSpec: providerMeta?.vmSpec ?? null,
         providerPlanDuration: providerMeta?.planDuration ?? null,
         providerUsername: providerMeta?.providerUsername ?? null,
         providerPassword,
@@ -1197,9 +1204,15 @@ export class SuperAdminVmInventoryService {
 
     const start = (page - 1) * limit;
     const paged = filtered.slice(start, start + limit);
+    const ownerCounts = new Map<string, number>();
+    for (const item of filtered) {
+      const label = effectiveOwnerLabel(item);
+      ownerCounts.set(label, (ownerCounts.get(label) ?? 0) + 1);
+    }
 
     return {
       items: paged,
+      owners: [...ownerCounts.entries()].map(([label, count]) => ({ label, count })),
       total: filtered.length,
       page,
       limit,
@@ -1274,6 +1287,7 @@ export class SuperAdminVmInventoryService {
         {
           $set: {
             ipAddress,
+            vmSpec: row.vmSpec?.trim() || null,
             planDuration: row.planDuration ?? null,
             providerUsername: row.username?.trim() || null,
             providerPassword: row.password ? encrypt(row.password) : null,

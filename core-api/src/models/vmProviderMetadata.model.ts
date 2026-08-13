@@ -5,6 +5,7 @@ export type ProviderPlanDuration = 'monthly' | 'quarterly' | 'hourly' | 'yearly'
 export interface IVmProviderMetadata extends Document {
   _id: mongoose.Types.ObjectId;
   ipAddress: string;
+  vmSpec?: string | null;
   planDuration?: ProviderPlanDuration | null;
   providerUsername?: string | null;
   providerPassword?: string | null;
@@ -23,6 +24,11 @@ const vmProviderMetadataSchema = new Schema<IVmProviderMetadata>(
       unique: true,
       trim: true,
       index: true,
+    },
+    vmSpec: {
+      type: String,
+      trim: true,
+      default: null,
     },
     planDuration: {
       type: String,
