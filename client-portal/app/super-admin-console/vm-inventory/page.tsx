@@ -642,6 +642,8 @@ function InventoryTable(props: {
 
 function AssignmentTable(props: {
   rows: AssignmentRow[];
+  page: number;
+  totalPages: number;
   showVmNames: boolean;
   showProjects: boolean;
   showClients: boolean;
@@ -663,6 +665,8 @@ function AssignmentTable(props: {
   onHidePlanDuration: () => void;
   onProjectFilterChange: (value: string) => void;
   onClientFilterChange: (value: string) => void;
+  onPreviousPage: () => void;
+  onNextPage: () => void;
   onShowUsers: () => void;
   onHideUsers: () => void;
   onToggleSort: (value: AssignmentSortBy) => void;
@@ -898,6 +902,30 @@ function AssignmentTable(props: {
           </tbody>
         </table>
       </div>
+
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-gray-100 px-5 py-3">
+        <p className="text-xs text-gray-500">
+          Page {props.page} / {props.totalPages}
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            disabled={props.page <= 1}
+            onClick={props.onPreviousPage}
+            className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Previous
+          </button>
+          <button
+            type="button"
+            disabled={props.page >= props.totalPages}
+            onClick={props.onNextPage}
+            className="rounded-lg border border-gray-200 px-3 py-1.5 text-sm text-gray-700 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            Next
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
@@ -920,6 +948,7 @@ export default function SuperAdminVmInventoryPage() {
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc');
   const [assignmentSortBy, setAssignmentSortBy] = useState<AssignmentSortBy>('providerEndDate');
   const [assignmentSortDirection, setAssignmentSortDirection] = useState<SortDirection>('asc');
+  const [assignmentPage, setAssignmentPage] = useState(1);
   const [showAssignmentView, setShowAssignmentView] = useState(false);
   const [showAssignmentVmNames, setShowAssignmentVmNames] = useState(false);
   const [showAssignmentProjects, setShowAssignmentProjects] = useState(false);
@@ -1039,14 +1068,28 @@ export default function SuperAdminVmInventoryPage() {
       return projectMatches && clientMatches;
     });
   }, [assignmentRows, assignmentProjectFilter, assignmentClientFilter]);
+  const assignmentPageSize = 100;
+  const assignmentTotalPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredAssignmentRows.length / assignmentPageSize)),
+    [filteredAssignmentRows.length]
+  );
   const sortedAssignmentRows = useMemo(
     () => sortAssignmentRows(filteredAssignmentRows, assignmentSortBy, assignmentSortDirection),
     [filteredAssignmentRows, assignmentSortBy, assignmentSortDirection]
   );
+  const paginatedAssignmentRows = useMemo(() => {
+    const safePage = Math.min(Math.max(assignmentPage, 1), assignmentTotalPages);
+    const start = (safePage - 1) * assignmentPageSize;
+    return sortedAssignmentRows.slice(start, start + assignmentPageSize);
+  }, [assignmentPage, assignmentTotalPages, sortedAssignmentRows]);
   const externalVmById = useMemo(
     () => new Map(externalVmRows.map((row) => [row.externalVmId, row] as const)),
     [externalVmRows]
   );
+
+  useEffect(() => {
+    setAssignmentPage((current) => Math.min(current, assignmentTotalPages));
+  }, [assignmentTotalPages]);
 
   const handleEditAssignmentRow = useCallback(
     (row: AssignmentRow) => {
@@ -1345,6 +1388,7 @@ export default function SuperAdminVmInventoryPage() {
       setAssignmentSortBy(nextSortBy);
       setAssignmentSortDirection('asc');
     }
+    setAssignmentPage(1);
   };
 
   const handleProviderMetadataUpload = async (file: File) => {
@@ -1529,7 +1573,9 @@ export default function SuperAdminVmInventoryPage() {
 
       {showAssignmentView && !loading && !error && sortedAssignmentRows.length > 0 ? (
         <AssignmentTable
-          rows={sortedAssignmentRows}
+          rows={paginatedAssignmentRows}
+          page={assignmentPage}
+          totalPages={assignmentTotalPages}
           showVmNames={showAssignmentVmNames}
           showProjects={showAssignmentProjects}
           showClients={showAssignmentClients}
@@ -1551,6 +1597,8 @@ export default function SuperAdminVmInventoryPage() {
           onHidePlanDuration={() => setShowAssignmentPlanDuration(false)}
           onProjectFilterChange={setAssignmentProjectFilter}
           onClientFilterChange={setAssignmentClientFilter}
+          onPreviousPage={() => setAssignmentPage((current) => Math.max(1, current - 1))}
+          onNextPage={() => setAssignmentPage((current) => Math.min(assignmentTotalPages, current + 1))}
           onShowUsers={() => setShowAssignmentUsers(true)}
           onHideUsers={() => setShowAssignmentUsers(false)}
           onToggleSort={toggleAssignmentSort}

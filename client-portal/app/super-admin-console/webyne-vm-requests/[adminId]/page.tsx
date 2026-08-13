@@ -34,6 +34,8 @@ import {
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 
+const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
+
 function formatMoney(amount: number): string {
   return new Intl.NumberFormat('en-IN', {
     style: 'currency',
@@ -51,6 +53,16 @@ function formatDate(iso: string): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function getAttachDelayRemainingMs(req: ICatalogVm, nowMs: number): number {
+  if (!req.needsOsChange || !req.osTemplateChanged) return 0;
+  if (!req.osTemplateChangedAt) return 0;
+
+  const changedAtMs = new Date(req.osTemplateChangedAt).getTime();
+  if (Number.isNaN(changedAtMs)) return 0;
+
+  return Math.max(0, WINDOWS_ATTACH_DELAY_MS - (nowMs - changedAtMs));
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
@@ -109,6 +121,7 @@ export default function WebyneVmRequestsByAdminPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [powerActionId, setPowerActionId] = useState<string | null>(null);
   const [powerBusy, setPowerBusy] = useState<CatalogVmPowerAction | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!adminId) return;
@@ -134,6 +147,11 @@ export default function WebyneVmRequestsByAdminPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Poll while any request is fulfilling
   useEffect(() => {
@@ -472,27 +490,48 @@ export default function WebyneVmRequestsByAdminPage() {
                                       : 'Change template to Windows'}
                                   </button>
                                 ) : null}
-                                <button
-                                  type="button"
-                                  disabled={
-                                    actionId === req._id ||
-                                    Boolean(req.needsOsChange && !req.osTemplateChanged)
-                                  }
-                                  onClick={() => void handleAttach(req._id)}
-                                  className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
-                                  title={
+                                {(() => {
+                                  const remainingMs = getAttachDelayRemainingMs(req, nowMs);
+                                  const waitMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+                                  const blockedByOsChange = Boolean(
                                     req.needsOsChange && !req.osTemplateChanged
-                                      ? 'Change template to Windows first'
-                                      : undefined
-                                  }
-                                >
-                                  {actionId === req._id ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  ) : (
-                                    <Link2 className="h-3.5 w-3.5" />
-                                  )}
-                                  Attach
-                                </button>
+                                  );
+                                  const blockedByDelay = remainingMs > 0;
+
+                                  return (
+                                    <div className="inline-flex flex-col items-start gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          actionId === req._id ||
+                                          blockedByOsChange ||
+                                          blockedByDelay
+                                        }
+                                        onClick={() => void handleAttach(req._id)}
+                                        className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
+                                        title={
+                                          blockedByOsChange
+                                            ? 'Change template to Windows first'
+                                            : blockedByDelay
+                                              ? `Attach will be enabled in about ${waitMinutes} minute(s)`
+                                              : undefined
+                                        }
+                                      >
+                                        {actionId === req._id ? (
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <Link2 className="h-3.5 w-3.5" />
+                                        )}
+                                        {blockedByDelay ? `Attach (${waitMinutes}m)` : 'Attach'}
+                                      </button>
+                                      {blockedByDelay ? (
+                                        <p className="text-[11px] text-amber-700">
+                                          Attach available in about {waitMinutes} minute(s).
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })()}
                               </>
                             )}
                             {req.status !== 'active' &&
