@@ -415,12 +415,16 @@ public class MainForm : Form
 
                 if (file.FileName.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
                 {
-                    // Folder zip — extract into downloadDir
+                    // Folder zip — download to temp, close the file handle, then extract.
+                    // The file handle MUST be fully closed before ZipFile.ExtractToDirectory
+                    // can open the file — they cannot share access on Windows.
                     var tempZip = Path.Combine(Path.GetTempPath(), $"racko_{Guid.NewGuid():N}.zip");
                     try
                     {
-                        await using var fs = File.Create(tempZip);
-                        await response.Content.CopyToAsync(fs);
+                        using (var fs = File.Create(tempZip))
+                        {
+                            await response.Content.CopyToAsync(fs);
+                        } // fs.Dispose() called here — file handle fully released before extraction
                         System.IO.Compression.ZipFile.ExtractToDirectory(tempZip, downloadDir, overwriteFiles: true);
                     }
                     finally

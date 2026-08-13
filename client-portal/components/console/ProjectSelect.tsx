@@ -19,6 +19,8 @@ export function ProjectSelect({
   required = false,
   portal = 'org',
   seedFromQuery = true,
+  onCreateProject,
+  refreshKey,
 }: {
   serviceKey: AdminServiceKey;
   value: string;
@@ -29,6 +31,10 @@ export function ProjectSelect({
   portal?: 'org' | 'tenant';
   /** When true, preselect `?projectId=` from the URL once projects load. */
   seedFromQuery?: boolean;
+  /** When provided, renders a button that calls this instead of navigating away. */
+  onCreateProject?: () => void;
+  /** Increment to force the project list to re-fetch. */
+  refreshKey?: number;
 }) {
   const [projects, setProjects] = useState<OrgProject[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,7 +70,7 @@ export function ProjectSelect({
     return () => {
       cancelled = true;
     };
-  }, [serviceKey, portal]);
+  }, [serviceKey, portal, refreshKey]);
 
   useEffect(() => {
     if (!seedFromQuery || seededRef.current || loading) return;
@@ -106,12 +112,22 @@ export function ProjectSelect({
           <p className="mt-1 text-xs text-amber-700">
             Create a project with this service to continue.
           </p>
-          <Link
-            href={createHref}
-            className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#991B1B]"
-          >
-            + Create new project
-          </Link>
+          {onCreateProject ? (
+            <button
+              type="button"
+              onClick={onCreateProject}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#991B1B]"
+            >
+              + Create new project
+            </button>
+          ) : (
+            <Link
+              href={createHref}
+              className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-[#991B1B]"
+            >
+              + Create new project
+            </Link>
+          )}
         </div>
       ) : (
         <div className="space-y-2">
@@ -130,12 +146,22 @@ export function ProjectSelect({
             ))}
           </select>
 
-          <Link
-            href={createHref}
-            className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C] hover:underline"
-          >
-            + Create new project
-          </Link>
+          {onCreateProject ? (
+            <button
+              type="button"
+              onClick={onCreateProject}
+              className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C] hover:underline"
+            >
+              + Create new project
+            </button>
+          ) : (
+            <Link
+              href={createHref}
+              className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C] hover:underline"
+            >
+              + Create new project
+            </Link>
+          )}
         </div>
       )}
     </div>

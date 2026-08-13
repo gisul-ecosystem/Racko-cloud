@@ -388,14 +388,17 @@ export function openResetStatusStreamWithReconnect(
   onEvent: (event: { type: string; machineId?: string; success?: boolean; error?: string }) => void,
   onTerminal: () => void,
   onGiveUp: () => void,
+  expectedCount: number = 1,
 ): () => void {
-  const BASE_DELAY_MS = 1_000;   // 1s initial backoff
-  const MAX_DELAY_MS  = 30_000;  // 30s max backoff
-  const MAX_ATTEMPTS  = 10;      // ~5 minutes total retry budget
+  const BASE_DELAY_MS = 1_000;
+  const MAX_DELAY_MS  = 30_000;
+  const MAX_ATTEMPTS  = 10;
 
   let stopped = false;
   let attempt = 0;
   let currentController: AbortController | null = null;
+  // Track which machineIds have received reset_complete so we don't double-count on reconnect
+  const completedMachines = new Set<string>();
 
   const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -415,7 +418,6 @@ export function openResetStatusStreamWithReconnect(
           throw new Error(`HTTP ${response.status}`);
         }
 
-        // Reset backoff on successful connection
         attempt = 0;
 
         const reader = response.body.getReader();
@@ -443,13 +445,23 @@ export function openResetStatusStreamWithReconnect(
                 error?: string;
               };
 
-              onEvent(event);
+              if (event.type === 'reset_complete' && event.machineId) {
+                // Deduplicate — on reconnect the server replays all persisted results.
+                // Only fire onEvent for machines not yet processed in this session.
+                if (!completedMachines.has(event.machineId)) {
+                  completedMachines.add(event.machineId);
+                  onEvent(event);
+                }
 
-              // Terminal event — stop reconnecting
-              if (event.type === 'reset_complete') {
-                stopped = true;
-                onTerminal();
-                return;
+                // All expected machines done — stop cleanly
+                if (completedMachines.size >= expectedCount) {
+                  stopped = true;
+                  onTerminal();
+                  return;
+                }
+                // More machines still pending — keep stream open
+              } else {
+                onEvent(event);
               }
             } catch {
               // ignore malformed SSE lines
@@ -458,13 +470,11 @@ export function openResetStatusStreamWithReconnect(
         }
       } catch (err) {
         if (stopped) return;
-        // AbortError means caller stopped us — exit cleanly
         if (err instanceof Error && err.name === 'AbortError') return;
       }
 
       if (stopped) return;
 
-      // Exponential backoff before reconnecting
       attempt++;
       if (attempt > MAX_ATTEMPTS) {
         onGiveUp();
@@ -478,7 +488,6 @@ export function openResetStatusStreamWithReconnect(
 
   void connect();
 
-  // Return a stop function for cleanup on unmount
   return () => {
     stopped = true;
     currentController?.abort();
