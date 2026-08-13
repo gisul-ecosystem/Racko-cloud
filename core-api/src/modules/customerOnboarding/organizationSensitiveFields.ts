@@ -4,14 +4,23 @@ import { logger } from '../../utils/logger';
 const TAX_ID_ENCRYPTION_PREFIX = 'enc:v1:';
 
 type OrganizationRecord = Record<string, unknown> & {
+  orgId?: unknown;
+  userId?: unknown;
   taxId?: string;
   toObject?: () => Record<string, unknown>;
 };
 
 type OrganizationRequestLike = {
+  orgId?: unknown;
+  userId?: unknown;
   taxId?: string;
   toObject?: () => Record<string, unknown>;
 };
+
+function resolveReadableOrgId(orgId: unknown): string | undefined {
+  if (typeof orgId === 'string' && orgId.trim()) return orgId;
+  return undefined;
+}
 
 export function encryptTaxId(taxId: string): string {
   const normalized = taxId.trim();
@@ -50,6 +59,7 @@ export function serializeOrganizationRequest(request: OrganizationRequestLike | 
     : { ...(request as Record<string, unknown>) };
   return {
     ...plain,
+    orgId: resolveReadableOrgId(plain.orgId),
     taxId: decryptTaxId(typeof plain.taxId === 'string' ? plain.taxId : undefined),
   };
 }

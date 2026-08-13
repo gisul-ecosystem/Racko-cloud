@@ -1,6 +1,9 @@
 import mongoose from 'mongoose';
 import { User } from '../../models/user.model';
-import { OrganizationAccessRequestModel } from '../../models/organizationAccessRequest.model';
+import {
+  OrganizationAccessRequestModel,
+  nextReadableOrgId,
+} from '../../models/organizationAccessRequest.model';
 import { AdminWallet } from '../../models/adminWallet.model';
 import { AdminWalletTransaction } from '../../models/adminWalletTransaction.model';
 import { AdminServiceConfig } from '../../models/adminServiceConfig.model';
@@ -105,6 +108,7 @@ export class AdminOrgOnboardingService {
       const org = input.organization;
       organizationRequest = await OrganizationAccessRequestModel.create({
         userId: user._id,
+        orgId: await nextReadableOrgId(),
         contactName: org.contactName,
         companyName: org.companyName,
         companyWebsite: org.companyWebsite || undefined,

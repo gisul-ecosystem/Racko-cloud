@@ -48,6 +48,7 @@ export default function ConsoleProfilePage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<FormFieldErrors>({});
   const [form, setForm] = useState<OrganizationOnboardingForm>(EMPTY_FORM);
+  const [orgId, setOrgId] = useState<string | null>(null);
   const [phoneDial, setPhoneDial] = useState('+91');
   const [phoneNational, setPhoneNational] = useState('');
 
@@ -61,6 +62,7 @@ export default function ConsoleProfilePage() {
     try {
       const request = await fetchMyOnboardingRequest();
       if (request) {
+        setOrgId(request.orgId ?? null);
         const phoneParts = splitPhone(request.phone);
         setPhoneDial(phoneParts.dialCode);
         setPhoneNational(phoneParts.national);
@@ -114,7 +116,8 @@ export default function ConsoleProfilePage() {
 
     setSaving(true);
     try {
-      await saveOrganizationProfile(parsed.data);
+      const saved = await saveOrganizationProfile(parsed.data);
+      setOrgId(saved.orgId ?? null);
       setSuccess('Organization profile saved.');
       setForm(parsed.data);
     } catch (err) {
@@ -160,8 +163,18 @@ export default function ConsoleProfilePage() {
       </div>
 
       <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-        <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Signed in as</p>
-        <p className="mt-1 text-sm font-semibold text-gray-900">{user.email}</p>
+        <div className="grid gap-4 sm:grid-cols-2">
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Signed in as</p>
+            <p className="mt-1 text-sm font-semibold text-gray-900">{user.email}</p>
+          </div>
+          <div>
+            <p className="text-xs font-medium uppercase tracking-wide text-gray-500">Organization ID</p>
+            <p className="mt-1 break-all text-sm font-semibold text-gray-900">
+              {orgId ?? 'Generated after details are saved'}
+            </p>
+          </div>
+        </div>
       </div>
 
       {loading ? (
