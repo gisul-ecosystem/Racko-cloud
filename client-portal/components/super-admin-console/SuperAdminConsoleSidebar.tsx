@@ -10,6 +10,7 @@ import {
   LayoutGrid,
   MonitorCheck,
   Palette,
+  Plus,
   Server,
   Shield,
   Upload,
@@ -69,6 +70,13 @@ const navItems: NavItem[] = [
     label: 'VM Inventory',
     icon: Database,
     anyOf: ['vm_inventory.read'],
+    section: 'services',
+  },
+  {
+    href: '/super-admin-console/create-vm',
+    label: 'VM Catalog',
+    icon: Plus,
+    anyOf: ['vm_catalog.superadmin'],
     section: 'services',
   },
   {

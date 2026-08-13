@@ -113,6 +113,16 @@ router.post(
   }
 );
 
+/** Super-admin: submit VM catalog request without wallet debit */
+router.post(
+  '/super-admin/requests',
+  requireRole('super_admin'),
+  validateRequest(createCatalogVmRequestSchema),
+  (req, res, next) => {
+    vmCatalogController.createSuperAdminRequest(req, res, next);
+  }
+);
+
 /** Control plane: requester cards */
 router.get(
   '/requests/requesters',

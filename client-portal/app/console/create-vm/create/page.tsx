@@ -80,10 +80,44 @@ function selectedVmOsLabel(category: VmCatalogCategory): string {
   return opt?.label ?? 'Linux';
 }
 
+function softwareMonogram(name: string): string {
+  const parts = name
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) return 'SW';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0] ?? ''}${parts[1][0] ?? ''}`.toUpperCase();
+}
+
+function softwareIconTone(name: string): string {
+  const lower = name.toLowerCase();
+  if (lower.includes('docker') || lower.includes('kubernetes')) {
+    return 'bg-sky-50 text-sky-700 border-sky-200';
+  }
+  if (lower.includes('python') || lower.includes('anaconda')) {
+    return 'bg-emerald-50 text-emerald-700 border-emerald-200';
+  }
+  if (lower.includes('mysql') || lower.includes('postgres') || lower.includes('mongo')) {
+    return 'bg-indigo-50 text-indigo-700 border-indigo-200';
+  }
+  if (lower.includes('chrome') || lower.includes('edge') || lower.includes('postman')) {
+    return 'bg-amber-50 text-amber-700 border-amber-200';
+  }
+  return 'bg-gray-100 text-gray-700 border-gray-200';
+}
+
+function softwareIconAlt(name: string): string {
+  return `${name} icon`;
+}
+
 export default function CreateVmPage() {
   const router = useRouter();
   const { api, routes, isReady } = useVmCatalogPortal();
-  const projectPortal = routes.hub === '/console' ? 'org' : 'tenant';
+  const projectPortal =
+    routes.hub === '/console' || routes.hub === '/super-admin-console' ? 'org' : 'tenant';
+  const isSuperAdminCatalog = routes.hub === '/super-admin-console';
   const [plans, setPlans] = useState<IVmCatalogPlan[]>([]);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
@@ -98,6 +132,7 @@ export default function CreateVmPage() {
   const [softwareMode, setSoftwareMode] = useState<'skip' | 'select'>('skip');
   const [selectedSoftwareIds, setSelectedSoftwareIds] = useState<string[]>([]);
   const [softwareOptions, setSoftwareOptions] = useState<CatalogSoftwareOption[]>([]);
+  const [brokenSoftwareIconIds, setBrokenSoftwareIconIds] = useState<Set<string>>(new Set());
   const [softwareSearch, setSoftwareSearch] = useState('');
   const [softwareLoading, setSoftwareLoading] = useState(false);
   const [softwareError, setSoftwareError] = useState<string | null>(null);
@@ -138,6 +173,7 @@ export default function CreateVmPage() {
 
   useEffect(() => {
     if (!selected || drawerStep !== 'software' || !isReady) return;
+    setBrokenSoftwareIconIds(new Set());
     void loadSoftwareCatalog();
   }, [selected, drawerStep, isReady, loadSoftwareCatalog]);
 
@@ -167,7 +203,7 @@ export default function CreateVmPage() {
     );
   }, [softwareForOs, softwareSearch]);
 
-  const showHourly = plans.some((p) => p.hourlyEnabled === true);
+  const showHourly = isSuperAdminCatalog || plans.some((p) => p.hourlyEnabled === true);
 
   function openPlan(plan: IVmCatalogPlan) {
     const cycles = availableBillings(plan, 'ubuntu');
@@ -390,8 +426,8 @@ export default function CreateVmPage() {
       </div>
 
       {selected ? (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/40">
-          <div className="flex h-full w-full max-w-md flex-col bg-white shadow-xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+          <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl border border-gray-200 bg-white shadow-2xl">
             <div className="flex items-start justify-between border-b px-5 py-4">
               <div>
                 {drawerStep === 'software' ? (
@@ -476,13 +512,15 @@ export default function CreateVmPage() {
                     />
                   </div>
 
-                  <ProjectSelect
-                    serviceKey="create-vm"
-                    value={projectId}
-                    onChange={setProjectId}
-                    disabled={buyLoading}
-                    portal={projectPortal}
-                  />
+                  {!isSuperAdminCatalog ? (
+                    <ProjectSelect
+                      serviceKey="create-vm"
+                      value={projectId}
+                      onChange={setProjectId}
+                      disabled={buyLoading}
+                      portal={projectPortal}
+                    />
+                  ) : null}
 
                   <div className="rounded-lg border border-gray-100 bg-gray-50 p-3 text-sm">
                     <div className="flex justify-between text-gray-600">
@@ -598,9 +636,11 @@ export default function CreateVmPage() {
                               : `No ${vmOsLabel} packages in the catalog yet. Add them in Machine Manager → Software Catalog, or choose Skip software.`}
                           </p>
                         ) : (
-                          <div className="max-h-64 space-y-2 overflow-y-auto pr-1">
+                          <div className="max-h-[24rem] overflow-y-auto pr-1">
+                            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
                             {filteredSoftware.map((sw) => {
                               const sel = selectedSoftwareIds.includes(sw._id);
+                              const showImage = Boolean(sw.iconUrl) && !brokenSoftwareIconIds.has(sw._id);
                               return (
                                 <button
                                   key={sw._id}
@@ -609,26 +649,52 @@ export default function CreateVmPage() {
                                   onClick={() => toggleSoftware(sw._id)}
                                   className={`w-full rounded-xl border p-3 text-left transition ${
                                     sel
-                                      ? 'border-[#B91C1C] bg-red-50 ring-1 ring-[#B91C1C]'
-                                      : 'border-gray-200 bg-white hover:border-gray-300'
+                                      ? 'border-[#B91C1C] bg-red-50 ring-1 ring-[#B91C1C] shadow-sm'
+                                      : 'border-gray-200 bg-white hover:border-gray-300 hover:shadow-sm'
                                   }`}
                                 >
                                   <div className="flex items-start justify-between gap-2">
-                                    <div>
-                                      <p className="text-sm font-semibold text-gray-900">{sw.name}</p>
-                                      <p className="mt-0.5 text-xs text-gray-500">
-                                        v{sw.version} · {sw.installMethod}
-                                      </p>
-                                    </div>
+                                    {showImage ? (
+                                      <img
+                                        src={sw.iconUrl}
+                                        alt={softwareIconAlt(sw.name)}
+                                        onError={() => {
+                                          setBrokenSoftwareIconIds((prev) => {
+                                            if (prev.has(sw._id)) return prev;
+                                            const next = new Set(prev);
+                                            next.add(sw._id);
+                                            return next;
+                                          });
+                                        }}
+                                        className="h-10 w-10 shrink-0 rounded-lg border border-gray-200 bg-white object-contain p-1"
+                                      />
+                                    ) : (
+                                      <div
+                                        className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border text-xs font-bold ${softwareIconTone(sw.name)}`}
+                                        aria-hidden="true"
+                                      >
+                                        {softwareMonogram(sw.name)}
+                                      </div>
+                                    )}
                                     {sel ? (
                                       <div className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-[#B91C1C]">
                                         <Check className="h-3 w-3 text-white" />
                                       </div>
                                     ) : null}
                                   </div>
+
+                                  <div className="mt-3">
+                                    <div>
+                                      <p className="line-clamp-2 text-sm font-semibold text-gray-900">{sw.name}</p>
+                                      <p className="mt-0.5 text-xs text-gray-500">
+                                        v{sw.version} · {sw.installMethod}
+                                      </p>
+                                    </div>
+                                  </div>
                                 </button>
                               );
                             })}
+                            </div>
                           </div>
                         )}
                         {selectedSoftwareIds.length > 0 ? (

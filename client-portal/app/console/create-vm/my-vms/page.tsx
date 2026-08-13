@@ -102,7 +102,7 @@ function ConnectionDetails({ vm }: { vm: ICatalogVm }) {
 export default function MyVmsPage() {
   const { routes } = useVmCatalogPortal();
   const { vms, loading, error, refetch } = useVmCatalogVms();
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
   const router = useRouter();
   const searchParams = useSearchParams();
   const filterProjectId = searchParams?.get('projectId')?.trim() || null;
@@ -208,20 +208,26 @@ export default function MyVmsPage() {
                 <tbody>
                   {visibleVms.map((vm, index) => {
                     const isActive = vm.status === 'active';
-                    const isExpanded = expandedId === vm._id;
+                    const instanceKey = vm.instanceId
+                      ? `${vm._id}:${vm.instanceId}`
+                      : `${vm._id}:${index}`;
+                    const isExpanded = expandedRowKey === instanceKey;
+                    const consoleHref = vm.instanceId
+                      ? `${routes.console(vm._id)}?instanceId=${encodeURIComponent(vm.instanceId)}`
+                      : routes.console(vm._id);
                     return (
                       <FragmentRow
-                        key={vm._id}
+                        key={instanceKey}
                         vm={vm}
                         index={index}
                         isActive={isActive}
                         isExpanded={isExpanded}
                         onToggle={() =>
-                          setExpandedId((prev) => (prev === vm._id ? null : vm._id))
+                          setExpandedRowKey((prev) =>
+                            prev === instanceKey ? null : instanceKey
+                          )
                         }
-                        onOpenConsole={() =>
-                          router.push(routes.console(vm._id))
-                        }
+                        onOpenConsole={() => router.push(consoleHref)}
                       />
                     );
                   })}
@@ -266,7 +272,11 @@ function FragmentRow({
               <p className="font-medium text-gray-900">{vm.planName}</p>
               <p className="text-xs text-gray-500">
                 {vm.billing}
-                {vm.quantity > 1 ? ` · ×${vm.quantity}` : ''}
+                {vm.instanceTotal && vm.instanceTotal > 1
+                  ? ` · VM ${vm.instanceIndex || 1} of ${vm.instanceTotal}`
+                  : vm.quantity > 1
+                    ? ` · ×${vm.quantity}`
+                    : ''}
               </p>
             </div>
           </div>

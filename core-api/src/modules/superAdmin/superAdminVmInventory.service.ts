@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { VM } from '../vm/vm.model';
 import { CatalogVmModel } from '../../models/catalogVm.model';
+import { CatalogVmInstanceModel } from '../../models/catalogVmInstance.model';
 import { ExternalVMModel, type ExternalVMSource } from '../external-vm/external-vm.model';
 import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
 import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
@@ -202,9 +203,23 @@ function hasInventoryAssignee(item: VmInventoryRecord): boolean {
   );
 }
 
+function hasKnownInventoryOwner(item: VmInventoryRecord): boolean {
+  return Boolean(
+    item.ownerTenantName ||
+    item.ownerTenantId ||
+    item.ownerAdminEmail ||
+    item.ownerAdminId
+  );
+}
+
 function effectiveOwnerLabel(item: VmInventoryRecord): string {
-  if (!hasInventoryAssignee(item)) return 'Unassigned';
-  return item.ownerTenantName || item.ownerAdminEmail || 'Unknown owner';
+  if (!hasKnownInventoryOwner(item) && !hasInventoryAssignee(item)) return 'Unassigned';
+
+  if (item.ownerScope === 'tenant') {
+    return item.ownerTenantName || item.ownerTenantId || 'Unknown tenant';
+  }
+
+  return item.ownerAdminEmail || item.ownerAdminId || 'Unknown admin';
 }
 
 export class SuperAdminVmInventoryService {
@@ -533,7 +548,7 @@ export class SuperAdminVmInventoryService {
         ? Promise.resolve([])
         : CatalogVmModel.find(catalogQuery)
           .select(
-            '_id hostname planName ipAddress protocol status adminId tenantId tenantUserId projectId autoProvisioned attachedAt expiresAt createdAt updatedAt'
+            '_id hostname planName ipAddress protocol username password status adminId tenantId tenantUserId projectId autoProvisioned attachedAt expiresAt createdAt updatedAt'
           )
           .lean(),
       filters.resourceType && filters.resourceType !== 'external_vm'
@@ -544,6 +559,27 @@ export class SuperAdminVmInventoryService {
           )
           .lean(),
     ]);
+
+    const catalogVmIds = catalogVms.map((vm) => vm._id);
+    const catalogInstances =
+      catalogVmIds.length > 0
+        ? await CatalogVmInstanceModel.find({
+            catalogVmId: { $in: catalogVmIds },
+            status: 'active',
+          })
+            .select(
+              '_id catalogVmId instanceOrder hostname ipAddress username password protocol status createdAt updatedAt'
+            )
+            .sort({ instanceOrder: 1, createdAt: 1 })
+            .lean()
+        : [];
+    const catalogInstancesByVmId = new Map<string, typeof catalogInstances>();
+    for (const row of catalogInstances) {
+      const key = row.catalogVmId.toString();
+      const list = catalogInstancesByVmId.get(key) ?? [];
+      list.push(row);
+      catalogInstancesByVmId.set(key, list);
+    }
 
     const externalVmIds = externalVms.map((vm) => vm._id);
     const [externalUserAssignments, externalTenantAssignments] = await Promise.all([
@@ -568,6 +604,7 @@ export class SuperAdminVmInventoryService {
     const ipAddresses = [...new Set([
       ...platformVms.map((vm) => vm.ipAddress).filter((value): value is string => Boolean(value?.trim())),
       ...catalogVms.map((vm) => vm.ipAddress).filter((value): value is string => Boolean(value?.trim())),
+      ...catalogInstances.map((vm) => vm.ipAddress).filter((value): value is string => Boolean(value?.trim())),
       ...externalVms.map((vm) => vm.ipAddress).filter((value): value is string => Boolean(value?.trim())),
     ].map((ip) => normalizeIpAddress(ip)))];
 
@@ -780,7 +817,6 @@ export class SuperAdminVmInventoryService {
     }
 
     for (const vm of catalogVms) {
-      const status = normalizeCatalogStatus(vm.status);
       const originChannel: InventoryOriginChannel = vm.autoProvisioned
         ? 'catalog_auto_provision'
         : vm.tenantId
@@ -796,12 +832,22 @@ export class SuperAdminVmInventoryService {
         mappedTenantUserId ? tenantUserEmailById.get(mappedTenantUserId) : undefined,
       ].filter((value): value is string => Boolean(value));
       const mappedAssignments: VmInventoryRecord['mappedAssignments'] = [];
-      const providerMeta = vm.ipAddress ? providerMetadataByIp.get(normalizeIpAddress(vm.ipAddress)) : undefined;
-      const providerPassword = vm.ipAddress
+      const catalogVmPassword = (() => {
+        if (!vm.password) return null;
+        try {
+          return decrypt(vm.password);
+        } catch {
+          return null;
+        }
+      })();
+      const baseProviderMeta = vm.ipAddress
+        ? providerMetadataByIp.get(normalizeIpAddress(vm.ipAddress))
+        : undefined;
+      const baseProviderPassword = vm.ipAddress
         ? providerPasswordByIp.get(normalizeIpAddress(vm.ipAddress)) ?? null
         : null;
-      const catalogProviderStart = providerMeta?.providerStartDate ?? null;
-      const catalogProviderEnd = providerMeta?.providerEndDate ?? null;
+      const baseCatalogProviderStart = baseProviderMeta?.providerStartDate ?? null;
+      const baseCatalogProviderEnd = baseProviderMeta?.providerEndDate ?? null;
       if (mappedTenantUserId) {
         const username = tenantUserEmailById.get(mappedTenantUserId);
         if (username) {
@@ -809,11 +855,11 @@ export class SuperAdminVmInventoryService {
             username,
             isTenantUser: true,
             tenantName: mappedTenantId ? tenantNameById.get(mappedTenantId) : undefined,
-            planDuration: providerMeta?.planDuration ?? null,
-            vmUsername: providerMeta?.providerUsername ?? null,
-            vmPassword: providerPassword,
-            providerStartDate: catalogProviderStart,
-            providerEndDate: catalogProviderEnd,
+            planDuration: baseProviderMeta?.planDuration ?? null,
+            vmUsername: vm.username ?? baseProviderMeta?.providerUsername ?? null,
+            vmPassword: catalogVmPassword ?? baseProviderPassword,
+            providerStartDate: baseCatalogProviderStart,
+            providerEndDate: baseCatalogProviderEnd,
             startDate: null,
             endDate: null,
           });
@@ -823,37 +869,118 @@ export class SuperAdminVmInventoryService {
         ? (tenantNameById.get(mappedTenantId) ?? 'Tenant')
         : (ownerAdminId ? adminEmailById.get(ownerAdminId) ?? 'Platform owner' : 'Unassigned');
 
-      items.push({
-        inventoryId: `catalog_vm:${vm._id.toString()}`,
-        resourceType: 'catalog_vm',
-        sourceCollection: 'catalog_vms',
-        sourceId: vm._id.toString(),
-        name: vm.hostname || vm.planName,
-        ipAddress: vm.ipAddress,
-        protocol: vm.protocol,
-        status,
-        originServiceKey: 'create-vm',
-        originServiceLabel: 'VM Catalog',
-        originChannel,
-        ownerScope,
-        ownerAdminId,
-        ownerAdminEmail: ownerAdminId ? adminEmailById.get(ownerAdminId) : undefined,
-        ownerTenantId,
-        ownerTenantName: ownerTenantId ? tenantNameById.get(ownerTenantId) : undefined,
-        mappedTenantId,
-        mappedTenantName: mappedTenantId ? tenantNameById.get(mappedTenantId) : undefined,
-        mappedTenantUserId,
-        mappedTenantUserEmail: mappedTenantUserId
-          ? tenantUserEmailById.get(mappedTenantUserId)
-          : undefined,
-        mappedAssignments,
-        mappedUsers: [...new Set(mappedUsers)],
-        assignmentLocation,
-        projectId,
-        projectName: projectId ? projectNameById.get(projectId) : undefined,
-        createdAt: vm.createdAt,
-        updatedAt: vm.updatedAt,
-      });
+      const instanceRows = catalogInstancesByVmId.get(vm._id.toString()) ?? [];
+      if (instanceRows.length === 0) {
+        const status = normalizeCatalogStatus(vm.status);
+        items.push({
+          inventoryId: `catalog_vm:${vm._id.toString()}`,
+          resourceType: 'catalog_vm',
+          sourceCollection: 'catalog_vms',
+          sourceId: vm._id.toString(),
+          name: vm.hostname || vm.planName,
+          ipAddress: vm.ipAddress,
+          protocol: vm.protocol,
+          status,
+          originServiceKey: 'create-vm',
+          originServiceLabel: 'VM Catalog',
+          originChannel,
+          providerPlanDuration: baseProviderMeta?.planDuration ?? null,
+          providerUsername: vm.username ?? baseProviderMeta?.providerUsername ?? null,
+          providerPassword: catalogVmPassword ?? baseProviderPassword,
+          providerStartDate: baseCatalogProviderStart,
+          providerEndDate: baseCatalogProviderEnd,
+          ownerScope,
+          ownerAdminId,
+          ownerAdminEmail: ownerAdminId ? adminEmailById.get(ownerAdminId) : undefined,
+          ownerTenantId,
+          ownerTenantName: ownerTenantId ? tenantNameById.get(ownerTenantId) : undefined,
+          mappedTenantId,
+          mappedTenantName: mappedTenantId ? tenantNameById.get(mappedTenantId) : undefined,
+          mappedTenantUserId,
+          mappedTenantUserEmail: mappedTenantUserId
+            ? tenantUserEmailById.get(mappedTenantUserId)
+            : undefined,
+          mappedAssignments,
+          mappedUsers: [...new Set(mappedUsers)],
+          assignmentLocation,
+          projectId,
+          projectName: projectId ? projectNameById.get(projectId) : undefined,
+          createdAt: vm.createdAt,
+          updatedAt: vm.updatedAt,
+        });
+        continue;
+      }
+
+      for (const instance of instanceRows) {
+        const instanceIp = instance.ipAddress?.trim();
+        const instancePassword = (() => {
+          if (!instance.password) return null;
+          try {
+            return decrypt(instance.password);
+          } catch {
+            return null;
+          }
+        })();
+        const providerMeta = instanceIp
+          ? providerMetadataByIp.get(normalizeIpAddress(instanceIp))
+          : baseProviderMeta;
+        const providerPassword = instanceIp
+          ? providerPasswordByIp.get(normalizeIpAddress(instanceIp)) ?? null
+          : baseProviderPassword;
+        const status = instance.status === 'active'
+          ? 'active'
+          : normalizeCatalogStatus(vm.status);
+
+        items.push({
+          inventoryId: `catalog_vm:${vm._id.toString()}:${instance._id.toString()}`,
+          resourceType: 'catalog_vm',
+          sourceCollection: 'catalog_vms',
+          sourceId: vm._id.toString(),
+          name: instance.hostname || vm.hostname || `${vm.planName} #${instance.instanceOrder}`,
+          ipAddress: instance.ipAddress || vm.ipAddress,
+          protocol: instance.protocol || vm.protocol,
+          status,
+          originServiceKey: 'create-vm',
+          originServiceLabel: 'VM Catalog',
+          originChannel,
+          providerPlanDuration: providerMeta?.planDuration ?? baseProviderMeta?.planDuration ?? null,
+          providerUsername:
+            instance.username ?? vm.username ?? providerMeta?.providerUsername ?? baseProviderMeta?.providerUsername ?? null,
+          providerPassword: instancePassword ?? catalogVmPassword ?? providerPassword,
+          providerStartDate:
+            providerMeta?.providerStartDate ?? baseCatalogProviderStart,
+          providerEndDate:
+            providerMeta?.providerEndDate ?? baseCatalogProviderEnd,
+          ownerScope,
+          ownerAdminId,
+          ownerAdminEmail: ownerAdminId ? adminEmailById.get(ownerAdminId) : undefined,
+          ownerTenantId,
+          ownerTenantName: ownerTenantId ? tenantNameById.get(ownerTenantId) : undefined,
+          mappedTenantId,
+          mappedTenantName: mappedTenantId ? tenantNameById.get(mappedTenantId) : undefined,
+          mappedTenantUserId,
+          mappedTenantUserEmail: mappedTenantUserId
+            ? tenantUserEmailById.get(mappedTenantUserId)
+            : undefined,
+          mappedAssignments: mappedAssignments.map((assignment) => ({
+            ...assignment,
+            planDuration: providerMeta?.planDuration ?? assignment.planDuration ?? null,
+            vmUsername:
+              instance.username ?? vm.username ?? providerMeta?.providerUsername ?? assignment.vmUsername ?? null,
+            vmPassword: instancePassword ?? catalogVmPassword ?? providerPassword ?? assignment.vmPassword ?? null,
+            providerStartDate:
+              providerMeta?.providerStartDate ?? assignment.providerStartDate ?? null,
+            providerEndDate:
+              providerMeta?.providerEndDate ?? assignment.providerEndDate ?? null,
+          })),
+          mappedUsers: [...new Set(mappedUsers)],
+          assignmentLocation,
+          projectId,
+          projectName: projectId ? projectNameById.get(projectId) : undefined,
+          createdAt: vm.createdAt,
+          updatedAt: instance.updatedAt ?? vm.updatedAt,
+        });
+      }
     }
 
     for (const vm of externalVms) {

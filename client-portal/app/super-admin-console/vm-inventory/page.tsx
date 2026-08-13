@@ -90,13 +90,17 @@ type ConfirmDialogState =
     }
   | null;
 
-function OwnerChip({ scope }: { scope: InventoryOwnerScope }) {
+function OwnerChip({ scope, ownerEmail }: { scope: InventoryOwnerScope; ownerEmail?: string }) {
   const tone =
     scope === 'tenant'
       ? 'border-indigo-200 bg-indigo-50 text-indigo-700'
       : 'border-sky-200 bg-sky-50 text-sky-700';
 
-  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}>{scope}</span>;
+  const normalizedEmail = ownerEmail?.trim().toLowerCase() ?? '';
+  const isSuperAdminAccount = normalizedEmail === 'superadmin@yourdomain.com';
+  const label = scope === 'tenant' ? 'tenant' : isSuperAdminAccount ? 'superadmin' : 'admin';
+
+  return <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${tone}`}>{label}</span>;
 }
 
 function formatDate(value?: string | Date | null): string {
@@ -111,6 +115,15 @@ function hasInventoryAssignee(item: SuperAdminVmInventoryItem): boolean {
     item.mappedAssignments.length > 0 ||
     item.mappedUsers.length > 0 ||
     Boolean(item.mappedTenantUserId || item.mappedTenantUserEmail)
+  );
+}
+
+function hasKnownInventoryOwner(item: SuperAdminVmInventoryItem): boolean {
+  return Boolean(
+    item.ownerTenantName ||
+    item.ownerTenantId ||
+    item.ownerAdminEmail ||
+    item.ownerAdminId
   );
 }
 
@@ -287,7 +300,14 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       current.editableExternalVmId = item.sourceId;
     }
 
-    if (item.resourceType === 'external_vm' && !current.providerDetails) {
+    if (
+      !current.providerDetails &&
+      (item.providerUsername ||
+        item.providerPassword ||
+        item.providerStartDate ||
+        item.providerEndDate ||
+        item.providerPlanDuration)
+    ) {
       current.providerDetails = {
         username: item.providerUsername?.trim() || item.name,
         isTenantUser: false,
@@ -538,9 +558,9 @@ function InventoryTable(props: {
                     </td>
                     <td className="px-4 py-3.5 text-xs text-gray-700">{item.originServiceLabel}</td>
                     <td className="px-4 py-3.5 text-xs">
-                      {hasInventoryAssignee(item) ? (
+                      {hasKnownInventoryOwner(item) ? (
                         <>
-                          <OwnerChip scope={item.ownerScope} />
+                          <OwnerChip scope={item.ownerScope} ownerEmail={item.ownerAdminEmail} />
                           <p className="mt-1 text-gray-700">{item.ownerTenantName || item.ownerAdminEmail || 'Unknown owner'}</p>
                         </>
                       ) : (
