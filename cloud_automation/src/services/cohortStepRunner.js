@@ -71,7 +71,7 @@ const runWithActiveCohort = async (requestId, stepKey, runFn, options = {}) => {
       cohort?.id &&
       (result?.failed === true ||
         (result?.complete === false &&
-          Number(result?.batchCreated || 0) === 0 &&
+          Number(result?.batchCreated || result?.rolesAssigned || 0) === 0 &&
           Array.isArray(result?.failures) &&
           result.failures.length > 0))
     ) {
@@ -88,10 +88,15 @@ const runWithActiveCohort = async (requestId, stepKey, runFn, options = {}) => {
     return withCohortMeta(result, cohort);
   } catch (error) {
     if (cohort?.id) {
-      try {
-        await markCohortFailed(cohort.id, error?.message || 'Step failed');
-      } catch {
-        // ignore secondary failure
+      const statusCode = Number(error?.statusCode ?? error?.status);
+      // Transient/server errors (timeouts, 5xx): keep wave in_progress so the
+      // UI can auto-retry without manual "Retry step". Hard 4xx stops the wave.
+      if (Number.isFinite(statusCode) && statusCode >= 400 && statusCode < 500) {
+        try {
+          await markCohortFailed(cohort.id, error?.message || 'Step failed');
+        } catch {
+          // ignore secondary failure
+        }
       }
     }
     throw error;

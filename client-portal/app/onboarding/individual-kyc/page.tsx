@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 
 export default function IndividualKycPage() {
-  const { user, isLoading, isAuthenticated } = useAuth();
+  const { user, isLoading, isAuthenticated, logout } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
@@ -22,6 +22,11 @@ export default function IndividualKycPage() {
 
   if (isLoading || !isAuthenticated || !user) {
     return <div className="min-h-screen bg-[#0a0f1e] flex items-center justify-center text-white">Loading...</div>;
+  }
+
+  async function handleSignOut() {
+    await logout();
+    router.replace('/login');
   }
 
   return (
@@ -44,9 +49,13 @@ export default function IndividualKycPage() {
           <Link href="/dashboard/user" className="rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white">
             Continue
           </Link>
-          <Link href="/login" className="rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-200">
+          <button
+            type="button"
+            onClick={handleSignOut}
+            className="rounded-lg border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:border-gray-500 hover:text-white transition"
+          >
             Back to sign in
-          </Link>
+          </button>
         </div>
       </div>
     </div>

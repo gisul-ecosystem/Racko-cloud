@@ -7,10 +7,12 @@ export type ServiceKey =
   | 'azure'
   | 'aws'
   | 'gcp'
+  | 'cloud-labs'
   | 'docs'
   | 'machine-manager';
 export type ServiceConfigStatus = 'active' | 'suspended';
 
+/** @deprecated Prefer fetchServiceCatalog — kept as offline fallback labels only. */
 export const PLATFORM_SERVICE_CATALOG: Array<{
   key: ServiceKey;
   name: string;
@@ -45,6 +47,11 @@ export const PLATFORM_SERVICE_CATALOG: Array<{
     key: 'aws',
     name: 'AWS Services',
     description: 'AWS access management, provisioning, and lab environments.',
+  },
+  {
+    key: 'cloud-labs',
+    name: 'Cloud Labs',
+    description: 'Cloud lab environments and training workspaces',
   },
   // GCP is temporarily hidden from UI until automation is ready (see lib/hiddenServices.ts).
   {
@@ -109,11 +116,103 @@ export interface TenantAdmin {
   updatedAt?: string;
 }
 
+export interface RevenueByService {
+  serviceKey: string;
+  amount: number;
+  percentage: number;
+}
+
+export interface TenantSignup {
+  month: string;
+  count: number;
+}
+
+export interface TopTenantByRevenue {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  revenue: number;
+  vmCount: number;
+}
+
+export interface TopTenantByResources {
+  tenantId: string;
+  tenantName: string;
+  tenantSlug: string;
+  vmCount: number;
+  totalVCpu: number;
+  totalMemoryGb: number;
+  totalDiskGb: number;
+}
+
+export interface PendingRequest {
+  id: string;
+  type: 'webyne_vm' | 'dedicated_server' | 'vm_order';
+  tenantName: string;
+  status: string;
+  amount?: number;
+  createdAt: string;
+}
+
+export interface VmExpiringItem {
+  vmId: string;
+  vmName: string;
+  tenantName: string;
+  provider: string;
+  expiryDate: string;
+  daysUntilExpiry: number;
+}
+
 export interface SuperAdminOverview {
+  // Existing metrics
   totalTenants: number;
   tenantsByStatus: Record<TenantStatus, number>;
   totalTenantAdmins: number;
-  totalTenantUsers: number;
+
+  // Revenue metrics
+  totalPlatformRevenue: number;
+  revenueThisMonth: number;
+  revenuePreviousMonth: number;
+  revenueChangePct: number;
+  revenueByService: RevenueByService[];
+
+  // B2B vs B2C split
+  b2bRevenue: number;
+  b2cRevenue: number;
+  b2bPercentage: number;
+  b2cPercentage: number;
+
+  // Outstanding/Pending payments
+  pendingPaymentOrders: number;
+  pendingPaymentAmount: number;
+
+  // Tenant metrics
+  newTenantSignups: TenantSignup[];
+  activeTenantsLast30Days: number;
+
+  // Infrastructure metrics
+  totalActiveVms: number;
+  totalCatalogVmRequests: number;
+  totalExternalVms: number;
+  totalVmsExpiringSoon: number;
+
+  // Platform users
+  managedUsers: number;
+
+  // Pending requests
+  pendingDedicatedServers: number;
+  pendingRequests: PendingRequest[];
+
+  // Top tenants
+  topTenantsByRevenue: TopTenantByRevenue[];
+  topTenantsByResources: TopTenantByResources[];
+
+  // VMs expiring soon
+  vmsExpiringSoon: VmExpiringItem[];
+
+  // Metadata
+  generatedAt: string;
+  currency: string;
 }
 
 export interface VmManagementLimits {

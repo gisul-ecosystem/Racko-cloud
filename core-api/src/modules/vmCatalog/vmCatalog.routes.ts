@@ -69,6 +69,14 @@ router.delete(
 );
 
 /** Admin: overview + my VMs */
+router.get(
+  '/software-options',
+  requireRole('admin', 'super_admin'),
+  (req, res, next) => {
+    vmCatalogController.listSoftwareOptions(req, res, next);
+  }
+);
+
 router.get('/overview', requireRole('admin', 'super_admin'), (req, res, next) => {
   vmCatalogController.overview(req, res, next);
 });
@@ -102,6 +110,16 @@ router.post(
   validateRequest(createCatalogVmRequestSchema),
   (req, res, next) => {
     vmCatalogController.createRequest(req, res, next);
+  }
+);
+
+/** Super-admin: submit VM catalog request without wallet debit */
+router.post(
+  '/super-admin/requests',
+  requireRole('super_admin'),
+  validateRequest(createCatalogVmRequestSchema),
+  (req, res, next) => {
+    vmCatalogController.createSuperAdminRequest(req, res, next);
   }
 );
 

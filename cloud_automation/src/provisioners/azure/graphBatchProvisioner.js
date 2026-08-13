@@ -6,6 +6,42 @@ const MAX_ATTEMPTS = 5;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+const GRAPH_GROUP_PERMISSION_HINT =
+  'Grant Microsoft Graph application permissions Group.ReadWrite.All and GroupMember.ReadWrite.All with admin consent (Azure Portal → App registrations → API permissions).';
+
+const isGraphAuthorizationDenied = (error) => {
+  const statusCode = Number(error?.statusCode || error?.status);
+  const code = String(error?.code || '').toLowerCase();
+  return statusCode === 403 || code === 'authorization_requestdenied';
+};
+
+const toGraphGroupError = (error, action) => {
+  if (error instanceof AppError) {
+    return error;
+  }
+
+  if (isGraphAuthorizationDenied(error)) {
+    return new AppError(
+      `Microsoft Graph denied ${action} for shared lab group access. ${GRAPH_GROUP_PERMISSION_HINT} Alternatively, use Per-User resource groups for large labs.`,
+      403
+    );
+  }
+
+  const statusCode = Number(error?.statusCode || error?.status);
+  if (Number.isInteger(statusCode) && statusCode >= 400 && statusCode <= 599) {
+    let message = error?.message || `Microsoft Graph ${action} failed.`;
+    try {
+      const parsed = JSON.parse(error?.body || '{}');
+      if (parsed?.message) message = parsed.message;
+    } catch {
+      // ignore
+    }
+    return new AppError(message, statusCode);
+  }
+
+  return new AppError(error?.message || `Microsoft Graph ${action} failed.`, 502);
+};
+
 const chunkArray = (items, size = GRAPH_BATCH_SIZE) => {
   const chunks = [];
   const array = Array.isArray(items) ? items : [];
@@ -50,9 +86,12 @@ const sendBatch = async (graphClient, requests) => {
   return graphClient.api('/$batch').post({ requests });
 };
 
-const executeBatchWithRetry = async (graphClient, requests, context) => {
+const executeBatchWithRetry = async (graphClient, requests, context, options = {}) => {
   let pendingRequests = requests;
   let lastError;
+  const successStatuses = new Set(
+    Array.isArray(options.successStatuses) ? options.successStatuses : []
+  );
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS && pendingRequests.length > 0; attempt += 1) {
     try {
@@ -71,7 +110,10 @@ const executeBatchWithRetry = async (graphClient, requests, context) => {
           continue;
         }
 
-        if (response.status >= 200 && response.status < 300) {
+        if (
+          (response.status >= 200 && response.status < 300) ||
+          successStatuses.has(Number(response.status))
+        ) {
           results.push({
             request,
             response
@@ -81,6 +123,16 @@ const executeBatchWithRetry = async (graphClient, requests, context) => {
 
         if (isRetryableError(response)) {
           failedRequests.push(request);
+          continue;
+        }
+
+        // Soft-fail non-retryable item errors so one bad user doesn't abort the lab delete.
+        if (options.continueOnItemError) {
+          results.push({
+            request,
+            response,
+            softFailed: true
+          });
           continue;
         }
 
@@ -308,13 +360,135 @@ const batchDisableUsers = async (graphClient, azureUserIds, context = 'bulk disa
   return { disabled, failed };
 };
 
+/**
+ * Delete Entra users via Graph /$batch (20/request). Much faster and gentler
+ * than one DELETE per user when tearing down large labs (52–500 users).
+ */
+const batchDeleteUsers = async (graphClient, azureUserIds, context = 'bulk delete users') => {
+  const uniqueIds = [...new Set((azureUserIds || []).filter(Boolean).map(String))];
+  const deleted = [];
+  const failed = [];
+
+  if (!uniqueIds.length) {
+    return { deleted, failed };
+  }
+
+  const chunks = chunkArray(uniqueIds, GRAPH_BATCH_SIZE);
+
+  for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    const chunk = chunks[chunkIndex];
+    const batchRequests = chunk.map((azureUserId) => ({
+      id: String(azureUserId),
+      method: 'DELETE',
+      url: `/users/${encodeURIComponent(azureUserId)}`
+    }));
+
+    try {
+      const batchResult = await executeBatchWithRetry(graphClient, batchRequests, context, {
+        successStatuses: [404],
+        continueOnItemError: true
+      });
+      const responses = Array.isArray(batchResult?.responses) ? batchResult.responses : [];
+      const responseById = new Map(responses.map((response) => [String(response.id), response]));
+      // Prefer per-request results (includes soft-failed items).
+      const resultById = new Map(
+        (batchResult?.results || []).map((entry) => [String(entry.request.id), entry])
+      );
+
+      for (const azureUserId of chunk) {
+        const entry = resultById.get(String(azureUserId));
+        const response = entry?.response || responseById.get(String(azureUserId));
+        const status = Number(response?.status || 0);
+
+        // 204/200 = deleted; 404 = already gone — both OK for teardown.
+        if ((status >= 200 && status < 300) || status === 404) {
+          deleted.push(azureUserId);
+          continue;
+        }
+
+        failed.push({
+          azureUserId,
+          status: status || null,
+          error:
+            response?.body?.error?.message ||
+            response?.body?.message ||
+            'Failed to delete Azure user'
+        });
+      }
+    } catch (error) {
+      for (const azureUserId of chunk) {
+        failed.push({
+          azureUserId,
+          status: Number(error?.statusCode || error?.status || 502),
+          error: error?.message || 'Graph batch delete failed'
+        });
+      }
+    }
+
+    // Pace batches so Graph throttling stays rare on 500-user deletes.
+    if (chunkIndex < chunks.length - 1) {
+      await sleep(400);
+    }
+  }
+
+  return { deleted, failed };
+};
+
+const escapeODataString = (value) => String(value || '').replace(/'/g, "''");
+
+const sanitizeMailNickname = (value) =>
+  String(value || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+    .slice(0, 64);
+
+/**
+ * One Entra security group per lab role — keeps shared-RG RBAC under Azure's
+ * 400 role-assignment limit (assign role to group once, add users via Graph).
+ */
+const ensureLabRoleSecurityGroup = async (graphClient, requestId, roleName) => {
+  const safeRole = String(roleName || 'role')
+    .replace(/[^a-zA-Z0-9]+/g, '-')
+    .slice(0, 48);
+  const displayName = `Racko-Lab-${requestId}-${safeRole}`.slice(0, 256);
+  const mailNickname = sanitizeMailNickname(`rackolab${requestId}${safeRole}`) || `rackolab${requestId}`;
+
+  try {
+    const filter = encodeURIComponent(`displayName eq '${escapeODataString(displayName)}'`);
+    const search = await graphClient
+      .api(`/groups?$filter=${filter}&$select=id,displayName`)
+      .get();
+
+    if (Array.isArray(search?.value) && search.value[0]?.id) {
+      return search.value[0].id;
+    }
+
+    const created = await graphClient.api('/groups').post({
+      displayName,
+      mailEnabled: false,
+      mailNickname,
+      securityEnabled: true,
+      groupTypes: []
+    });
+
+    return created.id;
+  } catch (error) {
+    throw toGraphGroupError(error, 'lab security group create/list');
+  }
+};
+
 module.exports = {
   GRAPH_BATCH_SIZE,
   batchAddUsersToGroups,
   batchPatchUsers,
   batchEnableUsers,
   batchDisableUsers,
+  batchDeleteUsers,
   chunkArray,
   executeBatchWithRetry,
-  isRetryableError
+  ensureLabRoleSecurityGroup,
+  isGraphAuthorizationDenied,
+  toGraphGroupError,
+  isRetryableError,
+  getRetryDelayMs
 };

@@ -16,10 +16,46 @@ function normalizeHost(hostname: string): string {
   return hostname.toLowerCase().trim();
 }
 
+/** Built-in Racko platform hosts (manage portal + metadata stay Racko-branded). */
+const DEFAULT_PLATFORM_HOSTS = [
+  'racko.ai',
+  'www.racko.ai',
+  'dev.racko.ai',
+  'qa.racko.ai',
+  'uat.racko.ai',
+  'admin.racko.ai',
+] as const;
+
+function parsePlatformHostsFromEnv(): string[] {
+  const hosts = new Set<string>();
+
+  const single = process.env['NEXT_PUBLIC_PLATFORM_DOMAIN']?.trim();
+  if (single) hosts.add(normalizeHost(single));
+
+  const list = process.env['NEXT_PUBLIC_PLATFORM_DOMAINS']?.trim();
+  if (list) {
+    for (const entry of list.split(',')) {
+      const normalized = normalizeHost(entry);
+      if (normalized) hosts.add(normalized);
+    }
+  }
+
+  return [...hosts];
+}
+
+/** All platform hostnames (env + built-in defaults). */
+export function getPlatformHosts(): readonly string[] {
+  const fromEnv = parsePlatformHostsFromEnv();
+  if (fromEnv.length > 0) {
+    return [...new Set([...DEFAULT_PLATFORM_HOSTS, ...fromEnv])];
+  }
+  return DEFAULT_PLATFORM_HOSTS;
+}
+
 /** Super-admin / platform hostname (e.g. admin.racko.local). Set in .env.local. */
 export function getPlatformDomain(): string | undefined {
-  const raw = process.env['NEXT_PUBLIC_PLATFORM_DOMAIN']?.trim();
-  return raw ? normalizeHost(raw) : undefined;
+  const fromEnv = parsePlatformHostsFromEnv();
+  return fromEnv[0];
 }
 
 /**
@@ -84,15 +120,14 @@ export function isLocalDevHost(hostname: string): boolean {
 }
 
 export function isPlatformHost(hostname?: string): boolean {
-  const platform = getPlatformDomain();
-  if (!platform) return false;
   const host =
     hostname !== undefined
       ? normalizeHost(hostname)
       : typeof window !== 'undefined'
         ? normalizeHost(window.location.hostname)
         : '';
-  return host === platform;
+  if (!host) return false;
+  return getPlatformHosts().includes(host);
 }
 
 /**

@@ -1,6 +1,5 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import type { AdminServiceKey } from '../constants/adminServiceCatalog';
-import { ADMIN_SERVICE_CATALOG } from '../constants/adminServiceCatalog';
 
 export type ProjectStatus = 'active' | 'archived';
 export type ProjectOwnerType = 'org' | 'tenant';
@@ -18,6 +17,8 @@ export interface IProject extends Document {
   sequenceNumber: number;
   clientName: string;
   description?: string;
+  startDate?: Date;
+  endDate?: Date;
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   /** Platform User or TenantUser id depending on creator. */
@@ -43,9 +44,10 @@ const projectSchema = new Schema<IProject>(
     sequenceNumber: { type: Number, required: true, min: 1 },
     clientName: { type: String, required: true, trim: true, maxlength: 200 },
     description: { type: String, trim: true, maxlength: 1000 },
+    startDate: { type: Date },
+    endDate: { type: Date },
     enabledServices: {
       type: [String],
-      enum: ADMIN_SERVICE_CATALOG,
       default: [],
     },
     status: {

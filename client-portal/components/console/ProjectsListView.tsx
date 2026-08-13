@@ -31,6 +31,7 @@ import {
   fetchProjects,
   previewProjectName,
   PROJECT_SERVICE_LABELS,
+  resolveProjectServiceLabel,
   type OrgProject,
   type ProjectNamePreview,
   type ProjectReportByProjectRow,
@@ -43,6 +44,7 @@ import {
   fetchTenantProjects,
   previewTenantProjectName,
 } from '@/lib/tenantProjectsApi';
+import { fetchTenantServiceCatalog } from '@/lib/tenantPortalApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { PROJECT_SERVICE_META } from '@/lib/projectServiceMeta';
 import {
@@ -69,7 +71,14 @@ interface CreateProjectInput {
   clientName: string;
   name?: string;
   description?: string;
+  startDate?: string;
+  endDate?: string;
   enabledServices: AdminServiceKey[];
+}
+
+interface AssignableServiceOption {
+  key: AdminServiceKey;
+  label: string;
 }
 
 interface ProjectsPortalAdapter {
@@ -78,7 +87,7 @@ interface ProjectsPortalAdapter {
   costReport: () => Promise<ProjectReportByProjectRow[]>;
   namePreview: () => Promise<ProjectNamePreview>;
   create: (input: CreateProjectInput) => Promise<OrgProject>;
-  assignableServices: () => Promise<AdminServiceKey[]>;
+  assignableServices: () => Promise<AssignableServiceOption[]>;
   projectHref: (id: string) => string;
   reportsHref: string;
 }
@@ -97,9 +106,13 @@ function orgAdapter(): ProjectsPortalAdapter {
           (service) =>
             service.status === 'active'
             && service.serviceKey !== 'docs'
+            && service.serviceKey !== 'machine-manager'
             && !isServiceHiddenFromUi(service.serviceKey)
         )
-        .map((service) => service.serviceKey);
+        .map((service) => ({
+          key: service.serviceKey,
+          label: service.label || PROJECT_SERVICE_LABELS[service.serviceKey] || service.serviceKey,
+        }));
     },
     projectHref: (id) => `/console/projects/${id}`,
     reportsHref: '/console/projects/reports',
@@ -114,8 +127,22 @@ function tenantAdapter(): ProjectsPortalAdapter {
     namePreview: previewTenantProjectName,
     create: createTenantProject,
     assignableServices: async () => {
-      const services = await fetchTenantEligibleProjectServices();
-      return services.filter((key) => key !== 'docs' && !isServiceHiddenFromUi(key));
+      const [services, catalog] = await Promise.all([
+        fetchTenantEligibleProjectServices(),
+        fetchTenantServiceCatalog().catch(() => [] as Array<{ key: string; label: string }>),
+      ]);
+      const labels = Object.fromEntries(catalog.map((c) => [c.key, c.label]));
+      return services
+        .filter(
+          (key) =>
+            key !== 'docs'
+            && key !== 'machine-manager'
+            && !isServiceHiddenFromUi(key)
+        )
+        .map((key) => ({
+          key,
+          label: labels[key] || PROJECT_SERVICE_LABELS[key] || key,
+        }));
     },
     projectHref: (id) => tenantConsole.project(id),
     reportsHref: tenantConsole.projectsReports,
@@ -178,10 +205,26 @@ export function ProjectsListView({
   const [previewName, setPreviewName] = useState('');
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clientMode, setClientMode] = useState<'select' | 'new'>('select');
   const [description, setDescription] = useState('');
-  const [availableServices, setAvailableServices] = useState<AdminServiceKey[]>([]);
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
+  const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
+
+  const existingClients = useMemo(
+    () => [...new Set(projects.map((p) => p.clientName).filter(Boolean))],
+    [projects]
+  );
+
+  const serviceLabel = useCallback(
+    (key: string) => {
+      const fromAvailable = availableServices.find((s) => s.key === key)?.label;
+      return resolveProjectServiceLabel(key, fromAvailable);
+    },
+    [availableServices]
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -209,6 +252,21 @@ export function ProjectsListView({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Auto-open the create modal when navigated here with ?create=1
+  // (e.g. from ProjectSelect "Create new project" link on service pages).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('create') === '1') {
+      void openCreateModal();
+      // Remove the query param so a refresh doesn't re-open the modal.
+      const cleanUrl = window.location.pathname;
+      window.history.replaceState(null, '', cleanUrl);
+    }
+  // openCreateModal is stable (defined outside render), intentionally omitted from deps.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const activeProjects = projects.filter((project) => project.status === 'active');
   const totalSpend = costRows.reduce((sum, row) => sum + row.totalDebit, 0);
@@ -275,7 +333,10 @@ export function ProjectsListView({
     setModalError(null);
     setCreatedProject(null);
     setClientName('');
+    setClientMode('select');
     setDescription('');
+    setStartDate('');
+    setEndDate('');
     setSelectedServices([]);
     try {
       const [preview, services] = await Promise.all([
@@ -300,7 +361,7 @@ export function ProjectsListView({
 
   function continueToServices(event: React.FormEvent) {
     event.preventDefault();
-    if (!projectName.trim() || !clientName.trim()) return;
+    if (!projectName.trim() || !clientName.trim() || !startDate || !endDate) return;
     setModalError(null);
     setModalStep('services');
   }
@@ -325,6 +386,8 @@ export function ProjectsListView({
         clientName: clientName.trim(),
         name: projectName.trim() !== previewName ? projectName.trim() : undefined,
         description: description.trim() || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
         enabledServices: selectedServices,
       });
       let detailed = created;
@@ -546,7 +609,7 @@ export function ProjectsListView({
                                   className="inline-flex items-center gap-1 rounded-md border border-gray-200 bg-white px-2 py-1 text-[11px] text-gray-600"
                                 >
                                   <Server className="h-3 w-3 text-gray-400" />
-                                  {PROJECT_SERVICE_LABELS[service] || service}
+                                  {serviceLabel(service)}
                                   {count > 0 ? ` (${count})` : ''}
                                 </span>
                               );
@@ -734,7 +797,7 @@ export function ProjectsListView({
                                     : 'bg-violet-50 text-violet-700'
                               }`}
                             >
-                              {PROJECT_SERVICE_LABELS[service] || service}
+                              {serviceLabel(service)}
                             </span>
                           ))}
                           {extraServices > 0 && (
@@ -999,20 +1062,38 @@ export function ProjectsListView({
                         <label className="mb-1.5 block text-xs font-semibold text-gray-700">
                           Client Name <span className="text-red-500">*</span>
                         </label>
-                        <input
-                          value={clientName}
-                          onChange={(event) => setClientName(event.target.value)}
-                          required
-                          placeholder="e.g. Acme Corp"
+                        <select
                           className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
                           style={accentFocus}
-                          onFocus={(e) => {
-                            e.currentTarget.style.borderColor = accent;
+                          value={clientMode === 'new' ? '__new__' : clientName}
+                          onChange={(e) => {
+                            if (e.target.value === '__new__') { setClientMode('new'); setClientName(''); }
+                            else { setClientMode('select'); setClientName(e.target.value); }
                           }}
-                          onBlur={(e) => {
-                            e.currentTarget.style.borderColor = '';
-                          }}
-                        />
+                          onFocus={(e) => { e.currentTarget.style.borderColor = accent; }}
+                          onBlur={(e) => { e.currentTarget.style.borderColor = ''; }}
+                        >
+                          <option value="">Select a client…</option>
+                          {existingClients.map((c) => <option key={c} value={c}>{c}</option>)}
+                          <option disabled>────────────────</option>
+                          <option value="__new__">✚ Create new client</option>
+                        </select>
+                        {clientMode === 'new' && (
+                          <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
+                            <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
+                            <input
+                              value={clientName}
+                              onChange={(event) => setClientName(event.target.value)}
+                              required
+                              placeholder="e.g. Acme Corp"
+                              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none transition focus:ring-2"
+                              style={accentFocus}
+                              onFocus={(e) => { e.currentTarget.style.borderColor = accent; }}
+                              onBlur={(e) => { e.currentTarget.style.borderColor = ''; }}
+                              autoFocus
+                            />
+                          </div>
+                        )}
                         <p className="mt-1 text-[11px] text-gray-400">
                           The client this project belongs to.
                         </p>
@@ -1031,7 +1112,7 @@ export function ProjectsListView({
                       <textarea
                         value={description}
                         onChange={(event) => setDescription(event.target.value.slice(0, 500))}
-                        rows={4}
+                        rows={3}
                         placeholder="Describe the purpose and workloads for this project."
                         className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
                         style={accentFocus}
@@ -1042,6 +1123,49 @@ export function ProjectsListView({
                           e.currentTarget.style.borderColor = '';
                         }}
                       />
+                    </div>
+
+                    <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                          Start Date <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={startDate}
+                          onChange={(e) => setStartDate(e.target.value)}
+                          max={endDate || undefined}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">When does this project start?</p>
+                      </div>
+                      <div>
+                        <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                          End Date <span className="text-red-500">*</span>
+                        </label>
+                        <input
+                          type="date"
+                          value={endDate}
+                          onChange={(e) => setEndDate(e.target.value)}
+                          min={startDate || undefined}
+                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                          style={accentFocus}
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
+                          }}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
+                        />
+                        <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1056,7 +1180,7 @@ export function ProjectsListView({
                   </button>
                   <button
                     type="submit"
-                    disabled={!projectName.trim() || !clientName.trim()}
+                    disabled={!projectName.trim() || !clientName.trim() || !startDate || !endDate}
                     className="inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
                     style={tenantAccentButton(accent)}
                   >
@@ -1120,7 +1244,8 @@ export function ProjectsListView({
                       </div>
                     ) : (
                       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                        {availableServices.map((serviceKey) => {
+                        {availableServices.map((option) => {
+                          const serviceKey = option.key;
                           const meta = PROJECT_SERVICE_META[serviceKey];
                           const selected = selectedServices.includes(serviceKey);
                           return (
@@ -1136,9 +1261,9 @@ export function ProjectsListView({
                               style={selected ? tenantAccentSelectedBox(accent) : undefined}
                             >
                               <span
-                                className={`flex h-8 w-8 items-center justify-center rounded-lg ${meta.iconBg} ${meta.iconColor}`}
+                                className={`flex h-8 w-8 items-center justify-center rounded-lg ${meta?.iconBg ?? 'bg-gray-100'} ${meta?.iconColor ?? 'text-gray-600'}`}
                               >
-                                {meta.icon}
+                                {meta?.icon}
                               </span>
                               {selected && (
                                 <span
@@ -1149,10 +1274,10 @@ export function ProjectsListView({
                                 </span>
                               )}
                               <span className="mt-2 text-xs font-semibold text-gray-900">
-                                {meta.label}
+                                {option.label || meta?.label || serviceKey}
                               </span>
                               <span className="mt-1 line-clamp-2 text-[11px] leading-4 text-gray-500">
-                                {meta.description}
+                                {meta?.description || ''}
                               </span>
                             </button>
                           );

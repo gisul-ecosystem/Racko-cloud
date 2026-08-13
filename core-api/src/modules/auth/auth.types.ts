@@ -1,9 +1,18 @@
 import type { UserRole, AccountType, OnboardingStatus } from '../../types';
 
+export type CheckEmailInput = { email: string };
+
 export interface RegisterDto {
   email: string;
   password: string;
   accountType?: AccountType;
+  name?: string;
+  phone?: string;
+}
+
+export interface CheckEmailResult {
+  valid: boolean;
+  reason?: string;
 }
 
 export interface LoginDto {

@@ -5,13 +5,15 @@ import {
   Cloud,
   ClipboardList,
   Calculator,
-  FileSpreadsheet,
+  Database,
   IndianRupee,
   Monitor,
   MonitorCheck,
+  Plus,
   Palette,
   Server,
   Shield,
+  Upload,
   Users,
 } from 'lucide-react';
 import { ServiceTileCard } from '@/components/super-admin-console/ServiceTileCard';
@@ -32,7 +34,8 @@ type ServiceTile = {
   anyOf?: string[];
 };
 
-const services: ServiceTile[] = [
+/** Product catalog services only — matches Mongo `service_catalog` kind=product. */
+const productServices: ServiceTile[] = [
   {
     id: 'vm-management',
     name: 'VM Management',
@@ -42,20 +45,12 @@ const services: ServiceTile[] = [
     anyOf: ['vm_management.manage'],
   },
   {
-    id: 'vm-pricing-calculator',
-    name: 'VM Pricing Calculator',
-    href: '/super-admin-console/vm-pricing-calculator',
-    icon: Calculator,
-    description: 'Compare live AWS, Azure, OCI and GCP list prices for a VM size',
-    anyOf: ['pricing.calculator.read', 'pricing.webyne.read'],
-  },
-  {
-    id: 'external-vm-pricing',
-    name: 'External VM Pricing and Configuration',
-    href: '/super-admin-console/external-vm-pricing',
-    icon: IndianRupee,
-    description: 'Override catalog plan prices from the external provider',
-    anyOf: ['pricing.webyne.read', 'pricing.webyne.write'],
+    id: 'create-vm',
+    name: 'VM Catalog',
+    href: '/super-admin-console/create-vm',
+    icon: Plus,
+    description: 'Create VM catalog requests from the Racko.ai services hub without wallet debit',
+    anyOf: ['vm_catalog.superadmin'],
   },
   {
     id: 'webyne-vm-requests',
@@ -91,6 +86,26 @@ const services: ServiceTile[] = [
     description: 'Oversee AWS lab requests, manage users, budgets and cleanup',
     anyOf: ['aws.manage'],
   },
+];
+
+/** Platform / ops tools — not sold product entitlements (utilities & admin). */
+const platformTools: ServiceTile[] = [
+  {
+    id: 'vm-pricing-calculator',
+    name: 'VM Pricing Calculator',
+    href: '/super-admin-console/vm-pricing-calculator',
+    icon: Calculator,
+    description: 'Compare live AWS, Azure, OCI and GCP list prices for a VM size',
+    anyOf: ['pricing.calculator.read', 'pricing.webyne.read'],
+  },
+  {
+    id: 'external-vm-pricing',
+    name: 'External VM Pricing and Configuration',
+    href: '/super-admin-console/external-vm-pricing',
+    icon: IndianRupee,
+    description: 'Override catalog plan prices from the external provider',
+    anyOf: ['pricing.webyne.read', 'pricing.webyne.write'],
+  },
   {
     id: 'machine-manager',
     name: 'Machine Manager',
@@ -100,12 +115,21 @@ const services: ServiceTile[] = [
     anyOf: ['machine_manager.manage'],
   },
   {
-    id: 'vm-host-leases',
-    name: 'Vm Inventory',
-    href: '/super-admin-console/vm-host-leases',
-    icon: FileSpreadsheet,
-    description: 'Upload Excel inventory of leased VM hosts and track expiry dates',
-    anyOf: ['vm_host_leases.manage'],
+    id: 'vm-inventory',
+    name: 'VM Inventory',
+    href: '/super-admin-console/vm-inventory',
+    icon: Database,
+    description: 'Unified inventory across VPS, VM Catalog, and imported servers',
+    anyOf: ['vm_inventory.read'],
+  },
+  {
+    id: 'elastic-servers',
+    name: 'Server Import & Assign',
+    href: '/super-admin-console/elastic-servers',
+    icon: Upload,
+    description:
+      'Bulk import external servers and assign to tenants/users with schedules',
+    anyOf: ['elastic_servers.superadmin'],
   },
   {
     id: 'white-labelling',
@@ -134,20 +158,68 @@ const services: ServiceTile[] = [
   },
 ];
 
+function filterByRbac(
+  tiles: ServiceTile[],
+  isSa: boolean,
+  rbac: ReturnType<typeof useRbacPermissions>
+): ServiceTile[] {
+  if (isSa) return tiles;
+  return tiles.filter((s) => {
+    if (!s.anyOf || s.anyOf.length === 0) return false;
+    return s.anyOf.some((key) => hasPermission(rbac, key));
+  });
+}
+
+function TileGrid({
+  tiles,
+  webynePendingCount,
+  dedicatedPendingCount,
+}: {
+  tiles: ServiceTile[];
+  webynePendingCount: number;
+  dedicatedPendingCount: number;
+}) {
+  return (
+    <div className="flex flex-wrap justify-center gap-6">
+      {tiles.map((service) => {
+        const badgeCount =
+          service.badgeKey === 'webyne'
+            ? webynePendingCount
+            : service.badgeKey === 'dedicated'
+              ? dedicatedPendingCount
+              : 0;
+
+        return (
+          <ServiceTileCard
+            key={service.id}
+            href={service.href}
+            name={service.name}
+            description={service.description}
+            icon={service.icon}
+            badgeCount={badgeCount}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
 export default function SuperAdminConsolePage() {
   const { user } = useAuth();
   const rbac = useRbacPermissions();
   const [webynePendingCount, setWebynePendingCount] = useState(0);
   const [dedicatedPendingCount, setDedicatedPendingCount] = useState(0);
 
-  const visibleServices = useMemo(() => {
-    const isSa = user?.role === 'super_admin' || rbac?.isSuperAdmin;
-    if (isSa) return services;
-    return services.filter((s) => {
-      if (!s.anyOf || s.anyOf.length === 0) return false;
-      return s.anyOf.some((key) => hasPermission(rbac, key));
-    });
-  }, [user?.role, rbac]);
+  const isSa = user?.role === 'super_admin' || rbac?.isSuperAdmin;
+
+  const visibleProducts = useMemo(
+    () => filterByRbac(productServices, Boolean(isSa), rbac),
+    [isSa, rbac]
+  );
+  const visiblePlatform = useMemo(
+    () => filterByRbac(platformTools, Boolean(isSa), rbac),
+    [isSa, rbac]
+  );
 
   const canReadWebyne = hasPermission(rbac, 'webyne.requests.read');
 
@@ -158,10 +230,9 @@ export default function SuperAdminConsolePage() {
         const webynePromise = canReadWebyne
           ? fetchCatalogVmRequesters().catch(() => [])
           : Promise.resolve([]);
-        const dedicatedPromise =
-          hasPermission(rbac, 'dedicated.requests.read')
-            ? fetchDedicatedRequesters().catch(() => [])
-            : Promise.resolve([]);
+        const dedicatedPromise = hasPermission(rbac, 'dedicated.requests.read')
+          ? fetchDedicatedRequesters().catch(() => [])
+          : Promise.resolve([]);
         const [webyne, dedicated] = await Promise.all([webynePromise, dedicatedPromise]);
         if (cancelled) return;
         setWebynePendingCount(webyne.reduce((sum, r) => sum + r.pendingCount, 0));
@@ -178,40 +249,47 @@ export default function SuperAdminConsolePage() {
     };
   }, [canReadWebyne, rbac]);
 
-  return (
-    <div className="mx-auto max-w-screen-xl space-y-8">
-      <section>
-        <h1 className="mb-5 text-2xl font-bold text-gray-900">Racko.ai services</h1>
+  const nothingVisible = visibleProducts.length === 0 && visiblePlatform.length === 0;
 
-        {visibleServices.length === 0 ? (
+  return (
+    <div className="mx-auto max-w-screen-xl space-y-10">
+      <section>
+        <h1 className="mb-1 text-2xl font-bold text-gray-900">Racko.ai services</h1>
+        <p className="mb-5 text-sm text-gray-500">
+          Product services you can entitle to org admins and tenants.
+        </p>
+
+        {nothingVisible ? (
           <p className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
             No services are assigned to your staff account yet. Ask a Super Admin to grant roles under
             Access control.
           </p>
+        ) : visibleProducts.length === 0 ? (
+          <p className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+            No product services available for your role.
+          </p>
         ) : (
-          <div className="flex flex-wrap justify-center gap-6">
-            {visibleServices.map((service) => {
-              const badgeCount =
-                service.badgeKey === 'webyne'
-                  ? webynePendingCount
-                  : service.badgeKey === 'dedicated'
-                    ? dedicatedPendingCount
-                    : 0;
-
-              return (
-                <ServiceTileCard
-                  key={service.id}
-                  href={service.href}
-                  name={service.name}
-                  description={service.description}
-                  icon={service.icon}
-                  badgeCount={badgeCount}
-                />
-              );
-            })}
-          </div>
+          <TileGrid
+            tiles={visibleProducts}
+            webynePendingCount={webynePendingCount}
+            dedicatedPendingCount={dedicatedPendingCount}
+          />
         )}
       </section>
+
+      {visiblePlatform.length > 0 && (
+        <section>
+          <h2 className="mb-1 text-lg font-semibold text-gray-900">Platform &amp; tools</h2>
+          <p className="mb-5 text-sm text-gray-500">
+            Admin utilities (pricing, machine manager) and platform management.
+          </p>
+          <TileGrid
+            tiles={visiblePlatform}
+            webynePendingCount={webynePendingCount}
+            dedicatedPendingCount={dedicatedPendingCount}
+          />
+        </section>
+      )}
     </div>
   );
 }

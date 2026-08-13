@@ -261,8 +261,9 @@ class SharedFilesService {
     const isTarget = doc.sharedWithMachineIds.some((id) => id.toString() === machine._id.toString());
     if (!isSource && !isTarget) throw new ForbiddenError('This file is not shared with your machine.');
 
-    // TTL: read = 60s (view only), full = 300s (5 min — enough for large downloads)
-    const ttl = doc.permission === 'full' ? 300 : 60;
+    // TTL: read = 600s (10 min — enough for Office Online Viewer to fetch large files),
+    //      full = 300s (5 min — enough for large downloads)
+    const ttl = doc.permission === 'full' ? 300 : 600;
 
     const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(doc.storageRef, ttl);
 

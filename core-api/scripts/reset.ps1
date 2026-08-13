@@ -181,7 +181,7 @@ $startMenuSystemFolders = @(
 )
 
 # ── Desktop shortcuts to keep ────────────────────────────────
-$keepShortcuts = @('Microsoft Edge.lnk')
+$keepShortcuts = @('Microsoft Edge.lnk', 'Racko Shared Files.lnk')
 
 # ── Startup entries to keep ──────────────────────────────────
 $keepStartup = @('SecurityHealth','RtkAudUService','racko*','Racko*','BingSvc')
@@ -235,7 +235,7 @@ $processSkip = @(
     # Our own session
     'powershell','pwsh','cmd',           # keep our own session alive
     # Racko agent
-    'RackoAgent','racko-agent',
+    'RackoAgent','racko-agent','racko-app',
     # VM guest tools
     'vmtoolsd','vm3dservice','VGAuthService',
     'cloudbase-init','QemuGuestAgent',

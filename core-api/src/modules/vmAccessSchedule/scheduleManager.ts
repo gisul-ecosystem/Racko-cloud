@@ -10,6 +10,12 @@ import {
   type WeeklyScheduleDay,
 } from './weeklySchedule';
 import { logger } from '../../utils/logger';
+import { guacamoleClient } from '../../utils/guacamoleClient';
+import {
+  isAccessAllowedNow,
+  msUntilNextWindowEnd,
+  type AssignmentSchedule,
+} from '../external-vm/schedule.types';
 
 const DEFAULT_TZ = 'Asia/Kolkata';
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
@@ -42,7 +48,7 @@ type ScheduleHandles = {
 /** In-memory: users blocked after schedule expiry until override / next window. */
 const expiredUserIds = new Set<string>();
 
-/** In-memory: per-VM disconnect timers. */
+/** In-memory: per-VM / per-assignment disconnect timers. */
 const scheduleMap = new Map<string, ScheduleHandles>();
 
 function vmIdStr(vm: { _id?: mongoose.Types.ObjectId | string } | string): string {
@@ -53,6 +59,68 @@ function vmIdStr(vm: { _id?: mongoose.Types.ObjectId | string } | string): strin
 function minutesOfDay(hhmm: string): number {
   const [h, m] = hhmm.split(':').map(Number);
   return h * 60 + m;
+}
+
+function platformAssignmentTimerKey(assignmentId: string): string {
+  return `ext-user-assign:${assignmentId}`;
+}
+
+function tenantAssignmentTimerKey(assignmentId: string): string {
+  return `ext-tenant-assign:${assignmentId}`;
+}
+
+function guacConnectionNameForPlatformVm(vmId: string): string {
+  return `vm-${vmId}`;
+}
+
+function guacConnectionNameForExternalVm(externalVmId: string): string {
+  return `externalvm-${externalVmId}`;
+}
+
+/**
+ * Kill live Guacamole tunnels for a named connection.
+ * Matches activeConnections by connectionIdentifier (and optional Guac username).
+ */
+async function killGuacamoleSessionsForConnection(
+  connectionName: string,
+  options?: { username?: string }
+): Promise<void> {
+  try {
+    const connectionIdentifier =
+      await guacamoleClient.getConnectionIdentifierByName(connectionName);
+    if (!connectionIdentifier) {
+      logger.info('[accessSchedule] no Guacamole connection to kill', { connectionName });
+      return;
+    }
+
+    const active = await guacamoleClient.listActiveConnections();
+    const username = options?.username?.trim();
+    const ids = active
+      .filter((a) => a.connectionIdentifier === connectionIdentifier)
+      .filter((a) => !username || a.username === username)
+      .map((a) => a.identifier);
+
+    if (ids.length === 0) {
+      logger.info('[accessSchedule] no active Guacamole tunnels', {
+        connectionName,
+        connectionIdentifier,
+      });
+      return;
+    }
+
+    await guacamoleClient.killActiveConnections(ids);
+    logger.info('[accessSchedule] Guacamole tunnels killed', {
+      connectionName,
+      connectionIdentifier,
+      killed: ids.length,
+    });
+  } catch (err) {
+    // Don't fail the disconnect path if Guac is down — JWT expiry still applied.
+    logger.error('[accessSchedule] Guacamole kill failed', {
+      connectionName,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 export function hasScheduleRestriction(vm: AccessScheduleFields): boolean {
@@ -205,18 +273,54 @@ export function cancelSchedule(vmId: string): void {
   scheduleMap.delete(vmId);
 }
 
+/** Cancel a window-end timer for an ExternalVM assignment row. */
+export function cancelExternalAssignmentTimer(
+  assignmentId: string,
+  kind: 'platform' | 'tenant'
+): void {
+  const key =
+    kind === 'platform'
+      ? platformAssignmentTimerKey(assignmentId)
+      : tenantAssignmentTimerKey(assignmentId);
+  cancelSchedule(key);
+}
+
 async function forceDisconnectForVm(vm: IVM, attempt: number): Promise<void> {
   const userId = vm.assignedTo?.toString();
   if (!userId) return;
 
   blockUserSession(userId);
   await expirePortalSessions(userId);
+  await killGuacamoleSessionsForConnection(guacConnectionNameForPlatformVm(vm._id.toString()));
 
   logger.info('[accessSchedule] disconnect', {
     vmId: vm._id.toString(),
     userId,
     attempt,
     reason: 'schedule_expired',
+  });
+}
+
+async function forceDisconnectForExternalAssignment(input: {
+  timerKey: string;
+  assigneeUserId: string;
+  externalVmId: string;
+  attempt: number;
+  kind: 'platform' | 'tenant';
+}): Promise<void> {
+  blockUserSession(input.assigneeUserId);
+  await expirePortalSessions(input.assigneeUserId);
+  await killGuacamoleSessionsForConnection(
+    guacConnectionNameForExternalVm(input.externalVmId)
+  );
+
+  logger.info('[accessSchedule] external assignment disconnect', {
+    timerKey: input.timerKey,
+    externalVmId: input.externalVmId,
+    assigneeUserId: input.assigneeUserId,
+    kind: input.kind,
+    attempt: input.attempt,
+    reason: 'assignment_schedule_expired',
   });
 }
 
@@ -298,9 +402,185 @@ export function scheduleDisconnect(vm: IVM): void {
   });
 }
 
+type ExternalAssignmentArmInput = {
+  assignmentId: string;
+  externalVmId: string;
+  assigneeUserId: string;
+  schedule: AssignmentSchedule;
+  kind: 'platform' | 'tenant';
+};
+
 /**
- * Boot / recovery: re-arm disconnect timers for assigned user VMs with legacy endTime.
- * Skips active overrides and weekly-only VMs.
+ * Arm a window-end disconnect timer for one ExternalVM assignment row.
+ */
+export function scheduleExternalAssignmentDisconnect(input: ExternalAssignmentArmInput): void {
+  const timerKey =
+    input.kind === 'platform'
+      ? platformAssignmentTimerKey(input.assignmentId)
+      : tenantAssignmentTimerKey(input.assignmentId);
+
+  cancelSchedule(timerKey);
+
+  const delayMs = msUntilNextWindowEnd(input.schedule);
+  if (delayMs == null || delayMs <= 0) {
+    logger.info('[accessSchedule] assignment disconnect not armed (no upcoming window end)', {
+      timerKey,
+      externalVmId: input.externalVmId,
+    });
+    return;
+  }
+
+  const handles: ScheduleHandles = { attempts: 0 };
+  const { assignmentId, externalVmId, assigneeUserId, kind } = input;
+
+  handles.timeout = setTimeout(() => {
+    void (async () => {
+      try {
+        const stillAllowed = await loadAssignmentStillAllowed(kind, assignmentId);
+        if (stillAllowed === null) {
+          cancelSchedule(timerKey);
+          return;
+        }
+        if (stillAllowed) {
+          // Window still open (clock skew / schedule edit) — re-arm.
+          const fresh = await loadAssignmentSchedule(kind, assignmentId);
+          if (fresh) {
+            scheduleExternalAssignmentDisconnect({
+              assignmentId,
+              externalVmId,
+              assigneeUserId,
+              schedule: fresh,
+              kind,
+            });
+          }
+          return;
+        }
+
+        await forceDisconnectForExternalAssignment({
+          timerKey,
+          assigneeUserId,
+          externalVmId,
+          attempt: 1,
+          kind,
+        });
+
+        handles.attempts = 1;
+        handles.cleanup = setInterval(() => {
+          void (async () => {
+            handles.attempts += 1;
+            const allowed = await loadAssignmentStillAllowed(kind, assignmentId);
+            if (allowed === null || allowed) {
+              cancelSchedule(timerKey);
+              if (allowed) {
+                const fresh = await loadAssignmentSchedule(kind, assignmentId);
+                if (fresh) {
+                  scheduleExternalAssignmentDisconnect({
+                    assignmentId,
+                    externalVmId,
+                    assigneeUserId,
+                    schedule: fresh,
+                    kind,
+                  });
+                }
+              }
+              return;
+            }
+            await forceDisconnectForExternalAssignment({
+              timerKey,
+              assigneeUserId,
+              externalVmId,
+              attempt: handles.attempts,
+              kind,
+            });
+            if (handles.attempts >= MAX_CLEANUP_ATTEMPTS) {
+              cancelSchedule(timerKey);
+              const fresh = await loadAssignmentSchedule(kind, assignmentId);
+              if (fresh) {
+                scheduleExternalAssignmentDisconnect({
+                  assignmentId,
+                  externalVmId,
+                  assigneeUserId,
+                  schedule: fresh,
+                  kind,
+                });
+              }
+            }
+          })();
+        }, CLEANUP_INTERVAL_MS);
+        scheduleMap.set(timerKey, handles);
+      } catch (err) {
+        logger.error('[accessSchedule] assignment disconnect handler failed', {
+          timerKey,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    })();
+  }, delayMs);
+
+  scheduleMap.set(timerKey, handles);
+  logger.info('[accessSchedule] assignment disconnect armed', {
+    timerKey,
+    externalVmId,
+    assigneeUserId,
+    kind,
+    delayMs,
+  });
+}
+
+async function loadAssignmentSchedule(
+  kind: 'platform' | 'tenant',
+  assignmentId: string
+): Promise<AssignmentSchedule | null> {
+  if (kind === 'platform') {
+    const { ExternalVmUserAssignmentModel } = await import(
+      '../../models/externalVmUserAssignment.model'
+    );
+    const row = await ExternalVmUserAssignmentModel.findById(assignmentId)
+      .select('schedule status')
+      .lean();
+    if (!row || (row.status != null && row.status !== 'active')) return null;
+    return (row.schedule as AssignmentSchedule | null | undefined) ?? null;
+  }
+
+  const { ExternalVmTenantAssignmentModel } = await import(
+    '../../models/externalVmTenantAssignment.model'
+  );
+  const row = await ExternalVmTenantAssignmentModel.findById(assignmentId)
+    .select('schedule status')
+    .lean();
+  if (!row || (row.status != null && row.status !== 'active')) return null;
+  return (row.schedule as AssignmentSchedule | null | undefined) ?? null;
+}
+
+/** true = still allowed, false = denied, null = assignment gone / inactive */
+async function loadAssignmentStillAllowed(
+  kind: 'platform' | 'tenant',
+  assignmentId: string
+): Promise<boolean | null> {
+  if (kind === 'platform') {
+    const { ExternalVmUserAssignmentModel } = await import(
+      '../../models/externalVmUserAssignment.model'
+    );
+    const row = await ExternalVmUserAssignmentModel.findById(assignmentId)
+      .select('schedule status')
+      .lean();
+    if (!row || (row.status != null && row.status !== 'active')) return null;
+    return isAccessAllowedNow(row.schedule ?? null);
+  }
+
+  const { ExternalVmTenantAssignmentModel } = await import(
+    '../../models/externalVmTenantAssignment.model'
+  );
+  const row = await ExternalVmTenantAssignmentModel.findById(assignmentId)
+    .select('schedule status')
+    .lean();
+  if (!row || (row.status != null && row.status !== 'active')) return null;
+  return isAccessAllowedNow(row.schedule ?? null);
+}
+
+/**
+ * Boot / recovery: re-arm disconnect timers for assigned user VMs with legacy endTime,
+ * plus ExternalVmUserAssignment / ExternalVmTenantAssignment schedule window ends.
  */
 export async function rescheduleFromDb(): Promise<void> {
   const vms = await VM.find({
@@ -320,36 +600,118 @@ export async function rescheduleFromDb(): Promise<void> {
     armed += 1;
   }
 
+  const { ExternalVmUserAssignmentModel } = await import(
+    '../../models/externalVmUserAssignment.model'
+  );
+  const { ExternalVmTenantAssignmentModel } = await import(
+    '../../models/externalVmTenantAssignment.model'
+  );
+
+  const platformAssignments = await ExternalVmUserAssignmentModel.find({
+    schedule: { $ne: null, $exists: true },
+    $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+  })
+    .select('_id externalVmId userId schedule')
+    .lean();
+
+  let platformArmed = 0;
+  for (const row of platformAssignments) {
+    if (!row.schedule) continue;
+    scheduleExternalAssignmentDisconnect({
+      assignmentId: row._id.toString(),
+      externalVmId: row.externalVmId.toString(),
+      assigneeUserId: row.userId.toString(),
+      schedule: row.schedule,
+      kind: 'platform',
+    });
+    platformArmed += 1;
+  }
+
+  const tenantAssignments = await ExternalVmTenantAssignmentModel.find({
+    schedule: { $ne: null, $exists: true },
+    $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+  })
+    .select('_id externalVmId tenantUserId schedule')
+    .lean();
+
+  let tenantArmed = 0;
+  for (const row of tenantAssignments) {
+    if (!row.schedule) continue;
+    scheduleExternalAssignmentDisconnect({
+      assignmentId: row._id.toString(),
+      externalVmId: row.externalVmId.toString(),
+      assigneeUserId: row.tenantUserId.toString(),
+      schedule: row.schedule,
+      kind: 'tenant',
+    });
+    tenantArmed += 1;
+  }
+
   logger.info('[accessSchedule] rescheduleFromDb complete', {
     scanned: vms.length,
     armed,
+    platformAssignments: platformAssignments.length,
+    platformArmed,
+    tenantAssignments: tenantAssignments.length,
+    tenantArmed,
   });
 }
 
 /**
  * Login / console gate for platform role=user: every restricted assigned VM must pass.
+ * Also checks ExternalVmUserAssignment schedules for elastic servers.
  */
 export async function assertUserAssignedVmsAccessible(
   userId: string
 ): Promise<AccessCheckResult> {
-  const vms = await VM.find({ assignedTo: new mongoose.Types.ObjectId(userId) }).lean();
+  const userOid = new mongoose.Types.ObjectId(userId);
+  const vms = await VM.find({ assignedTo: userOid }).lean();
   for (const vm of vms) {
     if (!hasScheduleRestriction(vm) && !vm.accessOverride) continue;
     const result = checkAccessWindow(vm);
     if (!result.allowed) return result;
   }
+
+  const { ExternalVmUserAssignmentModel } = await import(
+    '../../models/externalVmUserAssignment.model'
+  );
+  const { isAccessAllowedNow: allowedNow, getNextAllowedAccessHint } = await import(
+    '../external-vm/schedule.types'
+  );
+  const assignments = await ExternalVmUserAssignmentModel.find({
+    userId: userOid,
+    $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+  })
+    .select('schedule')
+    .lean();
+
+  for (const row of assignments) {
+    if (allowedNow(row.schedule ?? null)) continue;
+    const next = getNextAllowedAccessHint(row.schedule ?? null);
+    return {
+      allowed: false,
+      reason: 'outside_assignment_window',
+      error: next
+        ? `Access denied: outside your access window. Next allowed: ${next}.`
+        : 'Access denied: outside your access window.',
+      nextWindow: next,
+    };
+  }
+
   return { allowed: true, reason: 'all_vms_ok' };
 }
 
 /**
  * Login / session gate for tenant_user: every restricted assigned tenant VM
  * and elastic server must pass.
+ * Elastic servers use ExternalVmTenantAssignment.schedule (not ExternalVM fields).
  */
 export async function assertTenantUserAssignedVmsAccessible(
   tenantUserId: string
 ): Promise<AccessCheckResult> {
+  const tenantUserOid = new mongoose.Types.ObjectId(tenantUserId);
   const vms = await VM.find({
-    assignedTenantUserId: new mongoose.Types.ObjectId(tenantUserId),
+    assignedTenantUserId: tenantUserOid,
   }).lean();
   for (const vm of vms) {
     if (!hasScheduleRestriction(vm) && !vm.accessOverride) continue;
@@ -357,27 +719,30 @@ export async function assertTenantUserAssignedVmsAccessible(
     if (!result.allowed) return result;
   }
 
-  const { ExternalVMModel } = await import('../external-vm/external-vm.model');
-  const { getExternalVmIdsForTenantUser } = await import(
-    '../external-vm/externalVmTenantAssignment.service'
+  const { ExternalVmTenantAssignmentModel } = await import(
+    '../../models/externalVmTenantAssignment.model'
   );
-  const { TenantUser } = await import('../../models/tenantUser.model');
-  const tenantUser = await TenantUser.findById(tenantUserId).select('tenantId').lean();
-  const externalVms =
-    tenantUser?.tenantId != null
-      ? await ExternalVMModel.find({
-          _id: {
-            $in: await getExternalVmIdsForTenantUser(
-              tenantUser.tenantId as mongoose.Types.ObjectId,
-              new mongoose.Types.ObjectId(tenantUserId)
-            ),
-          },
-        }).lean()
-      : [];
-  for (const vm of externalVms) {
-    if (!hasScheduleRestriction(vm) && !vm.accessOverride) continue;
-    const result = checkAccessWindow(vm);
-    if (!result.allowed) return result;
+  const { isAccessAllowedNow: allowedNow, getNextAllowedAccessHint } = await import(
+    '../external-vm/schedule.types'
+  );
+  const assignments = await ExternalVmTenantAssignmentModel.find({
+    tenantUserId: tenantUserOid,
+    $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+  })
+    .select('schedule')
+    .lean();
+
+  for (const row of assignments) {
+    if (allowedNow(row.schedule ?? null)) continue;
+    const next = getNextAllowedAccessHint(row.schedule ?? null);
+    return {
+      allowed: false,
+      reason: 'outside_assignment_window',
+      error: next
+        ? `Access denied: outside your access window. Next allowed: ${next}.`
+        : 'Access denied: outside your access window.',
+      nextWindow: next,
+    };
   }
 
   return { allowed: true, reason: 'all_vms_ok' };

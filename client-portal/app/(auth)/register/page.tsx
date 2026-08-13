@@ -1,6 +1,6 @@
 'use client';
 
-import { Suspense, useState, type ReactNode } from 'react';
+import { Suspense, useState, useRef, useEffect, type ReactNode } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
@@ -14,6 +14,32 @@ import {
 
 const LINK_ACCENT = 'text-[#EF4444] hover:text-[#DC2626] font-medium';
 
+const COUNTRY_CODES = [
+  { code: '+91',  iso: 'in', name: 'India',        min: 10, max: 10 },
+  { code: '+1',   iso: 'us', name: 'USA / Canada',  min: 10, max: 10 },
+  { code: '+44',  iso: 'gb', name: 'UK',            min: 10, max: 10 },
+  { code: '+61',  iso: 'au', name: 'Australia',     min: 9,  max: 9  },
+  { code: '+971', iso: 'ae', name: 'UAE',           min: 9,  max: 9  },
+  { code: '+65',  iso: 'sg', name: 'Singapore',     min: 8,  max: 8  },
+  { code: '+60',  iso: 'my', name: 'Malaysia',      min: 9,  max: 10 },
+  { code: '+66',  iso: 'th', name: 'Thailand',      min: 9,  max: 9  },
+  { code: '+62',  iso: 'id', name: 'Indonesia',     min: 9,  max: 12 },
+  { code: '+92',  iso: 'pk', name: 'Pakistan',      min: 10, max: 10 },
+  { code: '+880', iso: 'bd', name: 'Bangladesh',    min: 10, max: 10 },
+  { code: '+94',  iso: 'lk', name: 'Sri Lanka',     min: 9,  max: 9  },
+  { code: '+977', iso: 'np', name: 'Nepal',         min: 10, max: 10 },
+  { code: '+49',  iso: 'de', name: 'Germany',       min: 10, max: 11 },
+  { code: '+33',  iso: 'fr', name: 'France',        min: 9,  max: 9  },
+  { code: '+39',  iso: 'it', name: 'Italy',         min: 9,  max: 10 },
+  { code: '+34',  iso: 'es', name: 'Spain',         min: 9,  max: 9  },
+  { code: '+81',  iso: 'jp', name: 'Japan',         min: 10, max: 11 },
+  { code: '+82',  iso: 'kr', name: 'South Korea',   min: 10, max: 11 },
+  { code: '+86',  iso: 'cn', name: 'China',         min: 11, max: 11 },
+  { code: '+55',  iso: 'br', name: 'Brazil',        min: 10, max: 11 },
+  { code: '+27',  iso: 'za', name: 'South Africa',  min: 9,  max: 9  },
+  { code: '+234', iso: 'ng', name: 'Nigeria',       min: 10, max: 10 },
+];
+
 const passwordRules = z
   .string()
   .min(8, 'At least 8 characters')
@@ -24,7 +50,20 @@ const passwordRules = z
 
 const individualRegisterSchema = z
   .object({
+    name: z
+      .string()
+      .trim()
+      .min(2, 'Name must be at least 2 characters')
+      .max(120)
+      .regex(
+        /^[A-Za-z][A-Za-z .'-]*$/,
+        'Name may only include letters, spaces, periods, hyphens, and apostrophes'
+      ),
     email: z.string().email('Invalid email address').max(254),
+    phone: z
+      .string()
+      .trim()
+      .regex(/^\+[1-9]\d{6,18}$/, 'Enter a valid phone number'),
     password: passwordRules,
     confirmPassword: z.string(),
   })
@@ -58,15 +97,141 @@ const orgRegisterSchema = z
     path: ['confirmPassword'],
   });
 
+const PASSWORD_CRITERIA = [
+  { label: 'At least 8 characters',    test: (p: string) => p.length >= 8 },
+  { label: 'Uppercase letter (A–Z)',   test: (p: string) => /[A-Z]/.test(p) },
+  { label: 'Lowercase letter (a–z)',   test: (p: string) => /[a-z]/.test(p) },
+  { label: 'Number (0–9)',             test: (p: string) => /[0-9]/.test(p) },
+  { label: 'Special character (!@#…)', test: (p: string) => /[^A-Za-z0-9]/.test(p) },
+];
+
+function PasswordStrengthMeter({ password }: { password: string }) {
+  if (!password) return null;
+  const passed = PASSWORD_CRITERIA.filter((c) => c.test(password)).length;
+  const strength = passed <= 2 ? 'weak' : passed <= 3 ? 'fair' : passed === 4 ? 'good' : 'strong';
+  const barColor =
+    strength === 'weak'   ? 'bg-red-500' :
+    strength === 'fair'   ? 'bg-orange-400' :
+    strength === 'good'   ? 'bg-yellow-400' :
+                            'bg-emerald-500';
+  const label =
+    strength === 'weak'   ? 'Weak' :
+    strength === 'fair'   ? 'Fair' :
+    strength === 'good'   ? 'Good' :
+                            'Strong';
+
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      {/* strength bar */}
+      <div className="flex items-center gap-2">
+        <div className="flex flex-1 gap-1">
+          {[1, 2, 3, 4, 5].map((i) => (
+            <div
+              key={i}
+              className={`h-1 flex-1 rounded-full transition-all duration-300 ${
+                i <= passed ? barColor : 'bg-gray-700'
+              }`}
+            />
+          ))}
+        </div>
+        <span className={`w-10 text-right text-[10px] font-medium ${barColor.replace('bg-', 'text-')}`}>
+          {label}
+        </span>
+      </div>
+      {/* criteria checklist */}
+      <div className="grid grid-cols-1 gap-0.5">
+        {PASSWORD_CRITERIA.map((c) => {
+          const ok = c.test(password);
+          return (
+            <div key={c.label} className="flex items-center gap-1.5">
+              <svg
+                className={`h-3 w-3 shrink-0 ${ok ? 'text-emerald-500' : 'text-gray-600'}`}
+                viewBox="0 0 12 12" fill="none"
+              >
+                {ok
+                  ? <path d="M2 6l3 3 5-5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                  : <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.2" />
+                }
+              </svg>
+              <span className={`text-[10px] leading-tight ${ok ? 'text-gray-400' : 'text-gray-600'}`}>
+                {c.label}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 type FormErrors = Partial<
   Record<
-    'fullName' | 'email' | 'companyName' | 'phone' | 'password' | 'confirmPassword' | 'general',
+    'fullName' | 'name' | 'email' | 'companyName' | 'phone' | 'password' | 'confirmPassword' | 'general',
     string
   >
 >;
 
 interface RegisterResponse {
   message: string;
+}
+
+function CountryCodeDropdown({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: string;
+  onChange: (code: string) => void;
+  disabled?: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = COUNTRY_CODES.find((c) => c.code === value) ?? COUNTRY_CODES[0]!;
+
+  useEffect(() => {
+    function onOutside(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    if (open) document.addEventListener('mousedown', onOutside);
+    return () => document.removeEventListener('mousedown', onOutside);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative shrink-0">
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+        className="flex h-full w-28 items-center gap-1.5 rounded-lg border border-gray-700 bg-black px-2 py-1.5 text-sm text-white transition hover:border-gray-600 focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:opacity-60"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={`https://flagcdn.com/w20/${selected.iso}.png`} alt={selected.name} width={20} height={14} className="shrink-0 rounded-[2px]" />
+        <span className="flex-1 text-left text-xs">{selected.code}</span>
+        <svg className="h-3 w-3 shrink-0 text-gray-400" viewBox="0 0 12 12" fill="none">
+          <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full z-50 mt-1 max-h-56 w-52 overflow-y-auto rounded-lg border border-gray-700 bg-[#0d0d0d] py-1 shadow-xl">
+          {COUNTRY_CODES.map((c) => (
+            <button
+              key={c.code}
+              type="button"
+              onClick={() => { onChange(c.code); setOpen(false); }}
+              className={`flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-sm transition hover:bg-gray-800 ${
+                c.code === value ? 'bg-red-950/40 text-white' : 'text-gray-300'
+              }`}
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={`https://flagcdn.com/w20/${c.iso}.png`} alt={c.name} width={20} height={14} className="shrink-0 rounded-[2px]" />
+              <span className="flex-1 truncate">{c.name}</span>
+              <span className="shrink-0 text-xs text-gray-500">{c.code}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function Field({
@@ -212,7 +377,8 @@ function RegisterForm() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [companyName, setCompanyName] = useState('');
-  const [phone, setPhone] = useState('');
+  const [countryCode, setCountryCode] = useState('+91');
+  const [phoneDigits, setPhoneDigits] = useState('');
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -221,6 +387,32 @@ function RegisterForm() {
   const [errors, setErrors] = useState<FormErrors>({});
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  // 'idle' | 'checking' | 'valid' | 'invalid'
+  const [emailCheck, setEmailCheck] = useState<{ status: 'idle' | 'checking' | 'valid' | 'invalid'; reason?: string }>({ status: 'idle' });
+  const lastCheckedEmail = useRef('');
+
+  async function validateEmailDomain(value: string) {
+    const trimmed = value.trim().toLowerCase();
+    if (!trimmed || trimmed === lastCheckedEmail.current) return;
+    // basic format check before hitting the server
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) {
+      setEmailCheck({ status: 'invalid', reason: 'Invalid email format.' });
+      return;
+    }
+    lastCheckedEmail.current = trimmed;
+    setEmailCheck({ status: 'checking' });
+    try {
+      const res = await apiRequest<{ valid: boolean; reason?: string }>('/api/v1/auth/check-email', {
+        method: 'POST',
+        body: JSON.stringify({ email: trimmed }),
+        skipAuth: true,
+      });
+      setEmailCheck(res.valid ? { status: 'valid' } : { status: 'invalid', reason: res.reason });
+    } catch {
+      // network/server error — don't block the user
+      setEmailCheck({ status: 'idle' });
+    }
+  }
 
   const isOrg = accountType === 'b2b';
 
@@ -230,12 +422,21 @@ function RegisterForm() {
     setErrorCode(null);
 
     if (isOrg) {
-      const normalizedPhone = phone.replace(/[^\d+]/g, '').replace(/(?!^)\+/g, '');
+      const b2bDigits = phoneDigits.replace(/\D/g, '');
+      const selectedCountry = COUNTRY_CODES.find((c) => c.code === countryCode);
+      if (selectedCountry && (b2bDigits.length < selectedCountry.min || b2bDigits.length > selectedCountry.max)) {
+        const range = selectedCountry.min === selectedCountry.max
+          ? `${selectedCountry.min} digits`
+          : `${selectedCountry.min}–${selectedCountry.max} digits`;
+        setErrors({ phone: `Phone number must be ${range} for ${countryCode}` });
+        return;
+      }
+      const b2bPhone = `${countryCode}${b2bDigits}`;
       const result = orgRegisterSchema.safeParse({
         fullName,
         email,
         companyName,
-        phone: normalizedPhone,
+        phone: b2bPhone,
         password,
         confirmPassword,
       });
@@ -248,6 +449,14 @@ function RegisterForm() {
         setErrors(fieldErrors);
         return;
       }
+      if (emailCheck.status === 'invalid') {
+        setErrors((prev) => ({ ...prev, email: emailCheck.reason ?? 'Please enter a valid email address.' }));
+        return;
+      }
+      if (emailCheck.status === 'idle') {
+        await validateEmailDomain(email);
+        // if still idle after attempt the check server is unreachable — proceed anyway
+      }
 
       setIsLoading(true);
       try {
@@ -259,7 +468,7 @@ function RegisterForm() {
         const draft: OrgRegisterDraft = {
           contactName: fullName.trim(),
           companyName: companyName.trim(),
-          phone: normalizedPhone,
+          phone: b2bPhone,
         };
         localStorage.setItem(registerDraftStorageKey(email), JSON.stringify(draft));
         setSuccess(true);
@@ -276,7 +485,17 @@ function RegisterForm() {
       return;
     }
 
-    const result = individualRegisterSchema.safeParse({ email, password, confirmPassword });
+    const digits = phoneDigits.replace(/\D/g, '');
+    const selectedCountry = COUNTRY_CODES.find((c) => c.code === countryCode);
+    if (selectedCountry && (digits.length < selectedCountry.min || digits.length > selectedCountry.max)) {
+      const range = selectedCountry.min === selectedCountry.max
+        ? `${selectedCountry.min} digits`
+        : `${selectedCountry.min}–${selectedCountry.max} digits`;
+      setErrors({ phone: `Phone number must be ${range} for ${countryCode}` });
+      return;
+    }
+    const b2cPhone = `${countryCode}${digits}`;
+    const result = individualRegisterSchema.safeParse({ name: fullName, email, phone: b2cPhone, password, confirmPassword });
     if (!result.success) {
       const fieldErrors: FormErrors = {};
       result.error.issues.forEach((issue) => {
@@ -286,12 +505,20 @@ function RegisterForm() {
       setErrors(fieldErrors);
       return;
     }
+    if (emailCheck.status === 'invalid') {
+      setErrors((prev) => ({ ...prev, email: emailCheck.reason ?? 'Please enter a valid email address.' }));
+      return;
+    }
+    if (emailCheck.status === 'idle') {
+      await validateEmailDomain(email);
+      // if still idle after attempt the check server is unreachable — proceed anyway
+    }
 
     setIsLoading(true);
     try {
       await apiRequest<RegisterResponse>('/api/v1/auth/register', {
         method: 'POST',
-        body: JSON.stringify({ email, password, accountType: 'b2c' }),
+        body: JSON.stringify({ email, password, name: fullName.trim(), phone: b2cPhone, accountType: 'b2c' }),
         skipAuth: true,
       });
       setSuccess(true);
@@ -406,11 +633,34 @@ function RegisterForm() {
                   icon={<Mail className="h-4 w-4" />}
                   type="email"
                   value={email}
-                  onChange={(e) => setEmail(e.target.value)}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (emailCheck.status !== 'idle') {
+                      setEmailCheck({ status: 'idle' });
+                      lastCheckedEmail.current = '';
+                    }
+                  }}
+                  onBlur={() => validateEmailDomain(email)}
                   placeholder="your@gmail.com"
                   autoComplete="email"
                   disabled={isLoading}
-                  error={errors.email}
+                  error={errors.email ?? (emailCheck.status === 'invalid' ? emailCheck.reason : undefined)}
+                  trailing={
+                    emailCheck.status === 'checking' ? (
+                      <svg className="h-4 w-4 animate-spin text-gray-400" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                      </svg>
+                    ) : emailCheck.status === 'valid' ? (
+                      <svg className="h-4 w-4 text-emerald-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    ) : emailCheck.status === 'invalid' ? (
+                      <svg className="h-4 w-4 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    ) : undefined
+                  }
                 />
                 <Field
                   label="Company Name"
@@ -422,30 +672,134 @@ function RegisterForm() {
                   disabled={isLoading}
                   error={errors.companyName}
                 />
-                <Field
-                  label="Phone No."
-                  icon={<Phone className="h-4 w-4" />}
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+91-XXXXXXXXXX"
-                  autoComplete="tel"
-                  disabled={isLoading}
-                  error={errors.phone}
-                />
+                <div className="min-w-0">
+                  <label className="mb-0.5 block text-xs font-medium text-gray-400">Phone No.</label>
+                  <div className="flex gap-2">
+                    <CountryCodeDropdown
+                      value={countryCode}
+                      onChange={(code) => {
+                        setCountryCode(code);
+                        setPhoneDigits('');
+                        setErrors((prev) => ({ ...prev, phone: undefined }));
+                      }}
+                      disabled={isLoading}
+                    />
+                    <div className="relative min-w-0 flex-1">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                        <Phone className="h-4 w-4" />
+                      </span>
+                      {(() => {
+                        const cc = COUNTRY_CODES.find((c) => c.code === countryCode);
+                        const maxLen = cc?.max ?? 15;
+                        const placeholder = '0'.repeat(cc?.max ?? 10);
+                        return (
+                          <input
+                            type="tel"
+                            value={phoneDigits}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/[^\d]/g, '');
+                              if (val.length <= maxLen) setPhoneDigits(val);
+                            }}
+                            placeholder={placeholder}
+                            autoComplete="tel-national"
+                            disabled={isLoading}
+                            maxLength={maxLen}
+                            className={`w-full rounded-lg border border-gray-700 bg-black py-1.5 pl-10 pr-3 text-sm text-white placeholder-gray-500 transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:opacity-60 ${errors.phone ? 'border-red-500' : ''}`}
+                          />
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  {errors.phone ? <p className="mt-0.5 text-[11px] leading-tight text-red-400">{errors.phone}</p> : null}
+                </div>
               </>
             ) : (
-              <Field
-                label="Work Email"
-                icon={<Mail className="h-4 w-4" />}
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@gmail.com"
-                autoComplete="email"
-                disabled={isLoading}
-                error={errors.email}
-              />
+              <>
+                <Field
+                  label="Full Name"
+                  icon={<User className="h-4 w-4" />}
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Your name"
+                  autoComplete="name"
+                  disabled={isLoading}
+                  error={errors.name}
+                />
+                <Field
+                  label="Email"
+                  icon={<Mail className="h-4 w-4" />}
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (emailCheck.status !== 'idle') {
+                      setEmailCheck({ status: 'idle' });
+                      lastCheckedEmail.current = '';
+                    }
+                  }}
+                  onBlur={() => validateEmailDomain(email)}
+                  placeholder="your@email.com"
+                  autoComplete="email"
+                  disabled={isLoading}
+                  error={errors.email ?? (emailCheck.status === 'invalid' ? emailCheck.reason : undefined)}
+                  trailing={
+                    emailCheck.status === 'checking' ? (
+                      <svg className="h-4 w-4 animate-spin text-gray-400" viewBox="0 0 24 24" fill="none">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                      </svg>
+                    ) : emailCheck.status === 'valid' ? (
+                      <svg className="h-4 w-4 text-emerald-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    ) : emailCheck.status === 'invalid' ? (
+                      <svg className="h-4 w-4 text-red-500" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                      </svg>
+                    ) : undefined
+                  }
+                />
+                <div className="min-w-0">
+                  <label className="mb-0.5 block text-xs font-medium text-gray-400">Phone No.</label>
+                  <div className="flex gap-2">
+                    <CountryCodeDropdown
+                      value={countryCode}
+                      onChange={(code) => {
+                        setCountryCode(code);
+                        setPhoneDigits('');
+                        setErrors((prev) => ({ ...prev, phone: undefined }));
+                      }}
+                      disabled={isLoading}
+                    />
+                    <div className="relative min-w-0 flex-1">
+                      <span className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">
+                        <Phone className="h-4 w-4" />
+                      </span>
+                      {(() => {
+                        const cc = COUNTRY_CODES.find((c) => c.code === countryCode);
+                        const maxLen = cc?.max ?? 15;
+                        const placeholder = '0'.repeat(cc?.max ?? 10);
+                        return (
+                          <input
+                            type="tel"
+                            value={phoneDigits}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/[^\d]/g, '');
+                              if (val.length <= maxLen) setPhoneDigits(val);
+                            }}
+                            placeholder={placeholder}
+                            autoComplete="tel-national"
+                            disabled={isLoading}
+                            maxLength={maxLen}
+                            className={`w-full rounded-lg border border-gray-700 bg-black py-1.5 pl-10 pr-3 text-sm text-white placeholder-gray-500 transition focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C] disabled:opacity-60 ${errors.phone ? 'border-red-500' : ''}`}
+                          />
+                        );
+                      })()}
+                    </div>
+                  </div>
+                  {errors.phone ? <p className="mt-0.5 text-[11px] leading-tight text-red-400">{errors.phone}</p> : null}
+                </div>
+              </>
             )}
 
             <Field
@@ -469,6 +823,7 @@ function RegisterForm() {
                 </button>
               }
             />
+            <PasswordStrengthMeter password={password} />
             <Field
               label="Confirm Password"
               icon={<KeyRound className="h-4 w-4" />}
@@ -493,12 +848,18 @@ function RegisterForm() {
 
             {errors.general ? (
               <div className="rounded-lg border border-red-700 bg-red-900/30 px-3 py-2 text-xs text-red-300">
-                <p>{errors.general}</p>
                 {errorCode === 'REGISTRATION_UNAVAILABLE' ? (
-                  <Link href="/login" className={`mt-1 inline-block text-[11px] ${LINK_ACCENT}`}>
-                    Sign in instead
-                  </Link>
-                ) : null}
+                  <>
+                    <p className="font-medium">An account with this email already exists.</p>
+                    <p className="mt-0.5 opacity-80">Try signing in, or reset your password if you've forgotten it.</p>
+                    <div className="mt-2 flex gap-3">
+                      <Link href="/login" className={`text-[11px] ${LINK_ACCENT}`}>Sign in</Link>
+                      <Link href="/forgot-password" className={`text-[11px] ${LINK_ACCENT}`}>Forgot password?</Link>
+                    </div>
+                  </>
+                ) : (
+                  <p>{errors.general}</p>
+                )}
               </div>
             ) : null}
 

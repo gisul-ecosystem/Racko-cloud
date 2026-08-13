@@ -13,7 +13,7 @@ interface UseVMsResult {
 
 export function useMyVMs(
   isAuthenticated: boolean,
-  filters?: { status?: string; cloneType?: string; node?: string }
+  filters?: { status?: string; cloneType?: string; node?: string; projectId?: string }
 ): UseVMsResult {
   const [vms, setVMs] = useState<IVM[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,7 +34,7 @@ export function useMyVMs(
     } finally {
       setLoading(false);
     }
-  }, [filters?.status, filters?.cloneType, filters?.node]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [filters?.status, filters?.cloneType, filters?.node, filters?.projectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (isAuthenticated) void load();

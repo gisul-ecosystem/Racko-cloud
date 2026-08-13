@@ -1,20 +1,20 @@
 import { z } from 'zod';
 import mongoose from 'mongoose';
-import { ADMIN_SERVICE_CATALOG } from '../../constants/adminServiceCatalog';
 
 const mongoObjectId = z
   .string()
   .refine((val) => mongoose.Types.ObjectId.isValid(val), { message: 'Invalid ID format' });
 
-const adminServiceKeySchema = z.enum(
-  ADMIN_SERVICE_CATALOG as unknown as [string, ...string[]]
-);
+/** Catalog membership validated in projects.service. */
+const adminServiceKeySchema = z.string().min(1).max(100);
 
 export const createProjectSchema = z.object({
   body: z.object({
     clientName: z.string().min(1).max(200).trim(),
     name: z.string().min(1).max(200).trim().optional(),
     description: z.string().max(1000).trim().optional(),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
     enabledServices: z.array(adminServiceKeySchema).min(1),
   }),
 });
@@ -25,6 +25,8 @@ export const updateProjectSchema = z.object({
     name: z.string().min(1).max(200).trim().optional(),
     clientName: z.string().min(1).max(200).trim().optional(),
     description: z.string().max(1000).trim().optional().nullable(),
+    startDate: z.coerce.date().optional().nullable(),
+    endDate: z.coerce.date().optional().nullable(),
   }),
 });
 
@@ -62,6 +64,8 @@ export const createProjectForAdminSchema = z.object({
     clientName: z.string().min(1).max(200).trim(),
     name: z.string().min(1).max(200).trim().optional(),
     description: z.string().max(1000).trim().optional(),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
     enabledServices: z.array(adminServiceKeySchema).min(1),
   }),
 });
@@ -76,6 +80,8 @@ export const createProjectForTenantSchema = z.object({
     clientName: z.string().min(1).max(200).trim(),
     name: z.string().min(1).max(200).trim().optional(),
     description: z.string().max(1000).trim().optional(),
+    startDate: z.coerce.date(),
+    endDate: z.coerce.date(),
     enabledServices: z.array(adminServiceKeySchema).min(1),
   }),
 });

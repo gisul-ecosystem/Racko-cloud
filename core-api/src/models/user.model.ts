@@ -6,7 +6,11 @@ import type { UserRole, AccountType, OnboardingStatus } from '../types';
 export interface IUser extends Document {
   _id: mongoose.Types.ObjectId;
   email: string;
+  /** Optional login alias — globally unique when set. */
+  username?: string | null;
   password: string;
+  name?: string;
+  phone?: string;
   role: UserRole;
   accountType: AccountType;
   onboardingStatus: OnboardingStatus;
@@ -39,6 +43,7 @@ export interface IUser extends Document {
 
 export interface IUserModel extends Model<IUser> {
   findByEmail(email: string): Promise<IUser | null>;
+  findByEmailOrUsername(identifier: string): Promise<IUser | null>;
 }
 
 const userSchema = new Schema<IUser, IUserModel>(
@@ -50,6 +55,23 @@ const userSchema = new Schema<IUser, IUserModel>(
       lowercase: true,
       trim: true,
       index: true,
+    },
+    name: {
+      type: String,
+      trim: true,
+      maxlength: 120,
+    },
+    phone: {
+      type: String,
+      trim: true,
+      maxlength: 15,
+    },
+    username: {
+      type: String,
+      lowercase: true,
+      trim: true,
+      sparse: true,
+      unique: true,
     },
     password: {
       type: String,
@@ -187,6 +209,19 @@ userSchema.methods['comparePassword'] = async function (candidate: string): Prom
 // Static method: find by email (always select password for auth)
 userSchema.statics['findByEmail'] = function (email: string): Promise<IUser | null> {
   return this.findOne({ email: email.toLowerCase().trim() })
+    .select('+password +emailVerificationToken')
+    .exec();
+};
+
+// Static method: resolve login identifier as email OR username (global).
+userSchema.statics['findByEmailOrUsername'] = function (
+  identifier: string
+): Promise<IUser | null> {
+  const normalized = identifier.toLowerCase().trim();
+  if (!normalized) return Promise.resolve(null);
+  return this.findOne({
+    $or: [{ email: normalized }, { username: normalized }],
+  })
     .select('+password +emailVerificationToken')
     .exec();
 };

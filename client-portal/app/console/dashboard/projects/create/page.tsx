@@ -10,6 +10,7 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
+  fetchTenantProjects,
   previewTenantProjectName,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
@@ -69,7 +70,11 @@ export default function TenantCreateProjectPage() {
   const [previewName, setPreviewName] = useState('');
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clientMode, setClientMode] = useState<'select' | 'new'>('select');
+  const [existingClients, setExistingClients] = useState<string[]>([]);
   const [description, setDescription] = useState('');
+  const [startDate, setStartDate] = useState('');
+  const [endDate, setEndDate] = useState('');
   const [available, setAvailable] = useState<AdminServiceKey[]>([]);
   const [selected, setSelected] = useState<AdminServiceKey[]>([]);
   const [loading, setLoading] = useState(true);
@@ -80,13 +85,17 @@ export default function TenantCreateProjectPage() {
     setLoading(true);
     setError(null);
     try {
-      const [preview, services] = await Promise.all([
+      const [preview, services, existingProjectsList] = await Promise.all([
         previewTenantProjectName(),
         fetchTenantEligibleProjectServices(),
+        fetchTenantProjects().catch(() => [] as Awaited<ReturnType<typeof fetchTenantProjects>>),
       ]);
       setPreviewName(preview.name);
       setName(preview.name);
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
+      const clients = [...new Set(existingProjectsList.map((p) => p.clientName).filter(Boolean))];
+      setExistingClients(clients);
+      setClientMode(clients.length > 0 ? 'select' : 'new');
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to prepare create form.');
     } finally {
@@ -99,8 +108,8 @@ export default function TenantCreateProjectPage() {
   }, [load]);
 
   const canSubmit = useMemo(
-    () => clientName.trim().length > 0 && selected.length > 0 && name.trim().length > 0,
-    [clientName, selected, name]
+    () => clientName.trim().length > 0 && selected.length > 0 && name.trim().length > 0 && !!startDate && !!endDate,
+    [clientName, selected, name, startDate, endDate]
   );
 
   function toggleService(key: AdminServiceKey) {
@@ -119,6 +128,8 @@ export default function TenantCreateProjectPage() {
         clientName: clientName.trim(),
         name: name.trim() !== previewName ? name.trim() : undefined,
         description: description.trim() || undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
         enabledServices: selected,
       });
       router.push(tenantConsole.project(project.id));
@@ -176,13 +187,32 @@ export default function TenantCreateProjectPage() {
                 Client Name <span className="text-red-500">*</span>
               </label>
               <p className="mb-2 text-xs text-gray-400">The client this project belongs to.</p>
-              <input
-                value={clientName}
-                onChange={(e) => setClientName(e.target.value)}
-                required
-                placeholder="e.g. Acme Corp"
+              <select
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
-              />
+                value={clientMode === 'new' ? '__new__' : clientName}
+                onChange={(e) => {
+                  if (e.target.value === '__new__') { setClientMode('new'); setClientName(''); }
+                  else { setClientMode('select'); setClientName(e.target.value); }
+                }}
+              >
+                <option value="">Select a client…</option>
+                {existingClients.map((c) => <option key={c} value={c}>{c}</option>)}
+                <option disabled>────────────────</option>
+                <option value="__new__">✚ Create new client</option>
+              </select>
+              {clientMode === 'new' && (
+                <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
+                  <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
+                  <input
+                    value={clientName}
+                    onChange={(e) => setClientName(e.target.value)}
+                    required
+                    placeholder="e.g. Acme Corp"
+                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                    autoFocus
+                  />
+                </div>
+              )}
             </div>
           </div>
 
@@ -201,6 +231,36 @@ export default function TenantCreateProjectPage() {
             <p className="mt-1 text-right text-xs text-gray-400">
               {description.length} / {MAX_DESC}
             </p>
+          </div>
+
+          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+            <div className="rounded-lg border border-gray-200 p-4">
+              <label className="mb-1 block text-xs font-semibold text-gray-700">
+                Start Date <span className="text-red-500">*</span>
+              </label>
+              <p className="mb-2 text-xs text-gray-400">When does this project start?</p>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                max={endDate || undefined}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+              />
+            </div>
+
+            <div className="rounded-lg border border-gray-200 p-4">
+              <label className="mb-1 block text-xs font-semibold text-gray-700">
+                End Date <span className="text-red-500">*</span>
+              </label>
+              <p className="mb-2 text-xs text-gray-400">When does this project end?</p>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                min={startDate || undefined}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+              />
+            </div>
           </div>
         </div>
 

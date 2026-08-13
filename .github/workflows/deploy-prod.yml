@@ -48,10 +48,14 @@ jobs:
           CHECKSUM_WINDOWS=$(cat agent-artifacts/agent-windows/checksum-windows.txt | tr -d '[:space:]')
           CHECKSUM_LINUX=$(cat agent-artifacts/agent-linux/checksum-linux.txt | tr -d '[:space:]')
           AGENT_VERSION=$(cat agent-artifacts/agent-linux/agent-version.txt | tr -d '[:space:]')
+          RACKO_APP_VERSION=$(cat agent-artifacts/agent-windows/racko-app-version.txt | tr -d '[:space:]')
+          RACKO_APP_CHECKSUM=$(cat agent-artifacts/agent-windows/racko-app-checksum.txt | tr -d '[:space:]')
           docker build \
             --build-arg AGENT_VERSION=$AGENT_VERSION \
             --build-arg AGENT_CHECKSUM_WINDOWS=$CHECKSUM_WINDOWS \
             --build-arg AGENT_CHECKSUM_LINUX=$CHECKSUM_LINUX \
+            --build-arg RACKO_APP_VERSION=$RACKO_APP_VERSION \
+            --build-arg RACKO_APP_CHECKSUM=$RACKO_APP_CHECKSUM \
             -t ${{ env.DOCKERHUB_USERNAME }}/racko-core-api:production \
             -f core-api/Dockerfile core-api/
 
@@ -222,11 +226,14 @@ jobs:
         if: matrix.platform == 'windows'
         shell: pwsh
         run: |
+          $RACKO_APP_VERSION = (Get-Content racko-app/VERSION -Raw).Trim()
           dotnet publish racko-app/RackoApp.csproj `
             -c Release `
             -r win-x64 `
             --self-contained true `
             -p:PublishReadyToRun=true `
+            -p:Version=$RACKO_APP_VERSION `
+            -p:InformationalVersion=$RACKO_APP_VERSION `
             -o racko-app/publish
           # 1. Zip for VM push flow (push script downloads + extracts this)
           Compress-Archive -Path racko-app/publish/* -DestinationPath agent/dist/racko-app.zip -Force
@@ -253,6 +260,13 @@ jobs:
           Write-Host "Windows binary SHA256: $hash"
           Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "AGENT_CHECKSUM_WINDOWS=$hash"
           Set-Content -Path dist/checksum-windows.txt -Value $hash
+          $appHash = (Get-FileHash dist/racko-app.zip -Algorithm SHA256).Hash.ToLower()
+          Write-Host "racko-app.zip SHA256: $appHash"
+          Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "RACKO_APP_CHECKSUM=$appHash"
+          Set-Content -Path dist/racko-app-checksum.txt -Value $appHash
+          $appVer = (Get-Content ../racko-app/VERSION -Raw).Trim()
+          Set-Content -Path dist/racko-app-version.txt -Value $appVer
+          cp VERSION dist/agent-version.txt
 
       - name: Build Windows installer (Windows only)
         if: matrix.platform == 'windows'
@@ -272,6 +286,8 @@ jobs:
             agent/dist/agent-version.txt
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-agent-setup.exe' || '' }}
             ${{ matrix.platform == 'windows' && 'agent/dist/racko-app.zip' || '' }}
+            ${{ matrix.platform == 'windows' && 'agent/dist/racko-app-checksum.txt' || '' }}
+            ${{ matrix.platform == 'windows' && 'agent/dist/racko-app-version.txt' || '' }}
           retention-days: 1
 
   deploy-agent:

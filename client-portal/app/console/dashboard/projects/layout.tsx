@@ -1,35 +1,13 @@
 'use client';
 
-import { BarChart3, FolderKanban, Plus } from 'lucide-react';
-import { TenantServiceShell } from '@/components/tenant/TenantServiceShell';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { useTenantAuth } from '@/context/TenantAuthContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
+import { ServiceShellLayout } from '@/components/console/ServiceShellLayout';
+import { TenantTopBar } from '@/components/tenant/TenantTopBar';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
-import type { ServiceNavLink } from '@/components/console/ServiceNavSidebar';
-import { useRouter } from 'next/navigation';
-import { useEffect } from 'react';
-import { useTenantAuth } from '@/context/TenantAuthContext';
-
-const links: ServiceNavLink[] = [
-  {
-    href: tenantConsole.projects,
-    label: 'All projects',
-    icon: <FolderKanban className="h-4 w-4" />,
-    exact: true,
-  },
-  {
-    href: tenantConsole.projectsCreate,
-    label: 'Create project',
-    icon: <Plus className="h-4 w-4" />,
-    isActive: (p) => p.startsWith(tenantConsole.projectsCreate),
-  },
-  {
-    href: tenantConsole.projectsReports,
-    label: 'Reports',
-    icon: <BarChart3 className="h-4 w-4" />,
-    isActive: (p) => p.startsWith(tenantConsole.projectsReports),
-  },
-];
 
 export default function TenantProjectsLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
@@ -61,8 +39,13 @@ export default function TenantProjectsLayout({ children }: { children: React.Rea
   }
 
   return (
-    <TenantServiceShell title="Projects" subtitle="Client cost containers" links={links}>
+    <ServiceShellLayout
+      sidebarOpen={false}
+      sidebar={null}
+      topBar={<TenantTopBar title="Projects" subtitle="Client cost containers" onToggleSidebar={() => {}} />}
+      mainClassName="p-6 lg:p-8"
+    >
       {children}
-    </TenantServiceShell>
+    </ServiceShellLayout>
   );
 }

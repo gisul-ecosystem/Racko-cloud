@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import type { ServiceKey } from '../../constants/serviceCatalog';
 import { Tenant } from '../../models/tenant.model';
 import {
   TenantServiceConfig,
@@ -18,20 +17,22 @@ import {
 import { isValidObjectId } from './tenant.service';
 import { normalizeVmManagementLimits, listPlatformTemplatesForAssignment } from './tenantVmManagementCatalog.service';
 import { orderService } from '../order/order.service';
+import { serviceCatalogService } from '../serviceCatalog/serviceCatalog.service';
 
 export interface TenantServiceConfigPublic {
   id: string;
   tenantId: string;
-  serviceKey: ServiceKey;
+  serviceKey: string;
   status: TenantServiceConfigStatus;
   limits: Record<string, unknown>;
   pricing: Record<string, unknown>;
   createdBy: string;
   createdAt: Date;
   updatedAt: Date;
+  label?: string;
 }
 
-function toPublic(doc: ITenantServiceConfig): TenantServiceConfigPublic {
+function toPublic(doc: ITenantServiceConfig, label?: string): TenantServiceConfigPublic {
   return {
     id: doc._id.toString(),
     tenantId: doc.tenantId.toString(),
@@ -42,11 +43,12 @@ function toPublic(doc: ITenantServiceConfig): TenantServiceConfigPublic {
     createdBy: doc.createdBy.toString(),
     createdAt: doc.createdAt,
     updatedAt: doc.updatedAt,
+    ...(label ? { label } : {}),
   };
 }
 
 function assertValidMergedConfig(
-  serviceKey: ServiceKey,
+  serviceKey: string,
   limits: unknown,
   pricing: unknown
 ): void {
@@ -71,7 +73,7 @@ async function requireTenantExists(tenantId: string): Promise<void> {
 export class TenantServiceConfigService {
   async assignService(
     tenantId: string,
-    serviceKey: ServiceKey,
+    serviceKey: string,
     limits: Record<string, unknown>,
     pricing: Record<string, unknown>,
     createdBy: string
@@ -81,6 +83,7 @@ export class TenantServiceConfigService {
     }
 
     await requireTenantExists(tenantId);
+    await serviceCatalogService.assertAssignable(serviceKey, 'tenant');
 
     const existing = await TenantServiceConfig.findOne({
       tenantId: new mongoose.Types.ObjectId(tenantId),
@@ -107,7 +110,8 @@ export class TenantServiceConfigService {
       createdBy: new mongoose.Types.ObjectId(createdBy),
     });
 
-    return toPublic(doc);
+    const labels = await serviceCatalogService.getLabelMap([serviceKey]);
+    return toPublic(doc, labels[serviceKey]);
   }
 
   async listServicesForTenant(tenantId: string): Promise<TenantServiceConfigPublic[]> {
@@ -117,12 +121,13 @@ export class TenantServiceConfigService {
       tenantId: new mongoose.Types.ObjectId(tenantId),
     }).sort({ serviceKey: 1 });
 
-    return configs.map(toPublic);
+    const labels = await serviceCatalogService.getLabelMap(configs.map((c) => c.serviceKey));
+    return configs.map((c) => toPublic(c, labels[c.serviceKey]));
   }
 
   async updateServiceConfig(
     tenantId: string,
-    serviceKey: ServiceKey,
+    serviceKey: string,
     updates: ServiceConfigUpdateInput
   ): Promise<TenantServiceConfigPublic> {
     if (!isValidObjectId(tenantId)) {
@@ -173,14 +178,15 @@ export class TenantServiceConfigService {
     config.markModified('pricing');
     await config.save();
 
-    return toPublic(config);
+    const labels = await serviceCatalogService.getLabelMap([serviceKey]);
+    return toPublic(config, labels[serviceKey]);
   }
 
   async removeService(
     tenantId: string,
-    serviceKey: ServiceKey,
+    serviceKey: string,
     force = false
-  ): Promise<TenantServiceConfigPublic | { deleted: true; serviceKey: ServiceKey }> {
+  ): Promise<TenantServiceConfigPublic | { deleted: true; serviceKey: string }> {
     if (!isValidObjectId(tenantId)) {
       throw new ValidationError('Invalid tenant id format.');
     }
