@@ -8,12 +8,19 @@ services:
     environment:
       NODE_ENV: production
       PORT: ${CORE_API_PORT:-8001}
-      JWT_ACCESS_EXPIRES_IN: ${CORE_API_JWT_ACCESS_EXPIRES_IN:-2m}
+      JWT_ACCESS_EXPIRES_IN: "30m"
+      JWT_REFRESH_EXPIRES_IN: "7d"
       TENANT_ASSETS_VOLUME_PATH: /data/tenant-assets
       CREATE_VM_AGENT_URL: http://create-vm-catalog-agent:3789
       RESELLER_SERVICE_URL: http://cloud-automation-reseller:3005
       SEAWEEDFS_ENDPOINT: https://s3api.gisul.co.in
       SEAWEEDFS_BUCKET: racko-vm-activity
+      GUACAMOLE_PUBLIC_URL: "https://guac-qa.racko.ai/guacamole"
+      GUACAMOLE_BASE_URL: "http://10.110.0.30:8080/guacamole"
+      PROXMOX_HOST: "https://103.99.38.117:8006"
+      PROXMOX_TOKEN_ID: "root@pam!new-racko-cluster"
+      # TODO: rotate PROXMOX_TOKEN_SECRET before prod promotion
+      PROXMOX_TOKEN_SECRET: "1de8b57c-ceff-44b3-bc29-81b76a829085"
     volumes:
       - tenant-assets:/data/tenant-assets
       - ./agent/dist:/agent/dist:ro
@@ -47,6 +54,7 @@ services:
       SUPABASE_DB_QUERY_TIMEOUT_MS: ${SUPABASE_DB_QUERY_TIMEOUT_MS:-0}
       SIGNIN_STALE_SESSION_MINUTES: ${SIGNIN_STALE_SESSION_MINUTES:-90}
       SIGNIN_MONITOR_LOOKBACK_MINUTES: ${SIGNIN_MONITOR_LOOKBACK_MINUTES:-180}
+      DATABASE_URL: "postgresql://racko:Supriya%401212123@10.110.0.20:5432/racko"
     ports:
       - "${CLOUD_AUTOMATION_PORT:-3002}:3002"
     networks:
