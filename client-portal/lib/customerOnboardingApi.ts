@@ -13,6 +13,7 @@ async function unwrap<T>(promise: Promise<ApiEnvelope<T>>): Promise<T> {
 
 export interface OrganizationAccessRequest {
   _id: string;
+  orgId?: string;
   userId:
     | string
     | {
