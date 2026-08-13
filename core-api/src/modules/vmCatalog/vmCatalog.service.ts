@@ -4,6 +4,7 @@ import {
   type ICatalogVm,
   type VmCatalogStatus,
 } from '../../models/catalogVm.model';
+import { CatalogVmInstanceModel } from '../../models/catalogVmInstance.model';
 import { VmCatalogPlan } from '../../models/vmCatalogPlan.model';
 import { ProjectModel } from '../../models/project.model';
 import { User } from '../../models/user.model';
@@ -47,6 +48,7 @@ import type {
 import { customerDisplayName } from './vmCatalogPlan.service';
 import { catalogPricingBucket, needsOsTemplateChange } from './webynePlanRouting';
 import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
+import { resolveSoftwareIconUrl } from '../software-catalog/software-catalog.icons';
 import { randomUUID } from 'crypto';
 
 const GST_RATE = 0.18;
@@ -264,6 +266,134 @@ class VmCatalogService {
     return response!;
   }
 
+  private async persistFetchedInstances(
+    doc: ICatalogVm,
+    servers: Array<{
+      hostname?: string | null;
+      ipAddress?: string | null;
+      username?: string | null;
+      password?: string | null;
+      protocol?: 'rdp' | 'ssh' | null;
+      externalRef?: string | null;
+      rawLabel?: string | null;
+    }>
+  ): Promise<number> {
+    if (!servers.length) return 0;
+
+    for (let idx = 0; idx < servers.length; idx += 1) {
+      const server = servers[idx]!;
+      const update = {
+        ...(doc.adminId ? { adminId: doc.adminId } : {}),
+        ...(doc.tenantId ? { tenantId: doc.tenantId } : {}),
+        instanceOrder: idx + 1,
+        ...(server.hostname ? { hostname: server.hostname } : {}),
+        ...(server.ipAddress ? { ipAddress: server.ipAddress } : {}),
+        ...(server.username ? { username: server.username } : {}),
+        ...(server.password ? { password: encrypt(server.password) } : {}),
+        ...(server.protocol ? { protocol: server.protocol } : {}),
+        ...(server.rawLabel ? { rawLabel: server.rawLabel } : {}),
+        status: 'ready_to_attach' as const,
+        updatedAt: new Date(),
+      };
+
+      if (server.externalRef) {
+        await CatalogVmInstanceModel.findOneAndUpdate(
+          { catalogVmId: doc._id, externalRef: server.externalRef },
+          {
+            $set: {
+              ...update,
+              externalRef: server.externalRef,
+            },
+            $setOnInsert: {
+              catalogVmId: doc._id,
+              createdAt: new Date(),
+            },
+          },
+          { upsert: true, new: true }
+        );
+      } else {
+        await CatalogVmInstanceModel.findOneAndUpdate(
+          { catalogVmId: doc._id, instanceOrder: idx + 1 },
+          {
+            $set: update,
+            $setOnInsert: {
+              catalogVmId: doc._id,
+              createdAt: new Date(),
+            },
+          },
+          { upsert: true, new: true }
+        );
+      }
+    }
+
+    return CatalogVmInstanceModel.countDocuments({ catalogVmId: doc._id });
+  }
+
+  private async expandAdminResponsesWithInstances(
+    docs: ICatalogVm[],
+    responses: CatalogVmResponse[]
+  ): Promise<CatalogVmResponse[]> {
+    if (docs.length === 0) return [];
+    const ids = docs.map((doc) => doc._id);
+    const instances = await CatalogVmInstanceModel.find({
+      catalogVmId: { $in: ids },
+    })
+      .sort({ instanceOrder: 1, createdAt: 1 })
+      .lean();
+
+    const responseById = new Map(responses.map((row) => [row._id, row]));
+    const grouped = new Map<string, typeof instances>();
+    for (const instance of instances) {
+      const key = instance.catalogVmId.toString();
+      const bucket = grouped.get(key);
+      if (bucket) bucket.push(instance);
+      else grouped.set(key, [instance]);
+    }
+
+    const expanded: CatalogVmResponse[] = [];
+    for (const doc of docs) {
+      const parentId = doc._id.toString();
+      const base = responseById.get(parentId);
+      if (!base) continue;
+
+      const rows = grouped.get(parentId) || [];
+      const total = Math.max(1, Number(doc.quantity) || 1, rows.length);
+      if (rows.length === 0 && total === 1) {
+        expanded.push(base);
+        continue;
+      }
+
+      for (let idx = 0; idx < total; idx += 1) {
+        const row = rows[idx];
+        expanded.push({
+          ...base,
+          parentRequestId: base._id,
+          ...(row ? { instanceId: row._id.toString() } : {}),
+          instanceIndex: idx + 1,
+          instanceTotal: total,
+          ...(base.status === 'active' && row?.hostname ? { hostname: row.hostname } : {}),
+          ...(base.status === 'active' && row?.ipAddress ? { ipAddress: row.ipAddress } : {}),
+          ...(base.status === 'active' && row?.username ? { username: row.username } : {}),
+          ...(base.status === 'active' && row?.protocol ? { protocol: row.protocol } : {}),
+          ...(base.status === 'active' && row?.externalRef
+            ? { externalRef: row.externalRef }
+            : {}),
+          ...(base.status === 'active' && row?.password
+            ? (() => {
+                try {
+                  return { password: decrypt(row.password) };
+                } catch {
+                  return {};
+                }
+              })()
+            : {}),
+        });
+      }
+    }
+
+    return expanded;
+  }
+
   private displayNameForPlan(plan: { sno?: number | null; name: string }): string {
     return customerDisplayName(plan.sno);
   }
@@ -369,18 +499,20 @@ class VmCatalogService {
       _id: string;
       name: string;
       version: string;
+      iconUrl?: string;
       supportedOS: Array<'windows' | 'linux' | 'macos'>;
       installMethod: string;
     }>
   > {
     const docs = await SoftwareCatalogModel.find()
-      .select('name version supportedOS installMethod')
+      .select('name version iconUrl supportedOS installMethod')
       .sort({ name: 1 })
       .lean();
     return docs.map((d) => ({
       _id: d._id.toString(),
       name: d.name,
       version: d.version,
+      iconUrl: resolveSoftwareIconUrl(d.name, d.iconUrl),
       supportedOS: d.supportedOS,
       installMethod: d.installMethod,
     }));
@@ -842,9 +974,168 @@ class VmCatalogService {
     return this.toCustomerResponse(doc, { adminEmail: admin.email });
   }
 
+  async createRequestForSuperAdmin(
+    dto: CreateCatalogVmRequestDto,
+    superAdminId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    const superAdmin = await User.findById(superAdminId).select('email role isActive').lean();
+    if (!superAdmin || superAdmin.role !== 'super_admin' || !superAdmin.isActive) {
+      throw new ForbiddenError('Only active super admins can submit super-admin catalog VM requests.');
+    }
+
+    const preferredSoftwareIds = await this.resolvePreferredSoftwareIds(
+      dto.preferredSoftwareIds
+    );
+
+    const plan = await VmCatalogPlan.findById(dto.planId).lean();
+    if (!plan || !plan.isActive) {
+      throw new ValidationError('Selected template is not available.');
+    }
+
+    const billing = String(dto.billing || '').toLowerCase();
+    if (!BILLING_PERIODS.includes(billing as (typeof BILLING_PERIODS)[number])) {
+      throw new ValidationError('Invalid billing cycle.');
+    }
+
+    const baseUnit = Number(plan[billing as (typeof BILLING_PERIODS)[number]]);
+    if (!Number.isFinite(baseUnit) || baseUnit <= 0) {
+      throw new ValidationError('Selected billing cycle is not priced for this template.');
+    }
+
+    const adminUser = await User.findById(superAdminId).select('role orgOwnerId').lean();
+    const orgId = adminUser
+      ? accountVmPricingService.resolveOrgIdFromUser({
+          _id: adminUser._id,
+          role: adminUser.role,
+          orgOwnerId: adminUser.orgOwnerId,
+        })
+      : null;
+    const priceBucket = catalogPricingBucket(dto.category);
+    const resolved = await accountVmPricingService.resolveWebyneUnitPrice({
+      account: orgId ? { scopeType: 'organization', orgId } : null,
+      category: priceBucket,
+      planId: plan._id.toString(),
+      period: billing as (typeof BILLING_PERIODS)[number],
+      baseUnit,
+    });
+
+    const quantity = Math.max(1, Math.floor(Number(dto.quantity) || 1));
+    const unitPrice = resolved.unitPrice;
+    const subtotal = roundMoney(unitPrice * quantity);
+    const tax = roundMoney(subtotal * GST_RATE);
+    const total = roundMoney(subtotal + tax);
+
+    if (!Number.isFinite(total) || total <= 0) {
+      throw new ValidationError('Invalid purchase total.');
+    }
+
+    const durationDays = resolveDurationDays(dto.billing, dto.durationDays);
+    const canonicalSpec =
+      dto.canonicalSpec || specsToCanonicalSpec(dto.specs, dto.category);
+
+    let selection: Awaited<ReturnType<typeof resellerSelect>>;
+    try {
+      selection = await resellerSelect({
+        canonicalSpec,
+        category: dto.category,
+        durationDays,
+        specs: dto.specs,
+      });
+    } catch (err) {
+      logger.warn('[VmCatalog] Reseller select failed — falling back to webyne', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      selection = {
+        provider: 'webyne',
+        region: null,
+        category: dto.category,
+        canonicalSpec,
+        rawTotalPricePerHr: null,
+        autoProvisioned: false,
+        reason: 'select_error_fallback',
+      };
+    }
+
+    const autoProvisioned = false;
+    const provider = 'webyne';
+
+    const projectCtx = dto.projectId
+      ? await projectsService.assertUsableForService({
+          projectId: dto.projectId,
+          actingUserId: superAdminId.toString(),
+          serviceKey: 'create-vm',
+        })
+      : null;
+
+    const doc = await CatalogVmModel.create({
+      adminId: superAdminId,
+      ...(projectCtx ? { projectId: projectCtx.projectId } : {}),
+      preferredSoftwareIds,
+      postReadyStatus: preferredSoftwareIds.length > 0 ? 'pending' : 'none',
+      provider,
+      category: dto.category,
+      planId: plan._id.toString(),
+      planName: plan.name,
+      specs: {
+        cpu: `${plan.vcpu} vCPU`,
+        ram: `${plan.ramGb} GB`,
+        disk: `${plan.ssdGb} GB SSD`,
+      },
+      billing,
+      quantity,
+      template: dto.template,
+      pricingSnapshot: {
+        currency: plan.currency || dto.pricingSnapshot.currency || 'INR',
+        subtotal,
+        tax,
+        total,
+        billingLabel: 'GST 18%',
+      },
+      status: 'provisioning',
+      chargedAmount: 0,
+      walletDebited: false,
+      needsOsChange: !autoProvisioned && needsOsTemplateChange(plan.name, dto.category),
+      osTemplateChanged: false,
+      autoProvisioned,
+      ...(selection.region ? { region: selection.region } : {}),
+      ...(selection.rawTotalPricePerHr != null
+        ? { rawProviderCostPerHr: selection.rawTotalPricePerHr }
+        : {}),
+      ...(autoProvisioned ? { expiresAt: computeExpiresAt(durationDays) } : {}),
+    });
+
+    const customerPlanName = this.displayNameForPlan(plan);
+    await this.notifySuperAdminsOfRequest(doc, superAdmin.email, {
+      tenantId: undefined,
+    });
+    await this.notifyRequester(
+      superAdminId,
+      'Webyne VM is provisioning',
+      `Your ${doc.quantity}× ${customerPlanName} request was submitted. It will be available soon.`,
+      {
+        requestId: doc._id.toString(),
+        event: 'submitted',
+        planName: customerPlanName,
+        total,
+      }
+    );
+
+    logger.info('[VmCatalog] Super-admin request created', {
+      requestId: doc._id.toString(),
+      superAdminId: superAdminId.toString(),
+      planName: doc.planName,
+      provider: doc.provider,
+      autoProvisioned: false,
+      walletDebited: false,
+    });
+
+    return this.toCustomerResponse(doc, { adminEmail: superAdmin.email });
+  }
+
   async listForAdmin(adminId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({ adminId }).sort({ createdAt: -1 });
-    return this.toCustomerResponses(docs);
+    const responses = await this.toCustomerResponses(docs);
+    return this.expandAdminResponsesWithInstances(docs, responses);
   }
 
   /** Admin: single owned VM (for console toolbar name, etc.). */
@@ -863,25 +1154,43 @@ class VmCatalogService {
   async openConsole(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId,
-    dimensions?: { width?: number; height?: number }
+    dimensions?: { width?: number; height?: number },
+    instanceId?: string
   ): Promise<CatalogVmConsoleSession> {
     const doc = await this.findOwnedByAdmin(id, adminId);
 
     if (doc.status !== 'active') {
       throw new ValidationError('Console is only available after the VM is attached (active).');
     }
-    if (!doc.ipAddress) {
+    let ipAddress = doc.ipAddress;
+    let username = doc.username;
+    let encryptedPassword = doc.password;
+    let protocol = doc.protocol || (doc.category === 'windows' ? 'rdp' : 'ssh');
+
+    if (instanceId && mongoose.Types.ObjectId.isValid(instanceId)) {
+      const instance = await CatalogVmInstanceModel.findOne({
+        _id: new mongoose.Types.ObjectId(instanceId),
+        catalogVmId: doc._id,
+      }).lean();
+      if (instance) {
+        ipAddress = instance.ipAddress || ipAddress;
+        username = instance.username || username;
+        encryptedPassword = instance.password || encryptedPassword;
+        protocol = instance.protocol || protocol;
+      }
+    }
+
+    if (!ipAddress) {
       throw new ValidationError('This VM has no IP address for console access.');
     }
-    if (!doc.password) {
+    if (!encryptedPassword) {
       throw new ValidationError('This VM has no password for console access.');
     }
 
-    const protocol = doc.protocol || (doc.category === 'windows' ? 'rdp' : 'ssh');
-    const username = doc.username || (protocol === 'rdp' ? 'Administrator' : 'root');
+    const resolvedUsername = username || (protocol === 'rdp' ? 'Administrator' : 'root');
     let password: string;
     try {
-      password = decrypt(doc.password);
+      password = decrypt(encryptedPassword);
     } catch {
       throw new ValidationError('Stored password could not be decrypted for console access.');
     }
@@ -891,16 +1200,16 @@ class VmCatalogService {
     logger.info('[VmCatalog] Opening Guacamole session', {
       catalogVmId: doc._id.toString(),
       protocol,
-      hostname: doc.ipAddress,
+      hostname: ipAddress,
     });
 
     const session = await guacamoleClient.openConsole(
       `catalogvm-${doc._id.toString()}`,
       protocol,
       {
-        hostname: doc.ipAddress,
+        hostname: ipAddress,
         port,
-        username,
+        username: resolvedUsername,
         password,
         ignoreCert: true,
         securityMode: 'any',
@@ -1180,17 +1489,54 @@ class VmCatalogService {
       .lean();
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
     const projects = await this.resolveProjectLabels(docs);
+    const instances = await CatalogVmInstanceModel.find({
+      catalogVmId: { $in: docs.map((doc) => doc._id) },
+    })
+      .sort({ instanceOrder: 1, createdAt: 1 })
+      .lean();
+    const instancesByRequest = new Map<string, typeof instances>();
+    for (const instance of instances) {
+      const key = instance.catalogVmId.toString();
+      const bucket = instancesByRequest.get(key);
+      if (bucket) bucket.push(instance);
+      else instancesByRequest.set(key, [instance]);
+    }
 
     return docs.map((doc) => {
       const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
-      return this.toResponse(doc, {
+      const instanceRows = instancesByRequest.get(doc._id.toString()) || [];
+      return {
+        ...this.toResponse(doc, {
         adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
         includeSecrets: true,
         role: 'super_admin',
         ...(project
           ? { projectName: project.projectName, clientName: project.clientName }
           : {}),
-      });
+        }),
+        fetchedCount: instanceRows.length,
+        missingCount: Math.max(0, (Number(doc.quantity) || 1) - instanceRows.length),
+        partial: instanceRows.length < (Number(doc.quantity) || 1),
+        instances: instanceRows.map((row) => ({
+          instanceId: row._id.toString(),
+          instanceIndex: row.instanceOrder,
+          status: row.status,
+          ...(row.hostname ? { hostname: row.hostname } : {}),
+          ...(row.ipAddress ? { ipAddress: row.ipAddress } : {}),
+          ...(row.username ? { username: row.username } : {}),
+          ...(row.protocol ? { protocol: row.protocol } : {}),
+          ...(row.externalRef ? { externalRef: row.externalRef } : {}),
+          ...(row.password
+            ? (() => {
+                try {
+                  return { password: decrypt(row.password) };
+                } catch {
+                  return {};
+                }
+              })()
+            : {}),
+        })),
+      };
     });
   }
 
@@ -1246,7 +1592,19 @@ class VmCatalogService {
         scrapeOnly: Boolean(doc.providerPurchased),
       });
 
-      const server = result.server;
+      const servers =
+        result.servers && result.servers.length > 0
+          ? result.servers
+          : result.server
+            ? [result.server]
+            : [];
+      const fetchedCount = await this.persistFetchedInstances(doc, servers);
+      const server = servers[0] || null;
+
+      if (!server) {
+        throw new ValidationError('No VM details were returned from Webyne after fulfillment.');
+      }
+
       doc.hostname = server.hostname || undefined;
       doc.ipAddress = server.ipAddress || undefined;
       doc.username = server.username || undefined;
@@ -1256,8 +1614,13 @@ class VmCatalogService {
       doc.protocol = server.protocol || (doc.category === 'windows' ? 'rdp' : 'ssh');
       doc.externalRef = server.externalRef || undefined;
       doc.providerPurchased = doc.providerPurchased || Boolean(result.purchased);
-      doc.fulfillError = undefined;
-      doc.status = 'ready_to_attach';
+      if (fetchedCount < doc.quantity) {
+        doc.status = 'failed';
+        doc.fulfillError = `Fetched ${fetchedCount}/${doc.quantity} VM details. Retry Fetch details to collect remaining VM credentials.`;
+      } else {
+        doc.fulfillError = undefined;
+        doc.status = 'ready_to_attach';
+      }
       doc.updatedAt = new Date();
       await doc.save();
 
@@ -1335,7 +1698,19 @@ class VmCatalogService {
         scrapeOnly: true,
       });
 
-      const server = result.server;
+      const servers =
+        result.servers && result.servers.length > 0
+          ? result.servers
+          : result.server
+            ? [result.server]
+            : [];
+      const fetchedCount = await this.persistFetchedInstances(doc, servers);
+      const server = servers[0] || null;
+
+      if (!server) {
+        throw new ValidationError('No VM details were returned from Webyne scrape.');
+      }
+
       doc.hostname = server.hostname || undefined;
       doc.ipAddress = server.ipAddress || undefined;
       doc.username = server.username || undefined;
@@ -1345,8 +1720,13 @@ class VmCatalogService {
       doc.protocol = server.protocol || (doc.category === 'windows' ? 'rdp' : 'ssh');
       doc.externalRef = server.externalRef || undefined;
       doc.providerPurchased = true;
-      doc.fulfillError = undefined;
-      doc.status = 'ready_to_attach';
+      if (fetchedCount < doc.quantity) {
+        doc.status = 'failed';
+        doc.fulfillError = `Fetched ${fetchedCount}/${doc.quantity} VM details. Retry Fetch details to collect remaining VM credentials.`;
+      } else {
+        doc.fulfillError = undefined;
+        doc.status = 'ready_to_attach';
+      }
       doc.updatedAt = new Date();
       await doc.save();
 
@@ -1392,12 +1772,32 @@ class VmCatalogService {
       throw new ValidationError('Cannot attach without hostname or IP from Webyne.');
     }
 
+    const fetchedInstanceCount = await CatalogVmInstanceModel.countDocuments({
+      catalogVmId: doc._id,
+    });
+    if (fetchedInstanceCount > 0 && fetchedInstanceCount < doc.quantity) {
+      throw new ValidationError(
+        `Only ${fetchedInstanceCount}/${doc.quantity} VM details were fetched. Run Fetch details until all requested VMs are captured before Attach.`
+      );
+    }
+
     doc.status = 'active';
     doc.attachedAt = new Date();
     doc.reviewedBy = reviewerId;
     doc.reviewedAt = new Date();
     doc.updatedAt = new Date();
     await doc.save();
+
+    await CatalogVmInstanceModel.updateMany(
+      { catalogVmId: doc._id },
+      {
+        $set: {
+          status: 'active',
+          attachedAt: doc.attachedAt,
+          updatedAt: new Date(),
+        },
+      }
+    );
 
     this.schedulePostReadySetup(doc);
 
@@ -1419,7 +1819,7 @@ class VmCatalogService {
 
   /**
    * Super-admin: after Linux-first deploy for a Windows request, change OS on
-   * Webyne machineshow to Windows (template via agent env / body).
+   * every fetched Webyne instance to Windows (template via agent env / body).
    */
   async changeTemplateToWindows(
     id: mongoose.Types.ObjectId,
@@ -1436,9 +1836,6 @@ class VmCatalogService {
         'This request does not need an OS template change (not a Windows request on a Linux-priced plan).'
       );
     }
-    if (doc.osTemplateChanged) {
-      throw new ValidationError('OS template has already been changed to Windows for this request.');
-    }
     if (doc.status !== 'ready_to_attach' && doc.status !== 'failed') {
       throw new ValidationError(
         'Change template to Windows is only available after the Linux VM is provisioned (ready to attach).'
@@ -1453,6 +1850,25 @@ class VmCatalogService {
       throw new ValidationError('Provider purchase did not complete; Approve the request first.');
     }
 
+    const instanceRows = await CatalogVmInstanceModel.find({ catalogVmId: doc._id })
+      .sort({ instanceOrder: 1, createdAt: 1 })
+      .lean();
+    const externalRefs = Array.from(
+      new Set(
+        instanceRows
+          .map((row) => String(row.externalRef || '').trim())
+          .filter((value) => Boolean(value))
+      )
+    );
+    if (!externalRefs.length && doc.externalRef) {
+      externalRefs.push(doc.externalRef);
+    }
+    if (!externalRefs.length) {
+      throw new ValidationError(
+        'Missing Webyne machine id(s) (externalRef). Use Fetch details first, then retry Change template.'
+      );
+    }
+
     doc.status = 'fulfilling';
     doc.fulfillError = undefined;
     doc.reviewedBy = reviewerId;
@@ -1460,46 +1876,91 @@ class VmCatalogService {
     doc.updatedAt = new Date();
     await doc.save();
 
-    try {
-      const result = await callCatalogAgentChangeOs({
-        externalRef: doc.externalRef,
-        targetOs: 'windows',
-        ...(opts?.template ? { template: opts.template } : {}),
-      });
+    const failures: Array<{ externalRef: string; error: string }> = [];
+    let firstSuccessfulResult: Awaited<ReturnType<typeof callCatalogAgentChangeOs>> | null = null;
 
-      const server = result.server;
-      if (server.hostname) doc.hostname = server.hostname;
-      if (server.ipAddress) doc.ipAddress = server.ipAddress;
-      if (server.username) doc.username = server.username;
-      if (server.password) doc.password = encrypt(server.password);
-      doc.protocol = server.protocol || 'rdp';
-      doc.osTemplateChanged = true;
-      doc.osTemplateChangedAt = new Date();
-      doc.needsOsChange = true;
-      doc.fulfillError = undefined;
-      doc.status = 'ready_to_attach';
-      doc.updatedAt = new Date();
-      await doc.save();
+    for (const externalRef of externalRefs) {
+      try {
+        const result = await callCatalogAgentChangeOs({
+          externalRef,
+          targetOs: 'windows',
+          ...(opts?.template ? { template: opts.template } : {}),
+        });
 
-      logger.info('[VmCatalog] OS template changed to Windows', {
-        requestId: id.toString(),
-        externalRef: doc.externalRef,
-        template: result.template,
-      });
+        if (!firstSuccessfulResult) {
+          firstSuccessfulResult = result;
+        }
 
-      return this.toResponse(doc, { includeSecrets: true });
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      logger.error('[VmCatalog] Change template to Windows failed', {
-        requestId: id.toString(),
-        error: message,
-      });
-      doc.status = 'ready_to_attach';
+        const server = result.server;
+        await CatalogVmInstanceModel.findOneAndUpdate(
+          { catalogVmId: doc._id, externalRef },
+          {
+            $set: {
+              ...(server.hostname ? { hostname: server.hostname } : {}),
+              ...(server.ipAddress ? { ipAddress: server.ipAddress } : {}),
+              ...(server.username ? { username: server.username } : {}),
+              ...(server.password ? { password: encrypt(server.password) } : {}),
+              ...(server.protocol ? { protocol: server.protocol } : {}),
+              ...(server.rawLabel ? { rawLabel: server.rawLabel } : {}),
+              status: 'ready_to_attach' as const,
+              updatedAt: new Date(),
+            },
+          },
+          { new: true }
+        );
+
+        logger.info('[VmCatalog] OS template changed to Windows', {
+          requestId: id.toString(),
+          externalRef,
+          template: result.template,
+        });
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : String(err);
+        failures.push({ externalRef, error: message });
+        logger.error('[VmCatalog] Change template to Windows failed for instance', {
+          requestId: id.toString(),
+          externalRef,
+          error: message,
+        });
+      }
+    }
+
+    if (!firstSuccessfulResult) {
+      const message = failures[0]?.error || 'Change template to Windows failed.';
+      doc.status = 'failed';
       doc.fulfillError = message.slice(0, 500);
       doc.updatedAt = new Date();
       await doc.save().catch(() => undefined);
-      throw err instanceof Error ? err : new ValidationError(message);
+      throw new ValidationError(message);
     }
+
+    if (failures.length > 0) {
+      const message = `Changed ${externalRefs.length - failures.length}/${externalRefs.length} VMs to Windows. Failed: ${failures
+        .map((failure) => failure.externalRef)
+        .join(', ')}.`;
+      doc.status = 'failed';
+      doc.fulfillError = message.slice(0, 500);
+      doc.updatedAt = new Date();
+      await doc.save().catch(() => undefined);
+      throw new ValidationError(message);
+    }
+
+    const server = firstSuccessfulResult.server;
+    if (server.hostname) doc.hostname = server.hostname;
+    if (server.ipAddress) doc.ipAddress = server.ipAddress;
+    if (server.username) doc.username = server.username;
+    if (server.password) doc.password = encrypt(server.password);
+    doc.protocol = server.protocol || 'rdp';
+    doc.externalRef = server.externalRef || externalRefs[0];
+    doc.osTemplateChanged = true;
+    doc.osTemplateChangedAt = new Date();
+    doc.needsOsChange = true;
+    doc.fulfillError = undefined;
+    doc.status = 'ready_to_attach';
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    return this.toResponse(doc, { includeSecrets: true });
   }
 
   /**
@@ -1507,7 +1968,8 @@ class VmCatalogService {
    */
   async powerAction(
     id: mongoose.Types.ObjectId,
-    action: CatalogPowerAction
+    action: CatalogPowerAction,
+    instanceId?: string
   ): Promise<{
     action: CatalogPowerAction;
     panelUrl?: string;
@@ -1527,8 +1989,19 @@ class VmCatalogService {
       );
     }
 
+    let externalRef = doc.externalRef;
+    if (instanceId && mongoose.Types.ObjectId.isValid(instanceId)) {
+      const instance = await CatalogVmInstanceModel.findOne({
+        _id: new mongoose.Types.ObjectId(instanceId),
+        catalogVmId: doc._id,
+      }).lean();
+      if (instance?.externalRef) {
+        externalRef = instance.externalRef;
+      }
+    }
+
     const result = await callCatalogAgentPower({
-      externalRef: doc.externalRef,
+      externalRef,
       action,
     });
 
