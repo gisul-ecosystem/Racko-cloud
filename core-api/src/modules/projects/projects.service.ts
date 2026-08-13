@@ -140,7 +140,12 @@ async function nextSequenceForOwner(params: {
   const filter =
     params.ownerType === 'tenant'
       ? { ownerType: 'tenant' as const, tenantId: params.tenantId, year: params.year }
-      : { ownerType: 'org' as const, orgId: params.orgId, year: params.year };
+      : {
+          ownerType: 'org' as const,
+          // Explicitly require orgId to be the exact string — never match null/missing orgId.
+          orgId: { $eq: params.orgId },
+          year: params.year,
+        };
   const latest = await ProjectModel.findOne(filter)
     .sort({ sequenceNumber: -1 })
     .select('sequenceNumber')
@@ -195,10 +200,20 @@ async function resolveTargetOrgOwnerId(adminId: string): Promise<string> {
 async function createForOrg(
   orgId: string,
   createdByUserId: string,
-  input: CreateProjectInput
+  input: CreateProjectInput,
+  options?: { bypassServiceCheck?: boolean }
 ): Promise<ProjectPublic> {
-  const allowed = await getActiveOrgServiceKeys(orgId);
-  const enabledServices = assertServicesSubset(input.enabledServices, allowed);
+  if (!orgId || typeof orgId !== 'string') {
+    throw new ValidationError('Organization ID is required to create a project.');
+  }
+  let enabledServices: AdminServiceKey[];
+  if (options?.bypassServiceCheck) {
+    // Super-admin path: trust the requested services without checking org's active service list.
+    enabledServices = input.enabledServices.filter(isAdminServiceKey) as AdminServiceKey[];
+  } else {
+    const allowed = await getActiveOrgServiceKeys(orgId);
+    enabledServices = assertServicesSubset(input.enabledServices, allowed);
+  }
 
   const year = new Date().getUTCFullYear();
   const sequenceNumber = await nextSequenceForOwner({ ownerType: 'org', orgId, year });
@@ -431,7 +446,8 @@ export class ProjectsService {
     input: CreateProjectInput
   ): Promise<ProjectPublic> {
     const orgId = await resolveTargetOrgOwnerId(targetAdminId);
-    return createForOrg(orgId, createdByUserId, input);
+    // Bypass service check — super-admin is trusted to assign any service.
+    return createForOrg(orgId, createdByUserId, input, { bypassServiceCheck: true });
   }
 
   /** Super-admin: active project-eligible services for an org. */

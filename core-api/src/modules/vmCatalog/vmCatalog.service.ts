@@ -539,8 +539,12 @@ class VmCatalogService {
   private schedulePostReadySetup(doc: ICatalogVm): void {
     const softwareIds = doc.preferredSoftwareIds ?? [];
     if (softwareIds.length === 0) return;
-    if (!doc.adminId) {
-      logger.warn('[VmCatalog] Post-ready install skipped — Machine Manager is org-admin only', {
+
+    // Use the org admin id directly, or fall back to the super-admin who attached
+    // the VM (reviewedBy) so tenant VMs also get the agent+software push.
+    const effectiveAdminId = doc.adminId ?? doc.reviewedBy;
+    if (!effectiveAdminId) {
+      logger.warn('[VmCatalog] Post-ready install skipped — no admin or reviewer id', {
         requestId: doc._id.toString(),
       });
       void CatalogVmModel.updateOne(
@@ -548,14 +552,14 @@ class VmCatalogService {
         {
           $set: {
             postReadyStatus: 'failed',
-            postReadyError:
-              'Automatic agent/software install is available for organization VMs only.',
+            postReadyError: 'No admin or reviewer id available for agent install.',
             updatedAt: new Date(),
           },
         }
       ).catch(() => undefined);
       return;
     }
+
     void this.runPostReadySetup(doc._id).catch((err: unknown) => {
       logger.error('[VmCatalog] Post-ready setup failed', {
         requestId: doc._id.toString(),
@@ -568,7 +572,10 @@ class VmCatalogService {
     const doc = await CatalogVmModel.findById(id);
     if (!doc) return;
     if (doc.status !== 'active') return;
-    if (!doc.adminId) return;
+
+    // Org admin id takes priority; fall back to the reviewing super-admin for tenant VMs.
+    const effectiveAdminId = doc.adminId ?? doc.reviewedBy;
+    if (!effectiveAdminId) return;
 
     const softwareIds = (doc.preferredSoftwareIds ?? []).map((sid) => sid.toString());
     if (softwareIds.length === 0) return;
@@ -613,7 +620,7 @@ class VmCatalogService {
             password: plainPassword,
           },
         ],
-        doc.adminId,
+        effectiveAdminId,
         sessionId
       );
 
@@ -627,7 +634,7 @@ class VmCatalogService {
 
       await machineManagerService.createJobs(
         { machineIds: [machine._id], softwareIds },
-        doc.adminId
+        effectiveAdminId
       );
 
       doc.postReadyStatus = 'done';
