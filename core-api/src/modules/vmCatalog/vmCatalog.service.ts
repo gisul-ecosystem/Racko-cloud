@@ -88,6 +88,8 @@ const OPEN_FOR_SUPER_ADMIN: VmCatalogStatus[] = [
   'failed',
 ];
 
+const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
+
 class VmCatalogService {
   private adminDisplayStatus(status: VmCatalogStatus): VmCatalogStatus {
     if (status === 'ready_to_attach' || status === 'fulfilling') return 'provisioning';
@@ -1767,6 +1769,16 @@ class VmCatalogService {
       throw new ValidationError(
         'Change template to Windows before attaching this VM (it was deployed as Linux first).'
       );
+    }
+    if (needsChange && doc.osTemplateChanged && doc.osTemplateChangedAt) {
+      const elapsed = Date.now() - doc.osTemplateChangedAt.getTime();
+      if (elapsed < WINDOWS_ATTACH_DELAY_MS) {
+        const remainingMs = WINDOWS_ATTACH_DELAY_MS - elapsed;
+        const remainingMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+        throw new ValidationError(
+          `Attach will be enabled 12 minutes after template change. Please wait about ${remainingMinutes} minute(s).`
+        );
+      }
     }
     if (!doc.ipAddress && !doc.hostname) {
       throw new ValidationError('Cannot attach without hostname or IP from Webyne.');
