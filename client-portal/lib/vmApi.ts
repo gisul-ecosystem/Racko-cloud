@@ -336,12 +336,14 @@ export async function fetchMyVMs(filters?: {
   cloneType?: string;
   node?: string;
   isRestricted?: boolean;
+  projectId?: string;
 }): Promise<IVM[]> {
   const params = new URLSearchParams();
   if (filters?.status) params.set('status', filters.status);
   if (filters?.cloneType) params.set('cloneType', filters.cloneType);
   if (filters?.node) params.set('node', filters.node);
   if (typeof filters?.isRestricted === 'boolean') params.set('isRestricted', String(filters.isRestricted));
+  if (filters?.projectId) params.set('projectId', filters.projectId);
   const qs = params.toString();
   const res = await apiRequest<ApiResponse<{ vms: IVM[]; total: number }>>(
     `/api/v1/vms${qs ? `?${qs}` : ''}`
