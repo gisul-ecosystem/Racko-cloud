@@ -72,6 +72,15 @@ class SuperAdminExternalVmAssignmentService {
         throw new ValidationError('Tenant user not found in this tenant.');
       }
 
+      const tenantAlreadyAssigned = await this.hasAnotherTenantVmAssignment(
+        vm.tenantId,
+        tenantUserId,
+        externalVmId
+      );
+      if (tenantAlreadyAssigned) {
+        throw new ValidationError('This tenant user is already assigned to another VM.');
+      }
+
       await this.assertNoScheduleOverlap({
         externalVmId,
         kind: 'tenant',
@@ -115,6 +124,15 @@ class SuperAdminExternalVmAssignmentService {
       .lean();
     if (!user) {
       throw new ValidationError('Managed user not found under this admin.');
+    }
+
+    const userAlreadyAssigned = await this.hasAnotherPlatformVmAssignment(
+      vm.adminId,
+      userId,
+      externalVmId
+    );
+    if (userAlreadyAssigned) {
+      throw new ValidationError('This managed user is already assigned to another VM.');
     }
 
     await this.assertNoScheduleOverlap({
@@ -327,6 +345,50 @@ class SuperAdminExternalVmAssignmentService {
       schedule,
       kind,
     });
+  }
+
+  private async hasAnotherTenantVmAssignment(
+    tenantId: mongoose.Types.ObjectId,
+    tenantUserId: mongoose.Types.ObjectId,
+    externalVmId: mongoose.Types.ObjectId
+  ): Promise<boolean> {
+    const [activeJunction, legacyAssigned] = await Promise.all([
+      ExternalVmTenantAssignmentModel.exists({
+        tenantId,
+        tenantUserId,
+        status: 'active',
+        externalVmId: { $ne: externalVmId },
+      }),
+      ExternalVMModel.exists({
+        tenantId,
+        assignedTenantUserId: tenantUserId,
+        _id: { $ne: externalVmId },
+      }),
+    ]);
+
+    return Boolean(activeJunction || legacyAssigned);
+  }
+
+  private async hasAnotherPlatformVmAssignment(
+    adminId: mongoose.Types.ObjectId,
+    userId: mongoose.Types.ObjectId,
+    externalVmId: mongoose.Types.ObjectId
+  ): Promise<boolean> {
+    const [activeJunction, legacyAssigned] = await Promise.all([
+      ExternalVmUserAssignmentModel.exists({
+        adminId,
+        userId,
+        status: 'active',
+        externalVmId: { $ne: externalVmId },
+      }),
+      ExternalVMModel.exists({
+        adminId,
+        assignedTo: userId,
+        _id: { $ne: externalVmId },
+      }),
+    ]);
+
+    return Boolean(activeJunction || legacyAssigned);
   }
 
   private async syncLegacyAssignedTo(

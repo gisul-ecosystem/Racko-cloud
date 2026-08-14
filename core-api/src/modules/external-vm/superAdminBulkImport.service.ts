@@ -201,11 +201,30 @@ class SuperAdminBulkImportService {
         password: encrypt(row.password),
         source: 'superadmin_bulk',
         tenantId,
+        ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
       });
 
       let assignmentId: string | undefined;
 
       if (tenantUserId) {
+        const alreadyAssigned = await this.hasAnotherTenantVmAssignment(
+          tenantId,
+          tenantUserId,
+          doc._id
+        );
+        if (alreadyAssigned) {
+          return {
+            ...base,
+            tenantId: tenantId.toString(),
+            tenantName: `${tenantLabel} (${slug})`,
+            userId: tenantUserId.toString(),
+            userCreated,
+            userReused,
+            externalVmId: doc._id.toString(),
+            error: 'This tenant user is already assigned to another VM.',
+          };
+        }
+
         const schedule = row.schedule ? toSchedule(row.schedule) : null;
         try {
           const created = await ExternalVmTenantAssignmentModel.create({
@@ -324,11 +343,28 @@ class SuperAdminBulkImportService {
         password: encrypt(row.password),
         source: 'superadmin_bulk',
         adminId,
+        ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
       });
 
       let assignmentId: string | undefined;
 
       if (userId) {
+        const alreadyAssigned = await this.hasAnotherPlatformVmAssignment(
+          adminId,
+          userId,
+          doc._id
+        );
+        if (alreadyAssigned) {
+          return {
+            ...base,
+            externalVmId: doc._id.toString(),
+            userId: userId.toString(),
+            userCreated,
+            userReused,
+            error: 'This managed user is already assigned to another VM.',
+          };
+        }
+
         const schedule = row.schedule ? toSchedule(row.schedule) : null;
         try {
           const created = await ExternalVmUserAssignmentModel.create({
@@ -434,6 +470,7 @@ class SuperAdminBulkImportService {
           password: encrypt(row.password),
           source: 'superadmin_bulk',
           tenantId,
+          ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
         });
 
         const assignmentResults = await this.applyTenantAssignments({
@@ -470,6 +507,7 @@ class SuperAdminBulkImportService {
         password: encrypt(row.password),
         source: 'superadmin_bulk',
         adminId,
+        ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
       });
 
       const assignmentResults = await this.applyPlatformAssignments({
@@ -778,6 +816,21 @@ class SuperAdminBulkImportService {
         continue;
       }
 
+      const tenantAlreadyAssigned = await this.hasAnotherTenantVmAssignment(
+        input.tenantId,
+        tenantUser._id,
+        input.externalVmId
+      );
+      if (tenantAlreadyAssigned) {
+        results.push({
+          index: i,
+          success: false,
+          tenantUserId: tenantUser._id.toString(),
+          error: 'This tenant user is already assigned to another VM.',
+        });
+        continue;
+      }
+
       try {
         const created = await ExternalVmTenantAssignmentModel.create({
           tenantId: input.tenantId,
@@ -851,6 +904,21 @@ class SuperAdminBulkImportService {
           success: false,
           userId: a.userId,
           error: this.describePlatformAssignmentNotFound(a),
+        });
+        continue;
+      }
+
+      const userAlreadyAssigned = await this.hasAnotherPlatformVmAssignment(
+        input.adminId,
+        user._id,
+        input.externalVmId
+      );
+      if (userAlreadyAssigned) {
+        results.push({
+          index: i,
+          success: false,
+          userId: user._id.toString(),
+          error: 'This managed user is already assigned to another VM.',
         });
         continue;
       }
@@ -962,6 +1030,50 @@ class SuperAdminBulkImportService {
     }
 
     return null;
+  }
+
+  private async hasAnotherTenantVmAssignment(
+    tenantId: mongoose.Types.ObjectId,
+    tenantUserId: mongoose.Types.ObjectId,
+    externalVmId: mongoose.Types.ObjectId
+  ): Promise<boolean> {
+    const [activeJunction, legacyAssigned] = await Promise.all([
+      ExternalVmTenantAssignmentModel.exists({
+        tenantId,
+        tenantUserId,
+        status: 'active',
+        externalVmId: { $ne: externalVmId },
+      }),
+      ExternalVMModel.exists({
+        tenantId,
+        assignedTenantUserId: tenantUserId,
+        _id: { $ne: externalVmId },
+      }),
+    ]);
+
+    return Boolean(activeJunction || legacyAssigned);
+  }
+
+  private async hasAnotherPlatformVmAssignment(
+    adminId: mongoose.Types.ObjectId,
+    userId: mongoose.Types.ObjectId,
+    externalVmId: mongoose.Types.ObjectId
+  ): Promise<boolean> {
+    const [activeJunction, legacyAssigned] = await Promise.all([
+      ExternalVmUserAssignmentModel.exists({
+        adminId,
+        userId,
+        status: 'active',
+        externalVmId: { $ne: externalVmId },
+      }),
+      ExternalVMModel.exists({
+        adminId,
+        assignedTo: userId,
+        _id: { $ne: externalVmId },
+      }),
+    ]);
+
+    return Boolean(activeJunction || legacyAssigned);
   }
 
   private describeTenantAssignmentNotFound(assignment: SuperAdminBulkImportAssignment): string {

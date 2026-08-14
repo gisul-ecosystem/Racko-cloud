@@ -22,6 +22,7 @@ export interface SuperAdminVmInventoryItem {
   originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
   originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
   originChannel: string;
+  providerVmSpec?: string | null;
   providerPlanDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
   providerUsername?: string | null;
   providerPassword?: string | null;
@@ -52,6 +53,7 @@ export interface SuperAdminVmInventoryItem {
   assignmentLocation: string;
   projectId?: string;
   projectName?: string;
+  projectClientName?: string;
   orderId?: string;
   vmid?: number;
   createdAt: string;
@@ -60,6 +62,7 @@ export interface SuperAdminVmInventoryItem {
 
 export interface SuperAdminVmInventoryListResult {
   items: SuperAdminVmInventoryItem[];
+  owners: SuperAdminVmInventoryOwnerOption[];
   total: number;
   page: number;
   limit: number;
@@ -73,6 +76,7 @@ export interface SuperAdminVmInventoryOwnerOption {
 export interface VmProviderMetadataImportRow {
   ipAddress: string;
   name?: string;
+  vmSpec?: string;
   protocol?: 'rdp' | 'ssh';
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
   username?: string;
@@ -85,6 +89,23 @@ export interface VmProviderMetadataImportResult {
   total: number;
   updated: number;
   created: number;
+}
+
+export interface SuperAdminVmInventoryClearAssignmentBody {
+  resourceType: InventoryResourceType;
+  sourceId: string;
+}
+
+export interface SuperAdminVmInventoryClearAssignmentResult {
+  updated: boolean;
+  deletedPlatformUsers?: number;
+  deletedTenantUsers?: number;
+}
+
+export interface SuperAdminVmInventoryDeleteAssignedUserResult {
+  updated: boolean;
+  deletedPlatformUsers: number;
+  deletedTenantUsers: number;
 }
 
 export interface SuperAdminVmInventoryQuery {
@@ -172,6 +193,32 @@ export async function importVmProviderMetadata(
     {
       method: 'POST',
       body: JSON.stringify({ rows }),
+    }
+  );
+  return res.data;
+}
+
+export async function clearSuperAdminVmInventoryAssignment(
+  body: SuperAdminVmInventoryClearAssignmentBody
+): Promise<SuperAdminVmInventoryClearAssignmentResult> {
+  const res = await apiRequest<ApiEnvelope<SuperAdminVmInventoryClearAssignmentResult>>(
+    '/api/v1/super-admin/vm-inventory/assignment/clear',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }
+  );
+  return res.data;
+}
+
+export async function deleteSuperAdminVmInventoryAssignedUser(
+  body: SuperAdminVmInventoryClearAssignmentBody
+): Promise<SuperAdminVmInventoryDeleteAssignedUserResult> {
+  const res = await apiRequest<ApiEnvelope<SuperAdminVmInventoryDeleteAssignedUserResult>>(
+    '/api/v1/super-admin/vm-inventory/assignment/delete-user',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
     }
   );
   return res.data;

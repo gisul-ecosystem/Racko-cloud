@@ -59,6 +59,34 @@ function MethodBadge({ method }: { method: InstallMethod }) {
   );
 }
 
+function SoftwareAvatar({ name, iconUrl }: { name: string; iconUrl?: string }) {
+  const [iconFailed, setIconFailed] = useState(false);
+  const initials = name
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? '')
+    .join('') || 'SW';
+
+  if (iconUrl && !iconFailed) {
+    return (
+      <img
+        src={iconUrl}
+        alt={`${name} icon`}
+        onError={() => setIconFailed(true)}
+        className="h-8 w-8 rounded-md border border-gray-200 bg-white object-contain p-1"
+      />
+    );
+  }
+
+  return (
+    <div className="flex h-8 w-8 items-center justify-center rounded-md border border-gray-200 bg-gray-100 text-[10px] font-semibold text-gray-700">
+      {initials}
+    </div>
+  );
+}
+
 // Whether this install method needs a file URL
 const FILE_METHODS: InstallMethod[] = ['msi', 'exe', 'zip', 'script'];
 // Whether this install method needs a package identifier
@@ -75,6 +103,7 @@ export default function SuperAdminSoftwareCatalogPage() {
   // Form state
   const [name, setName] = useState('');
   const [version, setVersion] = useState('');
+  const [iconUrl, setIconUrl] = useState('');
   const [selectedOS, setSelectedOS] = useState<MachineOS[]>([]);
   const [installMethod, setInstallMethod] = useState<InstallMethod>('choco');
   const [wingetId, setWingetId] = useState('');
@@ -108,6 +137,7 @@ export default function SuperAdminSoftwareCatalogPage() {
       await createSoftwareCatalogEntry({
         name: name.trim(),
         version: version.trim() || 'latest',
+        iconUrl: iconUrl.trim() || undefined,
         supportedOS: selectedOS,
         installMethod,
         wingetId:    wingetId.trim()    || undefined,
@@ -120,7 +150,7 @@ export default function SuperAdminSoftwareCatalogPage() {
       });
       addToast('success', `${name.trim()} added to catalog.`);
       // Reset form
-      setName(''); setVersion(''); setSelectedOS([]); setInstallMethod('choco');
+      setName(''); setVersion(''); setIconUrl(''); setSelectedOS([]); setInstallMethod('choco');
       setWingetId(''); setAptName(''); setBrewName(''); setChocoName('');
       setFileUrl(''); setFileName(''); setInstallArgs('');
       refetch();
@@ -186,6 +216,19 @@ export default function SuperAdminSoftwareCatalogPage() {
           <div>
             <label className={labelClass}>Version <span className="text-gray-400 font-normal">(optional)</span></label>
             <input className={inputClass} value={version} onChange={(e) => setVersion(e.target.value)} placeholder="e.g. 3.12.0 — leave blank for latest" />
+          </div>
+
+          <div className="sm:col-span-2">
+            <label className={labelClass}>Icon URL <span className="text-gray-400 font-normal">(optional)</span></label>
+            <input
+              className={inputClass}
+              value={iconUrl}
+              onChange={(e) => setIconUrl(e.target.value)}
+              placeholder="https://cdn.simpleicons.org/googlechrome"
+            />
+            <p className="mt-1 text-xs text-gray-400">
+              Leave blank to auto-assign an icon for known software names.
+            </p>
           </div>
 
           {/* Install method */}
@@ -314,7 +357,7 @@ export default function SuperAdminSoftwareCatalogPage() {
         ) : (
           <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
             {loading ? (
-              <TableSkeleton rows={4} cols={6} />
+              <TableSkeleton rows={4} cols={7} />
             ) : catalog.length === 0 ? (
               <div className="p-16 text-center">
                 <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
@@ -328,7 +371,7 @@ export default function SuperAdminSoftwareCatalogPage() {
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="border-b border-gray-100 bg-gray-50">
-                      {['Name', 'Version', 'Method', 'Supported OS', 'Package / File', 'Added', 'Actions'].map((h) => (
+                      {['Software', 'Version', 'Method', 'Supported OS', 'Package / File', 'Added', 'Actions'].map((h) => (
                         <th key={h} className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">{h}</th>
                       ))}
                     </tr>
@@ -336,7 +379,12 @@ export default function SuperAdminSoftwareCatalogPage() {
                   <tbody>
                     {catalog.map((sw, i) => (
                       <tr key={sw._id} className={`border-b border-gray-50 transition-colors hover:bg-gray-50 ${i % 2 !== 0 ? 'bg-gray-50/40' : ''}`}>
-                        <td className="px-5 py-3 font-medium text-gray-900">{sw.name}</td>
+                        <td className="px-5 py-3">
+                          <div className="flex items-center gap-2.5">
+                            <SoftwareAvatar name={sw.name} iconUrl={sw.iconUrl} />
+                            <span className="font-medium text-gray-900">{sw.name}</span>
+                          </div>
+                        </td>
                         <td className="px-5 py-3 text-gray-600">v{sw.version}</td>
                         <td className="px-5 py-3"><MethodBadge method={sw.installMethod} /></td>
                         <td className="px-5 py-3">

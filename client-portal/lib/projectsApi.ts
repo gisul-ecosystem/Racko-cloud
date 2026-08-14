@@ -82,6 +82,8 @@ export async function createProject(input: {
   clientName: string;
   name?: string;
   description?: string;
+  startDate?: string;
+  endDate?: string;
   enabledServices: AdminServiceKey[];
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
@@ -285,7 +287,7 @@ export const PROJECT_SERVICE_LABELS: Record<AdminServiceKey, string> = {
   'create-vm': 'VM Catalog',
   'dedicated-server': 'Dedicated Server',
   'vm-management': 'VPS Hosting',
-  'elastic-servers': 'Elastic Server Import',
+  'elastic-servers': 'External VM',
   'my-vms': 'My VM Dashboard',
   azure: 'Azure Lab',
   aws: 'AWS Lab',

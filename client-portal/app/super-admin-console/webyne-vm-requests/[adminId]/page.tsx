@@ -26,6 +26,7 @@ import {
   fetchCatalogVmRequests,
   formatCatalogVmStatus,
   rejectCatalogVmRequest,
+  retryCatalogVmInstall,
   type CatalogVmPowerAction,
   type ICatalogVm,
   type VmCatalogCategory,
@@ -33,6 +34,10 @@ import {
 } from '@/lib/vmCatalogApi';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
+
+const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
+const FETCH_TO_ATTACH_TIMEOUT_MS = 3 * 60 * 1000;
+const FETCH_TO_ATTACH_POLL_MS = 2500;
 
 function formatMoney(amount: number): string {
   return new Intl.NumberFormat('en-IN', {
@@ -51,6 +56,16 @@ function formatDate(iso: string): string {
     hour: 'numeric',
     minute: '2-digit',
   });
+}
+
+function getAttachDelayRemainingMs(req: ICatalogVm, nowMs: number): number {
+  if (!req.needsOsChange || !req.osTemplateChanged) return 0;
+  if (!req.osTemplateChangedAt) return 0;
+
+  const changedAtMs = new Date(req.osTemplateChangedAt).getTime();
+  if (Number.isNaN(changedAtMs)) return 0;
+
+  return Math.max(0, WINDOWS_ATTACH_DELAY_MS - (nowMs - changedAtMs));
 }
 
 function CategoryBadge({ category }: { category: VmCatalogCategory }) {
@@ -94,6 +109,46 @@ function StatusBadge({ status }: { status: VmCatalogStatus }) {
   );
 }
 
+function PostReadyInstallBadge({
+  status,
+}: {
+  status: NonNullable<ICatalogVm['postReadyStatus']>;
+}) {
+  if (status === 'done') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-800">
+        <CheckCircle2 className="h-3.5 w-3.5" /> Installed
+      </span>
+    );
+  }
+  if (status === 'failed') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+        <XCircle className="h-3.5 w-3.5" /> Failed
+      </span>
+    );
+  }
+  if (status === 'running') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-blue-200 bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Installing
+      </span>
+    );
+  }
+  if (status === 'pending') {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-800">
+        <RefreshCw className="h-3.5 w-3.5" /> Queued
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center rounded-full border border-gray-200 bg-gray-50 px-2.5 py-1 text-xs font-semibold text-gray-600">
+      Not requested
+    </span>
+  );
+}
+
 export default function WebyneVmRequestsByAdminPage() {
   const params = useParams();
   const adminId = typeof params?.adminId === 'string' ? params.adminId : '';
@@ -109,6 +164,7 @@ export default function WebyneVmRequestsByAdminPage() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [powerActionId, setPowerActionId] = useState<string | null>(null);
   const [powerBusy, setPowerBusy] = useState<CatalogVmPowerAction | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
 
   const load = useCallback(async (opts?: { silent?: boolean }) => {
     if (!adminId) return;
@@ -135,11 +191,26 @@ export default function WebyneVmRequestsByAdminPage() {
     void load();
   }, [load]);
 
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 30_000);
+    return () => clearInterval(timer);
+  }, []);
+
   // Poll while any request is fulfilling
   useEffect(() => {
     const hasFulfilling = requests.some((r) => r.status === 'fulfilling');
     if (!hasFulfilling) return;
     const id = setInterval(() => void load({ silent: true }), 4000);
+    return () => clearInterval(id);
+  }, [requests, load]);
+
+  // Poll while post-attach software install is queued/running.
+  useEffect(() => {
+    const hasInstalling = requests.some(
+      (r) => r.postReadyStatus === 'pending' || r.postReadyStatus === 'running'
+    );
+    if (!hasInstalling) return;
+    const id = setInterval(() => void load({ silent: true }), 5000);
     return () => clearInterval(id);
   }, [requests, load]);
 
@@ -191,6 +262,81 @@ export default function WebyneVmRequestsByAdminPage() {
     }
   }
 
+  async function handleAttachWithFreshFetch(id: string) {
+    setActionId(id);
+    setSuccessMsg(null);
+    setError(null);
+    try {
+      await fetchCatalogVmDetails(id);
+      setSuccessMsg('Fetching latest VM details from Webyne. Waiting for completion…');
+
+      const startedAt = Date.now();
+      let currentStatus: VmCatalogStatus | null = null;
+
+      while (Date.now() - startedAt < FETCH_TO_ATTACH_TIMEOUT_MS) {
+        const latest = await fetchCatalogVmRequests({ adminId, status: 'all' });
+        setRequests(latest);
+
+        const row = latest.find((req) => req._id === id);
+        currentStatus = row?.status ?? null;
+
+        if (currentStatus === 'ready_to_attach' || currentStatus === 'active') {
+          break;
+        }
+        if (currentStatus === 'failed') {
+          throw new Error(
+            row?.fulfillError ||
+              'Fetch details failed on Webyne. Please retry Fetch details.'
+          );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, FETCH_TO_ATTACH_POLL_MS));
+      }
+
+      if (currentStatus !== 'ready_to_attach' && currentStatus !== 'active') {
+        throw new Error(
+          'Fetch details is still in progress. Please wait a moment and click Attach again.'
+        );
+      }
+
+      if (currentStatus === 'active') {
+        setSuccessMsg('VM is already attached and visible under My VM.');
+        setExpandedId(id);
+        setStatusFilter('active');
+        await load();
+        return;
+      }
+
+      setSuccessMsg('Fetched latest VM details from Webyne. Attaching now…');
+      await attachCatalogVmRequest(id);
+      setSuccessMsg('VM attached — now visible to the admin under My VM.');
+      setExpandedId(id);
+      setStatusFilter('active');
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Attach failed after fetch details.');
+    } finally {
+      setActionId(null);
+    }
+  }
+
+  async function handleRetryInstall(id: string) {
+    setActionId(id);
+    setSuccessMsg(null);
+    setError(null);
+    try {
+      await retryCatalogVmInstall(id);
+      setSuccessMsg('Retry started: pushing agent and resuming software installation.');
+      setExpandedId(id);
+      setStatusFilter('active');
+      await load();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : 'Retry install failed.');
+    } finally {
+      setActionId(null);
+    }
+  }
+
   async function handleChangeTemplateToWindows(id: string) {
     setActionId(id);
     setSuccessMsg(null);
@@ -210,13 +356,13 @@ export default function WebyneVmRequestsByAdminPage() {
     }
   }
 
-  async function handlePower(id: string, action: CatalogVmPowerAction) {
-    setPowerActionId(id);
+  async function handlePower(id: string, action: CatalogVmPowerAction, instanceId?: string) {
+    setPowerActionId(instanceId ? `${id}:${instanceId}` : id);
     setPowerBusy(action);
     setSuccessMsg(null);
     setError(null);
     try {
-      const result = await catalogVmPowerAction(id, action);
+      const result = await catalogVmPowerAction(id, action, instanceId);
       if (action === 'virtualizor') {
         if (result.panelUrl) {
           window.open(result.panelUrl, '_blank', 'noopener,noreferrer');
@@ -239,6 +385,52 @@ export default function WebyneVmRequestsByAdminPage() {
       setPowerActionId(null);
       setPowerBusy(null);
     }
+  }
+
+  function getMachineInstallSummary(req: ICatalogVm): {
+    effectiveStatus: NonNullable<ICatalogVm['postReadyStatus']>;
+    done: number;
+    total: number;
+    failed: number;
+    running: number;
+    pending: number;
+    stage: NonNullable<ICatalogVm['postReadyStage']>;
+    stageLabel: string;
+    machineStatus?: NonNullable<ICatalogVm['postReadyMachineStatus']>;
+    agentConnected: boolean;
+    runningSoftware: string[];
+    pendingSoftware: string[];
+  } {
+    const done = req.postReadyJobDone ?? 0;
+    const total = req.postReadyJobTotal ?? 0;
+    const failed = req.postReadyJobFailed ?? 0;
+    const running = req.postReadyJobRunning ?? 0;
+    const pending = req.postReadyJobPending ?? 0;
+
+    let effectiveStatus: NonNullable<ICatalogVm['postReadyStatus']> =
+      req.postReadyStatus ?? 'none';
+
+    if (total > 0) {
+      if (failed > 0) effectiveStatus = 'failed';
+      else if (running > 0) effectiveStatus = 'running';
+      else if (pending > 0) effectiveStatus = 'pending';
+      else if (done === total) effectiveStatus = 'done';
+    }
+
+    return {
+      effectiveStatus,
+      done,
+      total,
+      failed,
+      running,
+      pending,
+      stage: req.postReadyStage ?? 'not_requested',
+      stageLabel: req.postReadyStageLabel ?? 'Not requested',
+      machineStatus: req.postReadyMachineStatus,
+      agentConnected: Boolean(req.postReadyAgentConnected),
+      runningSoftware: req.postReadyRunningSoftware ?? [],
+      pendingSoftware: req.postReadyPendingSoftware ?? [],
+    };
   }
 
   async function handleReject(e: React.FormEvent) {
@@ -349,6 +541,10 @@ export default function WebyneVmRequestsByAdminPage() {
                 <tbody>
                   {requests.map((req) => (
                     <Fragment key={req._id}>
+                      {(() => {
+                        const install = getMachineInstallSummary(req);
+                        return (
+                          <>
                       <tr className="border-b border-gray-50 hover:bg-gray-50/80">
                         <td className="px-5 py-3.5">
                           <p className="font-medium text-gray-900">{req.planName}</p>
@@ -452,9 +648,25 @@ export default function WebyneVmRequestsByAdminPage() {
                                 {expandedId === req._id ? 'Hide details' : 'View details'}
                               </button>
                             )}
+                            {req.status === 'active' && install.effectiveStatus === 'failed' && (
+                              <button
+                                type="button"
+                                disabled={actionId === req._id}
+                                onClick={() => void handleRetryInstall(req._id)}
+                                className="inline-flex items-center gap-1 rounded-md border border-blue-300 bg-blue-50 px-2.5 py-1.5 text-xs font-semibold text-blue-900 hover:bg-blue-100 disabled:opacity-60"
+                                title="Retry agent push and software installation"
+                              >
+                                {actionId === req._id ? (
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                ) : (
+                                  <RefreshCw className="h-3.5 w-3.5" />
+                                )}
+                                Retry install
+                              </button>
+                            )}
                             {req.status === 'ready_to_attach' && (
                               <>
-                                {req.needsOsChange && !req.osTemplateChanged ? (
+                                {req.needsOsChange ? (
                                   <button
                                     type="button"
                                     disabled={actionId === req._id}
@@ -467,30 +679,53 @@ export default function WebyneVmRequestsByAdminPage() {
                                     ) : (
                                       <MonitorSmartphone className="h-3.5 w-3.5" />
                                     )}
-                                    Change template to Windows
+                                    {req.osTemplateChanged
+                                      ? 'Try again: change template to Windows'
+                                      : 'Change template to Windows'}
                                   </button>
                                 ) : null}
-                                <button
-                                  type="button"
-                                  disabled={
-                                    actionId === req._id ||
-                                    Boolean(req.needsOsChange && !req.osTemplateChanged)
-                                  }
-                                  onClick={() => void handleAttach(req._id)}
-                                  className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
-                                  title={
+                                {(() => {
+                                  const remainingMs = getAttachDelayRemainingMs(req, nowMs);
+                                  const waitMinutes = Math.max(1, Math.ceil(remainingMs / 60000));
+                                  const blockedByOsChange = Boolean(
                                     req.needsOsChange && !req.osTemplateChanged
-                                      ? 'Change template to Windows first'
-                                      : undefined
-                                  }
-                                >
-                                  {actionId === req._id ? (
-                                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                                  ) : (
-                                    <Link2 className="h-3.5 w-3.5" />
-                                  )}
-                                  Attach
-                                </button>
+                                  );
+                                  const blockedByDelay = remainingMs > 0;
+
+                                  return (
+                                    <div className="inline-flex flex-col items-start gap-1">
+                                      <button
+                                        type="button"
+                                        disabled={
+                                          actionId === req._id ||
+                                          blockedByOsChange ||
+                                          blockedByDelay
+                                        }
+                                        onClick={() => void handleAttachWithFreshFetch(req._id)}
+                                        className="inline-flex items-center gap-1 rounded-md bg-[#B91C1C] px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-[#a01717] disabled:opacity-60"
+                                        title={
+                                          blockedByOsChange
+                                            ? 'Change template to Windows first'
+                                            : blockedByDelay
+                                              ? `Attach will be enabled in about ${waitMinutes} minute(s)`
+                                              : undefined
+                                        }
+                                      >
+                                        {actionId === req._id ? (
+                                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                                        ) : (
+                                          <Link2 className="h-3.5 w-3.5" />
+                                        )}
+                                        {blockedByDelay ? `Attach (${waitMinutes}m)` : 'Attach'}
+                                      </button>
+                                      {blockedByDelay ? (
+                                        <p className="text-[11px] text-amber-700">
+                                          Attach available in about {waitMinutes} minute(s).
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                  );
+                                })()}
                               </>
                             )}
                             {req.status !== 'active' &&
@@ -521,34 +756,217 @@ export default function WebyneVmRequestsByAdminPage() {
                                 ? 'VM details (attached — visible to admin)'
                                 : 'Fetched from Webyne (admin cannot see this until Attach)'}
                             </p>
-                            <div className="grid gap-2 text-sm text-gray-800 sm:grid-cols-2 lg:grid-cols-3">
-                              <div>
-                                <span className="text-xs text-gray-500">Hostname</span>
-                                <p className="font-mono text-xs">{req.hostname || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">IP</span>
-                                <p className="font-mono text-xs">{req.ipAddress || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Username</span>
-                                <p className="font-mono text-xs">{req.username || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Password</span>
-                                <p className="font-mono text-xs">{req.password || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Protocol</span>
-                                <p className="font-mono text-xs uppercase">{req.protocol || '—'}</p>
-                              </div>
-                              <div>
-                                <span className="text-xs text-gray-500">Webyne ref</span>
-                                <p className="font-mono text-xs">{req.externalRef || '—'}</p>
-                              </div>
+                            <div className="mb-3 flex flex-wrap items-center gap-2 text-xs">
+                              <span className="rounded-full bg-amber-100 px-2.5 py-1 font-semibold text-amber-900">
+                                Fetched {req.fetchedCount ?? req.instances?.length ?? 0} / {req.quantity}
+                              </span>
+                              {(req.missingCount ?? 0) > 0 ? (
+                                <span className="rounded-full bg-red-100 px-2.5 py-1 font-semibold text-red-800">
+                                  {req.missingCount} pending
+                                </span>
+                              ) : (
+                                <span className="rounded-full bg-green-100 px-2.5 py-1 font-semibold text-green-800">
+                                  All VM details fetched
+                                </span>
+                              )}
                             </div>
 
-                            <div className="mt-4 border-t border-amber-100 pt-4">
+                            <div className="mb-3 rounded-lg border border-gray-200 bg-white px-3 py-2.5">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+                                Software Installation
+                              </p>
+                              <div className="mt-2 flex flex-wrap items-center gap-2">
+                                <PostReadyInstallBadge status={install.effectiveStatus} />
+                                <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-semibold text-slate-700">
+                                  Stage: {install.stageLabel}
+                                </span>
+                                <span className="text-xs text-gray-600">
+                                  Selected packages: {req.preferredSoftwareIds?.length ?? 0}
+                                </span>
+                                {install.total > 0 ? (
+                                  <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-800">
+                                    Jobs: {install.done}/{install.total} done
+                                  </span>
+                                ) : null}
+                                {install.failed > 0 ? (
+                                  <span className="rounded-full bg-red-50 px-2.5 py-1 text-xs font-semibold text-red-800">
+                                    {install.failed} failed
+                                  </span>
+                                ) : null}
+                                {req.machineId ? (
+                                  <span className="rounded-md bg-gray-100 px-2 py-0.5 font-mono text-[11px] text-gray-700">
+                                    Machine ID: {req.machineId}
+                                  </span>
+                                ) : null}
+                                {install.machineStatus ? (
+                                  <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-700">
+                                    Machine: {install.machineStatus}
+                                  </span>
+                                ) : null}
+                                <span
+                                  className={`rounded-full px-2.5 py-1 text-xs font-semibold ${
+                                    install.agentConnected
+                                      ? 'bg-green-50 text-green-800'
+                                      : 'bg-amber-50 text-amber-800'
+                                  }`}
+                                >
+                                  Agent: {install.agentConnected ? 'connected' : 'not connected'}
+                                </span>
+                              </div>
+                              {install.runningSoftware.length > 0 ? (
+                                <p className="mt-2 text-xs text-blue-700">
+                                  Installing now: {install.runningSoftware.join(', ')}
+                                </p>
+                              ) : null}
+                              {install.pendingSoftware.length > 0 ? (
+                                <p className="mt-1 text-xs text-amber-700">
+                                  Queued next: {install.pendingSoftware.join(', ')}
+                                </p>
+                              ) : null}
+                              {install.effectiveStatus === 'running' ? (
+                                <p className="mt-2 text-xs text-blue-700">
+                                  Agent/software installation is in progress. This view auto-refreshes every 5 seconds.
+                                </p>
+                              ) : install.effectiveStatus === 'pending' ? (
+                                <p className="mt-2 text-xs text-amber-700">
+                                  Jobs are queued and waiting for the agent to pick them.
+                                </p>
+                              ) : null}
+                              {req.postReadyError ? (
+                                <p className="mt-2 text-xs text-red-700">{req.postReadyError}</p>
+                              ) : null}
+                            </div>
+
+                            {req.instances && req.instances.length > 0 ? (
+                              <div className="overflow-x-auto rounded-lg border border-amber-100 bg-white">
+                                <table className="min-w-full text-xs">
+                                  <thead className="bg-amber-50 text-amber-900">
+                                    <tr>
+                                      <th className="px-3 py-2 text-left font-semibold">VM</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Hostname</th>
+                                      <th className="px-3 py-2 text-left font-semibold">IP</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Username</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Password</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Protocol</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Webyne ref</th>
+                                      <th className="px-3 py-2 text-left font-semibold">Controls</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {req.instances.map((instance) => (
+                                      <tr key={instance.instanceId} className="border-t border-amber-100 text-gray-800">
+                                        <td className="px-3 py-2 font-semibold">#{instance.instanceIndex}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.hostname || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.ipAddress || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.username || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.password || '—'}</td>
+                                        <td className="px-3 py-2 font-mono uppercase">{instance.protocol || '—'}</td>
+                                        <td className="px-3 py-2 font-mono">{instance.externalRef || '—'}</td>
+                                        <td className="px-3 py-2">
+                                          <div className="flex flex-wrap items-center gap-2">
+                                            {(
+                                              [
+                                                {
+                                                  action: 'virtualizor' as const,
+                                                  label: 'Virtualizor',
+                                                  tone: 'bg-slate-600 hover:bg-slate-700',
+                                                  icon: <ToggleLeft className="h-4 w-4" />,
+                                                },
+                                                {
+                                                  action: 'start' as const,
+                                                  label: 'Start',
+                                                  tone: 'bg-emerald-500 hover:bg-emerald-600',
+                                                  icon: <Power className="h-4 w-4" />,
+                                                },
+                                                {
+                                                  action: 'stop' as const,
+                                                  label: 'Stop',
+                                                  tone: 'bg-red-500 hover:bg-red-600',
+                                                  icon: <Power className="h-4 w-4" />,
+                                                },
+                                                {
+                                                  action: 'reboot' as const,
+                                                  label: 'Reboot',
+                                                  tone: 'bg-blue-500 hover:bg-blue-600',
+                                                  icon: <RefreshCw className="h-4 w-4" />,
+                                                },
+                                              ] as const
+                                            ).map((btn) => {
+                                              const busy =
+                                                powerActionId === `${req._id}:${instance.instanceId}` &&
+                                                powerBusy === btn.action;
+                                              return (
+                                                <button
+                                                  key={btn.action}
+                                                  type="button"
+                                                  disabled={
+                                                    !instance.externalRef ||
+                                                    Boolean(powerActionId) ||
+                                                    actionId === req._id
+                                                  }
+                                                  onClick={() =>
+                                                    void handlePower(
+                                                      req._id,
+                                                      btn.action,
+                                                      instance.instanceId
+                                                    )
+                                                  }
+                                                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                                                  title={
+                                                    !instance.externalRef
+                                                      ? 'Missing Webyne machine id'
+                                                      : `${btn.label} this VM`
+                                                  }
+                                                >
+                                                  <span className={`inline-flex items-center gap-1 rounded-md px-2 py-1 ${btn.tone}`}>
+                                                    {busy ? (
+                                                      <Loader2 className="h-4 w-4 animate-spin" />
+                                                    ) : (
+                                                      btn.icon
+                                                    )}
+                                                    <span className="text-[11px]">{btn.label}</span>
+                                                  </span>
+                                                </button>
+                                              );
+                                            })}
+                                          </div>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <div className="grid gap-2 text-sm text-gray-800 sm:grid-cols-2 lg:grid-cols-3">
+                                <div>
+                                  <span className="text-xs text-gray-500">Hostname</span>
+                                  <p className="font-mono text-xs">{req.hostname || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">IP</span>
+                                  <p className="font-mono text-xs">{req.ipAddress || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Username</span>
+                                  <p className="font-mono text-xs">{req.username || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Password</span>
+                                  <p className="font-mono text-xs">{req.password || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Protocol</span>
+                                  <p className="font-mono text-xs uppercase">{req.protocol || '—'}</p>
+                                </div>
+                                <div>
+                                  <span className="text-xs text-gray-500">Webyne ref</span>
+                                  <p className="font-mono text-xs">{req.externalRef || '—'}</p>
+                                </div>
+                              </div>
+                            )}
+
+                            {!(req.instances && req.instances.length > 0) && (
+                              <div className="mt-4 border-t border-amber-100 pt-4">
                               <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-amber-800">
                                 Webyne controls
                               </p>
@@ -581,8 +999,8 @@ export default function WebyneVmRequestsByAdminPage() {
                                     },
                                   ] as const
                                 ).map((btn) => {
-                                  const busy =
-                                    powerActionId === req._id && powerBusy === btn.action;
+                                      const busy =
+                                        powerActionId === req._id && powerBusy === btn.action;
                                   const disabled =
                                     !req.externalRef ||
                                     Boolean(powerActionId) ||
@@ -619,10 +1037,14 @@ export default function WebyneVmRequestsByAdminPage() {
                               <p className="mt-2 text-xs text-amber-700/80">
                                 Runs on Webyne machineshow for this VM (via catalog agent).
                               </p>
-                            </div>
+                              </div>
+                            )}
                           </td>
                         </tr>
                       )}
+                          </>
+                        );
+                      })()}
                     </Fragment>
                   ))}
                 </tbody>

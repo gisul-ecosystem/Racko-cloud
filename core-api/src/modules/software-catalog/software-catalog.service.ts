@@ -3,6 +3,7 @@ import { SoftwareCatalogModel, type ISoftwareCatalog } from './software-catalog.
 import type { CreateSoftwareCatalogDto, SoftwareCatalogResponse } from './software-catalog.types';
 import { NotFoundError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
+import { resolveSoftwareIconUrl } from './software-catalog.icons';
 
 class SoftwareCatalogService {
   private toResponse(doc: ISoftwareCatalog): SoftwareCatalogResponse {
@@ -10,6 +11,7 @@ class SoftwareCatalogService {
       _id:           doc._id.toString(),
       name:          doc.name,
       version:       doc.version,
+      iconUrl:       resolveSoftwareIconUrl(doc.name, doc.iconUrl),
       supportedOS:   doc.supportedOS,
       installMethod: doc.installMethod,
       wingetId:      doc.wingetId,

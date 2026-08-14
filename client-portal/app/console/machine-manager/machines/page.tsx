@@ -378,7 +378,7 @@ export default function MyMachinesPage() {
               );
             }
           },
-          // onTerminal — reset_complete received, stop cleanly
+          // onTerminal — all accepted machines done, stop cleanly
           () => { sseRef.current = null; },
           // onGiveUp — all retries exhausted (>5 min), mark in-progress as failed
           () => {
@@ -389,6 +389,8 @@ export default function MyMachinesPage() {
               ) : prev
             );
           },
+          // expectedCount — number of accepted machines so stream knows when all are done
+          result.accepted.length,
         );
 
         sseRef.current = stop;

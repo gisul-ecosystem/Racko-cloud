@@ -10,6 +10,10 @@ import type {
 
 export interface CatalogVmResponse {
   _id: string;
+  parentRequestId?: string;
+  instanceId?: string;
+  instanceIndex?: number;
+  instanceTotal?: number;
   adminId?: string;
   tenantId?: string;
   tenantUserId?: string;
@@ -23,6 +27,25 @@ export interface CatalogVmResponse {
   machineId?: string;
   postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
   postReadyError?: string;
+  postReadyJobTotal?: number;
+  postReadyJobDone?: number;
+  postReadyJobFailed?: number;
+  postReadyJobRunning?: number;
+  postReadyJobPending?: number;
+  postReadyStage?:
+    | 'not_requested'
+    | 'agent_pushing'
+    | 'agent_waiting_online'
+    | 'agent_online'
+    | 'software_queued'
+    | 'software_installing'
+    | 'software_done'
+    | 'failed';
+  postReadyStageLabel?: string;
+  postReadyMachineStatus?: 'pending' | 'online' | 'offline';
+  postReadyAgentConnected?: boolean;
+  postReadyRunningSoftware?: string[];
+  postReadyPendingSoftware?: string[];
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
   category: VmCatalogCategory;
@@ -61,6 +84,20 @@ export interface CatalogVmResponse {
   autoProvisioned?: boolean;
   /** Super-admin only */
   rawProviderCostPerHr?: number;
+  fetchedCount?: number;
+  missingCount?: number;
+  partial?: boolean;
+  instances?: Array<{
+    instanceId: string;
+    instanceIndex: number;
+    status: 'ready_to_attach' | 'active';
+    hostname?: string;
+    ipAddress?: string;
+    username?: string;
+    password?: string;
+    protocol?: VmCatalogProtocol;
+    externalRef?: string;
+  }>;
   createdAt: string;
   updatedAt: string;
 }

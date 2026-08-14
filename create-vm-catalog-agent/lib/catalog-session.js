@@ -849,12 +849,13 @@ async function purchaseAndScrape(category, {
   // Racko sends OS labels (ubuntu/rocky/debian/windows/linux/gpu).
   // Linux-priced plans need a real Webyne image id at checkout.
   // Windows on a Linux-priced plan: deploy Ubuntu first, then SA changes OS.
-  const DEFAULT_LINUX_DEPLOY_TEMPLATE =
-    process.env.WEBYNE_LINUX_OS_TEMPLATE || 'ubuntu_20_64bit';
-  const ROCKY_TEMPLATE =
-    process.env.WEBYNE_ROCKY_OS_TEMPLATE || 'rocky_9_64bit';
-  const DEBIAN_TEMPLATE =
-    process.env.WEBYNE_DEBIAN_OS_TEMPLATE || 'debian_10_64bit';
+  // All templates must be set in .env — no hardcoded fallbacks.
+  const DEFAULT_LINUX_DEPLOY_TEMPLATE = String(process.env.WEBYNE_LINUX_OS_TEMPLATE || '').trim();
+  if (!DEFAULT_LINUX_DEPLOY_TEMPLATE) throw Object.assign(new Error('WEBYNE_LINUX_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
+  const ROCKY_TEMPLATE = String(process.env.WEBYNE_ROCKY_OS_TEMPLATE || '').trim();
+  if (!ROCKY_TEMPLATE) throw Object.assign(new Error('WEBYNE_ROCKY_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
+  const DEBIAN_TEMPLATE = String(process.env.WEBYNE_DEBIAN_OS_TEMPLATE || '').trim();
+  if (!DEBIAN_TEMPLATE) throw Object.assign(new Error('WEBYNE_DEBIAN_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
   let checkoutTemplate = String(template || '').trim();
   if (pricingCategory === 'linux') {
     const isOsLabel =
@@ -879,6 +880,7 @@ async function purchaseAndScrape(category, {
 
   const p = await ensureBrowser();
   let purchase = null;
+  const requestedCount = Math.max(1, Number(quantity) || 1);
 
   if (!scrapeOnly) {
     // Fresh CSRF from the pricing page where this plan actually lives
@@ -908,7 +910,7 @@ async function purchaseAndScrape(category, {
         id: String(webynePlanId),
         billing: String(webyneBilling),
         template: String(checkoutTemplate || ''),
-        quantity: String(Math.max(1, Number(quantity) || 1)),
+        quantity: String(requestedCount),
         addons_cpu: '',
         addons_ram: '',
         addons_disk: '',
@@ -945,10 +947,12 @@ async function purchaseAndScrape(category, {
     await p.waitForTimeout(10_000);
   }
 
-  const server = await scrapeLatestServer({
+  const servers = await scrapeLatestServers({
+    count: requestedCount,
     planName: planName || '',
     initialWaitMs: scrapeOnly ? 2_000 : 0,
   });
+  const server = servers[0] || null;
   if (!server || (!server.ipAddress && !server.hostname && !server.externalRef)) {
     throw Object.assign(
       new Error(
@@ -958,8 +962,16 @@ async function purchaseAndScrape(category, {
     );
   }
 
-  const protocol =
-    requestedOs === 'windows' ? 'rdp' : server.protocol || 'ssh';
+  const protocol = requestedOs === 'windows' ? 'rdp' : server.protocol || 'ssh';
+  const normalizedServers = servers.map((item) => ({
+    hostname: item.hostname || null,
+    ipAddress: item.ipAddress || null,
+    username: item.username || (requestedOs === 'windows' ? 'Administrator' : 'root'),
+    password: item.password || null,
+    protocol: requestedOs === 'windows' ? 'rdp' : item.protocol || 'ssh',
+    externalRef: item.externalRef || null,
+    rawLabel: item.rawLabel || null,
+  }));
 
   return {
     purchased: !scrapeOnly,
@@ -967,6 +979,10 @@ async function purchaseAndScrape(category, {
     pricingCategory,
     webynePlanId,
     checkoutTemplate,
+    requestedCount,
+    fetchedCount: normalizedServers.length,
+    partial: normalizedServers.length < requestedCount,
+    missingCount: Math.max(0, requestedCount - normalizedServers.length),
     server: {
       hostname: server.hostname || null,
       ipAddress: server.ipAddress || null,
@@ -976,8 +992,54 @@ async function purchaseAndScrape(category, {
       externalRef: server.externalRef || null,
       rawLabel: server.rawLabel || null,
     },
+    servers: normalizedServers,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+async function scrapeLatestServers({
+  count = 1,
+  planName = '',
+  initialWaitMs = 0,
+  maxRounds,
+} = {}) {
+  const targetCount = Math.max(1, Number(count) || 1);
+  const rounds = Math.max(targetCount * 2, Number(maxRounds) || targetCount * 2);
+  const found = [];
+  const seen = new Set();
+
+  for (let round = 1; round <= rounds && found.length < targetCount; round += 1) {
+    const item = await scrapeLatestServer({
+      planName,
+      initialWaitMs: round === 1 ? initialWaitMs : 0,
+      maxAttempts: 4,
+      retryWaitMs: 3_000,
+      excludeRefs: [...seen],
+    });
+
+    if (item && (item.externalRef || item.ipAddress || item.hostname)) {
+      const key = item.externalRef ? String(item.externalRef) : `ip:${item.ipAddress || ''}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        found.push(item);
+        console.log(
+          `[webyne] Multi-scrape captured ${found.length}/${targetCount}: ref=${item.externalRef || '-'} ip=${item.ipAddress || '-'} host=${item.hostname || '-'}`
+        );
+      }
+    }
+
+    if (found.length < targetCount) {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+    }
+  }
+
+  if (found.length < targetCount) {
+    console.warn(
+      `[webyne] Multi-scrape partial: fetched ${found.length}/${targetCount} server detail rows`
+    );
+  }
+
+  return found;
 }
 
 /**
@@ -989,6 +1051,7 @@ async function scrapeLatestServer({
   initialWaitMs = 0,
   maxAttempts = 5,
   retryWaitMs = 4_000,
+  excludeRefs = [],
 } = {}) {
   const p = await ensureBrowser();
   const url = 'https://cloud.webyne.com/admin/server';
@@ -1024,7 +1087,7 @@ async function scrapeLatestServer({
 
   let preferred = null;
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
-    preferred = await extractServerRows(p, planName);
+    preferred = await extractServerRows(p, planName, { excludeRefs });
     if (preferred && (preferred.ipAddress || preferred.externalRef)) {
       console.log(
         `[webyne] Server row found on attempt ${attempt}: id=${preferred.externalRef} ip=${preferred.ipAddress}`
@@ -1415,7 +1478,7 @@ async function scrapeLatestServer({
   };
 }
 
-async function extractServerRows(p, planName) {
+async function extractServerRows(p, planName, { excludeRefs = [] } = {}) {
   const rows = await p.evaluate((wantPlan) => {
     const normalize = (s) => (s || '').replace(/\s+/g, ' ').trim();
     const ipRe =
@@ -1551,14 +1614,27 @@ async function extractServerRows(p, planName) {
     return idB - idA;
   });
 
+  const excluded = new Set(
+    (excludeRefs || []).map((value) => String(value || '').trim()).filter(Boolean)
+  );
+  const notExcluded = (row) => {
+    const ref = String(row.externalRef || '').trim();
+    if (ref && excluded.has(ref)) return false;
+    if (!ref && row.ipAddress && excluded.has(`ip:${String(row.ipAddress).trim()}`)) {
+      return false;
+    }
+    return true;
+  };
+
   return (
     // Prefer newest ID first (even if IP only appears after opening detail)
-    scored.find((r) => r.matchesPlan && r.isActive && (r.ipAddress || r.href || r.externalRef)) ||
-    scored.find((r) => r.isActive && (r.ipAddress || r.href || r.externalRef)) ||
-    scored.find((r) => r.matchesPlan && r.ipAddress) ||
-    scored.find((r) => r.ipAddress) ||
-    scored.find((r) => r.externalRef) ||
-    scored[0]
+    scored.find((r) => notExcluded(r) && r.matchesPlan && r.isActive && (r.ipAddress || r.href || r.externalRef)) ||
+    scored.find((r) => notExcluded(r) && r.isActive && (r.ipAddress || r.href || r.externalRef)) ||
+    scored.find((r) => notExcluded(r) && r.matchesPlan && r.ipAddress) ||
+    scored.find((r) => notExcluded(r) && r.ipAddress) ||
+    scored.find((r) => notExcluded(r) && r.externalRef) ||
+    scored.find((r) => notExcluded(r)) ||
+    null
   );
 }
 
@@ -1619,6 +1695,94 @@ async function waitForMachineshowSetupReady(page, opts = {}) {
     `[webyne] SETUP still pending after ${maxWaitMs}ms (last=${last ? last.label : 'unknown'}) — continuing`
   );
   return last;
+}
+
+async function acceptTemplateChangeConfirmation(page) {
+  // Webyne may use either a native confirm dialog or an in-page modal.
+  const nativeDialogAccepted = await page
+    .waitForEvent('dialog', { timeout: 3500 })
+    .then(async (dialog) => {
+      const text = String(dialog.message() || '').replace(/\s+/g, ' ').trim();
+      await dialog.accept();
+      console.log(`[webyne] Accepted native confirmation dialog: ${text}`);
+      return true;
+    })
+    .catch(() => false);
+
+  if (nativeDialogAccepted) return true;
+
+  // In-page modal variant (Alert !! / Are You Sure Want To Change Template).
+  const modalText = page.locator('text=/Are\\s*You\\s*Sure\\s*Want\\s*To\\s*Change\\s*Template/i');
+  const modalVisible = await modalText
+    .first()
+    .waitFor({ state: 'visible', timeout: 8000 })
+    .then(() => true)
+    .catch(() => false);
+
+  if (!modalVisible) return false;
+
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    const clicked = await page
+      .evaluate(() => {
+        const CONFIRM_RE = /are\s*you\s*sure\s*want\s*to\s*change\s*template/i;
+        const OK_RE = /^(ok|yes|confirm)$/i;
+
+        const norm = (s) => String(s || '').replace(/\s+/g, ' ').trim();
+        const isVisible = (el) => {
+          if (!el) return false;
+          const style = window.getComputedStyle(el);
+          if (!style || style.display === 'none' || style.visibility === 'hidden') return false;
+          const rect = el.getBoundingClientRect();
+          return rect.width > 0 && rect.height > 0;
+        };
+
+        const containers = Array.from(
+          document.querySelectorAll('.modal.show, .swal2-popup, [role="dialog"], .bootbox, .sweet-alert, .modal')
+        );
+
+        const target =
+          containers.find((el) => isVisible(el) && CONFIRM_RE.test(norm(el.textContent))) ||
+          containers.find((el) => isVisible(el)) ||
+          null;
+
+        const scope = target || document;
+        const controls = Array.from(
+          scope.querySelectorAll(
+            'button, a, input[type="button"], input[type="submit"], [data-bs-dismiss="modal"]'
+          )
+        );
+
+        const ok = controls.find((el) => {
+          if (!isVisible(el)) return false;
+          const text = norm(el.textContent || el.value || el.getAttribute('aria-label') || '');
+          return OK_RE.test(text);
+        });
+
+        if (!ok) {
+          return { clicked: false, reason: 'ok_button_not_visible' };
+        }
+
+        ok.click();
+        return { clicked: true, label: norm(ok.textContent || ok.value || 'ok') };
+      })
+      .catch(() => ({ clicked: false, reason: 'evaluate_failed' }));
+
+    if (clicked && clicked.clicked) {
+      console.log(`[webyne] Accepted template change confirmation (${clicked.label || 'ok'})`);
+      return true;
+    }
+
+    await page.waitForTimeout(300);
+  }
+
+  const snapshot = await page
+    .evaluate(() => {
+      const txt = (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 600);
+      return { url: location.href, text: txt };
+    })
+    .catch(() => null);
+  console.warn('[webyne] Confirmation modal visible but OK button not found', snapshot);
+  return false;
 }
 
 /**
@@ -1682,9 +1846,9 @@ async function openMachineshowByRef(p, ref) {
  *
  * Known Linux templates (from Webyne UI):
  *   ubuntu → ubuntu_20_64bit
- *   rocky  → first Rocky option
- *   debian → default
- * Windows template: WEBYNE_WINDOWS_OS_TEMPLATE env (required until product confirms the id).
+ *   rocky  → WEBYNE_ROCKY_OS_TEMPLATE env (required)
+ *   debian → WEBYNE_DEBIAN_OS_TEMPLATE env (required)
+ * All OS templates must be set in .env — no hardcoded fallbacks.
  */
 async function changeMachineOs({
   externalRef,
@@ -1704,24 +1868,18 @@ async function changeMachineOs({
   let templateId = String(template || '').trim();
   if (!templateId) {
     if (osKey === 'windows') {
-      // Webyne: "windows_2022_64bit (Rs 0 / Core)"
-      templateId =
-        String(process.env.WEBYNE_WINDOWS_OS_TEMPLATE || '').trim() ||
-        'windows_2022_64bit';
+      templateId = String(process.env.WEBYNE_WINDOWS_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_WINDOWS_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     } else if (osKey === 'ubuntu' || osKey === 'linux') {
-      templateId =
-        String(process.env.WEBYNE_LINUX_OS_TEMPLATE || '').trim() ||
-        'ubuntu_20_64bit';
+      templateId = String(process.env.WEBYNE_LINUX_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_LINUX_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     } else if (osKey === 'rocky') {
-      // Webyne: "rocky_9_64bit (Rs 0)"
-      templateId =
-        String(process.env.WEBYNE_ROCKY_OS_TEMPLATE || '').trim() ||
-        'rocky_9_64bit';
+      templateId = String(process.env.WEBYNE_ROCKY_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_ROCKY_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     } else if (osKey === 'debian') {
-      // Webyne: "debian_10_64bit (Rs 0)"
       templateId =
-        String(process.env.WEBYNE_DEBIAN_OS_TEMPLATE || '').trim() ||
-        'debian_10_64bit';
+        String(process.env.WEBYNE_DEBIAN_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_DEBIAN_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     }
   }
 
@@ -1899,7 +2057,20 @@ async function changeMachineOs({
     });
   }
   await setupBtn.first().click({ timeout: 10000 });
-  console.log('[webyne] Clicked Setup — waiting for SETUP to leave PENDING…');
+  console.log('[webyne] Clicked Setup — waiting for confirmation modal…');
+  const confirmed = await acceptTemplateChangeConfirmation(p).catch((err) => {
+    console.warn('[webyne] Template change confirmation handling failed', err);
+    return false;
+  });
+  if (!confirmed) {
+    throw Object.assign(
+      new Error(
+        'Template confirmation popup was not accepted after Setup. OS change was not triggered.'
+      ),
+      { status: 502, code: 'TEMPLATE_CONFIRM_NOT_ACCEPTED' }
+    );
+  }
+  console.log('[webyne] Confirmation accepted — waiting for SETUP to leave PENDING…');
   await p.waitForTimeout(3_000);
   await waitForMachineshowSetupReady(p, { maxWaitMs: 60_000, pollMs: 6_000 });
 
@@ -2130,6 +2301,7 @@ module.exports = {
   fetchTemplates,
   fetchPlanDetails,
   purchaseAndScrape,
+  scrapeLatestServers,
   scrapeLatestServer,
   changeMachineOs,
   machinePowerControl,

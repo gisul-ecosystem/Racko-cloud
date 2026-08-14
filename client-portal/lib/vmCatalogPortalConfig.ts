@@ -6,6 +6,7 @@ import {
   fetchVmCatalogVms,
   getCatalogVmConsole,
   submitCatalogVmRequest,
+  submitSuperAdminCatalogVmRequest,
   type CatalogSoftwareOption,
   type CatalogVmConsoleSession,
   type CatalogVmOverview,
@@ -41,7 +42,7 @@ export interface VmCatalogPortalApi {
   submitRequest: (dto: CreateCatalogVmRequestDto) => Promise<ICatalogVm>;
   getConsole: (
     id: string,
-    dimensions?: { width?: number; height?: number }
+    dimensions?: { width?: number; height?: number; instanceId?: string }
   ) => Promise<CatalogVmConsoleSession>;
 }
 
@@ -89,6 +90,29 @@ const tenantApi: VmCatalogPortalApi = {
 export const adminVmCatalogPortalConfig: VmCatalogPortalConfig = {
   routes: adminRoutes,
   api: adminApi,
+};
+
+const superAdminRoutes: VmCatalogPortalRoutes = {
+  overview: '/super-admin-console/create-vm',
+  create: '/super-admin-console/create-vm/create',
+  myVms: '/super-admin-console/create-vm/my-vms',
+  console: (id) => `/super-admin-console/create-vm/my-vms/${id}/console`,
+  hub: '/super-admin-console',
+};
+
+const superAdminApi: VmCatalogPortalApi = {
+  fetchPlans: fetchVmCatalogPlans,
+  fetchOverview: fetchVmCatalogOverview,
+  fetchVms: fetchVmCatalogVms,
+  fetchVm: fetchCatalogVm,
+  fetchSoftwareOptions: fetchVmCatalogSoftwareOptions,
+  submitRequest: submitSuperAdminCatalogVmRequest,
+  getConsole: getCatalogVmConsole,
+};
+
+export const superAdminVmCatalogPortalConfig: VmCatalogPortalConfig = {
+  routes: superAdminRoutes,
+  api: superAdminApi,
 };
 
 export const tenantVmCatalogPortalConfig: VmCatalogPortalConfig = {

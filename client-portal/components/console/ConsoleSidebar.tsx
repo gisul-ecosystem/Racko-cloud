@@ -45,12 +45,6 @@ const PRODUCT_LINKS: NavItem[] = [
   },
   { id: 'elastic', label: 'Elastic Servers', href: '/console/elastic-servers', icon: Boxes },
   {
-    id: 'my-vm-dashboard',
-    label: 'My VM Dashboard',
-    href: '/console/my-vm-dashboard',
-    icon: LayoutList,
-  },
-  {
     id: CLOUD_LABS_SERVICE.id,
     label: CLOUD_LABS_SERVICE.name,
     href: CLOUD_LABS_ROUTES.hub,
@@ -148,6 +142,8 @@ export function ConsoleSidebar() {
   const hubActive = pathname === '/console' || pathname === '/console/';
   const overviewActive =
     pathname === '/console/overview' || pathname.startsWith('/console/overview/');
+  const myVirtualMachinesActive =
+    pathname === '/console/my-vm-dashboard' || pathname.startsWith('/console/my-vm-dashboard/');
 
   return (
     <>
@@ -186,6 +182,20 @@ export function ConsoleSidebar() {
                 className={`h-4 w-4 shrink-0 ${overviewActive ? 'text-[#B91C1C]' : 'text-gray-400'}`}
               />
               Overview
+            </Link>
+
+            <Link
+              href="/console/my-vm-dashboard"
+              className={`mt-0.5 flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+                myVirtualMachinesActive
+                  ? 'bg-red-50 text-[#B91C1C]'
+                  : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+              }`}
+            >
+              <LayoutList
+                className={`h-4 w-4 shrink-0 ${myVirtualMachinesActive ? 'text-[#B91C1C]' : 'text-gray-400'}`}
+              />
+              My Virtual Machines
             </Link>
 
             <Link

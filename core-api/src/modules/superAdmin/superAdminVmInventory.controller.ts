@@ -10,6 +10,42 @@ function success<T>(res: Response, message: string, data: T, statusCode = 200): 
 }
 
 export class SuperAdminVmInventoryController {
+  async deleteAssignedUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const body = req.body as {
+        resourceType: 'platform_vm' | 'catalog_vm' | 'external_vm';
+        sourceId: string;
+      };
+
+      const result = await superAdminVmInventoryService.deleteAssignedUser({
+        resourceType: body.resourceType,
+        sourceId: body.sourceId,
+      });
+
+      success(res, 'Assigned user deleted.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
+  async clearAssignment(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const body = req.body as {
+        resourceType: 'platform_vm' | 'catalog_vm' | 'external_vm';
+        sourceId: string;
+      };
+
+      const result = await superAdminVmInventoryService.clearAssignment({
+        resourceType: body.resourceType,
+        sourceId: body.sourceId,
+      });
+
+      success(res, 'VM assignment cleared.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async importProviderMetadata(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as AuthenticatedRequest;
@@ -17,6 +53,7 @@ export class SuperAdminVmInventoryController {
         rows: Array<{
           ipAddress: string;
           name?: string;
+          vmSpec?: string;
           protocol?: 'rdp' | 'ssh';
           planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
           username?: string;

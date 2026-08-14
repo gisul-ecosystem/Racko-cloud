@@ -11,6 +11,7 @@ import {
   Search,
   Trash2,
   Upload,
+  X,
 } from 'lucide-react';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/lib/apiClient';
@@ -26,6 +27,7 @@ import {
   type SuperAdminBulkImportRowDto,
   type SuperAdminTargetOption,
 } from '@/lib/superAdminExternalVmApi';
+import { fetchProjectsForAdmin, fetchProjectsForTenant, createProjectForAdmin, createProjectForTenant, previewProjectNameForAdmin, previewProjectNameForTenant, type OrgProject } from '@/lib/projectsApi';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -694,6 +696,18 @@ export default function SuperAdminServerImportPage() {
   const [rows, setRows] = useState<EditorRow[]>([emptyRow()]);
   const [defaultMode, setDefaultMode] = useState<TargetMode>('admin');
   const [defaultTargetId, setDefaultTargetId] = useState('');
+  const [defaultProjectId, setDefaultProjectId] = useState('');
+  const [defaultProjects, setDefaultProjects] = useState<OrgProject[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [createProjectOpen, setCreateProjectOpen] = useState(false);
+  const [cpPreviewName, setCpPreviewName] = useState('');
+  const [cpName, setCpName] = useState('');
+  const [cpClientName, setCpClientName] = useState('');
+  const [cpDescription, setCpDescription] = useState('');
+  const [cpStartDate, setCpStartDate] = useState('');
+  const [cpEndDate, setCpEndDate] = useState('');
+  const [cpSaving, setCpSaving] = useState(false);
+  const [cpError, setCpError] = useState<string | null>(null);
   const [admins, setAdmins] = useState<SuperAdminTargetOption[]>([]);
   const [tenants, setTenants] = useState<SuperAdminTargetOption[]>([]);
   const [assigneesByKey, setAssigneesByKey] = useState<Record<string, SuperAdminAssigneeOption[]>>(
@@ -702,6 +716,29 @@ export default function SuperAdminServerImportPage() {
   const [submitting, setSubmitting] = useState(false);
   const [importProgress, setImportProgress] = useState<{ done: number; total: number } | null>(null);
   const [result, setResult] = useState<SuperAdminBulkImportResult | null>(null);
+
+  // Load projects whenever the selected admin/tenant changes
+  useEffect(() => {
+    setDefaultProjectId('');
+    setDefaultProjects([]);
+    if (!defaultTargetId) return;
+    let cancelled = false;
+    setProjectsLoading(true);
+    (async () => {
+      try {
+        const list =
+          defaultMode === 'admin'
+            ? await fetchProjectsForAdmin(defaultTargetId)
+            : await fetchProjectsForTenant(defaultTargetId);
+        if (!cancelled) setDefaultProjects(list.filter((p) => p.status === 'active'));
+      } catch {
+        if (!cancelled) setDefaultProjects([]);
+      } finally {
+        if (!cancelled) setProjectsLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [defaultTargetId, defaultMode]);
 
   useEffect(() => {
     void (async () => {
@@ -822,7 +859,7 @@ export default function SuperAdminServerImportPage() {
         }
       }
 
-      const payload = rowToPayload(row, defaultMode, defaultTargetId, { admins, tenants });
+      const payload = rowToDefaultPayload(row);
       if (!payload) {
         addToast('error', `Row "${row.name}" could not be built. Check selected target/admin details.`);
         return null;
@@ -832,7 +869,61 @@ export default function SuperAdminServerImportPage() {
     return vms;
   };
 
+  async function openCreateProject() {
+    setCpClientName('');
+    setCpDescription('');
+    setCpStartDate('');
+    setCpEndDate('');
+    setCpError(null);
+    setCpPreviewName('');
+    setCpName('');
+    setCreateProjectOpen(true);
+    try {
+      const preview =
+        defaultMode === 'admin'
+          ? await previewProjectNameForAdmin(defaultTargetId)
+          : await previewProjectNameForTenant(defaultTargetId);
+      setCpPreviewName(preview.name);
+      setCpName(preview.name);
+    } catch {
+      // preview is optional — user can still type a name
+    }
+  }
+
+  async function handleCreateProject(e: React.FormEvent) {
+    e.preventDefault();
+    if (!cpClientName.trim() || !cpStartDate || !cpEndDate) return;
+    setCpSaving(true);
+    setCpError(null);
+    try {
+      const input = {
+        clientName: cpClientName.trim(),
+        name: cpName.trim() !== cpPreviewName ? cpName.trim() : undefined,
+        description: cpDescription.trim() || undefined,
+        startDate: cpStartDate,
+        endDate: cpEndDate,
+        enabledServices: ['elastic-servers' as const],
+      };
+      const created =
+        defaultMode === 'admin'
+          ? await createProjectForAdmin(defaultTargetId, input)
+          : await createProjectForTenant(defaultTargetId, input);
+      setDefaultProjects((prev) => [created, ...prev]);
+      setDefaultProjectId(created.id);
+      setCreateProjectOpen(false);
+      addToast('success', `Project "${created.name}" created.`);
+    } catch (err) {
+      setCpError(err instanceof ApiError ? err.message : 'Failed to create project.');
+    } finally {
+      setCpSaving(false);
+    }
+  }
+
   const handleSubmit = async () => {
+    if (defaultTargetId && !defaultProjectId) {
+      addToast('error', 'Select a project before importing.');
+      return;
+    }
     const vms = buildPayload();
     if (!vms) return;
 
@@ -881,7 +972,7 @@ export default function SuperAdminServerImportPage() {
 
       if (failed === 0) {
         setRows([emptyRow({ targetMode: defaultMode, targetId: defaultTargetId })]);
-        setAssigneesByKey({});
+      setAssigneesByKey({});
       }
 
       addToast(
@@ -895,6 +986,13 @@ export default function SuperAdminServerImportPage() {
       setImportProgress(null);
     }
   };
+
+  function rowToDefaultPayload(row: EditorRow): SuperAdminBulkImportRowDto | null {
+    const base = rowToPayload(row, defaultMode, defaultTargetId, { admins, tenants });
+    if (!base) return null;
+    if (defaultProjectId) (base as SuperAdminBulkImportLegacyRowDto).projectId = defaultProjectId;
+    return base;
+  }
 
   const targetOptions = useMemo(
     () =>
@@ -941,7 +1039,7 @@ export default function SuperAdminServerImportPage() {
               <label className={labelClass}>{defaultMode === 'admin' ? 'Admin' : 'Tenant'}</label>
               <FilterableSelect
                 value={defaultTargetId}
-                onChange={setDefaultTargetId}
+                onChange={(v) => { setDefaultTargetId(v); setDefaultProjectId(''); }}
                 options={targetOptions}
                 placeholder={`Select ${defaultMode === 'admin' ? 'admin' : 'tenant'}…`}
                 searchPlaceholder={`Search ${defaultMode === 'admin' ? 'admin by email/username' : 'tenant by name/slug'}…`}
@@ -949,6 +1047,52 @@ export default function SuperAdminServerImportPage() {
               />
             </div>
           </div>
+
+          {/* Project selector — appears after admin/tenant is chosen */}
+          {defaultTargetId && (
+            <div>
+              <label className={labelClass}>Project <span className="text-red-500">*</span></label>
+              {projectsLoading ? (
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                  Loading projects…
+                </div>
+              ) : defaultProjects.length === 0 ? (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                  No active projects for this {defaultMode === 'admin' ? 'admin' : 'tenant'}.{' '}
+                  <button
+                    type="button"
+                    onClick={openCreateProject}
+                    className="font-semibold underline"
+                  >
+                    Create a project
+                  </button>
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <select
+                    className={inputClass}
+                    value={defaultProjectId}
+                    onChange={(e) => setDefaultProjectId(e.target.value)}
+                  >
+                    <option value="">-- Select a project --</option>
+                    {defaultProjects.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} — {p.clientName}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={openCreateProject}
+                    className="inline-flex items-center gap-1 text-xs font-semibold text-[#B91C1C] hover:underline"
+                  >
+                    + Create new project
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
           <div>
             <label className={labelClass}>Upload .json file</label>
             <input
@@ -1483,7 +1627,7 @@ export default function SuperAdminServerImportPage() {
           </Link>
           <button
             type="button"
-            disabled={submitting || rows.length === 0}
+            disabled={submitting || rows.length === 0 || (!!defaultTargetId && !defaultProjectId)}
             onClick={() => void handleSubmit()}
             className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
           >
@@ -1584,6 +1728,147 @@ export default function SuperAdminServerImportPage() {
               </ul>
             </div>
           )}
+        </div>
+      )}
+
+      {/* ── Create project modal ─────────────────────────────────── */}
+      {createProjectOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4 backdrop-blur-[1px]"
+          role="dialog"
+          aria-modal="true"
+          onMouseDown={(e) => { if (e.target === e.currentTarget && !cpSaving) setCreateProjectOpen(false); }}
+        >
+          <div className="w-full max-w-4xl overflow-hidden rounded-2xl bg-white shadow-2xl">
+            {/* Header */}
+            <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">
+                  Create Project
+                </p>
+                <h2 className="mt-1 text-xl font-bold text-gray-900">Create New Project</h2>
+                <p className="mt-1 text-sm text-gray-500">
+                  Set up a new project to organize and manage your cloud resources.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={cpSaving}
+                onClick={() => setCreateProjectOpen(false)}
+                aria-label="Close"
+                className="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 disabled:opacity-50"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+
+            <form onSubmit={(e) => void handleCreateProject(e)}>
+              <div className="space-y-4 p-5">
+                {cpError && (
+                  <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{cpError}</div>
+                )}
+
+                <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                  <h3 className="text-sm font-semibold text-gray-900">Project Information</h3>
+
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Project Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpName}
+                        onChange={(e) => setCpName(e.target.value)}
+                        required
+                        placeholder={cpPreviewName || 'Auto-generated'}
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">A unique name to identify your project.</p>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Client Name <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpClientName}
+                        onChange={(e) => setCpClientName(e.target.value)}
+                        required
+                        placeholder="e.g. Acme Corp"
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
+                    </div>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="block text-xs font-semibold text-gray-700">
+                        Description <span className="font-normal text-gray-400">(Optional)</span>
+                      </label>
+                      <span className="text-[11px] text-gray-400">{cpDescription.length} / 500</span>
+                    </div>
+                    <textarea
+                      className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                      rows={3}
+                      value={cpDescription}
+                      onChange={(e) => setCpDescription(e.target.value.slice(0, 500))}
+                      placeholder="Describe the purpose and workloads for this project."
+                    />
+                  </div>
+
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Start Date <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpStartDate}
+                        onChange={(e) => setCpStartDate(e.target.value)}
+                        max={cpEndDate || undefined}
+                        required
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">When does this project start?</p>
+                    </div>
+                    <div>
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        End Date <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="date"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                        value={cpEndDate}
+                        onChange={(e) => setCpEndDate(e.target.value)}
+                        min={cpStartDate || undefined}
+                        required
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between border-t border-gray-100 px-6 py-3">
+                <button
+                  type="button"
+                  disabled={cpSaving}
+                  onClick={() => setCreateProjectOpen(false)}
+                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={cpSaving || !cpClientName.trim() || !cpStartDate || !cpEndDate}
+                  className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:opacity-60"
+                >
+                  {cpSaving && <Loader2 className="h-4 w-4 animate-spin" />}
+                  Create Project
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

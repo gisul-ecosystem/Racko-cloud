@@ -13,6 +13,7 @@ import {
   Database,
   ExternalLink,
   Loader2,
+  Plus,
   RefreshCw,
   Server,
   TrendingUp,
@@ -26,6 +27,7 @@ import { ApiError } from '../../../lib/apiClient';
 const SERVICE_LABELS: Record<string, string> = {
   'vm-management': 'VPS Hosting',
   'create-vm': 'VM Catalog',
+  'super-admin-create-vm': 'VM Catalog',
   'dedicated-server': 'Dedicated Servers',
   'elastic-servers': 'Elastic Servers',
   azure: 'Azure',

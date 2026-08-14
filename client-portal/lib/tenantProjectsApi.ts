@@ -76,7 +76,7 @@ export async function createTenantProject(input: {
 
 export async function updateTenantProject(
   id: string,
-  input: { name?: string; clientName?: string; description?: string | null }
+  input: { name?: string; clientName?: string; description?: string | null; startDate?: string | null; endDate?: string | null }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     tenantPortalRequest(`${BASE}/${id}`, {

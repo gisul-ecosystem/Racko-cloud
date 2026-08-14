@@ -745,6 +745,7 @@ function OrganizationRequestDetailModal({
 
         <div className="space-y-6 px-5 py-5">
           <dl className="grid gap-4 sm:grid-cols-2">
+            <DetailField label="Organization ID" value={request.orgId} />
             <DetailField label="Contact name" value={request.contactName} />
             <DetailField label="Email" value={userInfo?.email} />
             <DetailField label="Company name" value={request.companyName} />

@@ -651,9 +651,34 @@ class MachineManagerService {
     const { vmPushService } = await import('./vm-push.service');
     const { emitPushEvent } = await import('./push.events');
 
-    // Step 1: Create all machine records synchronously (fast, DB only)
+    // Step 1: Create or reuse machine records synchronously (fast, DB only)
     const machines: MachineResponse[] = [];
     for (const vm of vms) {
+      const existing = await MachineModel.findOne({
+        adminId,
+        ipAddress: vm.ipAddress,
+        deleted: { $ne: true },
+      }).sort({ createdAt: -1 });
+
+      // Retry path: if a prior push created a pending/offline row for same VM,
+      // reuse that row instead of creating another duplicate machine record.
+      if (existing && (!existing.agentId || existing.status !== 'online')) {
+        existing.name = vm.name;
+        existing.os = vm.os;
+        if (existing.status !== 'online') {
+          existing.status = 'pending';
+        }
+        await existing.save();
+        machines.push(this.toMachineResponse(existing));
+
+        logger.info('[MachineManager] Reused existing machine for push', {
+          machineId: existing._id.toString(),
+          adminId: adminId.toString(),
+          ipAddress: vm.ipAddress,
+        });
+        continue;
+      }
+
       const machine = await this.addMachine(
         { name: vm.name, ipAddress: vm.ipAddress, os: vm.os },
         adminId
@@ -970,24 +995,37 @@ class MachineManagerService {
   }
 
   /**
-   * Returns the persisted reset result for a session, or null if not yet complete.
-   * Used by the SSE stream on open to deliver already-completed results instantly.
+   * Returns ALL persisted reset results for a session, or empty array if none yet.
+   * Multiple machines in one session each write their own record — we must return
+   * all of them so the SSE stream can deliver each reset_complete event.
+   * Previously used findOne which only returned the first — causing the second
+   * machine's result to be silently dropped on reconnect.
    */
+  async getResetResults(sessionId: string): Promise<Array<{
+    machineId: string;
+    machineName: string;
+    success: boolean;
+    error?: string;
+  }>> {
+    const { ResetResultModel } = await import('../../models/resetResult.model');
+    const results = await ResetResultModel.find({ sessionId }).lean();
+    return results.map(r => ({
+      machineId:   r.machineId.toString(),
+      machineName: r.machineName,
+      success:     r.success,
+      error:       r.error,
+    }));
+  }
+
+  /** @deprecated Use getResetResults (plural) — this only returns the first result */
   async getResetResult(sessionId: string): Promise<{
     machineId: string;
     machineName: string;
     success: boolean;
     error?: string;
   } | null> {
-    const { ResetResultModel } = await import('../../models/resetResult.model');
-    const result = await ResetResultModel.findOne({ sessionId }).lean();
-    if (!result) return null;
-    return {
-      machineId:   result.machineId.toString(),
-      machineName: result.machineName,
-      success:     result.success,
-      error:       result.error,
-    };
+    const results = await this.getResetResults(sessionId);
+    return results[0] ?? null;
   }
 
   async execCommand(
