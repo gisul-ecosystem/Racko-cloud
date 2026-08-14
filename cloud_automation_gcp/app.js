@@ -8,6 +8,8 @@ import healthRoutes from './src/routes/health.js';
 import catalogRoutes from './src/routes/catalog.js';
 import requestRoutes from './src/routes/requests.js';
 import provisionRoutes from './src/routes/provision.routes.js';
+import managePortalRoutes from './src/routes/managePortal.js';
+import orgAdminRoutes from './src/routes/orgAdmin.js';
 
 const app = express();
 
@@ -17,6 +19,8 @@ app.use('/health', healthRoutes);
 app.use('/api', catalogRoutes);
 app.use('/api', requestRoutes);
 app.use('/api', provisionRoutes);
+app.use('/api', managePortalRoutes);
+app.use('/api', orgAdminRoutes);
 
 app.all('*', (req, res) => {
   res.status(404).json({ success: false, message: 'Route not found' });

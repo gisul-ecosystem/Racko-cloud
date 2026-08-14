@@ -41,6 +41,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
     (pathname?.startsWith('/console/cloud-labs/azure') ?? false) ||
     (pathname?.startsWith('/console/machine-manager') ?? false) ||
     (pathname?.startsWith('/console/aws') ?? false) ||
+    (pathname?.startsWith('/console/gcp') ?? false) ||
     (pathname?.startsWith('/console/docs') ?? false) ||
     (pathname?.startsWith('/console/create-vm') ?? false) ||
     (pathname?.startsWith('/console/dedicated-server') ?? false) ||

@@ -8,6 +8,19 @@ const escapeHtml = (value) =>
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 
+const formatPortalExpiryText = (expiresAt) => {
+  if (!expiresAt) {
+    return 'This secure link expires in 7 days.';
+  }
+
+  const parsed = expiresAt instanceof Date ? expiresAt : new Date(expiresAt);
+  if (!Number.isFinite(parsed.getTime())) {
+    return 'This secure link expires in 7 days.';
+  }
+
+  return `This secure link expires on ${parsed.toUTCString()} (when the lab ends).`;
+};
+
 const buildCredentialEmailHtml = ({ requestId, users, adminCredentials, portalLink, expiresAt }) => {
   const rowsHtml = users
     .map(
@@ -76,7 +89,7 @@ const buildCredentialEmailHtml = ({ requestId, users, adminCredentials, portalLi
             <li><strong>Word guide</strong> — step-by-step Manage Portal login and how to open the Azure Portal.</li>
           </ul>
           <p style="margin: 12px 0 0; font-size: 13px; color: #6b7280;">
-            This secure link expires in 7 days.
+            ${escapeHtml(formatPortalExpiryText(expiresAt))}
           </p>
           <p style="margin: 8px 0 0; font-size: 13px; color: #6b7280;">
             Use the temporary admin credentials above to sign in before managing users.
@@ -185,7 +198,7 @@ const buildAccessPortalEmailHtml = ({ requestId, manageUrl, expiresAt }) => `
           <a href="${escapeHtml(manageUrl)}" style="color: #2563eb; word-break: break-all;">${escapeHtml(manageUrl)}</a>
         </p>
         <p style="margin: 0; font-size: 13px; color: #6b7280;">
-          Link expires in 7 days${expiresAt ? ` on ${escapeHtml(expiresAt)}` : ''}.
+          ${escapeHtml(formatPortalExpiryText(expiresAt))}
         </p>
       </div>
     </body>

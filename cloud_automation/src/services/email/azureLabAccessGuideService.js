@@ -344,7 +344,7 @@ const buildAzureLabAccessGuideBuffer = async ({
     heading('8. Security notes'),
     bullet('Do not share admin portal credentials with learners.'),
     bullet('Do not share one learner’s password with another learner.'),
-    bullet('Portal access links expire (typically within 7 days). Ask admin to resend if expired.'),
+    bullet('Portal access links expire when the lab ends. Ask admin to resend if expired.'),
     bullet('Manage Portal sessions end when you close the tab or the session times out.'),
     bullet('Lab access ends on the lab expiry date; resources may be cleaned up automatically.'),
 

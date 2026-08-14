@@ -137,6 +137,7 @@ export class AdminBillingService {
       | 'vm_creation'
       | 'azure_lab_request'
       | 'aws_lab_request'
+      | 'gcp_lab_request'
       | 'catalog_vm_purchase'
       | 'dedicated_server_purchase' = 'vm_creation',
     attribution?: {
@@ -188,7 +189,7 @@ export class AdminBillingService {
     userId: string,
     amountUsd: number,
     relatedRequestId: string | null = null,
-    provider: 'azure' | 'aws' = 'azure',
+    provider: 'azure' | 'aws' | 'gcp' = 'azure',
     attribution?: {
       projectId?: string | null;
       serviceKey?: AdminServiceKey | null;
@@ -199,14 +200,15 @@ export class AdminBillingService {
     chargedInr: number;
     amountUsd: number;
     usdToInrRate: number;
-    provider: 'azure' | 'aws';
+    provider: 'azure' | 'aws' | 'gcp';
   }> {
     if (!Number.isFinite(amountUsd) || amountUsd <= 0) {
       throw new ValidationError('Estimated amount must be a positive number.');
     }
 
     const serviceKey: AdminServiceKey =
-      attribution?.serviceKey || (provider === 'aws' ? 'aws' : 'azure');
+      attribution?.serviceKey ||
+      (provider === 'aws' ? 'aws' : provider === 'gcp' ? 'gcp' : 'azure');
     let projectId: string | null = attribution?.projectId ?? null;
     let orgId: string | null = null;
 
@@ -222,7 +224,12 @@ export class AdminBillingService {
 
     const usdToInrRate = this.getUsdToInrRate();
     const chargedInr = this.usdToInr(amountUsd);
-    const reason = provider === 'aws' ? 'aws_lab_request' : 'azure_lab_request';
+    const reason =
+      provider === 'aws'
+        ? 'aws_lab_request'
+        : provider === 'gcp'
+          ? 'gcp_lab_request'
+          : 'azure_lab_request';
     const wallet = await this.debitWallet(userId, chargedInr, relatedRequestId, reason, {
       projectId,
       orgId,
