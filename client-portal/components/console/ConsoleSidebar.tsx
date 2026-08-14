@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { AZURE_ROUTES, AZURE_SERVICE } from '../../cloud_automation/constants';
 import { AWS_ROUTES, AWS_SERVICE } from '../../cloud_automation_aws/constants';
+import { GCP_ROUTES, GCP_SERVICE } from '../../cloud_automation_gcp/constants';
 import { CLOUD_LABS_ROUTES, CLOUD_LABS_SERVICE } from '../../cloud_automation_training/constants';
 import { useAdminServices } from '@/context/AdminServicesContext';
 import { CONSOLE_TILE_SERVICE_KEY, type AdminServiceKey } from '@/lib/adminServicesApi';
@@ -60,6 +61,12 @@ const PRODUCT_LINKS: NavItem[] = [
     label: AWS_SERVICE.name,
     href: AWS_ROUTES.dashboard,
     icon: Server,
+  },
+  {
+    id: GCP_SERVICE.id,
+    label: GCP_SERVICE.name,
+    href: GCP_ROUTES.dashboard,
+    icon: Cloud,
   },
 ];
 

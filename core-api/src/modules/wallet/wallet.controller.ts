@@ -71,9 +71,9 @@ export class WalletController {
       const { amountUsd, relatedRequestId, provider, projectId, serviceKey } = req.body as {
         amountUsd: number;
         relatedRequestId?: string | null;
-        provider?: 'azure' | 'aws';
+        provider?: 'azure' | 'aws' | 'gcp';
         projectId?: string;
-        serviceKey?: 'azure' | 'aws' | 'cloud-labs';
+        serviceKey?: 'azure' | 'aws' | 'gcp' | 'cloud-labs';
       };
       const result = await walletService.chargeCloudRequest(
         authReq.tenantUser.tenantId,
@@ -97,7 +97,7 @@ export class WalletController {
       const { amountInr, relatedRequestId, provider } = req.body as {
         amountInr: number;
         relatedRequestId?: string | null;
-        provider?: 'azure' | 'aws';
+        provider?: 'azure' | 'aws' | 'gcp';
       };
       const wallet = await walletService.refundCloudRequestCharge(
         authReq.tenantUser.tenantId,
@@ -116,7 +116,7 @@ export class WalletController {
       const authReq = req as TenantAuthenticatedRequest;
       const { relatedRequestId, provider } = req.body as {
         relatedRequestId: string;
-        provider?: 'azure' | 'aws';
+        provider?: 'azure' | 'aws' | 'gcp';
       };
       await walletService.linkCloudRequestCharge(
         authReq.tenantUser.tenantId,

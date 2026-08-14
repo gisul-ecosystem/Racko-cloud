@@ -54,6 +54,56 @@ function rewriteCloudAutomationGcpPath(path: string): string {
   return `/api${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
 }
 
+function rewriteGcpManagePortalPath(path: string): string {
+  const managePrefix = `${GATEWAY_PREFIX}/manage`;
+  const suffix = path.startsWith(managePrefix)
+    ? path.slice(managePrefix.length) || '/'
+    : path;
+  return `/api/manage${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
+function rewriteGcpOrgAdminPath(path: string): string {
+  const orgAdminPrefix = `${GATEWAY_PREFIX}/org-admin`;
+  const suffix = path.startsWith(orgAdminPrefix)
+    ? path.slice(orgAdminPrefix.length) || '/'
+    : path;
+  return `/api/org-admin${suffix.startsWith('/') ? suffix : `/${suffix}`}`;
+}
+
+const gcpManagePortalProxy = createProxyMiddleware({
+  target: config.CLOUD_AUTOMATION_GCP_URL,
+  changeOrigin: true,
+  timeout: 0,
+  proxyTimeout: 0,
+  pathRewrite: rewriteGcpManagePortalPath,
+  on: {
+    error: (_err, _req, res) => {
+      (res as Response).status(502).json({
+        success: false,
+        message: 'GCP manage portal service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
+  },
+});
+
+const gcpOrgAdminProxy = createProxyMiddleware({
+  target: config.CLOUD_AUTOMATION_GCP_URL,
+  changeOrigin: true,
+  timeout: 0,
+  proxyTimeout: 0,
+  pathRewrite: rewriteGcpOrgAdminPath,
+  on: {
+    error: (_err, _req, res) => {
+      (res as Response).status(502).json({
+        success: false,
+        message: 'GCP organization admin service temporarily unavailable.',
+        code: 'BAD_GATEWAY',
+      });
+    },
+  },
+});
+
 const cloudAutomationGcpProxy = createProxyMiddleware({
   target: config.CLOUD_AUTOMATION_GCP_URL,
   changeOrigin: true,
@@ -69,6 +119,19 @@ const cloudAutomationGcpProxy = createProxyMiddleware({
     },
   },
 });
+
+/** Public GCP manage-users portal (token/JWT auth enforced by cloud_automation_gcp). */
+router.use(`${GATEWAY_PREFIX}/manage`, gcpManagePortalProxy);
+
+/** GCP organization-admin APIs are restricted to verified super admins. */
+router.use(
+  `${GATEWAY_PREFIX}/org-admin`,
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin'),
+  forwardVerifiedIdentity,
+  gcpOrgAdminProxy
+);
 
 router.use(
   GATEWAY_PREFIX,

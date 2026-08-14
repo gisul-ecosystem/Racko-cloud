@@ -65,6 +65,9 @@ const API_VERSIONS = {
   'microsoft.servicebus/namespaces': '2022-10-01-preview',
   'microsoft.eventhub/namespaces': '2022-10-01-preview',
   'microsoft.cognitiveservices/accounts': '2023-05-01',
+  'microsoft.cognitiveservices/accounts/projects': '2025-06-01',
+  'microsoft.insights/components': '2020-02-02',
+  'microsoft.alertsmanagement/smartdetectoralertrules': '2021-04-01',
   'microsoft.containerregistry/registries': '2023-06-01-preview',
   'microsoft.documentdb/databaseaccounts': '2023-04-15',
   'microsoft.app/containerapps': '2023-05-01',
@@ -87,6 +90,10 @@ const API_VERSIONS = {
 const DELETE_ORDER = [
   'microsoft.containerservice/managedclusters',
   'microsoft.web/sites',
+  'microsoft.cognitiveservices/accounts/projects',
+  'microsoft.cognitiveservices/accounts',
+  'microsoft.insights/components',
+  'microsoft.alertsmanagement/smartdetectoralertrules',
   'microsoft.synapse/workspaces/bigdatapools',
   'microsoft.synapse/workspaces/sqlpools',
   'microsoft.synapse/workspaces/integrationruntimes',
@@ -122,7 +129,6 @@ const DELETE_ORDER = [
   'microsoft.web/serverfarms',
   'microsoft.apimanagement/service',
   'microsoft.operationalinsights/workspaces',
-  'microsoft.cognitiveservices/accounts',
   'microsoft.documentdb/databaseaccounts'
 ];
 
@@ -150,6 +156,10 @@ function getDeleteOrderIndex(resourceType) {
 
   if (normalized.startsWith('microsoft.synapse/workspaces/')) {
     return DELETE_ORDER.indexOf('microsoft.synapse/workspaces/bigdatapools');
+  }
+
+  if (normalized.startsWith('microsoft.cognitiveservices/accounts/')) {
+    return DELETE_ORDER.indexOf('microsoft.cognitiveservices/accounts/projects');
   }
 
   return 999;

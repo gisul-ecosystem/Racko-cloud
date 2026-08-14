@@ -156,15 +156,17 @@ export class AdminBillingController {
       const { amountUsd, relatedRequestId, provider, projectId, serviceKey } = req.body as {
         amountUsd: number;
         relatedRequestId?: string | null;
-        provider?: 'azure' | 'aws';
+        provider?: 'azure' | 'aws' | 'gcp';
         projectId?: string;
-        serviceKey?: 'azure' | 'aws' | 'cloud-labs';
+        serviceKey?: 'azure' | 'aws' | 'gcp' | 'cloud-labs';
       };
+      const normalizedProvider =
+        provider === 'aws' ? 'aws' : provider === 'gcp' ? 'gcp' : 'azure';
       const result = await adminBillingService.chargeCloudRequest(
         authReq.user.userId,
         amountUsd,
         relatedRequestId ?? null,
-        provider === 'aws' ? 'aws' : 'azure',
+        normalizedProvider,
         {
           projectId: projectId ?? null,
           serviceKey: serviceKey ?? null,

@@ -86,6 +86,14 @@ const productServices: ServiceTile[] = [
     description: 'Oversee AWS lab requests, manage users, budgets and cleanup',
     anyOf: ['aws.manage'],
   },
+  {
+    id: 'gcp',
+    name: 'GCP Lab Management',
+    href: '/super-admin-console/gcp/org-admin',
+    icon: Cloud,
+    description: 'Oversee GCP lab requests, manage users, IAM roles and cleanup',
+    anyOf: ['gcp.manage'],
+  },
 ];
 
 /** Platform / ops tools — not sold product entitlements (utilities & admin). */
