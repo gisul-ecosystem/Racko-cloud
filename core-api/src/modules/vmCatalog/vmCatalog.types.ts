@@ -27,6 +27,25 @@ export interface CatalogVmResponse {
   machineId?: string;
   postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
   postReadyError?: string;
+  postReadyJobTotal?: number;
+  postReadyJobDone?: number;
+  postReadyJobFailed?: number;
+  postReadyJobRunning?: number;
+  postReadyJobPending?: number;
+  postReadyStage?:
+    | 'not_requested'
+    | 'agent_pushing'
+    | 'agent_waiting_online'
+    | 'agent_online'
+    | 'software_queued'
+    | 'software_installing'
+    | 'software_done'
+    | 'failed';
+  postReadyStageLabel?: string;
+  postReadyMachineStatus?: 'pending' | 'online' | 'offline';
+  postReadyAgentConnected?: boolean;
+  postReadyRunningSoftware?: string[];
+  postReadyPendingSoftware?: string[];
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
   category: VmCatalogCategory;

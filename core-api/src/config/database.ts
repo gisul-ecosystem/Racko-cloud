@@ -51,6 +51,31 @@ export async function connectDatabase(): Promise<void> {
     });
 
     await mongoose.connect(config.MONGODB_URI, MONGODB_OPTIONS);
+
+    // One-time repair: drop the stale orgId_1_year_1_sequenceNumber_1 index on the
+    // projects collection if it was created without the partial filter expression.
+    // Without the filter, it incorrectly enforces uniqueness on orgId:null (tenant projects),
+    // causing E11000 duplicate key errors. Mongoose will recreate it correctly on next sync.
+    try {
+      const db = mongoose.connection.db;
+      if (db) {
+        const indexes = await db.collection('projects').indexes();
+        const staleIndex = indexes.find(
+          (idx) =>
+            idx.name === 'orgId_1_year_1_sequenceNumber_1' &&
+            !idx.partialFilterExpression
+        );
+        if (staleIndex) {
+          await db.collection('projects').dropIndex('orgId_1_year_1_sequenceNumber_1');
+          logger.info('[Migration] Dropped stale projects index orgId_1_year_1_sequenceNumber_1 (missing partial filter). Mongoose will recreate it correctly.');
+        }
+      }
+    } catch (indexErr) {
+      // Non-fatal — log and continue. Mongoose will attempt to create correct index anyway.
+      logger.warn('[Migration] Could not repair projects index', {
+        error: indexErr instanceof Error ? indexErr.message : String(indexErr),
+      });
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown error';
     logger.error('Failed to connect to MongoDB', { error: message });

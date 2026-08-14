@@ -131,6 +131,14 @@ function ServiceCard({
               View VMs
             </Link>
           )}
+          {serviceKey === 'create-vm' && resourceCount > 0 && (
+            <Link
+              href={`/console/create-vm/my-vms?projectId=${projectId}`}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-semibold text-gray-700 transition hover:border-gray-300 hover:bg-gray-50"
+            >
+              View Catalog VMs
+            </Link>
+          )}
           {transactionsHref ? (
             <Link
               href={transactionsHref}

@@ -11,6 +11,18 @@
  * GET  /api/cart/:type/:planId/buy-preview?billing=&quantity=&template=
  * GET  /api/cart/:type/:planId/templates?billing=
  */
+const fs = require('fs');
+const path = require('path');
+const dotenv = require('dotenv');
+
+// Load .env from this agent folder even when started from another working dir.
+const localEnvPath = path.resolve(__dirname, '.env');
+if (fs.existsSync(localEnvPath)) {
+  dotenv.config({ path: localEnvPath });
+} else {
+  dotenv.config();
+}
+
 const express = require('express');
 const {
   PRICING_URLS,
