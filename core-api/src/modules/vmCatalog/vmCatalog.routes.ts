@@ -169,6 +169,15 @@ router.patch(
 );
 
 router.patch(
+  '/requests/:id/retry-install',
+  requirePermission('webyne.requests.attach'),
+  validateRequest(catalogVmRequestIdParamSchema),
+  (req, res, next) => {
+    vmCatalogController.retryPostReady(req, res, next);
+  }
+);
+
+router.patch(
   '/requests/:id/change-template',
   requirePermission('webyne.requests.attach'),
   validateRequest(changeCatalogVmTemplateSchema),

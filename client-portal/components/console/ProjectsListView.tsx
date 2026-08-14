@@ -205,18 +205,12 @@ export function ProjectsListView({
   const [previewName, setPreviewName] = useState('');
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
-  const [clientMode, setClientMode] = useState<'select' | 'new'>('select');
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
-
-  const existingClients = useMemo(
-    () => [...new Set(projects.map((p) => p.clientName).filter(Boolean))],
-    [projects]
-  );
 
   const serviceLabel = useCallback(
     (key: string) => {
@@ -333,7 +327,6 @@ export function ProjectsListView({
     setModalError(null);
     setCreatedProject(null);
     setClientName('');
-    setClientMode('select');
     setDescription('');
     setStartDate('');
     setEndDate('');
@@ -1062,38 +1055,20 @@ export function ProjectsListView({
                         <label className="mb-1.5 block text-xs font-semibold text-gray-700">
                           Client Name <span className="text-red-500">*</span>
                         </label>
-                        <select
+                        <input
+                          value={clientName}
+                          onChange={(event) => setClientName(event.target.value)}
+                          required
+                          placeholder="e.g. Acme Corp"
                           className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
                           style={accentFocus}
-                          value={clientMode === 'new' ? '__new__' : clientName}
-                          onChange={(e) => {
-                            if (e.target.value === '__new__') { setClientMode('new'); setClientName(''); }
-                            else { setClientMode('select'); setClientName(e.target.value); }
+                          onFocus={(e) => {
+                            e.currentTarget.style.borderColor = accent;
                           }}
-                          onFocus={(e) => { e.currentTarget.style.borderColor = accent; }}
-                          onBlur={(e) => { e.currentTarget.style.borderColor = ''; }}
-                        >
-                          <option value="">Select a client…</option>
-                          {existingClients.map((c) => <option key={c} value={c}>{c}</option>)}
-                          <option disabled>────────────────</option>
-                          <option value="__new__">✚ Create new client</option>
-                        </select>
-                        {clientMode === 'new' && (
-                          <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
-                            <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
-                            <input
-                              value={clientName}
-                              onChange={(event) => setClientName(event.target.value)}
-                              required
-                              placeholder="e.g. Acme Corp"
-                              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none transition focus:ring-2"
-                              style={accentFocus}
-                              onFocus={(e) => { e.currentTarget.style.borderColor = accent; }}
-                              onBlur={(e) => { e.currentTarget.style.borderColor = ''; }}
-                              autoFocus
-                            />
-                          </div>
-                        )}
+                          onBlur={(e) => {
+                            e.currentTarget.style.borderColor = '';
+                          }}
+                        />
                         <p className="mt-1 text-[11px] text-gray-400">
                           The client this project belongs to.
                         </p>
