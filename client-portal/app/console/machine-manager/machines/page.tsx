@@ -9,14 +9,15 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
   deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStreamWithReconnect,
-  bulkDeleteMachines,
-  type IMachine, type MachineStatus, type IJob, type JobStatus,
+  bulkDeleteMachines, createJobs,
+  type IMachine, type MachineStatus, type IJob, type JobStatus, type ISoftwareCatalog,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
 import { useJobStream } from '../../../../hooks/useJobStream';
+import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -229,6 +230,135 @@ function ResetStatusModal({
   );
 }
 
+// ─── Bulk Install Modal ────────────────────────────────────────────────────────
+function BulkInstallModal({
+  machines,
+  onClose,
+  onInstalled,
+  isAuthenticated,
+}: {
+  machines: IMachine[];
+  onClose: () => void;
+  onInstalled: (count: number) => void;
+  isAuthenticated: boolean;
+}) {
+  const { catalog, loading } = useSoftwareCatalog(isAuthenticated);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [installing, setInstalling] = useState(false);
+
+  // Filter catalog to software compatible with ALL selected machines' OS types
+  const osTypes = [...new Set(machines.map((m) => m.os))];
+  const compatible = catalog.filter((sw) =>
+    osTypes.every((os) => sw.supportedOS.includes(os))
+  );
+
+  const toggle = (id: string) =>
+    setSelected((prev) => prev.includes(id) ? prev.filter((s) => s !== id) : [...prev, id]);
+
+  const handleInstall = async () => {
+    if (!selected.length) return;
+    setInstalling(true);
+    try {
+      await createJobs({
+        machineIds: machines.map((m) => m._id),
+        softwareIds: selected,
+      });
+      onInstalled(selected.length * machines.length);
+      onClose();
+    } catch {
+      // error handled by caller
+    } finally {
+      setInstalling(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
+      <div className="w-full max-w-lg rounded-2xl bg-white shadow-xl">
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-gray-100 px-6 py-4">
+          <div>
+            <h2 className="text-base font-semibold text-gray-900">Install Software</h2>
+            <p className="mt-0.5 text-sm text-gray-500">
+              Installing on <span className="font-medium text-gray-900">{machines.length} machine{machines.length !== 1 ? 's' : ''}</span>
+              {osTypes.length > 1 && (
+                <span className="ml-1 text-orange-600">— showing software compatible with all selected OS types</span>
+              )}
+            </p>
+          </div>
+          <button onClick={onClose} className="rounded-lg p-1.5 text-gray-400 hover:bg-gray-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="max-h-80 overflow-y-auto px-6 py-4">
+          {loading ? (
+            <div className="flex h-24 items-center justify-center">
+              <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
+            </div>
+          ) : compatible.length === 0 ? (
+            <p className="py-8 text-center text-sm text-gray-400">
+              {catalog.length === 0
+                ? 'No software in catalog yet.'
+                : 'No software compatible with all selected OS types.'}
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              {compatible.map((sw) => {
+                const isSelected = selected.includes(sw._id);
+                return (
+                  <button
+                    key={sw._id}
+                    type="button"
+                    onClick={() => toggle(sw._id)}
+                    className={`flex items-center justify-between rounded-lg border px-4 py-3 text-left text-sm transition ${
+                      isSelected
+                        ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                        : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300 hover:bg-gray-50'
+                    }`}
+                  >
+                    <div>
+                      <p className="font-medium">{sw.name}</p>
+                      <p className="text-xs text-gray-400">{sw.version} · {sw.installMethod}</p>
+                    </div>
+                    {isSelected && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4">
+          <p className="text-sm text-gray-500">
+            {selected.length > 0
+              ? `${selected.length} package${selected.length !== 1 ? 's' : ''} selected`
+              : 'Select packages to install'}
+          </p>
+          <div className="flex gap-2">
+            <button
+              onClick={onClose}
+              className="rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={() => void handleInstall()}
+              disabled={!selected.length || installing}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-medium text-white transition hover:bg-[#a01717] disabled:opacity-50"
+            >
+              {installing && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Install on {machines.length} VM{machines.length !== 1 ? 's' : ''}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────────
 export default function MyMachinesPage() {
   const { isAuthenticated } = useAuth();
@@ -241,6 +371,9 @@ export default function MyMachinesPage() {
   // Bulk delete state
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false);
   const [bulkDeleteLoading, setBulkDeleteLoading] = useState(false);
+
+  // Bulk install state
+  const [showInstallModal, setShowInstallModal] = useState(false);
 
   // Bulk selection — any machine can be selected for reset
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -464,6 +597,19 @@ export default function MyMachinesPage() {
         />
       )}
 
+      {showInstallModal && (
+        <BulkInstallModal
+          machines={selectedMachines}
+          isAuthenticated={isAuthenticated}
+          onClose={() => setShowInstallModal(false)}
+          onInstalled={(count) => {
+            addToast('success', `${count} install job${count !== 1 ? 's' : ''} queued.`);
+            setSelectedIds(new Set());
+            void loadJobs();
+          }}
+        />
+      )}
+
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Machines</h1>
@@ -474,6 +620,14 @@ export default function MyMachinesPage() {
         <div className="flex items-center gap-2">
           {selectedIds.size > 0 && (
             <>
+              {/* Install Software — for any selected machines */}
+              <button
+                onClick={() => setShowInstallModal(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm font-medium text-blue-700 transition hover:bg-blue-100"
+              >
+                <Package className="h-3.5 w-3.5" />
+                Install Software
+              </button>
               {/* Reset — only for online machines */}
               {selectedMachines.some((m) => m.status === 'online') && (
                 <button
