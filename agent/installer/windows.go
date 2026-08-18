@@ -438,6 +438,16 @@ func ensureChocolatey() (string, error) {
 		log.Printf("[choco] Found choco at default path: %s", chocoExe)
 		return "", nil
 	}
+	// Also check common non-standard paths
+	for _, altPath := range []string{
+		`C:\chocolatey\bin\choco.exe`,
+		`C:\tools\chocolatey\bin\choco.exe`,
+	} {
+		if _, err := os.Stat(altPath); err == nil {
+			log.Printf("[choco] Found choco at alternate path: %s", altPath)
+			return "", nil
+		}
+	}
 	log.Printf("[choco] Chocolatey not found — installing now...")
 	installScript := `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`
 	out, err := runCmd("powershell.exe",
@@ -446,6 +456,21 @@ func ensureChocolatey() (string, error) {
 		"-Command", installScript,
 	)
 	if err != nil {
+		// If the bootstrap says "already installed" it exits non-zero but choco IS present.
+		// Treat this as success — the bootstrap refuses to overwrite an existing install.
+		outLower := strings.ToLower(out)
+		alreadyPresentSignals := []string{
+			"existing chocolatey installation was detected",
+			"files from a previous installation",
+			"installation will not continue",
+			"already installed",
+		}
+		for _, signal := range alreadyPresentSignals {
+			if strings.Contains(outLower, signal) {
+				log.Printf("[choco] Bootstrap detected existing install — treating as success")
+				return out, nil
+			}
+		}
 		log.Printf("[choco] Chocolatey install FAILED: %v", err)
 		return out, fmt.Errorf("chocolatey install failed: %w", err)
 	}
