@@ -585,6 +585,17 @@ export class ProjectsService {
     return docs.map((d) => toPublic(d));
   }
 
+  /** Returns distinct client names used in projects for this tenant. */
+  async distinctClientNamesForTenant(tenantId: string): Promise<string[]> {
+    const names: string[] = await ProjectModel.distinct('clientName', {
+      ownerType: 'tenant',
+      tenantId,
+    });
+    return names
+      .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+      .sort((a, b) => a.localeCompare(b));
+  }
+
   async previewNameForTenant(
     tenantId: string
   ): Promise<{ name: string; year: number; sequenceNumber: number }> {

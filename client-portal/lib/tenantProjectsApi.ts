@@ -50,6 +50,13 @@ export async function previewTenantProjectName(): Promise<ProjectNamePreview> {
   return unwrap(tenantPortalRequest(`${BASE}/name-preview`));
 }
 
+export async function fetchTenantProjectClientNames(): Promise<string[]> {
+  const data = await unwrap<{ clientNames: string[] }>(
+    tenantPortalRequest(`${BASE}/client-names`)
+  );
+  return data.clientNames;
+}
+
 export async function fetchTenantEligibleProjectServices(): Promise<AdminServiceKey[]> {
   const data = await unwrap<{ services: AdminServiceKey[] }>(
     tenantPortalRequest(`${BASE}/eligible-services`)
