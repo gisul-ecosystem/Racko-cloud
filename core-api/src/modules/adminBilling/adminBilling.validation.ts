@@ -54,9 +54,9 @@ export const chargeCloudRequestSchema = z.object({
   body: z.object({
     amountUsd: z.number().positive(),
     relatedRequestId: z.string().min(1).nullable().optional(),
-    provider: z.enum(['azure', 'aws']).optional().default('azure'),
+    provider: z.enum(['azure', 'aws', 'gcp']).optional().default('azure'),
     projectId: z.string().min(1).optional(),
-    serviceKey: z.enum(['azure', 'aws', 'cloud-labs']).optional(),
+    serviceKey: z.enum(['azure', 'aws', 'gcp', 'cloud-labs']).optional(),
   }),
 });
 

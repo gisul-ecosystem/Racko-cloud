@@ -89,6 +89,15 @@ router.post(
   }
 );
 
+router.patch(
+  '/admins/:adminId/:projectId',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.updateForAdmin(req, res, next);
+  }
+);
+
 /** Super-admin: manage projects for a white-label tenant */
 router.get(
   '/tenants/:tenantId',
@@ -135,6 +144,14 @@ router.post(
   }
 );
 
+router.patch(
+  '/tenants/:tenantId/:projectId',
+  requirePermission('white_labelling.manage'),
+  (req, res, next) => {
+    projectsController.updateForTenantSuperAdmin(req, res, next);
+  }
+);
+
 /** Org admin routes */
 router.use(requireRole('admin'));
 
@@ -165,6 +182,10 @@ router.get(
 
 router.get('/for-service/:serviceKey', (req, res, next) => {
   projectsController.listForService(req, res, next);
+});
+
+router.get('/client-names', requirePlatformPermission('projects.read'), (req, res, next) => {
+  projectsController.listClientNames(req, res, next);
 });
 
 router.get('/', requirePlatformPermission('projects.read'), (req, res, next) => {

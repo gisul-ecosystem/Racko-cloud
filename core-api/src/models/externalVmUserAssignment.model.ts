@@ -17,6 +17,8 @@ export interface IExternalVmUserAssignment extends Document {
   adminId: mongoose.Types.ObjectId;
   schedule?: AssignmentSchedule | null;
   status: ExternalVmAssignmentStatus;
+  accessOverride: boolean;
+  accessOverrideUntil?: Date | null;
   /** Platform user who performed the assignment. */
   assignedBy: mongoose.Types.ObjectId;
   createdAt: Date;
@@ -35,6 +37,8 @@ const externalVmUserAssignmentSchema = new Schema<IExternalVmUserAssignment>(
       required: true,
       index: true,
     },
+    accessOverride: { type: Boolean, default: false, index: true },
+    accessOverrideUntil: { type: Date, default: null },
     assignedBy: { type: Schema.Types.ObjectId, ref: 'User', required: true },
     createdAt: { type: Date, default: Date.now },
   },

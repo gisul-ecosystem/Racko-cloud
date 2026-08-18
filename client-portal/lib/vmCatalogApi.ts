@@ -85,6 +85,25 @@ export interface ICatalogVm {
   machineId?: string;
   postReadyStatus?: 'none' | 'pending' | 'running' | 'done' | 'failed';
   postReadyError?: string;
+  postReadyJobTotal?: number;
+  postReadyJobDone?: number;
+  postReadyJobFailed?: number;
+  postReadyJobRunning?: number;
+  postReadyJobPending?: number;
+  postReadyStage?:
+    | 'not_requested'
+    | 'agent_pushing'
+    | 'agent_waiting_online'
+    | 'agent_online'
+    | 'software_queued'
+    | 'software_installing'
+    | 'software_done'
+    | 'failed';
+  postReadyStageLabel?: string;
+  postReadyMachineStatus?: 'pending' | 'online' | 'offline';
+  postReadyAgentConnected?: boolean;
+  postReadyRunningSoftware?: string[];
+  postReadyPendingSoftware?: string[];
   fetchedCount?: number;
   missingCount?: number;
   partial?: boolean;
@@ -368,6 +387,14 @@ export async function fetchCatalogVmDetails(id: string): Promise<ICatalogVm> {
 export async function attachCatalogVmRequest(id: string): Promise<ICatalogVm> {
   const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
     `/api/v1/vm-catalog/requests/${id}/attach`,
+    { method: 'PATCH' }
+  );
+  return res.data.request;
+}
+
+export async function retryCatalogVmInstall(id: string): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
+    `/api/v1/vm-catalog/requests/${id}/retry-install`,
     { method: 'PATCH' }
   );
   return res.data.request;

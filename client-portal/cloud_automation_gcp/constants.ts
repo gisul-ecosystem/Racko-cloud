@@ -30,6 +30,9 @@ export const COMMON_TIMEZONES = [
   'Australia/Sydney',
 ] as const;
 
+/** Organization admin portal API (super_admin via cloud-gateway). */
+export const GCP_ORG_ADMIN_API_PREFIX = '/api/v1/cloud-automation-gcp/org-admin';
+
 /** Client routes for the GCP services area. */
 export const GCP_ROUTES = {
   dashboard: '/console/gcp',

@@ -42,10 +42,16 @@ export const patchSuperAdminExternalVmAssignmentSchema = z.object({
     .object({
       schedule: assignmentScheduleBody.nullable().optional(),
       status: z.enum(['active', 'revoked']).optional(),
+      accessOverride: z.boolean().optional(),
+      accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
     })
-    .refine((data) => data.schedule !== undefined || data.status !== undefined, {
-      message: 'Provide schedule and/or status',
-    }),
+    .refine(
+      (data) =>
+        data.schedule !== undefined ||
+        data.status !== undefined ||
+        data.accessOverride !== undefined,
+      { message: 'Provide schedule, status, and/or accessOverride' }
+    ),
 });
 
 export const deleteSuperAdminExternalVmAssignmentSchema = z.object({

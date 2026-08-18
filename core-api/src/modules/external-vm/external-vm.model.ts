@@ -23,9 +23,9 @@ export interface IExternalVM extends Document {
    */
   source: ExternalVMSource;
 
-  /** Platform admin owner (admin console). Mutually exclusive with tenantId. */
+  /** Platform admin owner (admin console). Mutually exclusive with tenantId. Omit both for free-pool VMs. */
   adminId?: mongoose.Types.ObjectId;
-  /** Tenant workspace owner (tenant console). Mutually exclusive with adminId. */
+  /** Tenant workspace owner (tenant console). Mutually exclusive with adminId. Omit both for free-pool VMs. */
   tenantId?: mongoose.Types.ObjectId;
   /** Organization project this elastic server belongs to (platform admin). */
   projectId?: mongoose.Types.ObjectId;
@@ -161,8 +161,8 @@ externalVMSchema.pre('validate', function (next) {
   }
   const hasAdmin = Boolean(this.adminId);
   const hasTenant = Boolean(this.tenantId);
-  if (hasAdmin === hasTenant) {
-    next(new Error('External VM must belong to exactly one of adminId or tenantId.'));
+  if (hasAdmin && hasTenant) {
+    next(new Error('External VM cannot belong to both adminId and tenantId.'));
     return;
   }
   next();

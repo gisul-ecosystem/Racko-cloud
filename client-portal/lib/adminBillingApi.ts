@@ -141,10 +141,10 @@ export async function createAdminWalletTopup(amount: number): Promise<AdminTopup
 export async function chargeAdminWalletForCloudRequest(
   amountUsd: number,
   relatedRequestId?: string | null,
-  provider: 'azure' | 'aws' = 'azure',
+  provider: 'azure' | 'aws' | 'gcp' = 'azure',
   attribution?: {
     projectId?: string | null;
-    serviceKey?: 'azure' | 'aws' | 'cloud-labs' | null;
+    serviceKey?: 'azure' | 'aws' | 'gcp' | 'cloud-labs' | null;
   }
 ): Promise<AdminCloudChargeResult> {
   return unwrap(

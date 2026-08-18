@@ -10,11 +10,13 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
+  fetchTenantProjectClientNames,
   fetchTenantProjects,
   previewTenantProjectName,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { PROJECT_SERVICE_META } from '@/lib/projectServiceMeta';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 
 const MAX_DESC = 500;
 
@@ -70,8 +72,7 @@ export default function TenantCreateProjectPage() {
   const [previewName, setPreviewName] = useState('');
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
-  const [clientMode, setClientMode] = useState<'select' | 'new'>('select');
-  const [existingClients, setExistingClients] = useState<string[]>([]);
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -85,17 +86,15 @@ export default function TenantCreateProjectPage() {
     setLoading(true);
     setError(null);
     try {
-      const [preview, services, existingProjectsList] = await Promise.all([
+      const [preview, services, names] = await Promise.all([
         previewTenantProjectName(),
         fetchTenantEligibleProjectServices(),
-        fetchTenantProjects().catch(() => [] as Awaited<ReturnType<typeof fetchTenantProjects>>),
+        fetchTenantProjectClientNames().catch(() => []),
       ]);
       setPreviewName(preview.name);
       setName(preview.name);
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
-      const clients = [...new Set(existingProjectsList.map((p) => p.clientName).filter(Boolean))];
-      setExistingClients(clients);
-      setClientMode(clients.length > 0 ? 'select' : 'new');
+      setClientNames(names);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to prepare create form.');
     } finally {
@@ -187,32 +186,13 @@ export default function TenantCreateProjectPage() {
                 Client Name <span className="text-red-500">*</span>
               </label>
               <p className="mb-2 text-xs text-gray-400">The client this project belongs to.</p>
-              <select
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
-                value={clientMode === 'new' ? '__new__' : clientName}
-                onChange={(e) => {
-                  if (e.target.value === '__new__') { setClientMode('new'); setClientName(''); }
-                  else { setClientMode('select'); setClientName(e.target.value); }
-                }}
-              >
-                <option value="">Select a client…</option>
-                {existingClients.map((c) => <option key={c} value={c}>{c}</option>)}
-                <option disabled>────────────────</option>
-                <option value="__new__">✚ Create new client</option>
-              </select>
-              {clientMode === 'new' && (
-                <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
-                  <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
-                  <input
-                    value={clientName}
-                    onChange={(e) => setClientName(e.target.value)}
-                    required
-                    placeholder="e.g. Acme Corp"
-                    className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
-                    autoFocus
-                  />
-                </div>
-              )}
+              <ClientNameCombobox
+                value={clientName}
+                onChange={setClientName}
+                clientNames={clientNames}
+                required
+                disabled={saving}
+              />
             </div>
           </div>
 
