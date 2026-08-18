@@ -49,7 +49,11 @@ import { customerDisplayName } from './vmCatalogPlan.service';
 import { catalogPricingBucket, needsOsTemplateChange } from './webynePlanRouting';
 import { SoftwareCatalogModel } from '../software-catalog/software-catalog.model';
 import { resolveSoftwareIconUrl } from '../software-catalog/software-catalog.icons';
+import { JobModel } from '../machine-manager/machine-manager.model';
 import { randomUUID } from 'crypto';
+
+const AGENT_ONLINE_WAIT_TIMEOUT_MS = 15 * 60 * 1000;
+const AGENT_ONLINE_WAIT_POLL_MS = 4000;
 
 const GST_RATE = 0.18;
 
@@ -91,6 +95,237 @@ const OPEN_FOR_SUPER_ADMIN: VmCatalogStatus[] = [
 const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
 
 class VmCatalogService {
+  private async waitForMachineAgentOnline(machineId: string): Promise<void> {
+    const { MachineModel } = await import('../machine-manager/machine-manager.model');
+    const startedAt = Date.now();
+
+    while (Date.now() - startedAt < AGENT_ONLINE_WAIT_TIMEOUT_MS) {
+      const doc = await MachineModel.findById(machineId)
+        .select('status agentId')
+        .lean();
+      const isOnline = doc?.status === 'online';
+      const hasAgentId = Boolean(doc?.agentId);
+      if (isOnline && hasAgentId) return;
+
+      await new Promise((resolve) => setTimeout(resolve, AGENT_ONLINE_WAIT_POLL_MS));
+    }
+
+    throw new Error('Agent did not come online within 15 minutes after push.');
+  }
+
+  private postReadyStageLabel(stage: NonNullable<CatalogVmResponse['postReadyStage']>): string {
+    switch (stage) {
+      case 'not_requested':
+        return 'Not requested';
+      case 'agent_pushing':
+        return 'Agent pushing';
+      case 'agent_waiting_online':
+        return 'Waiting for agent online';
+      case 'agent_online':
+        return 'Agent online';
+      case 'software_queued':
+        return 'Software queued';
+      case 'software_installing':
+        return 'Software installing';
+      case 'software_done':
+        return 'Software completed';
+      case 'failed':
+      default:
+        return 'Failed';
+    }
+  }
+
+  private async resolvePostReadyJobSummary(
+    docs: ICatalogVm[]
+  ): Promise<
+    Map<
+      string,
+      {
+        status: 'none' | 'pending' | 'running' | 'done' | 'failed';
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        stage: NonNullable<CatalogVmResponse['postReadyStage']>;
+        stageLabel: string;
+        machineStatus?: 'pending' | 'online' | 'offline';
+        agentConnected?: boolean;
+        runningSoftware: string[];
+        pendingSoftware: string[];
+      }
+    >
+  > {
+    const machineIds = [
+      ...new Set(
+        docs
+          .map((d) => d.machineId?.toString())
+          .filter((id): id is string => Boolean(id) && mongoose.Types.ObjectId.isValid(id!))
+      ),
+    ];
+    if (machineIds.length === 0) return new Map();
+
+    const jobs = await JobModel.find({
+      machineId: { $in: machineIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select('machineId status softwareIds')
+      .lean();
+
+    const { MachineModel } = await import('../machine-manager/machine-manager.model');
+    const machineDocs = await MachineModel.find({
+      _id: { $in: machineIds.map((id) => new mongoose.Types.ObjectId(id)) },
+    })
+      .select('_id status agentId')
+      .lean();
+
+    const machineById = new Map(
+      machineDocs.map((m) => [m._id.toString(), m])
+    );
+
+    const softwareIds = [
+      ...new Set(
+        jobs
+          .flatMap((job) => job.softwareIds ?? [])
+          .map((id) => id.toString())
+          .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      ),
+    ];
+    const softwareById = new Map<string, string>();
+    if (softwareIds.length > 0) {
+      const softwareRows = await SoftwareCatalogModel.find({
+        _id: { $in: softwareIds.map((id) => new mongoose.Types.ObjectId(id)) },
+      })
+        .select('name')
+        .lean();
+      for (const sw of softwareRows) {
+        softwareById.set(sw._id.toString(), sw.name);
+      }
+    }
+
+    const countsByMachine = new Map<
+      string,
+      {
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        runningSoftware: Set<string>;
+        pendingSoftware: Set<string>;
+      }
+    >();
+
+    for (const job of jobs) {
+      const key = job.machineId.toString();
+      const c = (key ? countsByMachine.get(key) : undefined) ?? {
+        total: 0,
+        done: 0,
+        failed: 0,
+        running: 0,
+        pending: 0,
+        runningSoftware: new Set<string>(),
+        pendingSoftware: new Set<string>(),
+      };
+      c.total += 1;
+      const softwareName = softwareById.get(job.softwareIds?.[0]?.toString() || '');
+      if (job.status === 'success') c.done += 1;
+      else if (job.status === 'failed') c.failed += 1;
+      else if (job.status === 'pending') {
+        c.pending += 1;
+        if (softwareName) c.pendingSoftware.add(softwareName);
+      } else {
+        c.running += 1; // installing / retrying
+        if (softwareName) c.runningSoftware.add(softwareName);
+      }
+      countsByMachine.set(key, c);
+    }
+
+    const out = new Map<
+      string,
+      {
+        status: 'none' | 'pending' | 'running' | 'done' | 'failed';
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        stage: NonNullable<CatalogVmResponse['postReadyStage']>;
+        stageLabel: string;
+        machineStatus?: 'pending' | 'online' | 'offline';
+        agentConnected?: boolean;
+        runningSoftware: string[];
+        pendingSoftware: string[];
+      }
+    >();
+
+    for (const doc of docs) {
+      const hasPreferredSoftware = (doc.preferredSoftwareIds?.length ?? 0) > 0;
+      const key = doc.machineId?.toString();
+      const c = (key ? countsByMachine.get(key) : undefined) ?? {
+        total: 0,
+        done: 0,
+        failed: 0,
+        running: 0,
+        pending: 0,
+        runningSoftware: new Set<string>(),
+        pendingSoftware: new Set<string>(),
+      };
+      const machine = key ? machineById.get(key) : undefined;
+      const machineStatus = machine?.status as 'pending' | 'online' | 'offline' | undefined;
+      const agentConnected = Boolean(machine?.agentId);
+      const fallback = (doc.postReadyStatus ?? 'none') as
+        | 'none'
+        | 'pending'
+        | 'running'
+        | 'done'
+        | 'failed';
+      let status: 'none' | 'pending' | 'running' | 'done' | 'failed' = fallback;
+      if (c.total > 0) {
+        if (c.failed > 0) status = 'failed';
+        else if (c.running > 0 || c.pending > 0) status = 'running';
+        else if (c.done === c.total) status = 'done';
+        else status = 'running';
+      }
+
+      let stage: NonNullable<CatalogVmResponse['postReadyStage']> = 'not_requested';
+      if (status === 'failed') {
+        stage = 'failed';
+      } else if (!hasPreferredSoftware) {
+        stage = 'not_requested';
+      } else if (c.total > 0) {
+        if (c.done === c.total) stage = 'software_done';
+        else if (c.running > 0) stage = 'software_installing';
+        else if (c.pending > 0) stage = 'software_queued';
+        else stage = 'software_installing';
+      } else if (!doc.machineId) {
+        stage = 'agent_pushing';
+      } else if (machineStatus === 'online' && agentConnected) {
+        stage = 'agent_online';
+      } else if (machineStatus === 'pending' || !agentConnected) {
+        stage = 'agent_waiting_online';
+      } else {
+        stage = 'agent_pushing';
+      }
+
+      out.set(doc._id.toString(), {
+        status,
+        total: c.total,
+        done: c.done,
+        failed: c.failed,
+        running: c.running,
+        pending: c.pending,
+        stage,
+        stageLabel: this.postReadyStageLabel(stage),
+        ...(machineStatus ? { machineStatus } : {}),
+        agentConnected,
+        runningSoftware: Array.from(c.runningSoftware),
+        pendingSoftware: Array.from(c.pendingSoftware),
+      });
+    }
+
+    return out;
+  }
+
   private adminDisplayStatus(status: VmCatalogStatus): VmCatalogStatus {
     if (status === 'ready_to_attach' || status === 'fulfilling') return 'provisioning';
     return status;
@@ -107,6 +342,20 @@ class VmCatalogService {
       projectName?: string;
       clientName?: string;
       role?: CatalogVmCallerRole;
+      postReadyOverride?: {
+        status: 'none' | 'pending' | 'running' | 'done' | 'failed';
+        total: number;
+        done: number;
+        failed: number;
+        running: number;
+        pending: number;
+        stage: NonNullable<CatalogVmResponse['postReadyStage']>;
+        stageLabel: string;
+        machineStatus?: 'pending' | 'online' | 'offline';
+        agentConnected?: boolean;
+        runningSoftware: string[];
+        pendingSoftware: string[];
+      };
     }
   ): CatalogVmResponse {
     const includeSecrets = Boolean(opts?.includeSecrets);
@@ -128,8 +377,25 @@ class VmCatalogService {
       ...(opts?.clientName ? { clientName: opts.clientName } : {}),
       preferredSoftwareIds: (doc.preferredSoftwareIds ?? []).map((id) => id.toString()),
       ...(doc.machineId ? { machineId: doc.machineId.toString() } : {}),
-      postReadyStatus: doc.postReadyStatus ?? 'none',
+      postReadyStatus: opts?.postReadyOverride?.status ?? (doc.postReadyStatus ?? 'none'),
       ...(doc.postReadyError ? { postReadyError: doc.postReadyError } : {}),
+      ...(opts?.postReadyOverride
+        ? {
+            postReadyJobTotal: opts.postReadyOverride.total,
+            postReadyJobDone: opts.postReadyOverride.done,
+            postReadyJobFailed: opts.postReadyOverride.failed,
+            postReadyJobRunning: opts.postReadyOverride.running,
+            postReadyJobPending: opts.postReadyOverride.pending,
+            postReadyStage: opts.postReadyOverride.stage,
+            postReadyStageLabel: opts.postReadyOverride.stageLabel,
+            ...(opts.postReadyOverride.machineStatus
+              ? { postReadyMachineStatus: opts.postReadyOverride.machineStatus }
+              : {}),
+            postReadyAgentConnected: Boolean(opts.postReadyOverride.agentConnected),
+            postReadyRunningSoftware: opts.postReadyOverride.runningSoftware,
+            postReadyPendingSoftware: opts.postReadyOverride.pendingSoftware,
+          }
+        : {}),
       provider: doc.provider,
       category: doc.category,
       planId: doc.planId,
@@ -242,17 +508,20 @@ class VmCatalogService {
     docs: ICatalogVm[],
     opts?: { adminEmail?: string; includeSecrets?: boolean }
   ): Promise<CatalogVmResponse[]> {
-    const [names, projects] = await Promise.all([
+    const [names, projects, postReadyByRequest] = await Promise.all([
       this.resolveCustomerPlanNames(docs),
       this.resolveProjectLabels(docs),
+      this.resolvePostReadyJobSummary(docs),
     ]);
     return docs.map((doc) => {
       const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      const postReady = postReadyByRequest.get(doc._id.toString());
       return this.toResponse(doc, {
         ...opts,
         forAdmin: true,
         role: 'admin',
         displayPlanName: names.get(doc.planId),
+        ...(postReady ? { postReadyOverride: postReady } : {}),
         ...(project
           ? { projectName: project.projectName, clientName: project.clientName }
           : {}),
@@ -541,8 +810,12 @@ class VmCatalogService {
   private schedulePostReadySetup(doc: ICatalogVm): void {
     const softwareIds = doc.preferredSoftwareIds ?? [];
     if (softwareIds.length === 0) return;
-    if (!doc.adminId) {
-      logger.warn('[VmCatalog] Post-ready install skipped — Machine Manager is org-admin only', {
+
+    // Use the org admin id directly, or fall back to the super-admin who attached
+    // the VM (reviewedBy) so tenant VMs also get the agent+software push.
+    const effectiveAdminId = doc.adminId ?? doc.reviewedBy;
+    if (!effectiveAdminId) {
+      logger.warn('[VmCatalog] Post-ready install skipped — no admin or reviewer id', {
         requestId: doc._id.toString(),
       });
       void CatalogVmModel.updateOne(
@@ -550,14 +823,14 @@ class VmCatalogService {
         {
           $set: {
             postReadyStatus: 'failed',
-            postReadyError:
-              'Automatic agent/software install is available for organization VMs only.',
+            postReadyError: 'No admin or reviewer id available for agent install.',
             updatedAt: new Date(),
           },
         }
       ).catch(() => undefined);
       return;
     }
+
     void this.runPostReadySetup(doc._id).catch((err: unknown) => {
       logger.error('[VmCatalog] Post-ready setup failed', {
         requestId: doc._id.toString(),
@@ -570,28 +843,83 @@ class VmCatalogService {
     const doc = await CatalogVmModel.findById(id);
     if (!doc) return;
     if (doc.status !== 'active') return;
-    if (!doc.adminId) return;
+
+    // Org admin id takes priority; fall back to the reviewing super-admin for tenant VMs.
+    const effectiveAdminId = doc.adminId ?? doc.reviewedBy;
+    if (!effectiveAdminId) return;
 
     const softwareIds = (doc.preferredSoftwareIds ?? []).map((sid) => sid.toString());
     if (softwareIds.length === 0) return;
 
-    if (!doc.ipAddress || !doc.username || !doc.password) {
-      doc.postReadyStatus = 'failed';
-      doc.postReadyError = 'Missing IP, username, or password for agent install.';
-      doc.updatedAt = new Date();
-      await doc.save();
-      return;
-    }
+    const os = catalogCategoryToMachineOs(doc.category);
+    const instanceDocs = await CatalogVmInstanceModel.find({ catalogVmId: doc._id })
+      .sort({ instanceOrder: 1, createdAt: 1 })
+      .lean();
 
-    let plainPassword: string;
-    try {
-      plainPassword = decrypt(doc.password);
-    } catch {
-      doc.postReadyStatus = 'failed';
-      doc.postReadyError = 'Stored password could not be decrypted for agent install.';
-      doc.updatedAt = new Date();
-      await doc.save();
-      return;
+    const pushTargets: Array<{
+      name: string;
+      ipAddress: string;
+      os: 'windows' | 'linux';
+      username: string;
+      password: string;
+    }> = [];
+
+    if (instanceDocs.length > 0) {
+      for (const instance of instanceDocs) {
+        if (!instance.ipAddress || !instance.username || !instance.password) {
+          doc.postReadyStatus = 'failed';
+          doc.postReadyError = `Missing IP, username, or password for VM #${instance.instanceOrder}.`;
+          doc.updatedAt = new Date();
+          await doc.save();
+          return;
+        }
+
+        let plainPassword: string;
+        try {
+          plainPassword = decrypt(instance.password);
+        } catch {
+          doc.postReadyStatus = 'failed';
+          doc.postReadyError = `Stored password for VM #${instance.instanceOrder} could not be decrypted.`;
+          doc.updatedAt = new Date();
+          await doc.save();
+          return;
+        }
+
+        pushTargets.push({
+          name: `${doc.planName} #${instance.instanceOrder} · ${instance.ipAddress}`.slice(0, 120),
+          ipAddress: instance.ipAddress,
+          os,
+          username: instance.username,
+          password: plainPassword,
+        });
+      }
+    } else {
+      if (!doc.ipAddress || !doc.username || !doc.password) {
+        doc.postReadyStatus = 'failed';
+        doc.postReadyError = 'Missing IP, username, or password for agent install.';
+        doc.updatedAt = new Date();
+        await doc.save();
+        return;
+      }
+
+      let plainPassword: string;
+      try {
+        plainPassword = decrypt(doc.password);
+      } catch {
+        doc.postReadyStatus = 'failed';
+        doc.postReadyError = 'Stored password could not be decrypted for agent install.';
+        doc.updatedAt = new Date();
+        await doc.save();
+        return;
+      }
+
+      pushTargets.push({
+        name: `${doc.planName} · ${doc.ipAddress}`.slice(0, 120),
+        ipAddress: doc.ipAddress,
+        os,
+        username: doc.username,
+        password: plainPassword,
+      });
     }
 
     doc.postReadyStatus = 'running';
@@ -600,36 +928,30 @@ class VmCatalogService {
     await doc.save();
 
     const { machineManagerService } = await import('../machine-manager/machine-manager.service');
-    const os = catalogCategoryToMachineOs(doc.category);
     const sessionId = randomUUID();
-    const machineName = `${doc.planName} · ${doc.ipAddress}`.slice(0, 120);
 
     try {
       const { machines } = await machineManagerService.pushAgentToVMs(
-        [
-          {
-            name: machineName,
-            ipAddress: doc.ipAddress,
-            os,
-            username: doc.username,
-            password: plainPassword,
-          },
-        ],
-        doc.adminId,
+        pushTargets,
+        effectiveAdminId,
         sessionId
       );
 
-      const machine = machines[0];
-      if (!machine) {
+      if (!machines.length) {
         throw new Error('Machine Manager did not return a machine record.');
       }
 
-      doc.machineId = new mongoose.Types.ObjectId(machine._id);
+      // Keep a primary machine link for compatibility (first machine).
+      doc.machineId = new mongoose.Types.ObjectId(machines[0]!._id);
       await doc.save();
 
+      // Match Setup Wizard behavior: queue software only after agent is actually
+      // online/registered for each machine.
+      await Promise.all(machines.map((m) => this.waitForMachineAgentOnline(m._id)));
+
       await machineManagerService.createJobs(
-        { machineIds: [machine._id], softwareIds },
-        doc.adminId
+        { machineIds: machines.map((m) => m._id), softwareIds },
+        effectiveAdminId
       );
 
       doc.postReadyStatus = 'done';
@@ -639,7 +961,7 @@ class VmCatalogService {
 
       logger.info('[VmCatalog] Post-ready agent push + software jobs queued', {
         requestId: doc._id.toString(),
-        machineId: machine._id,
+        machineCount: machines.length,
         softwareCount: softwareIds.length,
       });
     } catch (err) {
@@ -1491,6 +1813,7 @@ class VmCatalogService {
       .lean();
     const emailById = new Map(admins.map((a) => [a._id.toString(), a.email]));
     const projects = await this.resolveProjectLabels(docs);
+    const postReadyByRequest = await this.resolvePostReadyJobSummary(docs);
     const instances = await CatalogVmInstanceModel.find({
       catalogVmId: { $in: docs.map((doc) => doc._id) },
     })
@@ -1506,12 +1829,14 @@ class VmCatalogService {
 
     return docs.map((doc) => {
       const project = doc.projectId ? projects.get(doc.projectId.toString()) : undefined;
+      const postReady = postReadyByRequest.get(doc._id.toString());
       const instanceRows = instancesByRequest.get(doc._id.toString()) || [];
       return {
         ...this.toResponse(doc, {
         adminEmail: doc.adminId ? emailById.get(doc.adminId.toString()) : undefined,
         includeSecrets: true,
         role: 'super_admin',
+        ...(postReady ? { postReadyOverride: postReady } : {}),
         ...(project
           ? { projectName: project.projectName, clientName: project.clientName }
           : {}),
@@ -1827,6 +2152,42 @@ class VmCatalogService {
     );
 
     return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
+  }
+
+  /** Super-admin retry: re-run post-ready agent push + software installation. */
+  async retryPostReadySetup(
+    id: mongoose.Types.ObjectId,
+    reviewerId: mongoose.Types.ObjectId
+  ): Promise<CatalogVmResponse> {
+    const doc = await CatalogVmModel.findById(id);
+    if (!doc) throw new NotFoundError('Catalog VM request not found.');
+    if (doc.status !== 'active') {
+      throw new ValidationError('Retry install is available only for active requests.');
+    }
+
+    const softwareIds = doc.preferredSoftwareIds ?? [];
+    if (softwareIds.length === 0) {
+      throw new ValidationError('No software package was selected for this request.');
+    }
+    if (doc.postReadyStatus === 'pending' || doc.postReadyStatus === 'running') {
+      throw new ValidationError('Install retry is already in progress for this request.');
+    }
+
+    doc.reviewedBy = reviewerId;
+    doc.reviewedAt = new Date();
+    doc.postReadyStatus = 'pending';
+    doc.postReadyError = undefined;
+    doc.updatedAt = new Date();
+    await doc.save();
+
+    this.schedulePostReadySetup(doc);
+
+    const postReady = (await this.resolvePostReadyJobSummary([doc])).get(doc._id.toString());
+    return this.toResponse(doc, {
+      includeSecrets: true,
+      role: 'super_admin',
+      ...(postReady ? { postReadyOverride: postReady } : {}),
+    });
   }
 
   /**

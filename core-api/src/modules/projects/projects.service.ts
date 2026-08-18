@@ -140,7 +140,12 @@ async function nextSequenceForOwner(params: {
   const filter =
     params.ownerType === 'tenant'
       ? { ownerType: 'tenant' as const, tenantId: params.tenantId, year: params.year }
-      : { ownerType: 'org' as const, orgId: params.orgId, year: params.year };
+      : {
+          ownerType: 'org' as const,
+          // Explicitly require orgId to be the exact string — never match null/missing orgId.
+          orgId: { $eq: params.orgId },
+          year: params.year,
+        };
   const latest = await ProjectModel.findOne(filter)
     .sort({ sequenceNumber: -1 })
     .select('sequenceNumber')
@@ -195,10 +200,20 @@ async function resolveTargetOrgOwnerId(adminId: string): Promise<string> {
 async function createForOrg(
   orgId: string,
   createdByUserId: string,
-  input: CreateProjectInput
+  input: CreateProjectInput,
+  options?: { bypassServiceCheck?: boolean }
 ): Promise<ProjectPublic> {
-  const allowed = await getActiveOrgServiceKeys(orgId);
-  const enabledServices = assertServicesSubset(input.enabledServices, allowed);
+  if (!orgId || typeof orgId !== 'string') {
+    throw new ValidationError('Organization ID is required to create a project.');
+  }
+  let enabledServices: AdminServiceKey[];
+  if (options?.bypassServiceCheck) {
+    // Super-admin path: trust the requested services without checking org's active service list.
+    enabledServices = input.enabledServices.filter(isAdminServiceKey) as AdminServiceKey[];
+  } else {
+    const allowed = await getActiveOrgServiceKeys(orgId);
+    enabledServices = assertServicesSubset(input.enabledServices, allowed);
+  }
 
   const year = new Date().getUTCFullYear();
   const sequenceNumber = await nextSequenceForOwner({ ownerType: 'org', orgId, year });
@@ -431,7 +446,8 @@ export class ProjectsService {
     input: CreateProjectInput
   ): Promise<ProjectPublic> {
     const orgId = await resolveTargetOrgOwnerId(targetAdminId);
-    return createForOrg(orgId, createdByUserId, input);
+    // Bypass service check — super-admin is trusted to assign any service.
+    return createForOrg(orgId, createdByUserId, input, { bypassServiceCheck: true });
   }
 
   /** Super-admin: active project-eligible services for an org. */
@@ -567,6 +583,17 @@ export class ProjectsService {
       createdAt: -1,
     });
     return docs.map((d) => toPublic(d));
+  }
+
+  /** Returns distinct client names used in projects for this tenant. */
+  async distinctClientNamesForTenant(tenantId: string): Promise<string[]> {
+    const names: string[] = await ProjectModel.distinct('clientName', {
+      ownerType: 'tenant',
+      tenantId,
+    });
+    return names
+      .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+      .sort((a, b) => a.localeCompare(b));
   }
 
   async previewNameForTenant(
@@ -1060,6 +1087,48 @@ export class ProjectsService {
   async catalogServices(): Promise<AdminServiceKey[]> {
     const keys = await serviceCatalogService.listAssignableKeys('admin');
     return keys.filter(isAdminServiceKey);
+  }
+
+  /** Super-admin: update a project belonging to an org admin. */
+  async updateForAdminBySuperAdmin(
+    adminId: string,
+    projectId: string,
+    input: UpdateProjectInput
+  ): Promise<ProjectPublic> {
+    const orgId = await resolveTargetOrgOwnerId(adminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status === 'archived') {
+      throw new ValidationError('Archived projects cannot be edited.');
+    }
+    if (input.name !== undefined) doc.name = input.name.trim();
+    if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
+    if (input.description !== undefined) {
+      doc.description = input.description?.trim() || undefined;
+    }
+    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
+    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  /** Returns distinct client names already used in projects for this org. */
+  async distinctClientNames(userId: string): Promise<string[]> {
+    const { orgId } = await assertOrgOwner(userId);
+    const names: string[] = await ProjectModel.distinct('clientName', {
+      orgId,
+      $or: [
+        { ownerType: 'org' },
+        { ownerType: { $exists: false } },
+        { ownerType: null },
+      ],
+    });
+    return names
+      .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+      .sort((a, b) => a.localeCompare(b));
   }
 }
 

@@ -7,8 +7,9 @@ import { useAuth } from '../../../../../context/AuthContext';
 import { useTemplates, useTemplateDetails } from '../../../../../hooks/useTemplates';
 import { createVM } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
-import { createProject, previewProjectName, fetchProjects } from '../../../../../lib/projectsApi';
+import { createProject, previewProjectName, fetchProjects, fetchProjectClientNames } from '../../../../../lib/projectsApi';
 import type { OrgProject } from '../../../../../lib/projectsApi';
+import { ClientNameCombobox } from '../../../../../components/console/ClientNameCombobox';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
 import { ProjectSelect } from '../../../../../components/console/ProjectSelect';
 import {
@@ -84,8 +85,7 @@ export default function CreateVMPage() {
   const [cpPreviewName, setCpPreviewName] = useState('');
   const [cpName, setCpName] = useState('');
   const [cpClientName, setCpClientName] = useState('');
-  const [cpClientMode, setCpClientMode] = useState<'select' | 'new'>('select');
-  const [cpExistingClients, setCpExistingClients] = useState<string[]>([]);
+  const [cpClientNames, setCpClientNames] = useState<string[]>([]);
   const [cpDescription, setCpDescription] = useState('');
   const [cpStartDate, setCpStartDate] = useState('');
   const [cpEndDate, setCpEndDate] = useState('');
@@ -281,18 +281,15 @@ export default function CreateVMPage() {
     setCpName('');
     setCpOpen(true);
     try {
-      const [preview, existingProjects] = await Promise.all([
+      const [preview, names] = await Promise.all([
         previewProjectName(),
-        fetchProjects().catch(() => []),
+        fetchProjectClientNames().catch(() => []),
       ]);
       setCpPreviewName(preview.name);
       setCpName(preview.name);
-      const clients = [...new Set(existingProjects.map((p) => p.clientName).filter(Boolean))];
-      setCpExistingClients(clients);
-      setCpClientMode(clients.length > 0 ? 'select' : 'new');
+      setCpClientNames(names);
     } catch {
-      setCpExistingClients([]);
-      setCpClientMode('new');
+      // preview optional
     }
   }
 
@@ -906,28 +903,14 @@ export default function CreateVMPage() {
                     </div>
                     <div>
                       <label className="mb-1.5 block text-xs font-semibold text-gray-700">Client Name <span className="text-red-500">*</span></label>
-                      <select
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                        value={cpClientMode === 'new' ? '__new__' : cpClientName}
-                        onChange={(e) => {
-                          if (e.target.value === '__new__') { setCpClientMode('new'); setCpClientName(''); }
-                          else { setCpClientMode('select'); setCpClientName(e.target.value); }
-                        }}
-                      >
-                        <option value="">Select a client…</option>
-                        {cpExistingClients.map((c) => <option key={c} value={c}>{c}</option>)}
-                        <option disabled>────────────────</option>
-                        <option value="__new__">✚ Create new client</option>
-                      </select>
-                      {cpClientMode === 'new' && (
-                        <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
-                          <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
-                          <input
-                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                            value={cpClientName} onChange={(e) => setCpClientName(e.target.value)}
-                            placeholder="e.g. Acme Corp" required autoFocus />
-                        </div>
-                      )}
+                      <ClientNameCombobox
+                        value={cpClientName}
+                        onChange={setCpClientName}
+                        clientNames={cpClientNames}
+                        required
+                        disabled={cpSaving}
+                        placeholder="e.g. Acme Corp"
+                      />
                       <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
                     </div>
                   </div>

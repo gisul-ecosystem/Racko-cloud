@@ -651,9 +651,34 @@ class MachineManagerService {
     const { vmPushService } = await import('./vm-push.service');
     const { emitPushEvent } = await import('./push.events');
 
-    // Step 1: Create all machine records synchronously (fast, DB only)
+    // Step 1: Create or reuse machine records synchronously (fast, DB only)
     const machines: MachineResponse[] = [];
     for (const vm of vms) {
+      const existing = await MachineModel.findOne({
+        adminId,
+        ipAddress: vm.ipAddress,
+        deleted: { $ne: true },
+      }).sort({ createdAt: -1 });
+
+      // Retry path: if a prior push created a pending/offline row for same VM,
+      // reuse that row instead of creating another duplicate machine record.
+      if (existing && (!existing.agentId || existing.status !== 'online')) {
+        existing.name = vm.name;
+        existing.os = vm.os;
+        if (existing.status !== 'online') {
+          existing.status = 'pending';
+        }
+        await existing.save();
+        machines.push(this.toMachineResponse(existing));
+
+        logger.info('[MachineManager] Reused existing machine for push', {
+          machineId: existing._id.toString(),
+          adminId: adminId.toString(),
+          ipAddress: vm.ipAddress,
+        });
+        continue;
+      }
+
       const machine = await this.addMachine(
         { name: vm.name, ipAddress: vm.ipAddress, os: vm.os },
         adminId
