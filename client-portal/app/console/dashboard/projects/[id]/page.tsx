@@ -12,6 +12,7 @@ import {
   archiveTenantProject,
   fetchTenantEligibleProjectServices,
   fetchTenantProject,
+  fetchTenantProjects,
   fetchTenantServiceCostReport,
   PROJECT_SERVICE_LABELS,
   removeTenantProjectService,
@@ -20,6 +21,7 @@ import {
   type ProjectReportByServiceRow,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 import {
   getServiceLaunchHref,
   getServiceTransactionsHref,
@@ -151,6 +153,7 @@ export default function TenantProjectDetailPage() {
   const [costRows, setCostRows] = useState<ProjectReportByServiceRow[]>([]);
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -166,10 +169,11 @@ export default function TenantProjectDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [p, services, costs] = await Promise.all([
+      const [p, services, costs, allProjects] = await Promise.all([
         fetchTenantProject(id),
         fetchTenantEligibleProjectServices(),
         fetchTenantServiceCostReport(id),
+        fetchTenantProjects().catch(() => []),
       ]);
       setProject(p);
       setName(p.name);
@@ -179,6 +183,8 @@ export default function TenantProjectDetailPage() {
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
       setCostRows(costs);
+      const names = [...new Set(allProjects.map((pr) => pr.clientName).filter(Boolean))].sort();
+      setClientNames(names);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load project.');
     } finally {
@@ -478,11 +484,12 @@ export default function TenantProjectDetailPage() {
                   </div>
                   <div>
                     <label className="mb-1.5 block text-sm font-medium text-gray-700">Client name</label>
-                    <input
+                    <ClientNameCombobox
                       value={clientName}
-                      onChange={(e) => setClientName(e.target.value)}
+                      onChange={setClientName}
+                      clientNames={clientNames}
                       required
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                      disabled={saving}
                     />
                   </div>
                 </div>
