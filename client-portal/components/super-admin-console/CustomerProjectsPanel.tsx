@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { FolderKanban, Loader2, Plus, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import type { AdminServiceKey } from '@/lib/adminServicesApi';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 import {
   addProjectServicesForAdmin,
   createProjectForAdmin,
@@ -50,6 +51,11 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
   const [previewName, setPreviewName] = useState('');
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+
+  const clientNames = useMemo(
+    () => [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort(),
+    [projects]
+  );
   const [description, setDescription] = useState('');
   const [available, setAvailable] = useState<AdminServiceKey[]>([]);
   const [selected, setSelected] = useState<AdminServiceKey[]>([]);
@@ -350,12 +356,13 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-gray-700">Client name</label>
-                  <input
+                  <ClientNameCombobox
                     value={clientName}
-                    onChange={(e) => setClientName(e.target.value)}
+                    onChange={setClientName}
+                    clientNames={clientNames}
                     required
+                    disabled={saving}
                     placeholder="End-client company name"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
                   />
                 </div>
                 <div>

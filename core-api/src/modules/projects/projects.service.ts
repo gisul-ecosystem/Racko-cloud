@@ -1077,6 +1077,22 @@ export class ProjectsService {
     const keys = await serviceCatalogService.listAssignableKeys('admin');
     return keys.filter(isAdminServiceKey);
   }
+
+  /** Returns distinct client names already used in projects for this org. */
+  async distinctClientNames(userId: string): Promise<string[]> {
+    const { orgId } = await assertOrgOwner(userId);
+    const names: string[] = await ProjectModel.distinct('clientName', {
+      orgId,
+      $or: [
+        { ownerType: 'org' },
+        { ownerType: { $exists: false } },
+        { ownerType: null },
+      ],
+    });
+    return names
+      .filter((n): n is string => typeof n === 'string' && n.trim().length > 0)
+      .sort((a, b) => a.localeCompare(b));
+  }
 }
 
 export const projectsService = new ProjectsService();

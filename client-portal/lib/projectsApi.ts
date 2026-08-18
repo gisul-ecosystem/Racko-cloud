@@ -69,6 +69,13 @@ export async function fetchProjectsForService(serviceKey: AdminServiceKey): Prom
   return data.projects;
 }
 
+export async function fetchProjectClientNames(): Promise<string[]> {
+  const data = await unwrap<{ clientNames: string[] }>(
+    apiRequest('/api/v1/projects/client-names')
+  );
+  return data.clientNames;
+}
+
 export async function fetchProject(id: string): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(apiRequest(`/api/v1/projects/${id}`));
   return data.project;

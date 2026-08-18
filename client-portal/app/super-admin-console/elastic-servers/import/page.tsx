@@ -28,6 +28,7 @@ import {
   type SuperAdminTargetOption,
 } from '@/lib/superAdminExternalVmApi';
 import { fetchProjectsForAdmin, fetchProjectsForTenant, createProjectForAdmin, createProjectForTenant, previewProjectNameForAdmin, previewProjectNameForTenant, type OrgProject } from '@/lib/projectsApi';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -740,6 +741,7 @@ export default function SuperAdminServerImportPage() {
   const [cpPreviewName, setCpPreviewName] = useState('');
   const [cpName, setCpName] = useState('');
   const [cpClientName, setCpClientName] = useState('');
+  const [cpClientNames, setCpClientNames] = useState<string[]>([]);
   const [cpDescription, setCpDescription] = useState('');
   const [cpStartDate, setCpStartDate] = useState('');
   const [cpEndDate, setCpEndDate] = useState('');
@@ -932,12 +934,18 @@ export default function SuperAdminServerImportPage() {
     setCpName('');
     setCreateProjectOpen(true);
     try {
-      const preview =
+      const [preview, existingProjects] = await Promise.all([
         defaultMode === 'admin'
-          ? await previewProjectNameForAdmin(defaultTargetId)
-          : await previewProjectNameForTenant(defaultTargetId);
+          ? previewProjectNameForAdmin(defaultTargetId)
+          : previewProjectNameForTenant(defaultTargetId),
+        defaultMode === 'admin'
+          ? fetchProjectsForAdmin(defaultTargetId).catch(() => [])
+          : fetchProjectsForTenant(defaultTargetId).catch(() => []),
+      ]);
       setCpPreviewName(preview.name);
       setCpName(preview.name);
+      const names = [...new Set(existingProjects.map((p) => p.clientName).filter(Boolean))].sort();
+      setCpClientNames(names);
     } catch {
       // preview is optional — user can still type a name
     }
@@ -1863,11 +1871,12 @@ export default function SuperAdminServerImportPage() {
                       <label className="mb-1.5 block text-xs font-semibold text-gray-700">
                         Client Name <span className="text-red-500">*</span>
                       </label>
-                      <input
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
+                      <ClientNameCombobox
                         value={cpClientName}
-                        onChange={(e) => setCpClientName(e.target.value)}
+                        onChange={setCpClientName}
+                        clientNames={cpClientNames}
                         required
+                        disabled={cpSaving}
                         placeholder="e.g. Acme Corp"
                       />
                       <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
