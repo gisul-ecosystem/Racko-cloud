@@ -10,6 +10,7 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
+  fetchTenantProjectClientNames,
   fetchTenantProjects,
   previewTenantProjectName,
 } from '@/lib/tenantProjectsApi';
@@ -85,15 +86,14 @@ export default function TenantCreateProjectPage() {
     setLoading(true);
     setError(null);
     try {
-      const [preview, services, allProjects] = await Promise.all([
+      const [preview, services, names] = await Promise.all([
         previewTenantProjectName(),
         fetchTenantEligibleProjectServices(),
-        fetchTenantProjects().catch(() => []),
+        fetchTenantProjectClientNames().catch(() => []),
       ]);
       setPreviewName(preview.name);
       setName(preview.name);
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
-      const names = [...new Set(allProjects.map((p) => p.clientName).filter(Boolean))].sort();
       setClientNames(names);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to prepare create form.');

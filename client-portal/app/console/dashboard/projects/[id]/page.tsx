@@ -12,6 +12,7 @@ import {
   archiveTenantProject,
   fetchTenantEligibleProjectServices,
   fetchTenantProject,
+  fetchTenantProjectClientNames,
   fetchTenantProjects,
   fetchTenantServiceCostReport,
   PROJECT_SERVICE_LABELS,
@@ -169,11 +170,11 @@ export default function TenantProjectDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [p, services, costs, allProjects] = await Promise.all([
+      const [p, services, costs, names] = await Promise.all([
         fetchTenantProject(id),
         fetchTenantEligibleProjectServices(),
         fetchTenantServiceCostReport(id),
-        fetchTenantProjects().catch(() => []),
+        fetchTenantProjectClientNames().catch(() => []),
       ]);
       setProject(p);
       setName(p.name);
@@ -183,8 +184,9 @@ export default function TenantProjectDetailPage() {
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
       setCostRows(costs);
-      const names = [...new Set(allProjects.map((pr) => pr.clientName).filter(Boolean))].sort();
-      setClientNames(names);
+      // Always include the current project's clientName so it appears as a selection not create
+      const merged = [...new Set([p.clientName, ...names].filter(Boolean))].sort();
+      setClientNames(merged);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load project.');
     } finally {
@@ -490,6 +492,7 @@ export default function TenantProjectDetailPage() {
                       clientNames={clientNames}
                       required
                       disabled={saving}
+                      showCreate={false}
                     />
                   </div>
                 </div>

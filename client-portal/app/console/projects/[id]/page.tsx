@@ -193,7 +193,8 @@ export default function ProjectDetailPage() {
       setDescription(p.description || '');
       setStartDate(p.startDate ? p.startDate.slice(0, 10) : '');
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
-      setClientNames(names);
+      // Always include the current project's clientName so it appears as a selection, not a new create
+      setClientNames([...new Set([p.clientName, ...names].filter(Boolean))].sort());
       setAvailable(
         services
           .filter(
@@ -518,6 +519,7 @@ export default function ProjectDetailPage() {
                       clientNames={clientNames}
                       required
                       disabled={saving}
+                      showCreate={false}
                     />
                   </div>
                 </div>
