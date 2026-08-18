@@ -17,6 +17,10 @@ import {
   type SuperAdminExternalVmOverviewRow,
   updateSuperAdminExternalVmProviderMetadata,
 } from '@/lib/superAdminExternalVmApi';
+import {
+  GrantAccessOverrideModal,
+  type AccessOverridePayload,
+} from '@/components/access-schedule/GrantAccessOverrideModal';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -88,8 +92,18 @@ function assigneeLabel(a: SuperAdminExternalVmAssigneeView): string {
   return a.userId ?? a.tenantUserId ?? 'Unknown';
 }
 
+function isLegacyAssignment(a: SuperAdminExternalVmAssigneeView): boolean {
+  return a.assignmentId.startsWith('legacy');
+}
+
 function isManageableAssignment(a: SuperAdminExternalVmAssigneeView): boolean {
-  return !a.assignmentId.startsWith('legacy:') && a.assignmentId !== 'none';
+  return !isLegacyAssignment(a) && a.assignmentId !== 'none';
+}
+
+function hasActiveAssigneeOverride(a: SuperAdminExternalVmAssigneeView): boolean {
+  if (!a.accessOverride) return false;
+  if (!a.accessOverrideUntil) return true;
+  return new Date(a.accessOverrideUntil).getTime() > Date.now();
 }
 
 function SchedulePicker({
@@ -229,6 +243,7 @@ export function ManageExternalVmAssignmentsModal({
   const [editSchedule, setEditSchedule] = useState(defaultScheduleEditor);
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(() => providerEditorFromRow(row));
   const [savingProvider, setSavingProvider] = useState(false);
+  const [overrideTarget, setOverrideTarget] = useState<SuperAdminExternalVmAssigneeView | null>(null);
 
   useEffect(() => {
     setLocalRow(row);
@@ -236,7 +251,7 @@ export function ManageExternalVmAssignmentsModal({
   }, [row]);
 
   const manageable = localRow.assignments.filter(isManageableAssignment);
-  const legacy = localRow.assignments.filter((a) => a.assignmentId.startsWith('legacy:'));
+  const legacy = localRow.assignments.filter(isLegacyAssignment);
 
   const previewSchedules = useMemo(() => {
     const items: Array<{ key: string; label: string; schedule: AssignmentScheduleDto | null }> =
@@ -331,22 +346,32 @@ export function ManageExternalVmAssignmentsModal({
     }
   }
 
-  async function revoke(assignmentId: string) {
+  async function saveAssignmentOverride(
+    assignmentId: string,
+    payload: AccessOverridePayload
+  ) {
     setBusyId(assignmentId);
     setError(null);
     try {
       const updated = await patchSuperAdminExternalVmAssignment(
         localRow.externalVmId,
         assignmentId,
-        { status: 'revoked' }
+        {
+          accessOverride: payload.accessOverride,
+          accessOverrideUntil: payload.accessOverrideUntil ?? null,
+        }
       );
       applyRow(updated);
-      if (editingId === assignmentId) setEditingId(null);
+      setOverrideTarget(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to revoke assignment.');
+      setError(err instanceof ApiError ? err.message : 'Failed to update access override.');
     } finally {
       setBusyId(null);
     }
+  }
+
+  async function ungrantOverride(assignmentId: string) {
+    await saveAssignmentOverride(assignmentId, { accessOverride: false });
   }
 
   async function remove(assignmentId: string) {
@@ -368,6 +393,16 @@ export function ManageExternalVmAssignmentsModal({
 
   return (
     <>
+      <GrantAccessOverrideModal
+        open={Boolean(overrideTarget)}
+        vmName={overrideTarget ? assigneeLabel(overrideTarget) : localRow.name}
+        currentlyActive={overrideTarget ? hasActiveAssigneeOverride(overrideTarget) : false}
+        onClose={() => setOverrideTarget(null)}
+        onSave={async (payload) => {
+          if (!overrideTarget) return;
+          await saveAssignmentOverride(overrideTarget.assignmentId, payload);
+        }}
+      />
       <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} aria-hidden />
       <div className="fixed inset-y-0 right-0 z-50 flex w-full max-w-lg flex-col bg-white shadow-2xl">
         <div className="flex items-start justify-between border-b border-gray-100 px-6 py-5">
@@ -462,6 +497,14 @@ export function ManageExternalVmAssignmentsModal({
                     <div>
                       <p className="text-sm font-medium text-gray-900">{assigneeLabel(a)}</p>
                       <p className="text-xs capitalize text-gray-500">Status: {a.status}</p>
+                      {hasActiveAssigneeOverride(a) ? (
+                        <p className="mt-1 text-xs font-medium text-emerald-700">
+                          Override active — access anytime
+                          {a.accessOverrideUntil
+                            ? ` until ${new Date(a.accessOverrideUntil).toLocaleString()}`
+                            : ''}
+                        </p>
+                      ) : null}
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-1">
                       {a.status === 'active' && (
@@ -479,18 +522,29 @@ export function ManageExternalVmAssignmentsModal({
                         </button>
                       )}
                       {a.status === 'active' && (
-                        <button
-                          type="button"
-                          disabled={busyId === a.assignmentId}
-                          onClick={() => void revoke(a.assignmentId)}
-                          className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
-                        >
-                          {busyId === a.assignmentId ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            'Revoke'
-                          )}
-                        </button>
+                        hasActiveAssigneeOverride(a) ? (
+                          <button
+                            type="button"
+                            disabled={busyId === a.assignmentId}
+                            onClick={() => void ungrantOverride(a.assignmentId)}
+                            className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                          >
+                            {busyId === a.assignmentId ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              'Ungrant override'
+                            )}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            disabled={busyId === a.assignmentId}
+                            onClick={() => setOverrideTarget(a)}
+                            className="rounded-md border border-emerald-200 bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-800 hover:bg-emerald-100 disabled:opacity-50"
+                          >
+                            Grant override
+                          </button>
+                        )
                       )}
                       <button
                         type="button"
@@ -535,9 +589,11 @@ export function ManageExternalVmAssignmentsModal({
                     </div>
                   ) : (
                     <p className="mt-2 text-xs text-gray-600">
-                      {a.schedule
-                        ? `${a.schedule.effectiveFrom.slice(0, 10)} · ${a.schedule.dailyStart}–${a.schedule.dailyEnd}`
-                        : 'Always on'}
+                      {hasActiveAssigneeOverride(a)
+                        ? 'Schedule bypassed while override is active'
+                        : a.schedule
+                          ? `${a.schedule.effectiveFrom.slice(0, 10)} · ${a.schedule.dailyStart}–${a.schedule.dailyEnd}`
+                          : 'Always on'}
                     </p>
                   )}
                 </div>
@@ -547,10 +603,19 @@ export function ManageExternalVmAssignmentsModal({
             {legacy.map((a) => (
               <div
                 key={a.assignmentId}
-                className="rounded-lg border border-gray-100 bg-gray-50 p-3 opacity-80"
+                className="rounded-lg border border-amber-100 bg-amber-50/60 p-3"
               >
-                <p className="text-sm text-gray-800">{assigneeLabel(a)}</p>
-                <p className="text-xs text-gray-500">Legacy assignment</p>
+                <p className="text-sm font-medium text-gray-900">{assigneeLabel(a)}</p>
+                <p className="text-xs text-gray-600">
+                  {a.stack === 'tenant' ? 'Tenant end user' : 'Platform user'} · Legacy assignment (read-only)
+                </p>
+                <p className="mt-1 text-xs text-gray-600">
+                  {a.schedule
+                    ? `Schedule: ${a.schedule.effectiveFrom.slice(0, 10)} – ${a.schedule.effectiveTo?.slice(0, 10) ?? 'open'} · ${a.schedule.dailyStart}–${a.schedule.dailyEnd}`
+                    : localRow.providerStartDate || localRow.providerEndDate
+                      ? `Provider dates: ${localRow.providerStartDate?.slice(0, 10) ?? '—'} – ${localRow.providerEndDate?.slice(0, 10) ?? '—'}`
+                      : 'No schedule or provider dates recorded'}
+                </p>
               </div>
             ))}
           </section>

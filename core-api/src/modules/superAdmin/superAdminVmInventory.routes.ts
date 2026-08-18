@@ -44,6 +44,15 @@ router.patch(
 );
 
 router.patch(
+  '/assignment/free-and-delete-user',
+  requirePermission('vm_inventory.write'),
+  validateRequest(superAdminVmInventoryClearAssignmentSchema),
+  (req, res, next) => {
+    superAdminVmInventoryController.freeVmAndDeleteAssignedUser(req, res, next);
+  }
+);
+
+router.patch(
   '/provider-metadata',
   requirePermission('vm_inventory.write'),
   validateRequest(superAdminVmProviderMetadataUpdateSchema),

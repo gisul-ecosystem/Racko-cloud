@@ -45,6 +45,7 @@ import {
 } from './externalVmTenantAssignment.service';
 import {
   getNextAllowedAccessHint,
+  hasActiveAssignmentAccessOverride,
   isAccessAllowedNow,
   type AssignmentSchedule,
 } from './schedule.types';
@@ -296,7 +297,11 @@ class ExternalVMService {
   }
 
   /** Deny when outside the assignment's schedule window (no schedule → allow). */
-  private assertAssignmentScheduleWindow(schedule?: AssignmentSchedule | null): void {
+  private assertAssignmentScheduleWindow(
+    schedule?: AssignmentSchedule | null,
+    override?: { accessOverride?: boolean; accessOverrideUntil?: Date | null }
+  ): void {
+    if (override && hasActiveAssignmentAccessOverride(override)) return;
     if (isAccessAllowedNow(schedule)) return;
     const next = getNextAllowedAccessHint(schedule);
     throw new AccessWindowDeniedError(
@@ -324,14 +329,14 @@ class ExternalVMService {
         externalVmId: doc._id,
         userId,
       })
-        .select('schedule status')
+        .select('schedule status accessOverride accessOverrideUntil')
         .lean();
 
       if (assignment) {
         if (!this.isAssignmentStatusActive(assignment.status)) {
           throw new ForbiddenError('You do not have permission to access this external VM.');
         }
-        this.assertAssignmentScheduleWindow(assignment.schedule ?? null);
+        this.assertAssignmentScheduleWindow(assignment.schedule ?? null, assignment);
         return;
       }
 
@@ -363,11 +368,11 @@ class ExternalVMService {
         tenantUserId,
         ...activeAssignmentFilter,
       })
-        .select('schedule status')
+        .select('schedule status accessOverride accessOverrideUntil')
         .lean();
 
       if (assignment) {
-        this.assertAssignmentScheduleWindow(assignment.schedule ?? null);
+        this.assertAssignmentScheduleWindow(assignment.schedule ?? null, assignment);
         return;
       }
 

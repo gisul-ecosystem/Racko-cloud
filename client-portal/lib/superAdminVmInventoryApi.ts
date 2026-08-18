@@ -108,6 +108,14 @@ export interface SuperAdminVmInventoryDeleteAssignedUserResult {
   deletedTenantUsers: number;
 }
 
+export interface SuperAdminVmInventoryFreeVmResult {
+  updated: boolean;
+  deletedPlatformUsers: number;
+  deletedTenantUsers: number;
+  clearedAssignment: boolean;
+  clearedOwner: boolean;
+}
+
 export interface SuperAdminVmInventoryQuery {
   resourceType?: InventoryResourceType;
   originServiceKey?: 'vm-management' | 'create-vm' | 'external-vm';
@@ -216,6 +224,19 @@ export async function deleteSuperAdminVmInventoryAssignedUser(
 ): Promise<SuperAdminVmInventoryDeleteAssignedUserResult> {
   const res = await apiRequest<ApiEnvelope<SuperAdminVmInventoryDeleteAssignedUserResult>>(
     '/api/v1/super-admin/vm-inventory/assignment/delete-user',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }
+  );
+  return res.data;
+}
+
+export async function freeSuperAdminVmInventoryAndDeleteUser(
+  body: SuperAdminVmInventoryClearAssignmentBody
+): Promise<SuperAdminVmInventoryFreeVmResult> {
+  const res = await apiRequest<ApiEnvelope<SuperAdminVmInventoryFreeVmResult>>(
+    '/api/v1/super-admin/vm-inventory/assignment/free-and-delete-user',
     {
       method: 'PATCH',
       body: JSON.stringify(body),

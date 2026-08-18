@@ -42,12 +42,13 @@ export const superAdminVmProviderMetadataImportSchema = z.object({
       z.object({
         ipAddress: z.string().trim().min(1, 'ipAddress is required'),
         name: z.string().trim().optional(),
+        vmSpec: z.string().trim().optional(),
         protocol: z.enum(['rdp', 'ssh']).optional(),
         planDuration: providerPlanDurationSchema.optional(),
         username: z.string().trim().optional(),
         password: z.string().optional(),
-        providerStartDate: z.string().datetime().optional(),
-        providerEndDate: z.string().datetime().optional(),
+        providerStartDate: z.string().trim().min(1).optional(),
+        providerEndDate: z.string().trim().min(1).optional(),
       })
     ).min(1, 'Provide at least one row').max(5000, 'Too many rows'),
   }),
