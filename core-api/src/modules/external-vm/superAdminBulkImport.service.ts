@@ -8,7 +8,10 @@ import { hashPassword } from '../../utils/argon2';
 import { encrypt } from '../../utils/crypto';
 import { logger } from '../../utils/logger';
 import { ExternalVMModel } from './external-vm.model';
-import { syncLegacyAssignedTenantUserId } from './externalVmTenantAssignment.service';
+import {
+  removeAllExternalVmAssignmentsForVms,
+  syncLegacyAssignedTenantUserId,
+} from './externalVmTenantAssignment.service';
 import {
   schedulesOverlap,
   type AssignmentSchedule,
@@ -170,6 +173,17 @@ class SuperAdminBulkImportService {
       }
 
       const { tenantId, name: tenantLabel, slug } = tenantResolved;
+
+      if (!row.user) {
+        return {
+          ...base,
+          tenantId: tenantId.toString(),
+          tenantName: `${tenantLabel} (${slug})`,
+          error:
+            'Extended tenant import requires a portal user so the end user can access the elastic server console.',
+        };
+      }
+
       let tenantUserId: mongoose.Types.ObjectId | undefined;
       let userCreated = false;
       let userReused = false;
@@ -201,30 +215,13 @@ class SuperAdminBulkImportService {
         password: encrypt(row.password),
         source: 'superadmin_bulk',
         tenantId,
+        ...(tenantUserId ? { assignedTenantUserId: tenantUserId } : {}),
         ...(row.projectId ? { projectId: new mongoose.Types.ObjectId(row.projectId) } : {}),
       });
 
       let assignmentId: string | undefined;
 
       if (tenantUserId) {
-        const alreadyAssigned = await this.hasAnotherTenantVmAssignment(
-          tenantId,
-          tenantUserId,
-          doc._id
-        );
-        if (alreadyAssigned) {
-          return {
-            ...base,
-            tenantId: tenantId.toString(),
-            tenantName: `${tenantLabel} (${slug})`,
-            userId: tenantUserId.toString(),
-            userCreated,
-            userReused,
-            externalVmId: doc._id.toString(),
-            error: 'This tenant user is already assigned to another VM.',
-          };
-        }
-
         const schedule = row.schedule ? toSchedule(row.schedule) : null;
         try {
           const created = await ExternalVmTenantAssignmentModel.create({
@@ -248,6 +245,7 @@ class SuperAdminBulkImportService {
             });
           }
         } catch (err) {
+          await this.rollbackCreatedVm(tenantId, doc._id);
           const message =
             err instanceof Error && (err as { code?: number }).code === 11000
               ? 'This user already has an assignment to this VM'
@@ -261,7 +259,6 @@ class SuperAdminBulkImportService {
             userId: tenantUserId.toString(),
             userCreated,
             userReused,
-            externalVmId: doc._id.toString(),
             error: message,
           };
         }
@@ -461,6 +458,14 @@ class SuperAdminBulkImportService {
       }
 
       if (resolvedTarget.kind === 'tenant') {
+        if (!row.assignments?.length) {
+          return {
+            ...base,
+            error:
+              'Tenant import requires at least one end-user assignment for console access.',
+          };
+        }
+
         const tenantId = resolvedTarget.tenantId;
         const doc = await ExternalVMModel.create({
           name: row.name,
@@ -478,6 +483,20 @@ class SuperAdminBulkImportService {
           tenantId,
           assignments: row.assignments,
         });
+
+        const assignmentSucceeded = assignmentResults.some((a) => a.success);
+        if (!assignmentSucceeded) {
+          await this.rollbackCreatedVm(tenantId, doc._id);
+          const firstError =
+            assignmentResults.find((a) => a.error)?.error ??
+            'Failed to assign this server to a tenant end user.';
+          return {
+            ...base,
+            tenantId: tenantId.toString(),
+            error: firstError,
+            assignments: assignmentResults,
+          };
+        }
 
         await syncLegacyAssignedTenantUserId(tenantId, doc._id);
 
@@ -547,6 +566,14 @@ class SuperAdminBulkImportService {
       });
       return { ...base, error: message };
     }
+  }
+
+  private async rollbackCreatedVm(
+    tenantId: mongoose.Types.ObjectId,
+    externalVmId: mongoose.Types.ObjectId
+  ): Promise<void> {
+    await removeAllExternalVmAssignmentsForVms(tenantId, [externalVmId]);
+    await ExternalVMModel.deleteOne({ _id: externalVmId, tenantId });
   }
 
   private async resolveTenantByName(tenantName: string): Promise<ResolvedTenant> {
@@ -816,21 +843,6 @@ class SuperAdminBulkImportService {
         continue;
       }
 
-      const tenantAlreadyAssigned = await this.hasAnotherTenantVmAssignment(
-        input.tenantId,
-        tenantUser._id,
-        input.externalVmId
-      );
-      if (tenantAlreadyAssigned) {
-        results.push({
-          index: i,
-          success: false,
-          tenantUserId: tenantUser._id.toString(),
-          error: 'This tenant user is already assigned to another VM.',
-        });
-        continue;
-      }
-
       try {
         const created = await ExternalVmTenantAssignmentModel.create({
           tenantId: input.tenantId,
@@ -858,6 +870,10 @@ class SuperAdminBulkImportService {
           tenantUserId: tenantUser._id.toString(),
           assignmentId: created._id.toString(),
         });
+        await ExternalVMModel.updateOne(
+          { _id: input.externalVmId, tenantId: input.tenantId },
+          { $set: { assignedTenantUserId: tenantUser._id } }
+        );
       } catch (err) {
         const message =
           err instanceof Error && (err as { code?: number }).code === 11000
@@ -1030,28 +1046,6 @@ class SuperAdminBulkImportService {
     }
 
     return null;
-  }
-
-  private async hasAnotherTenantVmAssignment(
-    tenantId: mongoose.Types.ObjectId,
-    tenantUserId: mongoose.Types.ObjectId,
-    externalVmId: mongoose.Types.ObjectId
-  ): Promise<boolean> {
-    const [activeJunction, legacyAssigned] = await Promise.all([
-      ExternalVmTenantAssignmentModel.exists({
-        tenantId,
-        tenantUserId,
-        status: 'active',
-        externalVmId: { $ne: externalVmId },
-      }),
-      ExternalVMModel.exists({
-        tenantId,
-        assignedTenantUserId: tenantUserId,
-        _id: { $ne: externalVmId },
-      }),
-    ]);
-
-    return Boolean(activeJunction || legacyAssigned);
   }
 
   private async hasAnotherPlatformVmAssignment(

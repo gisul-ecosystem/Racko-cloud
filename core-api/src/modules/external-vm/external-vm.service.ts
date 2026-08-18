@@ -354,24 +354,33 @@ class ExternalVMService {
     if (actor.role === 'tenant_user') {
       const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
       const tenantUserId = new mongoose.Types.ObjectId(actor.id);
+      const activeAssignmentFilter = {
+        $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+      };
       const assignment = await ExternalVmTenantAssignmentModel.findOne({
         tenantId,
         externalVmId: doc._id,
         tenantUserId,
+        ...activeAssignmentFilter,
       })
         .select('schedule status')
         .lean();
 
       if (assignment) {
-        if (!this.isAssignmentStatusActive(assignment.status)) {
-          throw new ForbiddenError('You do not have permission to access this external VM.');
-        }
         this.assertAssignmentScheduleWindow(assignment.schedule ?? null);
         return;
       }
 
-      // Legacy path: ExternalVM.assignedTenantUserId only (no junction row yet).
+      // Legacy path: ExternalVM.assignedTenantUserId (self-heal junction if missing).
       if (doc.assignedTenantUserId && doc.assignedTenantUserId.toString() === actor.id) {
+        await ExternalVmTenantAssignmentModel.updateOne(
+          { tenantId, externalVmId: doc._id, tenantUserId },
+          {
+            $set: { status: 'active' },
+            $setOnInsert: { createdAt: new Date() },
+          },
+          { upsert: true }
+        );
         return;
       }
 
@@ -889,7 +898,9 @@ class ExternalVMService {
     actor: TenantExternalVmActor,
     dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
-    const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
+    const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
+    await migrateLegacyExternalVmAssignments(tenantId);
+    const doc = await this.findOwnedByTenant(id, tenantId);
     await this.assertTenantAccess(doc, actor);
     return this.openGuacamole(
       doc,
