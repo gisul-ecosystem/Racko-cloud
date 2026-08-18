@@ -28,6 +28,8 @@ export interface ExternalVmMyAccess {
   allowedNow: boolean;
   schedule: AssignmentSchedulePublic | null;
   nextWindow: string | null;
+  overrideActive?: boolean;
+  overrideUntil?: string | null;
 }
 
 export interface IExternalVM {
