@@ -11,6 +11,8 @@ interface ClientNameComboboxProps {
   disabled?: boolean;
   placeholder?: string;
   inputClassName?: string;
+  /** Set false in edit forms so typing a new name doesn't show '+ Create' — just type and save. */
+  showCreate?: boolean;
 }
 
 export function ClientNameCombobox({
@@ -21,6 +23,7 @@ export function ClientNameCombobox({
   disabled,
   placeholder = 'Select or create a client',
   inputClassName,
+  showCreate = true,
 }: ClientNameComboboxProps) {
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -34,7 +37,7 @@ export function ClientNameCombobox({
 
   // Show "+ Create" only when the typed value doesn't exactly match an existing name
   const exactMatch = clientNames.some((n) => n.toLowerCase() === q);
-  const showCreate = trimmed.length > 0 && !exactMatch;
+  const showCreateOption = showCreate && trimmed.length > 0 && !exactMatch;
 
   // Close on outside click
   useEffect(() => {
@@ -51,7 +54,7 @@ export function ClientNameCombobox({
     inputClassName ||
     'w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]';
 
-  const dropdownVisible = open && (suggestions.length > 0 || showCreate);
+  const dropdownVisible = open && (suggestions.length > 0 || showCreateOption);
 
   return (
     <div ref={containerRef} className="relative">
@@ -101,12 +104,12 @@ export function ClientNameCombobox({
           ))}
 
           {/* Divider between existing and create */}
-          {suggestions.length > 0 && showCreate && (
+          {suggestions.length > 0 && showCreateOption && (
             <li className="mx-2 my-1 border-t border-gray-100" />
           )}
 
           {/* Create new client option */}
-          {showCreate && (
+          {showCreateOption && (
             <li>
               <button
                 type="button"

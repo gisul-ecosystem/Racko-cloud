@@ -313,6 +313,34 @@ async function createForTenant(req: Request, res: Response, next: NextFunction):
   }
 }
 
+async function updateForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const body = req.body as UpdateProjectInput;
+    const project = await projectsService.updateForAdminBySuperAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId']),
+      body
+    );
+    success(res, 'Project updated.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function updateForTenantSuperAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const body = req.body as UpdateProjectInput;
+    const project = await projectsService.updateForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId']),
+      body
+    );
+    success(res, 'Project updated.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listClientNames(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = req as AuthenticatedRequest;
@@ -340,6 +368,7 @@ export const projectsController = {
   previewNameForAdmin,
   listEligibleServicesForAdmin,
   createForAdmin,
+  updateForAdmin,
   addServicesForAdmin,
   getByIdForAdmin,
   reportByServiceForAdmin,
@@ -347,5 +376,6 @@ export const projectsController = {
   previewNameForTenant,
   listEligibleServicesForTenant,
   createForTenant,
+  updateForTenantSuperAdmin,
   addServicesForTenantSuperAdmin,
 };

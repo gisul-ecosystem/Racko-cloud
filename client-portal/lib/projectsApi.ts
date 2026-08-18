@@ -290,6 +290,34 @@ export async function addProjectServicesForTenant(
   return data.project;
 }
 
+export async function updateProjectForAdmin(
+  adminId: string,
+  projectId: string,
+  input: { clientName?: string; name?: string; description?: string | null }
+): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    apiRequest(`/api/v1/projects/admins/${adminId}/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    })
+  );
+  return data.project;
+}
+
+export async function updateProjectForTenant(
+  tenantId: string,
+  projectId: string,
+  input: { clientName?: string; name?: string; description?: string | null }
+): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    apiRequest(`/api/v1/projects/tenants/${tenantId}/${projectId}`, {
+      method: 'PATCH',
+      body: JSON.stringify(input),
+    })
+  );
+  return data.project;
+}
+
 export const PROJECT_SERVICE_LABELS: Record<AdminServiceKey, string> = {
   'create-vm': 'VM Catalog',
   'dedicated-server': 'Dedicated Server',

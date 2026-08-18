@@ -110,7 +110,17 @@ async function update(req: Request, res: Response, next: NextFunction): Promise<
     next(err);
   }
 }
-
+async function listClientNames(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as TenantAuthenticatedRequest;
+    const clientNames = await projectsService.distinctClientNamesForTenant(
+      authReq.tenantUser.tenantId
+    );
+    success(res, 'Client names retrieved.', { clientNames });
+  } catch (err) {
+    next(err);
+  }
+}
 async function addServices(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = tenantAuth(req);
@@ -180,6 +190,7 @@ async function reportByService(req: Request, res: Response, next: NextFunction):
 export const tenantProjectsController = {
   list,
   previewName,
+  listClientNames,
   listEligibleServices,
   listForService,
   getById,
