@@ -169,6 +169,20 @@ async function attach(req: Request, res: Response, next: NextFunction): Promise<
   }
 }
 
+async function retryPostReady(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const reviewerId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const request = await vmCatalogService.retryPostReadySetup(id, reviewerId);
+    success(res, 'Post-ready install retried. Agent push and software installation resumed.', {
+      request,
+    });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function fetchDetails(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = req as AuthenticatedRequest;
@@ -340,6 +354,7 @@ export const vmCatalogController = {
   approve,
   fetchDetails,
   attach,
+  retryPostReady,
   changeTemplate,
   powerAction,
   reject,

@@ -39,6 +39,10 @@ router.get('/name-preview', requireTenantPermission('projects.manage'), (req, re
   tenantProjectsController.previewName(req, res, next);
 });
 
+router.get('/client-names', requireTenantPermission('projects.read'), (req, res, next) => {
+  tenantProjectsController.listClientNames(req, res, next);
+});
+
 router.get('/eligible-services', requireTenantPermission('projects.manage'), (req, res, next) => {
   tenantProjectsController.listEligibleServices(req, res, next);
 });

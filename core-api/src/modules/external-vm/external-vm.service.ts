@@ -27,6 +27,7 @@ import {
 } from '../vmAccessSchedule/accessScheduleParse';
 import {
   cancelSchedule,
+  hasActiveAccessOverride,
   unblockUserSession,
 } from '../vmAccessSchedule/scheduleManager';
 import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
@@ -45,6 +46,7 @@ import {
 } from './externalVmTenantAssignment.service';
 import {
   getNextAllowedAccessHint,
+  hasActiveAssignmentAccessOverride,
   isAccessAllowedNow,
   type AssignmentSchedule,
 } from './schedule.types';
@@ -91,13 +93,34 @@ function toSchedulePublic(
   };
 }
 
-function toMyAccess(schedule?: AssignmentSchedule | null): ExternalVmMyAccess {
+function toMyAccess(
+  assignment?: {
+    schedule?: AssignmentSchedule | null;
+    accessOverride?: boolean;
+    accessOverrideUntil?: Date | null;
+  } | null,
+  vmDoc?: Pick<IExternalVM, 'accessOverride' | 'accessOverrideUntil'>
+): ExternalVmMyAccess {
+  const assignmentOverride = Boolean(assignment && hasActiveAssignmentAccessOverride(assignment));
+  const vmOverride = Boolean(vmDoc && hasActiveAccessOverride(vmDoc));
+  const overrideActive = assignmentOverride || vmOverride;
+  const schedule = assignment?.schedule ?? null;
+  const allowedNow = overrideActive || isAccessAllowedNow(schedule);
   const pub = toSchedulePublic(schedule);
-  const allowedNow = isAccessAllowedNow(schedule ?? null);
+  const overrideUntil = assignmentOverride
+    ? assignment?.accessOverrideUntil
+      ? new Date(assignment.accessOverrideUntil).toISOString()
+      : null
+    : vmOverride && vmDoc?.accessOverrideUntil
+      ? new Date(vmDoc.accessOverrideUntil).toISOString()
+      : null;
+
   return {
     allowedNow,
     schedule: pub,
-    nextWindow: allowedNow ? null : getNextAllowedAccessHint(schedule ?? null),
+    nextWindow: allowedNow ? null : getNextAllowedAccessHint(schedule),
+    overrideActive,
+    overrideUntil,
   };
 }
 
@@ -265,7 +288,14 @@ class ExternalVMService {
     );
     const summaries = await this.loadTenantAssignmentSummaries(tenantId, docs);
 
-    let myScheduleByVm = new Map<string, AssignmentSchedule | null>();
+    let myAssignmentByVm = new Map<
+      string,
+      {
+        schedule?: AssignmentSchedule | null;
+        accessOverride?: boolean;
+        accessOverrideUntil?: Date | null;
+      }
+    >();
     if (options?.forTenantUserId) {
       const mine = await ExternalVmTenantAssignmentModel.find({
         tenantId,
@@ -273,18 +303,16 @@ class ExternalVMService {
         externalVmId: { $in: docs.map((d) => d._id) },
         $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
       })
-        .select('externalVmId schedule')
+        .select('externalVmId schedule accessOverride accessOverrideUntil')
         .lean();
-      myScheduleByVm = new Map(
-        mine.map((r) => [r.externalVmId.toString(), r.schedule ?? null] as const)
-      );
+      myAssignmentByVm = new Map(mine.map((r) => [r.externalVmId.toString(), r]));
     }
 
     return docs.map((doc) => {
       const vmId = doc._id.toString();
       const assignments = summaries.get(vmId) ?? [];
       const myAccess = options?.forTenantUserId
-        ? toMyAccess(myScheduleByVm.get(vmId) ?? null)
+        ? toMyAccess(myAssignmentByVm.get(vmId) ?? null, doc)
         : undefined;
       return this.toResponse(doc, {
         ...options,
@@ -296,7 +324,11 @@ class ExternalVMService {
   }
 
   /** Deny when outside the assignment's schedule window (no schedule → allow). */
-  private assertAssignmentScheduleWindow(schedule?: AssignmentSchedule | null): void {
+  private assertAssignmentScheduleWindow(
+    schedule?: AssignmentSchedule | null,
+    override?: { accessOverride?: boolean; accessOverrideUntil?: Date | null }
+  ): void {
+    if (override && hasActiveAssignmentAccessOverride(override)) return;
     if (isAccessAllowedNow(schedule)) return;
     const next = getNextAllowedAccessHint(schedule);
     throw new AccessWindowDeniedError(
@@ -324,14 +356,14 @@ class ExternalVMService {
         externalVmId: doc._id,
         userId,
       })
-        .select('schedule status')
+        .select('schedule status accessOverride accessOverrideUntil')
         .lean();
 
       if (assignment) {
         if (!this.isAssignmentStatusActive(assignment.status)) {
           throw new ForbiddenError('You do not have permission to access this external VM.');
         }
-        this.assertAssignmentScheduleWindow(assignment.schedule ?? null);
+        this.assertAssignmentScheduleWindow(assignment.schedule ?? null, assignment);
         return;
       }
 
@@ -352,26 +384,37 @@ class ExternalVMService {
       throw new ForbiddenError('You do not have permission to access this external VM.');
     }
     if (actor.role === 'tenant_user') {
+      if (hasActiveAccessOverride(doc)) return;
+
       const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
       const tenantUserId = new mongoose.Types.ObjectId(actor.id);
+      const activeAssignmentFilter = {
+        $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+      };
       const assignment = await ExternalVmTenantAssignmentModel.findOne({
         tenantId,
         externalVmId: doc._id,
         tenantUserId,
+        ...activeAssignmentFilter,
       })
-        .select('schedule status')
+        .select('schedule status accessOverride accessOverrideUntil')
         .lean();
 
       if (assignment) {
-        if (!this.isAssignmentStatusActive(assignment.status)) {
-          throw new ForbiddenError('You do not have permission to access this external VM.');
-        }
-        this.assertAssignmentScheduleWindow(assignment.schedule ?? null);
+        this.assertAssignmentScheduleWindow(assignment.schedule ?? null, assignment);
         return;
       }
 
-      // Legacy path: ExternalVM.assignedTenantUserId only (no junction row yet).
+      // Legacy path: ExternalVM.assignedTenantUserId (self-heal junction if missing).
       if (doc.assignedTenantUserId && doc.assignedTenantUserId.toString() === actor.id) {
+        await ExternalVmTenantAssignmentModel.updateOne(
+          { tenantId, externalVmId: doc._id, tenantUserId },
+          {
+            $set: { status: 'active' },
+            $setOnInsert: { createdAt: new Date() },
+          },
+          { upsert: true }
+        );
         return;
       }
 
@@ -464,9 +507,9 @@ class ExternalVMService {
         userId: requestingUserId,
         $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
       })
-        .select('schedule')
+        .select('schedule accessOverride accessOverrideUntil')
         .lean();
-      myAccess = toMyAccess(assignment?.schedule ?? null);
+      myAccess = toMyAccess(assignment ?? null, doc);
     }
 
     return this.toResponse(doc, { includePassword, myAccess });
@@ -520,11 +563,11 @@ class ExternalVMService {
       userId,
       $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
     })
-      .select('externalVmId schedule')
+      .select('externalVmId schedule accessOverride accessOverrideUntil')
       .lean();
 
-    const byVmSchedule = new Map(
-      junction.map((j) => [j.externalVmId.toString(), j.schedule ?? null] as const)
+    const byVmAssignment = new Map(
+      junction.map((j) => [j.externalVmId.toString(), j] as const)
     );
 
     const fromJunction = junction.map((j) => j.externalVmId);
@@ -533,13 +576,10 @@ class ExternalVMService {
     }).sort({ createdAt: -1 });
 
     return docs.map((doc) => {
-      const schedule =
-        byVmSchedule.get(doc._id.toString()) ??
-        // Legacy assignedTo with no junction schedule → always-on
-        null;
+      const assignment = byVmAssignment.get(doc._id.toString()) ?? null;
       return this.toResponse(doc, {
         includePassword: false,
-        myAccess: toMyAccess(schedule),
+        myAccess: toMyAccess(assignment, doc),
       });
     });
   }
@@ -889,7 +929,9 @@ class ExternalVMService {
     actor: TenantExternalVmActor,
     dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
-    const doc = await this.findOwnedByTenant(id, new mongoose.Types.ObjectId(actor.tenantId));
+    const tenantId = new mongoose.Types.ObjectId(actor.tenantId);
+    await migrateLegacyExternalVmAssignments(tenantId);
+    const doc = await this.findOwnedByTenant(id, tenantId);
     await this.assertTenantAccess(doc, actor);
     return this.openGuacamole(
       doc,

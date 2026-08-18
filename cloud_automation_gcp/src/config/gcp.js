@@ -201,21 +201,105 @@ export const GCP_REGION_BILLING_NAMES = {
 
 // ─── Google APIs (Admin SDK for Cloud Identity) ────────────────────────────
 
-export async function getGoogleAdminClient() {
-  const { google } = await import('googleapis');
+export const ADMIN_DIRECTORY_USER_SCOPE =
+  'https://www.googleapis.com/auth/admin.directory.user';
 
-  const authOpts = {
-    scopes: ['https://www.googleapis.com/auth/admin.directory.user'],
-  };
-  if (gcpConfig.credentials) authOpts.credentials = gcpConfig.credentials;
-  else if (gcpConfig.keyFilename) authOpts.keyFilename = gcpConfig.keyFilename;
-  if (GCP_ADMIN_EMAIL) {
-    authOpts.clientOptions = { subject: GCP_ADMIN_EMAIL };
+function loadServiceAccountJson() {
+  if (gcpConfig.credentials) {
+    return gcpConfig.credentials;
   }
 
-  const authClient = new GoogleAuth(authOpts);
-  const client = await authClient.getClient();
-  return google.admin({ version: 'directory_v1', auth: client });
+  if (gcpConfig.keyFilename) {
+    const resolved = path.resolve(gcpConfig.keyFilename);
+    if (fs.existsSync(resolved)) {
+      return JSON.parse(fs.readFileSync(resolved, 'utf8'));
+    }
+  }
+
+  throw new Error(
+    'GCP service account key not found. Set GCP_SERVICE_ACCOUNT_KEY_PATH or GCP_SERVICE_ACCOUNT_KEY.'
+  );
+}
+
+export function getServiceAccountClientId() {
+  try {
+    return String(loadServiceAccountJson().client_id || '').trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+export function getAdminSdkEnableUrl(projectId = GCP_PROJECT_ID) {
+  const project = projectId || 'racko-master-project-505113';
+  return `https://console.cloud.google.com/apis/library/admin.googleapis.com?project=${encodeURIComponent(project)}`;
+}
+
+export function formatAdminSdkHelp(err) {
+  const enableUrl = getAdminSdkEnableUrl();
+  const base =
+    `Google Admin SDK API is not enabled on GCP project ${GCP_PROJECT_ID || 'racko-master-project-505113'}.\n` +
+    `Enable it here (requires Project Owner or Service Usage Admin):\n${enableUrl}\n` +
+    `Then wait 2–5 minutes and retry provisioning.`;
+
+  if (err?.message) {
+    return `${base}\n\nGoogle error: ${err.message}`;
+  }
+
+  return base;
+}
+
+export function formatDomainWideDelegationHelp(err) {
+  const message = String(err?.message || '');
+  if (
+    message.includes('admin.googleapis.com') ||
+    message.includes('Admin SDK API has not been used') ||
+    message.includes('SERVICE_DISABLED')
+  ) {
+    return formatAdminSdkHelp(err);
+  }
+
+  const clientId = getServiceAccountClientId();
+  const clientHint = clientId ? `Client ID: ${clientId}` : 'service account Client ID from gcp-key.json';
+  const base =
+    `Cloud Identity admin access is not authorized. Ask your Google Workspace super admin to:\n` +
+    `1) GCP Console → IAM → Service Accounts → enable Domain-wide delegation for racko-lab-automation\n` +
+    `2) admin.google.com → Security → API controls → Domain-wide delegation → Add ${clientHint}\n` +
+    `   Scope: ${ADMIN_DIRECTORY_USER_SCOPE}\n` +
+    `3) Ensure ${GCP_ADMIN_EMAIL || 'GCP_ADMIN_EMAIL'} is a Workspace super admin`;
+
+  if (err?.message) {
+    return `${base}\n\nGoogle error: ${err.message}`;
+  }
+
+  return base;
+}
+
+export async function getGoogleAdminClient() {
+  const { google } = await import('googleapis');
+  const { JWT } = await import('google-auth-library');
+
+  if (!GCP_ADMIN_EMAIL) {
+    throw new Error('GCP_ADMIN_EMAIL is required to create Cloud Identity users.');
+  }
+
+  const keys = loadServiceAccountJson();
+  const jwtClient = new JWT({
+    email: keys.client_email,
+    key: keys.private_key,
+    scopes: [ADMIN_DIRECTORY_USER_SCOPE],
+    subject: GCP_ADMIN_EMAIL,
+  });
+
+  try {
+    await jwtClient.authorize();
+  } catch (err) {
+    const message = formatDomainWideDelegationHelp(err);
+    const error = new Error(message);
+    error.code = 'GCP_DOMAIN_WIDE_DELEGATION_MISSING';
+    throw error;
+  }
+
+  return google.admin({ version: 'directory_v1', auth: jwtClient });
 }
 
 // ─── Helper: get short-lived access token ──────────────────────────────────
@@ -230,16 +314,28 @@ export async function getAccessToken() {
 
 export function validateGcpConfig() {
   const missing = [];
-  if (!GCP_PROJECT_ID)      missing.push('GCP_PROJECT_ID');
+  if (!GCP_PROJECT_ID) missing.push('GCP_PROJECT_ID');
   if (!GCP_ORGANIZATION_ID) missing.push('GCP_ORGANIZATION_ID');
-  if (!GCP_BILLING_ACCOUNT) missing.push('GCP_BILLING_ACCOUNT_ID');
 
   if (missing.length > 0) {
-    console.warn(`[gcpConfig] Missing env vars: ${missing.join(', ')}. Provisioning will fail.`);
+    console.warn(`[gcpConfig] Missing required env vars: ${missing.join(', ')}`);
+    return;
+  }
+
+  if (!GCP_BILLING_ACCOUNT) {
+    console.warn(
+      '[gcpConfig] GCP_BILLING_ACCOUNT_ID not set — shared master project mode (users + IAM + email only).'
+    );
   } else {
     console.log('[gcpConfig] GCP config validated OK');
-    console.log(`[gcpConfig] Project: ${GCP_PROJECT_ID} | Org: ${GCP_ORGANIZATION_ID} | Region: ${GCP_DEFAULT_REGION}`);
   }
+
+  console.log(
+    `[gcpConfig] Project: ${GCP_PROJECT_ID} | Org: ${GCP_ORGANIZATION_ID} | Region: ${GCP_DEFAULT_REGION}`
+  );
+  console.log(
+    `[gcpConfig] Cloud Identity user provisioning requires Admin SDK API: ${getAdminSdkEnableUrl()}`
+  );
 }
 
 // ─── GCP Region display names ───────────────────────────────────────────────

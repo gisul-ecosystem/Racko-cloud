@@ -123,6 +123,8 @@ export interface SuperAdminExternalVmAssigneeView {
   username: string | null;
   status: string;
   schedule: AssignmentScheduleDto | null;
+  accessOverride?: boolean;
+  accessOverrideUntil?: string | null;
 }
 
 export interface SuperAdminExternalVmOverviewRow {
@@ -133,11 +135,12 @@ export interface SuperAdminExternalVmOverviewRow {
   username: string;
   password: string;
   providerPlanDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
+  providerVmSpec?: string | null;
   providerUsername?: string | null;
   providerStartDate?: string | null;
   providerEndDate?: string | null;
   source: string;
-  stack: 'platform' | 'tenant';
+  stack: 'platform' | 'tenant' | 'free';
   adminId: string | null;
   adminEmail: string | null;
   tenantId: string | null;
@@ -271,6 +274,8 @@ export type CreateSuperAdminAssignmentBody = {
 export type PatchSuperAdminAssignmentBody = {
   schedule?: AssignmentScheduleDto | null;
   status?: 'active' | 'revoked';
+  accessOverride?: boolean;
+  accessOverrideUntil?: string | null;
 };
 
 export async function createSuperAdminExternalVmAssignment(

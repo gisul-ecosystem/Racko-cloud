@@ -138,9 +138,17 @@ export function TenantUserResourcesTabs() {
                   ))}
                   {servers.map((s) => {
                     const blocked = Boolean(s.myAccess && !s.myAccess.allowedNow);
+                    const overrideActive = Boolean(s.myAccess?.overrideActive);
                     return (
                     <tr key={`srv-${s._id}`} className="border-b border-gray-50">
-                      <td className="px-4 py-3 font-medium">{s.name}</td>
+                      <td className="px-4 py-3 font-medium">
+                        <div>{s.name}</div>
+                        {overrideActive ? (
+                          <p className="mt-0.5 text-[11px] font-medium text-emerald-700">
+                            Override active
+                          </p>
+                        ) : null}
+                      </td>
                       <td className="px-4 py-3 text-xs text-gray-500">Imported Server</td>
                       <td className="px-4 py-3">
                         <ProtocolBadge protocol={s.protocol} />

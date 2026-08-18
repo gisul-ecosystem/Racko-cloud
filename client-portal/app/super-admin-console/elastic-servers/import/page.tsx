@@ -28,6 +28,7 @@ import {
   type SuperAdminTargetOption,
 } from '@/lib/superAdminExternalVmApi';
 import { fetchProjectsForAdmin, fetchProjectsForTenant, createProjectForAdmin, createProjectForTenant, previewProjectNameForAdmin, previewProjectNameForTenant, type OrgProject } from '@/lib/projectsApi';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -165,7 +166,7 @@ function emptyRow(defaults?: {
     importShape: defaults?.importShape ?? 'legacy',
     targetMode: defaults?.targetMode ?? 'admin',
     targetId: defaults?.targetId ?? '',
-    createPortalUser: false,
+    createPortalUser: defaults?.targetMode === 'tenant',
     portalUserName: '',
     portalUserEmail: '',
     portalUserUsername: '',
@@ -311,7 +312,44 @@ function rowToPayload(
       if (!row.portalUserEmail.trim() || !row.portalUserUsername.trim() || !row.portalUserPassword) {
         return null;
       }
+    } else if (row.targetMode === 'tenant') {
+      const hasAssignee = row.assignments.some((a) => a.assigneeId);
+      if (!hasAssignee) return null;
+      const assignments = row.assignments
+        .filter((a) => a.assigneeId)
+        .map((a) => {
+          const schedule = toScheduleDto(a);
+          return { tenantUserId: a.assigneeId, ...(schedule ? { schedule } : {}) };
+        });
+      return {
+        name: row.name.trim(),
+        ip: row.ip.trim(),
+        password: row.password,
+        protocol: row.protocol,
+        ...(row.username.trim() ? { username: row.username.trim() } : {}),
+        target: { tenantId: targetId },
+        assignments,
+      };
+    } else if (row.targetMode === 'admin') {
+      const hasAssignee = row.assignments.some((a) => a.assigneeId);
+      if (!hasAssignee) return null;
+      const assignments = row.assignments
+        .filter((a) => a.assigneeId)
+        .map((a) => {
+          const schedule = toScheduleDto(a);
+          return { userId: a.assigneeId, ...(schedule ? { schedule } : {}) };
+        });
+      return {
+        name: row.name.trim(),
+        ip: row.ip.trim(),
+        password: row.password,
+        protocol: row.protocol,
+        ...(row.username.trim() ? { username: row.username.trim() } : {}),
+        target: { adminId: targetId },
+        assignments,
+      };
     }
+
     const schedule = row.createPortalUser ? toScheduleDto(row.rowAssignment) : undefined;
     if (row.rowAssignment.useSchedule && row.createPortalUser && !schedule) {
       return null;
@@ -703,8 +741,7 @@ export default function SuperAdminServerImportPage() {
   const [cpPreviewName, setCpPreviewName] = useState('');
   const [cpName, setCpName] = useState('');
   const [cpClientName, setCpClientName] = useState('');
-  const [cpClientMode, setCpClientMode] = useState<'select' | 'new'>('select');
-  const [cpExistingClients, setCpExistingClients] = useState<string[]>([]);
+  const [cpClientNames, setCpClientNames] = useState<string[]>([]);
   const [cpDescription, setCpDescription] = useState('');
   const [cpStartDate, setCpStartDate] = useState('');
   const [cpEndDate, setCpEndDate] = useState('');
@@ -847,11 +884,27 @@ export default function SuperAdminServerImportPage() {
             addToast('error', `Row "${row.name}" portal user needs email, username, and password.`);
             return null;
           }
+        } else if (row.targetMode === 'tenant') {
+          const hasAssignee = row.assignments.some((a) => a.assigneeId);
+          if (!hasAssignee) {
+            addToast(
+              'error',
+              `Row "${row.name}": pick a tenant end user (or enable "Create / assign portal user") so they can open the console.`
+            );
+            return null;
+          }
         }
       } else {
         const targetId = row.targetId || defaultTargetId;
         if (!targetId) {
           addToast('error', `Row "${row.name}" needs a target admin or tenant.`);
+          return null;
+        }
+        if (row.targetMode === 'tenant' && !row.assignments.some((a) => a.assigneeId)) {
+          addToast(
+            'error',
+            `Row "${row.name}": tenant imports need an end-user assignment for console access.`
+          );
           return null;
         }
         const warnings = overlapWarnings(row.assignments);
@@ -879,17 +932,20 @@ export default function SuperAdminServerImportPage() {
     setCpError(null);
     setCpPreviewName('');
     setCpName('');
-    const clients = [...new Set(defaultProjects.map((p) => p.clientName).filter(Boolean))];
-    setCpExistingClients(clients);
-    setCpClientMode(clients.length > 0 ? 'select' : 'new');
     setCreateProjectOpen(true);
     try {
-      const preview =
+      const [preview, existingProjects] = await Promise.all([
         defaultMode === 'admin'
-          ? await previewProjectNameForAdmin(defaultTargetId)
-          : await previewProjectNameForTenant(defaultTargetId);
+          ? previewProjectNameForAdmin(defaultTargetId)
+          : previewProjectNameForTenant(defaultTargetId),
+        defaultMode === 'admin'
+          ? fetchProjectsForAdmin(defaultTargetId).catch(() => [])
+          : fetchProjectsForTenant(defaultTargetId).catch(() => []),
+      ]);
       setCpPreviewName(preview.name);
       setCpName(preview.name);
+      const names = [...new Set(existingProjects.map((p) => p.clientName).filter(Boolean))].sort();
+      setCpClientNames(names);
     } catch {
       // preview is optional — user can still type a name
     }
@@ -1320,19 +1376,33 @@ export default function SuperAdminServerImportPage() {
                           <input
                             type="checkbox"
                             checked={row.createPortalUser}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const checked = e.target.checked;
                               setRows((prev) =>
                                 prev.map((r) =>
                                   r.key === row.key
-                                    ? { ...r, createPortalUser: e.target.checked }
+                                    ? {
+                                        ...r,
+                                        createPortalUser: checked,
+                                        assignments:
+                                          !checked && r.assignments.length === 0
+                                            ? [emptyAssignment()]
+                                            : r.assignments,
+                                      }
                                     : r
                                 )
-                              )
-                            }
+                              );
+                            }}
                           />
-                          Create / assign portal user
+                          Create new portal user & assign
                         </label>
                       </div>
+                      {!row.createPortalUser && row.targetMode === 'tenant' ? (
+                        <p className="sm:col-span-2 text-xs text-amber-800">
+                          Pick an existing tenant end user below — they need an assignment to open the
+                          elastic server console.
+                        </p>
+                      ) : null}
                       {row.createPortalUser && (
                         <>
                           <div>
@@ -1485,10 +1555,13 @@ export default function SuperAdminServerImportPage() {
                   )}
                 </div>
 
-                {row.importShape === 'legacy' && (
+                {(row.importShape === 'legacy' ||
+                  (row.importShape === 'extended' && !row.createPortalUser)) && (
                 <div className="mt-4 border-t border-gray-100 pt-4">
                   <div className="mb-2 flex items-center justify-between">
-                    <p className="text-sm font-medium text-gray-800">Assignments</p>
+                    <p className="text-sm font-medium text-gray-800">
+                      {row.targetMode === 'tenant' ? 'Tenant end user (console access)' : 'Assignments'}
+                    </p>
                     <button
                       type="button"
                       onClick={() =>
@@ -1613,7 +1686,11 @@ export default function SuperAdminServerImportPage() {
                       </div>
                     ))}
                     {row.assignments.length === 0 && (
-                      <p className="text-xs text-gray-400">No assignments — VM will be imported unassigned.</p>
+                      <p className="text-xs text-gray-400">
+                        {row.targetMode === 'tenant'
+                          ? 'Required for tenant imports — end users cannot open the console without an assignment.'
+                          : 'No assignments — VM will be imported unassigned.'}
+                      </p>
                     )}
                   </div>
                 </div>
@@ -1794,28 +1871,14 @@ export default function SuperAdminServerImportPage() {
                       <label className="mb-1.5 block text-xs font-semibold text-gray-700">
                         Client Name <span className="text-red-500">*</span>
                       </label>
-                      <select
-                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                        value={cpClientMode === 'new' ? '__new__' : cpClientName}
-                        onChange={(e) => {
-                          if (e.target.value === '__new__') { setCpClientMode('new'); setCpClientName(''); }
-                          else { setCpClientMode('select'); setCpClientName(e.target.value); }
-                        }}
-                      >
-                        <option value="">Select a client…</option>
-                        {cpExistingClients.map((c) => <option key={c} value={c}>{c}</option>)}
-                        <option disabled>────────────────</option>
-                        <option value="__new__">✚ Create new client</option>
-                      </select>
-                      {cpClientMode === 'new' && (
-                        <div className="mt-2 rounded-lg border border-[#B91C1C]/30 bg-red-50/40 p-2.5">
-                          <p className="mb-1.5 text-[11px] font-medium text-[#B91C1C]">New client name</p>
-                          <input
-                            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                            value={cpClientName} onChange={(e) => setCpClientName(e.target.value)}
-                            placeholder="e.g. Acme Corp" required autoFocus />
-                        </div>
-                      )}
+                      <ClientNameCombobox
+                        value={cpClientName}
+                        onChange={setCpClientName}
+                        clientNames={cpClientNames}
+                        required
+                        disabled={cpSaving}
+                        placeholder="e.g. Acme Corp"
+                      />
                       <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
                     </div>
                   </div>

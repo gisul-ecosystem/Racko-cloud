@@ -108,7 +108,6 @@ export default function ConsoleTenantLoginPage() {
   return (
     <TenantAuthFrame
       title="Welcome back"
-      description="Use your email or username after verifying your invite and setting your password. Sign in here for your tenant workspace — not at the platform /login."
     >
       <form onSubmit={handleSubmit} noValidate className="space-y-5">
         <div>

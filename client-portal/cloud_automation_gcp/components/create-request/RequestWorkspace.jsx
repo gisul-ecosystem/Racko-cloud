@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, FilePlus2, Server } from 'lucide-react';
+import { ArrowLeft, Cloud, FilePlus2 } from 'lucide-react';
 import { ErrorState } from '../../../components/dashboard/ErrorState';
 import { TableSkeleton } from '../../../components/dashboard/LoadingSkeleton';
 import { ApiError } from '../../../lib/apiClient';
@@ -16,6 +16,8 @@ import {
 import { createRequest, getPurchaseClonePayload, listPrivilegedRoles, createPrivilegedRoleRequest } from '../../api/client';
 import { GCP_DEFAULT_REGION } from '../../constants';
 import { useGcpRoutes } from '../../../lib/cloudPortalRoutes';
+import { useCloudAccentColor } from '../../../lib/cloudAccent';
+import { hexToRgba } from '../../../lib/tenantAccentStyles';
 import { ProjectSelect } from '@/components/console/ProjectSelect';
 import { useIsTenantPortal } from '@/lib/portalMode';
 import { DEFAULT_IAM_POLICIES } from '../../config/iamPolicies';
@@ -41,7 +43,7 @@ import {
   TEST_IDS_DEFAULTS,
   TEST_IDS_MAX_ACCOUNT_COUNT,
 } from '../../utils/requestForm';
-import { FINAL_FORM_STEP } from './RequestStepper';
+import { FINAL_FORM_STEP, RequestPhaseProgress, RequestStepper } from './RequestStepper';
 
 function durationDaysBetween(startDate, endDate) {
   if (!startDate || !endDate) return 0;
@@ -167,6 +169,8 @@ export function RequestWorkspace() {
   const purchaseToken = searchParams.get('purchaseToken');
   const isPurchaseConvert = Boolean(fromTestRequest && purchaseToken);
   const Gcp_ROUTES = useGcpRoutes();
+  const accent = useCloudAccentColor();
+  const soft = hexToRgba(accent, 0.1);
   const isTenantPortal = useIsTenantPortal();
   const { services, servicesByCategory, loading, error, refetch } = useServiceCatalog();
 
@@ -321,8 +325,6 @@ export function RequestWorkspace() {
     loading: regionsLoading,
     error: regionsError,
   } = useAvailableRegions(selectedServiceIds, selectedInstances);
-
-  const showFinalStepPanel = currentStep === FINAL_FORM_STEP;
 
   const refreshWallet = useCallback(async () => {
     setWalletLoading(true);
@@ -757,9 +759,9 @@ export function RequestWorkspace() {
 
     try {
       if (totalPrice > 0) {
-        const charge = await chargeCloudRequestWallet(totalPrice, null, 'Gcp', {
+        const charge = await chargeCloudRequestWallet(totalPrice, null, 'gcp', {
           projectId: rackoProjectId || undefined,
-          serviceKey: 'Gcp',
+          serviceKey: 'gcp',
         });
         chargedInr = charge.chargedInr;
         setWalletBalance(charge.balance);
@@ -771,14 +773,14 @@ export function RequestWorkspace() {
         const requestId = response.data?.requestId ?? response.requestId;
 
         if (chargedInr != null && chargedInr > 0) {
-          void linkCloudRequestWalletCharge(String(requestId), 'Gcp').catch(() => undefined);
+          void linkCloudRequestWalletCharge(String(requestId), 'gcp').catch(() => undefined);
         }
 
         router.push(Gcp_ROUTES.requestStatus(String(requestId)));
       } catch (createErr) {
         if (chargedInr != null && chargedInr > 0) {
           try {
-            const refunded = await refundCloudRequestWallet(chargedInr, null, 'Gcp');
+            const refunded = await refundCloudRequestWallet(chargedInr, null, 'gcp');
             setWalletBalance(refunded.balance);
           } catch {
             // Best-effort refund; surface original create failure below.
@@ -812,26 +814,63 @@ export function RequestWorkspace() {
     walletBalance != null &&
     walletBalance < estimatedInr;
 
+  const submitBarProps = {
+    submitting,
+    submitError,
+    totalPrice,
+    currency: 'USD',
+    onSubmit: handleSubmit,
+    walletBalance,
+    walletCurrency,
+    estimatedInr,
+    usdToInrRate,
+    walletLoading,
+    insufficientBalance,
+    submitDisabled: currentStep < FINAL_FORM_STEP,
+    submitDisabledLabel: 'Complete all steps',
+  };
+
   return (
     <div className="mx-auto max-w-screen-xl space-y-6 pb-10">
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
-        <div className="h-1 bg-gradient-to-r from-[var(--cloud-accent,#B91C1C)] via-[var(--cloud-accent,#B91C1C)] to-[var(--cloud-accent,#B91C1C)]" />
+        <div
+          className="h-1"
+          style={{
+            background: `linear-gradient(90deg, ${accent}, ${hexToRgba(accent, 0.65)}, ${accent})`,
+          }}
+        />
         <div className="p-6 lg:p-8">
           <Link
             href={Gcp_ROUTES.dashboard}
-            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:text-[var(--cloud-accent,#B91C1C)]"
+            className="mb-5 inline-flex items-center gap-1.5 text-sm text-gray-500 transition hover:opacity-80"
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = accent;
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = '';
+            }}
           >
             <ArrowLeft className="h-4 w-4" />
             Back to overview
           </Link>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div className="flex items-start gap-4">
-              <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl bg-[var(--cloud-accent-soft,#fef2f2)] text-[var(--cloud-accent,#B91C1C)] ring-1 ring-[var(--cloud-accent,#B91C1C)]/10">
+              <div
+                className="flex h-14 w-14 shrink-0 items-center justify-center rounded-xl ring-1"
+                style={{
+                  backgroundColor: soft,
+                  color: accent,
+                  '--tw-ring-color': hexToRgba(accent, 0.15),
+                }}
+              >
                 <FilePlus2 className="h-7 w-7" />
               </div>
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-[var(--cloud-accent,#B91C1C)]">
-                  Gcp automation
+                <p
+                  className="text-xs font-semibold uppercase tracking-wider"
+                  style={{ color: accent }}
+                >
+                  GCP automation
                 </p>
                 <h1 className="mt-1 text-2xl font-bold tracking-tight text-gray-900">
                   {isPurchaseConvert ? 'Continue purchase from test lab' : 'Create request'}
@@ -839,150 +878,171 @@ export function RequestWorkspace() {
                 <p className="mt-1 max-w-xl text-sm leading-relaxed text-gray-500">
                   {isPurchaseConvert
                     ? 'Services and permissions are prefilled from your test lab. Set dates, cleanup, budget, and account count, then submit.'
-                    : 'Name your lab, choose test or full Gcp IDs, then configure services and send credentials by email.'}
+                    : 'Name your lab, choose test or full GCP IDs, then configure services and send credentials by email.'}
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-2 rounded-lg border border-gray-100 bg-gray-50 px-3 py-2 text-xs text-gray-500">
-              <Server className="h-4 w-4 shrink-0 text-[var(--cloud-accent,#B91C1C)]" />
-              <span>Complete each step — Next unlocks the following section</span>
+              <Cloud className="h-4 w-4 shrink-0" style={{ color: accent }} />
+              <span>Fields unlock step by step as you complete each section</span>
             </div>
           </div>
         </div>
       </div>
 
-      {cloneError && !cloneLoading && <ErrorState message={cloneError} />}
+      {error && !loading && !cloneLoading ? (
+        <ErrorState message={error} onRetry={refetch} />
+      ) : null}
+
+      {cloneError && !cloneLoading ? <ErrorState message={cloneError} /> : null}
 
       {(loading || cloneLoading) && (
-        <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm">
-          <TableSkeleton rows={6} cols={1} embedded />
+        <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
+          <div className="p-6">
+            <TableSkeleton rows={6} cols={1} embedded />
+          </div>
         </div>
       )}
 
       {!loading && !cloneLoading && !error && !cloneError && (
-        <div
-          className={`grid grid-cols-1 gap-6 ${
-            showFinalStepPanel ? 'xl:grid-cols-[minmax(0,1fr)_340px]' : ''
-          }`}
-        >
-          <div className="min-w-0 space-y-6">
-            <div className="overflow-hidden rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-              <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
-                Cost attribution
-              </p>
-              <p className="mb-3 text-sm text-gray-500">
-                Charges stay on your main wallet. Optionally assign a project so spend appears in
-                Reports.
-              </p>
-              <ProjectSelect
-                serviceKey="Gcp"
-                value={rackoProjectId}
-                onChange={setRackoProjectId}
-                portal={isTenantPortal ? 'tenant' : 'org'}
-                disabled={submitting}
-              />
-            </div>
-            <RequestForm
+        <>
+          <RequestPhaseProgress currentStep={currentStep} accent={accent} soft={soft} />
+
+          <div className="overflow-hidden rounded-xl border border-gray-200 bg-white px-4 py-4 shadow-sm sm:px-6">
+            <RequestStepper
+              compact
               currentStep={currentStep}
               maxReachableStep={maxReachableStep}
               onStepClick={goToStep}
-              onNext={handleNext}
-              onBack={handleBack}
-              stepErrors={stepErrors}
-              services={services}
-              servicesByCategory={servicesByCategory}
-              selectedServiceIds={selectedServiceIds}
-              onToggleService={handleToggleService}
-              selectedInstances={selectedInstances}
-              onSelectInstance={handleSelectInstance}
-              pricingRegion={pricingRegion}
-              region={region}
-              onRegionChange={handleRegionChange}
-              projectName={projectName}
-              onProjectNameChange={setProjectName}
-              idMode={idMode}
-              onIdModeChange={handleIdModeChange}
-              purchaseConvertMode={isPurchaseConvert}
-              customerEmail={customerEmail}
-              onCustomerEmailChange={setCustomerEmail}
-              accountCount={accountCount}
-              onAccountCountChange={setAccountCount}
-              accessType={accessType}
-              onAccessTypeChange={setAccessType}
-              startDate={startDate}
-              onStartDateChange={handleStartDateChange}
-              endDate={endDate}
-              onEndDateChange={setEndDate}
-              durationDays={durationDays}
-              enableDailyUsage={enableDailyUsage}
-              onEnableDailyUsageChange={setEnableDailyUsage}
-              usageWindows={usageWindows}
-              onUsageWindowsChange={setUsageWindows}
-              timezone={timezone}
-              onTimezoneChange={setTimezone}
-              enableResourceCleanup={enableResourceCleanup}
-              onEnableResourceCleanupChange={setEnableResourceCleanup}
-              resourceCleanupTime={resourceCleanupTime}
-              onResourceCleanupTimeChange={setResourceCleanupTime}
-              resourceCleanupTimezone={resourceCleanupTimezone}
-              onResourceCleanupTimezoneChange={setResourceCleanupTimezone}
-              budgetEnabled={budgetEnabled}
-              onBudgetEnabledChange={setBudgetEnabled}
-              perUserBudgetUsd={perUserBudgetUsd}
-              onPerUserBudgetUsdChange={setPerUserBudgetUsd}
-              permissionOverrides={permissionOverrides}
-              onPermissionChange={handlePermissionChange}
-              validationErrors={validationErrors}
-              availableRegions={availableRegions}
-              regionsLoading={regionsLoading}
-              regionsError={regionsError}
-              privilegedRoleOpen={privilegedRoleOpen}
-              onPrivilegedRoleOpenChange={setPrivilegedRoleOpen}
-              privilegedRoles={privilegedRoles}
-              privilegedRolesLoading={privilegedRolesLoading}
-              selectedPrivilegedRole={selectedPrivilegedRole}
-              onSelectedPrivilegedRoleChange={handleSelectedPrivilegedRoleChange}
-              onSubmitPrivilegedRoleRequest={handleSubmitPrivilegedRoleRequest}
-              privilegedRoleSubmitting={privilegedRoleSubmitting}
-              privilegedRoleSubmitted={privilegedRoleSubmitted}
-              privilegedRoleMessage={privilegedRoleMessage}
-              privilegedRoleMessageType={privilegedRoleMessageType}
             />
           </div>
 
-          {showFinalStepPanel ? (
-            <div className="space-y-4 xl:sticky xl:top-6 xl:self-start">
-              <PricingSummary
-                totalPrice={totalPrice}
-                breakdown={estimate?.breakdown ?? []}
-                durationHours={estimate?.durationHours}
-                calendarHours={estimate?.calendarHours}
-                billableHours={estimate?.billableHours}
-                usesUsageWindows={estimate?.usesUsageWindows}
+          <div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_340px]">
+            <div className="min-w-0 space-y-6">
+              <div className="overflow-hidden rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
+                  Cost attribution
+                </p>
+                <p className="mb-3 text-sm text-gray-500">
+                  Charges stay on your main wallet. Optionally assign a project so spend appears in
+                  Reports.
+                </p>
+                <ProjectSelect
+                  serviceKey="gcp"
+                  value={rackoProjectId}
+                  onChange={setRackoProjectId}
+                  portal={isTenantPortal ? 'tenant' : 'org'}
+                  disabled={submitting}
+                />
+              </div>
+
+              <RequestForm
+                currentStep={currentStep}
+                maxReachableStep={maxReachableStep}
+                onStepClick={goToStep}
+                onNext={handleNext}
+                onBack={handleBack}
+                stepErrors={stepErrors}
+                services={services}
+                servicesByCategory={servicesByCategory}
+                selectedServiceIds={selectedServiceIds}
+                onToggleService={handleToggleService}
+                selectedInstances={selectedInstances}
+                onSelectInstance={handleSelectInstance}
+                pricingRegion={pricingRegion}
+                region={region}
+                onRegionChange={handleRegionChange}
+                projectName={projectName}
+                onProjectNameChange={setProjectName}
+                idMode={idMode}
+                onIdModeChange={handleIdModeChange}
+                purchaseConvertMode={isPurchaseConvert}
+                customerEmail={customerEmail}
+                onCustomerEmailChange={setCustomerEmail}
                 accountCount={accountCount}
-                baseHourlyPrice={estimate?.baseHourlyPrice}
-                portalHourlyTotal={estimate?.portalHourlyTotal}
-                infraHourlyTotal={estimate?.infraHourlyTotal}
-                loading={estimateLoading}
-                error={estimateError}
+                onAccountCountChange={setAccountCount}
+                accessType={accessType}
+                onAccessTypeChange={setAccessType}
+                startDate={startDate}
+                onStartDateChange={handleStartDateChange}
+                endDate={endDate}
+                onEndDateChange={setEndDate}
+                durationDays={durationDays}
+                enableDailyUsage={enableDailyUsage}
+                onEnableDailyUsageChange={setEnableDailyUsage}
+                usageWindows={usageWindows}
+                onUsageWindowsChange={setUsageWindows}
+                timezone={timezone}
+                onTimezoneChange={setTimezone}
+                enableResourceCleanup={enableResourceCleanup}
+                onEnableResourceCleanupChange={setEnableResourceCleanup}
+                resourceCleanupTime={resourceCleanupTime}
+                onResourceCleanupTimeChange={setResourceCleanupTime}
+                resourceCleanupTimezone={resourceCleanupTimezone}
+                onResourceCleanupTimezoneChange={setResourceCleanupTimezone}
+                budgetEnabled={budgetEnabled}
+                onBudgetEnabledChange={setBudgetEnabled}
+                perUserBudgetUsd={perUserBudgetUsd}
+                onPerUserBudgetUsdChange={setPerUserBudgetUsd}
+                permissionOverrides={permissionOverrides}
+                onPermissionChange={handlePermissionChange}
+                validationErrors={validationErrors}
+                availableRegions={availableRegions}
+                regionsLoading={regionsLoading}
+                regionsError={regionsError}
+                privilegedRoleOpen={privilegedRoleOpen}
+                onPrivilegedRoleOpenChange={setPrivilegedRoleOpen}
+                privilegedRoles={privilegedRoles}
+                privilegedRolesLoading={privilegedRolesLoading}
+                selectedPrivilegedRole={selectedPrivilegedRole}
+                onSelectedPrivilegedRoleChange={handleSelectedPrivilegedRoleChange}
+                onSubmitPrivilegedRoleRequest={handleSubmitPrivilegedRoleRequest}
+                privilegedRoleSubmitting={privilegedRoleSubmitting}
+                privilegedRoleSubmitted={privilegedRoleSubmitted}
+                privilegedRoleMessage={privilegedRoleMessage}
+                privilegedRoleMessageType={privilegedRoleMessageType}
               />
 
-              <CreateRequestSubmitBar
-                submitting={submitting}
-                submitError={submitError}
-                totalPrice={totalPrice}
-                currency="USD"
-                onSubmit={handleSubmit}
-                walletBalance={walletBalance}
-                walletCurrency={walletCurrency}
-                estimatedInr={estimatedInr}
-                usdToInrRate={usdToInrRate}
-                walletLoading={walletLoading}
-                insufficientBalance={insufficientBalance}
-              />
+              <div className="space-y-4 xl:hidden">
+                <PricingSummary
+                  totalPrice={totalPrice}
+                  breakdown={estimate?.breakdown ?? []}
+                  durationHours={estimate?.durationHours}
+                  calendarHours={estimate?.calendarHours}
+                  billableHours={estimate?.billableHours}
+                  usesUsageWindows={estimate?.usesUsageWindows}
+                  accountCount={accountCount}
+                  baseHourlyPrice={estimate?.baseHourlyPrice}
+                  portalHourlyTotal={estimate?.portalHourlyTotal}
+                  infraHourlyTotal={estimate?.infraHourlyTotal}
+                  loading={estimateLoading}
+                  error={estimateError}
+                />
+                <CreateRequestSubmitBar {...submitBarProps} />
+              </div>
             </div>
-          ) : null}
-        </div>
+
+            <aside className="hidden xl:block">
+              <div className="sticky top-20 space-y-4">
+                <PricingSummary
+                  totalPrice={totalPrice}
+                  breakdown={estimate?.breakdown ?? []}
+                  durationHours={estimate?.durationHours}
+                  calendarHours={estimate?.calendarHours}
+                  billableHours={estimate?.billableHours}
+                  usesUsageWindows={estimate?.usesUsageWindows}
+                  accountCount={accountCount}
+                  baseHourlyPrice={estimate?.baseHourlyPrice}
+                  portalHourlyTotal={estimate?.portalHourlyTotal}
+                  infraHourlyTotal={estimate?.infraHourlyTotal}
+                  loading={estimateLoading}
+                  error={estimateError}
+                />
+                <CreateRequestSubmitBar {...submitBarProps} compact />
+              </div>
+            </aside>
+          </div>
+        </>
       )}
     </div>
   );

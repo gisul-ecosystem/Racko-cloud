@@ -849,12 +849,13 @@ async function purchaseAndScrape(category, {
   // Racko sends OS labels (ubuntu/rocky/debian/windows/linux/gpu).
   // Linux-priced plans need a real Webyne image id at checkout.
   // Windows on a Linux-priced plan: deploy Ubuntu first, then SA changes OS.
-  const DEFAULT_LINUX_DEPLOY_TEMPLATE =
-    process.env.WEBYNE_LINUX_OS_TEMPLATE || 'ubuntu_20_64bit';
-  const ROCKY_TEMPLATE =
-    process.env.WEBYNE_ROCKY_OS_TEMPLATE || 'rocky_9_64bit';
-  const DEBIAN_TEMPLATE =
-    process.env.WEBYNE_DEBIAN_OS_TEMPLATE || 'debian_10_64bit';
+  // All templates must be set in .env — no hardcoded fallbacks.
+  const DEFAULT_LINUX_DEPLOY_TEMPLATE = String(process.env.WEBYNE_LINUX_OS_TEMPLATE || '').trim();
+  if (!DEFAULT_LINUX_DEPLOY_TEMPLATE) throw Object.assign(new Error('WEBYNE_LINUX_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
+  const ROCKY_TEMPLATE = String(process.env.WEBYNE_ROCKY_OS_TEMPLATE || '').trim();
+  if (!ROCKY_TEMPLATE) throw Object.assign(new Error('WEBYNE_ROCKY_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
+  const DEBIAN_TEMPLATE = String(process.env.WEBYNE_DEBIAN_OS_TEMPLATE || '').trim();
+  if (!DEBIAN_TEMPLATE) throw Object.assign(new Error('WEBYNE_DEBIAN_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
   let checkoutTemplate = String(template || '').trim();
   if (pricingCategory === 'linux') {
     const isOsLabel =
@@ -1845,9 +1846,9 @@ async function openMachineshowByRef(p, ref) {
  *
  * Known Linux templates (from Webyne UI):
  *   ubuntu → ubuntu_20_64bit
- *   rocky  → first Rocky option
- *   debian → default
- * Windows template: WEBYNE_WINDOWS_OS_TEMPLATE env (required until product confirms the id).
+ *   rocky  → WEBYNE_ROCKY_OS_TEMPLATE env (required)
+ *   debian → WEBYNE_DEBIAN_OS_TEMPLATE env (required)
+ * All OS templates must be set in .env — no hardcoded fallbacks.
  */
 async function changeMachineOs({
   externalRef,
@@ -1867,24 +1868,18 @@ async function changeMachineOs({
   let templateId = String(template || '').trim();
   if (!templateId) {
     if (osKey === 'windows') {
-      // Webyne: "windows_2022_64bit (Rs 0 / Core)"
-      templateId =
-        String(process.env.WEBYNE_WINDOWS_OS_TEMPLATE || '').trim() ||
-        'windows_2022_64bit';
+      templateId = String(process.env.WEBYNE_WINDOWS_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_WINDOWS_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     } else if (osKey === 'ubuntu' || osKey === 'linux') {
-      templateId =
-        String(process.env.WEBYNE_LINUX_OS_TEMPLATE || '').trim() ||
-        'ubuntu_20_64bit';
+      templateId = String(process.env.WEBYNE_LINUX_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_LINUX_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     } else if (osKey === 'rocky') {
-      // Webyne: "rocky_9_64bit (Rs 0)"
-      templateId =
-        String(process.env.WEBYNE_ROCKY_OS_TEMPLATE || '').trim() ||
-        'rocky_9_64bit';
+      templateId = String(process.env.WEBYNE_ROCKY_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_ROCKY_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     } else if (osKey === 'debian') {
-      // Webyne: "debian_10_64bit (Rs 0)"
       templateId =
-        String(process.env.WEBYNE_DEBIAN_OS_TEMPLATE || '').trim() ||
-        'debian_10_64bit';
+        String(process.env.WEBYNE_DEBIAN_OS_TEMPLATE || '').trim();
+      if (!templateId) throw Object.assign(new Error('WEBYNE_DEBIAN_OS_TEMPLATE env var is required but not set'), { status: 500, code: 'MISSING_ENV' });
     }
   }
 

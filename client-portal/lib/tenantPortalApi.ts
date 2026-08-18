@@ -218,16 +218,16 @@ export interface TenantCloudChargeResult {
   chargedInr: number;
   amountUsd: number;
   usdToInrRate: number;
-  provider: 'azure' | 'aws';
+  provider: 'azure' | 'aws' | 'gcp';
 }
 
 export async function chargeTenantWalletForCloudRequest(
   amountUsd: number,
   relatedRequestId?: string | null,
-  provider: 'azure' | 'aws' = 'azure',
+  provider: 'azure' | 'aws' | 'gcp' = 'azure',
   attribution?: {
     projectId?: string | null;
-    serviceKey?: 'azure' | 'aws' | 'cloud-labs' | null;
+    serviceKey?: 'azure' | 'aws' | 'gcp' | 'cloud-labs' | null;
   }
 ): Promise<TenantCloudChargeResult> {
   return unwrap(
@@ -250,7 +250,7 @@ export async function chargeTenantWalletForCloudRequest(
 export async function refundTenantWalletCloudCharge(
   amountInr: number,
   relatedRequestId?: string | null,
-  provider: 'azure' | 'aws' = 'azure'
+  provider: 'azure' | 'aws' | 'gcp' = 'azure'
 ): Promise<TenantWallet> {
   return unwrap(
     tenantPortalRequest<ApiEnvelope<TenantWallet>>('/api/v1/tenant-wallet/refund-cloud-request', {
@@ -266,7 +266,7 @@ export async function refundTenantWalletCloudCharge(
 
 export async function linkTenantWalletCloudCharge(
   relatedRequestId: string,
-  provider: 'azure' | 'aws' = 'azure'
+  provider: 'azure' | 'aws' | 'gcp' = 'azure'
 ): Promise<void> {
   await unwrap(
     tenantPortalRequest<ApiEnvelope<{ relatedRequestId: string }>>(
