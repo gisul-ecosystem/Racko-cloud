@@ -11,12 +11,14 @@ import {
   type SuperAdminExternalVmOverviewRow,
 } from './superAdminExternalVmOverview.service';
 import {
+  hasActiveAssignmentAccessOverride,
   schedulesOverlap,
   type AssignmentSchedule,
 } from './schedule.types';
 import {
   cancelExternalAssignmentTimer,
   scheduleExternalAssignmentDisconnect,
+  unblockUserSession,
 } from '../vmAccessSchedule/scheduleManager';
 import type {
   CreateSuperAdminExternalVmAssignmentInput,
@@ -187,19 +189,17 @@ class SuperAdminExternalVmAssignmentService {
 
       row.schedule = nextSchedule;
       row.status = nextStatus;
+      this.applyAccessOverridePatch(row, input.body);
       await row.save();
 
-      if (nextStatus === 'active' && nextSchedule) {
-        this.armTimer(
-          'tenant',
-          row._id.toString(),
-          externalVmId.toString(),
-          row.tenantUserId.toString(),
-          nextSchedule
-        );
-      } else {
-        cancelExternalAssignmentTimer(row._id.toString(), 'tenant');
-      }
+      this.syncAssignmentTimers(
+        'tenant',
+        row._id.toString(),
+        externalVmId.toString(),
+        row.tenantUserId.toString(),
+        row.schedule ?? null,
+        row
+      );
 
       await syncLegacyAssignedTenantUserId(vm.tenantId, externalVmId);
       return this.requireOverviewRow(externalVmId);
@@ -235,19 +235,17 @@ class SuperAdminExternalVmAssignmentService {
 
     row.schedule = nextSchedule;
     row.status = nextStatus;
+    this.applyAccessOverridePatch(row, input.body);
     await row.save();
 
-    if (nextStatus === 'active' && nextSchedule) {
-      this.armTimer(
-        'platform',
-        row._id.toString(),
-        externalVmId.toString(),
-        row.userId.toString(),
-        nextSchedule
-      );
-    } else {
-      cancelExternalAssignmentTimer(row._id.toString(), 'platform');
-    }
+    this.syncAssignmentTimers(
+      'platform',
+      row._id.toString(),
+      externalVmId.toString(),
+      row.userId.toString(),
+      row.schedule ?? null,
+      row
+    );
 
     await this.syncLegacyAssignedTo(externalVmId, vm.adminId);
     return this.requireOverviewRow(externalVmId);
@@ -315,6 +313,55 @@ class SuperAdminExternalVmAssignmentService {
       if (schedulesOverlap(input.candidate, row.schedule)) {
         throw new ValidationError('Schedule overlaps with an existing assignment on this VM.');
       }
+    }
+  }
+
+  private applyAccessOverridePatch(
+    row: {
+      accessOverride: boolean;
+      accessOverrideUntil?: Date | null;
+    },
+    body: PatchSuperAdminExternalVmAssignmentInput['body']
+  ): void {
+    if (body.accessOverride === undefined) return;
+
+    row.accessOverride = body.accessOverride;
+    if (body.accessOverride) {
+      row.accessOverrideUntil = body.accessOverrideUntil
+        ? new Date(body.accessOverrideUntil)
+        : null;
+    } else {
+      row.accessOverrideUntil = null;
+    }
+  }
+
+  private syncAssignmentTimers(
+    kind: 'platform' | 'tenant',
+    assignmentId: string,
+    externalVmId: string,
+    assigneeUserId: string,
+    schedule: AssignmentSchedule | null,
+    row: {
+      status: string;
+      accessOverride: boolean;
+      accessOverrideUntil?: Date | null;
+    }
+  ): void {
+    if (row.status !== 'active') {
+      cancelExternalAssignmentTimer(assignmentId, kind);
+      return;
+    }
+
+    if (hasActiveAssignmentAccessOverride(row)) {
+      cancelExternalAssignmentTimer(assignmentId, kind);
+      unblockUserSession(assigneeUserId);
+      return;
+    }
+
+    if (schedule) {
+      this.armTimer(kind, assignmentId, externalVmId, assigneeUserId, schedule);
+    } else {
+      cancelExternalAssignmentTimer(assignmentId, kind);
     }
   }
 
