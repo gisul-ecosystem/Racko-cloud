@@ -54,14 +54,37 @@ export async function isExternalVmAssignedToTenantUser(input: {
   return Boolean(hit);
 }
 
+const activeAssignmentStatusFilter = {
+  $or: [{ status: 'active' }, { status: { $exists: false } }, { status: null }],
+};
+
 export async function getExternalVmIdsForTenantUser(
   tenantId: mongoose.Types.ObjectId,
   tenantUserId: mongoose.Types.ObjectId
 ): Promise<mongoose.Types.ObjectId[]> {
-  const rows = await ExternalVmTenantAssignmentModel.find({ tenantId, tenantUserId })
+  await migrateLegacyExternalVmAssignments(tenantId);
+
+  const rows = await ExternalVmTenantAssignmentModel.find({
+    tenantId,
+    tenantUserId,
+    ...activeAssignmentStatusFilter,
+  })
     .select('externalVmId')
     .lean();
-  return rows.map((r) => r.externalVmId);
+
+  const ids = new Set(rows.map((r) => r.externalVmId.toString()));
+
+  const legacy = await ExternalVMModel.find({
+    tenantId,
+    assignedTenantUserId: tenantUserId,
+  })
+    .select('_id')
+    .lean();
+  for (const doc of legacy) {
+    ids.add(doc._id.toString());
+  }
+
+  return [...ids].map((id) => new mongoose.Types.ObjectId(id));
 }
 
 export async function getTenantUserIdsForExternalVm(

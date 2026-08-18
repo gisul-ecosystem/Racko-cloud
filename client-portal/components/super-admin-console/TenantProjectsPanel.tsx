@@ -53,6 +53,7 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
   const [manageAvailable, setManageAvailable] = useState<AdminServiceKey[]>([]);
   const [manageSelected, setManageSelected] = useState<AdminServiceKey[]>([]);
   const [manageLoading, setManageLoading] = useState(false);
+  const [detailProject, setDetailProject] = useState<OrgProject | null>(null);
 
   // Edit client name
   const [editProject, setEditProject] = useState<OrgProject | null>(null);
@@ -79,6 +80,7 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
   async function openCreate() {
     setShowCreate(true);
     setManageProject(null);
+    setDetailProject(null);
     setFlash(null);
     setError(null);
     setFormLoading(true);
@@ -128,6 +130,7 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
 
   async function openManage(project: OrgProject) {
     setShowCreate(false);
+    setDetailProject(null);
     setManageProject(project);
     setFlash(null);
     setError(null);
@@ -142,6 +145,14 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
     } finally {
       setManageLoading(false);
     }
+  }
+
+  function openDetail(project: OrgProject) {
+    setShowCreate(false);
+    setManageProject(null);
+    setFlash(null);
+    setError(null);
+    setDetailProject(project);
   }
 
   const canSubmit = useMemo(
@@ -229,7 +240,7 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
             {flash}
           </div>
         )}
-        {error && !showCreate && !manageProject && (
+        {error && !showCreate && !manageProject && !detailProject && (
           <div className="border-b border-red-100 bg-red-50 px-5 py-2.5 text-sm text-red-700">
             {error}
           </div>
@@ -280,15 +291,22 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
                   </td>
                   <td className="px-4 py-3 text-gray-500">{formatDate(p.createdAt)}</td>
                   <td className="px-4 py-3 text-right">
-                    {p.status === 'active' ? (
-                      <div className="flex items-center justify-end gap-3">
-                        <button
-                          type="button"
-                          onClick={() => openEdit(p)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
-                        >
-                          <Pencil className="h-3 w-3" /> Edit
-                        </button>
+                    <div className="inline-flex items-center justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => openDetail(p)}
+                        className="text-xs font-semibold text-gray-700 hover:underline"
+                      >
+                        View
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => openEdit(p)}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                      >
+                        <Pencil className="h-3 w-3" /> Edit
+                      </button>
+                      {p.status === 'active' ? (
                         <button
                           type="button"
                           onClick={() => void openManage(p)}
@@ -296,10 +314,8 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
                         >
                           Add services
                         </button>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-gray-400">—</span>
-                    )}
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -535,6 +551,97 @@ export function TenantProjectsPanel({ tenantId }: { tenantId: string }) {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {detailProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="max-h-[90vh] w-full max-w-2xl overflow-y-auto rounded-2xl bg-white shadow-xl">
+            <div className="sticky top-0 flex items-center justify-between border-b border-gray-100 bg-white px-5 py-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">{detailProject.name}</h3>
+                <p className="mt-0.5 text-xs text-gray-500">
+                  Client: {detailProject.clientName} · {detailProject.status}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setDetailProject(null)}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-50 hover:text-gray-700"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+
+            <div className="space-y-5 px-5 py-4">
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="rounded-lg border border-gray-100 px-3 py-2.5">
+                  <p className="text-xs font-medium text-gray-500">Project ID</p>
+                  <p className="mt-0.5 break-all text-sm text-gray-900">{detailProject.id}</p>
+                </div>
+                <div className="rounded-lg border border-gray-100 px-3 py-2.5">
+                  <p className="text-xs font-medium text-gray-500">Auto-generated name</p>
+                  <p className="mt-0.5 text-sm text-gray-900">{detailProject.autoGeneratedName}</p>
+                </div>
+                <div className="rounded-lg border border-gray-100 px-3 py-2.5">
+                  <p className="text-xs font-medium text-gray-500">Start date</p>
+                  <p className="mt-0.5 text-sm text-gray-900">
+                    {detailProject.startDate ? formatDate(detailProject.startDate) : '—'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-gray-100 px-3 py-2.5">
+                  <p className="text-xs font-medium text-gray-500">End date</p>
+                  <p className="mt-0.5 text-sm text-gray-900">
+                    {detailProject.endDate ? formatDate(detailProject.endDate) : '—'}
+                  </p>
+                </div>
+                <div className="rounded-lg border border-gray-100 px-3 py-2.5">
+                  <p className="text-xs font-medium text-gray-500">Created</p>
+                  <p className="mt-0.5 text-sm text-gray-900">{formatDate(detailProject.createdAt)}</p>
+                </div>
+                <div className="rounded-lg border border-gray-100 px-3 py-2.5">
+                  <p className="text-xs font-medium text-gray-500">Updated</p>
+                  <p className="mt-0.5 text-sm text-gray-900">{formatDate(detailProject.updatedAt)}</p>
+                </div>
+              </div>
+
+              <div>
+                <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">Description</p>
+                <p className="rounded-lg border border-gray-100 px-3 py-2.5 text-sm text-gray-800">
+                  {detailProject.description?.trim() || 'No description provided.'}
+                </p>
+              </div>
+
+              <div>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-gray-500">Enabled services</p>
+                {detailProject.enabledServices.length === 0 ? (
+                  <p className="rounded-lg border border-dashed border-gray-200 px-3 py-3 text-sm text-gray-500">No services enabled.</p>
+                ) : (
+                  <ul className="space-y-1.5">
+                    {detailProject.enabledServices.map((key) => (
+                      <li key={key} className="rounded-lg border border-gray-100 px-3 py-2 text-sm text-gray-900">
+                        {PROJECT_SERVICE_LABELS[key] || key}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+
+              <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">
+                {detailProject.status === 'active' ? (
+                  <button type="button"
+                    onClick={() => { const p = detailProject; setDetailProject(null); void openManage(p); }}
+                    className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50">
+                    Add services
+                  </button>
+                ) : null}
+                <button type="button" onClick={() => setDetailProject(null)}
+                  className="rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#991B1B]">
+                  Close
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
