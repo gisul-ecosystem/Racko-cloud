@@ -183,7 +183,7 @@ export default function TenantProjectDetailPage() {
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
       setCostRows(costs);
-      const names = [...new Set(allProjects.map((pr) => pr.clientName).filter(Boolean))].sort();
+      const names = [...new Set([p.clientName, ...allProjects.map((pr) => pr.clientName)].filter(Boolean))].sort();
       setClientNames(names);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load project.');
@@ -490,6 +490,7 @@ export default function TenantProjectDetailPage() {
                       clientNames={clientNames}
                       required
                       disabled={saving}
+                      showCreate={false}
                     />
                   </div>
                 </div>

@@ -1078,6 +1078,32 @@ export class ProjectsService {
     return keys.filter(isAdminServiceKey);
   }
 
+  /** Super-admin: update a project belonging to an org admin. */
+  async updateForAdminBySuperAdmin(
+    adminId: string,
+    projectId: string,
+    input: UpdateProjectInput
+  ): Promise<ProjectPublic> {
+    const orgId = await resolveTargetOrgOwnerId(adminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status === 'archived') {
+      throw new ValidationError('Archived projects cannot be edited.');
+    }
+    if (input.name !== undefined) doc.name = input.name.trim();
+    if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
+    if (input.description !== undefined) {
+      doc.description = input.description?.trim() || undefined;
+    }
+    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
+    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
   /** Returns distinct client names already used in projects for this org. */
   async distinctClientNames(userId: string): Promise<string[]> {
     const { orgId } = await assertOrgOwner(userId);
