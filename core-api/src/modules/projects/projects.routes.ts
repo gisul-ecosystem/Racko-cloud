@@ -167,6 +167,10 @@ router.get('/for-service/:serviceKey', (req, res, next) => {
   projectsController.listForService(req, res, next);
 });
 
+router.get('/client-names', requirePlatformPermission('projects.read'), (req, res, next) => {
+  projectsController.listClientNames(req, res, next);
+});
+
 router.get('/', requirePlatformPermission('projects.read'), (req, res, next) => {
   projectsController.list(req, res, next);
 });

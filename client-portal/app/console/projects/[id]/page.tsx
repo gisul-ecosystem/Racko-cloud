@@ -11,6 +11,7 @@ import {
   addProjectServices,
   archiveProject,
   fetchProject,
+  fetchProjectClientNames,
   fetchServiceCostReport,
   PROJECT_SERVICE_LABELS,
   removeProjectService,
@@ -18,6 +19,7 @@ import {
   type OrgProject,
   type ProjectReportByServiceRow,
 } from '@/lib/projectsApi';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 import {
   getServiceLaunchHref,
   getServiceTransactionsHref,
@@ -163,6 +165,7 @@ export default function ProjectDetailPage() {
   const [costRows, setCostRows] = useState<ProjectReportByServiceRow[]>([]);
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -178,10 +181,11 @@ export default function ProjectDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const [p, services, costs] = await Promise.all([
+      const [p, services, costs, names] = await Promise.all([
         fetchProject(id),
         fetchMyAdminServices(),
         fetchServiceCostReport(id),
+        fetchProjectClientNames().catch(() => []),
       ]);
       setProject(p);
       setName(p.name);
@@ -189,6 +193,7 @@ export default function ProjectDetailPage() {
       setDescription(p.description || '');
       setStartDate(p.startDate ? p.startDate.slice(0, 10) : '');
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
+      setClientNames(names);
       setAvailable(
         services
           .filter(
@@ -507,11 +512,12 @@ export default function ProjectDetailPage() {
                     <label className="mb-1.5 block text-sm font-medium text-gray-700">
                       Client name
                     </label>
-                    <input
+                    <ClientNameCombobox
                       value={clientName}
-                      onChange={(e) => setClientName(e.target.value)}
+                      onChange={setClientName}
+                      clientNames={clientNames}
                       required
-                      className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                      disabled={saving}
                     />
                   </div>
                 </div>
