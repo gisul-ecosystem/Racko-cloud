@@ -165,7 +165,7 @@ function emptyRow(defaults?: {
     importShape: defaults?.importShape ?? 'legacy',
     targetMode: defaults?.targetMode ?? 'admin',
     targetId: defaults?.targetId ?? '',
-    createPortalUser: false,
+    createPortalUser: defaults?.targetMode === 'tenant',
     portalUserName: '',
     portalUserEmail: '',
     portalUserUsername: '',
@@ -311,7 +311,44 @@ function rowToPayload(
       if (!row.portalUserEmail.trim() || !row.portalUserUsername.trim() || !row.portalUserPassword) {
         return null;
       }
+    } else if (row.targetMode === 'tenant') {
+      const hasAssignee = row.assignments.some((a) => a.assigneeId);
+      if (!hasAssignee) return null;
+      const assignments = row.assignments
+        .filter((a) => a.assigneeId)
+        .map((a) => {
+          const schedule = toScheduleDto(a);
+          return { tenantUserId: a.assigneeId, ...(schedule ? { schedule } : {}) };
+        });
+      return {
+        name: row.name.trim(),
+        ip: row.ip.trim(),
+        password: row.password,
+        protocol: row.protocol,
+        ...(row.username.trim() ? { username: row.username.trim() } : {}),
+        target: { tenantId: targetId },
+        assignments,
+      };
+    } else if (row.targetMode === 'admin') {
+      const hasAssignee = row.assignments.some((a) => a.assigneeId);
+      if (!hasAssignee) return null;
+      const assignments = row.assignments
+        .filter((a) => a.assigneeId)
+        .map((a) => {
+          const schedule = toScheduleDto(a);
+          return { userId: a.assigneeId, ...(schedule ? { schedule } : {}) };
+        });
+      return {
+        name: row.name.trim(),
+        ip: row.ip.trim(),
+        password: row.password,
+        protocol: row.protocol,
+        ...(row.username.trim() ? { username: row.username.trim() } : {}),
+        target: { adminId: targetId },
+        assignments,
+      };
     }
+
     const schedule = row.createPortalUser ? toScheduleDto(row.rowAssignment) : undefined;
     if (row.rowAssignment.useSchedule && row.createPortalUser && !schedule) {
       return null;
@@ -845,11 +882,27 @@ export default function SuperAdminServerImportPage() {
             addToast('error', `Row "${row.name}" portal user needs email, username, and password.`);
             return null;
           }
+        } else if (row.targetMode === 'tenant') {
+          const hasAssignee = row.assignments.some((a) => a.assigneeId);
+          if (!hasAssignee) {
+            addToast(
+              'error',
+              `Row "${row.name}": pick a tenant end user (or enable "Create / assign portal user") so they can open the console.`
+            );
+            return null;
+          }
         }
       } else {
         const targetId = row.targetId || defaultTargetId;
         if (!targetId) {
           addToast('error', `Row "${row.name}" needs a target admin or tenant.`);
+          return null;
+        }
+        if (row.targetMode === 'tenant' && !row.assignments.some((a) => a.assigneeId)) {
+          addToast(
+            'error',
+            `Row "${row.name}": tenant imports need an end-user assignment for console access.`
+          );
           return null;
         }
         const warnings = overlapWarnings(row.assignments);
@@ -1315,19 +1368,33 @@ export default function SuperAdminServerImportPage() {
                           <input
                             type="checkbox"
                             checked={row.createPortalUser}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const checked = e.target.checked;
                               setRows((prev) =>
                                 prev.map((r) =>
                                   r.key === row.key
-                                    ? { ...r, createPortalUser: e.target.checked }
+                                    ? {
+                                        ...r,
+                                        createPortalUser: checked,
+                                        assignments:
+                                          !checked && r.assignments.length === 0
+                                            ? [emptyAssignment()]
+                                            : r.assignments,
+                                      }
                                     : r
                                 )
-                              )
-                            }
+                              );
+                            }}
                           />
-                          Create / assign portal user
+                          Create new portal user & assign
                         </label>
                       </div>
+                      {!row.createPortalUser && row.targetMode === 'tenant' ? (
+                        <p className="sm:col-span-2 text-xs text-amber-800">
+                          Pick an existing tenant end user below — they need an assignment to open the
+                          elastic server console.
+                        </p>
+                      ) : null}
                       {row.createPortalUser && (
                         <>
                           <div>
@@ -1480,10 +1547,13 @@ export default function SuperAdminServerImportPage() {
                   )}
                 </div>
 
-                {row.importShape === 'legacy' && (
+                {(row.importShape === 'legacy' ||
+                  (row.importShape === 'extended' && !row.createPortalUser)) && (
                 <div className="mt-4 border-t border-gray-100 pt-4">
                   <div className="mb-2 flex items-center justify-between">
-                    <p className="text-sm font-medium text-gray-800">Assignments</p>
+                    <p className="text-sm font-medium text-gray-800">
+                      {row.targetMode === 'tenant' ? 'Tenant end user (console access)' : 'Assignments'}
+                    </p>
                     <button
                       type="button"
                       onClick={() =>
@@ -1608,7 +1678,11 @@ export default function SuperAdminServerImportPage() {
                       </div>
                     ))}
                     {row.assignments.length === 0 && (
-                      <p className="text-xs text-gray-400">No assignments — VM will be imported unassigned.</p>
+                      <p className="text-xs text-gray-400">
+                        {row.targetMode === 'tenant'
+                          ? 'Required for tenant imports — end users cannot open the console without an assignment.'
+                          : 'No assignments — VM will be imported unassigned.'}
+                      </p>
                     )}
                   </div>
                 </div>
