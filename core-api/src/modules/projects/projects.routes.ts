@@ -126,6 +126,15 @@ router.get(
   }
 );
 
+router.get(
+  '/tenants/:tenantId/client-names',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantIdParamSchema),
+  (req, res, next) => {
+    projectsController.listClientNamesForTenant(req, res, next);
+  }
+);
+
 router.post(
   '/tenants/:tenantId',
   requirePermission('white_labelling.manage'),
