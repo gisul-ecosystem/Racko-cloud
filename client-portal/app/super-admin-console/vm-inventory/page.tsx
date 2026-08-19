@@ -474,6 +474,16 @@ function scoreOverviewRowForEdit(row: SuperAdminExternalVmOverviewRow): number {
   return row.assignments.length * 100 + (row.tenantId ? 10 : 0) + (row.adminId ? 5 : 0);
 }
 
+function overviewClientLabel(row: SuperAdminExternalVmOverviewRow): string {
+  const projectClient = String(row.projectClientName ?? '').trim();
+  if (projectClient) return projectClient;
+
+  const tenantName = String(row.tenantName ?? '').trim();
+  if (tenantName) return tenantName;
+
+  return String(row.tenantSlug ?? '').trim();
+}
+
 function resolveOverviewRowForManage(
   assignmentRow: AssignmentRow,
   overviewRows: SuperAdminExternalVmOverviewRow[]
@@ -533,6 +543,16 @@ function buildAssignmentRowsFromOverview(rows: SuperAdminExternalVmOverviewRow[]
     const vmSpecLabel = String(row.providerVmSpec ?? '').trim();
     if (vmSpecLabel && !current.vmSpecs.includes(vmSpecLabel)) {
       current.vmSpecs.push(vmSpecLabel);
+    }
+
+    const projectLabel = String(row.projectName ?? row.projectId ?? '').trim();
+    if (projectLabel && !current.projectNames.includes(projectLabel)) {
+      current.projectNames.push(projectLabel);
+    }
+
+    const clientLabel = overviewClientLabel(row);
+    if (clientLabel && !current.clientNames.includes(clientLabel)) {
+      current.clientNames.push(clientLabel);
     }
 
     const rowScore = scoreOverviewRowForEdit(row);

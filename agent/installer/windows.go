@@ -425,30 +425,38 @@ func installOnPlatform(pkg SoftwarePackage) (string, error) {
 
 // ─── Install methods ──────────────────────────────────────────────────────────
 
-// ensureChocolatey installs Chocolatey if not already present.
-// Runs as LocalSystem — choco bootstrap only touches system paths.
+// ensureChocolatey guarantees choco.exe is present and executable.
+//
+// Logic:
+//  1. Check if choco.exe is already working — if yes, done immediately.
+//  2. If not, delete any broken/partial chocolatey folder that would
+//     block the bootstrap installer, then run the bootstrap.
+//  3. Verify choco.exe works after bootstrap — if still missing, error.
+//
+// This handles every state: fresh VM, broken install, partial install,
+// non-standard path, or rate-limited bootstrap. Only the end result matters.
 func ensureChocolatey() (string, error) {
-	log.Printf("[choco] Checking if chocolatey is installed...")
-	if path, err := exec.LookPath("choco"); err == nil {
-		log.Printf("[choco] Found choco in PATH: %s", path)
+	const chocoExe = `C:\ProgramData\chocolatey\bin\choco.exe`
+	const chocoDir = `C:\ProgramData\chocolatey`
+
+	// ── Step 1: check if choco is already working ─────────────────────────────
+	if chocoWorking() {
+		log.Printf("[choco] choco.exe already present and working")
 		return "", nil
 	}
-	chocoExe := `C:\ProgramData\chocolatey\bin\choco.exe`
-	if _, err := os.Stat(chocoExe); err == nil {
-		log.Printf("[choco] Found choco at default path: %s", chocoExe)
-		return "", nil
-	}
-	// Also check common non-standard paths
-	for _, altPath := range []string{
-		`C:\chocolatey\bin\choco.exe`,
-		`C:\tools\chocolatey\bin\choco.exe`,
-	} {
-		if _, err := os.Stat(altPath); err == nil {
-			log.Printf("[choco] Found choco at alternate path: %s", altPath)
-			return "", nil
+
+	// ── Step 2: delete any broken/partial folder so bootstrap can run cleanly ─
+	// The Chocolatey installer refuses to run if the folder already exists,
+	// even if choco.exe is missing inside it. Remove it before trying to install.
+	if _, err := os.Stat(chocoDir); err == nil {
+		log.Printf("[choco] chocolatey folder exists but choco.exe not working — removing broken install")
+		if err := os.RemoveAll(chocoDir); err != nil {
+			log.Printf("[choco] Warning: could not remove %s: %v — bootstrap may still refuse to run", chocoDir, err)
 		}
 	}
-	log.Printf("[choco] Chocolatey not found — installing now...")
+
+	// ── Step 3: run the bootstrap installer ───────────────────────────────────
+	log.Printf("[choco] Installing Chocolatey...")
 	installScript := `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`
 	out, err := runCmd("powershell.exe",
 		"-ExecutionPolicy", "Bypass",
@@ -456,26 +464,42 @@ func ensureChocolatey() (string, error) {
 		"-Command", installScript,
 	)
 	if err != nil {
-		// If the bootstrap says "already installed" it exits non-zero but choco IS present.
-		// Treat this as success — the bootstrap refuses to overwrite an existing install.
-		outLower := strings.ToLower(out)
-		alreadyPresentSignals := []string{
-			"existing chocolatey installation was detected",
-			"files from a previous installation",
-			"installation will not continue",
-			"already installed",
-		}
-		for _, signal := range alreadyPresentSignals {
-			if strings.Contains(outLower, signal) {
-				log.Printf("[choco] Bootstrap detected existing install — treating as success")
-				return out, nil
-			}
-		}
-		log.Printf("[choco] Chocolatey install FAILED: %v", err)
-		return out, fmt.Errorf("chocolatey install failed: %w", err)
+		log.Printf("[choco] Bootstrap exited with error: %v (checking if choco.exe is usable anyway)", err)
 	}
-	log.Printf("[choco] Chocolatey installed successfully")
-	return out, nil
+
+	// ── Step 4: verify choco.exe works regardless of bootstrap exit code ──────
+	// The bootstrap can exit non-zero for benign reasons (e.g. network warnings).
+	// What matters is whether choco.exe is present and executable afterward.
+	if chocoWorking() {
+		log.Printf("[choco] Chocolatey installed successfully")
+		return out, nil
+	}
+
+	return out, fmt.Errorf("chocolatey install failed: choco.exe not found or not executable after bootstrap")
+}
+
+// chocoWorking returns true if choco.exe can be found and executed.
+// Checks the default install path first (avoids PATH dependency),
+// then falls back to PATH lookup.
+func chocoWorking() bool {
+	const defaultPath = `C:\ProgramData\chocolatey\bin\choco.exe`
+	if _, err := os.Stat(defaultPath); err == nil {
+		// File exists — verify it actually runs
+		cmd := exec.Command(defaultPath, "--version")
+		cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+		if err := cmd.Run(); err == nil {
+			return true
+		}
+	}
+	// Fall back to PATH
+	if path, err := exec.LookPath("choco"); err == nil {
+		cmd := exec.Command(path, "--version")
+		cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_NO_WINDOW}
+		if err := cmd.Run(); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // runWinget installs via winget in the active user's session.
