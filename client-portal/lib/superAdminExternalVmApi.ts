@@ -146,6 +146,9 @@ export interface SuperAdminExternalVmOverviewRow {
   tenantId: string | null;
   tenantName: string | null;
   tenantSlug: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  projectClientName: string | null;
   assignedTo: string | null;
   assignedTenantUserId: string | null;
   assignments: SuperAdminExternalVmAssigneeView[];
