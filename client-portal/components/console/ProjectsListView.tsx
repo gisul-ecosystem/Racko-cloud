@@ -40,6 +40,7 @@ import {
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
+  fetchTenantProjectClientNames,
   fetchTenantProject,
   fetchTenantProjectCostReport,
   fetchTenantProjects,
@@ -335,10 +336,19 @@ export function ProjectsListView({
     setEndDate('');
     setSelectedServices([]);
     try {
+      const loadClientNames = async (): Promise<string[]> => {
+        if (portal === 'tenant') {
+          const names = await fetchTenantProjectClientNames().catch(() => [] as string[]);
+          if (names.length > 0) return names;
+          return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+        }
+        return fetchProjectClientNames().catch(() => [] as string[]);
+      };
+
       const [preview, services, names] = await Promise.all([
         api.namePreview(),
         api.assignableServices(),
-        portal === 'tenant' ? Promise.resolve([]) : fetchProjectClientNames().catch(() => []),
+        loadClientNames(),
       ]);
       setPreviewName(preview.name);
       setProjectName(preview.name);
