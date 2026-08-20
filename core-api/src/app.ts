@@ -22,7 +22,7 @@ import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
-import { machineRouter, agentRouter } from './modules/machine-manager/machine-manager.routes';
+import { machineRouter, agentRouter, superAdminMachineRouter } from './modules/machine-manager/machine-manager.routes';
 import { agentSharedFilesRouter, adminSharedFilesRouter } from './modules/shared-files/shared-files.routes';
 import machineGroupsRoutes from './modules/machine-groups/machine-groups.routes';
 import softwareCatalogRoutes from './modules/software-catalog/software-catalog.routes';
@@ -181,6 +181,7 @@ app.use('/api/v1/tenant-auth', tenantAuthRoutes);
 // More-specific mount before /super-admin so white_labelling.manage does not gate this route.
 app.use('/api/v1/super-admin/external-vms', superAdminExternalVmRoutes);
 app.use('/api/v1/super-admin/vm-inventory', superAdminVmInventoryRoutes);
+app.use('/api/v1/super-admin/machines', superAdminMachineRouter);
 app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
 app.use('/api/v1/tenant-wallet', walletRoutes);
