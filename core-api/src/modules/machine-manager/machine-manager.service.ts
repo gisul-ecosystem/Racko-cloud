@@ -1048,6 +1048,126 @@ class MachineManagerService {
     return { output: result.output, exitCode: result.exitCode };
   }
 
+  /**
+   * Super-admin reset machines by inventory IDs.
+   * Looks up inventory items, finds corresponding VMs, then looks up machines
+   * and triggers reset on those machines.
+   */
+  async superAdminResetMachinesByInventory(
+    inventoryIds: string[],
+    sessionId: string
+  ): Promise<{ accepted: string[]; offline: string[]; notFound: string[] }> {
+    const { VM } = await import('../vm/vm.model');
+    const { CatalogVmModel } = await import('../../models/catalogVm.model');
+    const { ExternalVMModel } = await import('../external-vm/external-vm.model');
+
+    const accepted: string[] = [];
+    const offline: string[] = [];
+    const notFound: string[] = [];
+
+    // Parse inventoryId format: "[sourceCollection]:[sourceId]"
+    // Example: "vms:507f1f77bcf86cd799439011"
+    const lookups = inventoryIds.map(invId => {
+      const parts = invId.split(':');
+      if (parts.length !== 2) {
+        notFound.push(invId);
+        return null;
+      }
+      const [sourceCollection, sourceId] = parts;
+      return { invId, sourceCollection, sourceId };
+    }).filter((item): item is NonNullable<typeof item> => item !== null);
+
+    for (const lookup of lookups) {
+      try {
+        // Find the source VM to get its ipAddress
+        let vmIpAddress: string | undefined;
+        let vmAdminId: mongoose.Types.ObjectId | undefined;
+
+        if (lookup.sourceCollection === 'vms') {
+          const vm = await VM.findById(lookup.sourceId).lean();
+          if (!vm) {
+            notFound.push(lookup.invId);
+            continue;
+          }
+          vmIpAddress = vm.ipAddress;
+          vmAdminId = vm.adminId;
+        } else if (lookup.sourceCollection === 'catalog_vms') {
+          const vm = await CatalogVmModel.findById(lookup.sourceId).lean();
+          if (!vm) {
+            notFound.push(lookup.invId);
+            continue;
+          }
+          vmIpAddress = vm.ipAddress;
+          vmAdminId = vm.adminId;
+        } else if (lookup.sourceCollection === 'external_vms') {
+          const vm = await ExternalVMModel.findById(lookup.sourceId).lean();
+          if (!vm) {
+            notFound.push(lookup.invId);
+            continue;
+          }
+          vmIpAddress = vm.ipAddress;
+          vmAdminId = vm.adminId;
+        } else {
+          notFound.push(lookup.invId);
+          continue;
+        }
+
+        if (!vmIpAddress || !vmAdminId) {
+          notFound.push(lookup.invId);
+          continue;
+        }
+
+        // Find the machine for this VM by matching ipAddress and adminId
+        const machine = await MachineModel.findOne({
+          ipAddress: vmIpAddress.trim(),
+          adminId: vmAdminId,
+          deleted: false,
+        });
+
+        if (!machine) {
+          notFound.push(lookup.invId);
+          continue;
+        }
+
+        // Use the existing resetMachines logic
+        const machineId = machine._id.toString();
+        const { wsManager } = await import('./websocket/wsManager');
+
+        if (!machine.agentId || !wsManager.isConnected(machine.agentId)) {
+          offline.push(machineId);
+          logger.warn('[MachineManager] Reset skipped — agent offline', {
+            inventoryId: lookup.invId,
+            machineId,
+            agentId: machine.agentId,
+          });
+          continue;
+        }
+
+        // Send reset command
+        wsManager.sendReset(machine.agentId, sessionId);
+        accepted.push(machineId);
+
+        // Clear job history
+        await JobModel.deleteMany({ machineId: machine._id });
+
+        logger.info('[MachineManager] Reset initiated (super-admin)', {
+          inventoryId: lookup.invId,
+          machineId,
+          agentId: machine.agentId,
+          sessionId,
+        });
+      } catch (err) {
+        logger.error('[MachineManager] Error looking up machine for reset', {
+          inventoryId: lookup.invId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        notFound.push(lookup.invId);
+      }
+    }
+
+    return { accepted, offline, notFound };
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
   private async findOwnedMachine(
     id: mongoose.Types.ObjectId,
