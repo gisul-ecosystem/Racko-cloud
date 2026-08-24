@@ -1753,30 +1753,43 @@ export default function SuperAdminVmInventoryPage() {
       try {
         const sessionId = Date.now().toString();
         const result = await superAdminResetMachinesByInventory([item.inventoryId], sessionId);
-        
-        // Get stream ticket
-        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
-        
-        // Open SSE stream
-        resetStatesRef.current.clear();
+
         const vmLabel = item.name || item.ipAddress || item.inventoryId;
-        
-        // Initialize modal state
+        const notFound = result.notFound.includes(item.inventoryId);
+        const initialStatus: ResetMachineStatus['status'] = notFound
+          ? 'offline'
+          : result.accepted.length > 0
+            ? 'pending'
+            : result.offline.length > 0
+              ? 'offline'
+              : 'offline';
+
         setResetMachineStatuses([
-          { inventoryId: item.inventoryId, vmLabel, status: 'pending' },
+          {
+            inventoryId: item.inventoryId,
+            vmLabel,
+            status: initialStatus,
+            error: notFound ? 'No machine agent found for this VM.' : undefined,
+          },
         ]);
         setResetProgressData({
           acceptedCount: result.accepted.length,
-          offlineCount: result.offline.length,
-          isStreaming: true,
+          offlineCount: result.offline.length + result.notFound.length,
+          isStreaming: result.accepted.length > 0,
         });
         setResetProgressModalOpen(true);
-        
+
+        if (result.accepted.length === 0) {
+          return;
+        }
+
+        resetStatesRef.current.clear();
+        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
+
         const stopStream = await superAdminOpenResetStatusStreamWithReconnect(
           sessionId,
           ticketResponse.streamToken,
           (event) => {
-            // Update status as events come in
             if (event.type === 'reset_complete' && event.machineId) {
               setResetMachineStatuses((prev) =>
                 prev.map((m) =>
@@ -1793,21 +1806,29 @@ export default function SuperAdminVmInventoryPage() {
             }
           },
           () => {
-            // Terminal callback
             setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
           },
           () => {
-            // Give up callback
             setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            setResetMachineStatuses((prev) =>
+              prev.map((m) =>
+                m.status === 'pending'
+                  ? {
+                      ...m,
+                      status: 'failed',
+                      error: 'Connection lost — reset may have completed. Check the machine status.',
+                    }
+                  : m
+              )
+            );
           },
           result.accepted.length
         );
-        
+
         resetSseRef.current = stopStream;
-        
-        // Reload after stream completes
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        await load();
+        setTimeout(() => {
+          void load();
+        }, 3000);
       } catch (err) {
         const errorMsg = err instanceof ApiError ? err.message : 'Failed to reset machine';
         setFlashMessage({
@@ -1830,46 +1851,64 @@ export default function SuperAdminVmInventoryPage() {
       try {
         const sessionId = Date.now().toString();
         const result = await superAdminResetMachinesByInventory(inventoryIds, sessionId);
-        
-        // Get stream ticket
-        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
-        
-        // Initialize modal with all machines from selected items
+
         const machineStatuses: ResetMachineStatus[] = inventoryIds.map((invId) => {
           const item = items.find((i) => i.inventoryId === invId);
           const vmLabel = item?.name || item?.ipAddress || invId;
+          const notFound = result.notFound.includes(invId);
           return {
             inventoryId: invId,
             vmLabel,
-            status: result.accepted.includes(invId)
-              ? 'pending'
-              : result.offline.includes(invId)
-                ? 'offline'
-                : 'offline', // notFound
+            status: notFound ? 'offline' : result.accepted.length > 0 ? 'pending' : 'offline',
+            error: notFound
+              ? 'No machine agent found for this VM.'
+              : result.accepted.length === 0
+                ? 'Machine agent is offline.'
+                : undefined,
           };
         });
-        
+
         setResetMachineStatuses(machineStatuses);
         setResetProgressData({
           acceptedCount: result.accepted.length,
-          offlineCount: result.offline.length,
-          isStreaming: true,
+          offlineCount: result.offline.length + result.notFound.length,
+          isStreaming: result.accepted.length > 0,
         });
         setResetProgressModalOpen(true);
-        
-        // Open SSE stream
+
         resetStatesRef.current.clear();
-        inventoryIds.forEach((id) => resetStatesRef.current.set(id, 'pending'));
-        
+
+        if (result.accepted.length === 0) {
+          setSelectedInventoryIds([]);
+          return;
+        }
+
+        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
+
+        const markRemainingPendingOffline = () => {
+          setResetMachineStatuses((prev) =>
+            prev.map((m) =>
+              m.status === 'pending'
+                ? {
+                    ...m,
+                    status: 'offline',
+                    error: 'Machine agent is offline or reset was skipped.',
+                  }
+                : m
+            )
+          );
+        };
+
         const stopStream = await superAdminOpenResetStatusStreamWithReconnect(
           sessionId,
           ticketResponse.streamToken,
           (event) => {
-            // Update status as events come in
             if (event.type === 'reset_complete' && event.machineId) {
-              setResetMachineStatuses((prev) =>
-                prev.map((m) =>
-                  result.accepted.includes(m.inventoryId)
+              setResetMachineStatuses((prev) => {
+                const nextPendingIndex = prev.findIndex((m) => m.status === 'pending');
+                if (nextPendingIndex === -1) return prev;
+                return prev.map((m, idx) =>
+                  idx === nextPendingIndex
                     ? {
                         ...m,
                         status: event.success ? 'success' : 'failed',
@@ -1877,28 +1916,36 @@ export default function SuperAdminVmInventoryPage() {
                         completedAt: Date.now(),
                       }
                     : m
-                )
-              );
+                );
+              });
             }
           },
           () => {
-            // Terminal callback
             setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            markRemainingPendingOffline();
           },
           () => {
-            // Give up callback
             setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            setResetMachineStatuses((prev) =>
+              prev.map((m) =>
+                m.status === 'pending'
+                  ? {
+                      ...m,
+                      status: 'failed',
+                      error: 'Connection lost — reset may have completed. Check the machine status.',
+                    }
+                  : m
+              )
+            );
           },
           result.accepted.length
         );
-        
+
         resetSseRef.current = stopStream;
-        
         setSelectedInventoryIds([]);
-        
-        // Reload after stream completes
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-        await load();
+        setTimeout(() => {
+          void load();
+        }, 3000);
       } catch (err) {
         const errorMsg = err instanceof ApiError ? err.message : 'Failed to reset machines';
         setFlashMessage({
