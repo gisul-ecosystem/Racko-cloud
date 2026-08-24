@@ -1,4 +1,5 @@
 import { apiRequest } from './apiClient';
+import { getSseGatewayBaseUrl } from './gatewayUrl';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -285,8 +286,7 @@ export function superAdminOpenResetStatusStream(
   sessionId: string,
   streamToken: string
 ): EventSource {
-  // Use the regular SSE gateway since reset events are published to it
-  const url = `${new URL(window.location.href).origin.replace(/:[0-9]+$/, ':3001')}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
   return new EventSource(url, { withCredentials: true });
 }
 
@@ -312,8 +312,7 @@ export function superAdminOpenResetStatusStreamWithReconnect(
   const connect = async () => {
     while (!stopped && attempt <= MAX_ATTEMPTS) {
       currentController = new AbortController();
-      const baseUrl = new URL(window.location.href).origin.replace(/:[0-9]+$/, ':3001');
-      const url = `${baseUrl}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+      const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
 
       try {
         const response = await fetch(url, {
