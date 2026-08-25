@@ -117,6 +117,9 @@ function TenantMyVmDashboardContent() {
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-900">{row.name}</p>
                       <p className="text-xs text-gray-400">{row.ipAddress}</p>
+                      <p className="text-xs text-gray-400">
+                        {row.protocol.toUpperCase()} · {row.username}
+                      </p>
                     </td>
                     <td className="px-4 py-3">
                       <ProtocolBadge protocol={row.protocol} />
