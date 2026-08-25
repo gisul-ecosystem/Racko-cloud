@@ -138,9 +138,14 @@ export default function Footer() {
         </div>
 
         <div className="mt-10 flex flex-col gap-3 border-t border-border pt-8 text-text-muted sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-xs">
-            © 2025 Racko. All rights reserved. · Privacy Policy · Terms
-          </p>
+          <div className="space-y-2">
+            <p className="text-xs">
+              © 2025 Racko. All rights reserved. · Privacy Policy · Terms
+            </p>
+            <p className="text-xs">
+              Racko is a product owned and managed by Gisul Software Services.
+            </p>
+          </div>
           <p className="text-[11px]">
             AWS Partner · Azure Authorized · GCP Partner
           </p>
