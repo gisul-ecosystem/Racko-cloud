@@ -1398,7 +1398,6 @@ class VmCatalogService {
       ...(selection.rawTotalPricePerHr != null
         ? { rawProviderCostPerHr: selection.rawTotalPricePerHr }
         : {}),
-      ...(autoProvisioned ? { expiresAt: computeExpiresAt(durationDays) } : {}),
     });
 
     const customerPlanName = this.displayNameForPlan(plan);
