@@ -301,7 +301,7 @@ function buildPayload(
   }
 
   if (protocol === 'vnc') {
-    parameters['color-depth'] = '16';
+    parameters['color-depth'] = '24';
     parameters['cursor'] = 'remote';
     parameters['read-only'] = 'false';
     if (params.width) parameters['width'] = String(params.width);
