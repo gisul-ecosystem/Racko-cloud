@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { User } from '../../models/user.model';
 import { TenantUser } from '../../models/tenantUser.model';
-import { ExternalVMModel, type IExternalVM, defaultPortForExternalVm } from './external-vm.model';
+import { ExternalVMModel, type IExternalVM, defaultPortForExternalVm, defaultUsernameFor } from './external-vm.model';
 import type {
   BulkAssignExternalPairsDto,
   BulkAssignExternalPairsResult,
@@ -1326,7 +1326,7 @@ class ExternalVMService {
   ): Promise<ExternalVMConsoleSession> {
     const password = decrypt(doc.password);
     const port = defaultPortForExternalVm(doc.protocol, doc.port);
-    const username = doc.protocol === 'vnc' ? undefined : doc.username || undefined;
+    const guacUsername = doc.username?.trim() || defaultUsernameFor(doc.protocol);
 
     logger.info('[ExternalVM] Opening Guacamole session', {
       externalVmId: doc._id.toString(),
@@ -1342,7 +1342,7 @@ class ExternalVMService {
       {
         hostname: doc.ipAddress,
         port,
-        ...(username ? { username } : {}),
+        username: guacUsername,
         password,
         ...(doc.protocol === 'rdp'
           ? {
@@ -1351,7 +1351,12 @@ class ExternalVMService {
               width: dimensions?.width,
               height: dimensions?.height,
             }
-          : {}),
+          : doc.protocol === 'vnc'
+            ? {
+                width: dimensions?.width,
+                height: dimensions?.height,
+              }
+            : {}),
       }
     );
 

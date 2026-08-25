@@ -29,6 +29,7 @@ import {
 } from '@/lib/superAdminExternalVmApi';
 import {
   parseExternalVmProtocol,
+  defaultExternalVmUsername,
   type ExternalVMProtocol,
 } from '@/lib/externalVmApi';
 import { fetchProjectsForAdmin, fetchProjectsForTenant, createProjectForAdmin, createProjectForTenant, previewProjectNameForAdmin, previewProjectNameForTenant, type OrgProject } from '@/lib/projectsApi';
@@ -1299,12 +1300,11 @@ export default function SuperAdminServerImportPage() {
                     </select>
                   </div>
                   <div>
-                    <label className={labelClass}>
-                      Username {row.protocol === 'vnc' ? '(not used for VNC)' : '(optional)'}
-                    </label>
+                    <label className={labelClass}>Username (optional)</label>
                     <input
                       className={inputClass}
                       value={row.username}
+                      placeholder={defaultExternalVmUsername(row.protocol)}
                       onChange={(e) =>
                         setRows((prev) =>
                           prev.map((r) =>
