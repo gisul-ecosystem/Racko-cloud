@@ -18,7 +18,7 @@ export interface SuperAdminVmInventoryItem {
   sourceId: string;
   name: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   status: InventoryStatus;
   originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
   originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
@@ -78,7 +78,7 @@ export interface VmProviderMetadataImportRow {
   ipAddress: string;
   name?: string;
   vmSpec?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
   username?: string;
   password?: string;

@@ -300,6 +300,10 @@ function buildPayload(
     if (params.passphrase) parameters['passphrase'] = params.passphrase;
   }
 
+  if (protocol === 'vnc') {
+    parameters['color-depth'] = '24';
+  }
+
   return {
     name,
     parentIdentifier: 'ROOT',

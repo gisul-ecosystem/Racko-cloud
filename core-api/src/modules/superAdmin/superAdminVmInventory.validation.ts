@@ -43,7 +43,7 @@ export const superAdminVmProviderMetadataImportSchema = z.object({
         ipAddress: z.string().trim().min(1, 'ipAddress is required'),
         name: z.string().trim().optional(),
         vmSpec: z.string().trim().optional(),
-        protocol: z.enum(['rdp', 'ssh']).optional(),
+        protocol: z.enum(['rdp', 'ssh', 'vnc']).optional(),
         planDuration: providerPlanDurationSchema.optional(),
         username: z.string().trim().optional(),
         password: z.string().optional(),
