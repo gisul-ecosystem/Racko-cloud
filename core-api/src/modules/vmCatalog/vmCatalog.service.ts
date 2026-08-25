@@ -26,7 +26,7 @@ import {
 } from './catalogAgentClient';
 import type { CatalogAgentError, CatalogPowerAction } from './catalogAgentClient';
 import {
-  selectProvider as resellerSelect,
+  type ResellerSelectResult,
   provisionVm as resellerProvision,
   terminateVm as resellerTerminate,
 } from './resellerClient';
@@ -66,6 +66,22 @@ const BILLING_PERIODS = ['hourly', 'monthly', 'quarterly', 'yearly'] as const;
 
 function roundMoney(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Webyne manual attach flow — no reseller /api/select call on Buy Now. */
+function defaultWebyneManualSelection(
+  category: string,
+  canonicalSpec: string
+): ResellerSelectResult {
+  return {
+    provider: 'webyne',
+    region: null,
+    category,
+    canonicalSpec,
+    rawTotalPricePerHr: null,
+    autoProvisioned: false,
+    reason: 'webyne_manual_flow',
+  };
 }
 
 export interface CatalogVmConsoleSession {
@@ -978,7 +994,7 @@ class VmCatalogService {
   private async runAutoProvision(input: {
     requestId: mongoose.Types.ObjectId;
     adminId: mongoose.Types.ObjectId;
-    selection: Awaited<ReturnType<typeof resellerSelect>>;
+    selection: ResellerSelectResult;
     canonicalSpec: string;
     category: string;
     total: number;
@@ -1128,28 +1144,7 @@ class VmCatalogService {
     const canonicalSpec =
       dto.canonicalSpec || specsToCanonicalSpec(dto.specs, dto.category);
 
-    let selection: Awaited<ReturnType<typeof resellerSelect>>;
-    try {
-      selection = await resellerSelect({
-        canonicalSpec,
-        category: dto.category,
-        durationDays,
-        specs: dto.specs,
-      });
-    } catch (err) {
-      logger.warn('[VmCatalog] Reseller select failed — falling back to webyne', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      selection = {
-        provider: 'webyne',
-        region: null,
-        category: dto.category,
-        canonicalSpec,
-        rawTotalPricePerHr: null,
-        autoProvisioned: false,
-        reason: 'select_error_fallback',
-      };
-    }
+    const selection = defaultWebyneManualSelection(dto.category, canonicalSpec);
 
     // Always route through Webyne (Super Admin manual flow).
     // Cloud auto-provision (Azure/AWS/OCI/GCP) is disabled intentionally so that
@@ -1353,32 +1348,10 @@ class VmCatalogService {
       throw new ValidationError('Invalid purchase total.');
     }
 
-    const durationDays = resolveDurationDays(dto.billing, dto.durationDays);
     const canonicalSpec =
       dto.canonicalSpec || specsToCanonicalSpec(dto.specs, dto.category);
 
-    let selection: Awaited<ReturnType<typeof resellerSelect>>;
-    try {
-      selection = await resellerSelect({
-        canonicalSpec,
-        category: dto.category,
-        durationDays,
-        specs: dto.specs,
-      });
-    } catch (err) {
-      logger.warn('[VmCatalog] Reseller select failed — falling back to webyne', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      selection = {
-        provider: 'webyne',
-        region: null,
-        category: dto.category,
-        canonicalSpec,
-        rawTotalPricePerHr: null,
-        autoProvisioned: false,
-        reason: 'select_error_fallback',
-      };
-    }
+    const selection = defaultWebyneManualSelection(dto.category, canonicalSpec);
 
     const autoProvisioned = false;
     const provider = 'webyne';
