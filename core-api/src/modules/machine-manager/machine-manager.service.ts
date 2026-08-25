@@ -1048,6 +1048,155 @@ class MachineManagerService {
     return { output: result.output, exitCode: result.exitCode };
   }
 
+  /**
+   * Super-admin reset machines by inventory IDs.
+   * Looks up inventory items, finds corresponding VMs, then looks up machines
+   * and triggers reset on those machines.
+   */
+  /**
+   * Resolve VM inventory IDs (from super-admin VM inventory) to IP + adminId for machine lookup.
+   * Supports inventoryId formats:
+   * - platform_vm:{vmId}
+   * - catalog_vm:{catalogVmId} or catalog_vm:{catalogVmId}:{instanceId}
+   * - external_vm:{externalVmId}
+   * Legacy: vms:{id}, catalog_vms:{id}, external_vms:{id}
+   */
+  private async resolveInventoryResetTarget(
+    invId: string
+  ): Promise<{ vmIpAddress: string; vmAdminId: mongoose.Types.ObjectId } | null> {
+    const { VM } = await import('../vm/vm.model');
+    const { CatalogVmModel } = await import('../../models/catalogVm.model');
+    const { CatalogVmInstanceModel } = await import('../../models/catalogVmInstance.model');
+    const { ExternalVMModel } = await import('../external-vm/external-vm.model');
+
+    if (invId.startsWith('platform_vm:')) {
+      const sourceId = invId.slice('platform_vm:'.length);
+      const vm = await VM.findById(sourceId).lean();
+      if (!vm?.ipAddress || !vm.adminId) return null;
+      return { vmIpAddress: vm.ipAddress.trim(), vmAdminId: vm.adminId };
+    }
+
+    if (invId.startsWith('catalog_vm:')) {
+      const rest = invId.slice('catalog_vm:'.length);
+      const colonIndex = rest.indexOf(':');
+      const catalogVmId = colonIndex === -1 ? rest : rest.slice(0, colonIndex);
+      const instanceId = colonIndex === -1 ? undefined : rest.slice(colonIndex + 1);
+
+      const vm = await CatalogVmModel.findById(catalogVmId).lean();
+      if (!vm) return null;
+
+      if (instanceId) {
+        const instance = await CatalogVmInstanceModel.findById(instanceId).lean();
+        if (!instance) return null;
+        const vmIpAddress = (instance.ipAddress ?? vm.ipAddress)?.trim();
+        const vmAdminId = instance.adminId ?? vm.adminId;
+        if (!vmIpAddress || !vmAdminId) return null;
+        return { vmIpAddress, vmAdminId };
+      }
+
+      if (!vm.ipAddress || !vm.adminId) return null;
+      return { vmIpAddress: vm.ipAddress.trim(), vmAdminId: vm.adminId };
+    }
+
+    if (invId.startsWith('external_vm:')) {
+      const sourceId = invId.slice('external_vm:'.length);
+      const vm = await ExternalVMModel.findById(sourceId).lean();
+      if (!vm?.ipAddress || !vm.adminId) return null;
+      return { vmIpAddress: vm.ipAddress.trim(), vmAdminId: vm.adminId };
+    }
+
+    const parts = invId.split(':');
+    if (parts.length !== 2) return null;
+
+    const [sourceCollection, sourceId] = parts;
+    if (sourceCollection === 'vms') {
+      const vm = await VM.findById(sourceId).lean();
+      if (!vm?.ipAddress || !vm.adminId) return null;
+      return { vmIpAddress: vm.ipAddress.trim(), vmAdminId: vm.adminId };
+    }
+    if (sourceCollection === 'catalog_vms') {
+      const vm = await CatalogVmModel.findById(sourceId).lean();
+      if (!vm?.ipAddress || !vm.adminId) return null;
+      return { vmIpAddress: vm.ipAddress.trim(), vmAdminId: vm.adminId };
+    }
+    if (sourceCollection === 'external_vms') {
+      const vm = await ExternalVMModel.findById(sourceId).lean();
+      if (!vm?.ipAddress || !vm.adminId) return null;
+      return { vmIpAddress: vm.ipAddress.trim(), vmAdminId: vm.adminId };
+    }
+
+    return null;
+  }
+
+  async superAdminResetMachinesByInventory(
+    inventoryIds: string[],
+    sessionId: string
+  ): Promise<{ accepted: string[]; offline: string[]; notFound: string[] }> {
+    const accepted: string[] = [];
+    const offline: string[] = [];
+    const notFound: string[] = [];
+
+    for (const invId of inventoryIds) {
+      try {
+        const target = await this.resolveInventoryResetTarget(invId);
+        if (!target) {
+          notFound.push(invId);
+          continue;
+        }
+
+        const { vmIpAddress, vmAdminId } = target;
+
+        // Find the machine for this VM by matching ipAddress and adminId
+        const machine = await MachineModel.findOne({
+          ipAddress: vmIpAddress,
+          adminId: vmAdminId,
+          deleted: false,
+        });
+
+        if (!machine) {
+          notFound.push(invId);
+          continue;
+        }
+
+        // Use the existing resetMachines logic
+        const machineId = machine._id.toString();
+        const { wsManager } = await import('./websocket/wsManager');
+
+        if (!machine.agentId || !wsManager.isConnected(machine.agentId)) {
+          offline.push(machineId);
+          logger.warn('[MachineManager] Reset skipped — agent offline', {
+            inventoryId: invId,
+            machineId,
+            agentId: machine.agentId,
+          });
+          continue;
+        }
+
+        // Send reset command
+        wsManager.sendReset(machine.agentId, sessionId);
+        accepted.push(machineId);
+
+        // Clear job history
+        await JobModel.deleteMany({ machineId: machine._id });
+
+        logger.info('[MachineManager] Reset initiated (super-admin)', {
+          inventoryId: invId,
+          machineId,
+          agentId: machine.agentId,
+          sessionId,
+        });
+      } catch (err) {
+        logger.error('[MachineManager] Error looking up machine for reset', {
+          inventoryId: invId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        notFound.push(invId);
+      }
+    }
+
+    return { accepted, offline, notFound };
+  }
+
   // ─── Helpers ───────────────────────────────────────────────────────────────
   private async findOwnedMachine(
     id: mongoose.Types.ObjectId,

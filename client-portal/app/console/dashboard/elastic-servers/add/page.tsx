@@ -102,16 +102,22 @@ export default function TenantAddServerPage() {
             >
               <option value="rdp">RDP</option>
               <option value="ssh">SSH</option>
+              <option value="vnc">VNC</option>
             </select>
           </div>
           <div>
-            <label className={labelClass}>Username (optional)</label>
+            <label className={labelClass}>
+              Username{protocol === 'vnc' ? ' (not used for VNC)' : ' (optional)'}
+            </label>
             <input
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Administrator"
+              placeholder={
+                protocol === 'ssh' ? 'root' : protocol === 'vnc' ? '—' : 'Administrator'
+              }
               className={inputClass}
+              disabled={protocol === 'vnc'}
             />
           </div>
           <div>

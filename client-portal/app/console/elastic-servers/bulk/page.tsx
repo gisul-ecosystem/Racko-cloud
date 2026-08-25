@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ApiError } from '../../../../lib/apiClient';
-import { bulkCreateExternalVMs, type CreateExternalVMDto } from '../../../../lib/externalVmApi';
+import { bulkCreateExternalVMs, parseExternalVmProtocol, type CreateExternalVMDto } from '../../../../lib/externalVmApi';
 import { ProjectSelect } from '../../../../components/console/ProjectSelect';
 import { ChevronLeft } from 'lucide-react';
 
@@ -63,7 +63,7 @@ export default function BulkImportPage() {
     const vms: CreateExternalVMDto[] = [];
     for (const raw of parsed as BulkEntryRaw[]) {
       const ip = raw.ipAddress ?? raw.ip;
-      const proto = raw.protocol === 'ssh' ? 'ssh' : 'rdp';
+      const proto = parseExternalVmProtocol(raw.protocol);
       if (!raw.name || !ip || !raw.password) {
         addToast('error', 'Each entry needs at least name, ip, and password.');
         return;

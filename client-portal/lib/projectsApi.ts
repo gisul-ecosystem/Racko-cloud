@@ -258,6 +258,13 @@ export async function fetchEligibleProjectServicesForTenant(
   return data.services;
 }
 
+export async function fetchProjectClientNamesForTenant(tenantId: string): Promise<string[]> {
+  const data = await unwrap<{ clientNames: string[] }>(
+    apiRequest(`/api/v1/projects/tenants/${tenantId}/client-names`)
+  );
+  return data.clientNames;
+}
+
 export async function createProjectForTenant(
   tenantId: string,
   input: {
@@ -293,7 +300,13 @@ export async function addProjectServicesForTenant(
 export async function updateProjectForAdmin(
   adminId: string,
   projectId: string,
-  input: { clientName?: string; name?: string; description?: string | null }
+  input: {
+    clientName?: string;
+    name?: string;
+    description?: string | null;
+    startDate?: string | null;
+    endDate?: string | null;
+  }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     apiRequest(`/api/v1/projects/admins/${adminId}/${projectId}`, {
@@ -307,7 +320,13 @@ export async function updateProjectForAdmin(
 export async function updateProjectForTenant(
   tenantId: string,
   projectId: string,
-  input: { clientName?: string; name?: string; description?: string | null }
+  input: {
+    clientName?: string;
+    name?: string;
+    description?: string | null;
+    startDate?: string | null;
+    endDate?: string | null;
+  }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     apiRequest(`/api/v1/projects/tenants/${tenantId}/${projectId}`, {

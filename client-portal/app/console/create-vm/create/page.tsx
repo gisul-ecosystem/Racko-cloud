@@ -20,6 +20,7 @@ import {
 import { ClientNameCombobox } from '../../../../components/console/ClientNameCombobox';
 import {
   createTenantProject,
+  fetchTenantProjectClientNames,
   fetchTenantProjects,
   previewTenantProjectName,
 } from '../../../../lib/tenantProjectsApi';
@@ -315,9 +316,23 @@ export default function CreateVmPage() {
     setCpName('');
     setCpOpen(true);
     try {
+      const loadClientNames = async (): Promise<string[]> => {
+        if (projectPortal === 'tenant') {
+          const names = await fetchTenantProjectClientNames().catch(() => [] as string[]);
+          if (names.length > 0) return names;
+          const projects = await fetchTenantProjects().catch(() => []);
+          return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+        }
+
+        const names = await fetchProjectClientNames().catch(() => [] as string[]);
+        if (names.length > 0) return names;
+        const projects = await fetchProjects().catch(() => []);
+        return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+      };
+
       const [preview, names] = await Promise.all([
         projectPortal === 'tenant' ? previewTenantProjectName() : previewProjectName(),
-        projectPortal === 'tenant' ? Promise.resolve([]) : fetchProjectClientNames().catch(() => []),
+        loadClientNames(),
       ]);
       setCpPreviewName(preview.name);
       setCpName(preview.name);

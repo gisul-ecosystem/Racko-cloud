@@ -351,6 +351,15 @@ async function listClientNames(req: Request, res: Response, next: NextFunction):
   }
 }
 
+async function listClientNamesForTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const clientNames = await projectsService.distinctClientNamesForTenant(String(req.params['tenantId']));
+    success(res, 'Client names retrieved.', { clientNames });
+  } catch (err) {
+    next(err);
+  }
+}
+
 export const projectsController = {
   previewName,
   list,
@@ -364,6 +373,7 @@ export const projectsController = {
   reportByProject,
   reportByService,
   listClientNames,
+  listClientNamesForTenant,
   listForAdmin,
   previewNameForAdmin,
   listEligibleServicesForAdmin,

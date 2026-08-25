@@ -86,10 +86,17 @@ export default function TenantCreateProjectPage() {
     setLoading(true);
     setError(null);
     try {
+      const loadClientNames = async (): Promise<string[]> => {
+        const names = await fetchTenantProjectClientNames().catch(() => [] as string[]);
+        if (names.length > 0) return names;
+        const projects = await fetchTenantProjects().catch(() => []);
+        return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+      };
+
       const [preview, services, names] = await Promise.all([
         previewTenantProjectName(),
         fetchTenantEligibleProjectServices(),
-        fetchTenantProjectClientNames().catch(() => []),
+        loadClientNames(),
       ]);
       setPreviewName(preview.name);
       setName(preview.name);
