@@ -5,6 +5,7 @@ export interface CreateExternalVMDto {
   name: string;
   ipAddress: string;
   protocol: ExternalVMProtocol;
+  port?: number;
   username?: string;
   password: string;
   /** Required for platform admin console creates. */

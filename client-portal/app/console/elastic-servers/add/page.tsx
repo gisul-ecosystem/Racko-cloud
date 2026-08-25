@@ -98,15 +98,21 @@ export default function AddServerPage() {
             >
               <option value="rdp">RDP</option>
               <option value="ssh">SSH</option>
+              <option value="vnc">VNC</option>
             </select>
           </div>
           <div>
-            <label className={labelClass}>Username</label>
+            <label className={labelClass}>
+              Username{protocol === 'vnc' ? ' (not used for VNC)' : ''}
+            </label>
             <input
               className={inputClass}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder={protocol === 'ssh' ? 'root' : 'Administrator'}
+              placeholder={
+                protocol === 'ssh' ? 'root' : protocol === 'vnc' ? '—' : 'Administrator'
+              }
+              disabled={protocol === 'vnc'}
             />
           </div>
           <div>
