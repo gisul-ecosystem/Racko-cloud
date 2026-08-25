@@ -36,7 +36,7 @@ export interface SuperAdminBulkImportLegacyRowDto {
   name: string;
   ip?: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   username?: string;
   password: string;
   projectId?: string;
@@ -53,7 +53,7 @@ export interface SuperAdminBulkImportExtendedRowDto {
   name: string;
   ip?: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   username?: string;
   password: string;
   projectId?: string;
@@ -67,7 +67,7 @@ export interface SuperAdminBulkImportExtendedAdminRowDto {
   name: string;
   ip?: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   username?: string;
   password: string;
   adminEmail: string;

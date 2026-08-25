@@ -11,10 +11,11 @@ const externalVMBody = z.object({
     .string({ required_error: 'ipAddress is required' })
     .trim()
     .ip({ message: 'ipAddress must be a valid IPv4 or IPv6 address' }),
-  protocol: z.enum(['rdp', 'ssh'], {
+  protocol: z.enum(['rdp', 'ssh', 'vnc'], {
     required_error: 'protocol is required',
-    invalid_type_error: 'protocol must be rdp or ssh',
+    invalid_type_error: 'protocol must be rdp, ssh, or vnc',
   }),
+  port: z.coerce.number().int().min(1).max(65535).optional(),
   username: z.string().max(100).trim().optional(),
   password: z
     .string({ required_error: 'password is required' })

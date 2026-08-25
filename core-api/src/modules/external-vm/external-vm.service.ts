@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { User } from '../../models/user.model';
 import { TenantUser } from '../../models/tenantUser.model';
-import { ExternalVMModel, type IExternalVM } from './external-vm.model';
+import { ExternalVMModel, type IExternalVM, defaultPortForExternalVm } from './external-vm.model';
 import type {
   BulkAssignExternalPairsDto,
   BulkAssignExternalPairsResult,
@@ -441,6 +441,7 @@ class ExternalVMService {
       name: dto.name,
       ipAddress: dto.ipAddress,
       protocol: dto.protocol,
+      ...(dto.port != null ? { port: dto.port } : {}),
       username: dto.username,
       password: encrypt(dto.password),
       source: 'admin_import',
@@ -813,6 +814,7 @@ class ExternalVMService {
       name: dto.name,
       ipAddress: dto.ipAddress,
       protocol: dto.protocol,
+      ...(dto.port != null ? { port: dto.port } : {}),
       username: dto.username,
       password: encrypt(dto.password),
       source: 'tenant_import',
@@ -1323,12 +1325,14 @@ class ExternalVMService {
     dimensions?: { width?: number; height?: number }
   ): Promise<ExternalVMConsoleSession> {
     const password = decrypt(doc.password);
-    const port = doc.protocol === 'rdp' ? 3389 : 22;
+    const port = defaultPortForExternalVm(doc.protocol, doc.port);
+    const username = doc.protocol === 'vnc' ? undefined : doc.username || undefined;
 
     logger.info('[ExternalVM] Opening Guacamole session', {
       externalVmId: doc._id.toString(),
       protocol: doc.protocol,
       hostname: doc.ipAddress,
+      port,
       ...logContext,
     });
 
@@ -1338,12 +1342,16 @@ class ExternalVMService {
       {
         hostname: doc.ipAddress,
         port,
-        username: doc.username,
+        ...(username ? { username } : {}),
         password,
-        ignoreCert: true,
-        securityMode: 'any',
-        width: dimensions?.width,
-        height: dimensions?.height,
+        ...(doc.protocol === 'rdp'
+          ? {
+              ignoreCert: true,
+              securityMode: 'any' as const,
+              width: dimensions?.width,
+              height: dimensions?.height,
+            }
+          : {}),
       }
     );
 

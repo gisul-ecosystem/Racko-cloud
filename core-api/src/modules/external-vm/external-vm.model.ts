@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import type { WeeklyScheduleDay } from '../vmAccessSchedule/weeklySchedule';
 
-export type ExternalVMProtocol = 'rdp' | 'ssh';
+export type ExternalVMProtocol = 'rdp' | 'ssh' | 'vnc';
 
 /** Billing / provenance: which console imported this elastic server. */
 export type ExternalVMSource = 'admin_import' | 'tenant_import' | 'superadmin_bulk';
@@ -13,6 +13,8 @@ export interface IExternalVM extends Document {
   name: string;
   ipAddress: string;
   protocol: ExternalVMProtocol;
+  /** Optional override; defaults to 3389/22/5900 by protocol when opening console. */
+  port?: number;
   username: string;
   /** AES-256-CBC encrypted password (encrypt/decrypt handled in the service). */
   password: string;
@@ -52,9 +54,27 @@ export interface IExternalVM extends Document {
   updatedAt: Date;
 }
 
-/** Default console username per protocol when one is not supplied. */
-function defaultUsernameFor(protocol: ExternalVMProtocol): string {
-  return protocol === 'ssh' ? 'root' : 'Administrator';
+/** Default console username per protocol when one is not supplied. VNC uses password-only auth. */
+function defaultUsernameFor(protocol: ExternalVMProtocol): string | undefined {
+  if (protocol === 'ssh') return 'root';
+  if (protocol === 'vnc') return undefined;
+  return 'Administrator';
+}
+
+/** Default Guacamole port when `port` is not stored on the VM document. */
+export function defaultPortForExternalVm(
+  protocol: ExternalVMProtocol,
+  port?: number | null
+): number {
+  if (port != null && port > 0) return port;
+  switch (protocol) {
+    case 'rdp':
+      return 3389;
+    case 'vnc':
+      return 5900;
+    case 'ssh':
+      return 22;
+  }
 }
 
 const externalVMSchema = new Schema<IExternalVM>(
@@ -71,8 +91,14 @@ const externalVMSchema = new Schema<IExternalVM>(
     },
     protocol: {
       type: String,
-      enum: ['rdp', 'ssh'],
+      enum: ['rdp', 'ssh', 'vnc'],
       required: true,
+    },
+    port: {
+      type: Number,
+      min: 1,
+      max: 65535,
+      required: false,
     },
     username: {
       type: String,
@@ -156,8 +182,9 @@ const externalVMSchema = new Schema<IExternalVM>(
 externalVMSchema.index({ tenantId: 1, createdAt: -1 });
 
 externalVMSchema.pre('validate', function (next) {
-  if (!this.username) {
-    this.username = defaultUsernameFor(this.protocol);
+  if (!this.username && this.protocol !== 'vnc') {
+    const fallback = defaultUsernameFor(this.protocol);
+    if (fallback) this.username = fallback;
   }
   const hasAdmin = Boolean(this.adminId);
   const hasTenant = Boolean(this.tenantId);

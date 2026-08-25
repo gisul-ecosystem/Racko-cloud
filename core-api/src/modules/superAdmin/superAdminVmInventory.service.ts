@@ -54,7 +54,7 @@ export interface VmInventoryRecord {
   sourceId: string;
   name: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   status: InventoryStatus;
   originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
   originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
@@ -114,7 +114,7 @@ export interface VmProviderMetadataImportRow {
   ipAddress: string;
   name?: string;
   vmSpec?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   planDuration?: ProviderPlanDuration;
   username?: string;
   password?: string;
@@ -168,8 +168,8 @@ function normalizeIpAddress(ipAddress: string): string {
   return normalizeCanonicalIpv4(ipAddress);
 }
 
-function inferExternalVmProtocol(row: VmProviderMetadataImportRow): 'rdp' | 'ssh' {
-  if (row.protocol === 'rdp' || row.protocol === 'ssh') {
+function inferExternalVmProtocol(row: VmProviderMetadataImportRow): 'rdp' | 'ssh' | 'vnc' {
+  if (row.protocol === 'rdp' || row.protocol === 'ssh' || row.protocol === 'vnc') {
     return row.protocol;
   }
 
