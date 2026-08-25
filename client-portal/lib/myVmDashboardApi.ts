@@ -24,7 +24,7 @@ export interface MyVmDashboardRow {
   _id: string;
   name: string;
   ipAddress: string;
-  protocol: 'rdp' | 'ssh';
+  protocol: 'rdp' | 'ssh' | 'vnc';
   username: string;
   password: '••••••••';
   source: ExternalVMSource;

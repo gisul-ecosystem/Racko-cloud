@@ -2,12 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Database, Pencil, Search, Trash2, Upload } from 'lucide-react';
+import { ChevronLeft, Database, Pencil, RotateCcw, Search, Trash2, Upload } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchSuperAdminVmInventory,
   freeSuperAdminVmInventoryAndDeleteUser,
   importVmProviderMetadata,
+  superAdminResetMachinesByInventory,
+  superAdminIssueResetStreamTicket,
+  superAdminOpenResetStatusStreamWithReconnect,
   type InventoryOwnerScope,
   type InventoryResourceType,
   type InventoryStatus,
@@ -24,6 +27,7 @@ import {
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { ManageExternalVmAssignmentsModal } from '@/components/super-admin-console/ManageExternalVmAssignmentsModal';
+import { ResetProgressModal, type ResetMachineStatus } from './ResetProgressModal';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -82,6 +86,17 @@ type ConfirmDialogState =
   | {
       kind: 'bulkDeleteAssignmentVms';
       externalVmIds: string[];
+      message: string;
+    }
+  | {
+      kind: 'resetMachine';
+      item: SuperAdminVmInventoryItem;
+      vmLabel: string;
+      message: string;
+    }
+  | {
+      kind: 'bulkResetMachines';
+      inventoryIds: string[];
       message: string;
     }
   | null;
@@ -173,6 +188,7 @@ function ConfirmActionModal(props: {
   onConfirm: () => void;
   onCancel: () => void;
   busy: boolean;
+  confirmText?: string;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -193,7 +209,7 @@ function ConfirmActionModal(props: {
             disabled={props.busy}
             className="rounded-md bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {props.busy ? 'Deleting…' : 'OK'}
+            {props.busy ? `${props.confirmText || 'Processing'}…` : 'OK'}
           </button>
         </div>
       </div>
@@ -474,6 +490,16 @@ function scoreOverviewRowForEdit(row: SuperAdminExternalVmOverviewRow): number {
   return row.assignments.length * 100 + (row.tenantId ? 10 : 0) + (row.adminId ? 5 : 0);
 }
 
+function overviewClientLabel(row: SuperAdminExternalVmOverviewRow): string {
+  const projectClient = String(row.projectClientName ?? '').trim();
+  if (projectClient) return projectClient;
+
+  const tenantName = String(row.tenantName ?? '').trim();
+  if (tenantName) return tenantName;
+
+  return String(row.tenantSlug ?? '').trim();
+}
+
 function resolveOverviewRowForManage(
   assignmentRow: AssignmentRow,
   overviewRows: SuperAdminExternalVmOverviewRow[]
@@ -533,6 +559,16 @@ function buildAssignmentRowsFromOverview(rows: SuperAdminExternalVmOverviewRow[]
     const vmSpecLabel = String(row.providerVmSpec ?? '').trim();
     if (vmSpecLabel && !current.vmSpecs.includes(vmSpecLabel)) {
       current.vmSpecs.push(vmSpecLabel);
+    }
+
+    const projectLabel = String(row.projectName ?? row.projectId ?? '').trim();
+    if (projectLabel && !current.projectNames.includes(projectLabel)) {
+      current.projectNames.push(projectLabel);
+    }
+
+    const clientLabel = overviewClientLabel(row);
+    if (clientLabel && !current.clientNames.includes(clientLabel)) {
+      current.clientNames.push(clientLabel);
     }
 
     const rowScore = scoreOverviewRowForEdit(row);
@@ -650,8 +686,11 @@ function InventoryTable(props: {
   onToggleInventorySelection: (item: SuperAdminVmInventoryItem, checked: boolean) => void;
   onToggleAllSelection: (checked: boolean) => void;
   onBulkFreeVmAndDeleteUser: () => void;
+  onBulkResetMachines: () => void;
   bulkBusy: boolean;
   onFreeVmAndDeleteUser: (item: SuperAdminVmInventoryItem) => void;
+  onResetMachine: (item: SuperAdminVmInventoryItem) => void;
+  resetingVmInventoryId: string | null;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
@@ -686,6 +725,15 @@ function InventoryTable(props: {
                 className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 Delete user & make VM free
+              </button>
+              <button
+                type="button"
+                onClick={props.onBulkResetMachines}
+                disabled={props.bulkBusy}
+                className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Reset VMs
               </button>
             </>
           ) : null}
@@ -832,6 +880,18 @@ function InventoryTable(props: {
                           className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           Delete user & make VM free
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => props.onResetMachine(item)}
+                          disabled={
+                            props.resetingVmInventoryId === item.inventoryId ||
+                            props.bulkBusy
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Reset VM
                         </button>
                       </div>
                     </td>
@@ -1270,6 +1330,7 @@ export default function SuperAdminVmInventoryPage() {
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
   const [deletingAssignmentVmId, setDeletingAssignmentVmId] = useState<string | null>(null);
   const [freeingVmInventoryId, setFreeingVmInventoryId] = useState<string | null>(null);
+  const [resetingVmInventoryId, setResetingVmInventoryId] = useState<string | null>(null);
   const [bulkActionBusy, setBulkActionBusy] = useState(false);
   const [selectedInventoryIds, setSelectedInventoryIds] = useState<string[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
@@ -1277,6 +1338,15 @@ export default function SuperAdminVmInventoryPage() {
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const resetSseRef = useRef<(() => void) | null>(null);
+  const resetStatesRef = useRef<Map<string, 'pending' | 'resetting' | 'success' | 'failed' | 'offline'>>(new Map());
+  const [resetProgressModalOpen, setResetProgressModalOpen] = useState(false);
+  const [resetMachineStatuses, setResetMachineStatuses] = useState<ResetMachineStatus[]>([]);
+  const [resetProgressData, setResetProgressData] = useState<{ acceptedCount: number; offlineCount: number; isStreaming: boolean }>({
+    acceptedCount: 0,
+    offlineCount: 0,
+    isStreaming: false,
+  });
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1596,6 +1666,16 @@ export default function SuperAdminVmInventoryPage() {
     });
   }, []);
 
+  const handleResetMachine = useCallback((item: SuperAdminVmInventoryItem) => {
+    const vmLabel = item.name || item.ipAddress || 'this VM';
+    setConfirmDialog({
+      kind: 'resetMachine',
+      item,
+      vmLabel,
+      message: `Reset ${vmLabel}? All user software, credentials, activity traces, and system cache will be removed.`,
+    });
+  }, []);
+
   const handleToggleInventorySelection = useCallback((item: SuperAdminVmInventoryItem, checked: boolean) => {
     setSelectedInventoryIds((prev) => {
       if (checked) {
@@ -1622,6 +1702,15 @@ export default function SuperAdminVmInventoryPage() {
       kind: 'bulkFreeVmAndDeleteUser',
       inventoryIds: [...selectedInventoryIds],
       message: `Delete user & free ${selectedInventoryIds.length} selected VM(s)? End users are deleted, VMs are unassigned, and detached from tenant/admin owners into the free pool.`,
+    });
+  }, [selectedInventoryIds]);
+
+  const handleBulkResetMachines = useCallback(() => {
+    if (selectedInventoryIds.length === 0) return;
+    setConfirmDialog({
+      kind: 'bulkResetMachines',
+      inventoryIds: [...selectedInventoryIds],
+      message: `Reset ${selectedInventoryIds.length} selected VM(s)? All user software, credentials, activity traces, and system cache will be removed from each.`,
     });
   }, [selectedInventoryIds]);
 
@@ -1656,6 +1745,221 @@ export default function SuperAdminVmInventoryPage() {
     [items, load]
   );
 
+  const performResetMachine = useCallback(
+    async (item: SuperAdminVmInventoryItem) => {
+      if (!item.inventoryId) return;
+      setResetingVmInventoryId(item.inventoryId);
+      setFlashMessage(null);
+      try {
+        const sessionId = Date.now().toString();
+        const result = await superAdminResetMachinesByInventory([item.inventoryId], sessionId);
+
+        const vmLabel = item.name || item.ipAddress || item.inventoryId;
+        const notFound = result.notFound.includes(item.inventoryId);
+        const initialStatus: ResetMachineStatus['status'] = notFound
+          ? 'offline'
+          : result.accepted.length > 0
+            ? 'pending'
+            : result.offline.length > 0
+              ? 'offline'
+              : 'offline';
+
+        setResetMachineStatuses([
+          {
+            inventoryId: item.inventoryId,
+            vmLabel,
+            status: initialStatus,
+            error: notFound ? 'No machine agent found for this VM.' : undefined,
+          },
+        ]);
+        setResetProgressData({
+          acceptedCount: result.accepted.length,
+          offlineCount: result.offline.length + result.notFound.length,
+          isStreaming: result.accepted.length > 0,
+        });
+        setResetProgressModalOpen(true);
+
+        if (result.accepted.length === 0) {
+          return;
+        }
+
+        resetStatesRef.current.clear();
+        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
+
+        const stopStream = await superAdminOpenResetStatusStreamWithReconnect(
+          sessionId,
+          ticketResponse.streamToken,
+          (event) => {
+            if (event.type === 'reset_complete' && event.machineId) {
+              setResetMachineStatuses((prev) =>
+                prev.map((m) =>
+                  m.inventoryId === item.inventoryId
+                    ? {
+                        ...m,
+                        status: event.success ? 'success' : 'failed',
+                        error: event.error,
+                        completedAt: Date.now(),
+                      }
+                    : m
+                )
+              );
+            }
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            setResetMachineStatuses((prev) =>
+              prev.map((m) =>
+                m.status === 'pending'
+                  ? {
+                      ...m,
+                      status: 'failed',
+                      error: 'Connection lost — reset may have completed. Check the machine status.',
+                    }
+                  : m
+              )
+            );
+          },
+          result.accepted.length
+        );
+
+        resetSseRef.current = stopStream;
+        setTimeout(() => {
+          void load();
+        }, 3000);
+      } catch (err) {
+        const errorMsg = err instanceof ApiError ? err.message : 'Failed to reset machine';
+        setFlashMessage({
+          type: 'error',
+          text: errorMsg,
+        });
+        setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+      } finally {
+        setResetingVmInventoryId(null);
+      }
+    },
+    [load]
+  );
+
+  const performBulkResetMachines = useCallback(
+    async (inventoryIds: string[]) => {
+      if (inventoryIds.length === 0) return;
+      setBulkActionBusy(true);
+      setFlashMessage(null);
+      try {
+        const sessionId = Date.now().toString();
+        const result = await superAdminResetMachinesByInventory(inventoryIds, sessionId);
+
+        const machineStatuses: ResetMachineStatus[] = inventoryIds.map((invId) => {
+          const item = items.find((i) => i.inventoryId === invId);
+          const vmLabel = item?.name || item?.ipAddress || invId;
+          const notFound = result.notFound.includes(invId);
+          return {
+            inventoryId: invId,
+            vmLabel,
+            status: notFound ? 'offline' : result.accepted.length > 0 ? 'pending' : 'offline',
+            error: notFound
+              ? 'No machine agent found for this VM.'
+              : result.accepted.length === 0
+                ? 'Machine agent is offline.'
+                : undefined,
+          };
+        });
+
+        setResetMachineStatuses(machineStatuses);
+        setResetProgressData({
+          acceptedCount: result.accepted.length,
+          offlineCount: result.offline.length + result.notFound.length,
+          isStreaming: result.accepted.length > 0,
+        });
+        setResetProgressModalOpen(true);
+
+        resetStatesRef.current.clear();
+
+        if (result.accepted.length === 0) {
+          setSelectedInventoryIds([]);
+          return;
+        }
+
+        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
+
+        const markRemainingPendingOffline = () => {
+          setResetMachineStatuses((prev) =>
+            prev.map((m) =>
+              m.status === 'pending'
+                ? {
+                    ...m,
+                    status: 'offline',
+                    error: 'Machine agent is offline or reset was skipped.',
+                  }
+                : m
+            )
+          );
+        };
+
+        const stopStream = await superAdminOpenResetStatusStreamWithReconnect(
+          sessionId,
+          ticketResponse.streamToken,
+          (event) => {
+            if (event.type === 'reset_complete' && event.machineId) {
+              setResetMachineStatuses((prev) => {
+                const nextPendingIndex = prev.findIndex((m) => m.status === 'pending');
+                if (nextPendingIndex === -1) return prev;
+                return prev.map((m, idx) =>
+                  idx === nextPendingIndex
+                    ? {
+                        ...m,
+                        status: event.success ? 'success' : 'failed',
+                        error: event.error,
+                        completedAt: Date.now(),
+                      }
+                    : m
+                );
+              });
+            }
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            markRemainingPendingOffline();
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            setResetMachineStatuses((prev) =>
+              prev.map((m) =>
+                m.status === 'pending'
+                  ? {
+                      ...m,
+                      status: 'failed',
+                      error: 'Connection lost — reset may have completed. Check the machine status.',
+                    }
+                  : m
+              )
+            );
+          },
+          result.accepted.length
+        );
+
+        resetSseRef.current = stopStream;
+        setSelectedInventoryIds([]);
+        setTimeout(() => {
+          void load();
+        }, 3000);
+      } catch (err) {
+        const errorMsg = err instanceof ApiError ? err.message : 'Failed to reset machines';
+        setFlashMessage({
+          type: 'error',
+          text: errorMsg,
+        });
+        setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+      } finally {
+        setBulkActionBusy(false);
+      }
+    },
+    [items, load]
+  );
+
   const handleConfirmDialog = useCallback(async () => {
     if (!confirmDialog) return;
 
@@ -1665,8 +1969,20 @@ export default function SuperAdminVmInventoryPage() {
       return;
     }
 
+    if (confirmDialog.kind === 'resetMachine') {
+      await performResetMachine(confirmDialog.item);
+      setConfirmDialog(null);
+      return;
+    }
+
     if (confirmDialog.kind === 'bulkFreeVmAndDeleteUser') {
       await performBulkFreeVmAndDeleteUser(confirmDialog.inventoryIds);
+      setConfirmDialog(null);
+      return;
+    }
+
+    if (confirmDialog.kind === 'bulkResetMachines') {
+      await performBulkResetMachines(confirmDialog.inventoryIds);
       setConfirmDialog(null);
       return;
     }
@@ -1682,12 +1998,14 @@ export default function SuperAdminVmInventoryPage() {
       setConfirmDialog(null);
       return;
     }
-  }, [confirmDialog, performBulkFreeVmAndDeleteUser, performBulkDeleteAssignmentRows, performFreeVmAndDeleteUser, performDeleteAssignmentRow]);
+  }, [confirmDialog, performBulkFreeVmAndDeleteUser, performBulkResetMachines, performBulkDeleteAssignmentRows, performFreeVmAndDeleteUser, performResetMachine, performDeleteAssignmentRow]);
 
   const confirmDialogBusy =
     confirmDialog?.kind === 'freeVmAndDeleteUser'
       ? freeingVmInventoryId === confirmDialog.item.inventoryId
-      : confirmDialog?.kind === 'bulkFreeVmAndDeleteUser' || confirmDialog?.kind === 'bulkDeleteAssignmentVms'
+      : confirmDialog?.kind === 'resetMachine'
+        ? resetingVmInventoryId === confirmDialog.item.inventoryId
+      : confirmDialog?.kind === 'bulkFreeVmAndDeleteUser' || confirmDialog?.kind === 'bulkDeleteAssignmentVms' || confirmDialog?.kind === 'bulkResetMachines'
         ? bulkActionBusy
       : confirmDialog?.kind === 'deleteAssignmentVm'
       ? deletingAssignmentVmId === confirmDialog.row.editableExternalVmId
@@ -1818,8 +2136,22 @@ export default function SuperAdminVmInventoryPage() {
             if (!confirmDialogBusy) setConfirmDialog(null);
           }}
           busy={confirmDialogBusy}
+          confirmText={
+            confirmDialog.kind === 'resetMachine' || confirmDialog.kind === 'bulkResetMachines'
+              ? 'Resetting'
+              : undefined
+          }
         />
       ) : null}
+
+      <ResetProgressModal
+        isOpen={resetProgressModalOpen}
+        machines={resetMachineStatuses}
+        onClose={() => setResetProgressModalOpen(false)}
+        isStreaming={resetProgressData.isStreaming}
+        acceptedCount={resetProgressData.acceptedCount}
+        offlineCount={resetProgressData.offlineCount}
+      />
 
       {manageRow ? (
         <ManageExternalVmAssignmentsModal
@@ -1925,12 +2257,15 @@ export default function SuperAdminVmInventoryPage() {
           onPreviousPage={() => setPage((p) => Math.max(1, p - 1))}
           onNextPage={() => setPage((p) => Math.min(totalPages, p + 1))}
           freeingVmInventoryId={freeingVmInventoryId}
+          resetingVmInventoryId={resetingVmInventoryId}
           selectedInventoryIds={selectedInventoryIds}
           onToggleInventorySelection={handleToggleInventorySelection}
           onToggleAllSelection={handleToggleAllInventorySelection}
           onBulkFreeVmAndDeleteUser={handleBulkFreeVmAndDeleteUser}
+          onBulkResetMachines={handleBulkResetMachines}
           bulkBusy={bulkActionBusy}
           onFreeVmAndDeleteUser={handleFreeVmAndDeleteUser}
+          onResetMachine={handleResetMachine}
           loading={loading}
           error={error}
           onRetry={() => void load()}

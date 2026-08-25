@@ -8,6 +8,7 @@ import { VmProviderMetadataModel, type ProviderPlanDuration } from '../../models
 import { decrypt } from '../../utils/crypto';
 import { normalizeCanonicalIpv4 } from '../vm/helpers/ipCidr';
 import { ValidationError } from '../../utils/errors';
+import { ProjectModel } from '../../models/project.model';
 import { ExternalVMModel } from './external-vm.model';
 import type { AssignmentSchedule } from './schedule.types';
 
@@ -51,6 +52,9 @@ export interface SuperAdminExternalVmOverviewRow {
   tenantId: string | null;
   tenantName: string | null;
   tenantSlug: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  projectClientName: string | null;
   assignedTo: string | null;
   assignedTenantUserId: string | null;
   assignments: SuperAdminExternalVmAssigneeView[];
@@ -126,8 +130,11 @@ class SuperAdminExternalVmOverviewService {
     const tenantIds = [
       ...new Set(docs.filter((d) => d.tenantId).map((d) => d.tenantId!.toString())),
     ].map((id) => new mongoose.Types.ObjectId(id));
+    const projectIds = [
+      ...new Set(docs.filter((d) => d.projectId).map((d) => d.projectId!.toString())),
+    ].map((id) => new mongoose.Types.ObjectId(id));
 
-    const [platformAssigns, tenantAssigns, admins, tenants] = await Promise.all([
+    const [platformAssigns, tenantAssigns, admins, tenants, projects] = await Promise.all([
       ExternalVmUserAssignmentModel.find({ externalVmId: { $in: vmIds } }).lean(),
       ExternalVmTenantAssignmentModel.find({ externalVmId: { $in: vmIds } }).lean(),
       adminIds.length
@@ -135,6 +142,9 @@ class SuperAdminExternalVmOverviewService {
         : Promise.resolve([]),
       tenantIds.length
         ? Tenant.find({ _id: { $in: tenantIds } }).select('_id name slug').lean()
+        : Promise.resolve([]),
+      projectIds.length
+        ? ProjectModel.find({ _id: { $in: projectIds } }).select('_id name clientName').lean()
         : Promise.resolve([]),
     ]);
 
@@ -156,6 +166,7 @@ class SuperAdminExternalVmOverviewService {
 
     const adminById = new Map(admins.map((a) => [a._id.toString(), a]));
     const tenantById = new Map(tenants.map((t) => [t._id.toString(), t]));
+    const projectById = new Map(projects.map((p) => [p._id.toString(), p]));
     const platformUserById = new Map(platformUsers.map((u) => [u._id.toString(), u]));
     const tenantUserById = new Map(tenantUsers.map((u) => [u._id.toString(), u]));
 
@@ -179,6 +190,7 @@ class SuperAdminExternalVmOverviewService {
       const isFree = !doc.tenantId && !doc.adminId;
       const admin = doc.adminId ? adminById.get(doc.adminId.toString()) : undefined;
       const tenant = doc.tenantId ? tenantById.get(doc.tenantId.toString()) : undefined;
+      const project = doc.projectId ? projectById.get(doc.projectId.toString()) : undefined;
       const provider = providerByIp.get(normalizeIpAddress(doc.ipAddress));
 
       let password = '';
@@ -297,6 +309,9 @@ class SuperAdminExternalVmOverviewService {
         tenantId: doc.tenantId?.toString() ?? null,
         tenantName: tenant?.name ?? null,
         tenantSlug: tenant?.slug ?? null,
+        projectId: doc.projectId?.toString() ?? null,
+        projectName: project?.name ?? null,
+        projectClientName: project?.clientName ?? null,
         assignedTo: doc.assignedTo?.toString() ?? null,
         assignedTenantUserId: doc.assignedTenantUserId?.toString() ?? null,
         assignments,
