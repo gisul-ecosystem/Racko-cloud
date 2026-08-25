@@ -21,10 +21,13 @@ const IFRAME_OVERLAY_FADE_MS = 300;
 const protocolColors: Record<ExternalVMProtocol, { bg: string; border: string; text: string }> = {
   rdp: { bg: 'rgba(59, 130, 246, 0.15)', border: 'rgba(59, 130, 246, 0.4)', text: '#93c5fd' },
   ssh: { bg: 'rgba(34, 197, 94, 0.15)', border: 'rgba(34, 197, 94, 0.4)', text: '#86efac' },
+  vnc: { bg: 'rgba(168, 85, 247, 0.15)', border: 'rgba(168, 85, 247, 0.4)', text: '#d8b4fe' },
 };
 
 function getProtocolSubtitle(p: ExternalVMProtocol): string {
-  return p === 'ssh' ? 'Establishing secure SSH session' : 'Establishing secure RDP session';
+  if (p === 'ssh') return 'Establishing secure SSH session';
+  if (p === 'vnc') return 'Establishing secure VNC session';
+  return 'Establishing secure RDP session';
 }
 
 /** Ignore sub-pixel/rounding drift so we don't loop re-fetching forever. */

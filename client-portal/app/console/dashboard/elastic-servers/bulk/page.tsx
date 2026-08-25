@@ -9,6 +9,7 @@ import {
   bulkCreateTenantExternalVMs,
   type CreateExternalVMDto,
 } from '@/lib/tenantExternalVmApi';
+import { parseExternalVmProtocol } from '@/lib/externalVmApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { tenantAccentButton } from '@/lib/tenantAccentStyles';
@@ -70,7 +71,7 @@ export default function TenantBulkImportPage() {
     const vms: CreateExternalVMDto[] = [];
     for (const raw of parsed as BulkEntryRaw[]) {
       const ip = raw.ipAddress ?? raw.ip;
-      const proto = raw.protocol === 'ssh' ? 'ssh' : 'rdp';
+      const proto = parseExternalVmProtocol(raw.protocol);
       if (!raw.name || !ip || !raw.password) {
         addToast('error', 'Each entry needs at least name, ip, and password.');
         return;

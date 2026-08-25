@@ -27,6 +27,10 @@ import {
   type SuperAdminBulkImportRowDto,
   type SuperAdminTargetOption,
 } from '@/lib/superAdminExternalVmApi';
+import {
+  parseExternalVmProtocol,
+  type ExternalVMProtocol,
+} from '@/lib/externalVmApi';
 import { fetchProjectsForAdmin, fetchProjectsForTenant, createProjectForAdmin, createProjectForTenant, previewProjectNameForAdmin, previewProjectNameForTenant, type OrgProject } from '@/lib/projectsApi';
 import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 
@@ -89,7 +93,7 @@ interface EditorRow {
   name: string;
   ip: string;
   password: string;
-  protocol: 'rdp' | 'ssh';
+  protocol: ExternalVMProtocol;
   username: string;
   importShape: ImportShape;
   targetMode: TargetMode;
@@ -248,7 +252,7 @@ function rowFromRawJson(
       name: String(raw.name ?? '').trim(),
       ip,
       password: String(raw.password ?? ''),
-      protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
+      protocol: parseExternalVmProtocol(raw.protocol),
       username: String(raw.username ?? '').trim(),
       importShape: 'extended',
       targetMode,
@@ -268,7 +272,7 @@ function rowFromRawJson(
     name: String(raw.name ?? '').trim(),
     ip,
     password: String(raw.password ?? ''),
-    protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
+    protocol: parseExternalVmProtocol(raw.protocol),
     username: String(raw.username ?? '').trim(),
     importShape: 'legacy',
     targetMode: defaults.targetMode,
@@ -473,7 +477,7 @@ function jsonTextToPayload(
         name: String(raw.name).trim(),
         ip: String(raw.ipAddress ?? raw.ip).trim(),
         password: String(raw.password),
-        protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
+        protocol: parseExternalVmProtocol(raw.protocol),
         ...(raw.username ? { username: String(raw.username).trim() } : {}),
         ...(extendedTenantName ? { tenantName: extendedTenantName } : { adminEmail: extendedAdminEmail }),
         ...(userRaw
@@ -497,7 +501,7 @@ function jsonTextToPayload(
         name: String(raw.name).trim(),
         ip: String(raw.ipAddress ?? raw.ip).trim(),
         password: String(raw.password),
-        protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
+        protocol: parseExternalVmProtocol(raw.protocol),
         ...(raw.username ? { username: String(raw.username).trim() } : {}),
         target,
         ...(Array.isArray(raw.assignments)
@@ -519,7 +523,7 @@ function jsonTextToPayload(
       name: String(raw.name).trim(),
       ip: String(raw.ipAddress ?? raw.ip).trim(),
       password: String(raw.password),
-      protocol: raw.protocol === 'ssh' ? 'ssh' : 'rdp',
+      protocol: parseExternalVmProtocol(raw.protocol),
       ...(raw.username ? { username: String(raw.username).trim() } : {}),
       target: defaultMode === 'tenant' ? { tenantId: defaultTargetId } : { adminId: defaultTargetId },
     });
@@ -1283,7 +1287,7 @@ export default function SuperAdminServerImportPage() {
                         setRows((prev) =>
                           prev.map((r) =>
                             r.key === row.key
-                              ? { ...r, protocol: e.target.value as 'rdp' | 'ssh' }
+                              ? { ...r, protocol: e.target.value as ExternalVMProtocol }
                               : r
                           )
                         )
@@ -1291,10 +1295,13 @@ export default function SuperAdminServerImportPage() {
                     >
                       <option value="rdp">RDP</option>
                       <option value="ssh">SSH</option>
+                      <option value="vnc">VNC</option>
                     </select>
                   </div>
                   <div>
-                    <label className={labelClass}>Username (optional)</label>
+                    <label className={labelClass}>
+                      Username {row.protocol === 'vnc' ? '(not used for VNC)' : '(optional)'}
+                    </label>
                     <input
                       className={inputClass}
                       value={row.username}

@@ -72,7 +72,7 @@ export class SuperAdminVmInventoryController {
           ipAddress: string;
           name?: string;
           vmSpec?: string;
-          protocol?: 'rdp' | 'ssh';
+          protocol?: 'rdp' | 'ssh' | 'vnc';
           planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
           username?: string;
           password?: string;
