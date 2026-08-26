@@ -2,6 +2,17 @@ package installer
 
 import "fmt"
 
+// platformChocoURL is set once at startup via Init().
+// It points to the platform's internal Chocolatey nupkg endpoint,
+// avoiding community.chocolatey.org rate limits.
+var platformChocoURL string
+
+// Init sets the platform URL for internal package downloads.
+// Must be called once before any installs are attempted.
+func Init(platformURL string) {
+	platformChocoURL = platformURL + "/api/v1/agent/binary/chocolatey"
+}
+
 // SoftwarePackage mirrors the relevant fields from the platform's SoftwareCatalog.
 // The agent fetches this from GET /api/v1/agent/software-catalog/:id before installing.
 type SoftwarePackage struct {

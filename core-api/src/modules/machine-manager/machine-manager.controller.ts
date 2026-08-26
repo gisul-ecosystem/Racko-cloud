@@ -358,7 +358,9 @@ export class MachineManagerController {
         darwin:    { file: 'racko-agent-mac', name: 'racko-agent' },
         // racko-app is published as a folder-zip (required for WebView2Loader.dll to
         // land on disk as a loose file). The push script downloads and extracts the zip.
-        'racko-app': { file: 'racko-app.zip', name: 'racko-app.zip' },
+        'racko-app':  { file: 'racko-app.zip',     name: 'racko-app.zip' },
+        // chocolatey.nupkg — hosted internally to avoid rate limits from community.chocolatey.org
+        'chocolatey': { file: 'chocolatey.nupkg', name: 'chocolatey.nupkg' },
       };
 
       const entry = fileMap[os];
