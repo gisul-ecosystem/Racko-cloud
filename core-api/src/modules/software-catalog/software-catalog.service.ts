@@ -104,6 +104,17 @@ class SoftwareCatalogService {
   async deleteSoftware(id: mongoose.Types.ObjectId): Promise<void> {
     const doc = await SoftwareCatalogModel.findById(id);
     if (!doc) throw new NotFoundError('Software not found.');
+
+    // Delete the uploaded file from SeaweedFS if it was stored internally.
+    // Only internal storageRefs start with 'software-catalog/' — external URLs are left alone.
+    if (doc.fileUrl && doc.fileUrl.startsWith('software-catalog/')) {
+      await seaweedfsService.delete(doc.fileUrl);
+      logger.info('[SoftwareCatalog] Deleted S3 file', {
+        softwareId: id.toString(),
+        storageRef: doc.fileUrl,
+      });
+    }
+
     await doc.deleteOne();
     logger.info('[SoftwareCatalog] Deleted software', { softwareId: id.toString() });
   }
