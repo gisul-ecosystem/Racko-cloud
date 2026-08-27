@@ -21,6 +21,7 @@ class SoftwareCatalogService {
       chocoName:     doc.chocoName,
       fileUrl:       doc.fileUrl,
       fileName:      doc.fileName,
+      zipInstallScript: doc.zipInstallScript,
       installArgs:   doc.installArgs,
       uploadedBy:    doc.uploadedBy.toString(),
       createdAt:     doc.createdAt.toISOString(),
