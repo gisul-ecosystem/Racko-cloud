@@ -103,35 +103,119 @@ class VMPushService {
    *   winrm set winrm/config/service '@{AllowUnencrypted="true"}'
    *   (or use HTTPS port 5986 with a certificate for production)
    */
+  /**
+   * Windows — push agent via WinRM using the Task Scheduler pattern.
+   *
+   * Two WinRM commands:
+   *   1. Write the install PS1 script to C:\Windows\Temp\ using base64-decoded content
+   *      (zero quoting/escaping issues — the content is passed as a base64 string)
+   *   2. Register + immediately trigger a one-time Scheduled Task as SYSTEM
+   *      (returns in <1 second — task runs in background with no timeout)
+   *
+   * This is the same approach used by Microsoft SCCM, Intune, and all enterprise RMMs.
+   * The agent connects back via WebSocket after it installs — typically within 30-60s.
+   */
   private async pushWindows(target: VMPushTarget): Promise<void> {
-    const psScript = this.buildWindowsInstallScript(target.accountToken);
+    const scriptPath = 'C:\\Windows\\Temp\\racko-install.ps1';
+    const taskName = 'RackoAgentInstall';
 
-    // Step 1: Create a WinRM shell
-    const shellId = await this.winrmCreateShell(target);
-    logger.info('[VMPush] WinRM shell created', { machineId: target.machineId, shellId });
+    // ── Step 1: Write the install script via base64 decode ────────────────────
+    // Encode the PS1 content as base64 in Node.js — then decode on the VM.
+    // This completely eliminates all quoting/escaping complexity.
+    const installPs1 = this.buildInstallPs1(target.accountToken);
+    const ps1Base64 = Buffer.from(installPs1, 'utf8').toString('base64');
 
+    // PowerShell to decode base64 → write UTF-8 file (no BOM)
+    const writeFilePs = [
+      `$b64 = '${ps1Base64}'`,
+      `$bytes = [System.Convert]::FromBase64String($b64)`,
+      `[System.IO.File]::WriteAllBytes('${scriptPath}', $bytes)`,
+    ].join('; ');
+
+    const shellId1 = await this.winrmCreateShell(target);
+    logger.info('[VMPush] WinRM shell 1 created (write script)', { machineId: target.machineId });
     try {
-      // Step 2: Run the PowerShell install script
-      const commandId = await this.winrmRunCommand(target, shellId, psScript);
-      logger.info('[VMPush] WinRM command dispatched', { machineId: target.machineId, commandId });
-
-      // Step 3: Wait for output/completion
-      const { exitCode, stdout, stderr } = await this.winrmGetOutput(target, shellId, commandId);
-
-      logger.info('[VMPush] WinRM command completed', {
-        machineId: target.machineId,
-        exitCode,
-        stdout: stdout.slice(0, 500),
-        stderr: stderr.slice(0, 500),
-      });
-
-      if (exitCode !== 0) {
-        throw new Error(`PowerShell install failed (exit ${exitCode}): ${stderr || stdout}`);
+      const cmdId1 = await this.winrmRunCommand(target, shellId1, writeFilePs);
+      const { exitCode: ec1, stdout: out1, stderr: err1 } = await this.winrmGetOutput(target, shellId1, cmdId1);
+      logger.info('[VMPush] Install script written', { machineId: target.machineId, exitCode: ec1 });
+      if (ec1 !== 0) {
+        throw new Error(`Failed to write install script (exit ${ec1}): ${err1 || out1}`);
       }
     } finally {
-      // Step 4: Always delete the shell to free resources on the remote machine
-      await this.winrmDeleteShell(target, shellId).catch(() => { /* best-effort */ });
+      await this.winrmDeleteShell(target, shellId1).catch(() => { /* best-effort */ });
     }
+
+    // ── Step 2: Register + trigger Scheduled Task (returns immediately) ────────
+    // schtasks /run returns as soon as the task is queued — does NOT wait for completion.
+    const registerAndRunTask = [
+      // Clean up any leftover task from a previous push attempt (2>nul suppresses "not found" error)
+      `schtasks /delete /tn "${taskName}" /f 2>nul`,
+      // Register one-time task: runs as SYSTEM at highest privilege
+      `schtasks /create /tn "${taskName}" /tr "powershell.exe -NonInteractive -ExecutionPolicy Bypass -File \\"${scriptPath}\\"" /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f`,
+      // Trigger immediately — WinRM returns in <1 second
+      `schtasks /run /tn "${taskName}"`,
+    ].join(' & ');
+
+    const shellId2 = await this.winrmCreateShell(target);
+    logger.info('[VMPush] WinRM shell 2 created (register+run task)', { machineId: target.machineId });
+    try {
+      const cmdId2 = await this.winrmRunCommand(target, shellId2, registerAndRunTask);
+      const { exitCode: ec2, stdout: out2, stderr: err2 } = await this.winrmGetOutput(target, shellId2, cmdId2);
+      logger.info('[VMPush] Task Scheduler triggered', { machineId: target.machineId, exitCode: ec2, stdout: out2.slice(0, 300) });
+      if (ec2 !== 0) {
+        throw new Error(`Task Scheduler registration failed (exit ${ec2}): ${err2 || out2}`);
+      }
+    } finally {
+      await this.winrmDeleteShell(target, shellId2).catch(() => { /* best-effort */ });
+    }
+
+    logger.info('[VMPush] Install task launched. Agent will connect back within 60s.', { machineId: target.machineId });
+    // "Push success" is reported here. The Connection Status SSE stream detects
+    // the agent connecting back via WebSocket (notifyAgentConnected).
+  }
+
+  /**
+   * Builds the PowerShell install script that runs as a Scheduled Task (SYSTEM).
+   * Downloads the agent binary, writes config.json, registers + starts the service.
+   * Self-cleans: deletes the task and script file after successful installation.
+   */
+  private buildInstallPs1(accountToken: string): string {
+    const binaryUrl = `${this.platformUrl}/api/v1/agent/binary/windows`;
+    const installDir = 'C:\\ProgramData\\racko-agent';
+    const taskName = 'RackoAgentInstall';
+    const scriptPath = 'C:\\Windows\\Temp\\racko-install.ps1';
+
+    const configJson = JSON.stringify({
+      PLATFORM_URL: this.platformUrl,
+      ACCOUNT_TOKEN: accountToken,
+    });
+    // Escape single quotes for safe embedding in a PS single-quoted string
+    const safeConfigJson = configJson.replace(/'/g, "''");
+
+    return [
+      '$ErrorActionPreference = "Stop"',
+      `$installDir = '${installDir}'`,
+      `$binaryUrl = '${binaryUrl}'`,
+      `$configContent = '${safeConfigJson}'`,
+      // Create install directory
+      'New-Item -ItemType Directory -Force -Path $installDir | Out-Null',
+      // Write config UTF-8 without BOM (Go json.NewDecoder rejects BOM from Set-Content -Encoding UTF8)
+      '[System.IO.File]::WriteAllText("$installDir\\config.json", $configContent, [System.Text.UTF8Encoding]::new($false))',
+      // Download agent binary
+      'Invoke-WebRequest -Uri $binaryUrl -OutFile "$installDir\\racko-agent.exe" -UseBasicParsing',
+      // Remove any existing service cleanly
+      'sc.exe stop RackoAgent 2>$null',
+      'sc.exe delete RackoAgent 2>$null',
+      'Start-Sleep -Seconds 1',
+      // Register service — binpath must be quoted to handle future path changes
+      'sc.exe create RackoAgent binpath= "\"$installDir\\racko-agent.exe\"" start= auto displayname= "Racko Agent" obj= LocalSystem',
+      'sc.exe description RackoAgent "Racko software management agent"',
+      // Start the service
+      'sc.exe start RackoAgent',
+      // Self-clean: remove the task and script file
+      `schtasks /delete /tn "${taskName}" /f 2>$null`,
+      `Remove-Item '${scriptPath}' -Force -ErrorAction SilentlyContinue`,
+    ].join('\r\n');
   }
 
   // ─── WinRM SOAP helpers ────────────────────────────────────────────────────
@@ -342,44 +426,6 @@ class VMPushService {
 
   private buildLinuxInstallScript(accountToken: string): string {
     return `curl -fsSL '${this.platformUrl}/api/v1/agent/install/linux?token=${accountToken}' | sudo bash`;
-  }
-
-  private buildWindowsInstallScript(accountToken: string): string {
-    // Download the agent binary from the existing /api/v1/agent/binary/windows endpoint,
-    // write config.json, register as a Windows service, and start it.
-    // Mirrors what the Inno Setup installer does, but fully scriptable via WinRM.
-    const binaryUrl = `${this.platformUrl}/api/v1/agent/binary/windows`;
-    const installDir = 'C:\\ProgramData\\racko-agent';
-    const configContent = JSON.stringify({
-      PLATFORM_URL: this.platformUrl,
-      ACCOUNT_TOKEN: accountToken,
-    });
-
-    return [
-      '$ErrorActionPreference = "Stop"',
-      `$installDir = '${installDir}'`,
-      `$binaryUrl = '${binaryUrl}'`,
-      `$configContent = '${configContent}'`,
-      'Write-Host "[racko] Creating install directory..."',
-      'New-Item -ItemType Directory -Force -Path $installDir | Out-Null',
-      'Write-Host "[racko] Downloading agent binary..."',
-      'Invoke-WebRequest -Uri $binaryUrl -OutFile "$installDir\\racko-agent.exe" -UseBasicParsing',
-      'Write-Host "[racko] Writing config..."',
-      // [System.IO.File]::WriteAllText writes UTF-8 WITHOUT BOM — critical because
-      // PowerShell Set-Content -Encoding UTF8 adds a BOM (EF BB BF) which breaks
-      // Go's json.NewDecoder and causes all config fields to parse as empty strings.
-      '[System.IO.File]::WriteAllText("$installDir\\config.json", $configContent, [System.Text.UTF8Encoding]::new($false))',
-      // Stop and remove any existing service before creating
-      'sc.exe stop RackoAgent 2>$null; sc.exe delete RackoAgent 2>$null; Start-Sleep -Seconds 2',
-      'Write-Host "[racko] Registering Windows service..."',
-      'sc.exe create RackoAgent binpath= "$installDir\\racko-agent.exe" start= auto displayname= "Racko Agent" obj= LocalSystem',
-      'sc.exe description RackoAgent "Racko software management agent"',
-      'Write-Host "[racko] Starting service..."',
-      'sc.exe start RackoAgent',
-      'Write-Host "[racko] Agent installed and started successfully."',
-      // racko-app + WebView2 are installed automatically via WebSocket exec
-      // once the agent connects — no WinRM involvement needed for the heavy downloads.
-    ].join('; ');
   }
 }
 
