@@ -10,6 +10,7 @@ import { ErrorState } from '../../../components/dashboard/ErrorState';
 import {
   createSoftwareCatalogEntry,
   deleteSoftwareCatalogEntry,
+  issueSoftwareCatalogUploadUrl,
   type ISoftwareCatalog,
   type MachineOS,
   type InstallMethod,
@@ -115,6 +116,11 @@ export default function SuperAdminSoftwareCatalogPage() {
   const [installArgs, setInstallArgs] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
+  // File upload state — for msi/exe/zip/script install methods
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState(''); // display name of uploaded file
+  const [storageRef, setStorageRef] = useState(''); // storageRef returned by upload
+
   const isFileBased = FILE_METHODS.includes(installMethod);
   const isPkgBased  = PKG_METHODS.includes(installMethod);
 
@@ -123,12 +129,43 @@ export default function SuperAdminSoftwareCatalogPage() {
 
   const canSubmit = !!(
     name.trim() && selectedOS.length > 0 &&
-    (isFileBased ? fileUrl.trim() : true) &&
+    (isFileBased ? (storageRef || fileUrl.trim()) : true) &&
     (installMethod === 'apt'    ? aptName.trim() :
      installMethod === 'brew'   ? brewName.trim() :
      installMethod === 'choco'  ? chocoName.trim() :
      installMethod === 'winget' ? wingetId.trim() : true)
-  ) && !submitting;
+  ) && !submitting && !uploadingFile;
+
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFile(true);
+    setUploadedFileName('');
+    setStorageRef('');
+    try {
+      const { presignedUrl, storageRef: ref } = await issueSoftwareCatalogUploadUrl(
+        file.name,
+        file.type || 'application/octet-stream'
+      );
+      // Upload directly to SeaweedFS — no file bytes through the API
+      const uploadRes = await fetch(presignedUrl, {
+        method: 'PUT',
+        body: file,
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+      });
+      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+      setStorageRef(ref);
+      setUploadedFileName(file.name);
+      if (!fileName) setFileName(file.name);
+      addToast('success', `${file.name} uploaded successfully.`);
+    } catch (err) {
+      addToast('error', err instanceof Error ? err.message : 'File upload failed.');
+    } finally {
+      setUploadingFile(false);
+      // Reset file input so same file can be re-selected
+      e.target.value = '';
+    }
+  };
 
   const handleSubmit = async () => {
     if (!canSubmit) return;
@@ -144,7 +181,8 @@ export default function SuperAdminSoftwareCatalogPage() {
         aptName:     aptName.trim()     || undefined,
         brewName:    brewName.trim()    || undefined,
         chocoName:   chocoName.trim()   || undefined,
-        fileUrl:     fileUrl.trim()     || undefined,
+        // Use storageRef if file was uploaded, otherwise fall back to manual URL
+        fileUrl:     storageRef || fileUrl.trim() || undefined,
         fileName:    fileName.trim()    || undefined,
         installArgs: installArgs.trim() || undefined,
       });
@@ -153,6 +191,7 @@ export default function SuperAdminSoftwareCatalogPage() {
       setName(''); setVersion(''); setIconUrl(''); setSelectedOS([]); setInstallMethod('choco');
       setWingetId(''); setAptName(''); setBrewName(''); setChocoName('');
       setFileUrl(''); setFileName(''); setInstallArgs('');
+      setStorageRef(''); setUploadedFileName('');
       refetch();
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to add software.');
@@ -285,24 +324,62 @@ export default function SuperAdminSoftwareCatalogPage() {
             </div>
           )}
 
-          {/* File URL — shown only for file-based methods */}
+          {/* File upload — shown only for file-based methods */}
           {isFileBased && (
             <>
               <div className="sm:col-span-2">
-                <label className={labelClass}>File URL <span className="text-red-500">*</span></label>
-                <input
-                  className={inputClass}
-                  value={fileUrl}
-                  onChange={(e) => setFileUrl(e.target.value)}
-                  placeholder="https://cdn.example.com/installer.msi"
-                />
-                <p className="mt-1 text-xs text-gray-400">
-                  Direct URL to the {installMethod === 'script' ? 'script' : 'installer'} file.
-                  Must be publicly accessible or behind a signed URL.
-                </p>
+                <label className={labelClass}>
+                  Installer File <span className="text-red-500">*</span>
+                </label>
+                {/* Option A: Upload file directly to SeaweedFS */}
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3">
+                    <label className={`inline-flex cursor-pointer items-center gap-2 rounded-lg border px-4 py-2 text-sm font-medium transition ${
+                      uploadingFile
+                        ? 'border-gray-200 bg-gray-50 text-gray-400 cursor-not-allowed'
+                        : 'border-[#B91C1C] bg-red-50 text-[#B91C1C] hover:bg-red-100'
+                    }`}>
+                      {uploadingFile
+                        ? <><span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-gray-400 border-t-transparent" /> Uploading…</>
+                        : <><Upload className="h-4 w-4" /> Choose File</>
+                      }
+                      <input
+                        type="file"
+                        accept={installMethod === 'msi' ? '.msi' : installMethod === 'exe' ? '.exe' : installMethod === 'zip' ? '.zip' : '.ps1,.sh'}
+                        disabled={uploadingFile}
+                        onChange={(e) => void handleFileUpload(e)}
+                        className="hidden"
+                      />
+                    </label>
+                    {uploadedFileName && (
+                      <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
+                        <span className="h-2 w-2 rounded-full bg-green-500" />
+                        {uploadedFileName}
+                        <button
+                          type="button"
+                          onClick={() => { setStorageRef(''); setUploadedFileName(''); }}
+                          className="ml-1 text-green-500 hover:text-green-700"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                  {/* Option B: Paste a direct URL (for external CDN / public URLs) */}
+                  <div>
+                    <p className="mb-1.5 text-xs text-gray-400">Or paste a direct download URL:</p>
+                    <input
+                      className={inputClass}
+                      value={fileUrl}
+                      onChange={(e) => setFileUrl(e.target.value)}
+                      placeholder={`https://cdn.example.com/installer.${installMethod === 'script' ? 'ps1' : installMethod}`}
+                      disabled={!!storageRef}
+                    />
+                  </div>
+                </div>
               </div>
               <div>
-                <label className={labelClass}>File name</label>
+                <label className={labelClass}>File name <span className="text-gray-400 font-normal">(optional)</span></label>
                 <input className={inputClass} value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder={`installer.${installMethod === 'script' ? 'ps1' : installMethod}`} />
               </div>
             </>
