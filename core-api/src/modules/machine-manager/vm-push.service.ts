@@ -182,14 +182,20 @@ class VMPushService {
     }
 
     // ── Step 2: Register + trigger Scheduled Task (returns immediately) ────────
-    // Use `;` as statement separator — winrmRunCommand wraps in PowerShell -EncodedCommand,
-    // so `&` (cmd.exe chaining) is rejected with AmpersandNotAllowed. `;` works in PS.
-    // The delete is wrapped in try/catch so a "task not found" error on first push
-    // doesn't abort the create+run steps.
+    // Use Register-ScheduledTask (PowerShell native) instead of schtasks.exe.
+    // schtasks /create argument quoting is unreliable when run via -EncodedCommand
+    // because the /tr path escaping gets mangled by PowerShell's string parsing.
+    // Register-ScheduledTask handles paths natively with no escaping needed.
     const registerAndRunTask = [
-      `try { schtasks /delete /tn "${taskName}" /f 2>$null } catch {}`,
-      `schtasks /create /tn "${taskName}" /tr "powershell.exe -NonInteractive -ExecutionPolicy Bypass -File \\"${scriptPath}\\"" /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f`,
-      `schtasks /run /tn "${taskName}"`,
+      // Remove stale task silently
+      `Unregister-ScheduledTask -TaskName "${taskName}" -Confirm:$false -ErrorAction SilentlyContinue`,
+      // Build action + settings + trigger objects
+      `$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument '-NonInteractive -ExecutionPolicy Bypass -File "${scriptPath}"'`,
+      `$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit (New-TimeSpan -Hours 1)`,
+      `$principal = New-ScheduledTaskPrincipal -UserId 'SYSTEM' -RunLevel Highest`,
+      // Register and immediately run
+      `Register-ScheduledTask -TaskName "${taskName}" -Action $action -Settings $settings -Principal $principal -Force`,
+      `Start-ScheduledTask -TaskName "${taskName}"`,
     ].join('; ');
 
     logger.info('[VMPush:Windows] Step 2 — registering + triggering Task Scheduler', {
