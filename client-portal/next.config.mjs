@@ -57,7 +57,7 @@ const securityHeaders = [
         "connect-src 'self'",
         "https://api-dev.racko.ai https://api-qa.racko.ai https://api-uat.racko.ai https://api.racko.ai",
         "wss://api-dev.racko.ai wss://api-qa.racko.ai wss://api-uat.racko.ai wss://api.racko.ai",
-        "https://storage.gisul.co.in",
+        "https://storage.gisul.co.in https://s3api.gisul.co.in",
         directGatewayConnectSrc,
       ]
         .filter(Boolean)

@@ -74,13 +74,14 @@ func (p *WSPoller) Start(done <-chan struct{}) {
 		default:
 			if err := p.connect(done); err != nil {
 				if isPermanentError(err) {
-					log.Printf("[ws-poller] Permanent error: %v — stopping reconnection attempts", err)
+					log.Printf("[ws-poller] Permanent error — stopping reconnection: %v", err)
 					return
 				}
-				log.Printf("[ws-poller] Connection error: %v — retrying in %s", err, p.backoff.current)
+				log.Printf("[ws-poller] Connection error (will retry in %s): %v", p.backoff.current, err)
 				time.Sleep(p.backoff.current)
 				p.increaseBackoff()
 			} else {
+				log.Printf("[ws-poller] Connection closed cleanly — reconnecting immediately")
 				p.resetBackoff()
 			}
 		}
@@ -103,19 +104,24 @@ func (p *WSPoller) connect(done <-chan struct{}) error {
 	q.Set("agentId", p.agentID)
 	u.RawQuery = q.Encode()
 
-	log.Printf("[ws-poller] Connecting to %s", u.String())
+	log.Printf("[ws-poller] Connecting to %s (agentId=%s)", u.String(), p.agentID)
 
 	dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 	conn, resp, err := dialer.Dial(u.String(), nil)
 	if err != nil {
-		if resp != nil && resp.StatusCode == 410 {
-			return &permanentError{msg: "agent deleted (410)"}
+		if resp != nil {
+			log.Printf("[ws-poller] WebSocket dial failed — HTTP status: %d", resp.StatusCode)
+			if resp.StatusCode == 410 {
+				return &permanentError{msg: "agent deleted (410)"}
+			}
+		} else {
+			log.Printf("[ws-poller] WebSocket dial failed — no HTTP response (network/DNS error): %v", err)
 		}
 		return fmt.Errorf("websocket dial: %w", err)
 	}
 	defer conn.Close()
 
-	log.Println("[ws-poller] Connected")
+	log.Printf("[ws-poller] WebSocket connected successfully to %s", u.Host)
 
 	// writeMu serializes all writes — gorilla/websocket requires this.
 	var writeMu sync.Mutex

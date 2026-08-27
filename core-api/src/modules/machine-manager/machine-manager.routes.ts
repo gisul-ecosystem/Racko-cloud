@@ -122,6 +122,13 @@ machineRouter.get(
   (req, res, next) => machineManagerController.listJobs(req, res, next)
 );
 
+// DELETE /api/v1/machines/jobs — clear ALL jobs for this admin
+machineRouter.delete(
+  '/jobs',
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
+  (req, res, next) => machineManagerController.clearAllJobs(req, res, next)
+);
+
 // POST /api/v1/machines/jobs/:id/stream-ticket — issue SSE stream ticket
 machineRouter.post(
   '/jobs/:id/stream-ticket',
@@ -191,6 +198,14 @@ machineRouter.post(
   requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
   validateRequest(machineIdParamSchema),
   (req, res, next) => machineManagerController.execCommand(req, res, next)
+);
+
+// DELETE /api/v1/machines/:id/jobs — clear all jobs for a specific machine
+machineRouter.delete(
+  '/:id/jobs',
+  requireRoleOrPermission(['admin', 'super_admin'], 'machine_manager.manage'),
+  validateRequest(machineIdParamSchema),
+  (req, res, next) => machineManagerController.clearMachineJobs(req, res, next)
 );
 
 // ─── Agent routes (no JWT auth — uses accountToken in body) ──────────────────

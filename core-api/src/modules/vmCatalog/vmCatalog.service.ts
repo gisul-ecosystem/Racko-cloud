@@ -950,7 +950,11 @@ class VmCatalogService {
       const { machines } = await machineManagerService.pushAgentToVMs(
         pushTargets,
         effectiveAdminId,
-        sessionId
+        sessionId,
+        undefined, // groupId — not applicable for catalog VMs
+        false      // installRackoApp=false — skip racko-app during software install to
+                   // avoid Windows Installer conflicts (WebView2 vs Postman/other packages).
+                   // RackoApp installs later via the heartbeat update path.
       );
 
       if (!machines.length) {

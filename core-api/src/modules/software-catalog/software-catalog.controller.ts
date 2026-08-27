@@ -9,6 +9,22 @@ function success<T>(res: Response, message: string, data?: T, statusCode = 200):
 }
 
 export class SoftwareCatalogController {
+  /** POST /api/v1/software-catalog/upload-url — issue presigned PUT URL for direct browser→SeaweedFS upload */
+  async issueUploadUrl(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const uploadedBy = new mongoose.Types.ObjectId(
+        (req as AuthenticatedRequest).user.userId
+      );
+      const { fileName, mimeType } = req.body as { fileName: string; mimeType: string };
+      if (!fileName || !mimeType) {
+        res.status(400).json({ success: false, message: 'fileName and mimeType are required.' });
+        return;
+      }
+      const result = await softwareCatalogService.issueUploadUrl(fileName, mimeType, uploadedBy);
+      success(res, 'Upload URL issued.', result);
+    } catch (err) { next(err); }
+  }
+
   /** GET /api/v1/software-catalog */
   async list(_req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

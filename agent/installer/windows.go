@@ -17,6 +17,7 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/racko-ai/agent/download"
 	"golang.org/x/sys/windows"
 )
 
@@ -427,14 +428,15 @@ func installOnPlatform(pkg SoftwarePackage) (string, error) {
 
 // ensureChocolatey guarantees choco.exe is present and executable.
 //
+// Install method: offline install using chocolatey.nupkg hosted on the platform.
+// This avoids community.chocolatey.org rate limits and works on VMs with no
+// direct internet access to Chocolatey's CDN.
+//
 // Logic:
 //  1. Check if choco.exe is already working — if yes, done immediately.
 //  2. If not, delete any broken/partial chocolatey folder that would
-//     block the bootstrap installer, then run the bootstrap.
-//  3. Verify choco.exe works after bootstrap — if still missing, error.
-//
-// This handles every state: fresh VM, broken install, partial install,
-// non-standard path, or rate-limited bootstrap. Only the end result matters.
+//     block the bootstrap installer, then run the offline install.
+//  3. Verify choco.exe works after install — if still missing, error.
 func ensureChocolatey() (string, error) {
 	const chocoExe = `C:\ProgramData\chocolatey\bin\choco.exe`
 	const chocoDir = `C:\ProgramData\chocolatey`
@@ -445,37 +447,60 @@ func ensureChocolatey() (string, error) {
 		return "", nil
 	}
 
-	// ── Step 2: delete any broken/partial folder so bootstrap can run cleanly ─
-	// The Chocolatey installer refuses to run if the folder already exists,
-	// even if choco.exe is missing inside it. Remove it before trying to install.
+	// ── Step 2: delete any broken/partial folder so install can run cleanly ──
 	if _, err := os.Stat(chocoDir); err == nil {
 		log.Printf("[choco] chocolatey folder exists but choco.exe not working — removing broken install")
 		if err := os.RemoveAll(chocoDir); err != nil {
-			log.Printf("[choco] Warning: could not remove %s: %v — bootstrap may still refuse to run", chocoDir, err)
+			log.Printf("[choco] Warning: could not remove %s: %v", chocoDir, err)
 		}
 	}
 
-	// ── Step 3: run the bootstrap installer ───────────────────────────────────
-	log.Printf("[choco] Installing Chocolatey...")
-	installScript := `[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor 3072; iex ((New-Object Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))`
+	// ── Step 3: download nupkg from our own platform (no rate limits) ─────────
+	log.Printf("[choco] Downloading chocolatey.nupkg from platform...")
+	nupkgPath := `C:\Windows\Temp\chocolatey.nupkg`
+	_ = os.Remove(nupkgPath) // clean up any previous partial download
+
+	if _, err := download.File(
+		platformChocoURL,
+		nupkgPath,
+		"chocolatey.nupkg",
+	); err != nil {
+		return "", fmt.Errorf("failed to download chocolatey.nupkg from platform: %w", err)
+	}
+	defer os.Remove(nupkgPath)
+
+	// ── Step 4: offline install using the downloaded nupkg ────────────────────
+	// Chocolatey's official offline install: set ChocolateyInstall env var,
+	// extract the nupkg (it's a zip), and run the install script inside it.
+	log.Printf("[choco] Running offline Chocolatey install...")
+	installScript := fmt.Sprintf(`
+$ErrorActionPreference = 'Stop'
+$env:ChocolateyInstall = 'C:\ProgramData\chocolatey'
+New-Item -ItemType Directory -Force -Path $env:ChocolateyInstall | Out-Null
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+$extractDir = "$env:TEMP\choco_install_tmp"
+Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+[System.IO.Compression.ZipFile]::ExtractToDirectory('%s', $extractDir)
+& "$extractDir\tools\chocolateyInstall.ps1"
+Remove-Item -Recurse -Force $extractDir -ErrorAction SilentlyContinue
+`, nupkgPath)
+
 	out, err := runCmd("powershell.exe",
 		"-ExecutionPolicy", "Bypass",
 		"-NonInteractive",
 		"-Command", installScript,
 	)
 	if err != nil {
-		log.Printf("[choco] Bootstrap exited with error: %v (checking if choco.exe is usable anyway)", err)
+		log.Printf("[choco] Offline install exited with error: %v (checking if choco.exe is usable anyway)", err)
 	}
 
-	// ── Step 4: verify choco.exe works regardless of bootstrap exit code ──────
-	// The bootstrap can exit non-zero for benign reasons (e.g. network warnings).
-	// What matters is whether choco.exe is present and executable afterward.
+	// ── Step 5: verify choco.exe works regardless of install script exit code ─
 	if chocoWorking() {
-		log.Printf("[choco] Chocolatey installed successfully")
+		log.Printf("[choco] Chocolatey installed successfully (offline)")
 		return out, nil
 	}
 
-	return out, fmt.Errorf("chocolatey install failed: choco.exe not found or not executable after bootstrap")
+	return out, fmt.Errorf("chocolatey offline install failed: choco.exe not found or not executable after install")
 }
 
 // chocoWorking returns true if choco.exe can be found and executed.
@@ -668,8 +693,17 @@ func runEXE(pkg SoftwarePackage) (string, error) {
 	return runAsActiveUser(path, args...)
 }
 
-// runZIP downloads, extracts, and runs the installer in the active user session.
+// runZIP downloads and extracts a ZIP archive, then runs the admin-provided
+// PowerShell install script in the active user session.
+//
+// The script is run with $extractDir set to the folder where the ZIP was extracted,
+// so admins can do things like copy portable apps to Program Files, create shortcuts, etc.
+// This is the same pattern Chocolatey uses inside its .nupkg packages.
 func runZIP(pkg SoftwarePackage) (string, error) {
+	if pkg.ZipInstallScript == "" {
+		return "", fmt.Errorf("zipInstallScript is required for zip install method — please provide a PowerShell script in the catalog entry")
+	}
+
 	zipPath, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
 		return "", fmt.Errorf("download zip: %w", err)
@@ -686,17 +720,17 @@ func runZIP(pkg SoftwarePackage) (string, error) {
 		return "", fmt.Errorf("extract zip: %w", err)
 	}
 
-	installerPath := findInstallerInDir(extractDir, []string{"setup.exe", "install.exe", "installer.exe"})
-	if installerPath == "" {
-		return "", fmt.Errorf("no installer found in zip (expected setup.exe, install.exe, or installer.exe)")
-	}
+	log.Printf("[zip] Extracted to %s, running install script", extractDir)
 
-	args := []string{"/S", "/silent", "/quiet"}
-	if pkg.InstallArgs != "" {
-		args = strings.Fields(pkg.InstallArgs)
-	}
-	log.Printf("[zip] Running in active user session: %s %v", installerPath, args)
-	return runAsActiveUser(installerPath, args...)
+	// Wrap the admin script: set $extractDir then run their script.
+	// $ErrorActionPreference = 'Stop' ensures any error propagates as a non-zero exit.
+	wrappedScript := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$extractDir = '%s'
+%s`, extractDir, pkg.ZipInstallScript)
+
+	args := []string{"-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command", wrappedScript}
+	log.Printf("[zip] Running install script in active user session")
+	return runAsActiveUser("powershell.exe", args...)
 }
 
 // runPowerShell downloads and runs a .ps1 script in the active user session.
