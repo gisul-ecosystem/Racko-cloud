@@ -9,7 +9,7 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
   deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStreamWithReconnect,
-  bulkDeleteMachines, createJobs,
+  bulkDeleteMachines, createJobs, execCommand,
   type IMachine, type MachineStatus, type IJob, type JobStatus, type ISoftwareCatalog,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
@@ -17,7 +17,7 @@ import { useJobStream } from '../../../../hooks/useJobStream';
 import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package, Terminal,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -359,6 +359,243 @@ function BulkInstallModal({
   );
 }
 
+// ─── Bulk Exec Modal ──────────────────────────────────────────────────────────
+// Runs a PowerShell command on all selected online machines with a concurrency
+// limit of 5 — at most 5 WebSocket exec requests in-flight at once.
+// Results stream in per-machine as they complete.
+
+type ExecResultStatus = 'pending' | 'running' | 'success' | 'failed';
+
+interface ExecMachineResult {
+  machineId: string;
+  machineName: string;
+  status: ExecResultStatus;
+  output?: string;
+  exitCode?: number;
+  error?: string;
+}
+
+const EXEC_CONCURRENCY = 5;
+
+/**
+ * Runs `task` for each item in `items` with at most `concurrency` tasks
+ * running simultaneously. Calls `onResult` immediately when each task
+ * completes so the UI updates as results stream in rather than all at once.
+ */
+async function runWithConcurrency<T>(
+  items: T[],
+  concurrency: number,
+  task: (item: T) => Promise<void>,
+): Promise<void> {
+  const queue = [...items];
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (queue.length > 0) {
+      const item = queue.shift();
+      if (item !== undefined) await task(item);
+    }
+  });
+  await Promise.all(workers);
+}
+
+function BulkExecModal({
+  machines,
+  onClose,
+}: {
+  machines: IMachine[];
+  onClose: () => void;
+}) {
+  const onlineMachines = machines.filter((m) => m.status === 'online');
+
+  const [command, setCommand] = useState('');
+  const [commandHistory, setCommandHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState(-1);
+  const [running, setRunning] = useState(false);
+  const [results, setResults] = useState<ExecMachineResult[]>([]);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const resultsBottomRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll results panel when new output arrives
+  useEffect(() => {
+    resultsBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [results]);
+
+  const handleRun = async () => {
+    const cmd = command.trim();
+    if (!cmd || running || onlineMachines.length === 0) return;
+
+    // Add to command history (deduplicate, most recent first)
+    setCommandHistory((prev) => [cmd, ...prev.filter((c) => c !== cmd)].slice(0, 50));
+    setHistoryIndex(-1);
+    setCommand('');
+    setRunning(true);
+
+    // Initialise all results as pending
+    const initial: ExecMachineResult[] = onlineMachines.map((m) => ({
+      machineId: m._id,
+      machineName: m.name,
+      status: 'pending',
+    }));
+    setResults(initial);
+    setExpandedId(null);
+
+    await runWithConcurrency(onlineMachines, EXEC_CONCURRENCY, async (machine) => {
+      // Mark as running
+      setResults((prev) =>
+        prev.map((r) => r.machineId === machine._id ? { ...r, status: 'running' } : r)
+      );
+      try {
+        const result = await execCommand(machine._id, cmd);
+        setResults((prev) =>
+          prev.map((r) =>
+            r.machineId === machine._id
+              ? { ...r, status: result.exitCode === 0 ? 'success' : 'failed', output: result.output, exitCode: result.exitCode }
+              : r
+          )
+        );
+      } catch (err) {
+        const msg = err instanceof ApiError ? err.message : err instanceof Error ? err.message : 'Command failed.';
+        setResults((prev) =>
+          prev.map((r) =>
+            r.machineId === machine._id
+              ? { ...r, status: 'failed', error: msg, exitCode: 1 }
+              : r
+          )
+        );
+      }
+    });
+
+    setRunning(false);
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void handleRun();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      const next = Math.min(historyIndex + 1, commandHistory.length - 1);
+      setHistoryIndex(next);
+      setCommand(commandHistory[next] ?? '');
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      const next = Math.max(historyIndex - 1, -1);
+      setHistoryIndex(next);
+      setCommand(next === -1 ? '' : commandHistory[next] ?? '');
+    }
+  };
+
+  const allDone = results.length > 0 && results.every((r) => r.status === 'success' || r.status === 'failed');
+  const successCount = results.filter((r) => r.status === 'success').length;
+  const failedCount = results.filter((r) => r.status === 'failed').length;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 p-4 sm:items-center">
+      <div className="flex w-full max-w-2xl flex-col rounded-xl border border-gray-200 bg-white shadow-xl" style={{ maxHeight: '90vh' }}>
+
+        {/* Header */}
+        <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+          <div className="flex items-center gap-2">
+            <Terminal className="h-4 w-4 text-gray-500" />
+            <p className="text-sm font-semibold text-gray-900">
+              PowerShell — {onlineMachines.length} machine{onlineMachines.length !== 1 ? 's' : ''}
+            </p>
+            {machines.length !== onlineMachines.length && (
+              <span className="rounded-full bg-yellow-50 px-2 py-0.5 text-xs text-yellow-700 border border-yellow-200">
+                {machines.length - onlineMachines.length} offline (skipped)
+              </span>
+            )}
+          </div>
+          <button onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg text-gray-400 hover:bg-gray-100">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Results panel */}
+        {results.length > 0 && (
+          <div className="flex-1 overflow-y-auto border-b border-gray-100 bg-gray-950 p-4 space-y-2">
+            {results.map((r) => (
+              <div key={r.machineId} className="rounded-lg border border-gray-800 bg-gray-900 overflow-hidden">
+                {/* Machine header row */}
+                <button
+                  type="button"
+                  onClick={() => setExpandedId((prev) => prev === r.machineId ? null : r.machineId)}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left hover:bg-gray-800 transition"
+                >
+                  {r.status === 'pending' && <span className="h-2 w-2 rounded-full bg-gray-500 shrink-0" />}
+                  {r.status === 'running' && <Loader2 className="h-3.5 w-3.5 animate-spin text-blue-400 shrink-0" />}
+                  {r.status === 'success' && <CheckCircle2 className="h-3.5 w-3.5 text-green-400 shrink-0" />}
+                  {r.status === 'failed'  && <XCircle className="h-3.5 w-3.5 text-red-400 shrink-0" />}
+                  <span className="flex-1 truncate text-xs font-medium text-gray-200">{r.machineName}</span>
+                  {r.exitCode !== undefined && (
+                    <span className={`shrink-0 rounded px-1.5 py-0.5 text-xs font-mono ${r.exitCode === 0 ? 'bg-green-900 text-green-300' : 'bg-red-900 text-red-300'}`}>
+                      exit {r.exitCode}
+                    </span>
+                  )}
+                  {r.status === 'pending' && <span className="shrink-0 text-xs text-gray-500">queued</span>}
+                  {r.status === 'running' && <span className="shrink-0 text-xs text-blue-400">running…</span>}
+                  {(r.output || r.error) && (
+                    <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-gray-500 transition-transform ${expandedId === r.machineId ? 'rotate-180' : ''}`} />
+                  )}
+                </button>
+                {/* Expandable output */}
+                {expandedId === r.machineId && (r.output || r.error) && (
+                  <pre className="border-t border-gray-800 bg-gray-950 px-3 py-2 text-xs text-gray-300 whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+                    {r.error ?? r.output}
+                  </pre>
+                )}
+              </div>
+            ))}
+            <div ref={resultsBottomRef} />
+          </div>
+        )}
+
+        {/* Summary bar when all done */}
+        {allDone && (
+          <div className="flex items-center gap-3 border-b border-gray-100 bg-gray-50 px-5 py-2 text-xs">
+            {successCount > 0 && (
+              <span className="flex items-center gap-1 text-green-700">
+                <CheckCircle2 className="h-3.5 w-3.5" />{successCount} succeeded
+              </span>
+            )}
+            {failedCount > 0 && (
+              <span className="flex items-center gap-1 text-red-600">
+                <XCircle className="h-3.5 w-3.5" />{failedCount} failed
+              </span>
+            )}
+          </div>
+        )}
+
+        {/* Input bar */}
+        <div className="flex items-center gap-2 bg-gray-950 px-4 py-3">
+          <span className="shrink-0 font-mono text-xs text-green-400">PS&gt;</span>
+          <input
+            ref={inputRef}
+            type="text"
+            value={command}
+            onChange={(e) => setCommand(e.target.value)}
+            onKeyDown={handleKeyDown}
+            disabled={running}
+            placeholder={onlineMachines.length === 0 ? 'No online machines selected' : 'Type a command and press Enter…'}
+            autoFocus
+            className="flex-1 bg-transparent font-mono text-sm text-gray-100 placeholder:text-gray-600 focus:outline-none disabled:opacity-50"
+          />
+          <button
+            onClick={() => void handleRun()}
+            disabled={!command.trim() || running || onlineMachines.length === 0}
+            className="shrink-0 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-medium text-white transition hover:bg-[#a01717] disabled:opacity-40"
+          >
+            {running ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Run'}
+          </button>
+        </div>
+        <p className="bg-gray-950 px-4 pb-2 text-xs text-gray-600">
+          ↑↓ history · Enter to run · max {EXEC_CONCURRENCY} machines run in parallel
+        </p>
+      </div>
+    </div>
+  );
+}
+
 // ─── Page ──────────────────────────────────────────────────────────────────────
 export default function MyMachinesPage() {
   const { isAuthenticated } = useAuth();
@@ -374,6 +611,9 @@ export default function MyMachinesPage() {
 
   // Bulk install state
   const [showInstallModal, setShowInstallModal] = useState(false);
+
+  // Bulk exec (PowerShell) state
+  const [showExecModal, setShowExecModal] = useState(false);
 
   // Bulk selection — any machine can be selected for reset
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -610,6 +850,13 @@ export default function MyMachinesPage() {
         />
       )}
 
+      {showExecModal && (
+        <BulkExecModal
+          machines={selectedMachines}
+          onClose={() => setShowExecModal(false)}
+        />
+      )}
+
       <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">My Machines</h1>
@@ -628,6 +875,16 @@ export default function MyMachinesPage() {
                 <Package className="h-3.5 w-3.5" />
                 Install Software
               </button>
+              {/* PowerShell — only for online machines */}
+              {selectedMachines.some((m) => m.status === 'online') && (
+                <button
+                  onClick={() => setShowExecModal(true)}
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-gray-700 bg-gray-900 px-3 py-2 text-sm font-medium text-gray-100 transition hover:bg-gray-800"
+                >
+                  <Terminal className="h-3.5 w-3.5" />
+                  PowerShell
+                </button>
+              )}
               {/* Reset — only for online machines */}
               {selectedMachines.some((m) => m.status === 'online') && (
                 <button
