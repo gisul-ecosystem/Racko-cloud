@@ -16,6 +16,7 @@ import {
   resetMachines,
   issueResetStreamTicket,
   openResetStatusStream,
+  clearMachineJobs,
   type IMachine,
   type MachineStatus,
   type IJob,
@@ -157,6 +158,9 @@ export default function MachineDetailPage() {
   const [resetStatus, setResetStatus] = useState<'idle' | 'resetting' | 'success' | 'failed'>('idle');
   const [resetError, setResetError] = useState<string>('');
   const sseRef = useRef<EventSource | null>(null);
+
+  // Clear logs state
+  const [clearingLogs, setClearingLogs] = useState(false);
 
   // Terminal tabs state — each tab is an independent terminal session
   interface TerminalEntry { command: string; output: string; exitCode: number; ts: string }
@@ -329,6 +333,20 @@ export default function MachineDetailPage() {
     terminalBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [activeTab?.history]);
 
+  const handleClearLogs = async () => {
+    if (!machine || clearingLogs) return;
+    setClearingLogs(true);
+    try {
+      await clearMachineJobs(machine._id);
+      setJobs([]);
+      addToast('success', 'Logs cleared.');
+    } catch (err) {
+      addToast('error', err instanceof ApiError ? err.message : 'Failed to clear logs.');
+    } finally {
+      setClearingLogs(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -479,6 +497,17 @@ export default function MachineDetailPage() {
             <Package className="h-4 w-4 text-gray-400" />
             <h2 className="text-sm font-semibold text-gray-700">Installation History</h2>
             <span className="ml-auto text-xs text-gray-400">{jobs.length} job{jobs.length !== 1 ? 's' : ''}</span>
+            <button
+              onClick={() => void handleClearLogs()}
+              disabled={clearingLogs}
+              className="inline-flex items-center gap-1 rounded-lg border border-red-200 bg-red-50 px-2.5 py-1 text-xs font-medium text-red-700 transition hover:bg-red-100 disabled:opacity-40"
+            >
+              {clearingLogs
+                ? <RefreshCw className="h-3 w-3 animate-spin" />
+                : <Trash2 className="h-3 w-3" />
+              }
+              Clear Logs
+            </button>
           </div>
           <table className="w-full text-sm">
             <thead>

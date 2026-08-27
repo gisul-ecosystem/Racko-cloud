@@ -2,20 +2,32 @@ package installer
 
 import "fmt"
 
+// platformChocoURL is set once at startup via Init().
+// It points to the platform's internal Chocolatey nupkg endpoint,
+// avoiding community.chocolatey.org rate limits.
+var platformChocoURL string
+
+// Init sets the platform URL for internal package downloads.
+// Must be called once before any installs are attempted.
+func Init(platformURL string) {
+	platformChocoURL = platformURL + "/api/v1/agent/binary/chocolatey"
+}
+
 // SoftwarePackage mirrors the relevant fields from the platform's SoftwareCatalog.
 // The agent fetches this from GET /api/v1/agent/software-catalog/:id before installing.
 type SoftwarePackage struct {
-	ID            string `json:"_id"`
-	Name          string `json:"name"`
-	Version       string `json:"version"`
-	InstallMethod string `json:"installMethod"` // winget|apt|brew|choco|msi|exe|zip|script
-	WingetID      string `json:"wingetId"`
-	AptName       string `json:"aptName"`
-	BrewName      string `json:"brewName"`
-	ChocoName     string `json:"chocoName"`
-	FileURL       string `json:"fileUrl"`
-	FileName      string `json:"fileName"`
-	InstallArgs   string `json:"installArgs"`
+	ID               string `json:"_id"`
+	Name             string `json:"name"`
+	Version          string `json:"version"`
+	InstallMethod    string `json:"installMethod"` // winget|apt|brew|choco|msi|exe|zip|script
+	WingetID         string `json:"wingetId"`
+	AptName          string `json:"aptName"`
+	BrewName         string `json:"brewName"`
+	ChocoName        string `json:"chocoName"`
+	FileURL          string `json:"fileUrl"`
+	FileName         string `json:"fileName"`
+	ZipInstallScript string `json:"zipInstallScript"` // PowerShell script run after ZIP extraction
+	InstallArgs      string `json:"installArgs"`
 }
 
 // Install dispatches to the platform-specific installer based on the package's

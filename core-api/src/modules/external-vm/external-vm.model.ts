@@ -54,10 +54,10 @@ export interface IExternalVM extends Document {
   updatedAt: Date;
 }
 
-/** Default console username per protocol when one is not supplied. VNC uses password-only auth. */
-function defaultUsernameFor(protocol: ExternalVMProtocol): string | undefined {
+/** Default stored username per protocol when one is not supplied at import/create. */
+export function defaultUsernameFor(protocol: ExternalVMProtocol): string {
   if (protocol === 'ssh') return 'root';
-  if (protocol === 'vnc') return undefined;
+  if (protocol === 'vnc') return 'admin';
   return 'Administrator';
 }
 
@@ -182,9 +182,8 @@ const externalVMSchema = new Schema<IExternalVM>(
 externalVMSchema.index({ tenantId: 1, createdAt: -1 });
 
 externalVMSchema.pre('validate', function (next) {
-  if (!this.username && this.protocol !== 'vnc') {
-    const fallback = defaultUsernameFor(this.protocol);
-    if (fallback) this.username = fallback;
+  if (!this.username?.trim()) {
+    this.username = defaultUsernameFor(this.protocol);
   }
   const hasAdmin = Boolean(this.adminId);
   const hasTenant = Boolean(this.tenantId);

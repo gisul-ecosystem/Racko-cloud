@@ -432,6 +432,9 @@ export default function TenantMyServersPage() {
                               <Server className="h-4 w-4" />
                             </span>
                             <span className="font-medium text-gray-900">{vm.name}</span>
+                            <p className="text-xs text-gray-400">
+                              {vm.protocol.toUpperCase()} · {vm.username}
+                            </p>
                           </div>
                         </td>
                         <td className="px-4 py-3.5 font-mono text-xs text-gray-600">{vm.ipAddress}</td>

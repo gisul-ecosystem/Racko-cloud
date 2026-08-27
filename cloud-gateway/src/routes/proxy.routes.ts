@@ -514,6 +514,7 @@ router.delete('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, re
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/software-catalog/upload-url', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.delete('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 
@@ -521,8 +522,7 @@ router.delete('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, 
 router.post('/api/v1/agent/register', coreApiProxy);
 router.post('/api/v1/agent/enroll', coreApiProxy);
 router.get('/api/v1/agent/binary/:os', coreApiProxy);
-router.get('/api/v1/agent/install/linux', coreApiProxy);
-router.get('/api/v1/agent/reset-script', coreApiProxy); // public — no auth, agent uses this at reset time
+router.get('/api/v1/agent/install/linux', coreApiProxy);router.get('/api/v1/agent/reset-script', coreApiProxy); // public — no auth, agent uses this at reset time
 router.get('/api/v1/agent/connect', coreApiProxy); // WebSocket upgrade — handled via server.on('upgrade') in server.ts
 router.get('/api/v1/agent/jobs/:agentId', coreApiProxy);
 router.post('/api/v1/agent/jobs/:jobId/result', coreApiProxy);
