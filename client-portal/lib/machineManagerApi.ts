@@ -213,6 +213,22 @@ export async function deleteSoftwareCatalogEntry(id: string): Promise<void> {
   await apiRequest(`/api/v1/software-catalog/${id}`, { method: 'DELETE' });
 }
 
+/**
+ * Issues a presigned PUT URL so the browser can upload a software installer
+ * directly to SeaweedFS without routing the file bytes through the API server.
+ * Returns the storageRef to save as fileUrl in the catalog entry.
+ */
+export async function issueSoftwareCatalogUploadUrl(
+  fileName: string,
+  mimeType: string
+): Promise<{ presignedUrl: string; storageRef: string; expiresIn: number }> {
+  const res = await apiRequest<ApiResponse<{ presignedUrl: string; storageRef: string; expiresIn: number }>>(
+    '/api/v1/software-catalog/upload-url',
+    { method: 'POST', body: JSON.stringify({ fileName, mimeType }) }
+  );
+  return res.data;
+}
+
 // ─── VM Push API ──────────────────────────────────────────────────────────────
 
 export interface VMPushTarget {

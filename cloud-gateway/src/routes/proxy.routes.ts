@@ -514,6 +514,7 @@ router.delete('/api/v1/vm-host-leases/:id', authMiddleware, verifyMiddleware, re
 // ─── SOFTWARE CATALOG ROUTES ──────────────────────────────────────────────────
 router.get('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
 router.get('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin', 'staff'), coreApiProxy);
+router.post('/api/v1/software-catalog/upload-url', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.post('/api/v1/software-catalog', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 router.delete('/api/v1/software-catalog/:id', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiProxy);
 

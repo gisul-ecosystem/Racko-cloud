@@ -25,7 +25,7 @@ export const createSoftwareCatalogSchema = z.object({
     brewName:    z.string().max(200).trim().optional(),
     chocoName:   z.string().max(200).trim().optional(),
     // File-based install
-    fileUrl:     z.string().url('fileUrl must be a valid URL').optional(),
+    fileUrl:     z.string().optional(), // accepts presigned URL, direct URL, or internal storageRef
     fileName:    z.string().max(256).trim().optional(),
     // Extra args
     installArgs: z.string().max(512).trim().optional(),
