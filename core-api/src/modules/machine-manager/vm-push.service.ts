@@ -119,59 +119,118 @@ class VMPushService {
     const scriptPath = 'C:\\Windows\\Temp\\racko-install.ps1';
     const taskName = 'RackoAgentInstall';
 
+    logger.info('[VMPush:Windows] Starting push', {
+      machineId: target.machineId,
+      ip: target.ipAddress,
+      username: target.username,
+      scriptPath,
+      taskName,
+    });
+
     // ── Step 1: Write the install script via base64 decode ────────────────────
-    // Encode the PS1 content as base64 in Node.js — then decode on the VM.
-    // This completely eliminates all quoting/escaping complexity.
     const installPs1 = this.buildInstallPs1(target.accountToken);
     const ps1Base64 = Buffer.from(installPs1, 'utf8').toString('base64');
 
-    // PowerShell to decode base64 → write UTF-8 file (no BOM)
+    logger.info('[VMPush:Windows] Step 1 — writing install script via WinRM', {
+      machineId: target.machineId,
+      scriptByteLength: installPs1.length,
+      base64Length: ps1Base64.length,
+    });
+
     const writeFilePs = [
       `$b64 = '${ps1Base64}'`,
       `$bytes = [System.Convert]::FromBase64String($b64)`,
       `[System.IO.File]::WriteAllBytes('${scriptPath}', $bytes)`,
     ].join('; ');
 
-    const shellId1 = await this.winrmCreateShell(target);
-    logger.info('[VMPush] WinRM shell 1 created (write script)', { machineId: target.machineId });
+    let shellId1: string;
+    try {
+      shellId1 = await this.winrmCreateShell(target);
+      logger.info('[VMPush:Windows] Step 1 — WinRM shell created', { machineId: target.machineId, shellId: shellId1 });
+    } catch (err) {
+      logger.error('[VMPush:Windows] Step 1 — WinRM shell creation FAILED', {
+        machineId: target.machineId,
+        ip: target.ipAddress,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+
     try {
       const cmdId1 = await this.winrmRunCommand(target, shellId1, writeFilePs);
+      logger.info('[VMPush:Windows] Step 1 — WinRM command dispatched', { machineId: target.machineId, commandId: cmdId1 });
+
       const { exitCode: ec1, stdout: out1, stderr: err1 } = await this.winrmGetOutput(target, shellId1, cmdId1);
-      logger.info('[VMPush] Install script written', { machineId: target.machineId, exitCode: ec1 });
+      logger.info('[VMPush:Windows] Step 1 — write-script result', {
+        machineId: target.machineId,
+        exitCode: ec1,
+        stdout: out1.slice(0, 500) || '(empty)',
+        stderr: err1.slice(0, 500) || '(empty)',
+      });
+
       if (ec1 !== 0) {
         throw new Error(`Failed to write install script (exit ${ec1}): ${err1 || out1}`);
       }
+      logger.info('[VMPush:Windows] Step 1 — install script written successfully', { machineId: target.machineId, scriptPath });
     } finally {
-      await this.winrmDeleteShell(target, shellId1).catch(() => { /* best-effort */ });
+      await this.winrmDeleteShell(target, shellId1).catch((err) => {
+        logger.warn('[VMPush:Windows] Step 1 — shell delete failed (non-fatal)', {
+          machineId: target.machineId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
 
     // ── Step 2: Register + trigger Scheduled Task (returns immediately) ────────
-    // schtasks /run returns as soon as the task is queued — does NOT wait for completion.
     const registerAndRunTask = [
-      // Clean up any leftover task from a previous push attempt (2>nul suppresses "not found" error)
       `schtasks /delete /tn "${taskName}" /f 2>nul`,
-      // Register one-time task: runs as SYSTEM at highest privilege
       `schtasks /create /tn "${taskName}" /tr "powershell.exe -NonInteractive -ExecutionPolicy Bypass -File \\"${scriptPath}\\"" /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f`,
-      // Trigger immediately — WinRM returns in <1 second
       `schtasks /run /tn "${taskName}"`,
     ].join(' & ');
 
-    const shellId2 = await this.winrmCreateShell(target);
-    logger.info('[VMPush] WinRM shell 2 created (register+run task)', { machineId: target.machineId });
+    logger.info('[VMPush:Windows] Step 2 — registering + triggering Task Scheduler', {
+      machineId: target.machineId,
+      taskName,
+      command: registerAndRunTask,
+    });
+
+    let shellId2: string;
+    try {
+      shellId2 = await this.winrmCreateShell(target);
+      logger.info('[VMPush:Windows] Step 2 — WinRM shell created', { machineId: target.machineId, shellId: shellId2 });
+    } catch (err) {
+      logger.error('[VMPush:Windows] Step 2 — WinRM shell creation FAILED', {
+        machineId: target.machineId,
+        ip: target.ipAddress,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throw err;
+    }
+
     try {
       const cmdId2 = await this.winrmRunCommand(target, shellId2, registerAndRunTask);
+      logger.info('[VMPush:Windows] Step 2 — WinRM command dispatched', { machineId: target.machineId, commandId: cmdId2 });
+
       const { exitCode: ec2, stdout: out2, stderr: err2 } = await this.winrmGetOutput(target, shellId2, cmdId2);
-      logger.info('[VMPush] Task Scheduler triggered', { machineId: target.machineId, exitCode: ec2, stdout: out2.slice(0, 300) });
+      logger.info('[VMPush:Windows] Step 2 — task scheduler result', {
+        machineId: target.machineId,
+        exitCode: ec2,
+        stdout: out2.slice(0, 500) || '(empty)',
+        stderr: err2.slice(0, 500) || '(empty)',
+      });
+
       if (ec2 !== 0) {
         throw new Error(`Task Scheduler registration failed (exit ${ec2}): ${err2 || out2}`);
       }
+      logger.info('[VMPush:Windows] Step 2 — Task Scheduler fired. Agent will connect back within 60s.', { machineId: target.machineId });
     } finally {
-      await this.winrmDeleteShell(target, shellId2).catch(() => { /* best-effort */ });
+      await this.winrmDeleteShell(target, shellId2).catch((err) => {
+        logger.warn('[VMPush:Windows] Step 2 — shell delete failed (non-fatal)', {
+          machineId: target.machineId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     }
-
-    logger.info('[VMPush] Install task launched. Agent will connect back within 60s.', { machineId: target.machineId });
-    // "Push success" is reported here. The Connection Status SSE stream detects
-    // the agent connecting back via WebSocket (notifyAgentConnected).
   }
 
   /**
