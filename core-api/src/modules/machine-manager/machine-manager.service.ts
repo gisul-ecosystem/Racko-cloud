@@ -303,6 +303,31 @@ class MachineManagerService {
     });
   }
 
+  /** Delete all jobs for an admin (used by "Clear All Logs" on the Jobs & Status page). */
+  async clearAllJobs(adminId: mongoose.Types.ObjectId): Promise<{ deleted: number }> {
+    const result = await JobModel.deleteMany({ adminId });
+    logger.info('[MachineManager] Cleared all jobs for admin', {
+      adminId: adminId.toString(),
+      deleted: result.deletedCount,
+    });
+    return { deleted: result.deletedCount };
+  }
+
+  /** Delete all jobs for a specific machine owned by this admin. */
+  async clearMachineJobs(
+    machineId: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId
+  ): Promise<{ deleted: number }> {
+    await this.findOwnedMachine(machineId, adminId); // ownership check
+    const result = await JobModel.deleteMany({ machineId, adminId });
+    logger.info('[MachineManager] Cleared jobs for machine', {
+      machineId: machineId.toString(),
+      adminId: adminId.toString(),
+      deleted: result.deletedCount,
+    });
+    return { deleted: result.deletedCount };
+  }
+
   async getJob(
     id: mongoose.Types.ObjectId,
     adminId: mongoose.Types.ObjectId

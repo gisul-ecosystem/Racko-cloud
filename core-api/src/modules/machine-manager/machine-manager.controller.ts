@@ -138,6 +138,29 @@ export class MachineManagerController {
     }
   }
 
+  /** DELETE /api/v1/machines/jobs — clear ALL jobs for this admin */
+  async clearAllJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const result = await machineManagerService.clearAllJobs(adminId);
+      success(res, `${result.deleted} job(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** DELETE /api/v1/machines/:id/jobs — clear jobs for a specific machine */
+  async clearMachineJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const machineId = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const result = await machineManagerService.clearMachineJobs(machineId, adminId);
+      success(res, `${result.deleted} job(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** GET /api/v1/machines/jobs/:id */
   async getJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -358,7 +381,9 @@ export class MachineManagerController {
         darwin:    { file: 'racko-agent-mac', name: 'racko-agent' },
         // racko-app is published as a folder-zip (required for WebView2Loader.dll to
         // land on disk as a loose file). The push script downloads and extracts the zip.
-        'racko-app': { file: 'racko-app.zip', name: 'racko-app.zip' },
+        'racko-app':  { file: 'racko-app.zip',     name: 'racko-app.zip' },
+        // chocolatey.nupkg — hosted internally to avoid rate limits from community.chocolatey.org
+        'chocolatey': { file: 'chocolatey.nupkg', name: 'chocolatey.nupkg' },
       };
 
       const entry = fileMap[os];

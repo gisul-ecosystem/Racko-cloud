@@ -29,6 +29,8 @@ type Executor struct {
 }
 
 func New(agentID string, cfg *config.Config, r *reporter.Reporter) *Executor {
+	// Initialize installer with platform URL so it can download Chocolatey from our own server
+	installer.Init(cfg.PlatformURL)
 	return &Executor{
 		agentID: agentID,
 		cfg:     cfg,

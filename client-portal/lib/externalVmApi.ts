@@ -21,6 +21,13 @@ export function externalVmProtocolBadgeClass(protocol: ExternalVMProtocol): stri
   }
 }
 
+/** Default stored username when import/create omits one (VNC defaults to admin). */
+export function defaultExternalVmUsername(protocol: ExternalVMProtocol): string {
+  if (protocol === 'ssh') return 'root';
+  if (protocol === 'vnc') return 'admin';
+  return 'Administrator';
+}
+
 export interface AssignmentSchedulePublic {
   effectiveFrom: string;
   effectiveTo: string | null;
