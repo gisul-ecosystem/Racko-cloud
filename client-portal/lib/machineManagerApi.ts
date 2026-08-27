@@ -57,6 +57,7 @@ export interface ISoftwareCatalog {
   chocoName?: string;
   fileUrl?: string;
   fileName?: string;
+  zipInstallScript?: string;
   installArgs?: string;
   uploadedBy: string;
   createdAt: string;
@@ -90,6 +91,7 @@ export interface CreateSoftwareCatalogDto {
   chocoName?: string;
   fileUrl?: string;
   fileName?: string;
+  zipInstallScript?: string;
   installArgs?: string;
 }
 

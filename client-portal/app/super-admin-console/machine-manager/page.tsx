@@ -113,6 +113,7 @@ export default function SuperAdminSoftwareCatalogPage() {
   const [chocoName, setChocoName] = useState('');
   const [fileUrl, setFileUrl] = useState('');
   const [fileName, setFileName] = useState('');
+  const [zipInstallScript, setZipInstallScript] = useState('');
   const [installArgs, setInstallArgs] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -130,6 +131,7 @@ export default function SuperAdminSoftwareCatalogPage() {
   const canSubmit = !!(
     name.trim() && selectedOS.length > 0 &&
     (isFileBased ? (storageRef || fileUrl.trim()) : true) &&
+    (installMethod === 'zip' ? zipInstallScript.trim() : true) &&
     (installMethod === 'apt'    ? aptName.trim() :
      installMethod === 'brew'   ? brewName.trim() :
      installMethod === 'choco'  ? chocoName.trim() :
@@ -184,13 +186,14 @@ export default function SuperAdminSoftwareCatalogPage() {
         // Use storageRef if file was uploaded, otherwise fall back to manual URL
         fileUrl:     storageRef || fileUrl.trim() || undefined,
         fileName:    fileName.trim()    || undefined,
+        zipInstallScript: zipInstallScript.trim() || undefined,
         installArgs: installArgs.trim() || undefined,
       });
       addToast('success', `${name.trim()} added to catalog.`);
       // Reset form
       setName(''); setVersion(''); setIconUrl(''); setSelectedOS([]); setInstallMethod('choco');
       setWingetId(''); setAptName(''); setBrewName(''); setChocoName('');
-      setFileUrl(''); setFileName(''); setInstallArgs('');
+      setFileUrl(''); setFileName(''); setZipInstallScript(''); setInstallArgs('');
       setStorageRef(''); setUploadedFileName('');
       refetch();
     } catch (err) {
@@ -382,6 +385,25 @@ export default function SuperAdminSoftwareCatalogPage() {
                 <label className={labelClass}>File name <span className="text-gray-400 font-normal">(optional)</span></label>
                 <input className={inputClass} value={fileName} onChange={(e) => setFileName(e.target.value)} placeholder={`installer.${installMethod === 'script' ? 'ps1' : installMethod}`} />
               </div>
+
+              {/* ZIP install script — required for zip method */}
+              {installMethod === 'zip' && (
+                <div className="sm:col-span-2">
+                  <label className={labelClass}>
+                    Install Script (PowerShell) <span className="text-red-500">*</span>
+                  </label>
+                  <textarea
+                    className={`${inputClass} resize-y font-mono text-xs`}
+                    rows={6}
+                    value={zipInstallScript}
+                    onChange={(e) => setZipInstallScript(e.target.value)}
+                    placeholder={`# $extractDir is set to the folder where the ZIP was extracted\n# Example: copy portable app to Program Files\n$dest = "C:\\Program Files\\MyApp"\nNew-Item -ItemType Directory -Force -Path $dest | Out-Null\nCopy-Item "$extractDir\\*" $dest -Recurse -Force\n# Create desktop shortcut\n$shell = New-Object -ComObject WScript.Shell\n$sc = $shell.CreateShortcut("$env:PUBLIC\\Desktop\\MyApp.lnk")\n$sc.TargetPath = "$dest\\myapp.exe"\n$sc.Save()`}
+                  />
+                  <p className="mt-1 text-xs text-gray-400">
+                    The ZIP is extracted to a temp folder. Use <code className="rounded bg-gray-100 px-1">$extractDir</code> to reference it. Script runs as admin in PowerShell.
+                  </p>
+                </div>
+              )}
             </>
           )}
 

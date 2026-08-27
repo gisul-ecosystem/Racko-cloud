@@ -693,8 +693,17 @@ func runEXE(pkg SoftwarePackage) (string, error) {
 	return runAsActiveUser(path, args...)
 }
 
-// runZIP downloads, extracts, and runs the installer in the active user session.
+// runZIP downloads and extracts a ZIP archive, then runs the admin-provided
+// PowerShell install script in the active user session.
+//
+// The script is run with $extractDir set to the folder where the ZIP was extracted,
+// so admins can do things like copy portable apps to Program Files, create shortcuts, etc.
+// This is the same pattern Chocolatey uses inside its .nupkg packages.
 func runZIP(pkg SoftwarePackage) (string, error) {
+	if pkg.ZipInstallScript == "" {
+		return "", fmt.Errorf("zipInstallScript is required for zip install method — please provide a PowerShell script in the catalog entry")
+	}
+
 	zipPath, cleanup, err := downloadFile(pkg.FileURL, pkg.FileName)
 	if err != nil {
 		return "", fmt.Errorf("download zip: %w", err)
@@ -711,17 +720,17 @@ func runZIP(pkg SoftwarePackage) (string, error) {
 		return "", fmt.Errorf("extract zip: %w", err)
 	}
 
-	installerPath := findInstallerInDir(extractDir, []string{"setup.exe", "install.exe", "installer.exe"})
-	if installerPath == "" {
-		return "", fmt.Errorf("no installer found in zip (expected setup.exe, install.exe, or installer.exe)")
-	}
+	log.Printf("[zip] Extracted to %s, running install script", extractDir)
 
-	args := []string{"/S", "/silent", "/quiet"}
-	if pkg.InstallArgs != "" {
-		args = strings.Fields(pkg.InstallArgs)
-	}
-	log.Printf("[zip] Running in active user session: %s %v", installerPath, args)
-	return runAsActiveUser(installerPath, args...)
+	// Wrap the admin script: set $extractDir then run their script.
+	// $ErrorActionPreference = 'Stop' ensures any error propagates as a non-zero exit.
+	wrappedScript := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$extractDir = '%s'
+%s`, extractDir, pkg.ZipInstallScript)
+
+	args := []string{"-ExecutionPolicy", "Bypass", "-NonInteractive", "-Command", wrappedScript}
+	log.Printf("[zip] Running install script in active user session")
+	return runAsActiveUser("powershell.exe", args...)
 }
 
 // runPowerShell downloads and runs a .ps1 script in the active user session.

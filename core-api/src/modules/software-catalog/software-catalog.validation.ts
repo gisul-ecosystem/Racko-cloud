@@ -27,8 +27,18 @@ export const createSoftwareCatalogSchema = z.object({
     // File-based install
     fileUrl:     z.string().optional(), // accepts presigned URL, direct URL, or internal storageRef
     fileName:    z.string().max(256).trim().optional(),
+    // ZIP install script — required when installMethod is 'zip'
+    zipInstallScript: z.string().max(50000).trim().optional(),
     // Extra args
     installArgs: z.string().max(512).trim().optional(),
+  }).superRefine((data, ctx) => {
+    if (data.installMethod === 'zip' && !data.zipInstallScript?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'zipInstallScript is required when installMethod is zip',
+        path: ['zipInstallScript'],
+      });
+    }
   }),
 });
 
