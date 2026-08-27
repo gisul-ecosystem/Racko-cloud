@@ -182,11 +182,15 @@ class VMPushService {
     }
 
     // ── Step 2: Register + trigger Scheduled Task (returns immediately) ────────
+    // Use `;` as statement separator — winrmRunCommand wraps in PowerShell -EncodedCommand,
+    // so `&` (cmd.exe chaining) is rejected with AmpersandNotAllowed. `;` works in PS.
+    // The delete is wrapped in try/catch so a "task not found" error on first push
+    // doesn't abort the create+run steps.
     const registerAndRunTask = [
-      `schtasks /delete /tn "${taskName}" /f 2>nul`,
+      `try { schtasks /delete /tn "${taskName}" /f 2>$null } catch {}`,
       `schtasks /create /tn "${taskName}" /tr "powershell.exe -NonInteractive -ExecutionPolicy Bypass -File \\"${scriptPath}\\"" /sc once /st 00:00 /ru SYSTEM /rl HIGHEST /f`,
       `schtasks /run /tn "${taskName}"`,
-    ].join(' & ');
+    ].join('; ');
 
     logger.info('[VMPush:Windows] Step 2 — registering + triggering Task Scheduler', {
       machineId: target.machineId,
