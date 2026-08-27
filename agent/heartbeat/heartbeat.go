@@ -97,13 +97,13 @@ func sendHeartbeat(client *http.Client, cfg *config.Config, agentID string, canc
 	if resp.StatusCode == http.StatusForbidden {
 		// 403 means the machine was deleted from the platform — cancel all goroutines
 		// then uninstall cleanly.
-		log.Printf("[heartbeat] Received 403 — machine deleted from platform. Stopping agent and uninstalling...")
+		log.Printf("[heartbeat] Received 403 Forbidden — machine deleted from platform. Stopping agent and uninstalling...")
 		selfUninstall(cancel)
 		return nil
 	}
 
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status: %d", resp.StatusCode)
+		return fmt.Errorf("unexpected status: %d (url=%s)", resp.StatusCode, cfg.PlatformURL+"/api/v1/agent/heartbeat")
 	}
 
 	// Parse response to check for update availability
