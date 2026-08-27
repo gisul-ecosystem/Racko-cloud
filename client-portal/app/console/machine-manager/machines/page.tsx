@@ -9,7 +9,7 @@ import { TableSkeleton } from '../../../../components/dashboard/LoadingSkeleton'
 import { ErrorState } from '../../../../components/dashboard/ErrorState';
 import {
   deleteMachine, fetchJobs, resetMachines, issueResetStreamTicket, openResetStatusStreamWithReconnect,
-  bulkDeleteMachines, createJobs, execCommand,
+  bulkDeleteMachines, createJobs, execCommand, clearMachineJobs,
   type IMachine, type MachineStatus, type IJob, type JobStatus, type ISoftwareCatalog,
 } from '../../../../lib/machineManagerApi';
 import { ApiError } from '../../../../lib/apiClient';
@@ -17,7 +17,7 @@ import { useJobStream } from '../../../../hooks/useJobStream';
 import { useSoftwareCatalog } from '../../../../hooks/useSoftwareCatalog';
 import {
   Server, RefreshCw, Trash2, Eye, ChevronDown, ChevronUp,
-  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package, Terminal,
+  RotateCcw, CheckCircle2, XCircle, Loader2, X, Package, Terminal, Search,
 } from 'lucide-react';
 import Link from 'next/link';
 
@@ -615,6 +615,12 @@ export default function MyMachinesPage() {
   // Bulk exec (PowerShell) state
   const [showExecModal, setShowExecModal] = useState(false);
 
+  // Search
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Per-machine log clearing
+  const [clearingLogsId, setClearingLogsId] = useState<string | null>(null);
+
   // Bulk selection — any machine can be selected for reset
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -706,6 +712,24 @@ export default function MyMachinesPage() {
   };
 
   const selectedMachines = machines.filter((m) => selectedIds.has(m._id));
+
+  // Client-side search filter
+  const filteredMachines = machines.filter((m) => {
+    if (!searchQuery.trim()) return true;
+    const q = searchQuery.toLowerCase().trim();
+    return m.name.toLowerCase().includes(q) || m.ipAddress.includes(q);
+  });
+
+  const handleClearMachineLogs = async (machineId: string) => {
+    if (clearingLogsId) return;
+    setClearingLogsId(machineId);
+    try {
+      await clearMachineJobs(machineId);
+      setJobsByMachine((prev) => ({ ...prev, [machineId]: [] }));
+    } catch { /* non-fatal */ } finally {
+      setClearingLogsId(null);
+    }
+  };
 
   const handleReset = async () => {
     if (!selectedMachines.length) return;
@@ -864,7 +888,18 @@ export default function MyMachinesPage() {
             {loading ? 'Loading…' : `${machines.length} machine${machines.length !== 1 ? 's' : ''}`}
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by name or IP…"
+              className="h-9 rounded-lg border border-gray-200 bg-white pl-8 pr-3 text-sm text-gray-700 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20 w-52"
+            />
+          </div>
           {selectedIds.size > 0 && (
             <>
               {/* Install Software — for any selected machines */}
@@ -945,6 +980,14 @@ export default function MyMachinesPage() {
                 Setup Wizard
               </Link>
             </div>
+          ) : filteredMachines.length === 0 ? (
+            <div className="p-12 text-center">
+              <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-gray-100">
+                <Search className="h-6 w-6 text-gray-400" />
+              </div>
+              <p className="font-medium text-gray-600">No machines match &quot;{searchQuery}&quot;</p>
+              <p className="mt-1 text-sm text-gray-400">Try a different name or IP address.</p>
+            </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -967,7 +1010,7 @@ export default function MyMachinesPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {machines.map((m, i) => {
+                  {filteredMachines.map((m, i) => {
                     const isSelected = selectedIds.has(m._id);
                     const isOnline = m.status === 'online';
                     return (
@@ -1009,6 +1052,19 @@ export default function MyMachinesPage() {
                               <Eye className="h-3.5 w-3.5" />
                               View
                             </Link>
+                            {(jobsByMachine[m._id]?.length ?? 0) > 0 && (
+                              <button
+                                onClick={() => void handleClearMachineLogs(m._id)}
+                                disabled={clearingLogsId === m._id}
+                                className="inline-flex items-center gap-1.5 rounded-lg border border-orange-200 bg-orange-50 px-3 py-1.5 text-xs font-medium text-orange-700 transition hover:bg-orange-100 disabled:opacity-50"
+                              >
+                                {clearingLogsId === m._id
+                                  ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+                                  : <Trash2 className="h-3.5 w-3.5" />
+                                }
+                                Clear Logs
+                              </button>
+                            )}
                             <button
                               onClick={() => setPendingDelete(m)}
                               className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition hover:bg-red-100"

@@ -138,6 +138,29 @@ export class MachineManagerController {
     }
   }
 
+  /** DELETE /api/v1/machines/jobs — clear ALL jobs for this admin */
+  async clearAllJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const result = await machineManagerService.clearAllJobs(adminId);
+      success(res, `${result.deleted} job(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** DELETE /api/v1/machines/:id/jobs — clear jobs for a specific machine */
+  async clearMachineJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const machineId = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const result = await machineManagerService.clearMachineJobs(machineId, adminId);
+      success(res, `${result.deleted} job(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** GET /api/v1/machines/jobs/:id */
   async getJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {

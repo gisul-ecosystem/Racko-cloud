@@ -215,6 +215,26 @@ export async function deleteSoftwareCatalogEntry(id: string): Promise<void> {
   await apiRequest(`/api/v1/software-catalog/${id}`, { method: 'DELETE' });
 }
 
+// ─── Job clear API ────────────────────────────────────────────────────────────
+
+/** Deletes ALL jobs for the logged-in admin. Used by Jobs & Status page. */
+export async function clearAllJobs(): Promise<{ deleted: number }> {
+  const res = await apiRequest<ApiResponse<{ deleted: number }>>(
+    '/api/v1/machines/jobs',
+    { method: 'DELETE' }
+  );
+  return res.data;
+}
+
+/** Deletes all jobs for a specific machine. Used by machine detail + list pages. */
+export async function clearMachineJobs(machineId: string): Promise<{ deleted: number }> {
+  const res = await apiRequest<ApiResponse<{ deleted: number }>>(
+    `/api/v1/machines/${machineId}/jobs`,
+    { method: 'DELETE' }
+  );
+  return res.data;
+}
+
 /**
  * Issues a presigned PUT URL so the browser can upload a software installer
  * directly to SeaweedFS without routing the file bytes through the API server.
