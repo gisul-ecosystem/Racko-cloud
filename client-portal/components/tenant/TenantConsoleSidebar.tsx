@@ -233,7 +233,7 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
                   style={{ color: myVirtualMachinesActive ? accentColor : undefined }}
                 />
                 <span className={myVirtualMachinesActive ? '' : 'text-gray-600'}>
-                  My Virtual Machines
+                  My VM Dashboard
                 </span>
               </Link>
             )}

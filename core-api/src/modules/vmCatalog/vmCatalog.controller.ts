@@ -241,6 +241,42 @@ async function powerAction(req: Request, res: Response, next: NextFunction): Pro
   }
 }
 
+async function powerOwnedVm(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const adminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+    const body = (req.body || {}) as {
+      action: 'virtualizor' | 'start' | 'stop' | 'reboot';
+      instanceId?: string;
+    };
+    const result = await vmCatalogService.powerActionForAdmin(
+      id,
+      adminId,
+      body.action,
+      body.instanceId
+    );
+    success(res, powerActionSuccessMessage(body.action), result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+function powerActionSuccessMessage(action: 'virtualizor' | 'start' | 'stop' | 'reboot'): string {
+  switch (action) {
+    case 'virtualizor':
+      return 'Virtualization control opened.';
+    case 'start':
+      return 'Start requested.';
+    case 'stop':
+      return 'Stop requested.';
+    case 'reboot':
+      return 'Restart requested.';
+    default:
+      return 'Power action completed.';
+  }
+}
+
 async function calculatePricing(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const body = req.body as CalculateVmPricingInput;
@@ -357,6 +393,7 @@ export const vmCatalogController = {
   retryPostReady,
   changeTemplate,
   powerAction,
+  powerOwnedVm,
   reject,
   calculatePricing,
   listPricing,

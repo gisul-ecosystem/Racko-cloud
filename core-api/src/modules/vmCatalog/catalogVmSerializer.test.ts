@@ -37,11 +37,12 @@ const sample: CatalogVmResponse = {
 };
 
 test('admin role never receives provider identity fields', () => {
-  const shaped = stripProviderLeakFields(sample, 'admin');
+  const shaped = stripProviderLeakFields({ ...sample, externalRef: 'wb-123' }, 'admin');
   assert.equal(shaped.provider, undefined);
   assert.equal(shaped.region, undefined);
   assert.equal(shaped.providerInstanceId, undefined);
   assert.equal(shaped.rawProviderCostPerHr, undefined);
+  assert.equal(shaped.externalRef, undefined);
   assert.equal(shaped.planName, 'Plan');
   assert.equal(shaped.status, 'active');
 });
