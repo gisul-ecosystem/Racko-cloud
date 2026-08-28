@@ -6,6 +6,7 @@ const SUPER_ADMIN_ONLY_FIELDS = [
   'region',
   'providerInstanceId',
   'rawProviderCostPerHr',
+  'externalRef',
 ] as const;
 
 export type CatalogVmCallerRole = 'super_admin' | 'admin' | 'user' | string;

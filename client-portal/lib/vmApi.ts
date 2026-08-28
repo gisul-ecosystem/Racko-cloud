@@ -800,7 +800,6 @@ export type AdminVmTemplateBuildStep =
   | 'stopping_source'
   | 'cloning'
   | 'starting_source'
-  | 'running_sysprep'
   | 'converting'
   | null;
 

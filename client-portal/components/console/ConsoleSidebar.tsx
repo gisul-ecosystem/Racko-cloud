@@ -195,7 +195,7 @@ export function ConsoleSidebar() {
               <LayoutList
                 className={`h-4 w-4 shrink-0 ${myVirtualMachinesActive ? 'text-[#B91C1C]' : 'text-gray-400'}`}
               />
-              My Virtual Machines
+              My VM Dashboard
             </Link>
 
             <Link

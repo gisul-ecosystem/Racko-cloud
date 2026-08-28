@@ -6,7 +6,6 @@ export type AdminVmTemplateBuildStep =
   | 'stopping_source'
   | 'cloning'
   | 'starting_source'
-  | 'running_sysprep'
   | 'converting'
   | null;
 
@@ -41,7 +40,7 @@ const adminVmTemplateSchema = new Schema<IAdminVmTemplate>(
     },
     buildStep: {
       type: String,
-      enum: ['stopping_source', 'cloning', 'starting_source', 'running_sysprep', 'converting', null],
+      enum: ['stopping_source', 'cloning', 'starting_source', 'converting', null],
       default: null,
     },
     errorMessage: { type: String },

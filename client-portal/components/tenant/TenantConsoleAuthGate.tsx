@@ -31,6 +31,7 @@ export function TenantConsoleAuthGate({ children }: { children: React.ReactNode 
     pathname === TENANT_CONSOLE ||
     pathname === `${TENANT_CONSOLE}/` ||
     pathname.startsWith(`${TENANT_CONSOLE}/overview`) ||
+    pathname.startsWith(`${TENANT_CONSOLE}/my-vm-dashboard`) ||
     pathname.startsWith(`${TENANT_CONSOLE}/access-control`);
 
   useEffect(() => {
