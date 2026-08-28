@@ -15,6 +15,7 @@ import {
 } from '../../../../lib/vmCatalogApi';
 import { ChevronDown, ChevronUp, Monitor, Plus, Server } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { CatalogVmPowerControls } from '../../../../components/create-vm/CatalogVmPowerControls';
 
 function formatDateTime(value: string) {
   return new Date(value).toLocaleString('en-US', {
@@ -100,7 +101,7 @@ function ConnectionDetails({ vm }: { vm: ICatalogVm }) {
 }
 
 export default function MyVmsPage() {
-  const { routes } = useVmCatalogPortal();
+  const { routes, api } = useVmCatalogPortal();
   const { vms, loading, error, refetch } = useVmCatalogVms();
   const [expandedRowKey, setExpandedRowKey] = useState<string | null>(null);
   const router = useRouter();
@@ -228,6 +229,7 @@ export default function MyVmsPage() {
                           )
                         }
                         onOpenConsole={() => router.push(consoleHref)}
+                        onPowerAction={api.powerAction}
                       />
                     );
                   })}
@@ -248,6 +250,7 @@ function FragmentRow({
   isExpanded,
   onToggle,
   onOpenConsole,
+  onPowerAction,
 }: {
   vm: ICatalogVm;
   index: number;
@@ -255,6 +258,15 @@ function FragmentRow({
   isExpanded: boolean;
   onToggle: () => void;
   onOpenConsole: () => void;
+  onPowerAction: (
+    id: string,
+    action: import('../../../../lib/vmCatalogApi').CatalogVmPowerAction,
+    instanceId?: string
+  ) => Promise<{
+    action: import('../../../../lib/vmCatalogApi').CatalogVmPowerAction;
+    panelUrl?: string;
+    vm: ICatalogVm;
+  }>;
 }) {
   return (
     <>
@@ -352,6 +364,13 @@ function FragmentRow({
               Connection details
             </p>
             <ConnectionDetails vm={vm} />
+            <div className="mt-4 border-t border-green-100 pt-4">
+              <CatalogVmPowerControls
+                vmId={vm.parentRequestId ?? vm._id}
+                instanceId={vm.instanceId}
+                onPowerAction={onPowerAction}
+              />
+            </div>
           </td>
         </tr>
       ) : null}
