@@ -27,6 +27,13 @@ router.get(
   (req, res, next) => softwareCatalogController.getOne(req, res, next)
 );
 
+// POST /api/v1/software-catalog/upload-url — issue presigned PUT URL (must be before /:id)
+router.post(
+  '/upload-url',
+  requirePermission('machine_manager.manage'),
+  (req, res, next) => softwareCatalogController.issueUploadUrl(req, res, next)
+);
+
 // POST /api/v1/software-catalog — super_admin only
 router.post(
   '/',
