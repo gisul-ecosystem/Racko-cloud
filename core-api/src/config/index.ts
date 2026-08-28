@@ -246,7 +246,7 @@ const envSchema = z.object({
     .default('300000'),
 
   // SeaweedFS S3-compatible object storage (used for VM activity file tracking + clone replay)
-  SEAWEEDFS_ENDPOINT:   z.string().url('SEAWEEDFS_ENDPOINT must be a valid URL').default('https://storage.gisul.co.in'),
+  SEAWEEDFS_ENDPOINT:   z.string().url('SEAWEEDFS_ENDPOINT must be a valid URL').default('https://s3api.gisul.co.in'),
   SEAWEEDFS_ACCESS_KEY: z.string().min(1, 'SEAWEEDFS_ACCESS_KEY is required'),
   SEAWEEDFS_SECRET_KEY: z.string().min(1, 'SEAWEEDFS_SECRET_KEY is required'),
   SEAWEEDFS_BUCKET:     z.string().min(1, 'SEAWEEDFS_BUCKET is required').default('racko-vm-activity'),

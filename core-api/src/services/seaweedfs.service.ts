@@ -2,7 +2,7 @@
  * SeaweedFS S3-compatible storage service.
  *
  * Uses the AWS SDK S3 client pointed at the existing SeaweedFS instance at
- * https://storage.gisul.co.in — which exposes a full S3-compatible API.
+ * https://s3api.gisul.co.in — which exposes a full S3-compatible API.
  *
  * All VM activity files (file_write events during change tracking) are stored
  * in the `racko-vm-activity` bucket and retrieved during clone replay.
