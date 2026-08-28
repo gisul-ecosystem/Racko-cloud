@@ -164,8 +164,11 @@ function getDueDateBadge(value?: string | Date | null): { label: string; tone: s
   if (diffDays <= 7) {
     return { label: `Due in ${diffDays}d`, tone: 'border-amber-200 bg-amber-50 text-amber-700' };
   }
+  if (diffDays <= 30) {
+    return { label: `Due in ${diffDays}d`, tone: 'border-yellow-200 bg-yellow-50 text-yellow-700' };
+  }
 
-  return null;
+  return { label: `Due in ${diffDays}d`, tone: 'border-gray-200 bg-gray-50 text-gray-600' };
 }
 
 function DueDateCell({ value }: { value?: string | Date | null }) {

@@ -662,9 +662,6 @@ class VmCatalogService {
           ...(base.status === 'active' && row?.ipAddress ? { ipAddress: row.ipAddress } : {}),
           ...(base.status === 'active' && row?.username ? { username: row.username } : {}),
           ...(base.status === 'active' && row?.protocol ? { protocol: row.protocol } : {}),
-          ...(base.status === 'active' && row?.externalRef
-            ? { externalRef: row.externalRef }
-            : {}),
           ...(base.status === 'active' && row?.password
             ? (() => {
                 try {
@@ -2312,6 +2309,74 @@ class VmCatalogService {
     return this.toResponse(doc, { includeSecrets: true });
   }
 
+  private async resolvePowerExternalRef(
+    doc: ICatalogVm,
+    instanceId: string | undefined,
+    missingMessage: string
+  ): Promise<string> {
+    let externalRef = doc.externalRef;
+    if (instanceId && mongoose.Types.ObjectId.isValid(instanceId)) {
+      const instance = await CatalogVmInstanceModel.findOne({
+        _id: new mongoose.Types.ObjectId(instanceId),
+        catalogVmId: doc._id,
+      }).lean();
+      if (instance?.externalRef) {
+        externalRef = instance.externalRef;
+      }
+    }
+
+    if (!externalRef) {
+      throw new ValidationError(missingMessage);
+    }
+
+    return externalRef;
+  }
+
+  private async executeCatalogPowerAction(
+    doc: ICatalogVm,
+    action: CatalogPowerAction,
+    instanceId: string | undefined,
+    opts: { ownerFacing: boolean }
+  ): Promise<{ action: CatalogPowerAction; panelUrl?: string }> {
+    if (opts.ownerFacing) {
+      if (doc.status !== 'active') {
+        throw new ValidationError('Power controls are only available for active VMs.');
+      }
+      if (doc.provider !== 'webyne') {
+        throw new ValidationError('Power controls are not available for this VM.');
+      }
+    } else if (!['ready_to_attach', 'active', 'failed'].includes(doc.status)) {
+      throw new ValidationError(
+        'Power controls are available after the VM has been provisioned on Webyne.'
+      );
+    }
+
+    const externalRef = await this.resolvePowerExternalRef(
+      doc,
+      instanceId,
+      opts.ownerFacing
+        ? 'This VM is not ready for power controls yet.'
+        : 'Missing Webyne machine id (externalRef). Use Fetch details first.'
+    );
+
+    const result = await callCatalogAgentPower({
+      externalRef,
+      action,
+    });
+
+    logger.info('[VmCatalog] Catalog VM power action completed', {
+      requestId: doc._id.toString(),
+      action,
+      ownerFacing: opts.ownerFacing,
+      panelUrl: result.panelUrl,
+    });
+
+    return {
+      action,
+      ...(result.panelUrl ? { panelUrl: result.panelUrl } : {}),
+    };
+  }
+
   /**
    * Super-admin: Virtualizor / Start / Stop / Reboot on Webyne machineshow.
    */
@@ -2327,43 +2392,55 @@ class VmCatalogService {
     const doc = await CatalogVmModel.findById(id);
     if (!doc) throw new NotFoundError('Catalog VM request not found.');
 
-    if (!['ready_to_attach', 'active', 'failed'].includes(doc.status)) {
-      throw new ValidationError(
-        'Power controls are available after the VM has been provisioned on Webyne.'
-      );
-    }
-    if (!doc.externalRef) {
-      throw new ValidationError(
-        'Missing Webyne machine id (externalRef). Use Fetch details first.'
-      );
-    }
-
-    let externalRef = doc.externalRef;
-    if (instanceId && mongoose.Types.ObjectId.isValid(instanceId)) {
-      const instance = await CatalogVmInstanceModel.findOne({
-        _id: new mongoose.Types.ObjectId(instanceId),
-        catalogVmId: doc._id,
-      }).lean();
-      if (instance?.externalRef) {
-        externalRef = instance.externalRef;
-      }
-    }
-
-    const result = await callCatalogAgentPower({
-      externalRef,
-      action,
-    });
-
-    logger.info('[VmCatalog] Webyne power action completed', {
-      requestId: id.toString(),
-      action,
-      panelUrl: result.panelUrl,
+    const result = await this.executeCatalogPowerAction(doc, action, instanceId, {
+      ownerFacing: false,
     });
 
     return {
-      action,
-      ...(result.panelUrl ? { panelUrl: result.panelUrl } : {}),
+      ...result,
       request: await this.toResponse(doc, { includeSecrets: true }),
+    };
+  }
+
+  async powerActionForAdmin(
+    id: mongoose.Types.ObjectId,
+    adminId: mongoose.Types.ObjectId,
+    action: CatalogPowerAction,
+    instanceId?: string
+  ): Promise<{
+    action: CatalogPowerAction;
+    panelUrl?: string;
+    vm: CatalogVmResponse;
+  }> {
+    const doc = await this.findOwnedByAdmin(id, adminId);
+    const result = await this.executeCatalogPowerAction(doc, action, instanceId, {
+      ownerFacing: true,
+    });
+
+    return {
+      ...result,
+      vm: await this.toCustomerResponse(doc),
+    };
+  }
+
+  async powerActionForTenant(
+    id: mongoose.Types.ObjectId,
+    tenantId: mongoose.Types.ObjectId,
+    action: CatalogPowerAction,
+    instanceId?: string
+  ): Promise<{
+    action: CatalogPowerAction;
+    panelUrl?: string;
+    vm: CatalogVmResponse;
+  }> {
+    const doc = await this.findOwnedByTenant(id, tenantId);
+    const result = await this.executeCatalogPowerAction(doc, action, instanceId, {
+      ownerFacing: true,
+    });
+
+    return {
+      ...result,
+      vm: await this.toCustomerResponse(doc),
     };
   }
 
@@ -2633,7 +2710,8 @@ class VmCatalogService {
 
   async listForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({ tenantId }).sort({ createdAt: -1 });
-    return this.toCustomerResponses(docs);
+    const responses = await this.toCustomerResponses(docs);
+    return this.expandAdminResponsesWithInstances(docs, responses);
   }
 
   async getOverviewForTenant(tenantId: mongoose.Types.ObjectId): Promise<CatalogVmOverview> {

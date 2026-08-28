@@ -103,6 +103,15 @@ router.get(
   }
 );
 
+router.post(
+  '/vms/:id/power',
+  requireRoleOrPermission(['admin'], 'create_vm.request'),
+  validateRequest(catalogVmPowerActionSchema),
+  (req, res, next) => {
+    vmCatalogController.powerOwnedVm(req, res, next);
+  }
+);
+
 /** Admin: submit Buy Now request */
 router.post(
   '/requests',
