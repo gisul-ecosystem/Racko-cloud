@@ -47,7 +47,6 @@ const BUILD_STEPS: { key: AdminVmTemplateBuildStep; label: string }[] = [
   { key: 'stopping_source', label: 'Stopping source VM' },
   { key: 'cloning',         label: 'Cloning VM' },
   { key: 'starting_source', label: 'Starting source VM' },
-  { key: 'running_sysprep', label: 'Running Sysprep' },
   { key: 'converting',      label: 'Converting to template' },
 ];
 
