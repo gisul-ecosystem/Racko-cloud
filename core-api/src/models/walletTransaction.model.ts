@@ -55,7 +55,6 @@ const walletTransactionSchema = new Schema<IWalletTransaction>(
       type: String,
       default: null,
       trim: true,
-      sparse: true,
     },
     createdBy: {
       type: Schema.Types.ObjectId,

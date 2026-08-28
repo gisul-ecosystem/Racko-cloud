@@ -430,6 +430,20 @@ export async function catalogVmPowerAction(
   return res.data;
 }
 
+export async function ownedCatalogVmPowerAction(
+  id: string,
+  action: CatalogVmPowerAction,
+  instanceId?: string
+): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; vm: ICatalogVm }> {
+  const res = await apiRequest<
+    ApiResponse<{ action: CatalogVmPowerAction; panelUrl?: string; vm: ICatalogVm }>
+  >(`/api/v1/vm-catalog/vms/${id}/power`, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...(instanceId ? { instanceId } : {}) }),
+  });
+  return res.data;
+}
+
 export async function rejectCatalogVmRequest(
   id: string,
   reason: string
@@ -449,7 +463,7 @@ export function formatCatalogVmStatus(status: VmCatalogStatus): string {
     pending_approval: 'Pending approval',
     approved: 'Approved',
     provisioning: 'Provisioning',
-    fulfilling: 'Fulfilling on Webyne…',
+    fulfilling: 'Provisioning…',
     ready_to_attach: 'Ready to attach',
     active: 'Active',
     failed: 'Fulfillment failed',
@@ -465,7 +479,7 @@ export function catalogVmStatusNote(status: VmCatalogStatus): string | null {
     return 'It will be available soon';
   }
   if (status === 'ready_to_attach') {
-    return 'Fetched from Webyne — attach to release to admin';
+    return 'Ready for delivery';
   }
   return null;
 }

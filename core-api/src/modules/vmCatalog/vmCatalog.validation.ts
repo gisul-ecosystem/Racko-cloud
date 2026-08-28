@@ -69,6 +69,7 @@ export const catalogVmPowerActionSchema = z.object({
   params: z.object({ id: mongoObjectId }),
   body: z.object({
     action: z.enum(['virtualizor', 'start', 'stop', 'reboot']),
+    instanceId: mongoObjectId.optional(),
   }),
 });
 
