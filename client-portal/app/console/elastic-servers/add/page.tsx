@@ -5,7 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ApiError } from '../../../../lib/apiClient';
-import { createExternalVM, type CreateExternalVMDto, type ExternalVMProtocol } from '../../../../lib/externalVmApi';
+import { createExternalVM, defaultExternalVmUsername, type CreateExternalVMDto, type ExternalVMProtocol } from '../../../../lib/externalVmApi';
 import { ProjectSelect } from '../../../../components/console/ProjectSelect';
 import { ChevronLeft, Eye, EyeOff } from 'lucide-react';
 
@@ -98,15 +98,16 @@ export default function AddServerPage() {
             >
               <option value="rdp">RDP</option>
               <option value="ssh">SSH</option>
+              <option value="vnc">VNC</option>
             </select>
           </div>
           <div>
-            <label className={labelClass}>Username</label>
+            <label className={labelClass}>Username (optional)</label>
             <input
               className={inputClass}
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder={protocol === 'ssh' ? 'root' : 'Administrator'}
+              placeholder={defaultExternalVmUsername(protocol)}
             />
           </div>
           <div>

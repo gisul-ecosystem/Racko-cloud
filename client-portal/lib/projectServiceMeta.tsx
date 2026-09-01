@@ -58,7 +58,7 @@ export const PROJECT_SERVICE_META: Record<AdminServiceKey, ProjectServiceMeta> =
   },
   'my-vms': {
     label: 'My VM Dashboard',
-    description: 'Read-only dashboard of all assigned external servers.',
+    description: 'Unified hub for all VMs with console access across services.',
     icon: <LayoutList className="h-5 w-5" />,
     iconBg: 'bg-slate-50',
     iconColor: 'text-slate-600',

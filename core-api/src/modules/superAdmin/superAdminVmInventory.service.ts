@@ -11,6 +11,8 @@ import { User } from '../../models/user.model';
 import { ProjectModel } from '../../models/project.model';
 import { VmProviderMetadataModel, type ProviderPlanDuration } from '../../models/vmProviderMetadata.model';
 import { decrypt, encrypt } from '../../utils/crypto';
+import { normalizeCanonicalIpv4 } from '../vm/helpers/ipCidr';
+import { cancelExternalAssignmentTimer } from '../vmAccessSchedule/scheduleManager';
 
 type InventoryResourceType = 'platform_vm' | 'catalog_vm' | 'external_vm';
 type InventoryOwnerScope = 'admin' | 'tenant';
@@ -52,7 +54,7 @@ export interface VmInventoryRecord {
   sourceId: string;
   name: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   status: InventoryStatus;
   originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
   originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
@@ -112,7 +114,7 @@ export interface VmProviderMetadataImportRow {
   ipAddress: string;
   name?: string;
   vmSpec?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   planDuration?: ProviderPlanDuration;
   username?: string;
   password?: string;
@@ -154,12 +156,20 @@ export interface SuperAdminVmInventoryDeleteAssignedUserResult {
   deletedTenantUsers: number;
 }
 
-function normalizeIpAddress(ipAddress: string): string {
-  return ipAddress.trim();
+export interface SuperAdminVmInventoryFreeVmResult {
+  updated: boolean;
+  deletedPlatformUsers: number;
+  deletedTenantUsers: number;
+  clearedAssignment: boolean;
+  clearedOwner: boolean;
 }
 
-function inferExternalVmProtocol(row: VmProviderMetadataImportRow): 'rdp' | 'ssh' {
-  if (row.protocol === 'rdp' || row.protocol === 'ssh') {
+function normalizeIpAddress(ipAddress: string): string {
+  return normalizeCanonicalIpv4(ipAddress);
+}
+
+function inferExternalVmProtocol(row: VmProviderMetadataImportRow): 'rdp' | 'ssh' | 'vnc' {
+  if (row.protocol === 'rdp' || row.protocol === 'ssh' || row.protocol === 'vnc') {
     return row.protocol;
   }
 
@@ -279,23 +289,173 @@ export class SuperAdminVmInventoryService {
     };
   }
 
-  async deleteAssignedUser(
+  /**
+   * Remove all end-user assignment state from a single inventory resource (VM stays with owner).
+   * Clears junction rows, legacy assignee columns, and access schedules on the resource.
+   */
+  private async clearResourceAssignmentsForInventoryRow(
     input: SuperAdminVmInventoryClearAssignmentInput
-  ): Promise<SuperAdminVmInventoryDeleteAssignedUserResult> {
+  ): Promise<{
+    found: boolean;
+    updated: boolean;
+    affectedPlatformUserIds: string[];
+    affectedTenantUserIds: string[];
+  }> {
     const sourceObjectId = toObjectId(input.sourceId);
     if (!sourceObjectId) {
-      return { updated: false, deletedPlatformUsers: 0, deletedTenantUsers: 0 };
+      return {
+        found: false,
+        updated: false,
+        affectedPlatformUserIds: [],
+        affectedTenantUserIds: [],
+      };
     }
 
-    const resolved = await this.resolveAssignedUsersForInventoryRow(input);
-    if (!resolved.found) {
-      return { updated: false, deletedPlatformUsers: 0, deletedTenantUsers: 0 };
+    const affectedPlatformUserIds: string[] = [];
+    const affectedTenantUserIds: string[] = [];
+
+    if (input.resourceType === 'platform_vm') {
+      const vm = await VM.findById(sourceObjectId);
+      if (!vm) {
+        return {
+          found: false,
+          updated: false,
+          affectedPlatformUserIds: [],
+          affectedTenantUserIds: [],
+        };
+      }
+
+      const hasAssignment = Boolean(vm.assignedTo || vm.assignedTenantUserId);
+      if (!hasAssignment) {
+        return {
+          found: true,
+          updated: false,
+          affectedPlatformUserIds: [],
+          affectedTenantUserIds: [],
+        };
+      }
+
+      if (vm.assignedTo) affectedPlatformUserIds.push(vm.assignedTo.toString());
+      if (vm.assignedTenantUserId) affectedTenantUserIds.push(vm.assignedTenantUserId.toString());
+
+      vm.assignedTo = undefined;
+      vm.assignedTenantUserId = undefined;
+      vm.accessStartDate = null;
+      vm.accessEndDate = null;
+      vm.accessStartTime = null;
+      vm.accessEndTime = null;
+      vm.weeklySchedule = null;
+      await vm.save();
+
+      return {
+        found: true,
+        updated: true,
+        affectedPlatformUserIds,
+        affectedTenantUserIds,
+      };
     }
 
+    if (input.resourceType === 'catalog_vm') {
+      const vm = await CatalogVmModel.findById(sourceObjectId);
+      if (!vm) {
+        return {
+          found: false,
+          updated: false,
+          affectedPlatformUserIds: [],
+          affectedTenantUserIds: [],
+        };
+      }
+      if (!vm.tenantUserId) {
+        return {
+          found: true,
+          updated: false,
+          affectedPlatformUserIds: [],
+          affectedTenantUserIds: [],
+        };
+      }
+
+      affectedTenantUserIds.push(vm.tenantUserId.toString());
+      vm.tenantUserId = undefined;
+      await vm.save();
+
+      return {
+        found: true,
+        updated: true,
+        affectedPlatformUserIds,
+        affectedTenantUserIds,
+      };
+    }
+
+    const externalVm = await ExternalVMModel.findById(sourceObjectId);
+    if (!externalVm) {
+      return {
+        found: false,
+        updated: false,
+        affectedPlatformUserIds: [],
+        affectedTenantUserIds: [],
+      };
+    }
+
+    if (externalVm.assignedTo) affectedPlatformUserIds.push(externalVm.assignedTo.toString());
+    if (externalVm.assignedTenantUserId) {
+      affectedTenantUserIds.push(externalVm.assignedTenantUserId.toString());
+    }
+
+    const [linkedPlatformAssignments, linkedTenantAssignments] = await Promise.all([
+      ExternalVmUserAssignmentModel.find({ externalVmId: sourceObjectId }).select('_id userId').lean(),
+      ExternalVmTenantAssignmentModel.find({ externalVmId: sourceObjectId })
+        .select('_id tenantUserId')
+        .lean(),
+    ]);
+
+    for (const assignment of linkedPlatformAssignments) {
+      cancelExternalAssignmentTimer(assignment._id.toString(), 'platform');
+      affectedPlatformUserIds.push(assignment.userId.toString());
+    }
+    for (const assignment of linkedTenantAssignments) {
+      cancelExternalAssignmentTimer(assignment._id.toString(), 'tenant');
+      affectedTenantUserIds.push(assignment.tenantUserId.toString());
+    }
+
+    const [platformAssignments, tenantAssignments] = await Promise.all([
+      ExternalVmUserAssignmentModel.deleteMany({ externalVmId: sourceObjectId }),
+      ExternalVmTenantAssignmentModel.deleteMany({ externalVmId: sourceObjectId }),
+    ]);
+
+    const hadLegacyAssignment = Boolean(externalVm.assignedTo || externalVm.assignedTenantUserId);
+    const hadAssignments =
+      hadLegacyAssignment || platformAssignments.deletedCount > 0 || tenantAssignments.deletedCount > 0;
+
+    if (!hadAssignments) {
+      return {
+        found: true,
+        updated: false,
+        affectedPlatformUserIds: [...new Set(affectedPlatformUserIds)],
+        affectedTenantUserIds: [...new Set(affectedTenantUserIds)],
+      };
+    }
+
+    externalVm.assignedTo = undefined;
+    externalVm.assignedTenantUserId = undefined;
+    externalVm.accessStartDate = null;
+    externalVm.accessEndDate = null;
+    externalVm.accessStartTime = null;
+    externalVm.accessEndTime = null;
+    externalVm.weeklySchedule = null;
+    await externalVm.save();
+
+    return {
+      found: true,
+      updated: true,
+      affectedPlatformUserIds: [...new Set(affectedPlatformUserIds)],
+      affectedTenantUserIds: [...new Set(affectedTenantUserIds)],
+    };
+  }
+
+  private async forceDeletePlatformUsers(userIds: string[]): Promise<number> {
     let deletedPlatformUsers = 0;
-    let deletedTenantUsers = 0;
 
-    for (const userId of resolved.platformUserIds) {
+    for (const userId of [...new Set(userIds.filter(Boolean))]) {
       const oid = toObjectId(userId);
       if (!oid) continue;
 
@@ -312,7 +472,13 @@ export class SuperAdminVmInventoryService {
       deletedPlatformUsers += 1;
     }
 
-    for (const tenantUserId of resolved.tenantUserIds) {
+    return deletedPlatformUsers;
+  }
+
+  private async forceDeleteTenantUsers(tenantUserIds: string[]): Promise<number> {
+    let deletedTenantUsers = 0;
+
+    for (const tenantUserId of [...new Set(tenantUserIds.filter(Boolean))]) {
       const oid = toObjectId(tenantUserId);
       if (!oid) continue;
 
@@ -330,8 +496,160 @@ export class SuperAdminVmInventoryService {
       deletedTenantUsers += 1;
     }
 
-    const updated = deletedPlatformUsers > 0 || deletedTenantUsers > 0;
+    return deletedTenantUsers;
+  }
+
+  /**
+   * Detach a VM from tenant/admin ownership so it returns to the free pool.
+   * External VMs become owner-less (available for future tenant attach).
+   * Platform VPS clears tenant/order/project links but keeps adminId (schema-required).
+   */
+  private async clearResourceOwnerForInventoryRow(
+    input: SuperAdminVmInventoryClearAssignmentInput
+  ): Promise<{ found: boolean; updated: boolean }> {
+    const sourceObjectId = toObjectId(input.sourceId);
+    if (!sourceObjectId) {
+      return { found: false, updated: false };
+    }
+
+    if (input.resourceType === 'platform_vm') {
+      const vm = await VM.findById(sourceObjectId);
+      if (!vm) {
+        return { found: false, updated: false };
+      }
+
+      const hadTenantLink = Boolean(vm.tenantId || vm.projectId || vm.orderId);
+      if (!hadTenantLink) {
+        return { found: true, updated: false };
+      }
+
+      vm.tenantId = null;
+      vm.orderId = null;
+      vm.projectId = undefined;
+      await vm.save();
+      return { found: true, updated: true };
+    }
+
+    if (input.resourceType === 'catalog_vm') {
+      const vm = await CatalogVmModel.findById(sourceObjectId);
+      if (!vm) {
+        return { found: false, updated: false };
+      }
+
+      const hadOwner = Boolean(vm.tenantId || vm.adminId || vm.projectId);
+      if (!hadOwner) {
+        return { found: true, updated: false };
+      }
+
+      vm.tenantId = undefined;
+      vm.adminId = undefined;
+      vm.projectId = undefined;
+      await vm.save();
+      return { found: true, updated: true };
+    }
+
+    const externalVm = await ExternalVMModel.findById(sourceObjectId);
+    if (!externalVm) {
+      return { found: false, updated: false };
+    }
+
+    const hadOwner = Boolean(
+      externalVm.tenantId ||
+      externalVm.adminId ||
+      externalVm.projectId ||
+      externalVm.createdByTenantUserId
+    );
+    if (!hadOwner) {
+      return { found: true, updated: false };
+    }
+
+    await ExternalVMModel.updateOne(
+      { _id: sourceObjectId },
+      {
+        $unset: {
+          tenantId: 1,
+          adminId: 1,
+          projectId: 1,
+          createdByTenantUserId: 1,
+        },
+        $set: {
+          source: 'superadmin_bulk' as ExternalVMSource,
+          updatedAt: new Date(),
+        },
+      }
+    );
+    return { found: true, updated: true };
+  }
+
+  async deleteAssignedUser(
+    input: SuperAdminVmInventoryClearAssignmentInput
+  ): Promise<SuperAdminVmInventoryDeleteAssignedUserResult> {
+    const resolved = await this.resolveAssignedUsersForInventoryRow(input);
+    const cleared = await this.clearResourceAssignmentsForInventoryRow(input);
+
+    if (!resolved.found && !cleared.found) {
+      return { updated: false, deletedPlatformUsers: 0, deletedTenantUsers: 0 };
+    }
+
+    const platformUserIds = [
+      ...new Set([...resolved.platformUserIds, ...cleared.affectedPlatformUserIds]),
+    ];
+    const tenantUserIds = [
+      ...new Set([...resolved.tenantUserIds, ...cleared.affectedTenantUserIds]),
+    ];
+
+    const [deletedPlatformUsers, deletedTenantUsers] = await Promise.all([
+      this.forceDeletePlatformUsers(platformUserIds),
+      this.forceDeleteTenantUsers(tenantUserIds),
+    ]);
+
+    const updated =
+      cleared.updated || deletedPlatformUsers > 0 || deletedTenantUsers > 0;
     return { updated, deletedPlatformUsers, deletedTenantUsers };
+  }
+
+  async freeVmAndDeleteAssignedUser(
+    input: SuperAdminVmInventoryClearAssignmentInput
+  ): Promise<SuperAdminVmInventoryFreeVmResult> {
+    const resolved = await this.resolveAssignedUsersForInventoryRow(input);
+    const cleared = await this.clearResourceAssignmentsForInventoryRow(input);
+    const ownerCleared = await this.clearResourceOwnerForInventoryRow(input);
+
+    if (!resolved.found && !cleared.found && !ownerCleared.found) {
+      return {
+        updated: false,
+        deletedPlatformUsers: 0,
+        deletedTenantUsers: 0,
+        clearedAssignment: false,
+        clearedOwner: false,
+      };
+    }
+
+    const platformUserIds = [
+      ...new Set([...resolved.platformUserIds, ...cleared.affectedPlatformUserIds]),
+    ];
+    const tenantUserIds = [
+      ...new Set([...resolved.tenantUserIds, ...cleared.affectedTenantUserIds]),
+    ];
+
+    const [deletedPlatformUsers, deletedTenantUsers] = await Promise.all([
+      this.forceDeletePlatformUsers(platformUserIds),
+      this.forceDeleteTenantUsers(tenantUserIds),
+    ]);
+
+    const updated =
+      cleared.updated ||
+      ownerCleared.updated ||
+      deletedPlatformUsers > 0 ||
+      deletedTenantUsers > 0;
+
+    return {
+      updated,
+      deletedPlatformUsers,
+      deletedTenantUsers,
+      clearedAssignment: cleared.updated,
+      clearedOwner: ownerCleared.updated,
+    };
   }
 
   private async deletePlatformUsersIfDetached(userIds: string[]): Promise<number> {
@@ -390,97 +708,13 @@ export class SuperAdminVmInventoryService {
   async clearAssignment(
     input: SuperAdminVmInventoryClearAssignmentInput
   ): Promise<SuperAdminVmInventoryClearAssignmentResult> {
-    const sourceObjectId = toObjectId(input.sourceId);
-    if (!sourceObjectId) {
-      return { updated: false };
-    }
-
-    const affectedPlatformUserIds: string[] = [];
-    const affectedTenantUserIds: string[] = [];
-
-    if (input.resourceType === 'platform_vm') {
-      const vm = await VM.findById(sourceObjectId);
-      if (!vm) return { updated: false };
-
-      const hasAssignment = Boolean(vm.assignedTo || vm.assignedTenantUserId);
-      if (!hasAssignment) return { updated: false };
-
-      if (vm.assignedTo) affectedPlatformUserIds.push(vm.assignedTo.toString());
-      if (vm.assignedTenantUserId) affectedTenantUserIds.push(vm.assignedTenantUserId.toString());
-
-      vm.assignedTo = undefined;
-      vm.assignedTenantUserId = undefined;
-      vm.accessStartDate = null;
-      vm.accessEndDate = null;
-      vm.accessStartTime = null;
-      vm.accessEndTime = null;
-      vm.weeklySchedule = null;
-      await vm.save();
-
-      const [deletedPlatformUsers, deletedTenantUsers] = await Promise.all([
-        this.deletePlatformUsersIfDetached(affectedPlatformUserIds),
-        this.deleteTenantUsersIfDetached(affectedTenantUserIds),
-      ]);
-
-      return { updated: true, deletedPlatformUsers, deletedTenantUsers };
-    }
-
-    if (input.resourceType === 'catalog_vm') {
-      const vm = await CatalogVmModel.findById(sourceObjectId);
-      if (!vm) return { updated: false };
-      if (!vm.tenantUserId) return { updated: false };
-
-      affectedTenantUserIds.push(vm.tenantUserId.toString());
-
-      vm.tenantUserId = undefined;
-      await vm.save();
-
-      const deletedTenantUsers = await this.deleteTenantUsersIfDetached(affectedTenantUserIds);
-      return { updated: true, deletedPlatformUsers: 0, deletedTenantUsers };
-    }
-
-    const externalVm = await ExternalVMModel.findById(sourceObjectId);
-    if (!externalVm) return { updated: false };
-
-    if (externalVm.assignedTo) affectedPlatformUserIds.push(externalVm.assignedTo.toString());
-    if (externalVm.assignedTenantUserId) {
-      affectedTenantUserIds.push(externalVm.assignedTenantUserId.toString());
-    }
-
-    const [linkedPlatformAssignments, linkedTenantAssignments] = await Promise.all([
-      ExternalVmUserAssignmentModel.find({ externalVmId: sourceObjectId }).select('userId').lean(),
-      ExternalVmTenantAssignmentModel.find({ externalVmId: sourceObjectId }).select('tenantUserId').lean(),
-    ]);
-    for (const assignment of linkedPlatformAssignments) {
-      affectedPlatformUserIds.push(assignment.userId.toString());
-    }
-    for (const assignment of linkedTenantAssignments) {
-      affectedTenantUserIds.push(assignment.tenantUserId.toString());
-    }
-
-    const [platformAssignments, tenantAssignments] = await Promise.all([
-      ExternalVmUserAssignmentModel.deleteMany({ externalVmId: sourceObjectId }),
-      ExternalVmTenantAssignmentModel.deleteMany({ externalVmId: sourceObjectId }),
-    ]);
-
-    const hadLegacyAssignment = Boolean(externalVm.assignedTo || externalVm.assignedTenantUserId);
-    const hadAssignments =
-      hadLegacyAssignment || platformAssignments.deletedCount > 0 || tenantAssignments.deletedCount > 0;
-
-    if (!hadAssignments) return { updated: false };
-
-    externalVm.assignedTo = undefined;
-    externalVm.assignedTenantUserId = undefined;
-    externalVm.accessStartDate = null;
-    externalVm.accessEndDate = null;
-    externalVm.accessStartTime = null;
-    externalVm.accessEndTime = null;
-    externalVm.weeklySchedule = null;
-    await externalVm.save();
+    const cleared = await this.clearResourceAssignmentsForInventoryRow(input);
+    if (!cleared.found) return { updated: false };
+    if (!cleared.updated) return { updated: false };
 
     const [deletedPlatformUsers, deletedTenantUsers] = await Promise.all([
-      this.deletePlatformUsersIfDetached(affectedPlatformUserIds),
-      this.deleteTenantUsersIfDetached(affectedTenantUserIds),
+      this.deletePlatformUsersIfDetached(cleared.affectedPlatformUserIds),
+      this.deleteTenantUsersIfDetached(cleared.affectedTenantUserIds),
     ]);
 
     return { updated: true, deletedPlatformUsers, deletedTenantUsers };
@@ -488,7 +722,7 @@ export class SuperAdminVmInventoryService {
 
   async listInventory(filters: SuperAdminVmInventoryFilters): Promise<SuperAdminVmInventoryListResult> {
     const page = Math.max(1, Number(filters.page ?? 1));
-    const limit = Math.min(200, Math.max(1, Number(filters.limit ?? 25)));
+    const limit = Math.min(5000, Math.max(1, Number(filters.limit ?? 25)));
     const sortDirection = filters.sortDirection === 'asc' ? 1 : -1;
 
     const tenantObjectId = toObjectId(filters.tenantId);
@@ -1255,47 +1489,70 @@ export class SuperAdminVmInventoryService {
 
     const ipAddresses = [...new Set(normalizedRows.map((row) => row.ipAddress))];
 
-    const [existingPlatformVms, existingCatalogVms, existingExternalVms] = await Promise.all([
+    const [existingPlatformVms, existingCatalogVms, existingExternalVms, existingProviderMetadata] =
+      await Promise.all([
       ipAddresses.length > 0
         ? VM.find({ ipAddress: { $in: ipAddresses } }).select('_id ipAddress').lean()
         : Promise.resolve([]),
       ipAddresses.length > 0
         ? CatalogVmModel.find({ ipAddress: { $in: ipAddresses } }).select('_id ipAddress').lean()
         : Promise.resolve([]),
-      ipAddresses.length > 0
-        ? ExternalVMModel.find({ ipAddress: { $in: ipAddresses } }).select('_id ipAddress').lean()
-        : Promise.resolve([]),
+      ExternalVMModel.find({}).select('_id ipAddress').lean(),
+      VmProviderMetadataModel.find({}).select('_id ipAddress').lean(),
     ]);
 
-    const existingIpAddresses = new Set<string>([
-      ...existingPlatformVms
-        .map((vm) => vm.ipAddress)
-        .filter((ip): ip is string => Boolean(ip?.trim()))
-        .map((ip) => normalizeIpAddress(ip)),
-      ...existingCatalogVms
-        .map((vm) => vm.ipAddress)
-        .filter((ip): ip is string => Boolean(ip?.trim()))
-        .map((ip) => normalizeIpAddress(ip)),
-      ...existingExternalVms.map((vm) => normalizeIpAddress(vm.ipAddress)),
-    ]);
+    for (const doc of existingProviderMetadata) {
+      const canonical = normalizeIpAddress(doc.ipAddress);
+      if (!canonical || canonical === doc.ipAddress) continue;
+
+      const duplicate = await VmProviderMetadataModel.findOne({ ipAddress: canonical }).select('_id').lean();
+      if (duplicate) {
+        await VmProviderMetadataModel.deleteOne({ _id: doc._id });
+      } else {
+        await VmProviderMetadataModel.updateOne({ _id: doc._id }, { $set: { ipAddress: canonical } });
+      }
+    }
+
+    const ipAddressSet = new Set(ipAddresses);
+    const existingIpAddresses = new Set<string>();
+
+    for (const vm of existingPlatformVms) {
+      if (!vm.ipAddress?.trim()) continue;
+      existingIpAddresses.add(normalizeIpAddress(vm.ipAddress));
+    }
+    for (const vm of existingCatalogVms) {
+      if (!vm.ipAddress?.trim()) continue;
+      existingIpAddresses.add(normalizeIpAddress(vm.ipAddress));
+    }
+    for (const vm of existingExternalVms) {
+      const canonical = normalizeIpAddress(vm.ipAddress);
+      if (canonical && vm.ipAddress !== canonical) {
+        await ExternalVMModel.updateOne({ _id: vm._id }, { $set: { ipAddress: canonical } });
+      }
+      if (ipAddressSet.has(canonical)) {
+        existingIpAddresses.add(canonical);
+      }
+    }
 
     for (const row of normalizedRows) {
       const ipAddress = row.ipAddress;
 
+      const set: Record<string, unknown> = {
+        ipAddress,
+        updatedBy: new mongoose.Types.ObjectId(updatedByUserId),
+      };
+      const vmSpec = row.vmSpec?.trim();
+      if (vmSpec) set.vmSpec = vmSpec;
+      if (row.planDuration) set.planDuration = row.planDuration;
+      const username = row.username?.trim();
+      if (username) set.providerUsername = username;
+      if (row.password) set.providerPassword = encrypt(row.password);
+      if (row.providerStartDate) set.providerStartDate = new Date(row.providerStartDate);
+      if (row.providerEndDate) set.providerEndDate = new Date(row.providerEndDate);
+
       await VmProviderMetadataModel.findOneAndUpdate(
         { ipAddress },
-        {
-          $set: {
-            ipAddress,
-            vmSpec: row.vmSpec?.trim() || null,
-            planDuration: row.planDuration ?? null,
-            providerUsername: row.username?.trim() || null,
-            providerPassword: row.password ? encrypt(row.password) : null,
-            providerStartDate: row.providerStartDate ? new Date(row.providerStartDate) : null,
-            providerEndDate: row.providerEndDate ? new Date(row.providerEndDate) : null,
-            updatedBy: new mongoose.Types.ObjectId(updatedByUserId),
-          },
-        },
+        { $set: set },
         { upsert: true, new: true, setDefaultsOnInsert: true }
       );
       updated += 1;
@@ -1315,7 +1572,6 @@ export class SuperAdminVmInventoryService {
         username: row.username?.trim() || undefined,
         password: encrypt(password),
         source: 'superadmin_bulk',
-        adminId: new mongoose.Types.ObjectId(updatedByUserId),
       });
       existingIpAddresses.add(ipAddress);
       created += 1;

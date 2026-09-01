@@ -10,10 +10,13 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
+  fetchTenantProjectClientNames,
+  fetchTenantProjects,
   previewTenantProjectName,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { PROJECT_SERVICE_META } from '@/lib/projectServiceMeta';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 
 const MAX_DESC = 500;
 
@@ -69,6 +72,7 @@ export default function TenantCreateProjectPage() {
   const [previewName, setPreviewName] = useState('');
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -82,13 +86,22 @@ export default function TenantCreateProjectPage() {
     setLoading(true);
     setError(null);
     try {
-      const [preview, services] = await Promise.all([
+      const loadClientNames = async (): Promise<string[]> => {
+        const names = await fetchTenantProjectClientNames().catch(() => [] as string[]);
+        if (names.length > 0) return names;
+        const projects = await fetchTenantProjects().catch(() => []);
+        return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+      };
+
+      const [preview, services, names] = await Promise.all([
         previewTenantProjectName(),
         fetchTenantEligibleProjectServices(),
+        loadClientNames(),
       ]);
       setPreviewName(preview.name);
       setName(preview.name);
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
+      setClientNames(names);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to prepare create form.');
     } finally {
@@ -180,12 +193,12 @@ export default function TenantCreateProjectPage() {
                 Client Name <span className="text-red-500">*</span>
               </label>
               <p className="mb-2 text-xs text-gray-400">The client this project belongs to.</p>
-              <input
+              <ClientNameCombobox
                 value={clientName}
-                onChange={(e) => setClientName(e.target.value)}
+                onChange={setClientName}
+                clientNames={clientNames}
                 required
-                placeholder="e.g. Acme Corp"
-                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                disabled={saving}
               />
             </div>
           </div>

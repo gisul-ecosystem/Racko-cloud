@@ -276,8 +276,10 @@ class WSManager {
     const conn: AgentConnection = { ws, agentId };
     this.connections.set(agentId, conn);
 
-    // Mark online immediately
-    await MachineModel.updateOne({ agentId }, { status: 'online', lastSeen: new Date() });
+    // Do NOT set status here — the HTTP heartbeat is the sole source of truth for
+    // online/offline status. Only update lastSeen so the stale sweeper has an
+    // accurate timestamp if this is the first contact before the first heartbeat.
+    await MachineModel.updateOne({ agentId }, { lastSeen: new Date() });
     logger.info('[WSManager] Agent connected', { agentId, machine: machine.name });
 
     // Notify push session registry — emits agent_connected SSE event if this machine
@@ -454,11 +456,11 @@ class WSManager {
     clearTimeout(conn.pongDeadlineTimer);
     this.connections.delete(agentId);
 
-    // Mark offline in DB
-    MachineModel.updateOne({ agentId }, { status: 'offline' }).catch((err: Error) => {
-      logger.error('[WSManager] Failed to mark agent offline', { agentId, error: err.message });
-    });
-
+    // Do NOT mark offline here — a dropped WebSocket doesn't mean the machine is
+    // offline. The agent reconnects within seconds and the HTTP heartbeat continues
+    // running independently. Status is managed exclusively by:
+    //   - handleHeartbeat() → sets 'online' + updates lastSeen every 30s
+    //   - markStaleAgentsOffline() → sets 'offline' after 3 min of no heartbeat
     logger.info('[WSManager] Agent disconnected', { agentId, code, reason, totalConnections: this.connections.size });
   }
 

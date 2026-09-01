@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
 import { ApiError } from '@/lib/apiClient';
+import { defaultExternalVmUsername } from '@/lib/externalVmApi';
 import {
   createTenantExternalVM,
   type CreateExternalVMDto,
@@ -102,6 +103,7 @@ export default function TenantAddServerPage() {
             >
               <option value="rdp">RDP</option>
               <option value="ssh">SSH</option>
+              <option value="vnc">VNC</option>
             </select>
           </div>
           <div>
@@ -110,7 +112,7 @@ export default function TenantAddServerPage() {
               type="text"
               value={username}
               onChange={(e) => setUsername(e.target.value)}
-              placeholder="Administrator"
+              placeholder={defaultExternalVmUsername(protocol)}
               className={inputClass}
             />
           </div>

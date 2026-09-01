@@ -1,4 +1,5 @@
 import { apiRequest } from './apiClient';
+import { getSseGatewayBaseUrl } from './gatewayUrl';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -17,7 +18,7 @@ export interface SuperAdminVmInventoryItem {
   sourceId: string;
   name: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   status: InventoryStatus;
   originServiceKey: 'vm-management' | 'create-vm' | 'external-vm';
   originServiceLabel: 'VPS Hosting' | 'VM Catalog' | 'External VM Import';
@@ -77,7 +78,7 @@ export interface VmProviderMetadataImportRow {
   ipAddress: string;
   name?: string;
   vmSpec?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
   username?: string;
   password?: string;
@@ -106,6 +107,14 @@ export interface SuperAdminVmInventoryDeleteAssignedUserResult {
   updated: boolean;
   deletedPlatformUsers: number;
   deletedTenantUsers: number;
+}
+
+export interface SuperAdminVmInventoryFreeVmResult {
+  updated: boolean;
+  deletedPlatformUsers: number;
+  deletedTenantUsers: number;
+  clearedAssignment: boolean;
+  clearedOwner: boolean;
 }
 
 export interface SuperAdminVmInventoryQuery {
@@ -222,4 +231,168 @@ export async function deleteSuperAdminVmInventoryAssignedUser(
     }
   );
   return res.data;
+}
+
+export async function freeSuperAdminVmInventoryAndDeleteUser(
+  body: SuperAdminVmInventoryClearAssignmentBody
+): Promise<SuperAdminVmInventoryFreeVmResult> {
+  const res = await apiRequest<ApiEnvelope<SuperAdminVmInventoryFreeVmResult>>(
+    '/api/v1/super-admin/vm-inventory/assignment/free-and-delete-user',
+    {
+      method: 'PATCH',
+      body: JSON.stringify(body),
+    }
+  );
+  return res.data;
+}
+
+// ─── Super-Admin Machine Reset API ────────────────────────────────────────────
+
+export interface SuperAdminResetMachinesResult {
+  accepted: string[]; // machineIds that will be reset
+  offline: string[]; // machineIds that are offline
+  sessionId: string;
+  notFound: string[]; // inventoryIds that don't map to machines
+}
+
+export async function superAdminResetMachinesByInventory(
+  inventoryIds: string[],
+  sessionId: string
+): Promise<SuperAdminResetMachinesResult> {
+  const res = await apiRequest<ApiEnvelope<SuperAdminResetMachinesResult>>(
+    '/api/v1/super-admin/machines/reset',
+    {
+      method: 'POST',
+      body: JSON.stringify({ inventoryIds, sessionId }),
+    }
+  );
+  return res.data;
+}
+
+export async function superAdminIssueResetStreamTicket(
+  sessionId: string
+): Promise<{ streamToken: string; expiresIn: number }> {
+  const res = await apiRequest<ApiEnvelope<{ streamToken: string; expiresIn: number }>>(
+    '/api/v1/super-admin/machines/reset-stream-ticket',
+    {
+      method: 'POST',
+      body: JSON.stringify({ sessionId }),
+    }
+  );
+  return res.data;
+}
+
+export function superAdminOpenResetStatusStream(
+  sessionId: string,
+  streamToken: string
+): EventSource {
+  const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+  return new EventSource(url, { withCredentials: true });
+}
+
+export function superAdminOpenResetStatusStreamWithReconnect(
+  sessionId: string,
+  streamToken: string,
+  onEvent: (event: { type: string; machineId?: string; success?: boolean; error?: string }) => void,
+  onTerminal: () => void,
+  onGiveUp: () => void,
+  expectedCount: number = 1,
+): () => void {
+  const BASE_DELAY_MS = 1_000;
+  const MAX_DELAY_MS  = 30_000;
+  const MAX_ATTEMPTS  = 10;
+
+  let stopped = false;
+  let attempt = 0;
+  let currentController: AbortController | null = null;
+  const completedMachines = new Set<string>();
+
+  const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+  const connect = async () => {
+    while (!stopped && attempt <= MAX_ATTEMPTS) {
+      currentController = new AbortController();
+      const url = `${getSseGatewayBaseUrl()}/api/v1/machines/reset-stream/${sessionId}?streamToken=${streamToken}`;
+
+      try {
+        const response = await fetch(url, {
+          credentials: 'include',
+          signal: currentController.signal,
+          headers: { Accept: 'text/event-stream' },
+        });
+
+        if (!response.ok || !response.body) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        attempt = 0;
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (!stopped) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() ?? '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            const raw = line.slice(5).trim();
+            if (!raw) continue;
+
+            try {
+              const event = JSON.parse(raw) as {
+                type: string;
+                machineId?: string;
+                success?: boolean;
+                error?: string;
+              };
+
+              if (event.type === 'reset_complete' && event.machineId) {
+                if (!completedMachines.has(event.machineId)) {
+                  completedMachines.add(event.machineId);
+                  onEvent(event);
+                }
+
+                if (completedMachines.size >= expectedCount) {
+                  stopped = true;
+                  onTerminal();
+                  return;
+                }
+              } else {
+                onEvent(event);
+              }
+            } catch {
+              // ignore malformed SSE lines
+            }
+          }
+        }
+      } catch (err) {
+        if (stopped) return;
+        if (err instanceof Error && err.name === 'AbortError') return;
+      }
+
+      if (stopped) return;
+
+      attempt++;
+      if (attempt > MAX_ATTEMPTS) {
+        onGiveUp();
+        return;
+      }
+
+      const backoff = Math.min(BASE_DELAY_MS * Math.pow(2, attempt - 1), MAX_DELAY_MS);
+      await delay(backoff);
+    }
+  };
+
+  void connect();
+
+  return () => {
+    stopped = true;
+    currentController?.abort();
+  };
 }

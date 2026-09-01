@@ -1,7 +1,7 @@
 import mongoose, { Document, Schema } from 'mongoose';
 import type { WeeklyScheduleDay } from '../vmAccessSchedule/weeklySchedule';
 
-export type ExternalVMProtocol = 'rdp' | 'ssh';
+export type ExternalVMProtocol = 'rdp' | 'ssh' | 'vnc';
 
 /** Billing / provenance: which console imported this elastic server. */
 export type ExternalVMSource = 'admin_import' | 'tenant_import' | 'superadmin_bulk';
@@ -13,6 +13,8 @@ export interface IExternalVM extends Document {
   name: string;
   ipAddress: string;
   protocol: ExternalVMProtocol;
+  /** Optional override; defaults to 3389/22/5900 by protocol when opening console. */
+  port?: number;
   username: string;
   /** AES-256-CBC encrypted password (encrypt/decrypt handled in the service). */
   password: string;
@@ -23,9 +25,9 @@ export interface IExternalVM extends Document {
    */
   source: ExternalVMSource;
 
-  /** Platform admin owner (admin console). Mutually exclusive with tenantId. */
+  /** Platform admin owner (admin console). Mutually exclusive with tenantId. Omit both for free-pool VMs. */
   adminId?: mongoose.Types.ObjectId;
-  /** Tenant workspace owner (tenant console). Mutually exclusive with adminId. */
+  /** Tenant workspace owner (tenant console). Mutually exclusive with adminId. Omit both for free-pool VMs. */
   tenantId?: mongoose.Types.ObjectId;
   /** Organization project this elastic server belongs to (platform admin). */
   projectId?: mongoose.Types.ObjectId;
@@ -52,9 +54,27 @@ export interface IExternalVM extends Document {
   updatedAt: Date;
 }
 
-/** Default console username per protocol when one is not supplied. */
-function defaultUsernameFor(protocol: ExternalVMProtocol): string {
-  return protocol === 'ssh' ? 'root' : 'Administrator';
+/** Default stored username per protocol when one is not supplied at import/create. */
+export function defaultUsernameFor(protocol: ExternalVMProtocol): string {
+  if (protocol === 'ssh') return 'root';
+  if (protocol === 'vnc') return 'admin';
+  return 'Administrator';
+}
+
+/** Default Guacamole port when `port` is not stored on the VM document. */
+export function defaultPortForExternalVm(
+  protocol: ExternalVMProtocol,
+  port?: number | null
+): number {
+  if (port != null && port > 0) return port;
+  switch (protocol) {
+    case 'rdp':
+      return 3389;
+    case 'vnc':
+      return 5900;
+    case 'ssh':
+      return 22;
+  }
 }
 
 const externalVMSchema = new Schema<IExternalVM>(
@@ -71,8 +91,14 @@ const externalVMSchema = new Schema<IExternalVM>(
     },
     protocol: {
       type: String,
-      enum: ['rdp', 'ssh'],
+      enum: ['rdp', 'ssh', 'vnc'],
       required: true,
+    },
+    port: {
+      type: Number,
+      min: 1,
+      max: 65535,
+      required: false,
     },
     username: {
       type: String,
@@ -156,13 +182,13 @@ const externalVMSchema = new Schema<IExternalVM>(
 externalVMSchema.index({ tenantId: 1, createdAt: -1 });
 
 externalVMSchema.pre('validate', function (next) {
-  if (!this.username) {
+  if (!this.username?.trim()) {
     this.username = defaultUsernameFor(this.protocol);
   }
   const hasAdmin = Boolean(this.adminId);
   const hasTenant = Boolean(this.tenantId);
-  if (hasAdmin === hasTenant) {
-    next(new Error('External VM must belong to exactly one of adminId or tenantId.'));
+  if (hasAdmin && hasTenant) {
+    next(new Error('External VM cannot belong to both adminId and tenantId.'));
     return;
   }
   next();

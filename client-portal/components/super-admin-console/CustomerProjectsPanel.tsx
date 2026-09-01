@@ -1,18 +1,21 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FolderKanban, Loader2, Plus, X } from 'lucide-react';
+import { FolderKanban, Loader2, Pencil, Plus, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import type { AdminServiceKey } from '@/lib/adminServicesApi';
+import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
 import {
   addProjectServicesForAdmin,
   createProjectForAdmin,
   fetchEligibleProjectServicesForAdmin,
+  fetchProjectClientNames,
   fetchProjectForAdmin,
   fetchProjectsForAdmin,
   fetchServiceCostReportForAdmin,
   previewProjectNameForAdmin,
   PROJECT_SERVICE_LABELS,
+  updateProjectForAdmin,
   type OrgProject,
   type ProjectReportByServiceRow,
 } from '@/lib/projectsApi';
@@ -50,6 +53,8 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
   const [previewName, setPreviewName] = useState('');
   const [name, setName] = useState('');
   const [clientName, setClientName] = useState('');
+
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [available, setAvailable] = useState<AdminServiceKey[]>([]);
   const [selected, setSelected] = useState<AdminServiceKey[]>([]);
@@ -65,11 +70,29 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
   const [usageRows, setUsageRows] = useState<ProjectReportByServiceRow[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
 
+  // Edit project details
+  const [editProject, setEditProject] = useState<OrgProject | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editClientName, setEditClientName] = useState('');
+  const [editDescription, setEditDescription] = useState('');
+  const [editStartDate, setEditStartDate] = useState('');
+  const [editEndDate, setEditEndDate] = useState('');
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      setProjects(await fetchProjectsForAdmin(adminId));
+      const [loadedProjects, names] = await Promise.all([
+        fetchProjectsForAdmin(adminId),
+        fetchProjectClientNames().catch(() => [] as string[]),
+      ]);
+      const fallbackNames = loadedProjects
+        .map((p) => p.clientName)
+        .filter((n): n is string => Boolean(n && n.trim()));
+      setProjects(loadedProjects);
+      setClientNames([...new Set([...names, ...fallbackNames])].sort());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to load projects.');
     } finally {
@@ -92,13 +115,18 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
     setDescription('');
     setSelected([]);
     try {
-      const [preview, services] = await Promise.all([
+      const [preview, services, names] = await Promise.all([
         previewProjectNameForAdmin(adminId),
         fetchEligibleProjectServicesForAdmin(adminId),
+        fetchProjectClientNames().catch(() => [] as string[]),
       ]);
       setPreviewName(preview.name);
       setName(preview.name);
       setAvailable(services);
+      const fallbackNames = projects
+        .map((p) => p.clientName)
+        .filter((n): n is string => Boolean(n && n.trim()));
+      setClientNames([...new Set([...names, ...fallbackNames])].sort());
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to prepare create form.');
       setShowCreate(false);
@@ -164,6 +192,39 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
     setManageSelected((prev) =>
       prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key]
     );
+  }
+
+  function openEdit(project: OrgProject) {
+    setEditProject(project);
+    setEditName(project.name);
+    setEditClientName(project.clientName);
+    setEditDescription(project.description || '');
+    setEditStartDate(project.startDate ? project.startDate.slice(0, 10) : '');
+    setEditEndDate(project.endDate ? project.endDate.slice(0, 10) : '');
+    setEditError(null);
+  }
+
+  async function handleEditSave(e: React.FormEvent) {
+    e.preventDefault();
+    if (!editProject || !editName.trim() || !editClientName.trim()) return;
+    setEditSaving(true);
+    setEditError(null);
+    try {
+      const updated = await updateProjectForAdmin(adminId, editProject.id, {
+        name: editName.trim(),
+        clientName: editClientName.trim(),
+        description: editDescription.trim() || null,
+        startDate: editStartDate || null,
+        endDate: editEndDate || null,
+      });
+      setFlash(`Updated project details for ${updated.name}.`);
+      setEditProject(null);
+      await load();
+    } catch (err) {
+      setEditError(err instanceof ApiError ? err.message : 'Failed to update project.');
+    } finally {
+      setEditSaving(false);
+    }
   }
 
   async function handleCreate(e: React.FormEvent) {
@@ -296,13 +357,22 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
                   <td className="px-4 py-3 text-gray-500">{formatDate(p.createdAt)}</td>
                   <td className="px-4 py-3 text-right">
                     {p.status === 'active' ? (
-                      <button
-                        type="button"
-                        onClick={() => void openManage(p)}
-                        className="text-xs font-semibold text-[#B91C1C] hover:underline"
-                      >
-                        Add services
-                      </button>
+                      <div className="flex items-center justify-end gap-3">
+                        <button
+                          type="button"
+                          onClick={() => openEdit(p)}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                        >
+                          <Pencil className="h-3 w-3" /> Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void openManage(p)}
+                          className="text-xs font-semibold text-[#B91C1C] hover:underline"
+                        >
+                          Add services
+                        </button>
+                      </div>
                     ) : (
                       <span className="text-xs text-gray-400">—</span>
                     )}
@@ -350,12 +420,13 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
                 </div>
                 <div>
                   <label className="mb-1 block text-xs font-medium text-gray-700">Client name</label>
-                  <input
+                  <ClientNameCombobox
                     value={clientName}
-                    onChange={(e) => setClientName(e.target.value)}
+                    onChange={setClientName}
+                    clientNames={clientNames}
                     required
+                    disabled={saving}
                     placeholder="End-client company name"
-                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
                   />
                 </div>
                 <div>
@@ -630,6 +701,90 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
           </div>
         </div>
       )}
+
+      {editProject && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
+          <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl">
+            <div className="flex items-center justify-between border-b border-gray-100 px-5 py-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">Edit project details</h3>
+                <p className="mt-0.5 text-xs text-gray-500">{editProject.name}</p>
+              </div>
+              <button type="button" onClick={() => setEditProject(null)} disabled={editSaving}
+                className="rounded-lg p-1 text-gray-400 hover:bg-gray-50 hover:text-gray-700 disabled:opacity-50">
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <form onSubmit={(e) => void handleEditSave(e)} className="space-y-4 px-5 py-4">
+              {editError && (
+                <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{editError}</div>
+              )}
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Project name</label>
+                <input
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  required
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Client name</label>
+                <ClientNameCombobox
+                  value={editClientName}
+                  onChange={setEditClientName}
+                  clientNames={clientNames}
+                  required
+                  disabled={editSaving}
+                  placeholder="End-client company name"
+                  showCreate={false}
+                />
+              </div>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-700">Start Date</label>
+                  <input
+                    type="date"
+                    value={editStartDate}
+                    onChange={(e) => setEditStartDate(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-medium text-gray-700">End Date</label>
+                  <input
+                    type="date"
+                    value={editEndDate}
+                    onChange={(e) => setEditEndDate(e.target.value)}
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="mb-1 block text-xs font-medium text-gray-700">Description</label>
+                <textarea
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
+                  rows={3}
+                  className="w-full resize-none rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                />
+              </div>
+              <div className="flex justify-end gap-2 border-t border-gray-100 pt-4">
+                <button type="button" onClick={() => setEditProject(null)} disabled={editSaving}
+                  className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">
+                  Cancel
+                </button>
+                <button type="submit" disabled={!editClientName.trim() || editSaving}
+                  className="inline-flex items-center gap-1.5 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-xs font-semibold text-white hover:bg-[#991B1B] disabled:opacity-50">
+                  {editSaving && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+                  Save
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
+

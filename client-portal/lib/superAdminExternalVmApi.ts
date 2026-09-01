@@ -36,7 +36,7 @@ export interface SuperAdminBulkImportLegacyRowDto {
   name: string;
   ip?: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   username?: string;
   password: string;
   projectId?: string;
@@ -53,7 +53,7 @@ export interface SuperAdminBulkImportExtendedRowDto {
   name: string;
   ip?: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   username?: string;
   password: string;
   projectId?: string;
@@ -67,7 +67,7 @@ export interface SuperAdminBulkImportExtendedAdminRowDto {
   name: string;
   ip?: string;
   ipAddress?: string;
-  protocol?: 'rdp' | 'ssh';
+  protocol?: 'rdp' | 'ssh' | 'vnc';
   username?: string;
   password: string;
   adminEmail: string;
@@ -123,6 +123,8 @@ export interface SuperAdminExternalVmAssigneeView {
   username: string | null;
   status: string;
   schedule: AssignmentScheduleDto | null;
+  accessOverride?: boolean;
+  accessOverrideUntil?: string | null;
 }
 
 export interface SuperAdminExternalVmOverviewRow {
@@ -133,16 +135,20 @@ export interface SuperAdminExternalVmOverviewRow {
   username: string;
   password: string;
   providerPlanDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
+  providerVmSpec?: string | null;
   providerUsername?: string | null;
   providerStartDate?: string | null;
   providerEndDate?: string | null;
   source: string;
-  stack: 'platform' | 'tenant';
+  stack: 'platform' | 'tenant' | 'free';
   adminId: string | null;
   adminEmail: string | null;
   tenantId: string | null;
   tenantName: string | null;
   tenantSlug: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  projectClientName: string | null;
   assignedTo: string | null;
   assignedTenantUserId: string | null;
   assignments: SuperAdminExternalVmAssigneeView[];
@@ -271,6 +277,8 @@ export type CreateSuperAdminAssignmentBody = {
 export type PatchSuperAdminAssignmentBody = {
   schedule?: AssignmentScheduleDto | null;
   status?: 'active' | 'revoked';
+  accessOverride?: boolean;
+  accessOverrideUntil?: string | null;
 };
 
 export async function createSuperAdminExternalVmAssignment(

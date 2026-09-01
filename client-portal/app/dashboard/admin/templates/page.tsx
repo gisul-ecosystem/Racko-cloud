@@ -47,7 +47,6 @@ const BUILD_STEPS: { key: AdminVmTemplateBuildStep; label: string }[] = [
   { key: 'stopping_source', label: 'Stopping source VM' },
   { key: 'cloning',         label: 'Cloning VM' },
   { key: 'starting_source', label: 'Starting source VM' },
-  { key: 'running_sysprep', label: 'Running Sysprep' },
   { key: 'converting',      label: 'Converting to template' },
 ];
 
@@ -151,7 +150,7 @@ function CreateTemplateModal({ vms, vmsLoading, onClose, onCreated }: CreateModa
           <div className="flex gap-2.5 p-3 bg-amber-50 border border-amber-200 rounded-lg">
             <AlertCircle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
             <p className="text-xs text-amber-700 leading-relaxed">
-              Creating a template will temporarily <span className="font-semibold">shut down your source VM</span> during cloning, then automatically restart it. For Windows VMs, Sysprep will also run on the clone. Make sure your VM is fully booted and running correctly before creating a template.
+              Creating a template will temporarily <span className="font-semibold">shut down your source VM</span> during cloning, then automatically restart it.
             </p>
           </div>
 

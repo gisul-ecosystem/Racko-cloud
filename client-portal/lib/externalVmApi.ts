@@ -3,7 +3,30 @@ import type { AccessSchedule, AccessScheduleInput } from './accessSchedule';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-export type ExternalVMProtocol = 'rdp' | 'ssh';
+export type ExternalVMProtocol = 'rdp' | 'ssh' | 'vnc';
+
+export function parseExternalVmProtocol(raw: unknown): ExternalVMProtocol {
+  if (raw === 'ssh' || raw === 'vnc') return raw;
+  return 'rdp';
+}
+
+export function externalVmProtocolBadgeClass(protocol: ExternalVMProtocol): string {
+  switch (protocol) {
+    case 'rdp':
+      return 'bg-blue-50 text-blue-700 border-blue-200';
+    case 'ssh':
+      return 'bg-green-50 text-green-700 border-green-200';
+    case 'vnc':
+      return 'bg-purple-50 text-purple-700 border-purple-200';
+  }
+}
+
+/** Default stored username when import/create omits one (VNC defaults to admin). */
+export function defaultExternalVmUsername(protocol: ExternalVMProtocol): string {
+  if (protocol === 'ssh') return 'root';
+  if (protocol === 'vnc') return 'admin';
+  return 'Administrator';
+}
 
 export interface AssignmentSchedulePublic {
   effectiveFrom: string;
@@ -28,6 +51,8 @@ export interface ExternalVmMyAccess {
   allowedNow: boolean;
   schedule: AssignmentSchedulePublic | null;
   nextWindow: string | null;
+  overrideActive?: boolean;
+  overrideUntil?: string | null;
 }
 
 export interface IExternalVM {
@@ -54,6 +79,7 @@ export interface CreateExternalVMDto {
   name: string;
   ipAddress: string;
   protocol: ExternalVMProtocol;
+  port?: number;
   username?: string;
   password: string;
   projectId?: string;

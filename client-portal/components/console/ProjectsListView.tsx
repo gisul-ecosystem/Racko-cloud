@@ -27,6 +27,7 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   createProject,
   fetchProject,
+  fetchProjectClientNames,
   fetchProjectCostReport,
   fetchProjects,
   previewProjectName,
@@ -39,6 +40,7 @@ import {
 import {
   createTenantProject,
   fetchTenantEligibleProjectServices,
+  fetchTenantProjectClientNames,
   fetchTenantProject,
   fetchTenantProjectCostReport,
   fetchTenantProjects,
@@ -53,6 +55,7 @@ import {
   tenantAccentSelectedBox,
   tenantAccentText,
 } from '@/lib/tenantAccentStyles';
+import { ClientNameCombobox } from './ClientNameCombobox';
 
 const PAGE_SIZE = 4;
 const ORG_ACCENT = '#B91C1C';
@@ -205,6 +208,7 @@ export function ProjectsListView({
   const [previewName, setPreviewName] = useState('');
   const [projectName, setProjectName] = useState('');
   const [clientName, setClientName] = useState('');
+  const [clientNames, setClientNames] = useState<string[]>([]);
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -332,13 +336,24 @@ export function ProjectsListView({
     setEndDate('');
     setSelectedServices([]);
     try {
-      const [preview, services] = await Promise.all([
+      const loadClientNames = async (): Promise<string[]> => {
+        if (portal === 'tenant') {
+          const names = await fetchTenantProjectClientNames().catch(() => [] as string[]);
+          if (names.length > 0) return names;
+          return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+        }
+        return fetchProjectClientNames().catch(() => [] as string[]);
+      };
+
+      const [preview, services, names] = await Promise.all([
         api.namePreview(),
         api.assignableServices(),
+        loadClientNames(),
       ]);
       setPreviewName(preview.name);
       setProjectName(preview.name);
       setAvailableServices(services);
+      setClientNames(names);
     } catch (err) {
       setModalError(err instanceof ApiError ? err.message : 'Failed to prepare project form.');
     } finally {
@@ -1055,19 +1070,13 @@ export function ProjectsListView({
                         <label className="mb-1.5 block text-xs font-semibold text-gray-700">
                           Client Name <span className="text-red-500">*</span>
                         </label>
-                        <input
+                        <ClientNameCombobox
                           value={clientName}
-                          onChange={(event) => setClientName(event.target.value)}
+                          onChange={setClientName}
+                          clientNames={clientNames}
                           required
+                          disabled={modalSaving}
                           placeholder="e.g. Acme Corp"
-                          className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
-                          style={accentFocus}
-                          onFocus={(e) => {
-                            e.currentTarget.style.borderColor = accent;
-                          }}
-                          onBlur={(e) => {
-                            e.currentTarget.style.borderColor = '';
-                          }}
                         />
                         <p className="mt-1 text-[11px] text-gray-400">
                           The client this project belongs to.

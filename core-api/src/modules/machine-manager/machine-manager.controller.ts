@@ -138,6 +138,29 @@ export class MachineManagerController {
     }
   }
 
+  /** DELETE /api/v1/machines/jobs — clear ALL jobs for this admin */
+  async clearAllJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const result = await machineManagerService.clearAllJobs(adminId);
+      success(res, `${result.deleted} job(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** DELETE /api/v1/machines/:id/jobs — clear jobs for a specific machine */
+  async clearMachineJobs(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const adminId = new mongoose.Types.ObjectId((req as AuthenticatedRequest).user.userId);
+      const machineId = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const result = await machineManagerService.clearMachineJobs(machineId, adminId);
+      success(res, `${result.deleted} job(s) deleted.`, result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** GET /api/v1/machines/jobs/:id */
   async getJob(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
@@ -358,7 +381,9 @@ export class MachineManagerController {
         darwin:    { file: 'racko-agent-mac', name: 'racko-agent' },
         // racko-app is published as a folder-zip (required for WebView2Loader.dll to
         // land on disk as a loose file). The push script downloads and extracts the zip.
-        'racko-app': { file: 'racko-app.zip', name: 'racko-app.zip' },
+        'racko-app':  { file: 'racko-app.zip',     name: 'racko-app.zip' },
+        // chocolatey.nupkg — hosted internally to avoid rate limits from community.chocolatey.org
+        'chocolatey': { file: 'chocolatey.nupkg', name: 'chocolatey.nupkg' },
       };
 
       const entry = fileMap[os];
@@ -796,6 +821,53 @@ echo "[racko] Done. Check status: systemctl status racko-agent"
       }
       const result = await machineManagerService.execCommand(id, adminId, command.trim());
       success(res, 'Command executed.', result);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  // ─── Super-Admin Machine Reset ─────────────────────────────────────────────
+
+  /**
+   * POST /api/v1/super-admin/machines/reset
+   * Reset machines by inventory IDs (super-admin scope).
+   * Looks up machine IDs from inventory and triggers reset.
+   */
+  async superAdminResetMachinesByInventory(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const { inventoryIds, sessionId } = req.body as { inventoryIds: string[]; sessionId?: string };
+
+      if (!Array.isArray(inventoryIds) || inventoryIds.length === 0) {
+        res.status(400).json({ success: false, message: 'inventoryIds array is required.' });
+        return;
+      }
+
+      const sid = sessionId ?? `reset-${Date.now()}`;
+      const result = await machineManagerService.superAdminResetMachinesByInventory(
+        inventoryIds,
+        sid
+      );
+      success(res, 'Reset initiated.', { ...result, sessionId: sid });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /**
+   * POST /api/v1/super-admin/machines/reset-stream-ticket
+   * Issues a short-lived SSE stream ticket for a super-admin reset session.
+   */
+  async superAdminIssueResetStreamTicket(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const userId = (req as AuthenticatedRequest).user.userId;
+      const { sessionId } = req.body as { sessionId: string };
+      if (!sessionId) {
+        res.status(400).json({ success: false, message: 'sessionId required.' });
+        return;
+      }
+      const { issueResetStreamTicket } = await import('./reset.streamTicket');
+      const ticket = issueResetStreamTicket(sessionId, userId);
+      success(res, 'Reset stream ticket issued.', ticket);
     } catch (err) {
       next(err);
     }

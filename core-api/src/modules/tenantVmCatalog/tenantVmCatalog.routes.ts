@@ -8,6 +8,7 @@ import { tenantVmCatalogController } from './tenantVmCatalog.controller';
 import {
   createCatalogVmRequestSchema,
   catalogVmRequestIdParamSchema,
+  catalogVmPowerActionSchema,
 } from '../vmCatalog/vmCatalog.validation';
 
 const router = Router();
@@ -53,6 +54,13 @@ router.post(
   requireTenantPermission('create_vm.request'),
   validateRequest(createCatalogVmRequestSchema),
   (req, res, next) => tenantVmCatalogController.createRequest(req, res, next)
+);
+
+router.post(
+  '/vms/:id/power',
+  requireTenantPermission('create_vm.request'),
+  validateRequest(catalogVmPowerActionSchema),
+  (req, res, next) => tenantVmCatalogController.powerVm(req, res, next)
 );
 
 export default router;

@@ -1,13 +1,13 @@
 "use client";
-
+ 
 import Link from "next/link";
-
+ 
 type FooterColumn = {
   title: string;
   links: { label: string; href: string }[];
   footerCta?: { label: string; href: string };
 };
-
+ 
 const footerColumns: FooterColumn[] = [
   {
     title: "Products",
@@ -65,9 +65,9 @@ const footerColumns: FooterColumn[] = [
     ],
   },
 ];
-
+ 
 const socialItems = ["in", "tw", "gh"];
-
+ 
 export default function Footer() {
   return (
     <footer className="border-t border-[rgba(255,255,255,0.08)] bg-bg-900 pb-10 pt-20">
@@ -88,13 +88,13 @@ export default function Footer() {
                 style={{ color: "transparent" }}
               />
             </Link>
-
+ 
             <p className="mt-5 text-[13px] leading-[1.8] text-text-muted">
               Enterprise infrastructure designed around the workload - not
               around a single cloud ideology. Private, hybrid, and AI-ready,
               governed and managed for production scale.
             </p>
-
+ 
             <div className="mt-5 flex items-center gap-2.5">
               {socialItems.map((item) => (
                 <button
@@ -107,7 +107,7 @@ export default function Footer() {
               ))}
             </div>
           </div>
-
+ 
           {footerColumns.map((column) => (
             <div key={column.title} className="min-w-0">
               <p className="mb-5 font-sans text-xs font-bold uppercase tracking-[0.06em] text-white">
@@ -136,7 +136,7 @@ export default function Footer() {
             </div>
           ))}
         </div>
-
+ 
         <div className="mt-10 flex flex-col gap-3 border-t border-border pt-8 text-text-muted sm:flex-row sm:items-center sm:justify-between">
           <div className="space-y-2">
             <p className="text-xs">

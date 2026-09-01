@@ -46,6 +46,24 @@ export class SuperAdminVmInventoryController {
     }
   }
 
+  async freeVmAndDeleteAssignedUser(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const body = req.body as {
+        resourceType: 'platform_vm' | 'catalog_vm' | 'external_vm';
+        sourceId: string;
+      };
+
+      const result = await superAdminVmInventoryService.freeVmAndDeleteAssignedUser({
+        resourceType: body.resourceType,
+        sourceId: body.sourceId,
+      });
+
+      success(res, 'VM freed and assigned user deleted.', result);
+    } catch (error) {
+      next(error);
+    }
+  }
+
   async importProviderMetadata(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const authReq = req as AuthenticatedRequest;
@@ -54,7 +72,7 @@ export class SuperAdminVmInventoryController {
           ipAddress: string;
           name?: string;
           vmSpec?: string;
-          protocol?: 'rdp' | 'ssh';
+          protocol?: 'rdp' | 'ssh' | 'vnc';
           planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly';
           username?: string;
           password?: string;

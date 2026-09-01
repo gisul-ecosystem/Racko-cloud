@@ -300,6 +300,18 @@ function buildPayload(
     if (params.passphrase) parameters['passphrase'] = params.passphrase;
   }
 
+  if (protocol === 'vnc') {
+    parameters['color-depth'] = '16';
+    parameters['cursor'] = 'remote';
+    parameters['read-only'] = 'false';
+    // Let Guacamole push browser size via SetDesktopSize when the server
+    // supports it; unsupported servers (e.g. macOS Screen Sharing) scale in
+    // place — never use RDP-style reconnect resize here.
+    parameters['disable-display-resize'] = 'false';
+    if (params.width) parameters['width'] = String(params.width);
+    if (params.height) parameters['height'] = String(params.height);
+  }
+
   return {
     name,
     parentIdentifier: 'ROOT',
@@ -385,10 +397,62 @@ function buildClientUrl(
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 export class GuacamoleClient {
+  private static readonly KILL_CONFIRM_MAX_ATTEMPTS = 8;
+  private static readonly KILL_CONFIRM_DELAY_MS = 250;
+
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   /**
-   * Create or update a connection for a VM, then return a browser-facing
-   * one-shot URL containing an embedded admin auth token. The URL always
-   * points at GUACAMOLE_PUBLIC_URL — never the internal docker hostname.
+   * Force-disconnect live tunnels on a connection and confirm they are gone
+   * before minting a new client URL (last connection wins with max-connections=1).
+   */
+  private async clearActiveSessionsForConnectionId(connectionIdentifier: string): Promise<number> {
+    let killedTotal = 0;
+
+    for (let attempt = 1; attempt <= GuacamoleClient.KILL_CONFIRM_MAX_ATTEMPTS; attempt++) {
+      const active = await this.listActiveConnections();
+      const matching = active.filter((a) => a.connectionIdentifier === connectionIdentifier);
+      if (matching.length === 0) {
+        if (killedTotal > 0) {
+          logger.info('Guacamole connection cleared for new session', {
+            connectionIdentifier,
+            killedTotal,
+            attempt,
+          });
+        }
+        return killedTotal;
+      }
+
+      const ids = matching.map((a) => a.identifier);
+      await this.killActiveConnections(ids);
+      killedTotal += ids.length;
+
+      if (attempt < GuacamoleClient.KILL_CONFIRM_MAX_ATTEMPTS) {
+        await this.sleep(GuacamoleClient.KILL_CONFIRM_DELAY_MS);
+      }
+    }
+
+    const remaining = (await this.listActiveConnections()).filter(
+      (a) => a.connectionIdentifier === connectionIdentifier
+    );
+    if (remaining.length > 0) {
+      logger.error('Guacamole active sessions still open after kill retries', {
+        connectionIdentifier,
+        remaining: remaining.map((a) => a.identifier),
+      });
+      throw new InternalError('Could not disconnect existing console session. Please try again.');
+    }
+
+    return killedTotal;
+  }
+
+  /**
+   * Create or update a connection for a VM, force-disconnect any existing live
+   * tunnel (last connection wins), then return a browser-facing one-shot URL
+   * containing an embedded admin auth token. The URL always points at
+   * GUACAMOLE_PUBLIC_URL — never the internal docker hostname.
    *
    * `name` should be stable per VM (e.g. `vm-${vmId}`) so repeated calls update
    * the same connection instead of creating duplicates.
@@ -403,6 +467,7 @@ export class GuacamoleClient {
     if (!params.port) throw new InternalError('port is required.');
 
     const connection = await upsertConnection(name, protocol, params);
+    const displaced = await this.clearActiveSessionsForConnectionId(connection.identifier);
     const token = await getToken();
     const clientUrl = buildClientUrl(
       connection.identifier,
@@ -415,6 +480,7 @@ export class GuacamoleClient {
       name,
       protocol,
       connectionId: connection.identifier,
+      displacedSessions: displaced,
     });
 
     return {

@@ -19,6 +19,8 @@ export interface ISoftwareCatalog extends Document {
   // File-based installs (msi/exe/zip/script) — URL to download the file
   fileUrl?: string;
   fileName?: string;
+  // ZIP installs — PowerShell script run after extraction ($extractDir variable is set)
+  zipInstallScript?: string;
   // Extra CLI args appended to the install command (optional)
   installArgs?: string;
   uploadedBy: mongoose.Types.ObjectId;
@@ -50,6 +52,8 @@ const softwareCatalogSchema = new Schema<ISoftwareCatalog>(
     chocoName:   { type: String, trim: true },
     fileUrl:     { type: String, trim: true },
     fileName:    { type: String, trim: true },
+    // ZIP installs — PowerShell script run after extraction ($extractDir is set in scope)
+    zipInstallScript: { type: String, trim: true },
     installArgs: { type: String, trim: true },
     uploadedBy:  { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   },

@@ -6,7 +6,9 @@ import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAs
 import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
 import { VmProviderMetadataModel, type ProviderPlanDuration } from '../../models/vmProviderMetadata.model';
 import { decrypt } from '../../utils/crypto';
+import { normalizeCanonicalIpv4 } from '../vm/helpers/ipCidr';
 import { ValidationError } from '../../utils/errors';
+import { ProjectModel } from '../../models/project.model';
 import { ExternalVMModel } from './external-vm.model';
 import type { AssignmentSchedule } from './schedule.types';
 
@@ -26,6 +28,8 @@ export interface SuperAdminExternalVmAssigneeView {
     dailyEnd: string;
     timezone: string;
   } | null;
+  accessOverride?: boolean;
+  accessOverrideUntil?: string | null;
 }
 
 export interface SuperAdminExternalVmOverviewRow {
@@ -37,16 +41,20 @@ export interface SuperAdminExternalVmOverviewRow {
   /** Decrypted — super_admin overview only. */
   password: string;
   providerPlanDuration?: ProviderPlanDuration | null;
+  providerVmSpec?: string | null;
   providerUsername?: string | null;
   providerStartDate?: string | null;
   providerEndDate?: string | null;
   source: string;
-  stack: 'platform' | 'tenant';
+  stack: 'platform' | 'tenant' | 'free';
   adminId: string | null;
   adminEmail: string | null;
   tenantId: string | null;
   tenantName: string | null;
   tenantSlug: string | null;
+  projectId: string | null;
+  projectName: string | null;
+  projectClientName: string | null;
   assignedTo: string | null;
   assignedTenantUserId: string | null;
   assignments: SuperAdminExternalVmAssigneeView[];
@@ -97,6 +105,10 @@ function scheduleView(
   };
 }
 
+function normalizeIpAddress(ipAddress: string): string {
+  return normalizeCanonicalIpv4(ipAddress);
+}
+
 class SuperAdminExternalVmOverviewService {
   async getOverview(): Promise<SuperAdminExternalVmOverviewResult> {
     const docs = await ExternalVMModel.find({}).sort({ createdAt: -1 }).lean();
@@ -104,14 +116,11 @@ class SuperAdminExternalVmOverviewService {
       return { rows: [], total: 0 };
     }
 
-    const ipAddresses = [...new Set(docs.map((doc) => doc.ipAddress).filter(Boolean))];
-    const providerMetadata = ipAddresses.length
-      ? await VmProviderMetadataModel.find({ ipAddress: { $in: ipAddresses } })
-        .select('ipAddress planDuration providerUsername providerStartDate providerEndDate')
-        .lean()
-      : [];
+    const providerMetadata = await VmProviderMetadataModel.find({})
+      .select('ipAddress vmSpec planDuration providerUsername providerStartDate providerEndDate')
+      .lean();
     const providerByIp = new Map(
-      providerMetadata.map((item) => [item.ipAddress, item])
+      providerMetadata.map((item) => [normalizeIpAddress(item.ipAddress), item])
     );
 
     const vmIds = docs.map((d) => d._id);
@@ -121,8 +130,11 @@ class SuperAdminExternalVmOverviewService {
     const tenantIds = [
       ...new Set(docs.filter((d) => d.tenantId).map((d) => d.tenantId!.toString())),
     ].map((id) => new mongoose.Types.ObjectId(id));
+    const projectIds = [
+      ...new Set(docs.filter((d) => d.projectId).map((d) => d.projectId!.toString())),
+    ].map((id) => new mongoose.Types.ObjectId(id));
 
-    const [platformAssigns, tenantAssigns, admins, tenants] = await Promise.all([
+    const [platformAssigns, tenantAssigns, admins, tenants, projects] = await Promise.all([
       ExternalVmUserAssignmentModel.find({ externalVmId: { $in: vmIds } }).lean(),
       ExternalVmTenantAssignmentModel.find({ externalVmId: { $in: vmIds } }).lean(),
       adminIds.length
@@ -130,6 +142,9 @@ class SuperAdminExternalVmOverviewService {
         : Promise.resolve([]),
       tenantIds.length
         ? Tenant.find({ _id: { $in: tenantIds } }).select('_id name slug').lean()
+        : Promise.resolve([]),
+      projectIds.length
+        ? ProjectModel.find({ _id: { $in: projectIds } }).select('_id name clientName').lean()
         : Promise.resolve([]),
     ]);
 
@@ -151,6 +166,7 @@ class SuperAdminExternalVmOverviewService {
 
     const adminById = new Map(admins.map((a) => [a._id.toString(), a]));
     const tenantById = new Map(tenants.map((t) => [t._id.toString(), t]));
+    const projectById = new Map(projects.map((p) => [p._id.toString(), p]));
     const platformUserById = new Map(platformUsers.map((u) => [u._id.toString(), u]));
     const tenantUserById = new Map(tenantUsers.map((u) => [u._id.toString(), u]));
 
@@ -171,9 +187,11 @@ class SuperAdminExternalVmOverviewService {
 
     const rows: SuperAdminExternalVmOverviewRow[] = docs.map((doc) => {
       const isTenant = Boolean(doc.tenantId);
+      const isFree = !doc.tenantId && !doc.adminId;
       const admin = doc.adminId ? adminById.get(doc.adminId.toString()) : undefined;
       const tenant = doc.tenantId ? tenantById.get(doc.tenantId.toString()) : undefined;
-      const provider = providerByIp.get(doc.ipAddress);
+      const project = doc.projectId ? projectById.get(doc.projectId.toString()) : undefined;
+      const provider = providerByIp.get(normalizeIpAddress(doc.ipAddress));
 
       let password = '';
       try {
@@ -184,61 +202,92 @@ class SuperAdminExternalVmOverviewService {
 
       const assignments: SuperAdminExternalVmAssigneeView[] = [];
 
-      if (isTenant) {
-        for (const a of tenantByVm.get(doc._id.toString()) ?? []) {
-          const u = tenantUserById.get(a.tenantUserId.toString());
-          assignments.push({
-            assignmentId: a._id.toString(),
-            stack: 'tenant',
-            tenantUserId: a.tenantUserId.toString(),
-            email: u?.email ?? null,
-            username: u?.username ?? null,
-            status: a.status ?? 'active',
-            schedule: scheduleView(a.schedule),
-          });
-        }
-      } else {
-        for (const a of platformByVm.get(doc._id.toString()) ?? []) {
-          const u = platformUserById.get(a.userId.toString());
-          assignments.push({
-            assignmentId: a._id.toString(),
-            stack: 'platform',
-            userId: a.userId.toString(),
-            email: u?.email ?? null,
-            username: u?.username ?? null,
-            status: a.status ?? 'active',
-            schedule: scheduleView(a.schedule),
-          });
-        }
+      for (const a of tenantByVm.get(doc._id.toString()) ?? []) {
+        const u = tenantUserById.get(a.tenantUserId.toString());
+        assignments.push({
+          assignmentId: a._id.toString(),
+          stack: 'tenant',
+          tenantUserId: a.tenantUserId.toString(),
+          email: u?.email ?? null,
+          username: u?.username ?? null,
+          status: a.status ?? 'active',
+          schedule: scheduleView(a.schedule),
+          accessOverride: Boolean(a.accessOverride),
+          accessOverrideUntil: a.accessOverrideUntil
+            ? new Date(a.accessOverrideUntil).toISOString()
+            : null,
+        });
+      }
 
-        // Legacy assignedTo with no junction row yet
-        if (
-          assignments.length === 0 &&
-          doc.assignedTo &&
-          platformUserById.has(doc.assignedTo.toString())
-        ) {
-          const u = platformUserById.get(doc.assignedTo.toString())!;
-          assignments.push({
-            assignmentId: `legacy:${doc._id.toString()}`,
-            stack: 'platform',
-            userId: doc.assignedTo.toString(),
-            email: u.email ?? null,
-            username: u.username ?? null,
-            status: 'active',
-            schedule: null,
-          });
-        } else if (assignments.length === 0 && doc.assignedTo) {
-          // User not in assignment map — still surface the id
-          assignments.push({
-            assignmentId: `legacy:${doc._id.toString()}`,
-            stack: 'platform',
-            userId: doc.assignedTo.toString(),
-            email: null,
-            username: null,
-            status: 'active',
-            schedule: null,
-          });
-        }
+      for (const a of platformByVm.get(doc._id.toString()) ?? []) {
+        const u = platformUserById.get(a.userId.toString());
+        assignments.push({
+          assignmentId: a._id.toString(),
+          stack: 'platform',
+          userId: a.userId.toString(),
+          email: u?.email ?? null,
+          username: u?.username ?? null,
+          status: a.status ?? 'active',
+          schedule: scheduleView(a.schedule),
+          accessOverride: Boolean(a.accessOverride),
+          accessOverrideUntil: a.accessOverrideUntil
+            ? new Date(a.accessOverrideUntil).toISOString()
+            : null,
+        });
+      }
+
+      if (
+        assignments.length === 0 &&
+        doc.assignedTenantUserId &&
+        tenantUserById.has(doc.assignedTenantUserId.toString())
+      ) {
+        const u = tenantUserById.get(doc.assignedTenantUserId.toString())!;
+        assignments.push({
+          assignmentId: `legacy-tenant:${doc._id.toString()}`,
+          stack: 'tenant',
+          tenantUserId: doc.assignedTenantUserId.toString(),
+          email: u.email ?? null,
+          username: u.username ?? null,
+          status: 'active',
+          schedule: null,
+        });
+      } else if (assignments.length === 0 && doc.assignedTenantUserId) {
+        assignments.push({
+          assignmentId: `legacy-tenant:${doc._id.toString()}`,
+          stack: 'tenant',
+          tenantUserId: doc.assignedTenantUserId.toString(),
+          email: null,
+          username: null,
+          status: 'active',
+          schedule: null,
+        });
+      }
+
+      if (
+        assignments.length === 0 &&
+        doc.assignedTo &&
+        platformUserById.has(doc.assignedTo.toString())
+      ) {
+        const u = platformUserById.get(doc.assignedTo.toString())!;
+        assignments.push({
+          assignmentId: `legacy:${doc._id.toString()}`,
+          stack: 'platform',
+          userId: doc.assignedTo.toString(),
+          email: u.email ?? null,
+          username: u.username ?? null,
+          status: 'active',
+          schedule: null,
+        });
+      } else if (assignments.length === 0 && doc.assignedTo) {
+        assignments.push({
+          assignmentId: `legacy:${doc._id.toString()}`,
+          stack: 'platform',
+          userId: doc.assignedTo.toString(),
+          email: null,
+          username: null,
+          status: 'active',
+          schedule: null,
+        });
       }
 
       return {
@@ -249,16 +298,20 @@ class SuperAdminExternalVmOverviewService {
         username: doc.username,
         password,
         providerPlanDuration: provider?.planDuration ?? null,
+        providerVmSpec: provider?.vmSpec ?? null,
         providerUsername: provider?.providerUsername ?? null,
         providerStartDate: provider?.providerStartDate ? new Date(provider.providerStartDate).toISOString() : null,
         providerEndDate: provider?.providerEndDate ? new Date(provider.providerEndDate).toISOString() : null,
         source: doc.source ?? 'admin_import',
-        stack: isTenant ? 'tenant' : 'platform',
+        stack: isFree ? 'free' : isTenant ? 'tenant' : 'platform',
         adminId: doc.adminId?.toString() ?? null,
         adminEmail: admin?.email ?? null,
         tenantId: doc.tenantId?.toString() ?? null,
         tenantName: tenant?.name ?? null,
         tenantSlug: tenant?.slug ?? null,
+        projectId: doc.projectId?.toString() ?? null,
+        projectName: project?.name ?? null,
+        projectClientName: project?.clientName ?? null,
         assignedTo: doc.assignedTo?.toString() ?? null,
         assignedTenantUserId: doc.assignedTenantUserId?.toString() ?? null,
         assignments,

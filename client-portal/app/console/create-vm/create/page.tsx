@@ -13,11 +13,14 @@ import {
 import { ProjectSelect } from '../../../../components/console/ProjectSelect';
 import {
   createProject,
+  fetchProjectClientNames,
   fetchProjects,
   previewProjectName,
 } from '../../../../lib/projectsApi';
+import { ClientNameCombobox } from '../../../../components/console/ClientNameCombobox';
 import {
   createTenantProject,
+  fetchTenantProjectClientNames,
   fetchTenantProjects,
   previewTenantProjectName,
 } from '../../../../lib/tenantProjectsApi';
@@ -145,6 +148,7 @@ export default function CreateVmPage() {
   const [cpPreviewName, setCpPreviewName] = useState('');
   const [cpName, setCpName] = useState('');
   const [cpClientName, setCpClientName] = useState('');
+  const [cpClientNames, setCpClientNames] = useState<string[]>([]);
   const [cpDescription, setCpDescription] = useState('');
   const [cpStartDate, setCpStartDate] = useState('');
   const [cpEndDate, setCpEndDate] = useState('');
@@ -312,9 +316,27 @@ export default function CreateVmPage() {
     setCpName('');
     setCpOpen(true);
     try {
-      const preview = projectPortal === 'tenant' ? await previewTenantProjectName() : await previewProjectName();
+      const loadClientNames = async (): Promise<string[]> => {
+        if (projectPortal === 'tenant') {
+          const names = await fetchTenantProjectClientNames().catch(() => [] as string[]);
+          if (names.length > 0) return names;
+          const projects = await fetchTenantProjects().catch(() => []);
+          return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+        }
+
+        const names = await fetchProjectClientNames().catch(() => [] as string[]);
+        if (names.length > 0) return names;
+        const projects = await fetchProjects().catch(() => []);
+        return [...new Set(projects.map((p) => p.clientName).filter(Boolean))].sort();
+      };
+
+      const [preview, names] = await Promise.all([
+        projectPortal === 'tenant' ? previewTenantProjectName() : previewProjectName(),
+        loadClientNames(),
+      ]);
       setCpPreviewName(preview.name);
       setCpName(preview.name);
+      setCpClientNames(names);
     } catch {
       // preview optional
     }
@@ -867,9 +889,14 @@ export default function CreateVmPage() {
                     </div>
                     <div>
                       <label className="mb-1.5 block text-xs font-semibold text-gray-700">Client Name <span className="text-red-500">*</span></label>
-                      <input className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                        value={cpClientName} onChange={(e) => setCpClientName(e.target.value)}
-                        required placeholder="e.g. Acme Corp" />
+                      <ClientNameCombobox
+                        value={cpClientName}
+                        onChange={setCpClientName}
+                        clientNames={cpClientNames}
+                        required
+                        disabled={cpSaving}
+                        placeholder="e.g. Acme Corp"
+                      />
                       <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
                     </div>
                   </div>

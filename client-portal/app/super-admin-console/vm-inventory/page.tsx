@@ -2,13 +2,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Database, Pencil, Search, Trash2, Upload } from 'lucide-react';
+import { ChevronLeft, Database, Pencil, RotateCcw, Search, Trash2, Upload } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchSuperAdminVmInventory,
-  clearSuperAdminVmInventoryAssignment,
-  deleteSuperAdminVmInventoryAssignedUser,
+  freeSuperAdminVmInventoryAndDeleteUser,
   importVmProviderMetadata,
+  superAdminResetMachinesByInventory,
+  superAdminIssueResetStreamTicket,
+  superAdminOpenResetStatusStreamWithReconnect,
   type InventoryOwnerScope,
   type InventoryResourceType,
   type InventoryStatus,
@@ -25,6 +27,7 @@ import {
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { ManageExternalVmAssignmentsModal } from '@/components/super-admin-console/ManageExternalVmAssignmentsModal';
+import { ResetProgressModal, type ResetMachineStatus } from './ResetProgressModal';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -41,6 +44,7 @@ type AssignmentEntry = {
   ownerKey?: string;
   tenantName?: string;
   planDuration?: 'monthly' | 'quarterly' | 'hourly' | 'yearly' | null;
+  vmSpec?: string | null;
   vmUsername?: string | null;
   vmPassword?: string | null;
   providerStartDate?: string | null;
@@ -63,13 +67,7 @@ type AssignmentRow = {
 
 type ConfirmDialogState =
   | {
-      kind: 'deleteAssignedUser';
-      item: SuperAdminVmInventoryItem;
-      vmLabel: string;
-      message: string;
-    }
-  | {
-      kind: 'clearAssignedUser';
+      kind: 'freeVmAndDeleteUser';
       item: SuperAdminVmInventoryItem;
       vmLabel: string;
       message: string;
@@ -81,18 +79,24 @@ type ConfirmDialogState =
       message: string;
     }
   | {
-      kind: 'bulkDeleteAssignedUsers';
-      inventoryIds: string[];
-      message: string;
-    }
-  | {
-      kind: 'bulkClearAssignedUsers';
+      kind: 'bulkFreeVmAndDeleteUser';
       inventoryIds: string[];
       message: string;
     }
   | {
       kind: 'bulkDeleteAssignmentVms';
       externalVmIds: string[];
+      message: string;
+    }
+  | {
+      kind: 'resetMachine';
+      item: SuperAdminVmInventoryItem;
+      vmLabel: string;
+      message: string;
+    }
+  | {
+      kind: 'bulkResetMachines';
+      inventoryIds: string[];
       message: string;
     }
   | null;
@@ -134,6 +138,10 @@ function hasKnownInventoryOwner(item: SuperAdminVmInventoryItem): boolean {
   );
 }
 
+function canFreeVmInventoryRow(item: SuperAdminVmInventoryItem): boolean {
+  return hasInventoryAssignee(item) || hasKnownInventoryOwner(item);
+}
+
 function getDueDateBadge(value?: string | Date | null): { label: string; tone: string } | null {
   if (!value) return null;
   const date = new Date(value);
@@ -156,8 +164,11 @@ function getDueDateBadge(value?: string | Date | null): { label: string; tone: s
   if (diffDays <= 7) {
     return { label: `Due in ${diffDays}d`, tone: 'border-amber-200 bg-amber-50 text-amber-700' };
   }
+  if (diffDays <= 30) {
+    return { label: `Due in ${diffDays}d`, tone: 'border-yellow-200 bg-yellow-50 text-yellow-700' };
+  }
 
-  return null;
+  return { label: `Due in ${diffDays}d`, tone: 'border-gray-200 bg-gray-50 text-gray-600' };
 }
 
 function DueDateCell({ value }: { value?: string | Date | null }) {
@@ -180,6 +191,7 @@ function ConfirmActionModal(props: {
   onConfirm: () => void;
   onCancel: () => void;
   busy: boolean;
+  confirmText?: string;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 px-4">
@@ -200,7 +212,7 @@ function ConfirmActionModal(props: {
             disabled={props.busy}
             className="rounded-md bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           >
-            {props.busy ? 'Deleting…' : 'OK'}
+            {props.busy ? `${props.confirmText || 'Processing'}…` : 'OK'}
           </button>
         </div>
       </div>
@@ -219,10 +231,57 @@ function readCell(row: Record<string, unknown>, keys: string[]): unknown {
     if (key in row) return row[key];
 
     const normalizedKey = normalizeHeader(key);
-    const matchedEntry = normalizedRowEntries.find(([rowKey]) => rowKey === normalizedKey);
-    if (matchedEntry) return matchedEntry[1];
+    const exact = normalizedRowEntries.find(([rowKey]) => rowKey === normalizedKey);
+    if (exact) return exact[1];
+
+    // Excel often truncates headers in the UI (e.g. "Plan Durat" for "Plan Duration").
+    const prefixLength = Math.min(5, normalizedKey.length);
+    const prefix = normalizedKey.slice(0, prefixLength);
+    const partial = normalizedRowEntries.find(([rowKey]) => {
+      if (rowKey.length < 3) return false;
+      return rowKey.startsWith(prefix) || normalizedKey.startsWith(rowKey.slice(0, prefixLength));
+    });
+    if (partial) return partial[1];
   }
   return undefined;
+}
+
+function normalizeCanonicalIpv4(ipAddress: string): string {
+  const trimmed = ipAddress.trim();
+  const parts = trimmed.split('.');
+  if (parts.length !== 4 || !parts.every((part) => /^\d{1,3}$/.test(part))) {
+    return trimmed;
+  }
+  return parts.map((part) => String(parseInt(part, 10))).join('.');
+}
+
+function normalizeIpCell(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return normalizeCanonicalIpv4(String(value));
+  }
+  return normalizeCanonicalIpv4(String(value).trim());
+}
+
+function getRowVmSpecs(row: AssignmentRow): string[] {
+  if (row.vmSpecs.length > 0) return row.vmSpecs;
+  const fromProvider = row.providerDetails?.vmSpec?.trim();
+  return fromProvider ? [fromProvider] : [];
+}
+
+function getRowProviderEntries(row: AssignmentRow): AssignmentEntry[] {
+  if (row.assignments.length > 0) {
+    return row.assignments.map((assignment) => ({
+      ...assignment,
+      planDuration: assignment.planDuration ?? row.providerDetails?.planDuration ?? null,
+      vmSpec: assignment.vmSpec ?? row.providerDetails?.vmSpec ?? null,
+      vmUsername: assignment.vmUsername ?? row.providerDetails?.vmUsername ?? null,
+      vmPassword: assignment.vmPassword ?? row.providerDetails?.vmPassword ?? null,
+      providerStartDate: assignment.providerStartDate ?? row.providerDetails?.providerStartDate ?? null,
+      providerEndDate: assignment.providerEndDate ?? row.providerDetails?.providerEndDate ?? null,
+    }));
+  }
+  return row.providerDetails ? [row.providerDetails] : [];
 }
 
 function normalizeDateCell(value: unknown): string | undefined {
@@ -407,6 +466,207 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
   return [...grouped.values()];
 }
 
+function overviewOwnerLabel(row: SuperAdminExternalVmOverviewRow): string {
+  if (row.tenantName) return row.tenantName;
+  if (row.adminEmail) return row.adminEmail;
+  return 'Unassigned';
+}
+
+function matchesOverviewOwnerFilter(row: SuperAdminExternalVmOverviewRow, ownerSearch: string): boolean {
+  const query = ownerSearch.trim().toLowerCase();
+  if (!query) return true;
+  return overviewOwnerLabel(row).toLowerCase().includes(query);
+}
+
+function buildOwnerOptionsFromOverview(rows: SuperAdminExternalVmOverviewRow[]): SuperAdminVmInventoryOwnerOption[] {
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const label = overviewOwnerLabel(row);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .map(([label, count]) => ({ label, count }))
+    .sort((a, b) => a.label.localeCompare(b.label));
+}
+
+function scoreOverviewRowForEdit(row: SuperAdminExternalVmOverviewRow): number {
+  return row.assignments.length * 100 + (row.tenantId ? 10 : 0) + (row.adminId ? 5 : 0);
+}
+
+function overviewClientLabel(row: SuperAdminExternalVmOverviewRow): string {
+  const projectClient = String(row.projectClientName ?? '').trim();
+  if (projectClient) return projectClient;
+
+  const tenantName = String(row.tenantName ?? '').trim();
+  if (tenantName) return tenantName;
+
+  return String(row.tenantSlug ?? '').trim();
+}
+
+function resolveOverviewRowForManage(
+  assignmentRow: AssignmentRow,
+  overviewRows: SuperAdminExternalVmOverviewRow[]
+): SuperAdminExternalVmOverviewRow | undefined {
+  const byId = (id: string) => overviewRows.find((item) => item.externalVmId === id);
+
+  if (assignmentRow.editableExternalVmId) {
+    const preferred = byId(assignmentRow.editableExternalVmId);
+    if (preferred?.assignments.length) return preferred;
+  }
+
+  const ip = assignmentRow.ipAddress.trim();
+  if (!ip || ip === '—') {
+    return assignmentRow.editableExternalVmId
+      ? byId(assignmentRow.editableExternalVmId)
+      : undefined;
+  }
+
+  const candidates = overviewRows.filter((row) => row.ipAddress?.trim() === ip);
+  if (candidates.length === 0) {
+    return assignmentRow.editableExternalVmId
+      ? byId(assignmentRow.editableExternalVmId)
+      : undefined;
+  }
+
+  return [...candidates].sort((left, right) => scoreOverviewRowForEdit(right) - scoreOverviewRowForEdit(left))[0];
+}
+
+function buildAssignmentRowsFromOverview(rows: SuperAdminExternalVmOverviewRow[]): AssignmentRow[] {
+  const grouped = new Map<string, AssignmentRow & { editableScore?: number }>();
+
+  for (const row of rows) {
+    const key = row.ipAddress?.trim() ? row.ipAddress.trim() : row.externalVmId;
+    const ownerKey = row.tenantId
+      ? `tenant:${row.tenantId}`
+      : row.adminId
+        ? `admin:${row.adminId}`
+        : 'free';
+    const latestUpdatedAt = Number.isNaN(new Date(row.updatedAt).getTime())
+      ? 0
+      : new Date(row.updatedAt).getTime();
+
+    const current = grouped.get(key) ?? {
+      rowKey: key,
+      ipAddress: row.ipAddress || '—',
+      vmNames: [],
+      vmSpecs: [],
+      projectNames: [],
+      clientNames: [],
+      assignments: [],
+    };
+
+    if (!current.vmNames.includes(row.name)) {
+      current.vmNames.push(row.name);
+    }
+
+    const vmSpecLabel = String(row.providerVmSpec ?? '').trim();
+    if (vmSpecLabel && !current.vmSpecs.includes(vmSpecLabel)) {
+      current.vmSpecs.push(vmSpecLabel);
+    }
+
+    const projectLabel = String(row.projectName ?? row.projectId ?? '').trim();
+    if (projectLabel && !current.projectNames.includes(projectLabel)) {
+      current.projectNames.push(projectLabel);
+    }
+
+    const clientLabel = overviewClientLabel(row);
+    if (clientLabel && !current.clientNames.includes(clientLabel)) {
+      current.clientNames.push(clientLabel);
+    }
+
+    const rowScore = scoreOverviewRowForEdit(row);
+    if (
+      current.editableExternalVmId === undefined ||
+      rowScore > (current.editableScore ?? -1)
+    ) {
+      current.editableExternalVmId = row.externalVmId;
+      current.editableScore = rowScore;
+    }
+
+    if (
+      !current.providerDetails &&
+      (row.providerVmSpec ||
+        row.providerUsername ||
+        row.password ||
+        row.providerStartDate ||
+        row.providerEndDate ||
+        row.providerPlanDuration)
+    ) {
+      current.providerDetails = {
+        username: row.providerUsername?.trim() || row.name,
+        isTenantUser: false,
+        ownerKey,
+        tenantName: row.tenantName ?? undefined,
+        planDuration: row.providerPlanDuration ?? null,
+        vmSpec: row.providerVmSpec ?? null,
+        vmUsername: row.providerUsername ?? row.username ?? null,
+        vmPassword: row.password ?? null,
+        providerStartDate: row.providerStartDate ?? null,
+        providerEndDate: row.providerEndDate ?? null,
+        startDate: null,
+        endDate: null,
+      };
+    }
+
+    const assignmentByPriorityKey = new Map<
+      string,
+      { assignment: AssignmentEntry; updatedAtMs: number }
+    >();
+
+    for (const existing of current.assignments) {
+      const existingIdentity = String(existing.username ?? '').trim().toLowerCase();
+      const existingOwnerKey = existing.ownerKey ?? (existing.isTenantUser
+        ? `tenant:${existing.tenantName ?? ''}`
+        : ownerKey);
+      const dedupeKey = `${existingOwnerKey}|${existingIdentity}|${current.ipAddress.trim().toLowerCase()}`;
+      assignmentByPriorityKey.set(dedupeKey, {
+        assignment: existing,
+        updatedAtMs: 0,
+      });
+    }
+
+    for (const assignment of row.assignments) {
+      const username = assignment.email ?? assignment.username ?? assignment.userId ?? assignment.tenantUserId ?? 'Unknown';
+      const isTenantUser = assignment.stack === 'tenant';
+      const assignmentOwnerKey = isTenantUser
+        ? `tenant:${row.tenantId ?? row.tenantName ?? ''}`
+        : `admin:${row.adminId ?? row.adminEmail ?? ''}`;
+      const identity = String(username).trim().toLowerCase();
+      const dedupeKey = `${assignmentOwnerKey}|${identity}|${current.ipAddress.trim().toLowerCase()}`;
+      const currentRecord = assignmentByPriorityKey.get(dedupeKey);
+      const normalizedAssignment: AssignmentEntry = {
+        username,
+        isTenantUser,
+        ownerKey: assignmentOwnerKey,
+        tenantName: row.tenantName ?? undefined,
+        planDuration: row.providerPlanDuration ?? null,
+        vmSpec: row.providerVmSpec ?? null,
+        vmUsername: row.providerUsername ?? row.username ?? null,
+        vmPassword: row.password ?? null,
+        providerStartDate: row.providerStartDate ?? null,
+        providerEndDate: row.providerEndDate ?? null,
+        startDate: assignment.schedule?.effectiveFrom ?? null,
+        endDate: assignment.schedule?.effectiveTo ?? null,
+      };
+
+      if (!currentRecord || latestUpdatedAt >= currentRecord.updatedAtMs) {
+        assignmentByPriorityKey.set(dedupeKey, {
+          assignment: normalizedAssignment,
+          updatedAtMs: latestUpdatedAt,
+        });
+      }
+    }
+
+    current.assignments = [...assignmentByPriorityKey.values()]
+      .map((entry) => entry.assignment)
+      .sort((a, b) => a.username.localeCompare(b.username));
+
+    grouped.set(key, current);
+  }
+
+  return [...grouped.values()].map(({ editableScore: _editableScore, ...row }) => row);
+}
+
 function InventoryTable(props: {
   items: SuperAdminVmInventoryItem[];
   ownerOptions: SuperAdminVmInventoryOwnerOption[];
@@ -424,16 +684,16 @@ function InventoryTable(props: {
   onLimitChange: (value: number) => void;
   onPreviousPage: () => void;
   onNextPage: () => void;
-  deletingUserInventoryId: string | null;
-  clearingAssignmentInventoryId: string | null;
+  freeingVmInventoryId: string | null;
   selectedInventoryIds: string[];
   onToggleInventorySelection: (item: SuperAdminVmInventoryItem, checked: boolean) => void;
   onToggleAllSelection: (checked: boolean) => void;
-  onBulkDeleteSelectedUsers: () => void;
-  onBulkFreeSelectedVms: () => void;
+  onBulkFreeVmAndDeleteUser: () => void;
+  onBulkResetMachines: () => void;
   bulkBusy: boolean;
-  onDeleteAssignedUser: (item: SuperAdminVmInventoryItem) => void;
-  onClearAssignedUser: (item: SuperAdminVmInventoryItem) => void;
+  onFreeVmAndDeleteUser: (item: SuperAdminVmInventoryItem) => void;
+  onResetMachine: (item: SuperAdminVmInventoryItem) => void;
+  resetingVmInventoryId: string | null;
   loading: boolean;
   error: string | null;
   onRetry: () => void;
@@ -463,19 +723,20 @@ function InventoryTable(props: {
             <>
               <button
                 type="button"
-                onClick={props.onBulkDeleteSelectedUsers}
-                disabled={props.bulkBusy}
-                className="inline-flex items-center rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1 text-[11px] font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                Delete selected users
-              </button>
-              <button
-                type="button"
-                onClick={props.onBulkFreeSelectedVms}
+                onClick={props.onBulkFreeVmAndDeleteUser}
                 disabled={props.bulkBusy}
                 className="inline-flex items-center rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                Unassign selected VMs
+                Delete user & make VM free
+              </button>
+              <button
+                type="button"
+                onClick={props.onBulkResetMachines}
+                disabled={props.bulkBusy}
+                className="inline-flex items-center gap-1 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1 text-[11px] font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RotateCcw className="h-3 w-3" />
+                Reset VMs
               </button>
             </>
           ) : null}
@@ -613,19 +874,27 @@ function InventoryTable(props: {
                       <div className="flex flex-wrap items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => props.onDeleteAssignedUser(item)}
-                          disabled={!hasInventoryAssignee(item) || props.deletingUserInventoryId === item.inventoryId || props.bulkBusy}
-                          className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Delete user
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => props.onClearAssignedUser(item)}
-                          disabled={props.clearingAssignmentInventoryId === item.inventoryId || props.bulkBusy}
+                          onClick={() => props.onFreeVmAndDeleteUser(item)}
+                          disabled={
+                            !canFreeVmInventoryRow(item) ||
+                            props.freeingVmInventoryId === item.inventoryId ||
+                            props.bulkBusy
+                          }
                           className="inline-flex items-center gap-1.5 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
                         >
                           Delete user & make VM free
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => props.onResetMachine(item)}
+                          disabled={
+                            props.resetingVmInventoryId === item.inventoryId ||
+                            props.bulkBusy
+                          }
+                          className="inline-flex items-center gap-1.5 rounded-md border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700 hover:bg-blue-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          <RotateCcw className="h-3 w-3" />
+                          Reset VM
                         </button>
                       </div>
                     </td>
@@ -667,6 +936,7 @@ function AssignmentTable(props: {
   page: number;
   totalPages: number;
   totalVmCount: number;
+  totalExternalVmCount: number;
   selectedExternalVmIds: string[];
   showVmNames: boolean;
   showProjects: boolean;
@@ -705,9 +975,9 @@ function AssignmentTable(props: {
   deletingVmId: string | null;
   bulkDeleteBusy: boolean;
 }) {
-  const entryList = (row: AssignmentRow): AssignmentEntry[] =>
-    row.assignments.length > 0 ? row.assignments : row.providerDetails ? [row.providerDetails] : [];
+  const entryList = (row: AssignmentRow): AssignmentEntry[] => getRowProviderEntries(row);
   const assignedUserList = (row: AssignmentRow): AssignmentEntry[] => row.assignments;
+  const vmSpecList = (row: AssignmentRow): string[] => getRowVmSpecs(row);
   const selectableRows = props.rows.filter((row) => Boolean(row.editableExternalVmId));
   const selectableRowIds = selectableRows
     .map((row) => row.editableExternalVmId)
@@ -726,7 +996,12 @@ function AssignmentTable(props: {
         <div>
           <p className="text-sm font-semibold text-gray-900">VM assignment view</p>
           <p className="text-xs text-gray-500">IP-first view with merged VM names and user mappings</p>
-          <p className="text-xs font-medium text-gray-700">Total VMs: {props.totalVmCount}</p>
+          <p className="text-xs font-medium text-gray-700">
+            Total VMs: {props.totalVmCount}
+            {props.totalExternalVmCount !== props.totalVmCount ? (
+              <span className="font-normal text-gray-500"> ({props.totalExternalVmCount} external records)</span>
+            ) : null}
+          </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <button
@@ -958,7 +1233,7 @@ function AssignmentTable(props: {
                 ) : null}
                 {props.showVmSpec ? (
                   <td className="px-4 py-3.5 text-xs">
-                    {row.vmSpecs.length > 0 ? row.vmSpecs.map((vmSpec, vmSpecIndex) => <p key={`${row.rowKey}:vmspec:${vmSpecIndex}`} className="text-gray-700">{vmSpec}</p>) : <p className="text-[11px] text-gray-400">—</p>}
+                    {vmSpecList(row).length > 0 ? vmSpecList(row).map((vmSpec, vmSpecIndex) => <p key={`${row.rowKey}:vmspec:${vmSpecIndex}`} className="text-gray-700">{vmSpec}</p>) : <p className="text-[11px] text-gray-400">—</p>}
                   </td>
                 ) : null}
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmuser:${assignmentIndex}`} className="text-gray-700">{assignment.vmUsername || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
@@ -1048,7 +1323,7 @@ export default function SuperAdminVmInventoryPage() {
   const [showAssignmentVmNames, setShowAssignmentVmNames] = useState(false);
   const [showAssignmentProjects, setShowAssignmentProjects] = useState(false);
   const [showAssignmentClients, setShowAssignmentClients] = useState(false);
-  const [showAssignmentVmSpec, setShowAssignmentVmSpec] = useState(false);
+  const [showAssignmentVmSpec, setShowAssignmentVmSpec] = useState(true);
   const [showAssignmentPlanDuration, setShowAssignmentPlanDuration] = useState(false);
   const [assignmentProjectFilter, setAssignmentProjectFilter] = useState('');
   const [assignmentClientFilter, setAssignmentClientFilter] = useState('');
@@ -1057,8 +1332,8 @@ export default function SuperAdminVmInventoryPage() {
   const [selectedAssignmentVmIds, setSelectedAssignmentVmIds] = useState<string[]>([]);
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
   const [deletingAssignmentVmId, setDeletingAssignmentVmId] = useState<string | null>(null);
-  const [deletingUserInventoryId, setDeletingUserInventoryId] = useState<string | null>(null);
-  const [clearingAssignmentInventoryId, setClearingAssignmentInventoryId] = useState<string | null>(null);
+  const [freeingVmInventoryId, setFreeingVmInventoryId] = useState<string | null>(null);
+  const [resetingVmInventoryId, setResetingVmInventoryId] = useState<string | null>(null);
   const [bulkActionBusy, setBulkActionBusy] = useState(false);
   const [selectedInventoryIds, setSelectedInventoryIds] = useState<string[]>([]);
   const [confirmDialog, setConfirmDialog] = useState<ConfirmDialogState>(null);
@@ -1066,6 +1341,15 @@ export default function SuperAdminVmInventoryPage() {
   const [flashMessage, setFlashMessage] = useState<FlashMessage>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const resetSseRef = useRef<(() => void) | null>(null);
+  const resetStatesRef = useRef<Map<string, 'pending' | 'resetting' | 'success' | 'failed' | 'offline'>>(new Map());
+  const [resetProgressModalOpen, setResetProgressModalOpen] = useState(false);
+  const [resetMachineStatuses, setResetMachineStatuses] = useState<ResetMachineStatus[]>([]);
+  const [resetProgressData, setResetProgressData] = useState<{ acceptedCount: number; offlineCount: number; isStreaming: boolean }>({
+    acceptedCount: 0,
+    offlineCount: 0,
+    isStreaming: false,
+  });
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -1079,12 +1363,21 @@ export default function SuperAdminVmInventoryPage() {
     setLoading(true);
     setError(null);
     try {
-      const requestedPage = options?.page ?? (showAssignmentView ? 1 : page);
-      const requestedLimit = options?.limit ?? (showAssignmentView ? 5000 : limit);
+      if (showAssignmentView) {
+        const overviewRows = await fetchSuperAdminExternalVmOverview();
+        setExternalVmRows(overviewRows);
+        setOwnerOptions(buildOwnerOptionsFromOverview(overviewRows));
+        setItems([]);
+        setTotal(overviewRows.length);
+        return;
+      }
+
+      const requestedPage = options?.page ?? page;
+      const requestedLimit = options?.limit ?? limit;
       const result = await fetchSuperAdminVmInventory({
         resourceType: resourceType || undefined,
         ownerScope: ownerScope || undefined,
-        originServiceKey: showAssignmentView ? undefined : serviceKey || undefined,
+        originServiceKey: serviceKey || undefined,
         status: status || undefined,
         search: debouncedSearch || undefined,
         ownerSearch: selectedOwner || undefined,
@@ -1113,7 +1406,37 @@ export default function SuperAdminVmInventoryPage() {
   }, [items]);
 
   const totalPages = useMemo(() => Math.max(1, Math.ceil(total / limit)), [total, limit]);
-  const assignmentRows = useMemo(() => buildAssignmentRows(items), [items]);
+
+  const filteredOverviewRows = useMemo(() => {
+    if (!showAssignmentView) return [];
+    let rows = externalVmRows;
+    if (debouncedSearch) {
+      const query = debouncedSearch.toLowerCase();
+      rows = rows.filter((row) => {
+        const haystack = [
+          row.ipAddress,
+          row.name,
+          row.tenantName,
+          row.tenantSlug,
+          row.adminEmail,
+          ...row.assignments.map((assignment) => assignment.email ?? assignment.username ?? ''),
+        ]
+          .filter(Boolean)
+          .join(' ')
+          .toLowerCase();
+        return haystack.includes(query);
+      });
+    }
+    if (selectedOwner.trim()) {
+      rows = rows.filter((row) => matchesOverviewOwnerFilter(row, selectedOwner));
+    }
+    return rows;
+  }, [debouncedSearch, externalVmRows, selectedOwner, showAssignmentView]);
+
+  const assignmentRows = useMemo(
+    () => (showAssignmentView ? buildAssignmentRowsFromOverview(filteredOverviewRows) : buildAssignmentRows(items)),
+    [filteredOverviewRows, items, showAssignmentView]
+  );
   const assignmentProjectOptions = useMemo(() => {
     const projects = new Set<string>();
     for (const row of assignmentRows) {
@@ -1177,18 +1500,20 @@ export default function SuperAdminVmInventoryPage() {
 
   const handleEditAssignmentRow = useCallback(
     async (row: AssignmentRow) => {
-      if (!row.editableExternalVmId) return;
-      let target = externalVmById.get(row.editableExternalVmId);
-      if (!target) {
-        const overviewRows = await fetchSuperAdminExternalVmOverview();
+      let overviewRows = externalVmRows;
+      let target = resolveOverviewRowForManage(row, overviewRows);
+
+      if (!target || (row.assignments.length > 0 && target.assignments.length === 0)) {
+        overviewRows = await fetchSuperAdminExternalVmOverview();
         setExternalVmRows(overviewRows);
-        target = overviewRows.find((item) => item.externalVmId === row.editableExternalVmId);
+        target = resolveOverviewRowForManage(row, overviewRows);
       }
+
       if (target) {
         setManageRow(target);
       }
     },
-    [externalVmById]
+    [externalVmRows]
   );
 
   const performDeleteAssignmentRow = useCallback(
@@ -1283,14 +1608,15 @@ export default function SuperAdminVmInventoryPage() {
     [load]
   );
 
-  const performClearAssignedUser = useCallback(
+  const performFreeVmAndDeleteUser = useCallback(
     async (item: SuperAdminVmInventoryItem) => {
+      if (!canFreeVmInventoryRow(item)) return;
       const vmLabel = item.name || item.ipAddress || 'this VM';
 
-      setClearingAssignmentInventoryId(item.inventoryId);
+      setFreeingVmInventoryId(item.inventoryId);
       setFlashMessage(null);
       try {
-        const result = await clearSuperAdminVmInventoryAssignment({
+        const result = await freeSuperAdminVmInventoryAndDeleteUser({
           resourceType: item.resourceType,
           sourceId: item.sourceId,
         });
@@ -1300,79 +1626,56 @@ export default function SuperAdminVmInventoryPage() {
           return;
         }
 
-        const deletedUsersCount = (result.deletedPlatformUsers ?? 0) + (result.deletedTenantUsers ?? 0);
-        const detail =
-          deletedUsersCount > 0
-            ? ` Login account${deletedUsersCount > 1 ? 's' : ''} removed: ${deletedUsersCount}.`
-            : ' VM is now free.';
-        setFlashMessage({ type: 'success', text: `Assignment cleared for ${vmLabel}.${detail}` });
-        await load();
-      } catch (clearError) {
-        setFlashMessage({
-          type: 'error',
-          text: clearError instanceof ApiError ? clearError.message : 'Failed to delete assigned user.',
-        });
-      } finally {
-        setClearingAssignmentInventoryId(null);
-      }
-    },
-    [load]
-  );
-
-  const performDeleteAssignedUser = useCallback(
-    async (item: SuperAdminVmInventoryItem) => {
-      if (!hasInventoryAssignee(item)) return;
-      const vmLabel = item.name || item.ipAddress || 'this VM';
-
-      setDeletingUserInventoryId(item.inventoryId);
-      setFlashMessage(null);
-      try {
-        const result = await deleteSuperAdminVmInventoryAssignedUser({
-          resourceType: item.resourceType,
-          sourceId: item.sourceId,
-        });
-
-        if (!result.updated) {
-          setFlashMessage({ type: 'error', text: 'No assigned user found to delete for this row.' });
-          return;
+        const deletedUsersCount = result.deletedPlatformUsers + result.deletedTenantUsers;
+        const detailParts: string[] = [];
+        if (deletedUsersCount > 0) {
+          detailParts.push(
+            `deleted ${deletedUsersCount} login account${deletedUsersCount > 1 ? 's' : ''}`
+          );
+        }
+        if (result.clearedAssignment) {
+          detailParts.push('end-user unassigned from VM');
+        }
+        if (result.clearedOwner) {
+          detailParts.push('moved to free pool (detached from tenant/admin)');
         }
 
-        const deletedUsersCount = (result.deletedPlatformUsers ?? 0) + (result.deletedTenantUsers ?? 0);
+        const detail = detailParts.length > 0 ? ` ${detailParts.join(', ')}.` : ' VM is now free.';
         setFlashMessage({
           type: 'success',
-          text: `Deleted user account${deletedUsersCount > 1 ? 's' : ''}: ${deletedUsersCount} for ${vmLabel}.`,
+          text: `${vmLabel} is free.${detail} Use owner filter "Unassigned" to find it in assignment view.`,
         });
         await load();
-      } catch (deleteError) {
+      } catch (freeError) {
         setFlashMessage({
           type: 'error',
-          text: deleteError instanceof ApiError ? deleteError.message : 'Failed to delete assigned user.',
+          text: freeError instanceof ApiError ? freeError.message : 'Failed to delete user and free VM.',
         });
       } finally {
-        setDeletingUserInventoryId(null);
+        setFreeingVmInventoryId(null);
       }
     },
     [load]
   );
 
-  const handleDeleteAssignedUser = useCallback((item: SuperAdminVmInventoryItem) => {
-    if (!hasInventoryAssignee(item)) return;
+  const handleFreeVmAndDeleteUser = useCallback((item: SuperAdminVmInventoryItem) => {
+    if (!canFreeVmInventoryRow(item)) return;
     const vmLabel = item.name || item.ipAddress || 'this VM';
     setConfirmDialog({
-      kind: 'deleteAssignedUser',
+      kind: 'freeVmAndDeleteUser',
       item,
       vmLabel,
-      message: `Delete user for ${vmLabel}? This removes the login account and unassigns that user everywhere.`,
+      message: `Delete user & free ${vmLabel}? This deletes the end-user account, unassigns them from the VM, and detaches the VM from its tenant/admin owner so it returns to the free pool.`,
     });
   }, []);
 
-  const handleClearAssignedUser = useCallback((item: SuperAdminVmInventoryItem) => {
+  const handleResetMachine = useCallback((item: SuperAdminVmInventoryItem) => {
     const vmLabel = item.name || item.ipAddress || 'this VM';
     setConfirmDialog({
-      kind: 'clearAssignedUser',
+      kind: 'resetMachine',
       item,
       vmLabel,
-      message: `Delete assigned user for ${vmLabel}? This clears assignment records from all linked storage.`,
+      message: `Reset ${vmLabel}? All user software, credentials, activity traces, and system cache will be removed.`,
     });
   }, []);
 
@@ -1396,25 +1699,25 @@ export default function SuperAdminVmInventoryPage() {
     setSelectedInventoryIds(selectableIds);
   }, [items]);
 
-  const handleBulkDeleteSelectedUsers = useCallback(() => {
+  const handleBulkFreeVmAndDeleteUser = useCallback(() => {
     if (selectedInventoryIds.length === 0) return;
     setConfirmDialog({
-      kind: 'bulkDeleteAssignedUsers',
+      kind: 'bulkFreeVmAndDeleteUser',
       inventoryIds: [...selectedInventoryIds],
-      message: `Delete user for ${selectedInventoryIds.length} selected row(s)? This removes login accounts and unassigns them everywhere.`,
+      message: `Delete user & free ${selectedInventoryIds.length} selected VM(s)? End users are deleted, VMs are unassigned, and detached from tenant/admin owners into the free pool.`,
     });
   }, [selectedInventoryIds]);
 
-  const handleBulkFreeSelectedVms = useCallback(() => {
+  const handleBulkResetMachines = useCallback(() => {
     if (selectedInventoryIds.length === 0) return;
     setConfirmDialog({
-      kind: 'bulkClearAssignedUsers',
+      kind: 'bulkResetMachines',
       inventoryIds: [...selectedInventoryIds],
-      message: `Delete user & make VM free for ${selectedInventoryIds.length} selected row(s)?`,
+      message: `Reset ${selectedInventoryIds.length} selected VM(s)? All user software, credentials, activity traces, and system cache will be removed from each.`,
     });
   }, [selectedInventoryIds]);
 
-  const performBulkDeleteAssignedUsers = useCallback(
+  const performBulkFreeVmAndDeleteUser = useCallback(
     async (inventoryIds: string[]) => {
       const rows = items.filter((item) => inventoryIds.includes(item.inventoryId));
       if (rows.length === 0) return;
@@ -1424,7 +1727,7 @@ export default function SuperAdminVmInventoryPage() {
       let failedCount = 0;
       for (const item of rows) {
         try {
-          const result = await deleteSuperAdminVmInventoryAssignedUser({
+          const result = await freeSuperAdminVmInventoryAndDeleteUser({
             resourceType: item.resourceType,
             sourceId: item.sourceId,
           });
@@ -1438,40 +1741,224 @@ export default function SuperAdminVmInventoryPage() {
       await load();
       setFlashMessage({
         type: failedCount > 0 ? 'error' : 'success',
-        text: `Delete user completed. Success: ${successCount}, Failed: ${failedCount}.`,
+        text: `Delete user & make VM free completed. Success: ${successCount}, Failed: ${failedCount}.`,
       });
       setBulkActionBusy(false);
     },
     [items, load]
   );
 
-  const performBulkFreeSelectedVms = useCallback(
+  const performResetMachine = useCallback(
+    async (item: SuperAdminVmInventoryItem) => {
+      if (!item.inventoryId) return;
+      setResetingVmInventoryId(item.inventoryId);
+      setFlashMessage(null);
+      try {
+        const sessionId = Date.now().toString();
+        const result = await superAdminResetMachinesByInventory([item.inventoryId], sessionId);
+
+        const vmLabel = item.name || item.ipAddress || item.inventoryId;
+        const notFound = result.notFound.includes(item.inventoryId);
+        const initialStatus: ResetMachineStatus['status'] = notFound
+          ? 'offline'
+          : result.accepted.length > 0
+            ? 'pending'
+            : result.offline.length > 0
+              ? 'offline'
+              : 'offline';
+
+        setResetMachineStatuses([
+          {
+            inventoryId: item.inventoryId,
+            vmLabel,
+            status: initialStatus,
+            error: notFound ? 'No machine agent found for this VM.' : undefined,
+          },
+        ]);
+        setResetProgressData({
+          acceptedCount: result.accepted.length,
+          offlineCount: result.offline.length + result.notFound.length,
+          isStreaming: result.accepted.length > 0,
+        });
+        setResetProgressModalOpen(true);
+
+        if (result.accepted.length === 0) {
+          return;
+        }
+
+        resetStatesRef.current.clear();
+        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
+
+        const stopStream = await superAdminOpenResetStatusStreamWithReconnect(
+          sessionId,
+          ticketResponse.streamToken,
+          (event) => {
+            if (event.type === 'reset_complete' && event.machineId) {
+              setResetMachineStatuses((prev) =>
+                prev.map((m) =>
+                  m.inventoryId === item.inventoryId
+                    ? {
+                        ...m,
+                        status: event.success ? 'success' : 'failed',
+                        error: event.error,
+                        completedAt: Date.now(),
+                      }
+                    : m
+                )
+              );
+            }
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            setResetMachineStatuses((prev) =>
+              prev.map((m) =>
+                m.status === 'pending'
+                  ? {
+                      ...m,
+                      status: 'failed',
+                      error: 'Connection lost — reset may have completed. Check the machine status.',
+                    }
+                  : m
+              )
+            );
+          },
+          result.accepted.length
+        );
+
+        resetSseRef.current = stopStream;
+        setTimeout(() => {
+          void load();
+        }, 3000);
+      } catch (err) {
+        const errorMsg = err instanceof ApiError ? err.message : 'Failed to reset machine';
+        setFlashMessage({
+          type: 'error',
+          text: errorMsg,
+        });
+        setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+      } finally {
+        setResetingVmInventoryId(null);
+      }
+    },
+    [load]
+  );
+
+  const performBulkResetMachines = useCallback(
     async (inventoryIds: string[]) => {
-      const rows = items.filter((item) => inventoryIds.includes(item.inventoryId));
-      if (rows.length === 0) return;
+      if (inventoryIds.length === 0) return;
       setBulkActionBusy(true);
       setFlashMessage(null);
-      let successCount = 0;
-      let failedCount = 0;
-      for (const item of rows) {
-        try {
-          const result = await clearSuperAdminVmInventoryAssignment({
-            resourceType: item.resourceType,
-            sourceId: item.sourceId,
-          });
-          if (result.updated) successCount += 1;
-          else successCount += 1;
-        } catch {
-          failedCount += 1;
+      try {
+        const sessionId = Date.now().toString();
+        const result = await superAdminResetMachinesByInventory(inventoryIds, sessionId);
+
+        const machineStatuses: ResetMachineStatus[] = inventoryIds.map((invId) => {
+          const item = items.find((i) => i.inventoryId === invId);
+          const vmLabel = item?.name || item?.ipAddress || invId;
+          const notFound = result.notFound.includes(invId);
+          return {
+            inventoryId: invId,
+            vmLabel,
+            status: notFound ? 'offline' : result.accepted.length > 0 ? 'pending' : 'offline',
+            error: notFound
+              ? 'No machine agent found for this VM.'
+              : result.accepted.length === 0
+                ? 'Machine agent is offline.'
+                : undefined,
+          };
+        });
+
+        setResetMachineStatuses(machineStatuses);
+        setResetProgressData({
+          acceptedCount: result.accepted.length,
+          offlineCount: result.offline.length + result.notFound.length,
+          isStreaming: result.accepted.length > 0,
+        });
+        setResetProgressModalOpen(true);
+
+        resetStatesRef.current.clear();
+
+        if (result.accepted.length === 0) {
+          setSelectedInventoryIds([]);
+          return;
         }
+
+        const ticketResponse = await superAdminIssueResetStreamTicket(sessionId);
+
+        const markRemainingPendingOffline = () => {
+          setResetMachineStatuses((prev) =>
+            prev.map((m) =>
+              m.status === 'pending'
+                ? {
+                    ...m,
+                    status: 'offline',
+                    error: 'Machine agent is offline or reset was skipped.',
+                  }
+                : m
+            )
+          );
+        };
+
+        const stopStream = await superAdminOpenResetStatusStreamWithReconnect(
+          sessionId,
+          ticketResponse.streamToken,
+          (event) => {
+            if (event.type === 'reset_complete' && event.machineId) {
+              setResetMachineStatuses((prev) => {
+                const nextPendingIndex = prev.findIndex((m) => m.status === 'pending');
+                if (nextPendingIndex === -1) return prev;
+                return prev.map((m, idx) =>
+                  idx === nextPendingIndex
+                    ? {
+                        ...m,
+                        status: event.success ? 'success' : 'failed',
+                        error: event.error,
+                        completedAt: Date.now(),
+                      }
+                    : m
+                );
+              });
+            }
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            markRemainingPendingOffline();
+          },
+          () => {
+            setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+            setResetMachineStatuses((prev) =>
+              prev.map((m) =>
+                m.status === 'pending'
+                  ? {
+                      ...m,
+                      status: 'failed',
+                      error: 'Connection lost — reset may have completed. Check the machine status.',
+                    }
+                  : m
+              )
+            );
+          },
+          result.accepted.length
+        );
+
+        resetSseRef.current = stopStream;
+        setSelectedInventoryIds([]);
+        setTimeout(() => {
+          void load();
+        }, 3000);
+      } catch (err) {
+        const errorMsg = err instanceof ApiError ? err.message : 'Failed to reset machines';
+        setFlashMessage({
+          type: 'error',
+          text: errorMsg,
+        });
+        setResetProgressData((prev) => ({ ...prev, isStreaming: false }));
+      } finally {
+        setBulkActionBusy(false);
       }
-      setSelectedInventoryIds([]);
-      await load();
-      setFlashMessage({
-        type: failedCount > 0 ? 'error' : 'success',
-        text: `Unassign completed. Success: ${successCount}, Failed: ${failedCount}.`,
-      });
-      setBulkActionBusy(false);
     },
     [items, load]
   );
@@ -1479,20 +1966,26 @@ export default function SuperAdminVmInventoryPage() {
   const handleConfirmDialog = useCallback(async () => {
     if (!confirmDialog) return;
 
-    if (confirmDialog.kind === 'deleteAssignedUser') {
-      await performDeleteAssignedUser(confirmDialog.item);
+    if (confirmDialog.kind === 'freeVmAndDeleteUser') {
+      await performFreeVmAndDeleteUser(confirmDialog.item);
       setConfirmDialog(null);
       return;
     }
 
-    if (confirmDialog.kind === 'bulkDeleteAssignedUsers') {
-      await performBulkDeleteAssignedUsers(confirmDialog.inventoryIds);
+    if (confirmDialog.kind === 'resetMachine') {
+      await performResetMachine(confirmDialog.item);
       setConfirmDialog(null);
       return;
     }
 
-    if (confirmDialog.kind === 'bulkClearAssignedUsers') {
-      await performBulkFreeSelectedVms(confirmDialog.inventoryIds);
+    if (confirmDialog.kind === 'bulkFreeVmAndDeleteUser') {
+      await performBulkFreeVmAndDeleteUser(confirmDialog.inventoryIds);
+      setConfirmDialog(null);
+      return;
+    }
+
+    if (confirmDialog.kind === 'bulkResetMachines') {
+      await performBulkResetMachines(confirmDialog.inventoryIds);
       setConfirmDialog(null);
       return;
     }
@@ -1508,20 +2001,17 @@ export default function SuperAdminVmInventoryPage() {
       setConfirmDialog(null);
       return;
     }
-
-    await performClearAssignedUser(confirmDialog.item);
-    setConfirmDialog(null);
-  }, [confirmDialog, performBulkDeleteAssignedUsers, performBulkDeleteAssignmentRows, performBulkFreeSelectedVms, performClearAssignedUser, performDeleteAssignedUser, performDeleteAssignmentRow]);
+  }, [confirmDialog, performBulkFreeVmAndDeleteUser, performBulkResetMachines, performBulkDeleteAssignmentRows, performFreeVmAndDeleteUser, performResetMachine, performDeleteAssignmentRow]);
 
   const confirmDialogBusy =
-    confirmDialog?.kind === 'deleteAssignedUser'
-      ? deletingUserInventoryId === confirmDialog.item.inventoryId
-      : confirmDialog?.kind === 'bulkDeleteAssignedUsers' || confirmDialog?.kind === 'bulkClearAssignedUsers' || confirmDialog?.kind === 'bulkDeleteAssignmentVms'
+    confirmDialog?.kind === 'freeVmAndDeleteUser'
+      ? freeingVmInventoryId === confirmDialog.item.inventoryId
+      : confirmDialog?.kind === 'resetMachine'
+        ? resetingVmInventoryId === confirmDialog.item.inventoryId
+      : confirmDialog?.kind === 'bulkFreeVmAndDeleteUser' || confirmDialog?.kind === 'bulkDeleteAssignmentVms' || confirmDialog?.kind === 'bulkResetMachines'
         ? bulkActionBusy
       : confirmDialog?.kind === 'deleteAssignmentVm'
       ? deletingAssignmentVmId === confirmDialog.row.editableExternalVmId
-      : confirmDialog?.kind === 'clearAssignedUser'
-        ? clearingAssignmentInventoryId === confirmDialog.item.inventoryId
         : false;
 
   const toggleSort = (nextSortBy: SortBy) => {
@@ -1556,11 +2046,38 @@ export default function SuperAdminVmInventoryPage() {
 
       const parsedRows: VmProviderMetadataImportRow[] = rows
         .map((row) => {
-          const ipAddress = String(readCell(row, ['IP', 'Ip', 'IP Address', 'Ip Address', 'ip', 'ipAddress']) ?? '').trim();
+          const ipAddress = normalizeIpCell(readCell(row, ['IP', 'Ip', 'IP Address', 'Ip Address', 'ip', 'ipAddress']));
           const name = String(readCell(row, ['Name', 'Server Name', 'VM Name', 'Hostname', 'Host Name', 'name']) ?? '').trim();
-          const vmSpec = String(readCell(row, ['VM Spec', 'VM Specs', 'Spec', 'Specs', 'Configuration', 'vmSpec']) ?? '').trim();
+          const vmSpec = String(
+            readCell(row, [
+              'VM Spec',
+              'VM Specs',
+              'Vm Spec',
+              'Vp Spec',
+              'VPS Spec',
+              'Server Spec',
+              'Instance Type',
+              'Instance Spec',
+              'Configuration',
+              'VM Configuration',
+              'Package',
+              'Plan Spec',
+              'Spec',
+              'Specs',
+              'vmSpec',
+            ]) ?? ''
+          ).trim();
           const rawProtocol = String(readCell(row, ['Protocol', 'protocol']) ?? '').trim().toLowerCase();
-          const rawDuration = String(readCell(row, ['Plan Duration', 'Duration', 'Billing Period', 'planDuration']) ?? '').trim().toLowerCase();
+          const rawDuration = String(
+            readCell(row, [
+              'Plan Duration',
+              'Plan Durat',
+              'Plan Dura',
+              'Duration',
+              'Billing Period',
+              'planDuration',
+            ]) ?? ''
+          ).trim().toLowerCase();
           const username = String(readCell(row, ['Username', 'User Name', 'username']) ?? '').trim();
           const password = String(readCell(row, ['Password', 'password']) ?? '').trim();
           const providerStartDate = normalizeDateCell(readCell(row, ['Start Date', 'Provider Start Date', 'startDate']));
@@ -1599,6 +2116,7 @@ export default function SuperAdminVmInventoryPage() {
         type: 'success',
         text: `Imported provider metadata for ${result.updated} of ${result.total} row(s)${result.created > 0 ? ` and created ${result.created} new VM record(s)` : ''}.`,
       });
+      setShowAssignmentVmSpec(true);
       setPage(1);
       await load({ page: 1 });
     } catch (uploadError) {
@@ -1621,8 +2139,22 @@ export default function SuperAdminVmInventoryPage() {
             if (!confirmDialogBusy) setConfirmDialog(null);
           }}
           busy={confirmDialogBusy}
+          confirmText={
+            confirmDialog.kind === 'resetMachine' || confirmDialog.kind === 'bulkResetMachines'
+              ? 'Resetting'
+              : undefined
+          }
         />
       ) : null}
+
+      <ResetProgressModal
+        isOpen={resetProgressModalOpen}
+        machines={resetMachineStatuses}
+        onClose={() => setResetProgressModalOpen(false)}
+        isStreaming={resetProgressData.isStreaming}
+        acceptedCount={resetProgressData.acceptedCount}
+        offlineCount={resetProgressData.offlineCount}
+      />
 
       {manageRow ? (
         <ManageExternalVmAssignmentsModal
@@ -1677,6 +2209,23 @@ export default function SuperAdminVmInventoryPage() {
             <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
             <input className={`${inputClass} pl-9`} placeholder="Search name, IP, owner..." value={search} onChange={(e) => setSearch(e.target.value)} />
           </div>
+          {showAssignmentView && ownerOptions.length > 0 ? (
+            <select
+              value={selectedOwner}
+              onChange={(e) => {
+                setSelectedOwner(e.target.value);
+                setAssignmentPage(1);
+              }}
+              className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700"
+            >
+              <option value="">All owners</option>
+              {ownerOptions.map((owner) => (
+                <option key={owner.label} value={owner.label}>
+                  {owner.label} ({owner.count})
+                </option>
+              ))}
+            </select>
+          ) : null}
           <button type="button" onClick={() => setShowAssignmentView((prev) => !prev)} className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-2 text-sm font-medium text-white hover:opacity-90">
             {showAssignmentView ? 'Inventory records view' : 'VM assignment view'}
           </button>
@@ -1710,20 +2259,37 @@ export default function SuperAdminVmInventoryPage() {
           }}
           onPreviousPage={() => setPage((p) => Math.max(1, p - 1))}
           onNextPage={() => setPage((p) => Math.min(totalPages, p + 1))}
-          deletingUserInventoryId={deletingUserInventoryId}
-          clearingAssignmentInventoryId={clearingAssignmentInventoryId}
+          freeingVmInventoryId={freeingVmInventoryId}
+          resetingVmInventoryId={resetingVmInventoryId}
           selectedInventoryIds={selectedInventoryIds}
           onToggleInventorySelection={handleToggleInventorySelection}
           onToggleAllSelection={handleToggleAllInventorySelection}
-          onBulkDeleteSelectedUsers={handleBulkDeleteSelectedUsers}
-          onBulkFreeSelectedVms={handleBulkFreeSelectedVms}
+          onBulkFreeVmAndDeleteUser={handleBulkFreeVmAndDeleteUser}
+          onBulkResetMachines={handleBulkResetMachines}
           bulkBusy={bulkActionBusy}
-          onDeleteAssignedUser={handleDeleteAssignedUser}
-          onClearAssignedUser={handleClearAssignedUser}
+          onFreeVmAndDeleteUser={handleFreeVmAndDeleteUser}
+          onResetMachine={handleResetMachine}
           loading={loading}
           error={error}
           onRetry={() => void load()}
         />
+      ) : null}
+
+      {showAssignmentView && loading ? <TableSkeleton rows={8} cols={8} /> : null}
+
+      {showAssignmentView && !loading && error ? (
+        <div className="mt-6">
+          <ErrorState message={error} onRetry={() => void load()} />
+        </div>
+      ) : null}
+
+      {showAssignmentView && !loading && !error && sortedAssignmentRows.length === 0 ? (
+        <div className="mt-6 rounded-xl border border-gray-200 bg-white p-16 text-center shadow-sm">
+          <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
+            <Database className="h-7 w-7 text-gray-400" />
+          </div>
+          <p className="text-sm text-gray-500">No external VMs match the current search or owner filter.</p>
+        </div>
       ) : null}
 
       {showAssignmentView && !loading && !error && sortedAssignmentRows.length > 0 ? (
@@ -1732,6 +2298,7 @@ export default function SuperAdminVmInventoryPage() {
           page={assignmentPage}
           totalPages={assignmentTotalPages}
           totalVmCount={filteredAssignmentRows.length}
+          totalExternalVmCount={filteredOverviewRows.length}
           selectedExternalVmIds={selectedAssignmentVmIds}
           showVmNames={showAssignmentVmNames}
           showProjects={showAssignmentProjects}
