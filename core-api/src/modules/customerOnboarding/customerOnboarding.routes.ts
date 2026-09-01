@@ -14,7 +14,8 @@ import { ValidationError, NotFoundError } from '../../utils/errors';
 import { sendPlainEmail } from '../../utils/email/sender';
 import { generateFingerprint, getClientIp } from '../../utils/deviceFingerprint';
 import { adminOrgOnboardingService } from './adminOrgOnboarding.service';
-import { otpService } from '../otp/otp.service';
+// OTP on hold — provider not finalized.
+// import { otpService } from '../otp/otp.service';
 import {
   serializeOrganizationRequest,
   serializeOrganizationRequests,
@@ -231,11 +232,12 @@ router.post(
 
       const body = req.body as z.infer<typeof submitOrganizationDetailsSchema>['body'];
       const encryptedBody = withEncryptedTaxId(body);
-      await otpService.assertPhoneVerified(
-        authReq.user.userId,
-        body.phone,
-        'organization_onboarding_phone'
-      );
+      // OTP on hold — provider not finalized; allow submit without phone verification for now.
+      // await otpService.assertPhoneVerified(
+      //   authReq.user.userId,
+      //   body.phone,
+      //   'organization_onboarding_phone'
+      // );
       const existing = await OrganizationAccessRequestModel.findOne({ userId: user._id })
         .select('_id')
         .lean();
