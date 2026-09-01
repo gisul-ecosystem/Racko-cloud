@@ -3,6 +3,20 @@ import { tenantPortalRequest } from './tenantPortalApiClient';
 
 export type ExternalVMSource = 'admin_import' | 'tenant_import' | 'superadmin_bulk';
 
+export type MyVmOriginServiceKey =
+  | 'vm-management'
+  | 'create-vm'
+  | 'elastic-servers'
+  | 'external-vm';
+
+export type MyVmOriginServiceLabel =
+  | 'VPS Hosting'
+  | 'VM Catalog'
+  | 'Elastic Server Import'
+  | 'External VM Import';
+
+export type MyVmResourceType = 'platform_vm' | 'catalog_vm' | 'external_vm';
+
 export interface MyVmAssignment {
   assignmentId: string;
   userId?: string;
@@ -22,13 +36,22 @@ export interface MyVmAssignment {
 
 export interface MyVmDashboardRow {
   _id: string;
+  resourceType: MyVmResourceType;
+  originServiceKey: MyVmOriginServiceKey;
+  originServiceLabel: MyVmOriginServiceLabel;
   name: string;
-  ipAddress: string;
-  protocol: 'rdp' | 'ssh' | 'vnc';
-  username: string;
-  password: '••••••••';
-  source: ExternalVMSource;
-  sourceLabel: 'External Server';
+  ipAddress: string | null;
+  protocol: 'rdp' | 'ssh' | 'vnc' | null;
+  username: string | null;
+  password: string | null;
+  hostname?: string | null;
+  status: string;
+  statusLabel: string;
+  canConsole: boolean;
+  consolePath: string | null;
+  managePath: string | null;
+  parentRequestId?: string;
+  instanceId?: string;
   assignments: MyVmAssignment[];
   accessSchedule: {
     startDate: string | null;

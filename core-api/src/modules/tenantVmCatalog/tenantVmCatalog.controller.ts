@@ -107,4 +107,35 @@ export const tenantVmCatalogController = {
       next(err);
     }
   },
+
+  async powerVm(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as TenantAuthenticatedRequest;
+      const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const body = (req.body || {}) as {
+        action: 'virtualizor' | 'start' | 'stop' | 'reboot';
+        instanceId?: string;
+      };
+      const result = await vmCatalogService.powerActionForTenant(
+        id,
+        tenantId,
+        body.action,
+        body.instanceId
+      );
+      const message =
+        body.action === 'virtualizor'
+          ? 'Virtualization control opened.'
+          : body.action === 'start'
+            ? 'Start requested.'
+            : body.action === 'stop'
+              ? 'Stop requested.'
+              : body.action === 'reboot'
+                ? 'Restart requested.'
+                : 'Power action completed.';
+      success(res, message, result);
+    } catch (err) {
+      next(err);
+    }
+  },
 };

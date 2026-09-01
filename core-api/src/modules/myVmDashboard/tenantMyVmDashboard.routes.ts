@@ -9,7 +9,7 @@ const router = Router();
 router.use(resolveTenantContext);
 router.use(requireTenantAuth);
 
-/** GET /api/v1/tenant-my-vms — read-only VM list gated by my_vms.read. */
+/** GET /api/v1/tenant-my-vms — unified VM hub for tenant admin. */
 router.get(
   '/',
   requireTenantPermission('my_vms.read'),
