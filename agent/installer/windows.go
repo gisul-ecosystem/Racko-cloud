@@ -674,7 +674,24 @@ func runMSI(pkg SoftwarePackage) (string, error) {
 		}
 	}
 	log.Printf("[msi] Running in active user session: msiexec %v", args)
-	return runAsActiveUser("msiexec", args...)
+	out, err := runAsActiveUser("msiexec", args...)
+
+	// Exit code 1603 from msiexec with no output means the software is already installed.
+	// Google Chrome Enterprise MSI (and several others) return 1603 instead of 1638
+	// when the same version is already present. Treat this as success — idempotent install.
+	if err != nil {
+		outLower := strings.ToLower(out)
+		if strings.Contains(err.Error(), "code 1603") && strings.TrimSpace(outLower) == "" {
+			log.Printf("[msi] Exit 1603 with no output — software already installed, treating as success")
+			return out, nil
+		}
+		// 1638 = another version already installed — also a success (idempotent)
+		if strings.Contains(err.Error(), "code 1638") {
+			log.Printf("[msi] Exit 1638 — another version already installed, treating as success")
+			return out, nil
+		}
+	}
+	return out, err
 }
 
 // runEXE downloads and runs a silent .exe installer in the active user session.
