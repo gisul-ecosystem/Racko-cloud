@@ -1,11 +1,13 @@
 'use client';
 
 import { useState } from 'react';
-import { Loader2, Power, RefreshCw, ToggleLeft } from 'lucide-react';
+import { Loader2, Power, RefreshCw, ToggleLeft, Trash2 } from 'lucide-react';
 import { ApiError } from '../../lib/apiClient';
 import type { CatalogVmPowerAction } from '../../lib/vmCatalogApi';
 
-const POWER_BUTTONS = [
+type PowerControlMode = 'webyne' | 'azure';
+
+const WEBYNE_BUTTONS = [
   {
     action: 'virtualizor' as const,
     label: 'Enable virtualization',
@@ -32,6 +34,38 @@ const POWER_BUTTONS = [
   },
 ] as const;
 
+const AZURE_BUTTONS = [
+  {
+    action: 'start' as const,
+    label: 'Start',
+    tone: 'bg-emerald-500 hover:bg-emerald-600',
+    icon: Power,
+  },
+  {
+    action: 'stop' as const,
+    label: 'Stop',
+    tone: 'bg-amber-500 hover:bg-amber-600',
+    icon: Power,
+  },
+  {
+    action: 'reboot' as const,
+    label: 'Restart',
+    tone: 'bg-blue-500 hover:bg-blue-600',
+    icon: RefreshCw,
+  },
+  {
+    action: 'terminate' as const,
+    label: 'Terminate',
+    tone: 'bg-red-600 hover:bg-red-700',
+    icon: Trash2,
+  },
+] as const;
+
+function buttonsForMode(mode: PowerControlMode | undefined) {
+  if (mode === 'azure') return AZURE_BUTTONS;
+  return WEBYNE_BUTTONS;
+}
+
 function successMessage(action: CatalogVmPowerAction): string {
   switch (action) {
     case 'virtualizor':
@@ -42,6 +76,8 @@ function successMessage(action: CatalogVmPowerAction): string {
       return 'Stop requested.';
     case 'reboot':
       return 'Restart requested.';
+    case 'terminate':
+      return 'VM and attached resources removed from Azure.';
     default:
       return 'Power action completed.';
   }
@@ -51,16 +87,20 @@ export function CatalogVmPowerControls({
   vmId,
   instanceId,
   disabled,
+  powerControlMode = 'webyne',
   onPowerAction,
+  onTerminated,
 }: {
   vmId: string;
   instanceId?: string;
   disabled?: boolean;
+  powerControlMode?: PowerControlMode;
   onPowerAction: (
     id: string,
     action: CatalogVmPowerAction,
     instanceId?: string
   ) => Promise<{ action: CatalogVmPowerAction; panelUrl?: string }>;
+  onTerminated?: () => void;
 }) {
   const [busyKey, setBusyKey] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ tone: 'success' | 'error'; message: string } | null>(
@@ -68,8 +108,16 @@ export function CatalogVmPowerControls({
   );
 
   const rowKey = instanceId ? `${vmId}:${instanceId}` : vmId;
+  const powerButtons = buttonsForMode(powerControlMode);
 
   async function handleClick(action: CatalogVmPowerAction) {
+    if (action === 'terminate') {
+      const ok = window.confirm(
+        'Terminate this VM in Azure? This permanently deletes the VM, OS disk, network interface, and public IP (if any). This cannot be undone.'
+      );
+      if (!ok) return;
+    }
+
     setBusyKey(`${rowKey}:${action}`);
     setFeedback(null);
     try {
@@ -78,6 +126,9 @@ export function CatalogVmPowerControls({
         window.open(result.panelUrl, '_blank', 'noopener,noreferrer');
       }
       setFeedback({ tone: 'success', message: successMessage(action) });
+      if (action === 'terminate') {
+        onTerminated?.();
+      }
     } catch (err) {
       setFeedback({
         tone: 'error',
@@ -90,9 +141,11 @@ export function CatalogVmPowerControls({
 
   return (
     <div className="space-y-2">
-      <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">Power controls</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-gray-600">
+        {powerControlMode === 'azure' ? 'Azure power controls' : 'Power controls'}
+      </p>
       <div className="flex flex-wrap items-center gap-2">
-        {POWER_BUTTONS.map((btn) => {
+        {powerButtons.map((btn) => {
           const busy = busyKey === `${rowKey}:${btn.action}`;
           const Icon = btn.icon;
           return (

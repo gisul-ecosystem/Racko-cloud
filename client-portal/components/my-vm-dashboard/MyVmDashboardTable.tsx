@@ -7,6 +7,7 @@ import { externalVmProtocolBadgeClass } from '@/lib/externalVmApi';
 import { formatAssignmentHolders } from '@/lib/externalVmAssignmentFormat';
 import type { CatalogVmPowerAction, ICatalogVm } from '@/lib/vmCatalogApi';
 import { CatalogVmDashboardDetails } from '@/components/my-vm-dashboard/CatalogVmDashboardDetails';
+import { CatalogVmPowerControls } from '@/components/create-vm/CatalogVmPowerControls';
 import Link from 'next/link';
 import { ChevronDown, ChevronUp, Monitor, ExternalLink } from 'lucide-react';
 
@@ -179,9 +180,11 @@ function ActionButtons({
 export function MyVmDashboardTable({
   rows,
   catalogPowerAction,
+  onRefresh,
 }: {
   rows: MyVmDashboardRow[];
   catalogPowerAction?: CatalogPowerActionHandler;
+  onRefresh?: () => void;
 }) {
   const [expandedKey, setExpandedKey] = useState<string | null>(null);
 
@@ -205,6 +208,11 @@ export function MyVmDashboardTable({
               const key = rowKey(row);
               const isExpanded = expandedKey === key;
               const isCatalog = row.resourceType === 'catalog_vm';
+              const showAzurePowerInline =
+                isCatalog &&
+                row.status === 'active' &&
+                row.powerControlMode === 'azure' &&
+                Boolean(catalogPowerAction);
 
               return (
                 <Fragment key={key}>
@@ -248,12 +256,26 @@ export function MyVmDashboardTable({
                       />
                     </td>
                   </tr>
-                  {isCatalog && isExpanded && catalogPowerAction ? (
+                  {showAzurePowerInline && catalogPowerAction ? (
+                    <tr className="border-b border-green-100 bg-green-50/40">
+                      <td colSpan={7} className="px-4 py-4">
+                        <CatalogVmPowerControls
+                          vmId={row._id}
+                          instanceId={row.instanceId}
+                          powerControlMode="azure"
+                          onPowerAction={catalogPowerAction}
+                          onTerminated={onRefresh}
+                        />
+                      </td>
+                    </tr>
+                  ) : null}
+                  {isCatalog && isExpanded && catalogPowerAction && !showAzurePowerInline ? (
                     <tr className="border-b border-green-100 bg-green-50/40">
                       <td colSpan={7} className="px-4 py-4">
                         <CatalogVmDashboardDetails
                           row={row}
                           onPowerAction={catalogPowerAction}
+                          onRefresh={onRefresh}
                         />
                       </td>
                     </tr>

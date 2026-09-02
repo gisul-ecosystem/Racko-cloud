@@ -7,6 +7,7 @@ import type { CatalogVmPowerAction, ICatalogVm } from '@/lib/vmCatalogApi';
 export function CatalogVmDashboardDetails({
   row,
   onPowerAction,
+  onRefresh,
 }: {
   row: MyVmDashboardRow;
   onPowerAction: (
@@ -14,6 +15,7 @@ export function CatalogVmDashboardDetails({
     action: CatalogVmPowerAction,
     instanceId?: string
   ) => Promise<{ action: CatalogVmPowerAction; panelUrl?: string; vm: ICatalogVm }>;
+  onRefresh?: () => void;
 }) {
   const isActive = row.status === 'active';
 
@@ -52,7 +54,9 @@ export function CatalogVmDashboardDetails({
           <CatalogVmPowerControls
             vmId={row._id}
             instanceId={row.instanceId}
+            powerControlMode={row.powerControlMode ?? 'webyne'}
             onPowerAction={onPowerAction}
+            onTerminated={onRefresh}
           />
         </div>
       ) : (
