@@ -51,7 +51,11 @@ export function MyVmDashboardView({
           </p>
         </div>
       ) : (
-        <MyVmDashboardTable rows={rows} catalogPowerAction={catalogPowerAction} />
+        <MyVmDashboardTable
+          rows={rows}
+          catalogPowerAction={catalogPowerAction}
+          onRefresh={refetch}
+        />
       )}
     </div>
   );
