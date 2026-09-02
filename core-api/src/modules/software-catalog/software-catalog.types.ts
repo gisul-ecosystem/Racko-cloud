@@ -14,6 +14,7 @@ export interface CreateSoftwareCatalogDto {
   fileUrl?: string;
   fileName?: string;
   zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
 }
 
@@ -30,6 +31,7 @@ export interface UpdateSoftwareCatalogDto {
   fileUrl?: string;
   fileName?: string;
   zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
 }
 
@@ -47,6 +49,7 @@ export interface SoftwareCatalogResponse {
   fileUrl?: string;
   fileName?: string;
   zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
   uploadedBy: string;
   createdAt: string;

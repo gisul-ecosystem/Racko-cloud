@@ -29,6 +29,8 @@ export const createSoftwareCatalogSchema = z.object({
     fileName:    z.string().max(256).trim().optional(),
     // ZIP install script — required when installMethod is 'zip'
     zipInstallScript: z.string().max(50000).trim().optional(),
+    // Post-install script — optional PowerShell script run after msi/exe installers complete
+    postInstallScript: z.string().max(50000).trim().optional(),
     // Extra args
     installArgs: z.string().max(512).trim().optional(),
   }).superRefine((data, ctx) => {
@@ -57,6 +59,7 @@ export const updateSoftwareCatalogSchema = z.object({
     fileUrl:     z.string().optional(),
     fileName:    z.string().max(256).trim().optional(),
     zipInstallScript: z.string().max(50000).trim().optional(),
+    postInstallScript: z.string().max(50000).trim().optional(),
     installArgs: z.string().max(512).trim().optional(),
   }).superRefine((data, ctx) => {
     // Only enforce zipInstallScript when installMethod is explicitly being set to zip
