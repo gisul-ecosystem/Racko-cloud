@@ -22,6 +22,7 @@ class SoftwareCatalogService {
       fileUrl:       doc.fileUrl,
       fileName:      doc.fileName,
       zipInstallScript: doc.zipInstallScript,
+      postInstallScript: doc.postInstallScript,
       installArgs:   doc.installArgs,
       uploadedBy:    doc.uploadedBy.toString(),
       createdAt:     doc.createdAt.toISOString(),
@@ -144,8 +145,9 @@ class SoftwareCatalogService {
     if (dto.chocoName     !== undefined) doc.chocoName     = dto.chocoName || undefined;
     if (dto.fileUrl       !== undefined) doc.fileUrl       = dto.fileUrl || undefined;
     if (dto.fileName      !== undefined) doc.fileName      = dto.fileName || undefined;
-    if (dto.zipInstallScript !== undefined) doc.zipInstallScript = dto.zipInstallScript || undefined;
-    if (dto.installArgs   !== undefined) doc.installArgs   = dto.installArgs || undefined;
+    if (dto.zipInstallScript    !== undefined) doc.zipInstallScript    = dto.zipInstallScript    || undefined;
+    if (dto.postInstallScript   !== undefined) doc.postInstallScript   = dto.postInstallScript   || undefined;
+    if (dto.installArgs         !== undefined) doc.installArgs         = dto.installArgs         || undefined;
 
     await doc.save();
 
