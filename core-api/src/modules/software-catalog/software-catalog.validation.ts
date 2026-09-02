@@ -42,6 +42,36 @@ export const createSoftwareCatalogSchema = z.object({
   }),
 });
 
+export const updateSoftwareCatalogSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z.object({
+    name:          z.string().min(1).max(100).trim().optional(),
+    version:       z.string().max(50).trim().optional(),
+    iconUrl:       z.string().url('iconUrl must be a valid URL').optional().or(z.literal('')),
+    supportedOS:   z.array(machineOSEnum).min(1).optional(),
+    installMethod: installMethodEnum.optional(),
+    wingetId:    z.string().max(200).trim().optional(),
+    aptName:     z.string().max(200).trim().optional(),
+    brewName:    z.string().max(200).trim().optional(),
+    chocoName:   z.string().max(200).trim().optional(),
+    fileUrl:     z.string().optional(),
+    fileName:    z.string().max(256).trim().optional(),
+    zipInstallScript: z.string().max(50000).trim().optional(),
+    installArgs: z.string().max(512).trim().optional(),
+  }).superRefine((data, ctx) => {
+    // Only enforce zipInstallScript when installMethod is explicitly being set to zip
+    if (data.installMethod === 'zip' && data.zipInstallScript !== undefined && !data.zipInstallScript.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'zipInstallScript is required when installMethod is zip',
+        path: ['zipInstallScript'],
+      });
+    }
+  }),
+});
+
+export type UpdateSoftwareCatalogInput = z.infer<typeof updateSoftwareCatalogSchema>['body'];
+
 export const softwareCatalogIdParamSchema = z.object({
   params: z.object({ id: mongoObjectId }),
 });
