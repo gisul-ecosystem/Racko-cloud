@@ -30,7 +30,16 @@ public static class ZipProgress
         CancellationToken               ct = default)
     {
         // Enumerate all files up-front so we know the total size for the progress bar.
-        var files = Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories);
+        // EnumerationOptions with IgnoreInaccessible + AttributesToSkip:ReparsePoint ensures
+        // that Windows junction points (My Music, My Pictures, etc.) and any locked/protected
+        // paths are silently skipped instead of throwing UnauthorizedAccessException.
+        var enumOptions = new EnumerationOptions
+        {
+            IgnoreInaccessible    = true,
+            RecurseSubdirectories = true,
+            AttributesToSkip      = FileAttributes.ReparsePoint,
+        };
+        var files = Directory.GetFiles(sourceDir, "*", enumOptions);
         long totalBytes = files.Sum(f => new FileInfo(f).Length);
         long doneBytes  = 0;
 
