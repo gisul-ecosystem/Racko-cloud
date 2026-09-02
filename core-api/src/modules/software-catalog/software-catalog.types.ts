@@ -17,6 +17,22 @@ export interface CreateSoftwareCatalogDto {
   installArgs?: string;
 }
 
+export interface UpdateSoftwareCatalogDto {
+  name?: string;
+  version?: string;
+  iconUrl?: string;
+  supportedOS?: MachineOS[];
+  installMethod?: InstallMethod;
+  wingetId?: string;
+  aptName?: string;
+  brewName?: string;
+  chocoName?: string;
+  fileUrl?: string;
+  fileName?: string;
+  zipInstallScript?: string;
+  installArgs?: string;
+}
+
 export interface SoftwareCatalogResponse {
   _id: string;
   name: string;

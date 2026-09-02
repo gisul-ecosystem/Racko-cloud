@@ -5,6 +5,7 @@ import { requirePermission, requireRoleOrPermission } from '../../middleware/req
 import { validateRequest } from '../../middleware/validate.middleware';
 import {
   createSoftwareCatalogSchema,
+  updateSoftwareCatalogSchema,
   softwareCatalogIdParamSchema,
 } from './software-catalog.validation';
 
@@ -40,6 +41,14 @@ router.post(
   requirePermission('machine_manager.manage'),
   validateRequest(createSoftwareCatalogSchema),
   (req, res, next) => softwareCatalogController.create(req, res, next)
+);
+
+// PATCH /api/v1/software-catalog/:id — super_admin only
+router.patch(
+  '/:id',
+  requirePermission('machine_manager.manage'),
+  validateRequest(updateSoftwareCatalogSchema),
+  (req, res, next) => softwareCatalogController.update(req, res, next)
 );
 
 // DELETE /api/v1/software-catalog/:id — super_admin only

@@ -211,6 +211,17 @@ export async function createSoftwareCatalogEntry(
   return res.data.software;
 }
 
+export async function updateSoftwareCatalogEntry(
+  id: string,
+  dto: Partial<CreateSoftwareCatalogDto>
+): Promise<ISoftwareCatalog> {
+  const res = await apiRequest<ApiResponse<{ software: ISoftwareCatalog }>>(
+    `/api/v1/software-catalog/${id}`,
+    { method: 'PATCH', body: JSON.stringify(dto) }
+  );
+  return res.data.software;
+}
+
 export async function deleteSoftwareCatalogEntry(id: string): Promise<void> {
   await apiRequest(`/api/v1/software-catalog/${id}`, { method: 'DELETE' });
 }
