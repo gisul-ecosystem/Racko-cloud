@@ -117,6 +117,7 @@ function EditSoftwareModal({ item, onClose, onSaved }: EditSoftwareModalProps) {
   const [chocoName, setChocoName]           = useState(item.chocoName ?? '');
   const [installArgs, setInstallArgs]       = useState(item.installArgs ?? '');
   const [zipInstallScript, setZipInstallScript] = useState(item.zipInstallScript ?? '');
+  const [postInstallScript, setPostInstallScript] = useState(item.postInstallScript ?? '');
 
   // File state — tracks what's happening with the installer file
   // 'keep'    = keep the existing file (no change)
@@ -219,6 +220,7 @@ function EditSoftwareModal({ item, onClose, onSaved }: EditSoftwareModalProps) {
       if (installArgs.trim() !== (item.installArgs ?? '')) patch['installArgs'] = installArgs.trim();
       if (fileName.trim() !== (item.fileName ?? '')) patch['fileName'] = fileName.trim();
       if (zipInstallScript.trim() !== (item.zipInstallScript ?? '')) patch['zipInstallScript'] = zipInstallScript.trim();
+      if (postInstallScript.trim() !== (item.postInstallScript ?? '')) patch['postInstallScript'] = postInstallScript.trim();
 
       // File URL handling
       if (isFileBased) {
@@ -463,6 +465,25 @@ function EditSoftwareModal({ item, onClose, onSaved }: EditSoftwareModalProps) {
               </div>
             )}
 
+                {/* Post-install script — optional for msi/exe methods */}
+                {(installMethod === 'msi' || installMethod === 'exe') && (
+                  <div>
+                    <label className={labelClass}>
+                      Post-install Script (PowerShell) <span className="text-gray-400 font-normal">(optional)</span>
+                    </label>
+                    <textarea
+                      className={`${inputClass} resize-y font-mono text-xs`}
+                      rows={6}
+                      value={postInstallScript}
+                      onChange={(e) => setPostInstallScript(e.target.value)}
+                      placeholder={`# Runs after the installer completes\n# $installerPath is set to the downloaded installer file`}
+                    />
+                    <p className="mt-1 text-xs text-gray-400">
+                      Runs after the installer completes. <code className="rounded bg-gray-100 px-1">$installerPath</code> is set to the downloaded installer path.
+                    </p>
+                  </div>
+                )}
+
             {/* Extra install args */}
             <div className="sm:col-span-2">
               <label className={labelClass}>Extra install arguments <span className="text-gray-400 font-normal">(optional)</span></label>
@@ -526,6 +547,7 @@ export default function SuperAdminSoftwareCatalogPage() {
   const [fileUrl, setFileUrl] = useState('');
   const [fileName, setFileName] = useState('');
   const [zipInstallScript, setZipInstallScript] = useState('');
+  const [postInstallScript, setPostInstallScript] = useState('');
   const [installArgs, setInstallArgs] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -599,13 +621,14 @@ export default function SuperAdminSoftwareCatalogPage() {
         fileUrl:     storageRef || fileUrl.trim() || undefined,
         fileName:    fileName.trim()    || undefined,
         zipInstallScript: zipInstallScript.trim() || undefined,
+        postInstallScript: postInstallScript.trim() || undefined,
         installArgs: installArgs.trim() || undefined,
       });
       addToast('success', `${name.trim()} added to catalog.`);
       // Reset form
       setName(''); setVersion(''); setIconUrl(''); setSelectedOS([]); setInstallMethod('choco');
       setWingetId(''); setAptName(''); setBrewName(''); setChocoName('');
-      setFileUrl(''); setFileName(''); setZipInstallScript(''); setInstallArgs('');
+      setFileUrl(''); setFileName(''); setZipInstallScript(''); setPostInstallScript(''); setInstallArgs('');
       setStorageRef(''); setUploadedFileName('');
       refetch();
     } catch (err) {
@@ -829,6 +852,25 @@ export default function SuperAdminSoftwareCatalogPage() {
                 </div>
               )}
             </>
+          )}
+
+          {/* Post-install script — optional for msi/exe methods */}
+          {(installMethod === 'msi' || installMethod === 'exe') && (
+            <div className="sm:col-span-2">
+              <label className={labelClass}>
+                Post-install Script (PowerShell) <span className="text-gray-400 font-normal">(optional)</span>
+              </label>
+              <textarea
+                className={`${inputClass} resize-y font-mono text-xs`}
+                rows={6}
+                value={postInstallScript}
+                onChange={(e) => setPostInstallScript(e.target.value)}
+                placeholder={`# Runs after the installer completes. $installerPath is set to the downloaded installer file.\n# Example for MySQL:\n$consolePath = "C:\\Program Files (x86)\\MySQL\\MySQL Installer for Windows\\MySQLInstallerConsole.exe"\nStart-Process $consolePath -ArgumentList "community install mysql-server;8.0.*;x64:*:passwd=YourPass" -Wait -NoNewWindow`}
+              />
+              <p className="mt-1 text-xs text-gray-400">
+                Runs after the installer completes. <code className="rounded bg-gray-100 px-1">$installerPath</code> is set to the path of the downloaded installer file.
+              </p>
+            </div>
           )}
 
           {/* Extra install args */}

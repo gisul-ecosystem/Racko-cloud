@@ -410,6 +410,99 @@ router.patch('/api/v1/vm-catalog/requests/:id/reject', authMiddleware, verifyMid
 router.post('/api/v1/vm-catalog/pricing/calculate', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiPricingProxy);
 router.get('/api/v1/vm-catalog/pricing', authMiddleware, verifyMiddleware, requireRole('super_admin', 'staff'), coreApiPricingProxy);
 
+/** Super-admin Azure VM wizard — ARM lookups and placement pricing can run 30s–3min. */
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/provision-ready',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/locations',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/marketplace/images',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/marketplace/image-plans',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/validate-image',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/custom-images',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/validate-custom-image',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/placement-options',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/create',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/ready',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.get(
+  '/api/v1/vm-catalog/super-admin/azure/vms',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/:id/power',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.patch(
+  '/api/v1/vm-catalog/super-admin/azure/:id/attach',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/super-admin/azure/manual',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
+  '/api/v1/vm-catalog/vms/:id/power',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('admin', 'super_admin'),
+  coreApiPricingProxy
+);
+
 router.get('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);
 router.post('/api/v1/dedicated-servers/plans/seed', authMiddleware, verifyMiddleware, requireRole('super_admin'), coreApiProxy);

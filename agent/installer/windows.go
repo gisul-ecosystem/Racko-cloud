@@ -690,8 +690,21 @@ func runMSI(pkg SoftwarePackage) (string, error) {
 			log.Printf("[msi] Exit 1638 — another version already installed, treating as success")
 			return out, nil
 		}
+		return out, err
 	}
-	return out, err
+
+	// Run post-install script if provided
+	if pkg.PostInstallScript != "" {
+		log.Printf("[msi] Running post-install script for %s", pkg.Name)
+		scriptOut, scriptErr := runPostInstallScript(pkg.PostInstallScript, path)
+		out += "\n[post-install script]\n" + scriptOut
+		if scriptErr != nil {
+			return out, fmt.Errorf("post-install script failed: %w", scriptErr)
+		}
+		log.Printf("[msi] Post-install script completed for %s", pkg.Name)
+	}
+
+	return out, nil
 }
 
 // runEXE downloads and runs a silent .exe installer in the active user session.
@@ -707,7 +720,40 @@ func runEXE(pkg SoftwarePackage) (string, error) {
 		args = strings.Fields(pkg.InstallArgs)
 	}
 	log.Printf("[exe] Running in active user session: %s %v", path, args)
-	return runAsActiveUser(path, args...)
+	out, err := runAsActiveUser(path, args...)
+	if err != nil {
+		return out, err
+	}
+
+	// Run post-install script if provided
+	if pkg.PostInstallScript != "" {
+		log.Printf("[exe] Running post-install script for %s", pkg.Name)
+		scriptOut, scriptErr := runPostInstallScript(pkg.PostInstallScript, path)
+		out += "\n[post-install script]\n" + scriptOut
+		if scriptErr != nil {
+			return out, fmt.Errorf("post-install script failed: %w", scriptErr)
+		}
+		log.Printf("[exe] Post-install script completed for %s", pkg.Name)
+	}
+
+	return out, nil
+}
+
+// runPostInstallScript executes an admin-provided PowerShell script after an MSI or EXE install.
+// $installerPath is set to the path of the downloaded installer file so the script can
+// reference it (e.g. to locate MySQLInstallerConsole.exe relative to the install dir).
+// Runs in the active user session with the same elevated token as other installs.
+func runPostInstallScript(script, installerPath string) (string, error) {
+	// Wrap the admin script: set $installerPath then run their script.
+	// $ErrorActionPreference = 'Stop' ensures any error propagates as a non-zero exit.
+	wrappedScript := fmt.Sprintf(`$ErrorActionPreference = 'Stop'
+$installerPath = '%s'
+%s`, installerPath, script)
+
+	return runAsActiveUser("powershell.exe",
+		"-ExecutionPolicy", "Bypass",
+		"-NonInteractive",
+		"-Command", wrappedScript)
 }
 
 // runZIP downloads and extracts a ZIP archive, then runs the admin-provided

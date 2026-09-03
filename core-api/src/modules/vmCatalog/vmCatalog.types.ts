@@ -46,6 +46,8 @@ export interface CatalogVmResponse {
   postReadyAgentConnected?: boolean;
   postReadyRunningSoftware?: string[];
   postReadyPendingSoftware?: string[];
+  /** Customer-safe hint for which power UI to show (no infra leak). */
+  powerControlMode?: 'webyne' | 'azure';
   /** Omitted for admin-role callers (provider leak guard). */
   provider?: VmCatalogProvider;
   category: VmCatalogCategory;
@@ -80,6 +82,8 @@ export interface CatalogVmResponse {
   region?: string;
   /** Super-admin only */
   providerInstanceId?: string;
+  /** Super-admin only */
+  azureResourceGroup?: string;
   expiresAt?: string;
   autoProvisioned?: boolean;
   /** Super-admin only */

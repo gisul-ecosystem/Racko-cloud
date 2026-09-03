@@ -52,6 +52,7 @@ export interface MyVmDashboardRow {
   managePath: string | null;
   parentRequestId?: string;
   instanceId?: string;
+  powerControlMode?: 'webyne' | 'azure';
   assignments: MyVmAssignment[];
   accessSchedule: {
     startDate: string | null;

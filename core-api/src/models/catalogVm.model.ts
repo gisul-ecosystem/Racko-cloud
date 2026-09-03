@@ -95,6 +95,8 @@ export interface ICatalogVm extends Document {
   region?: string;
   /** Real cloud instance id. Super-admin only in API responses. */
   providerInstanceId?: string;
+  /** Azure resource group for manual / auto Azure VMs. Super-admin only in API responses. */
+  azureResourceGroup?: string;
   /** Auto-teardown deadline for short-duration auto-provisioned VMs. */
   expiresAt?: Date;
   /** true = AWS/Azure auto path; false = manual Webyne fulfillment. */
@@ -252,6 +254,7 @@ const catalogVmSchema = new Schema<ICatalogVm>(
     osTemplateChangedAt: { type: Date },
     region: { type: String, trim: true },
     providerInstanceId: { type: String, trim: true },
+    azureResourceGroup: { type: String, trim: true },
     expiresAt: { type: Date, index: true },
     autoProvisioned: { type: Boolean, default: false, index: true },
     rawProviderCostPerHr: { type: Number, min: 0 },

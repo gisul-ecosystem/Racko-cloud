@@ -37,11 +37,25 @@ async function fetchRetailPage(filter, skip = 0) {
   url.searchParams.set('$filter', filter);
   if (skip > 0) url.searchParams.set('$skip', String(skip));
 
-  const res = await fetch(url.toString(), { headers: { Accept: 'application/json' } });
-  if (!res.ok) {
-    throw new Error(`Azure Retail Prices HTTP ${res.status}`);
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    try {
+      const res = await fetch(url.toString(), {
+        headers: { Accept: 'application/json' },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!res.ok) {
+        throw new Error(`Azure Retail Prices HTTP ${res.status}`);
+      }
+      return res.json();
+    } catch (err) {
+      lastErr = err;
+      if (attempt < 2) {
+        await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+      }
+    }
   }
-  return res.json();
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
 
 function pickAzureVmHourly(items, { windows = false } = {}) {

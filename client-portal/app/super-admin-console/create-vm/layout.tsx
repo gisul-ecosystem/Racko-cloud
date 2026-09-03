@@ -1,7 +1,7 @@
 'use client';
 
 import { useServiceShell } from '../../../components/console/useServiceShell';
-import { CreateVmCatalogSidebar } from '../../../components/console/CreateVmCatalogSidebar';
+import { SuperAdminCreateVmCatalogSidebar } from '../../../components/console/SuperAdminCreateVmCatalogSidebar';
 import { RackoGlobalTopBar } from '../../../components/console/RackoGlobalTopBar';
 import { ServiceShellLayout } from '../../../components/console/ServiceShellLayout';
 import { VmCatalogPortalProvider } from '../../../context/VmCatalogPortalContext';
@@ -18,7 +18,7 @@ export default function SuperAdminCreateVmLayout({ children }: { children: React
       <ServiceShellLayout
         sidebarOpen={sidebarOpen}
         sidebar={
-          <CreateVmCatalogSidebar
+          <SuperAdminCreateVmCatalogSidebar
             sidebarOpen={sidebarOpen}
             onCloseSidebar={() => setSidebarOpen(false)}
           />

@@ -16,12 +16,19 @@ export interface ServiceNavLink {
   isActive?: (pathname: string) => boolean;
 }
 
+export interface ServiceNavSection {
+  heading?: string;
+  links: ServiceNavLink[];
+}
+
 export interface ServiceNavSidebarProps {
   sidebarOpen: boolean;
   onCloseSidebar: () => void;
   title: string;
   subtitle?: string;
   links: ServiceNavLink[];
+  /** Optional grouped links below the main nav (e.g. super-admin-only tools). */
+  extraSections?: ServiceNavSection[];
   /** Accent for active item. Defaults to Racko red. */
   accentColor?: string;
   footerHref?: string;
@@ -46,12 +53,49 @@ function defaultIsActive(pathname: string, link: ServiceNavLink, homeHref?: stri
   return pathname.startsWith(`${link.href}/`);
 }
 
+function renderNavLink(
+  link: ServiceNavLink,
+  pathname: string,
+  homeHref: string | undefined,
+  accentColor: string,
+  onCloseSidebar: () => void
+) {
+  const isActive = defaultIsActive(pathname, link, homeHref);
+  return (
+    <Link
+      key={`${link.href}:${link.label}`}
+      href={link.href}
+      onClick={() => closeIfMobile(onCloseSidebar)}
+      className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
+        isActive ? '' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
+      }`}
+      style={
+        isActive
+          ? {
+              backgroundColor: hexToRgba(accentColor, 0.1),
+              color: accentColor,
+            }
+          : undefined
+      }
+    >
+      <span
+        className={`shrink-0 ${isActive ? '' : 'text-gray-400'}`}
+        style={isActive ? { color: accentColor } : undefined}
+      >
+        {link.icon}
+      </span>
+      {link.label}
+    </Link>
+  );
+}
+
 export function ServiceNavSidebar({
   sidebarOpen,
   onCloseSidebar,
   title,
   subtitle,
   links,
+  extraSections,
   accentColor = DEFAULT_ACCENT,
   footerHref,
   footerLabel = 'All services',
@@ -82,35 +126,21 @@ export function ServiceNavSidebar({
           </div>
 
           <nav className="scrollbar-white flex-1 space-y-0.5 overflow-y-auto p-3">
-            {links.map((link) => {
-              const isActive = defaultIsActive(pathname, link, homeHref);
-              return (
-                <Link
-                  key={`${link.href}:${link.label}`}
-                  href={link.href}
-                  onClick={() => closeIfMobile(onCloseSidebar)}
-                  className={`flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${
-                    isActive ? '' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'
-                  }`}
-                  style={
-                    isActive
-                      ? {
-                          backgroundColor: hexToRgba(accentColor, 0.1),
-                          color: accentColor,
-                        }
-                      : undefined
-                  }
-                >
-                  <span
-                    className={`shrink-0 ${isActive ? '' : 'text-gray-400'}`}
-                    style={isActive ? { color: accentColor } : undefined}
-                  >
-                    {link.icon}
-                  </span>
-                  {link.label}
-                </Link>
-              );
-            })}
+            {links.map((link) => renderNavLink(link, pathname, homeHref, accentColor, onCloseSidebar))}
+            {extraSections?.map((section, index) => (
+              <div key={section.heading ?? `section-${index}`} className="pt-3">
+                {section.heading ? (
+                  <p className="mb-1.5 px-3 text-[11px] font-semibold uppercase tracking-wide text-gray-400">
+                    {section.heading}
+                  </p>
+                ) : (
+                  <div className="mb-2 border-t border-gray-100" />
+                )}
+                {section.links.map((link) =>
+                  renderNavLink(link, pathname, homeHref, accentColor, onCloseSidebar)
+                )}
+              </div>
+            ))}
           </nav>
 
           {footerHref ? (

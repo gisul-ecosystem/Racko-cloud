@@ -68,7 +68,7 @@ export const changeCatalogVmTemplateSchema = z.object({
 export const catalogVmPowerActionSchema = z.object({
   params: z.object({ id: mongoObjectId }),
   body: z.object({
-    action: z.enum(['virtualizor', 'start', 'stop', 'reboot']),
+    action: z.enum(['virtualizor', 'start', 'stop', 'reboot', 'terminate']),
     instanceId: mongoObjectId.optional(),
   }),
 });
@@ -154,3 +154,135 @@ export const listVmPricingQuerySchema = z.object({
 export type CreateCatalogVmRequestInput = z.infer<typeof createCatalogVmRequestSchema>['body'];
 export type CalculateVmPricingInput = z.infer<typeof calculateVmPricingSchema>['body'];
 export type ListVmPricingQuery = z.infer<typeof listVmPricingQuerySchema>['query'];
+
+export const registerManualAzureCatalogVmSchema = z.object({
+  body: z
+    .object({
+      resourceGroup: z.string().min(1).max(200).trim(),
+      vmName: z.string().min(1).max(200).trim(),
+      region: z.string().min(1).max(100).trim(),
+      ipAddress: z.string().min(1).max(100).trim(),
+      hostname: z.string().max(253).trim().optional(),
+      username: z.string().min(1).max(128).trim(),
+      password: z.string().min(1).max(500),
+      protocol: z.enum(['rdp', 'ssh']),
+      osCategory: z.string().min(1).max(100).trim(),
+      catalogTemplate: z.string().min(1).max(200).trim(),
+      billing: z.string().min(1).max(64).trim().optional().default('monthly'),
+      subscriptionId: z.string().max(128).trim().optional(),
+      attachNow: z.boolean().optional().default(false),
+      ownerType: z.enum(['admin', 'tenant']).optional(),
+      ownerId: mongoObjectId.optional(),
+    })
+    .superRefine((body, ctx) => {
+      if (body.attachNow) {
+        if (!body.ownerType) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'ownerType is required when attachNow is true.',
+            path: ['ownerType'],
+          });
+        }
+        if (!body.ownerId) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'ownerId is required when attachNow is true.',
+            path: ['ownerId'],
+          });
+        }
+      }
+    }),
+});
+
+export const attachManualAzureCatalogVmSchema = z.object({
+  params: z.object({ id: mongoObjectId }),
+  body: z.object({
+    ownerType: z.enum(['admin', 'tenant']),
+    ownerId: mongoObjectId,
+  }),
+});
+
+export type RegisterManualAzureCatalogVmInput = z.infer<
+  typeof registerManualAzureCatalogVmSchema
+>['body'];
+export type AttachManualAzureCatalogVmInput = z.infer<
+  typeof attachManualAzureCatalogVmSchema
+>['body'];
+
+const azureOwnerProjectFields = {
+  ownerType: z.enum(['admin', 'tenant']),
+  ownerId: mongoObjectId,
+  projectId: mongoObjectId,
+};
+
+export const listSuperAdminAzurePlacementOptionsSchema = z.object({
+  body: z.object({
+    category: z.string().min(1).max(32).trim(),
+    vcpu: z.number().int().min(1).max(128),
+    ramGb: z.number().int().min(1).max(1024),
+    ssdGb: z.number().int().min(8).max(65536),
+    nestedVirtualization: z.boolean().optional(),
+    assignPublicIp: z.boolean().optional(),
+    region: z.string().min(1).max(100).trim().optional(),
+    imagePublisher: z.string().min(1).max(200).trim().optional(),
+    imageOffer: z.string().min(1).max(200).trim().optional(),
+    imageSku: z.string().min(1).max(200).trim().optional(),
+  }),
+});
+
+export const createSuperAdminAzureCatalogVmSchema = z.object({
+  body: z
+    .object({
+      ...azureOwnerProjectFields,
+      category: z.string().min(1).max(32).trim(),
+      catalogTemplate: z.string().min(1).max(200).trim(),
+      osCategory: z.string().min(1).max(100).trim().optional(),
+      canonicalSpec: z.string().min(1).max(100).trim().optional(),
+      vcpu: z.number().int().min(1).max(128).optional(),
+      ramGb: z.number().int().min(1).max(1024).optional(),
+      ssdGb: z.number().int().min(1).max(65536).optional(),
+      nestedVirtualization: z.boolean().optional(),
+      region: z.string().min(1).max(100).trim().optional(),
+      billing: z.string().min(1).max(64).trim().optional().default('monthly'),
+      attachNow: z.boolean().optional().default(true),
+      vmSize: z.string().min(1).max(100).trim().optional(),
+      imagePublisher: z.string().min(1).max(200).trim().optional(),
+      imageOffer: z.string().min(1).max(200).trim().optional(),
+      imageSku: z.string().min(1).max(200).trim().optional(),
+      imageVersion: z.string().min(1).max(100).trim().optional(),
+      customImageId: z.string().min(1).max(500).trim().optional(),
+      assignPublicIp: z.boolean().optional().default(false),
+    })
+    .superRefine((body, ctx) => {
+      if (!body.canonicalSpec && !body.vmSize) {
+        if (body.vcpu == null || body.ramGb == null || body.ssdGb == null) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            message: 'canonicalSpec, vmSize, or vcpu, ramGb, and ssdGb are required.',
+          });
+        }
+      }
+      const hasMarketplace =
+        body.imagePublisher || body.imageOffer || body.imageSku || body.imageVersion;
+      if (hasMarketplace && !(body.imagePublisher && body.imageOffer && body.imageSku)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message:
+            'imagePublisher, imageOffer, and imageSku are required when specifying a marketplace image.',
+        });
+      }
+      if (body.customImageId && hasMarketplace) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: 'Use either customImageId or marketplace image fields, not both.',
+        });
+      }
+    }),
+});
+
+export type ListSuperAdminAzurePlacementOptionsInput = z.infer<
+  typeof listSuperAdminAzurePlacementOptionsSchema
+>['body'];
+export type CreateSuperAdminAzureCatalogVmInput = z.infer<
+  typeof createSuperAdminAzureCatalogVmSchema
+>['body'];
