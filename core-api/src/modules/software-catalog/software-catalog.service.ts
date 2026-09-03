@@ -22,6 +22,7 @@ class SoftwareCatalogService {
       fileUrl:       doc.fileUrl,
       fileName:      doc.fileName,
       zipInstallScript: doc.zipInstallScript,
+      postInstallScript: doc.postInstallScript,
       installArgs:   doc.installArgs,
       uploadedBy:    doc.uploadedBy.toString(),
       createdAt:     doc.createdAt.toISOString(),
@@ -96,6 +97,63 @@ class SoftwareCatalogService {
       version: doc.version,
       installMethod: doc.installMethod,
       uploadedBy: uploadedBy.toString(),
+    });
+
+    return this.toResponse(doc);
+  }
+
+  async updateSoftware(
+    id: mongoose.Types.ObjectId,
+    dto: import('./software-catalog.types').UpdateSoftwareCatalogDto
+  ): Promise<SoftwareCatalogResponse> {
+    const doc = await SoftwareCatalogModel.findById(id);
+    if (!doc) throw new NotFoundError('Software not found.');
+
+    // If a new internal file is being set, delete the old one from SeaweedFS first.
+    // Only delete internal storageRefs (start with 'software-catalog/') — never external URLs.
+    if (
+      dto.fileUrl !== undefined &&
+      dto.fileUrl !== doc.fileUrl &&
+      doc.fileUrl &&
+      doc.fileUrl.startsWith('software-catalog/')
+    ) {
+      try {
+        await seaweedfsService.delete(doc.fileUrl);
+        logger.info('[SoftwareCatalog] Deleted old S3 file on update', {
+          softwareId: id.toString(),
+          oldStorageRef: doc.fileUrl,
+        });
+      } catch (err) {
+        // Non-fatal — log and continue. The new file is already uploaded.
+        logger.warn('[SoftwareCatalog] Could not delete old S3 file on update (non-fatal)', {
+          softwareId: id.toString(),
+          oldStorageRef: doc.fileUrl,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+
+    // Apply all provided fields — undefined fields are left unchanged
+    if (dto.name          !== undefined) doc.name          = dto.name;
+    if (dto.version       !== undefined) doc.version       = dto.version;
+    if (dto.iconUrl       !== undefined) doc.iconUrl       = dto.iconUrl || undefined;
+    if (dto.supportedOS   !== undefined) doc.supportedOS   = dto.supportedOS;
+    if (dto.installMethod !== undefined) doc.installMethod = dto.installMethod;
+    if (dto.wingetId      !== undefined) doc.wingetId      = dto.wingetId || undefined;
+    if (dto.aptName       !== undefined) doc.aptName       = dto.aptName || undefined;
+    if (dto.brewName      !== undefined) doc.brewName      = dto.brewName || undefined;
+    if (dto.chocoName     !== undefined) doc.chocoName     = dto.chocoName || undefined;
+    if (dto.fileUrl       !== undefined) doc.fileUrl       = dto.fileUrl || undefined;
+    if (dto.fileName      !== undefined) doc.fileName      = dto.fileName || undefined;
+    if (dto.zipInstallScript    !== undefined) doc.zipInstallScript    = dto.zipInstallScript    || undefined;
+    if (dto.postInstallScript   !== undefined) doc.postInstallScript   = dto.postInstallScript   || undefined;
+    if (dto.installArgs         !== undefined) doc.installArgs         = dto.installArgs         || undefined;
+
+    await doc.save();
+
+    logger.info('[SoftwareCatalog] Updated software', {
+      softwareId: id.toString(),
+      updatedFields: Object.keys(dto).filter((k) => dto[k as keyof typeof dto] !== undefined),
     });
 
     return this.toResponse(doc);

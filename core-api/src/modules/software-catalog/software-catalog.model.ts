@@ -21,6 +21,9 @@ export interface ISoftwareCatalog extends Document {
   fileName?: string;
   // ZIP installs — PowerShell script run after extraction ($extractDir variable is set)
   zipInstallScript?: string;
+  // MSI / EXE installs — optional PowerShell script run after the installer completes
+  // $installerPath is set to the path of the downloaded installer file
+  postInstallScript?: string;
   // Extra CLI args appended to the install command (optional)
   installArgs?: string;
   uploadedBy: mongoose.Types.ObjectId;
@@ -54,6 +57,9 @@ const softwareCatalogSchema = new Schema<ISoftwareCatalog>(
     fileName:    { type: String, trim: true },
     // ZIP installs — PowerShell script run after extraction ($extractDir is set in scope)
     zipInstallScript: { type: String, trim: true },
+    // MSI / EXE installs — optional PowerShell script run after the installer completes
+    // Agent sets $installerPath before running this script
+    postInstallScript: { type: String, trim: true },
     installArgs: { type: String, trim: true },
     uploadedBy:  { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
   },

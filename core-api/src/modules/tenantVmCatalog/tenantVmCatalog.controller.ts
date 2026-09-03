@@ -114,7 +114,7 @@ export const tenantVmCatalogController = {
       const tenantId = new mongoose.Types.ObjectId(authReq.tenantUser.tenantId);
       const id = new mongoose.Types.ObjectId(req.params['id'] as string);
       const body = (req.body || {}) as {
-        action: 'virtualizor' | 'start' | 'stop' | 'reboot';
+        action: 'virtualizor' | 'start' | 'stop' | 'reboot' | 'terminate';
         instanceId?: string;
       };
       const result = await vmCatalogService.powerActionForTenant(
@@ -127,12 +127,14 @@ export const tenantVmCatalogController = {
         body.action === 'virtualizor'
           ? 'Virtualization control opened.'
           : body.action === 'start'
-            ? 'Start requested.'
+            ? 'VM start requested.'
             : body.action === 'stop'
-              ? 'Stop requested.'
+              ? 'VM stop requested.'
               : body.action === 'reboot'
-                ? 'Restart requested.'
-                : 'Power action completed.';
+                ? 'VM restart requested.'
+                : body.action === 'terminate'
+                  ? 'VM terminated.'
+                  : 'Power action completed.';
       success(res, message, result);
     } catch (err) {
       next(err);

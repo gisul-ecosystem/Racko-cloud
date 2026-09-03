@@ -2,8 +2,12 @@ import crypto from 'crypto';
 import { ComputeManagementClient } from '@azure/arm-compute';
 import { NetworkManagementClient } from '@azure/arm-network';
 import { azureConfig, getAzureCredential, validateAzureConfig } from '../../config/azure.js';
+import { resolveAzureVmRef, resolveAzureSubscriptionId } from './azureVmRef.js';
 import { azureSpecMap, parseCanonicalSpec } from '../../config/specMap.js';
 import { ensureSkuMappings } from '../../services/dynamicSkuResolver.js';
+import { ensureAzureResourceGroup } from './azureResourceGroup.js';
+import { ensureAzureNetwork } from './azureNetwork.js';
+import { listAzureVmSkus } from './azureCatalogLookup.js';
 
 function randomPassword(length = 20) {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789!@#$%';
@@ -12,7 +16,6 @@ function randomPassword(length = 20) {
   for (let i = 0; i < length; i += 1) {
     out += chars[bytes[i] % chars.length];
   }
-  // Azure password complexity
   return `Aa1!${out}`.slice(0, length);
 }
 
@@ -26,81 +29,129 @@ function safeName(prefix, id) {
 
 /**
  * Launch an Azure VM for reseller catalog.
+ * VM + NIC live in `resourceGroup` (project RG). Subnet comes from shared network RG.
  */
 export async function launchAzureVm({
   region,
   canonicalSpec,
   category = 'linux',
   catalogVmId,
+  resourceGroup,
+  assignPublicIp = false,
+  vmSize: vmSizeOverride,
+  imageReference: imageReferenceOverride,
 } = {}) {
   validateAzureConfig({ forProvision: true });
 
-  let mapping = azureSpecMap[canonicalSpec];
-  if (!mapping?.vmSize) {
-    const parsed = parseCanonicalSpec(canonicalSpec);
-    if (!parsed) {
-      throw Object.assign(new Error(`Invalid canonicalSpec: ${canonicalSpec}`), {
-        statusCode: 400,
-      });
-    }
-    await ensureSkuMappings({
-      canonicalSpec,
-      vcpu: parsed.vcpu,
-      ramGb: parsed.ramGb,
-      diskGb: parsed.diskGb,
-      gpu: parsed.gpu || category === 'gpu',
-    });
-    mapping = azureSpecMap[canonicalSpec];
-  }
-  if (!mapping?.vmSize) {
-    throw Object.assign(new Error(`Could not resolve Azure SKU for: ${canonicalSpec}`), {
+  const parsed = parseCanonicalSpec(canonicalSpec);
+  if (!parsed) {
+    throw Object.assign(new Error(`Invalid canonicalSpec: ${canonicalSpec}`), {
       statusCode: 400,
     });
   }
 
+  let resolvedVmSize;
+  let diskGb = parsed.diskGb || 50;
+
+  if (vmSizeOverride?.trim()) {
+    const skus = await listAzureVmSkus();
+    const found = skus.find(
+      (s) => s.name.toLowerCase() === String(vmSizeOverride).trim().toLowerCase()
+    );
+    if (!found) {
+      throw Object.assign(new Error(`Unknown Azure VM size: ${vmSizeOverride}`), {
+        statusCode: 400,
+      });
+    }
+    resolvedVmSize = found.name;
+  } else {
+    let mapping = azureSpecMap[canonicalSpec];
+    if (!mapping?.vmSize) {
+      await ensureSkuMappings({
+        canonicalSpec,
+        vcpu: parsed.vcpu,
+        ramGb: parsed.ramGb,
+        diskGb: parsed.diskGb,
+        gpu: parsed.gpu || category === 'gpu',
+      });
+      mapping = azureSpecMap[canonicalSpec];
+    }
+    if (!mapping?.vmSize) {
+      throw Object.assign(new Error(`Could not resolve Azure SKU for: ${canonicalSpec}`), {
+        statusCode: 400,
+      });
+    }
+    resolvedVmSize = mapping.vmSize;
+    diskGb = mapping.diskGb || diskGb;
+  }
+
   const credential = getAzureCredential();
   const subscriptionId = azureConfig.subscriptionId;
-  const rg = azureConfig.resourceGroup;
   const location = region || azureConfig.location;
   const compute = new ComputeManagementClient(credential, subscriptionId);
   const network = new NetworkManagementClient(credential, subscriptionId);
 
-  const isWindows = category === 'windows';
+  if (!resourceGroup?.trim()) {
+    throw Object.assign(
+      new Error('resourceGroup is required — use the project name as the Azure resource group.'),
+      { statusCode: 400 }
+    );
+  }
+  const ensured = await ensureAzureResourceGroup({ name: resourceGroup, location });
+  const rg = ensured.resourceGroup;
+
+  const azureNetwork = await ensureAzureNetwork({ location, assignPublicIp });
+  const subnetId = azureNetwork.subnetId;
+
+  const isWindows = imageReferenceOverride?.id
+    ? /windows/i.test(String(imageReferenceOverride.osType || ''))
+    : imageReferenceOverride?.publisher
+      ? /windows/i.test(
+          `${imageReferenceOverride.publisher || ''} ${imageReferenceOverride.offer || ''}`
+        )
+      : category === 'windows';
   const username = azureConfig.adminUsername || 'rackoadmin';
   const password = randomPassword(24);
   const vmName = safeName('rvm', catalogVmId);
   const nicName = safeName('rnic', catalogVmId);
   const pipName = safeName('rpip', catalogVmId);
 
-  const subnetId = `/subscriptions/${subscriptionId}/resourceGroups/${rg}/providers/Microsoft.Network/virtualNetworks/${azureConfig.vnetName}/subnets/${azureConfig.subnetName}`;
+  let pip = null;
+  if (assignPublicIp) {
+    pip = await network.publicIPAddresses.beginCreateOrUpdateAndWait(rg, pipName, {
+      location,
+      publicIPAllocationMethod: 'Static',
+      sku: { name: 'Standard' },
+      tags: { ManagedBy: 'cloud-automation-reseller', CatalogVmId: String(catalogVmId || '') },
+    });
+  }
 
-  const pip = await network.publicIPAddresses.beginCreateOrUpdateAndWait(rg, pipName, {
-    location,
-    publicIPAllocationMethod: 'Static',
-    sku: { name: 'Standard' },
-    tags: { ManagedBy: 'cloud-automation-reseller', CatalogVmId: String(catalogVmId || '') },
-  });
-
-  const nic = await network.networkInterfaces.beginCreateOrUpdateAndWait(rg, nicName, {
+  const nicParams = {
     location,
     ipConfigurations: [
       {
         name: 'ipconfig1',
         subnet: { id: subnetId },
-        publicIPAddress: { id: pip.id },
+        ...(pip ? { publicIPAddress: { id: pip.id } } : {}),
       },
     ],
     tags: { ManagedBy: 'cloud-automation-reseller', CatalogVmId: String(catalogVmId || '') },
-  });
+  };
 
-  const imageReference = isWindows
-    ? {
-        publisher: 'MicrosoftWindowsServer',
-        offer: 'WindowsServer',
-        sku: '2022-datacenter-azure-edition',
-        version: 'latest',
-      }
-    : azureConfig.linuxImage;
+  const nic = await network.networkInterfaces.beginCreateOrUpdateAndWait(rg, nicName, nicParams);
+
+  const imageReference = imageReferenceOverride?.id
+    ? { id: imageReferenceOverride.id }
+    : imageReferenceOverride?.publisher
+      ? {
+          publisher: imageReferenceOverride.publisher,
+          offer: imageReferenceOverride.offer,
+          sku: imageReferenceOverride.sku,
+          version: imageReferenceOverride.version || 'latest',
+        }
+      : isWindows
+        ? azureConfig.windowsImage
+        : azureConfig.linuxImage;
 
   const osProfile = {
     computerName: vmName.slice(0, 15),
@@ -116,13 +167,14 @@ export async function launchAzureVm({
 
   await compute.virtualMachines.beginCreateOrUpdateAndWait(rg, vmName, {
     location,
-    hardwareProfile: { vmSize: mapping.vmSize },
+    hardwareProfile: { vmSize: resolvedVmSize },
     storageProfile: {
       imageReference,
       osDisk: {
         createOption: 'FromImage',
         managedDisk: { storageAccountType: 'Premium_LRS' },
-        diskSizeGB: mapping.diskGb || 50,
+        diskSizeGB: diskGb,
+        deleteOption: 'Delete',
       },
     },
     osProfile,
@@ -132,70 +184,160 @@ export async function launchAzureVm({
     tags: { ManagedBy: 'cloud-automation-reseller', CatalogVmId: String(catalogVmId || '') },
   });
 
-  const pipFresh = await network.publicIPAddresses.get(rg, pipName);
-  const ip = pipFresh.ipAddress || null;
+  const nicFresh = await network.networkInterfaces.get(rg, nicName);
+  const privateIp = nicFresh.ipConfigurations?.[0]?.privateIPAddress || null;
+
+  let ip = privateIp;
+  if (assignPublicIp && pip) {
+    const pipFresh = await network.publicIPAddresses.get(rg, pipName);
+    ip = pipFresh.ipAddress || privateIp;
+  }
 
   return {
     provider: 'azure',
-    providerInstanceId: `${rg}/${vmName}`,
+    providerInstanceId: vmName,
     region: location,
     ip,
-    hostname: ip,
+    privateIp,
+    hostname: vmName,
     username,
     password,
     protocol: isWindows ? 'rdp' : 'ssh',
-    meta: { nicName, pipName, vmName, resourceGroup: rg },
+    meta: {
+      nicName,
+      pipName: assignPublicIp ? pipName : null,
+      vmName,
+      resourceGroup: rg,
+      assignPublicIp: Boolean(assignPublicIp),
+      vmSize: resolvedVmSize,
+    },
   };
 }
 
-export async function terminateAzureVm({ providerInstanceId } = {}) {
-  if (!providerInstanceId) {
-    throw Object.assign(new Error('providerInstanceId is required'), { statusCode: 400 });
-  }
+function resourceNameFromId(id) {
+  if (!id) return null;
+  const parts = String(id).split('/');
+  return parts[parts.length - 1] || null;
+}
 
-  const [rg, vmName] = String(providerInstanceId).split('/');
-  if (!rg || !vmName) {
-    throw Object.assign(
-      new Error('Azure providerInstanceId must be resourceGroup/vmName'),
-      { statusCode: 400 }
-    );
+async function deleteResourceQuietly(deleteFn) {
+  try {
+    await deleteFn();
+    return true;
+  } catch (err) {
+    const status = err?.statusCode ?? err?.response?.status;
+    if (status === 404) return false;
+    throw err;
   }
+}
+
+/**
+ * Delete VM and all Racko-created attachments: OS/data disks, NICs, public IPs.
+ */
+export async function terminateAzureVm({
+  providerInstanceId,
+  subscriptionId,
+  resourceGroup,
+  vmName,
+} = {}) {
+  const { resourceGroup: rg, vmName: name } = resolveAzureVmRef({
+    providerInstanceId,
+    resourceGroup,
+    vmName,
+  });
+  const subId = resolveAzureSubscriptionId({ subscriptionId });
 
   const credential = getAzureCredential();
-  const compute = new ComputeManagementClient(credential, azureConfig.subscriptionId);
-  const network = new NetworkManagementClient(credential, azureConfig.subscriptionId);
+  const compute = new ComputeManagementClient(credential, subId);
+  const network = new NetworkManagementClient(credential, subId);
 
-  let nicName = null;
-  let pipName = null;
+  const diskNames = new Set();
+  const nicNames = new Set();
+  const pipNames = new Set();
+
   try {
-    const vm = await compute.virtualMachines.get(rg, vmName);
-    const nicId = vm.networkProfile?.networkInterfaces?.[0]?.id;
-    if (nicId) {
-      nicName = nicId.split('/').pop();
-      const nic = await network.networkInterfaces.get(rg, nicName);
-      const pipId = nic.ipConfigurations?.[0]?.publicIPAddress?.id;
-      if (pipId) pipName = pipId.split('/').pop();
+    const vm = await compute.virtualMachines.get(rg, name);
+
+    const osDiskName = resourceNameFromId(vm.storageProfile?.osDisk?.managedDisk?.id);
+    if (osDiskName) diskNames.add(osDiskName);
+
+    for (const dataDisk of vm.storageProfile?.dataDisks || []) {
+      const diskName = resourceNameFromId(dataDisk.managedDisk?.id);
+      if (diskName) diskNames.add(diskName);
     }
-  } catch {
-    // best-effort cleanup of related NICs/PIPs
+
+    for (const nicRef of vm.networkProfile?.networkInterfaces || []) {
+      const nicName = resourceNameFromId(nicRef.id);
+      if (!nicName) continue;
+      nicNames.add(nicName);
+      try {
+        const nic = await network.networkInterfaces.get(rg, nicName);
+        for (const ipConfig of nic.ipConfigurations || []) {
+          const pipName = resourceNameFromId(ipConfig.publicIPAddress?.id);
+          if (pipName) pipNames.add(pipName);
+        }
+      } catch {
+        /* best-effort PIP discovery */
+      }
+    }
+  } catch (err) {
+    const status = err?.statusCode ?? err?.response?.status;
+    if (status === 404) {
+      return {
+        provider: 'azure',
+        providerInstanceId: `${rg}/${name}`,
+        terminated: true,
+        alreadyDeleted: true,
+        cleanedUp: { vm: false, disks: [], nics: [], publicIps: [] },
+      };
+    }
+    throw err;
   }
 
-  await compute.virtualMachines.beginDeleteAndWait(rg, vmName);
+  await compute.virtualMachines.beginDeleteAndWait(rg, name);
 
-  if (nicName) {
-    try {
-      await network.networkInterfaces.beginDeleteAndWait(rg, nicName);
-    } catch {
-      /* ignore */
-    }
-  }
-  if (pipName) {
-    try {
-      await network.publicIPAddresses.beginDeleteAndWait(rg, pipName);
-    } catch {
-      /* ignore */
+  const deletedNics = [];
+  for (const nicName of nicNames) {
+    if (
+      await deleteResourceQuietly(async () => {
+        await network.networkInterfaces.beginDeleteAndWait(rg, nicName);
+      })
+    ) {
+      deletedNics.push(nicName);
     }
   }
 
-  return { provider: 'azure', providerInstanceId, terminated: true };
+  const deletedPublicIps = [];
+  for (const pipName of pipNames) {
+    if (
+      await deleteResourceQuietly(async () => {
+        await network.publicIPAddresses.beginDeleteAndWait(rg, pipName);
+      })
+    ) {
+      deletedPublicIps.push(pipName);
+    }
+  }
+
+  const deletedDisks = [];
+  for (const diskName of diskNames) {
+    if (
+      await deleteResourceQuietly(async () => {
+        await compute.disks.beginDeleteAndWait(rg, diskName);
+      })
+    ) {
+      deletedDisks.push(diskName);
+    }
+  }
+
+  return {
+    provider: 'azure',
+    providerInstanceId: `${rg}/${name}`,
+    terminated: true,
+    cleanedUp: {
+      vm: name,
+      disks: deletedDisks,
+      nics: deletedNics,
+      publicIps: deletedPublicIps,
+    },
+  };
 }
