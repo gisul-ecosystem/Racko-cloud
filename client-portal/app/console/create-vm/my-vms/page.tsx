@@ -230,6 +230,7 @@ export default function MyVmsPage() {
                         }
                         onOpenConsole={() => router.push(consoleHref)}
                         onPowerAction={api.powerAction}
+                        onRefresh={refetch}
                       />
                     );
                   })}
@@ -251,6 +252,7 @@ function FragmentRow({
   onToggle,
   onOpenConsole,
   onPowerAction,
+  onRefresh,
 }: {
   vm: ICatalogVm;
   index: number;
@@ -267,7 +269,11 @@ function FragmentRow({
     panelUrl?: string;
     vm: ICatalogVm;
   }>;
+  onRefresh: () => void;
 }) {
+  const showAzurePowerInline =
+    isActive && vm.powerControlMode === 'azure';
+
   return (
     <>
       <tr
@@ -357,7 +363,20 @@ function FragmentRow({
           )}
         </td>
       </tr>
-      {isActive && isExpanded ? (
+      {isActive && showAzurePowerInline ? (
+        <tr className="border-b border-green-100 bg-green-50/40">
+          <td colSpan={8} className="px-6 py-4">
+            <CatalogVmPowerControls
+              vmId={vm.parentRequestId ?? vm._id}
+              instanceId={vm.instanceId}
+              powerControlMode="azure"
+              onPowerAction={onPowerAction}
+              onTerminated={onRefresh}
+            />
+          </td>
+        </tr>
+      ) : null}
+      {isActive && isExpanded && !showAzurePowerInline ? (
         <tr className="border-b border-green-100 bg-green-50/40">
           <td colSpan={8} className="px-6 py-4">
             <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-green-800">
@@ -368,7 +387,9 @@ function FragmentRow({
               <CatalogVmPowerControls
                 vmId={vm.parentRequestId ?? vm._id}
                 instanceId={vm.instanceId}
+                powerControlMode={vm.powerControlMode ?? 'webyne'}
                 onPowerAction={onPowerAction}
+                onTerminated={onRefresh}
               />
             </div>
           </td>

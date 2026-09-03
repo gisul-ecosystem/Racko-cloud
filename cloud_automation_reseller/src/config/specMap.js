@@ -5,6 +5,8 @@
  * Override via AWS_SPEC_MAP / AZURE_SPEC_MAP / OCI_SPEC_MAP / GCP_SPEC_MAP env JSON.
  */
 
+import { azureConfig } from './azure.js';
+
 const DEFAULT_AWS_SPEC_MAP = {
   '1vcpu-1gb-20gbssd': { instanceType: 't3.micro', ebsGb: 20 },
   '1vcpu-2gb-40gbssd': { instanceType: 't3.small', ebsGb: 40 },
@@ -160,8 +162,9 @@ export const AWS_PRICING_REGIONS = (
   .map((r) => r.trim())
   .filter(Boolean);
 
+/** Azure pricing sync regions — optional AZURE_PRICING_REGIONS env, else home location only. */
 export const AZURE_PRICING_REGIONS = (
-  process.env.AZURE_PRICING_REGIONS || 'centralindia,southindia,eastus,westeurope'
+  process.env.AZURE_PRICING_REGIONS || azureConfig.location || ''
 )
   .split(',')
   .map((r) => r.trim())
