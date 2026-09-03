@@ -44,6 +44,7 @@ function buildEmail(emailPrefix: string, index: number): string {
 function toTenantUserProfile(user: {
   _id: mongoose.Types.ObjectId;
   email: string;
+  username?: string | null;
   tenantId: mongoose.Types.ObjectId;
   isActive: boolean;
   createdAt: Date;
@@ -51,11 +52,29 @@ function toTenantUserProfile(user: {
   return {
     id: user._id.toString(),
     email: user.email,
+    username: user.username?.trim() || null,
     role: 'tenant_user',
     tenantId: user.tenantId.toString(),
     isActive: user.isActive,
     createdAt: user.createdAt.toISOString(),
   };
+}
+
+/** Elastic/VPS end-users — not console operators invited via Access control. */
+function elasticEndUserFilter(tenantId: mongoose.Types.ObjectId) {
+  return {
+    tenantId,
+    role: 'tenant_user' as const,
+    isConsoleOperator: { $ne: true },
+  };
+}
+
+function canManageElasticEndUser(
+  user: { createdBy?: mongoose.Types.ObjectId | null },
+  actor: { id: mongoose.Types.ObjectId; role: 'tenant_admin' | 'tenant_user' }
+): boolean {
+  if (actor.role === 'tenant_admin') return true;
+  return Boolean(user.createdBy && user.createdBy.toString() === actor.id.toString());
 }
 
 export class TenantUserService {
@@ -202,9 +221,16 @@ export class TenantUserService {
 
   async listMyUsers(
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
+    actor: { id: mongoose.Types.ObjectId; role: 'tenant_admin' | 'tenant_user' }
   ): Promise<TenantUserProfile[]> {
-    const users = await TenantUser.find({ tenantId, role: 'tenant_user', createdBy }).sort({ createdAt: -1 });
+    const filter: Record<string, unknown> = elasticEndUserFilter(tenantId);
+    // Tenant admins see all elastic end-users in the tenant (including super-admin
+    // imports and users created by other admins). Operators only see users they created.
+    if (actor.role !== 'tenant_admin') {
+      filter['createdBy'] = actor.id;
+    }
+
+    const users = await TenantUser.find(filter).sort({ createdAt: -1 });
     return users.map(toTenantUserProfile);
   }
 
@@ -212,16 +238,15 @@ export class TenantUserService {
     targetUserId: string,
     isActive: boolean,
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
+    actor: { id: mongoose.Types.ObjectId; role: 'tenant_admin' | 'tenant_user' }
   ): Promise<TenantUserProfile> {
     const user = await TenantUser.findOne({
       _id: new mongoose.Types.ObjectId(targetUserId),
-      tenantId,
-      role: 'tenant_user',
+      ...elasticEndUserFilter(tenantId),
     });
 
     if (!user) throw new NotFoundError('Tenant user not found.');
-    if (!user.createdBy || user.createdBy.toString() !== createdBy.toString()) {
+    if (!canManageElasticEndUser(user, actor)) {
       throw new ForbiddenError('You can only manage tenant users you created.');
     }
 
@@ -234,17 +259,16 @@ export class TenantUserService {
   async deleteUser(
     targetUserId: string,
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
+    actor: { id: mongoose.Types.ObjectId; role: 'tenant_admin' | 'tenant_user' }
   ): Promise<void> {
     const user = await TenantUser.findOne({
       _id: new mongoose.Types.ObjectId(targetUserId),
-      tenantId,
-      role: 'tenant_user',
+      ...elasticEndUserFilter(tenantId),
     });
 
     if (!user) throw new NotFoundError('Tenant user not found.');
-    if (!user.createdBy || user.createdBy.toString() !== createdBy.toString()) {
-      throw new ForbiddenError('You can only delete tenant users created by a tenant admin.');
+    if (!canManageElasticEndUser(user, actor)) {
+      throw new ForbiddenError('You can only delete tenant users you created.');
     }
 
     const unassignResult = await VM.updateMany(
@@ -275,7 +299,7 @@ export class TenantUserService {
   async bulkDeleteUsers(
     targetUserIds: string[],
     tenantId: mongoose.Types.ObjectId,
-    createdBy: mongoose.Types.ObjectId
+    actor: { id: mongoose.Types.ObjectId; role: 'tenant_admin' | 'tenant_user' }
   ): Promise<{ deleted: number }> {
     const objectIds = targetUserIds
       .filter((id) => mongoose.Types.ObjectId.isValid(id))
@@ -283,9 +307,8 @@ export class TenantUserService {
 
     const users = await TenantUser.find({
       _id: { $in: objectIds },
-      tenantId,
-      role: 'tenant_user',
-      createdBy,
+      ...elasticEndUserFilter(tenantId),
+      ...(actor.role !== 'tenant_admin' ? { createdBy: actor.id } : {}),
     }).select('_id');
 
     const deletableIds = users.map((u) => u._id);
@@ -310,9 +333,8 @@ export class TenantUserService {
 
     const result = await TenantUser.deleteMany({
       _id: { $in: deletableIds },
-      tenantId,
-      role: 'tenant_user',
-      createdBy,
+      ...elasticEndUserFilter(tenantId),
+      ...(actor.role !== 'tenant_admin' ? { createdBy: actor.id } : {}),
     });
 
     logger.info('Tenant users bulk deleted', {

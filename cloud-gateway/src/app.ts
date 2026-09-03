@@ -45,7 +45,7 @@ app.use(loggerMiddleware);
 // 5. User ID-based rate limit — per-user independent buckets, falls back to IP for unauthenticated requests
 // Skip rate limiting for auth token endpoints, long-lived streams, and high-frequency
 // authenticated cloud automation traffic (provisioning polls many endpoints in parallel).
-const RATE_LIMIT_SKIP_PATHS = new Set(['/api/v1/auth/refresh', '/api/v1/auth/validate']);
+const RATE_LIMIT_SKIP_PATHS = new Set(['/api/v1/auth/refresh', '/api/v1/auth/validate', '/api/health']);
 
 const RATE_LIMIT_SKIP_PREFIXES = [
   '/api/v1/agent/',
