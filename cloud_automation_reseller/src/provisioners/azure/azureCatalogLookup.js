@@ -15,6 +15,7 @@ import {
 import CloudRegionPricing, { pricingModeQuery, toPricingMode } from '../../models/CloudRegionPricing.js';
 import { specsToCanonical } from '../../config/specMap.js';
 import { resolvePlacementRegionsForAzure } from './azureNetwork.js';
+import { checkAzureVmFamilyQuota } from './azureQuotaCheck.js';
 
 /** @typedef {{ name: string; vcpu: number; memoryGb: number; gpu: boolean; architecture: string; nestedVirtualizationCapable?: boolean }} AzureVmSku */
 
@@ -190,9 +191,11 @@ function mergeAzureVmSkuRecords(existing, incoming) {
   }
   return {
     name: existing.name,
+    family: existing.family || incoming.family || null,
     vcpu: existing.vcpu,
     memoryGb: existing.memoryGb,
     gpu: Boolean(existing.gpu || incoming.gpu),
+    gpuCount: Math.max(Number(existing.gpuCount) || 0, Number(incoming.gpuCount) || 0),
     architecture: existing.architecture || incoming.architecture,
     nestedVirtualizationCapable: Boolean(
       existing.nestedVirtualizationCapable || incoming.nestedVirtualizationCapable
@@ -231,7 +234,8 @@ async function fetchAzureVmSkusFromApi() {
       const caps = Object.fromEntries((sku.capabilities || []).map((c) => [c.name, c.value]));
       const vcpu = Number(caps.vCPUs || caps.NumberOfCores || 0);
       const memoryGb = Number(caps.MemoryGB || 0);
-      const gpu = Number(caps.GPUs || 0) > 0;
+      const gpuCount = Math.max(0, Number(caps.GPUs || 0) || 0);
+      const gpu = gpuCount > 0;
       if (!vcpu || !memoryGb) continue;
 
       const locations = [
@@ -243,9 +247,11 @@ async function fetchAzureVmSkusFromApi() {
 
       out.push({
         name: sku.name,
+        family: sku.family || null,
         vcpu,
         memoryGb,
         gpu,
+        gpuCount,
         architecture: azureArchitectureFromSku(sku, caps),
         nestedVirtualizationCapable: azureNestedVirtualizationCapable(caps),
         locations,
@@ -385,6 +391,7 @@ export async function validateAzureVmSizeInRegion({
     region: normalizeAzureRegion(regionQuery),
     vcpu: found.vcpu,
     memoryGb: found.memoryGb,
+    family: found.family || null,
   };
 }
 
@@ -487,6 +494,26 @@ export async function validateAzureProvisionQuote({
   const ip = assignPublicIp ? Number(row?.rawIpPricePerHr) || 0 : 0;
   const estimatedHourlyUsd = compute + storage + ip;
 
+  const quota = await checkAzureVmFamilyQuota({
+    region: normRegion,
+    vmSize: availability.vmSize,
+    vcpu: needVcpu,
+    family: availability.family,
+  });
+  if (!quota.valid) {
+    return {
+      valid: false,
+      vmSize: availability.vmSize,
+      region: normRegion,
+      canonicalSpec,
+      vcpu: needVcpu,
+      memoryGb: needRam,
+      estimatedHourlyUsd: estimatedHourlyUsd > 0 ? estimatedHourlyUsd : null,
+      quota,
+      message: quota.message,
+    };
+  }
+
   return {
     valid: true,
     vmSize: availability.vmSize,
@@ -495,7 +522,14 @@ export async function validateAzureProvisionQuote({
     vcpu: needVcpu,
     memoryGb: needRam,
     estimatedHourlyUsd: estimatedHourlyUsd > 0 ? estimatedHourlyUsd : null,
-    message: `Ready to provision ${availability.vmSize} in ${region}.`,
+    quota,
+    message: [
+      `Ready to provision ${availability.vmSize} in ${region}.`,
+      quota.message && !quota.skipped ? quota.message : null,
+      estimatedHourlyUsd > 0 ? `Est. ~$${estimatedHourlyUsd.toFixed(4)}/hr USD.` : null,
+    ]
+      .filter(Boolean)
+      .join(' '),
   };
 }
 

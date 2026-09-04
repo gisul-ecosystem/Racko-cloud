@@ -7,6 +7,7 @@ import type {
   RegisterManualAzureCatalogVmInput,
   AttachManualAzureCatalogVmInput,
   ListSuperAdminAzurePlacementOptionsInput,
+  ValidateSuperAdminAzureProvisionQuoteInput,
   CreateSuperAdminAzureCatalogVmInput,
 } from './vmCatalog.validation';
 import type {
@@ -235,10 +236,11 @@ async function searchSuperAdminAzureMarketplaceImages(
     const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
     const query = typeof req.query.q === 'string' ? req.query.q : '';
     const osTypeRaw = typeof req.query.osType === 'string' ? req.query.osType : undefined;
+    const osTypeNormalized = osTypeRaw?.toLowerCase();
     const osType =
-      osTypeRaw?.toLowerCase() === 'linux'
-        ? ('linux' as const)
-        : ('windows' as const);
+      osTypeNormalized === 'linux' || osTypeNormalized === 'windows' || osTypeNormalized === 'all'
+        ? (osTypeNormalized as 'linux' | 'windows' | 'all')
+        : ('all' as const);
     const skip = req.query.skip ? Number(req.query.skip) : 0;
     const take = req.query.take ? Number(req.query.take) : req.query.limit ? Number(req.query.limit) : 24;
     const result = await vmCatalogService.searchSuperAdminAzureMarketplaceImages(superAdminId, {
@@ -357,6 +359,22 @@ async function listSuperAdminAzurePlacementOptions(
     const body = req.body as ListSuperAdminAzurePlacementOptionsInput;
     const result = await vmCatalogService.listSuperAdminAzurePlacementOptions(body, superAdminId);
     success(res, 'Azure placement options retrieved.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function validateSuperAdminAzureProvisionQuote(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
+    const body = req.body as ValidateSuperAdminAzureProvisionQuoteInput;
+    const result = await vmCatalogService.validateSuperAdminAzureProvisionQuote(body, superAdminId);
+    success(res, result.valid ? 'Azure provision quote is ready.' : 'Azure provision quote failed.', result);
   } catch (err) {
     next(err);
   }
@@ -677,5 +695,6 @@ export const vmCatalogController = {
   listSuperAdminAzureCustomImages,
   validateSuperAdminAzureCustomImage,
   listSuperAdminAzurePlacementOptions,
+  validateSuperAdminAzureProvisionQuote,
   createSuperAdminAzureCatalogVm,
 };

@@ -19,6 +19,7 @@ import {
   type SuperAdminTargetOption,
 } from '@/lib/superAdminExternalVmApi';
 import { ToastContainer, useToast } from '@/components/ui/Toast';
+import { ReadMoreText } from '@/components/ui/ReadMoreText';
 
 const inputClass =
   'w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 placeholder:text-gray-400 focus:border-[#B91C1C] focus:outline-none focus:ring-2 focus:ring-[#B91C1C]/20';
@@ -356,9 +357,10 @@ export function SuperAdminAzureVmListView() {
                           />
                         </div>
                       ) : vm.status === 'failed' ? (
-                        <span className="text-xs text-red-600" title={vm.fulfillError || undefined}>
-                          {vm.fulfillError || 'Provisioning failed'}
-                        </span>
+                        <ReadMoreText
+                          text={vm.fulfillError || 'Provisioning failed'}
+                          previewLength={100}
+                        />
                       ) : (
                         <span className="text-xs text-gray-500">
                           {vm.status === 'provisioning' || vm.status === 'fulfilling'

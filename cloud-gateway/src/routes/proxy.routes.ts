@@ -488,6 +488,12 @@ router.post(
   coreApiPricingProxy
 );
 router.post(
+  '/api/v1/vm-catalog/super-admin/azure/validate-provision-quote',
+  authMiddleware,
+  verifyMiddleware,
+  coreApiPricingProxy
+);
+router.post(
   '/api/v1/vm-catalog/super-admin/azure/create',
   authMiddleware,
   verifyMiddleware,

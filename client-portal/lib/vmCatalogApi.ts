@@ -502,13 +502,13 @@ export async function fetchAzureLocations(): Promise<AzureLocationOption[]> {
 
 export async function searchAzureMarketplaceImages(input: {
   query?: string;
-  osType?: 'linux' | 'windows';
+  osType?: 'linux' | 'windows' | 'all';
   skip?: number;
   take?: number;
 }): Promise<AzureMarketplaceSearchResult> {
   const qs = new URLSearchParams();
   if (input.query?.trim()) qs.set('q', input.query.trim());
-  if (input.osType) qs.set('osType', input.osType);
+  qs.set('osType', input.osType || 'all');
   if (input.skip != null) qs.set('skip', String(input.skip));
   if (input.take != null) qs.set('take', String(input.take));
   const res = await vmCatalogApiRequest<ApiResponse<AzureMarketplaceSearchResult>>(
@@ -621,6 +621,11 @@ export interface AzurePlacementOption {
   vmSize: string;
   vcpu: number;
   memoryGb: number;
+  family?: string | null;
+  /** Human series label (e.g. NVSv4, Dadsv5) — one champion size per series in placement. */
+  series?: string | null;
+  gpu?: boolean;
+  gpuCount?: number;
   estimatedHourlyUsd: number;
   estimatedComputeHourlyUsd?: number;
   estimatedStorageHourlyUsd?: number;
@@ -636,6 +641,8 @@ export interface AzurePlacementOptionsResult {
   regionMode?: 'home' | 'auto';
   assignPublicIp?: boolean;
   recommended?: AzurePlacementOption | null;
+  /** Distinct Azure series covered by options (Portal-style). */
+  series?: string[];
 }
 
 export interface QuoteAzurePlacementOptionsDto {
@@ -656,6 +663,55 @@ export async function fetchAzurePlacementOptions(
 ): Promise<AzurePlacementOptionsResult> {
   const res = await vmCatalogApiRequest<ApiResponse<AzurePlacementOptionsResult>>(
     '/api/v1/vm-catalog/super-admin/azure/placement-options',
+    {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data;
+}
+
+export interface AzureProvisionQuoteValidation {
+  valid: boolean;
+  message?: string;
+  vmSize?: string;
+  region?: string;
+  canonicalSpec?: string;
+  vcpu?: number;
+  memoryGb?: number;
+  estimatedHourlyUsd?: number | null;
+  quota?: {
+    valid?: boolean;
+    family?: string;
+    limit?: number;
+    current?: number;
+    requiredCores?: number;
+    remaining?: number | null;
+    skipped?: boolean;
+    message?: string;
+  };
+}
+
+export interface ValidateAzureProvisionQuoteDto {
+  vmSize: string;
+  region: string;
+  category?: string;
+  vcpu?: number;
+  ramGb?: number;
+  ssdGb?: number;
+  nestedVirtualization?: boolean;
+  assignPublicIp?: boolean;
+  imagePublisher?: string;
+  imageOffer?: string;
+  imageSku?: string;
+  customImageId?: string;
+}
+
+export async function validateAzureProvisionQuote(
+  dto: ValidateAzureProvisionQuoteDto
+): Promise<AzureProvisionQuoteValidation> {
+  const res = await vmCatalogApiRequest<ApiResponse<AzureProvisionQuoteValidation>>(
+    '/api/v1/vm-catalog/super-admin/azure/validate-provision-quote',
     {
       method: 'POST',
       body: JSON.stringify(dto),

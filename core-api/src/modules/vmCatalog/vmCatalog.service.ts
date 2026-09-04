@@ -3113,7 +3113,7 @@ class VmCatalogService {
     superAdminId: mongoose.Types.ObjectId,
     input: {
       query?: string;
-      osType?: 'linux' | 'windows';
+      osType?: 'linux' | 'windows' | 'all';
       skip?: number;
       take?: number;
     }
@@ -3195,6 +3195,45 @@ class VmCatalogService {
       imagePublisher: dto.imagePublisher,
       imageOffer: dto.imageOffer,
       imageSku: dto.imageSku,
+    });
+  }
+
+  /** Super-admin: pre-create quote — SKU, image, pricing estimate, and Azure family quota. */
+  async validateSuperAdminAzureProvisionQuote(
+    dto: {
+      vmSize: string;
+      region: string;
+      category?: string;
+      vcpu?: number;
+      ramGb?: number;
+      ssdGb?: number;
+      nestedVirtualization?: boolean;
+      assignPublicIp?: boolean;
+      imagePublisher?: string;
+      imageOffer?: string;
+      imageSku?: string;
+      customImageId?: string;
+    },
+    superAdminId: mongoose.Types.ObjectId
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return validateAzureProvisionQuote({
+      vmSize: dto.vmSize,
+      region: dto.region,
+      category: catalogPricingBucket(dto.category || 'linux'),
+      vcpu: dto.vcpu,
+      ramGb: dto.ramGb,
+      ssdGb: dto.ssdGb,
+      nestedVirtualization: Boolean(dto.nestedVirtualization),
+      assignPublicIp: Boolean(dto.assignPublicIp),
+      ...(dto.customImageId?.trim() ? { customImageId: dto.customImageId.trim() } : {}),
+      ...(dto.imagePublisher && dto.imageOffer && dto.imageSku
+        ? {
+            imagePublisher: dto.imagePublisher,
+            imageOffer: dto.imageOffer,
+            imageSku: dto.imageSku,
+          }
+        : {}),
     });
   }
 
@@ -3441,7 +3480,7 @@ class VmCatalogService {
       throw new ValidationError('VM size is required for Azure provisioning.');
     }
 
-    if (!hasWizardPlacement) {
+    {
       const provisionQuote = await validateAzureProvisionQuote({
         vmSize: resolvedVmSize,
         region,
@@ -3463,7 +3502,7 @@ class VmCatalogService {
       if (!provisionQuote.valid) {
         throw new ValidationError(
           provisionQuote.message ||
-            'Azure VM size is not available in the selected region. Refresh placement and choose another size.'
+            'Azure VM size is not available in the selected region, or quota is insufficient.'
         );
       }
     }
