@@ -15,7 +15,7 @@ import {
   execCommand,
   resetMachines,
   issueResetStreamTicket,
-  openResetStatusStream,
+  openResetStatusStreamWithReconnect,
   clearMachineJobs,
   type IMachine,
   type MachineStatus,
@@ -157,7 +157,7 @@ export default function MachineDetailPage() {
   const [resetting, setResetting] = useState(false);
   const [resetStatus, setResetStatus] = useState<'idle' | 'resetting' | 'success' | 'failed'>('idle');
   const [resetError, setResetError] = useState<string>('');
-  const sseRef = useRef<EventSource | null>(null);
+  const sseRef = useRef<EventSource | (() => void) | null>(null);
 
   // Clear logs state
   const [clearingLogs, setClearingLogs] = useState(false);
@@ -241,8 +241,12 @@ export default function MachineDetailPage() {
     }
   };
 
-  // Cleanup SSE on unmount
-  useEffect(() => () => { sseRef.current?.close(); }, []);
+  // Cleanup SSE on unmount — handles both EventSource (.close) and stop function (call directly)
+  useEffect(() => () => {
+    const ref = sseRef.current;
+    if (typeof ref === 'function') ref();
+    else ref?.close();
+  }, []);
 
   const handleReset = async () => {
     if (!machine) return;
@@ -262,42 +266,49 @@ export default function MachineDetailPage() {
         return;
       }
 
-      // Open SSE stream to track completion
+      // Issue a reusable stream ticket (valid for 15 minutes — survives reconnects).
       const ticket = await issueResetStreamTicket(sessionId);
-      const sse = openResetStatusStream(sessionId, ticket.streamToken);
-      sseRef.current = sse;
 
-      sse.onmessage = (e: MessageEvent) => {
-        const event = JSON.parse(e.data as string) as {
-          type: string;
-          machineId?: string;
-          success?: boolean;
-          error?: string;
-        };
-        if (event.type === 'reset_complete') {
-          sse.close();
-          sseRef.current = null;
-          if (event.success) {
-            setResetStatus('success');
-            addToast('success', `"${machine.name}" reset successfully.`);
-            // Reload page data — jobs cleared, machine fresh
-            setTimeout(() => void load(), 1500);
-          } else {
-            setResetStatus('failed');
-            setResetError(event.error ?? 'Reset failed.');
-            addToast('error', `Reset failed: ${event.error ?? 'Unknown error'}`);
+      // Use the reconnecting stream instead of plain EventSource.
+      // The reset script kills VM processes which can briefly drop the connection.
+      // openResetStatusStreamWithReconnect retries with exponential backoff (up to 10×)
+      // and on each reconnect the server replays the persisted result from MongoDB
+      // instantly — so even if the reset finished while disconnected, we get the result.
+      const stop = openResetStatusStreamWithReconnect(
+        sessionId,
+        ticket.streamToken,
+        // onEvent — called for each reset_complete event (deduplicated on reconnect)
+        (event) => {
+          if (event.type === 'reset_complete') {
+            if (event.success) {
+              setResetStatus('success');
+              addToast('success', `"${machine.name}" reset successfully.`);
+              setTimeout(() => void load(), 1500);
+            } else {
+              setResetStatus('failed');
+              setResetError(event.error ?? 'Reset failed.');
+              addToast('error', `Reset failed: ${event.error ?? 'Unknown error'}`);
+            }
+            setResetting(false);
+            sseRef.current = null;
           }
+        },
+        // onTerminal — all done cleanly, stream stopped
+        () => {
+          sseRef.current = null;
           setResetting(false);
-        }
-      };
+        },
+        // onGiveUp — all 10 retries exhausted (~5 minutes) without a result
+        () => {
+          sseRef.current = null;
+          setResetting(false);
+          setResetStatus('failed');
+          setResetError('Connection lost after multiple retries. The reset may have completed — check the machine status.');
+        },
+        1, // expectedCount — single machine
+      );
 
-      sse.onerror = () => {
-        sse.close();
-        sseRef.current = null;
-        setResetStatus('failed');
-        setResetError('Lost connection to agent.');
-        setResetting(false);
-      };
+      sseRef.current = stop;
     } catch (err) {
       setResetStatus('failed');
       setResetError(err instanceof ApiError ? err.message : 'Failed to initiate reset.');
