@@ -160,7 +160,7 @@ router.get('/azure/marketplace/images', async (req, res, next) => {
   try {
     const result = await searchAzureMarketplaceImages({
       query: req.query.q ?? req.query.query ?? '',
-      osType: req.query.osType ?? req.query.os ?? 'windows',
+      osType: req.query.osType ?? req.query.os ?? 'all',
       skip: req.query.skip ? Number(req.query.skip) : 0,
       take: req.query.take ?? req.query.limit ?? 24,
     });

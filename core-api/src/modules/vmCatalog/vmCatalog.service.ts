@@ -3113,7 +3113,7 @@ class VmCatalogService {
     superAdminId: mongoose.Types.ObjectId,
     input: {
       query?: string;
-      osType?: 'linux' | 'windows';
+      osType?: 'linux' | 'windows' | 'all';
       skip?: number;
       take?: number;
     }
@@ -3196,6 +3196,138 @@ class VmCatalogService {
       imageOffer: dto.imageOffer,
       imageSku: dto.imageSku,
     });
+  }
+
+  /** Super-admin: pre-create quote — SKU, image, pricing estimate, and Azure family quota. */
+  async validateSuperAdminAzureProvisionQuote(
+    dto: {
+      vmSize: string;
+      region: string;
+      category?: string;
+      vcpu?: number;
+      ramGb?: number;
+      ssdGb?: number;
+      nestedVirtualization?: boolean;
+      assignPublicIp?: boolean;
+      imagePublisher?: string;
+      imageOffer?: string;
+      imageSku?: string;
+      customImageId?: string;
+    },
+    superAdminId: mongoose.Types.ObjectId
+  ) {
+    await this.assertSuperAdmin(superAdminId);
+    return validateAzureProvisionQuote({
+      vmSize: dto.vmSize,
+      region: dto.region,
+      category: catalogPricingBucket(dto.category || 'linux'),
+      vcpu: dto.vcpu,
+      ramGb: dto.ramGb,
+      ssdGb: dto.ssdGb,
+      nestedVirtualization: Boolean(dto.nestedVirtualization),
+      assignPublicIp: Boolean(dto.assignPublicIp),
+      ...(dto.customImageId?.trim() ? { customImageId: dto.customImageId.trim() } : {}),
+      ...(dto.imagePublisher && dto.imageOffer && dto.imageSku
+        ? {
+            imagePublisher: dto.imagePublisher,
+            imageOffer: dto.imageOffer,
+            imageSku: dto.imageSku,
+          }
+        : {}),
+    });
+  }
+
+  /** Provision Azure VM in the background — HTTP returns immediately with status provisioning. */
+  private runAzureCatalogProvisionInBackground(
+    docId: mongoose.Types.ObjectId,
+    superAdminId: mongoose.Types.ObjectId,
+    input: {
+      region: string;
+      category: string;
+      canonicalSpec: string;
+      resourceGroup: string;
+      assignPublicIp: boolean;
+      resolvedVmSize?: string;
+      attachNow: boolean;
+      catalogTemplate: string;
+      imageReference?: {
+        publisher?: string;
+        offer?: string;
+        sku?: string;
+        version?: string;
+        id?: string;
+        osType?: string;
+      };
+    }
+  ): void {
+    void (async () => {
+      const doc = await CatalogVmModel.findById(docId);
+      if (!doc || doc.status !== 'provisioning') return;
+
+      try {
+        const provisioned = await resellerProvision({
+          provider: 'azure',
+          region: input.region,
+          category: input.category,
+          canonicalSpec: input.canonicalSpec,
+          catalogVmId: doc._id.toString(),
+          resourceGroup: input.resourceGroup,
+          assignPublicIp: input.assignPublicIp,
+          ...(input.resolvedVmSize ? { vmSize: input.resolvedVmSize } : {}),
+          ...(input.imageReference ? { imageReference: input.imageReference } : {}),
+        });
+
+        doc.status = input.attachNow ? 'active' : 'ready_to_attach';
+        doc.providerPurchased = true;
+        doc.ipAddress = provisioned.ip || undefined;
+        doc.hostname = provisioned.hostname || provisioned.meta?.vmName || undefined;
+        doc.username = provisioned.username;
+        doc.password = encrypt(provisioned.password);
+        doc.protocol = provisioned.protocol;
+        doc.providerInstanceId = provisioned.providerInstanceId;
+        doc.azureResourceGroup = provisioned.meta?.resourceGroup || input.resourceGroup;
+        doc.region = provisioned.region || input.region;
+        doc.updatedAt = new Date();
+
+        if (input.attachNow) {
+          doc.attachedAt = new Date();
+          doc.reviewedBy = superAdminId;
+          doc.reviewedAt = new Date();
+        }
+
+        await doc.save();
+
+        if (input.attachNow) {
+          this.schedulePostReadySetup(doc);
+          await this.notifyOwner(
+            doc,
+            'Azure VM is ready',
+            `Your ${input.catalogTemplate} VM from Azure is now available in My VM.`,
+            {
+              requestId: doc._id.toString(),
+              event: 'attached',
+            }
+          );
+        }
+
+        logger.info('[VmCatalog] Azure VM provision completed', {
+          requestId: doc._id.toString(),
+          resourceGroup: input.resourceGroup,
+          region: input.region,
+          vmName: doc.providerInstanceId,
+          attachNow: input.attachNow,
+        });
+      } catch (err) {
+        doc.status = 'failed';
+        doc.fulfillError = err instanceof Error ? err.message : String(err);
+        doc.updatedAt = new Date();
+        await doc.save();
+        logger.error('[VmCatalog] Azure background provision failed', {
+          requestId: doc._id.toString(),
+          error: doc.fulfillError,
+        });
+      }
+    })();
   }
 
   /** Super-admin: create Azure VM via reseller and register in catalog. */
@@ -3348,7 +3480,7 @@ class VmCatalogService {
       throw new ValidationError('VM size is required for Azure provisioning.');
     }
 
-    if (!hasWizardPlacement) {
+    {
       const provisionQuote = await validateAzureProvisionQuote({
         vmSize: resolvedVmSize,
         region,
@@ -3370,7 +3502,7 @@ class VmCatalogService {
       if (!provisionQuote.valid) {
         throw new ValidationError(
           provisionQuote.message ||
-            'Azure VM size is not available in the selected region. Refresh placement and choose another size.'
+            'Azure VM size is not available in the selected region, or quota is insufficient.'
         );
       }
     }
@@ -3422,68 +3554,26 @@ class VmCatalogService {
       updatedAt: now,
     });
 
-    try {
-      const provisioned = await resellerProvision({
-        provider: 'azure',
-        region,
-        category,
-        canonicalSpec,
-        catalogVmId: doc._id.toString(),
-        resourceGroup,
-        assignPublicIp,
-        ...(resolvedVmSize ? { vmSize: resolvedVmSize } : {}),
-        ...(imageReference ? { imageReference } : {}),
-      });
+    this.runAzureCatalogProvisionInBackground(doc._id, superAdminId, {
+      region,
+      category,
+      canonicalSpec,
+      resourceGroup,
+      assignPublicIp,
+      resolvedVmSize,
+      attachNow,
+      catalogTemplate,
+      imageReference,
+    });
 
-      doc.status = attachNow ? 'active' : 'ready_to_attach';
-      doc.providerPurchased = true;
-      doc.ipAddress = provisioned.ip || undefined;
-      doc.hostname = provisioned.hostname || provisioned.meta?.vmName || undefined;
-      doc.username = provisioned.username;
-      doc.password = encrypt(provisioned.password);
-      doc.protocol = provisioned.protocol;
-      doc.providerInstanceId = provisioned.providerInstanceId;
-      doc.azureResourceGroup = provisioned.meta?.resourceGroup || resourceGroup;
-      doc.region = provisioned.region || region;
-      doc.updatedAt = new Date();
+    logger.info('[VmCatalog] Azure VM provisioning started', {
+      requestId: doc._id.toString(),
+      resourceGroup,
+      region,
+      attachNow,
+    });
 
-      if (attachNow) {
-        doc.attachedAt = new Date();
-        doc.reviewedBy = superAdminId;
-        doc.reviewedAt = new Date();
-      }
-
-      await doc.save();
-
-      if (attachNow) {
-        this.schedulePostReadySetup(doc);
-        await this.notifyOwner(
-          doc,
-          'Azure VM is ready',
-          `Your ${catalogTemplate} VM from Azure is now available in My VM.`,
-          {
-            requestId: doc._id.toString(),
-            event: 'attached',
-          }
-        );
-      }
-
-      logger.info('[VmCatalog] Azure VM auto-created', {
-        requestId: doc._id.toString(),
-        resourceGroup,
-        region,
-        vmName: doc.providerInstanceId,
-        attachNow,
-      });
-
-      return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
-    } catch (err) {
-      doc.status = 'failed';
-      doc.fulfillError = err instanceof Error ? err.message : String(err);
-      doc.updatedAt = new Date();
-      await doc.save();
-      throw err;
-    }
+    return this.toResponse(doc, { includeSecrets: true, role: 'super_admin' });
   }
 
   /** Super-admin: list Azure VMs waiting to be attached. */
@@ -3506,7 +3596,7 @@ class VmCatalogService {
   async listSuperAdminAzureCatalogVms(): Promise<CatalogVmResponse[]> {
     const docs = await CatalogVmModel.find({
       provider: 'azure',
-      status: { $in: ['active', 'provisioning', 'fulfilling'] },
+      status: { $in: ['active', 'provisioning', 'fulfilling', 'failed'] },
     })
       .sort({ createdAt: -1 })
       .lean(false);

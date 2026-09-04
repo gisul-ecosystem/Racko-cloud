@@ -1,7 +1,7 @@
 import { validateAzureConfig, azureConfig } from '../../config/azure.js';
 import { specsToCanonical } from '../../config/specMap.js';
 import { resolvePlacementRegionsForAzure } from './azureNetwork.js';
-import { shortlistAzureSkusForSpec } from '../../services/dynamicSkuResolver.js';
+import { shortlistAzureSkusAcrossSeries, azureSeriesLabelFromSku } from '../../services/dynamicSkuResolver.js';
 import { listAzureImageAvailabilityRegions } from './azureImageRegions.js';
 import { listAzureVmSkus } from './azureCatalogLookup.js';
 import { skuRecordAvailableInRegion, normalizeAzureRegion } from './azureSkuAvailability.js';
@@ -33,6 +33,37 @@ async function filterPlacementOptionsByAvailability(options, skuByName) {
   });
 }
 
+function limitPlacementOptionsKeepingSeries(sorted, maxOptions) {
+  if (!maxOptions || sorted.length <= maxOptions) return sorted;
+
+  // Always keep the cheapest row per series first so Review can show all series.
+  const seenSeries = new Set();
+  const seriesFirst = [];
+  const rest = [];
+  for (const opt of sorted) {
+    const key = String(opt.series || opt.family || opt.vmSize || '')
+      .trim()
+      .toLowerCase();
+    if (key && !seenSeries.has(key)) {
+      seenSeries.add(key);
+      seriesFirst.push(opt);
+    } else {
+      rest.push(opt);
+    }
+  }
+
+  const out = [];
+  const used = new Set();
+  for (const opt of [...seriesFirst, ...rest]) {
+    if (out.length >= maxOptions) break;
+    const rowKey = `${opt.region}|${opt.vmSize}`;
+    if (used.has(rowKey)) continue;
+    used.add(rowKey);
+    out.push(opt);
+  }
+  return sortPlacementOptions(out);
+}
+
 async function finalizePlacementOptions(
   options,
   skuByName,
@@ -46,7 +77,7 @@ async function finalizePlacementOptions(
     resultOptions = filtered.filter((opt) => opt.region === cheapestRegion);
   }
   const sorted = sortPlacementOptions(resultOptions);
-  const limited = maxOptions > 0 ? sorted.slice(0, maxOptions) : sorted;
+  const limited = limitPlacementOptionsKeepingSeries(sorted, maxOptions);
   return {
     options: limited,
     message:
@@ -78,6 +109,10 @@ function buildOptionsFromDbRows(dbRows, { needVcpu, needRam, assignPublicIp, sku
         vmSize: row.instanceType,
         vcpu: sku?.vcpu ?? needVcpu,
         memoryGb: sku?.memoryGb ?? needRam,
+        family: sku?.family || null,
+        series: sku?.series || azureSeriesLabelFromSku(sku || { name: row.instanceType }),
+        gpu: Boolean(sku?.gpu),
+        gpuCount: Number(sku?.gpuCount) || (sku?.gpu ? 1 : 0),
         estimatedHourlyUsd: compute + storage + ip,
         estimatedComputeHourlyUsd: compute,
         estimatedStorageHourlyUsd: storage,
@@ -102,14 +137,20 @@ async function queryCachedAzurePricing({
   priceCategory,
   pricingMode,
   regionsToPrice,
+  instanceTypes,
 }) {
-  return CloudRegionPricing.find({
+  const query = {
     provider: 'azure',
-    canonicalSpec,
     category: priceCategory,
     ...pricingModeQuery(pricingMode),
     region: { $in: regionsToPrice },
-  }).lean();
+  };
+  if (Array.isArray(instanceTypes) && instanceTypes.length > 0) {
+    query.instanceType = { $in: instanceTypes };
+  } else if (canonicalSpec) {
+    query.canonicalSpec = canonicalSpec;
+  }
+  return CloudRegionPricing.find(query).lean();
 }
 
 /** Public-IP quotes need multi-region cache; default sync only covers AZURE_LOCATION. */
@@ -200,14 +241,15 @@ async function tryCachedPlacementOptions({
   if (result.options.length === 0) return null;
 
   const comparedRegions = new Set(result.options.map((o) => o.region)).size;
+  const seriesCount = new Set(result.options.map((o) => o.series || o.family)).size;
   return buildPlacementResponse({
     options: result.options,
     canonicalSpec,
     message:
       result.message ||
       (assignPublic
-        ? `Compared ${comparedRegions} region(s) from pricing cache.`
-        : `Priced in ${homeRegion} from cache.`),
+        ? `Compared ${comparedRegions} region(s) and ${seriesCount} series from pricing cache — recommended is cheapest.`
+        : `Priced ${seriesCount} series in ${homeRegion} from cache — recommended is cheapest.`),
     assignPublicIp: assignPublic,
     homeRegion,
   });
@@ -217,10 +259,13 @@ function placementFinalizeOptions(assignPublic) {
   if (assignPublic) {
     return {
       cheapestRegionOnly: false,
-      maxOptions: Math.max(Number(process.env.AZURE_PUBLIC_PLACEMENT_MAX_OPTIONS) || 25, 5),
+      maxOptions: Math.max(Number(process.env.AZURE_PUBLIC_PLACEMENT_MAX_OPTIONS) || 80, 20),
     };
   }
-  return { cheapestRegionOnly: false };
+  return {
+    cheapestRegionOnly: false,
+    maxOptions: Math.max(Number(process.env.AZURE_PRIVATE_PLACEMENT_MAX_OPTIONS) || 60, 15),
+  };
 }
 
 async function loadRegionAncillaryCosts(regions, diskGb, assignPublic) {
@@ -260,6 +305,13 @@ function buildPlacementResponse({
 }) {
   const sorted = sortPlacementOptions(options);
   const assignPublic = Boolean(assignPublicIp);
+  const seriesSet = new Set();
+  for (const opt of sorted) {
+    const label = opt.series || azureSeriesLabelFromSku({ family: opt.family, name: opt.vmSize });
+    opt.series = label;
+    if (label) seriesSet.add(label);
+  }
+  const series = [...seriesSet].sort((a, b) => a.localeCompare(b));
   return {
     options: sorted,
     total: sorted.length,
@@ -269,6 +321,7 @@ function buildPlacementResponse({
     regionMode: assignPublic ? 'auto' : 'home',
     assignPublicIp: assignPublic,
     recommended: sorted[0] ?? null,
+    series,
   };
 }
 
@@ -361,13 +414,47 @@ async function listAzurePlacementOptionsInner({
   const skuName = String(imageSku || '').trim();
   let imageRegionCount = 0;
 
-  // Fast path: use Mongo pricing cache before image checks or live Azure pricing calls.
+  // Resolve series champions early so cache queries cover every Azure series that fits Spec.
+  const candidates = await shortlistAzureSkusAcrossSeries({
+    vcpu: needVcpu,
+    ramGb: needRam,
+    diskGb,
+    gpu,
+    nestedVirtualization: Boolean(nestedVirtualization),
+    category,
+    maxSeries: Math.max(Number(process.env.AZURE_PLACEMENT_MAX_SERIES) || 40, 8),
+  });
+
+  if (candidates.length === 0) {
+    const nestedHint = nestedVirtualization
+      ? ' Nested virtualization requires Intel/AMD sizes with Hyper-V support — try fewer vCPUs/RAM or disable nested virt.'
+      : '';
+    return buildPlacementResponse({
+      options: [],
+      canonicalSpec,
+      message: `No Azure VM sizes match this vCPU/RAM configuration.${nestedHint}`,
+      assignPublicIp: assignPublic,
+      homeRegion,
+    });
+  }
+
+  const candidateNames = candidates.map((c) => c.name).filter(Boolean);
   let dbRows = await queryCachedAzurePricing({
-    canonicalSpec,
     priceCategory,
     pricingMode,
     regionsToPrice,
+    instanceTypes: candidateNames,
   });
+
+  // Keep a canonicalSpec fallback for older cache rows that lack instance coverage.
+  if (dbRows.length === 0) {
+    dbRows = await queryCachedAzurePricing({
+      canonicalSpec,
+      priceCategory,
+      pricingMode,
+      regionsToPrice,
+    });
+  }
 
   if (pub && off && skuName) {
     let imageCheckRegions;
@@ -434,28 +521,6 @@ async function listAzurePlacementOptionsInner({
     }
   }
 
-  const candidates = await shortlistAzureSkusForSpec({
-    vcpu: needVcpu,
-    ramGb: needRam,
-    diskGb,
-    gpu,
-    nestedVirtualization: Boolean(nestedVirtualization),
-    category,
-  });
-
-  if (candidates.length === 0) {
-    const nestedHint = nestedVirtualization
-      ? ' Nested virtualization requires Intel/AMD sizes with Hyper-V support — try fewer vCPUs/RAM or disable nested virt.'
-      : '';
-    return buildPlacementResponse({
-      options: [],
-      canonicalSpec,
-      message: `No Azure VM sizes match this vCPU/RAM configuration.${nestedHint}`,
-      assignPublicIp: assignPublic,
-      homeRegion,
-    });
-  }
-
   dbRows = filterDbRowsToCandidates(dbRows, candidates);
 
   const availabilityEmptyMessage = assignPublic
@@ -479,10 +544,10 @@ async function listAzurePlacementOptionsInner({
   // Private IP: live retail pricing in home region is faster than ensureSpecPricing (multi-provider sync).
   if (dbRows.length === 0 && !assignPublic) {
     dbRows = await queryCachedAzurePricing({
-      canonicalSpec,
       priceCategory,
       pricingMode,
       regionsToPrice,
+      instanceTypes: candidateNames,
     });
     dbRows = filterDbRowsToCandidates(dbRows, candidates);
   }
@@ -518,8 +583,9 @@ async function listAzurePlacementOptionsInner({
     regionsForLivePricing = [homeRegion];
   }
 
+  // Price one champion size per series (all Azure series that fit Spec).
   const maxPricingSkus = Math.min(
-    Math.max(Number(process.env.AZURE_PLACEMENT_MAX_SKUS) || 3, 1),
+    Math.max(Number(process.env.AZURE_PLACEMENT_MAX_SKUS) || 40, candidates.length),
     candidates.length
   );
   const pricingCandidates = candidates.slice(0, maxPricingSkus);
@@ -549,6 +615,10 @@ async function listAzurePlacementOptionsInner({
             vmSize: sku.name,
             vcpu: sku.vcpu,
             memoryGb: sku.memoryGb,
+            family: sku.family || null,
+            series: sku.series || azureSeriesLabelFromSku(sku),
+            gpu: Boolean(sku.gpu),
+            gpuCount: Number(sku.gpuCount) || (sku.gpu ? 1 : 0),
             estimatedHourlyUsd: hourly,
             estimatedComputeHourlyUsd: compute,
             estimatedStorageHourlyUsd: storage,
@@ -579,8 +649,10 @@ async function listAzurePlacementOptionsInner({
     message:
       result.message ||
       (assignPublic && result.options.length > 0
-        ? `Live Azure retail pricing across ${comparedRegions} region(s) — recommended is lowest total (compute + disk + public IP).`
-        : undefined),
+        ? `Live Azure retail pricing across ${comparedRegions} region(s) and ${new Set(result.options.map((o) => o.series || o.family)).size} series — recommended is lowest total (compute + disk + public IP).`
+        : result.options.length > 0
+          ? `Compared ${new Set(result.options.map((o) => o.series || o.family)).size} Azure series for this Spec — recommended is the cheapest.`
+          : undefined),
     assignPublicIp: assignPublic,
     homeRegion,
   });
