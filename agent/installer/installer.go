@@ -27,6 +27,7 @@ type SoftwarePackage struct {
 	FileURL          string `json:"fileUrl"`
 	FileName         string `json:"fileName"`
 	ZipInstallScript string `json:"zipInstallScript"` // PowerShell script run after ZIP extraction
+	PostInstallScript string `json:"postInstallScript"` // PowerShell script run after msi/exe install
 	InstallArgs      string `json:"installArgs"`
 }
 

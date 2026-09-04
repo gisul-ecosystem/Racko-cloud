@@ -71,6 +71,7 @@ import otpRoutes from './modules/otp/otp.routes';
 import myVmDashboardRoutes from './modules/myVmDashboard/myVmDashboard.routes';
 import tenantMyVmDashboardRoutes from './modules/myVmDashboard/tenantMyVmDashboard.routes';
 import superAdminVmInventoryRoutes from './modules/superAdmin/superAdminVmInventory.routes';
+import healthRoutes from './routes/health.routes';
 
 const app = express();
 
@@ -167,10 +168,8 @@ app.use(
   })
 );
 
-// Health check
-app.get('/health', (_req, res) => {
-  res.status(200).json({ status: 'ok', service: 'core-api' });
-});
+// Health check — public, no auth; Mongo ping in health.routes.ts
+app.use(healthRoutes);
 
 // Routes
 app.use('/internal/tenants', internalTenantRoutes);

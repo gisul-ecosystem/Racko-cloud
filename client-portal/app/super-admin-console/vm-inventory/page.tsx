@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { ChevronLeft, Database, Pencil, RotateCcw, Search, Trash2, Upload } from 'lucide-react';
+import { ChevronLeft, Database, Lock, LockOpen, Pencil, RotateCcw, Search, Shield, Trash2, Upload } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   fetchSuperAdminVmInventory,
@@ -20,13 +20,19 @@ import {
 } from '@/lib/superAdminVmInventoryApi';
 import {
   bulkDeleteSuperAdminExternalVms,
+  bulkUpdateSuperAdminExternalVmOverride,
   deleteSuperAdminExternalVm,
   fetchSuperAdminExternalVmOverview,
+  setSuperAdminExternalVmInventoryLock,
   type SuperAdminExternalVmOverviewRow,
 } from '@/lib/superAdminExternalVmApi';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { ManageExternalVmAssignmentsModal } from '@/components/super-admin-console/ManageExternalVmAssignmentsModal';
+import {
+  GrantAccessOverrideModal,
+  type AccessOverridePayload,
+} from '@/components/access-schedule/GrantAccessOverrideModal';
 import { ResetProgressModal, type ResetMachineStatus } from './ResetProgressModal';
 
 const inputClass =
@@ -35,8 +41,8 @@ const inputClass =
 type ServiceKey = '' | 'vm-management' | 'create-vm' | 'external-vm';
 type SortBy = 'createdAt' | 'owner' | 'service';
 type SortDirection = 'asc' | 'desc';
-type AssignmentSortBy = 'providerEndDate' | 'clientEndDate' | 'assignedUser';
-type FlashMessage = { type: 'success' | 'error'; text: string } | null;
+type AssignmentSortBy = 'providerEndDate' | 'clientEndDate' | 'assignedUser' | 'locked';
+type FlashMessage = { type: 'success' | 'error' | 'warning'; text: string } | null;
 
 type AssignmentEntry = {
   username: string;
@@ -61,7 +67,14 @@ type AssignmentRow = {
   projectNames: string[];
   clientNames: string[];
   assignments: AssignmentEntry[];
+  vmLogins: Array<{
+    externalVmId: string;
+    name: string;
+    vmUsername: string | null;
+    vmPassword: string | null;
+  }>;
   editableExternalVmId?: string;
+  inventoryLocked?: boolean;
   providerDetails?: AssignmentEntry;
 };
 
@@ -118,7 +131,12 @@ function formatDate(value?: string | Date | null): string {
   if (!value) return '—';
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return '—';
-  return date.toLocaleDateString();
+  return date.toLocaleDateString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
 }
 
 function hasInventoryAssignee(item: SuperAdminVmInventoryItem): boolean {
@@ -139,7 +157,27 @@ function hasKnownInventoryOwner(item: SuperAdminVmInventoryItem): boolean {
 }
 
 function canFreeVmInventoryRow(item: SuperAdminVmInventoryItem): boolean {
-  return hasInventoryAssignee(item) || hasKnownInventoryOwner(item);
+  return (
+    hasInventoryAssignee(item) ||
+    hasKnownInventoryOwner(item) ||
+    Boolean(inventoryNameSubtitle(item.name, item.ipAddress))
+  );
+}
+
+function inventoryNameSubtitle(name?: string, ipAddress?: string): string | null {
+  const trimmedName = name?.trim();
+  if (!trimmedName) return null;
+  const trimmedIp = ipAddress?.trim();
+  if (trimmedIp && trimmedName === trimmedIp) return null;
+  return trimmedName;
+}
+
+function hasActiveAssignmentOverride(row: SuperAdminExternalVmOverviewRow): boolean {
+  return row.assignments.some((assignment) => {
+    if (!assignment.accessOverride) return false;
+    if (!assignment.accessOverrideUntil) return true;
+    return new Date(assignment.accessOverrideUntil).getTime() > Date.now();
+  });
 }
 
 function getDueDateBadge(value?: string | Date | null): { label: string; tone: string } | null {
@@ -227,13 +265,20 @@ function readCell(row: Record<string, unknown>, keys: string[]): unknown {
     value,
   ] as const);
 
+  // Exact matches across every alias first. Otherwise a short alias such as
+  // "Start Date" prefix-matches "Start Time" and never reaches "Provider Start Date".
   for (const key of keys) {
     if (key in row) return row[key];
+  }
 
+  for (const key of keys) {
     const normalizedKey = normalizeHeader(key);
     const exact = normalizedRowEntries.find(([rowKey]) => rowKey === normalizedKey);
     if (exact) return exact[1];
+  }
 
+  for (const key of keys) {
+    const normalizedKey = normalizeHeader(key);
     // Excel often truncates headers in the UI (e.g. "Plan Durat" for "Plan Duration").
     const prefixLength = Math.min(5, normalizedKey.length);
     const prefix = normalizedKey.slice(0, prefixLength);
@@ -277,24 +322,190 @@ function getRowProviderEntries(row: AssignmentRow): AssignmentEntry[] {
       vmSpec: assignment.vmSpec ?? row.providerDetails?.vmSpec ?? null,
       vmUsername: assignment.vmUsername ?? row.providerDetails?.vmUsername ?? null,
       vmPassword: assignment.vmPassword ?? row.providerDetails?.vmPassword ?? null,
-      providerStartDate: assignment.providerStartDate ?? row.providerDetails?.providerStartDate ?? null,
-      providerEndDate: assignment.providerEndDate ?? row.providerDetails?.providerEndDate ?? null,
+      providerStartDate: row.providerDetails?.providerStartDate ?? assignment.providerStartDate ?? null,
+      providerEndDate: row.providerDetails?.providerEndDate ?? assignment.providerEndDate ?? null,
     }));
   }
   return row.providerDetails ? [row.providerDetails] : [];
 }
 
-function normalizeDateCell(value: unknown): string | undefined {
-  if (!value) return undefined;
-  if (value instanceof Date && !Number.isNaN(value.getTime())) return value.toISOString();
-  if (typeof value === 'string') {
-    const trimmed = value.trim();
-    if (!trimmed) return undefined;
-    const parsed = new Date(trimmed);
-    if (!Number.isNaN(parsed.getTime())) return parsed.toISOString();
+const PROVIDER_START_DATE_HEADERS = [
+  'Provider Start Date',
+  'Provider Start',
+  'Provider From Date',
+  'Valid From',
+  'From Date',
+  'Activation Date',
+  'Contract Start',
+  'Start Date',
+  'startDate',
+];
+
+const PROVIDER_END_DATE_HEADERS = [
+  'Provider End Date',
+  'Provider End',
+  'Provider To Date',
+  'Valid Till',
+  'Valid To',
+  'Valid Until',
+  'To Date',
+  'Expiry Date',
+  'Expiration Date',
+  'Expiry',
+  'End Date',
+  'endDate',
+];
+
+function toUtcDateOnlyIso(year: number, monthIndex: number, day: number): string | undefined {
+  if (!Number.isInteger(year) || !Number.isInteger(monthIndex) || !Number.isInteger(day)) return undefined;
+  if (year < 1990 || year > 2100 || monthIndex < 0 || monthIndex > 11 || day < 1 || day > 31) {
+    return undefined;
   }
+  const date = new Date(Date.UTC(year, monthIndex, day));
+  if (
+    Number.isNaN(date.getTime()) ||
+    date.getUTCFullYear() !== year ||
+    date.getUTCMonth() !== monthIndex ||
+    date.getUTCDate() !== day
+  ) {
+    return undefined;
+  }
+  return date.toISOString();
+}
+
+function excelSerialToUtcDateOnlyIso(serial: number): string | undefined {
+  if (!Number.isFinite(serial)) return undefined;
+  const whole = Math.floor(serial);
+  // Excel serial ~1990-01-01 through ~2100-12-31. Smaller numbers are not dates.
+  if (whole < 32874 || whole > 73415) return undefined;
+  const utc = new Date(Math.round((serial - 25569) * 86400 * 1000));
+  if (Number.isNaN(utc.getTime())) return undefined;
+  return toUtcDateOnlyIso(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate());
+}
+
+function parseTwoDigitYear(raw: string): number | undefined {
+  if (raw.length === 2) {
+    const n = Number(raw);
+    if (!Number.isInteger(n)) return undefined;
+    return n >= 70 ? 1900 + n : 2000 + n;
+  }
+  const n = Number(raw);
+  return Number.isInteger(n) ? n : undefined;
+}
+
+function isDateLike(value: unknown): value is Date {
+  return (
+    value instanceof Date ||
+    (typeof value === 'object' &&
+      value !== null &&
+      typeof (value as Date).getTime === 'function' &&
+      !Number.isNaN((value as Date).getTime()))
+  );
+}
+
+function dateObjectToUtcDateOnlyIso(value: Date): string | undefined {
+  const utcHours =
+    value.getUTCHours() +
+    value.getUTCMinutes() / 60 +
+    value.getUTCSeconds() / 3600 +
+    value.getUTCMilliseconds() / 3600000;
+  // True UTC midnight date-only values can be used as-is.
+  if (utcHours < 0.001) {
+    return toUtcDateOnlyIso(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+  }
+  // Excel date-only cells are often timezone-shifted, e.g. 2026-08-12 in IST
+  // becomes 2026-08-11T18:29:50.000Z. Round to the nearest calendar day.
+  const shifted = new Date(value.getTime() + 12 * 60 * 60 * 1000);
+  return toUtcDateOnlyIso(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate());
+}
+
+function normalizeDateCell(value: unknown): string | undefined {
+  if (value == null || value === '') return undefined;
+
+  if (isDateLike(value)) {
+    return dateObjectToUtcDateOnlyIso(value);
+  }
+
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const asInt = Math.trunc(value);
+    if (asInt >= 19900101 && asInt <= 21001231) {
+      const asText = String(asInt);
+      if (asText.length === 8) {
+        const fromCompact = toUtcDateOnlyIso(
+          Number(asText.slice(0, 4)),
+          Number(asText.slice(4, 6)) - 1,
+          Number(asText.slice(6, 8))
+        );
+        if (fromCompact) return fromCompact;
+      }
+    }
+    return excelSerialToUtcDateOnlyIso(value);
+  }
+
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const numeric = Number(trimmed);
+    const fromSerial = excelSerialToUtcDateOnlyIso(numeric);
+    if (fromSerial) return fromSerial;
+    if (/^\d{8}$/.test(trimmed)) {
+      const fromCompact = toUtcDateOnlyIso(
+        Number(trimmed.slice(0, 4)),
+        Number(trimmed.slice(4, 6)) - 1,
+        Number(trimmed.slice(6, 8))
+      );
+      if (fromCompact) return fromCompact;
+    }
+  }
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[tT\s](.+))?$/);
+  if (isoMatch) {
+    const timePart = isoMatch[4]?.trim();
+    if (!timePart || /^00:00:00(\.0+)?(z|[+-]00:00)?$/i.test(timePart)) {
+      return toUtcDateOnlyIso(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+    }
+    const parsedIso = new Date(trimmed);
+    if (!Number.isNaN(parsedIso.getTime())) return dateObjectToUtcDateOnlyIso(parsedIso);
+  }
+
+  const dmyMatch = trimmed.match(/^(\d{1,2})[/.\\-](\d{1,2})[/.\\-](\d{2,4})$/);
+  if (dmyMatch) {
+    const first = Number(dmyMatch[1]);
+    const second = Number(dmyMatch[2]);
+    const year = parseTwoDigitYear(dmyMatch[3]);
+    if (year) {
+      if (first > 12 && second >= 1 && second <= 12) {
+        return toUtcDateOnlyIso(year, second - 1, first);
+      }
+      if (second > 12 && first >= 1 && first <= 12) {
+        return toUtcDateOnlyIso(year, first - 1, second);
+      }
+      // Ambiguous 01/02/2026: prefer DMY for this product.
+      return toUtcDateOnlyIso(year, second - 1, first);
+    }
+  }
+
+  const parsed = new Date(trimmed);
+  if (!Number.isNaN(parsed.getTime())) return dateObjectToUtcDateOnlyIso(parsed);
   return undefined;
 }
+
+function cellHasValue(value: unknown): boolean {
+  if (value == null || value === '') return false;
+  if (typeof value === 'string' && !value.trim()) return false;
+  return true;
+}
+
+function formatCellSample(value: unknown): string {
+  if (!cellHasValue(value)) return '(empty)';
+  if (isDateLike(value)) return value.toISOString();
+  return String(value).trim().slice(0, 80);
+}
+
+const DATE_FORMAT_HINT =
+  'Use Excel date cells, or text like 2026-08-12 or 12-08-2026.';
 
 function toSortDate(value?: string | null): number | null {
   if (!value) return null;
@@ -335,6 +546,15 @@ function sortAssignmentRows(rows: AssignmentRow[], sortBy: AssignmentSortBy, sor
     });
   }
 
+  if (sortBy === 'locked') {
+    return [...rows].sort((a, b) => {
+      const aLocked = a.inventoryLocked ? 1 : 0;
+      const bLocked = b.inventoryLocked ? 1 : 0;
+      if (aLocked !== bLocked) return (aLocked - bLocked) * direction;
+      return a.rowKey.localeCompare(b.rowKey);
+    });
+  }
+
   return [...rows].sort((a, b) => {
     const aDate = getRowSortDate(a, sortBy);
     const bDate = getRowSortDate(b, sortBy);
@@ -363,10 +583,12 @@ function buildAssignmentRows(items: SuperAdminVmInventoryItem[]): AssignmentRow[
       projectNames: [],
       clientNames: [],
       assignments: [],
+      vmLogins: [],
     };
 
-    if (!current.vmNames.includes(item.name)) {
-      current.vmNames.push(item.name);
+    const displayName = inventoryNameSubtitle(item.name, item.ipAddress);
+    if (displayName && !current.vmNames.includes(displayName)) {
+      current.vmNames.push(displayName);
     }
 
     const vmSpecLabel = String(item.providerVmSpec ?? '').trim();
@@ -553,10 +775,21 @@ function buildAssignmentRowsFromOverview(rows: SuperAdminExternalVmOverviewRow[]
       projectNames: [],
       clientNames: [],
       assignments: [],
+      vmLogins: [],
     };
 
-    if (!current.vmNames.includes(row.name)) {
-      current.vmNames.push(row.name);
+    const displayName = inventoryNameSubtitle(row.name, row.ipAddress);
+    if (displayName && !current.vmNames.includes(displayName)) {
+      current.vmNames.push(displayName);
+    }
+
+    if (!current.vmLogins.some((login) => login.externalVmId === row.externalVmId)) {
+      current.vmLogins.push({
+        externalVmId: row.externalVmId,
+        name: row.name,
+        vmUsername: row.username || row.providerUsername || null,
+        vmPassword: row.password || null,
+      });
     }
 
     const vmSpecLabel = String(row.providerVmSpec ?? '').trim();
@@ -581,30 +814,30 @@ function buildAssignmentRowsFromOverview(rows: SuperAdminExternalVmOverviewRow[]
     ) {
       current.editableExternalVmId = row.externalVmId;
       current.editableScore = rowScore;
+      current.inventoryLocked = Boolean(row.inventoryLocked);
     }
 
     if (
-      !current.providerDetails &&
-      (row.providerVmSpec ||
-        row.providerUsername ||
-        row.password ||
-        row.providerStartDate ||
-        row.providerEndDate ||
-        row.providerPlanDuration)
+      row.providerVmSpec ||
+      row.providerUsername ||
+      row.password ||
+      row.providerStartDate ||
+      row.providerEndDate ||
+      row.providerPlanDuration
     ) {
       current.providerDetails = {
-        username: row.providerUsername?.trim() || row.name,
+        username: row.providerUsername?.trim() || current.providerDetails?.username || row.name,
         isTenantUser: false,
-        ownerKey,
-        tenantName: row.tenantName ?? undefined,
-        planDuration: row.providerPlanDuration ?? null,
-        vmSpec: row.providerVmSpec ?? null,
-        vmUsername: row.providerUsername ?? row.username ?? null,
-        vmPassword: row.password ?? null,
-        providerStartDate: row.providerStartDate ?? null,
-        providerEndDate: row.providerEndDate ?? null,
-        startDate: null,
-        endDate: null,
+        ownerKey: current.providerDetails?.ownerKey ?? ownerKey,
+        tenantName: row.tenantName ?? current.providerDetails?.tenantName,
+        planDuration: row.providerPlanDuration ?? current.providerDetails?.planDuration ?? null,
+        vmSpec: row.providerVmSpec ?? current.providerDetails?.vmSpec ?? null,
+        vmUsername: row.providerUsername ?? row.username ?? current.providerDetails?.vmUsername ?? null,
+        vmPassword: row.password ?? current.providerDetails?.vmPassword ?? null,
+        providerStartDate: row.providerStartDate ?? current.providerDetails?.providerStartDate ?? null,
+        providerEndDate: row.providerEndDate ?? current.providerDetails?.providerEndDate ?? null,
+        startDate: current.providerDetails?.startDate ?? null,
+        endDate: current.providerDetails?.endDate ?? null,
       };
     }
 
@@ -641,10 +874,11 @@ function buildAssignmentRowsFromOverview(rows: SuperAdminExternalVmOverviewRow[]
         tenantName: row.tenantName ?? undefined,
         planDuration: row.providerPlanDuration ?? null,
         vmSpec: row.providerVmSpec ?? null,
-        vmUsername: row.providerUsername ?? row.username ?? null,
+        vmUsername: row.username || row.providerUsername || null,
         vmPassword: row.password ?? null,
-        providerStartDate: row.providerStartDate ?? null,
-        providerEndDate: row.providerEndDate ?? null,
+        providerStartDate:
+          row.providerStartDate ?? current.providerDetails?.providerStartDate ?? null,
+        providerEndDate: row.providerEndDate ?? current.providerDetails?.providerEndDate ?? null,
         startDate: assignment.schedule?.effectiveFrom ?? null,
         endDate: assignment.schedule?.effectiveTo ?? null,
       };
@@ -658,7 +892,16 @@ function buildAssignmentRowsFromOverview(rows: SuperAdminExternalVmOverviewRow[]
     }
 
     current.assignments = [...assignmentByPriorityKey.values()]
-      .map((entry) => entry.assignment)
+      .map((entry) => {
+        const assignment = entry.assignment;
+        return {
+          ...assignment,
+          providerStartDate:
+            current.providerDetails?.providerStartDate ?? assignment.providerStartDate ?? null,
+          providerEndDate:
+            current.providerDetails?.providerEndDate ?? assignment.providerEndDate ?? null,
+        };
+      })
       .sort((a, b) => a.username.localeCompare(b.username));
 
     grouped.set(key, current);
@@ -844,7 +1087,11 @@ function InventoryTable(props: {
                     </td>
                     <td className="px-6 py-3.5">
                       <p className="font-medium text-gray-900">{item.ipAddress || '—'}</p>
-                      <p className="mt-0.5 text-[11px] text-gray-500">{item.name}</p>
+                      {inventoryNameSubtitle(item.name, item.ipAddress) ? (
+                        <p className="mt-0.5 text-[11px] text-gray-500">{item.name}</p>
+                      ) : (
+                        <p className="mt-0.5 text-[11px] text-gray-400">—</p>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-xs text-gray-700">{item.originServiceLabel}</td>
                     <td className="px-4 py-3.5 text-xs">
@@ -969,13 +1216,25 @@ function AssignmentTable(props: {
   onToggleSort: (value: AssignmentSortBy) => void;
   onToggleRowSelection: (externalVmId: string, checked: boolean) => void;
   onTogglePageSelection: (checked: boolean) => void;
+  onBulkGrantOverride: () => void;
   onBulkDeleteSelected: () => void;
   onEditRow: (row: AssignmentRow) => void;
   onDeleteRow: (row: AssignmentRow) => void;
+  onToggleLock: (row: AssignmentRow) => void;
   deletingVmId: string | null;
+  lockingVmId: string | null;
   bulkDeleteBusy: boolean;
 }) {
   const entryList = (row: AssignmentRow): AssignmentEntry[] => getRowProviderEntries(row);
+  const loginList = (row: AssignmentRow) =>
+    row.vmLogins.length > 0
+      ? row.vmLogins
+      : entryList(row).map((entry) => ({
+          externalVmId: row.editableExternalVmId ?? row.rowKey,
+          name: '',
+          vmUsername: entry.vmUsername ?? null,
+          vmPassword: entry.vmPassword ?? null,
+        }));
   const assignedUserList = (row: AssignmentRow): AssignmentEntry[] => row.assignments;
   const vmSpecList = (row: AssignmentRow): string[] => getRowVmSpecs(row);
   const selectableRows = props.rows.filter((row) => Boolean(row.editableExternalVmId));
@@ -1004,6 +1263,15 @@ function AssignmentTable(props: {
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={props.selectedExternalVmIds.length === 0 || props.bulkDeleteBusy}
+            onClick={props.onBulkGrantOverride}
+            className="inline-flex items-center gap-1 rounded-md border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-[11px] font-medium text-amber-800 hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            <Shield className="h-3.5 w-3.5" />
+            {`Grant override${props.selectedExternalVmIds.length > 0 ? ` (${props.selectedExternalVmIds.length})` : ''}`}
+          </button>
           <button
             type="button"
             disabled={props.selectedExternalVmIds.length === 0 || props.bulkDeleteBusy}
@@ -1177,6 +1445,16 @@ function AssignmentTable(props: {
                   <span className="text-gray-400">{sortIndicator('clientEndDate')}</span>
                 </button>
               </th>
+              <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                <button
+                  type="button"
+                  onClick={() => props.onToggleSort('locked')}
+                  className="inline-flex items-center gap-1 text-left text-xs font-semibold uppercase tracking-wide text-gray-500 hover:text-gray-700"
+                >
+                  Locked
+                  <span className="text-gray-400">{sortIndicator('locked')}</span>
+                </button>
+              </th>
               <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">Actions</th>
             </tr>
           </thead>
@@ -1236,12 +1514,22 @@ function AssignmentTable(props: {
                     {vmSpecList(row).length > 0 ? vmSpecList(row).map((vmSpec, vmSpecIndex) => <p key={`${row.rowKey}:vmspec:${vmSpecIndex}`} className="text-gray-700">{vmSpec}</p>) : <p className="text-[11px] text-gray-400">—</p>}
                   </td>
                 ) : null}
-                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmuser:${assignmentIndex}`} className="text-gray-700">{assignment.vmUsername || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
-                <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:vmpass:${assignmentIndex}`} className="text-gray-700">{assignment.vmPassword || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{loginList(row).length > 0 ? loginList(row).map((login, loginIndex) => <p key={`${row.rowKey}:vmuser:${login.externalVmId}:${loginIndex}`} className="text-gray-700">{login.vmUsername || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">{loginList(row).length > 0 ? loginList(row).map((login, loginIndex) => <p key={`${row.rowKey}:vmpass:${login.externalVmId}:${loginIndex}`} className="text-gray-700">{login.vmPassword || '—'}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:provider-start:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.providerStartDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <DueDateCell key={`${row.rowKey}:provider-end:${assignmentIndex}`} value={assignment.providerEndDate} />) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <p key={`${row.rowKey}:client-start:${assignmentIndex}`} className="text-gray-700">{formatDate(assignment.startDate)}</p>) : <p className="text-[11px] text-gray-400">—</p>}</td>
                 <td className="px-4 py-3.5 text-xs">{entryList(row).length > 0 ? entryList(row).map((assignment, assignmentIndex) => <DueDateCell key={`${row.rowKey}:client-end:${assignmentIndex}`} value={assignment.endDate} />) : <p className="text-[11px] text-gray-400">—</p>}</td>
+                <td className="px-4 py-3.5 text-xs">
+                  {row.inventoryLocked ? (
+                    <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-800">
+                      <Lock className="h-3 w-3" />
+                      Locked
+                    </span>
+                  ) : (
+                    <span className="text-[11px] text-gray-400">—</span>
+                  )}
+                </td>
                 <td className="px-4 py-3.5 text-xs">
                   {row.editableExternalVmId ? (
                     <div className="flex items-center gap-2">
@@ -1255,8 +1543,32 @@ function AssignmentTable(props: {
                       </button>
                       <button
                         type="button"
+                        onClick={() => props.onToggleLock(row)}
+                        disabled={props.lockingVmId === row.editableExternalVmId || props.bulkDeleteBusy}
+                        title={row.inventoryLocked ? 'Unlock VM so it can be deleted' : 'Lock VM to prevent inventory delete'}
+                        className={`inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs font-medium disabled:cursor-not-allowed disabled:opacity-60 ${
+                          row.inventoryLocked
+                            ? 'border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                            : 'border-gray-200 bg-white text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        {row.inventoryLocked ? <LockOpen className="h-3.5 w-3.5" /> : <Lock className="h-3.5 w-3.5" />}
+                        {props.lockingVmId === row.editableExternalVmId
+                          ? row.inventoryLocked
+                            ? 'Unlocking…'
+                            : 'Locking…'
+                          : row.inventoryLocked
+                            ? 'Unlock'
+                            : 'Lock'}
+                      </button>
+                      <button
+                        type="button"
                         onClick={() => props.onDeleteRow(row)}
-                        disabled={props.deletingVmId === row.editableExternalVmId}
+                        disabled={
+                          Boolean(row.inventoryLocked) ||
+                          props.deletingVmId === row.editableExternalVmId
+                        }
+                        title={row.inventoryLocked ? 'Unlock this VM before deleting it' : 'Delete VM from inventory'}
                         className="inline-flex items-center gap-1.5 rounded-md border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-100 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         <Trash2 className="h-3.5 w-3.5" />
@@ -1330,8 +1642,10 @@ export default function SuperAdminVmInventoryPage() {
   const [showAssignmentUsers, setShowAssignmentUsers] = useState(false);
   const [externalVmRows, setExternalVmRows] = useState<SuperAdminExternalVmOverviewRow[]>([]);
   const [selectedAssignmentVmIds, setSelectedAssignmentVmIds] = useState<string[]>([]);
+  const [bulkOverrideOpen, setBulkOverrideOpen] = useState(false);
   const [manageRow, setManageRow] = useState<SuperAdminExternalVmOverviewRow | null>(null);
   const [deletingAssignmentVmId, setDeletingAssignmentVmId] = useState<string | null>(null);
+  const [lockingVmId, setLockingVmId] = useState<string | null>(null);
   const [freeingVmInventoryId, setFreeingVmInventoryId] = useState<string | null>(null);
   const [resetingVmInventoryId, setResetingVmInventoryId] = useState<string | null>(null);
   const [bulkActionBusy, setBulkActionBusy] = useState(false);
@@ -1437,6 +1751,12 @@ export default function SuperAdminVmInventoryPage() {
     () => (showAssignmentView ? buildAssignmentRowsFromOverview(filteredOverviewRows) : buildAssignmentRows(items)),
     [filteredOverviewRows, items, showAssignmentView]
   );
+  const manageIpRows = useMemo(() => {
+    if (!manageRow) return [];
+    const ip = manageRow.ipAddress.trim().toLowerCase();
+    const matches = externalVmRows.filter((item) => item.ipAddress.trim().toLowerCase() === ip);
+    return matches.length > 0 ? matches : [manageRow];
+  }, [externalVmRows, manageRow]);
   const assignmentProjectOptions = useMemo(() => {
     const projects = new Set<string>();
     for (const row of assignmentRows) {
@@ -1520,6 +1840,10 @@ export default function SuperAdminVmInventoryPage() {
     async (row: AssignmentRow) => {
       const externalVmId = row.editableExternalVmId;
       if (!externalVmId) return;
+      if (row.inventoryLocked) {
+        setFlashMessage({ type: 'error', text: 'Unlock this VM before deleting it from inventory.' });
+        return;
+      }
       const vmLabel = row.vmNames[0] || row.ipAddress || 'this VM';
 
       setDeletingAssignmentVmId(externalVmId);
@@ -1541,6 +1865,10 @@ export default function SuperAdminVmInventoryPage() {
   );
 
   const handleDeleteAssignmentRow = useCallback((row: AssignmentRow) => {
+    if (row.inventoryLocked) {
+      setFlashMessage({ type: 'error', text: 'Unlock this VM before deleting it from inventory.' });
+      return;
+    }
     const vmLabel = row.vmNames[0] || row.ipAddress || 'this VM';
     setConfirmDialog({
       kind: 'deleteAssignmentVm',
@@ -1549,6 +1877,40 @@ export default function SuperAdminVmInventoryPage() {
       message: `Delete ${vmLabel}? This removes the VM record and assignments.`,
     });
   }, []);
+
+  const handleToggleAssignmentLock = useCallback(
+    async (row: AssignmentRow) => {
+      const externalVmId = row.editableExternalVmId;
+      if (!externalVmId) return;
+      const nextLocked = !row.inventoryLocked;
+      setLockingVmId(externalVmId);
+      setFlashMessage(null);
+      try {
+        const result = await setSuperAdminExternalVmInventoryLock(externalVmId, nextLocked);
+        setExternalVmRows((prev) =>
+          prev.map((item) =>
+            item.externalVmId === result.externalVmId
+              ? { ...item, inventoryLocked: result.inventoryLocked }
+              : item
+          )
+        );
+        setFlashMessage({
+          type: 'success',
+          text: result.inventoryLocked
+            ? 'VM locked. It cannot be deleted from inventory until unlocked.'
+            : 'VM unlocked.',
+        });
+      } catch (err) {
+        setFlashMessage({
+          type: 'error',
+          text: err instanceof ApiError ? err.message : 'Failed to update VM lock.',
+        });
+      } finally {
+        setLockingVmId(null);
+      }
+    },
+    []
+  );
 
   const handleToggleAssignmentRowSelection = useCallback((externalVmId: string, checked: boolean) => {
     setSelectedAssignmentVmIds((prev) => {
@@ -1574,12 +1936,71 @@ export default function SuperAdminVmInventoryPage() {
 
   const handleBulkDeleteSelectedAssignmentVms = useCallback(() => {
     if (selectedAssignmentVmIds.length === 0) return;
+    const lockedIdSet = new Set(
+      externalVmRows.filter((row) => row.inventoryLocked).map((row) => row.externalVmId)
+    );
+    const unlockedIds = selectedAssignmentVmIds.filter((id) => !lockedIdSet.has(id));
+    const lockedCount = selectedAssignmentVmIds.length - unlockedIds.length;
+    if (unlockedIds.length === 0) {
+      setFlashMessage({
+        type: 'error',
+        text: 'Unlock selected VMs before deleting them from inventory.',
+      });
+      return;
+    }
     setConfirmDialog({
       kind: 'bulkDeleteAssignmentVms',
-      externalVmIds: [...selectedAssignmentVmIds],
-      message: `Delete ${selectedAssignmentVmIds.length} selected VM(s)? This removes the VM records and assignments.`,
+      externalVmIds: unlockedIds,
+      message:
+        lockedCount > 0
+          ? `Delete ${unlockedIds.length} unlocked VM(s)? ${lockedCount} locked VM(s) will be skipped.`
+          : `Delete ${unlockedIds.length} selected VM(s)? This removes the VM records and assignments.`,
     });
+  }, [externalVmRows, selectedAssignmentVmIds]);
+
+  const handleBulkGrantOverride = useCallback(() => {
+    if (selectedAssignmentVmIds.length === 0) return;
+    setBulkOverrideOpen(true);
   }, [selectedAssignmentVmIds]);
+
+  const selectedHaveActiveOverride = useMemo(() => {
+    const idSet = new Set(selectedAssignmentVmIds);
+    return externalVmRows.some(
+      (row) => idSet.has(row.externalVmId) && hasActiveAssignmentOverride(row)
+    );
+  }, [externalVmRows, selectedAssignmentVmIds]);
+
+  const saveBulkOverride = useCallback(
+    async (payload: AccessOverridePayload) => {
+      if (selectedAssignmentVmIds.length === 0) return;
+      setBulkActionBusy(true);
+      setFlashMessage(null);
+      try {
+        const result = await bulkUpdateSuperAdminExternalVmOverride(selectedAssignmentVmIds, payload);
+        const failedCount = result.notFound.length;
+        setFlashMessage({
+          type: failedCount > 0 && result.updatedVms === 0 ? 'error' : 'success',
+          text: payload.accessOverride
+            ? `Override granted for ${result.updatedVms} VM(s)` +
+              (result.updatedAssignments > 0 ? ` (${result.updatedAssignments} assignment${result.updatedAssignments === 1 ? '' : 's'}).` : '.') +
+              (failedCount > 0 ? ` ${failedCount} not found.` : '')
+            : `Override revoked for ${result.updatedVms} VM(s)` +
+              (failedCount > 0 ? ` ${failedCount} not found.` : '.'),
+        });
+        setBulkOverrideOpen(false);
+        await load();
+      } catch (err) {
+        setFlashMessage({
+          type: 'error',
+          text: err instanceof ApiError ? err.message : 'Failed to update access override.',
+        });
+        throw err;
+      } finally {
+        setBulkActionBusy(false);
+      }
+    },
+    [load, selectedAssignmentVmIds]
+  );
 
   const performBulkDeleteAssignmentRows = useCallback(
     async (externalVmIds: string[]) => {
@@ -2040,12 +2461,43 @@ export default function SuperAdminVmInventoryPage() {
     try {
       const XLSX = await import('xlsx');
       const data = await file.arrayBuffer();
-      const workbook = XLSX.read(data, { cellDates: true });
+      const workbook = XLSX.read(data, { cellDates: true, cellNF: false, cellText: false });
       const worksheet = workbook.Sheets[workbook.SheetNames[0]];
       const rows = XLSX.utils.sheet_to_json(worksheet, { defval: '' }) as Record<string, unknown>[];
+      const formattedRows = XLSX.utils.sheet_to_json(worksheet, {
+        defval: '',
+        raw: false,
+        dateNF: 'yyyy-mm-dd',
+      }) as Record<string, unknown>[];
+      const grid = XLSX.utils.sheet_to_json(worksheet, {
+        header: 1,
+        defval: '',
+        raw: false,
+        dateNF: 'yyyy-mm-dd',
+      }) as unknown[][];
+      const headerRow = (grid[0] ?? []).map((cell) => String(cell ?? '').trim());
+      const normalizeHeader = (value: string) => value.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const findDateColumn = (aliases: string[]) => {
+        const normalizedAliases = aliases.map(normalizeHeader);
+        return headerRow.findIndex((header) => normalizedAliases.includes(normalizeHeader(header)));
+      };
+      const startDateCol = findDateColumn(PROVIDER_START_DATE_HEADERS);
+      const endDateCol = findDateColumn(PROVIDER_END_DATE_HEADERS);
+      const unparsedStartSamples: string[] = [];
+      const unparsedEndSamples: string[] = [];
+      let missingIpCount = 0;
+      let missingStartCount = 0;
+      let missingEndCount = 0;
+      let unparsedStartCount = 0;
+      let unparsedEndCount = 0;
+      let invalidDurationCount = 0;
 
-      const parsedRows: VmProviderMetadataImportRow[] = rows
-        .map((row) => {
+      const parsedRows: VmProviderMetadataImportRow[] = [];
+      for (let index = 0; index < rows.length; index++) {
+        const row = rows[index] ?? {};
+        const formattedRow = formattedRows[index] ?? {};
+        const gridRow = grid[index + 1] ?? [];
+        const excelRow = index + 2;
           const ipAddress = normalizeIpCell(readCell(row, ['IP', 'Ip', 'IP Address', 'Ip Address', 'ip', 'ipAddress']));
           const name = String(readCell(row, ['Name', 'Server Name', 'VM Name', 'Hostname', 'Host Name', 'name']) ?? '').trim();
           const vmSpec = String(
@@ -2080,8 +2532,36 @@ export default function SuperAdminVmInventoryPage() {
           ).trim().toLowerCase();
           const username = String(readCell(row, ['Username', 'User Name', 'username']) ?? '').trim();
           const password = String(readCell(row, ['Password', 'password']) ?? '').trim();
-          const providerStartDate = normalizeDateCell(readCell(row, ['Start Date', 'Provider Start Date', 'startDate']));
-          const providerEndDate = normalizeDateCell(readCell(row, ['End Date', 'Provider End Date', 'endDate']));
+          const startRaw =
+            (startDateCol >= 0 ? gridRow[startDateCol] : undefined) ??
+            readCell(formattedRow, PROVIDER_START_DATE_HEADERS) ??
+            readCell(row, PROVIDER_START_DATE_HEADERS);
+          const endRaw =
+            (endDateCol >= 0 ? gridRow[endDateCol] : undefined) ??
+            readCell(formattedRow, PROVIDER_END_DATE_HEADERS) ??
+            readCell(row, PROVIDER_END_DATE_HEADERS);
+          const providerStartDate = normalizeDateCell(startRaw);
+          const providerEndDate = normalizeDateCell(endRaw);
+
+          if (!ipAddress) {
+            missingIpCount += 1;
+            continue;
+          }
+
+          if (!cellHasValue(startRaw)) missingStartCount += 1;
+          else if (!providerStartDate) {
+            unparsedStartCount += 1;
+            if (unparsedStartSamples.length < 8) {
+              unparsedStartSamples.push(`Row ${excelRow} (IP ${ipAddress}): "${formatCellSample(startRaw)}"`);
+            }
+          }
+          if (!cellHasValue(endRaw)) missingEndCount += 1;
+          else if (!providerEndDate) {
+            unparsedEndCount += 1;
+            if (unparsedEndSamples.length < 8) {
+              unparsedEndSamples.push(`Row ${excelRow} (IP ${ipAddress}): "${formatCellSample(endRaw)}"`);
+            }
+          }
 
           const protocol: VmProviderMetadataImportRow['protocol'] =
             rawProtocol === 'rdp' || rawProtocol === 'ssh' ? rawProtocol : undefined;
@@ -2091,8 +2571,9 @@ export default function SuperAdminVmInventoryPage() {
           else if (rawDuration === 'quarterly' || rawDuration === 'quarter' || rawDuration === 'qtr') planDuration = 'quarterly';
           else if (rawDuration === 'hourly' || rawDuration === 'hour' || rawDuration === 'hr') planDuration = 'hourly';
           else if (rawDuration === 'yearly' || rawDuration === 'year' || rawDuration === 'yr') planDuration = 'yearly';
+          else if (rawDuration) invalidDurationCount += 1;
 
-          return {
+          parsedRows.push({
             ipAddress,
             name: name || undefined,
             vmSpec: vmSpec || undefined,
@@ -2102,19 +2583,60 @@ export default function SuperAdminVmInventoryPage() {
             password: password || undefined,
             providerStartDate,
             providerEndDate,
-          };
-        })
-        .filter((row) => row.ipAddress);
+          });
+      }
 
       if (parsedRows.length === 0) {
-        setFlashMessage({ type: 'error', text: 'No valid Excel rows found.' });
+        const skippedHint = missingIpCount > 0
+          ? ` ${missingIpCount} row(s) were skipped because they had no IP. Use an "IP" or "IP Address" column.`
+          : '';
+        setFlashMessage({ type: 'error', text: `No valid Excel rows found.${skippedHint}` });
         return;
       }
 
+      const datedRows = parsedRows.filter((row) => row.providerStartDate || row.providerEndDate).length;
       const result = await importVmProviderMetadata(parsedRows);
+
+      const report: string[] = [
+        `Imported provider metadata for ${result.updated} of ${result.total} row(s)${result.created > 0 ? ` and created ${result.created} new VM record(s)` : ''}.`,
+        `Provider dates updated for ${datedRows} of ${parsedRows.length} row(s).`,
+      ];
+      if (startDateCol < 0) {
+        report.push('No Start Date column found. Add "Start Date" or "Provider Start Date".');
+      }
+      if (endDateCol < 0) {
+        report.push('No End Date column found. Add "End Date" or "Provider End Date".');
+      }
+      if (missingIpCount > 0) {
+        report.push(`${missingIpCount} row(s) skipped because IP was missing or empty.`);
+      }
+      if (unparsedStartCount > 0) {
+        report.push(`${unparsedStartCount} start date(s) were not in a supported format. ${DATE_FORMAT_HINT}`);
+        report.push(...unparsedStartSamples.map((sample) => `• ${sample}`));
+      }
+      if (unparsedEndCount > 0) {
+        report.push(`${unparsedEndCount} end date(s) were not in a supported format. ${DATE_FORMAT_HINT}`);
+        report.push(...unparsedEndSamples.map((sample) => `• ${sample}`));
+      }
+      if (missingStartCount > 0 && startDateCol >= 0) {
+        report.push(`${missingStartCount} row(s) had an empty Start Date.`);
+      }
+      if (missingEndCount > 0 && endDateCol >= 0) {
+        report.push(`${missingEndCount} row(s) had an empty End Date.`);
+      }
+      if (invalidDurationCount > 0) {
+        report.push(`${invalidDurationCount} Plan Duration value(s) were ignored. Use monthly, quarterly, hourly, or yearly.`);
+      }
+
+      const hasDateProblems =
+        startDateCol < 0 ||
+        endDateCol < 0 ||
+        unparsedStartCount > 0 ||
+        unparsedEndCount > 0 ||
+        datedRows === 0;
       setFlashMessage({
-        type: 'success',
-        text: `Imported provider metadata for ${result.updated} of ${result.total} row(s)${result.created > 0 ? ` and created ${result.created} new VM record(s)` : ''}.`,
+        type: hasDateProblems ? 'warning' : 'success',
+        text: report.join('\n'),
       });
       setShowAssignmentVmSpec(true);
       setPage(1);
@@ -2156,15 +2678,34 @@ export default function SuperAdminVmInventoryPage() {
         offlineCount={resetProgressData.offlineCount}
       />
 
+      {bulkOverrideOpen ? (
+        <GrantAccessOverrideModal
+          open
+          vmName={`${selectedAssignmentVmIds.length} selected VM${selectedAssignmentVmIds.length === 1 ? '' : 's'}`}
+          currentlyActive={selectedHaveActiveOverride}
+          onClose={() => {
+            if (!bulkActionBusy) setBulkOverrideOpen(false);
+          }}
+          onSave={saveBulkOverride}
+        />
+      ) : null}
+
       {manageRow ? (
         <ManageExternalVmAssignmentsModal
           row={manageRow}
+          ipRows={manageIpRows}
           onClose={() => setManageRow(null)}
           onUpdated={(updated) => {
-            setExternalVmRows((prev) =>
-              prev.map((row) => (row.externalVmId === updated.externalVmId ? updated : row))
+            setExternalVmRows((prev) => {
+              const exists = prev.some((item) => item.externalVmId === updated.externalVmId);
+              if (exists) {
+                return prev.map((item) => (item.externalVmId === updated.externalVmId ? updated : item));
+              }
+              return [...prev, updated];
+            });
+            setManageRow((current) =>
+              current?.externalVmId === updated.externalVmId ? updated : current
             );
-            setManageRow(updated);
             void load();
           }}
         />
@@ -2200,7 +2741,13 @@ export default function SuperAdminVmInventoryPage() {
 
       <div className="mt-6">
         {flashMessage ? (
-          <div className={`mb-3 rounded-lg border px-3 py-2 text-sm ${flashMessage.type === 'success' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-rose-200 bg-rose-50 text-rose-700'}`}>
+          <div className={`mb-3 whitespace-pre-wrap rounded-lg border px-3 py-2 text-sm ${
+            flashMessage.type === 'success'
+              ? 'border-emerald-200 bg-emerald-50 text-emerald-700'
+              : flashMessage.type === 'warning'
+                ? 'border-amber-200 bg-amber-50 text-amber-900'
+                : 'border-rose-200 bg-rose-50 text-rose-700'
+          }`}>
             {flashMessage.text}
           </div>
         ) : null}
@@ -2331,10 +2878,13 @@ export default function SuperAdminVmInventoryPage() {
           onToggleSort={toggleAssignmentSort}
           onToggleRowSelection={handleToggleAssignmentRowSelection}
           onTogglePageSelection={handleToggleAssignmentPageSelection}
+          onBulkGrantOverride={handleBulkGrantOverride}
           onBulkDeleteSelected={handleBulkDeleteSelectedAssignmentVms}
           onEditRow={handleEditAssignmentRow}
           onDeleteRow={handleDeleteAssignmentRow}
+          onToggleLock={handleToggleAssignmentLock}
           deletingVmId={deletingAssignmentVmId}
+          lockingVmId={lockingVmId}
           bulkDeleteBusy={bulkActionBusy}
         />
       ) : null}

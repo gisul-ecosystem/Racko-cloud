@@ -168,14 +168,18 @@ export default function MyServersPage() {
                       }`}
                     >
                       <td className="px-6 py-3.5">
-                        <div className="flex items-center gap-3">
+                        <div className="flex min-w-0 items-center gap-3">
                           <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-red-50 text-[#B91C1C]">
                             <Server className="h-4 w-4" />
                           </span>
-                          <span className="font-medium text-gray-900">{vm.name}</span>
-                          <p className="text-xs text-gray-400">
-                            {vm.protocol.toUpperCase()} · {vm.username}
-                          </p>
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-gray-900" title={vm.name}>
+                              {vm.name}
+                            </p>
+                            <p className="truncate text-xs text-gray-500" title={vm.username}>
+                              {vm.username}
+                            </p>
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3.5 font-mono text-xs text-gray-600">{vm.ipAddress}</td>

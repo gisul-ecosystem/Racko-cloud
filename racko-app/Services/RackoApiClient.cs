@@ -26,7 +26,7 @@ public class RackoApiClient
         _http    = new HttpClient
         {
             BaseAddress = new Uri(config.PlatformUrl),
-            Timeout     = TimeSpan.FromSeconds(120),
+            Timeout     = TimeSpan.FromSeconds(3600), // allow large file uploads/downloads
         };
         _http.DefaultRequestHeaders.Add("X-Agent-ID", _agentId);
     }
@@ -42,7 +42,7 @@ public class RackoApiClient
         var resp = await _http.GetFromJsonAsync<ApiListResponse<MachineDto>>(
             "/api/v1/agent/shared-files/machines-for-app", JsonOpts);
         var machines = resp?.Data.Machines ?? [];
-        var inGroup  = resp?.Data.InGroup ?? true; // default true for backward compat
+        var inGroup  = resp?.Data.InGroup ?? true;
         return (machines, inGroup);
     }
 
@@ -65,21 +65,26 @@ public class RackoApiClient
     }
 
     /// <summary>
-    /// Upload a file (or a folder that has been pre-zipped) using presigned S3 PUT URL.
-    /// localPath — path to the actual file to upload (may be a temp zip for folder uploads).
-    /// displayFileName — optional override for the file name stored in the DB (e.g. "MyFolder.zip").
+    /// Upload a file (or a folder that has been pre-zipped) using a presigned S3 PUT URL.
+    ///
+    /// <paramref name="localPath"/>       — path to the actual file to upload.
+    /// <paramref name="displayFileName"/> — optional override stored in the DB (e.g. "MyFolder.zip").
+    /// <paramref name="uploadProgress"/>  — reports bytes PUT to S3 so far (IProgress marshals to UI thread).
+    /// <paramref name="ct"/>              — cancellation token; cancels the S3 PUT mid-stream.
     /// </summary>
     public async Task<SharedFileDto> UploadAsync(
-        string   localPath,
-        string   permission,
-        string[] sharedWithMachineIds,
-        string?  displayFileName = null)
+        string            localPath,
+        string            permission,
+        string[]          sharedWithMachineIds,
+        string?           displayFileName = null,
+        IProgress<long>?  uploadProgress  = null,
+        CancellationToken ct              = default)
     {
         var fileName = displayFileName ?? Path.GetFileName(localPath);
         var mimeType = GuessMimeType(fileName);
         var fileInfo = new FileInfo(localPath);
 
-        // ── Step 1: Get presigned PUT URL from core-api ───────────────────────
+        // ── Step 1: Get presigned PUT URL from core-api ───────────────────
         var requestBody = new
         {
             fileName,
@@ -90,66 +95,99 @@ public class RackoApiClient
         };
 
         var reqContent = new StringContent(
-            System.Text.Json.JsonSerializer.Serialize(requestBody),
-            System.Text.Encoding.UTF8,
+            JsonSerializer.Serialize(requestBody),
+            Encoding.UTF8,
             "application/json");
 
-        var urlResp = await _http.PostAsync("/api/v1/agent/shared-files/upload-url", reqContent);
+        var urlResp = await _http.PostAsync(
+            "/api/v1/agent/shared-files/upload-url", reqContent, ct);
         urlResp.EnsureSuccessStatusCode();
 
-        var urlResult = await urlResp.Content.ReadFromJsonAsync<ApiUploadUrlResponse>(JsonOpts)
+        var urlResult = await urlResp.Content.ReadFromJsonAsync<ApiUploadUrlResponse>(JsonOpts, ct)
             ?? throw new InvalidOperationException("Empty upload-url response.");
 
         var presignedUrl = urlResult.Data.PresignedUrl;
         var pendingId    = urlResult.Data.PendingId;
 
-        // ── Step 2: PUT file DIRECTLY to S3 — no bytes through core-api ───────
-        using var s3Client  = new System.Net.Http.HttpClient();
-        await using var fs  = File.OpenRead(localPath);
-        using var fileContent = new StreamContent(fs);
-        fileContent.Headers.ContentType =
-            new System.Net.Http.Headers.MediaTypeHeaderValue(mimeType);
-        fileContent.Headers.ContentLength = fileInfo.Length;
+        // ── Step 2: PUT file DIRECTLY to S3 — bytes never pass through core-api ──
+        using var s3Client    = new HttpClient();
+        await using var rawFs = File.OpenRead(localPath);
 
-        var putResp = await s3Client.PutAsync(presignedUrl, fileContent);
-        putResp.EnsureSuccessStatusCode();
+        // Wrap in ProgressStream so every chunk read by HttpClient fires the callback.
+        Stream uploadStream = uploadProgress is not null
+            ? new ProgressStream(rawFs, uploadProgress)
+            : rawFs;
 
-        // ── Step 3: Finalize — notify core-api the upload completed ───────────
+        await using (uploadStream)
+        {
+            using var fileContent = new StreamContent(uploadStream);
+            fileContent.Headers.ContentType =
+                new System.Net.Http.Headers.MediaTypeHeaderValue(mimeType);
+            fileContent.Headers.ContentLength = fileInfo.Length;
+
+            var putResp = await s3Client.PutAsync(presignedUrl, fileContent, ct);
+            putResp.EnsureSuccessStatusCode();
+        }
+
+        // ── Step 3: Finalize — notify core-api the upload completed ───────
         var completeBody = new StringContent(
-            System.Text.Json.JsonSerializer.Serialize(new { pendingId }),
-            System.Text.Encoding.UTF8,
+            JsonSerializer.Serialize(new { pendingId }),
+            Encoding.UTF8,
             "application/json");
 
         var completeResp = await _http.PostAsync(
-            "/api/v1/agent/shared-files/upload-complete", completeBody);
+            "/api/v1/agent/shared-files/upload-complete", completeBody, ct);
         completeResp.EnsureSuccessStatusCode();
 
-        var result = await completeResp.Content.ReadFromJsonAsync<ApiFileResponse>(JsonOpts)
+        var result = await completeResp.Content.ReadFromJsonAsync<ApiFileResponse>(JsonOpts, ct)
             ?? throw new InvalidOperationException("Empty upload-complete response.");
         return result.Data.File;
     }
 
-    /// <summary>Download a shared file to the specified directory.</summary>
-    /// <returns>Full path of the saved file.</returns>
-    public async Task<string> DownloadAsync(string fileId, string fileName, string destDir)
+    /// <summary>
+    /// Download a shared file to the specified directory with progress reporting.
+    ///
+    /// <paramref name="downloadProgress"/> — reports bytes received so far.
+    /// <paramref name="totalBytes"/>        — expected file size for percentage calculation;
+    ///                                        pass 0 if unknown (bar will show indeterminate).
+    /// </summary>
+    public async Task<string> DownloadAsync(
+        string            fileId,
+        string            fileName,
+        string            destDir,
+        long              totalBytes       = 0,
+        IProgress<long>?  downloadProgress = null,
+        CancellationToken ct               = default)
     {
         var response = await _http.GetAsync(
             $"/api/v1/agent/shared-files/{fileId}/download",
-            HttpCompletionOption.ResponseHeadersRead);
+            HttpCompletionOption.ResponseHeadersRead,
+            ct);
         response.EnsureSuccessStatusCode();
 
         Directory.CreateDirectory(destDir);
         var destPath = Path.Combine(destDir, fileName);
 
-        await using var fs = File.Create(destPath);
-        await response.Content.CopyToAsync(fs);
+        await using var responseStream = await response.Content.ReadAsStreamAsync(ct);
+        await using var fileOut        = File.Create(destPath);
+
+        if (downloadProgress is not null)
+        {
+            await using var tracked = new ProgressStream(fileOut, downloadProgress);
+            await responseStream.CopyToAsync(tracked, ct);
+        }
+        else
+        {
+            await responseStream.CopyToAsync(fileOut, ct);
+        }
+
         return destPath;
     }
 
     /// <summary>
     /// Gets a presigned S3 GET URL for the file.
-    /// read permission  → 60s TTL  (open in viewer, never saved)
-    /// full permission  → 300s TTL (download directly from S3, API not involved)
+    /// read permission  → 60 s TTL  (viewer only, never saved)
+    /// full permission  → 300 s TTL (download directly from S3)
     /// </summary>
     public async Task<ViewUrlResponse> GetViewUrlAsync(string fileId)
     {
@@ -165,11 +203,7 @@ public class RackoApiClient
         string   permission,
         string[] sharedWithMachineIds)
     {
-        var payload = new
-        {
-            permission,
-            sharedWithMachineIds,
-        };
+        var payload = new { permission, sharedWithMachineIds };
         var content = new StringContent(
             JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
 

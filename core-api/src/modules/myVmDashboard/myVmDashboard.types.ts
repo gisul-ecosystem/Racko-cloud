@@ -34,6 +34,8 @@ export interface MyVmDashboardRow {
   parentRequestId?: string;
   /** Catalog instance row id. */
   instanceId?: string;
+  /** Catalog VM power UI mode (webyne vs azure). */
+  powerControlMode?: 'webyne' | 'azure';
   assignments: ExternalVmAssignmentSummary[];
   accessSchedule: {
     startDate: string | null;

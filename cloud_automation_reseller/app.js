@@ -5,6 +5,8 @@ import connectDB from './src/config/db.js';
 import healthRoutes from './src/routes/health.js';
 import apiRoutes from './src/routes/api.js';
 import { startPricingSyncScheduler } from './src/schedulers/pricingSyncScheduler.js';
+import { warmAzureVmSkuCache } from './src/provisioners/azure/azureCatalogLookup.js';
+import { warmAzureMarketplaceBrowseCache } from './src/provisioners/azure/azureMarketplaceBrowse.js';
 
 const app = express();
 
@@ -32,6 +34,18 @@ app.use((err, _req, res, _next) => {
 const start = async () => {
   await connectDB();
   startPricingSyncScheduler();
+  warmAzureVmSkuCache().then((skus) => {
+    if (Array.isArray(skus) && skus.length > 0) {
+      console.log(`[azure] VM SKU cache ready (${skus.length} sizes)`);
+    }
+  });
+  warmAzureMarketplaceBrowseCache().then((counts) => {
+    if (counts.windows > 0 || counts.linux > 0) {
+      console.log(
+        `[azure] Marketplace browse cache ready (${counts.windows} Windows, ${counts.linux} Linux offers)`
+      );
+    }
+  });
 
   const port = Number(process.env.PORT || 3005);
   const server = app.listen(port, () => {

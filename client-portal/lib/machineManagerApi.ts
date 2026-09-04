@@ -58,6 +58,7 @@ export interface ISoftwareCatalog {
   fileUrl?: string;
   fileName?: string;
   zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
   uploadedBy: string;
   createdAt: string;
@@ -92,6 +93,7 @@ export interface CreateSoftwareCatalogDto {
   fileUrl?: string;
   fileName?: string;
   zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
 }
 
@@ -207,6 +209,17 @@ export async function createSoftwareCatalogEntry(
   const res = await apiRequest<ApiResponse<{ software: ISoftwareCatalog }>>(
     '/api/v1/software-catalog',
     { method: 'POST', body: JSON.stringify(dto) }
+  );
+  return res.data.software;
+}
+
+export async function updateSoftwareCatalogEntry(
+  id: string,
+  dto: Partial<CreateSoftwareCatalogDto>
+): Promise<ISoftwareCatalog> {
+  const res = await apiRequest<ApiResponse<{ software: ISoftwareCatalog }>>(
+    `/api/v1/software-catalog/${id}`,
+    { method: 'PATCH', body: JSON.stringify(dto) }
   );
   return res.data.software;
 }
