@@ -95,6 +95,12 @@ const sharedProxyOptions = {
 // Explicit routes use the full path — no rewrite needed
 const coreApiProxy = createProxyMiddleware(sharedProxyOptions);
 
+/** Public core-api liveness — proxied to GET /health on core-api (no auth). */
+const coreApiHealthProxy = createProxyMiddleware({
+  ...sharedProxyOptions,
+  pathRewrite: () => '/health',
+});
+
 /** Live multi-cloud pricing can run for a long time — no proxy idle timeout. */
 const coreApiPricingProxy = createProxyMiddleware({
   ...sharedProxyOptions,
@@ -151,6 +157,7 @@ function requireRole(...roles: string[]) {
 }
 
 // ─── PUBLIC ROUTES (no auth required) ────────────────────────────────────────
+router.get('/api/health', coreApiHealthProxy);
 router.post('/api/v1/auth/register', registerRateLimiter, coreApiProxy);
 router.post('/api/v1/auth/login', loginFailedRateLimiter, loginSlowDown, coreApiProxy);
 router.post('/api/v1/auth/verify-email', verifyEmailRateLimiter, coreApiProxy);

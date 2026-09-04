@@ -233,86 +233,91 @@ export default function TenantMyServersPage() {
         />
       ) : null}
 
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">My Servers</h1>
-          <p className="mt-0.5 text-sm text-gray-500">
-            {loading
-              ? 'Loading…'
-              : `${vms.length} external server${vms.length !== 1 ? 's' : ''}`}
-            {isAdmin && selectedIds.size > 0
-              ? ` · ${selectedIds.size} selected`
-              : ''}
-          </p>
+      <div className="mb-6 space-y-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div className="min-w-0">
+            <h1 className="text-2xl font-bold text-gray-900">My Servers</h1>
+            <p className="mt-0.5 text-sm text-gray-500">
+              {loading
+                ? 'Loading…'
+                : `${vms.length} external server${vms.length !== 1 ? 's' : ''}`}
+              {isAdmin && selectedIds.size > 0 ? ` · ${selectedIds.size} selected` : ''}
+            </p>
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center justify-start gap-2 sm:justify-end">
+            <button
+              onClick={refetch}
+              disabled={loading}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
+              title="Reload server list"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+            {isAdmin && (
+              <>
+                <Link
+                  href={tenantConsole.elasticAdd}
+                  className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90"
+                  style={tenantAccentButton(accentColor)}
+                >
+                  <Plus className="h-4 w-4" />
+                  Add Server
+                </Link>
+                <Link
+                  href={tenantConsole.elasticBulk}
+                  className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
+                >
+                  <Upload className="h-4 w-4" />
+                  Bulk Import
+                </Link>
+              </>
+            )}
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
-          {isAdmin && vms.length > 0 ? (
-            <>
-              <button
-                type="button"
-                onClick={toggleAll}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
-              >
-                {allSelected ? 'Deselect all' : 'Select all'}
-              </button>
-              <button
-                type="button"
-                disabled={selectedIds.size === 0}
-                onClick={() =>
-                  setOverrideTarget({
-                    ids: selectedServers.map((vm) => vm._id),
-                    label: `${selectedServers.length} selected server${
-                      selectedServers.length === 1 ? '' : 's'
-                    }`,
-                    currentlyActive: selectedServers.some((vm) =>
-                      Boolean(toAccessSchedule(vm.accessSchedule)?.override)
-                    ),
-                  })
-                }
-                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Shield className="h-3.5 w-3.5" />
-                Override selected{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
-              </button>
-              <button
-                type="button"
-                disabled={selectedIds.size === 0 || deleteLoading}
-                onClick={() => setPendingBulkDelete(true)}
-                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                <Trash2 className="h-3.5 w-3.5" />
-                Delete selected{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
-              </button>
-            </>
-          ) : null}
-          <button
-            onClick={refetch}
-            disabled={loading}
-            className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-600 transition hover:bg-gray-50 disabled:opacity-40"
-          >
-            <RefreshCw className={`h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />
-            Refresh
-          </button>
-          {isAdmin && (
-            <>
-              <Link
-                href={tenantConsole.elasticAdd}
-                className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-medium text-white shadow-sm transition hover:opacity-90"
-                style={tenantAccentButton(accentColor)}
-              >
-                <Plus className="h-4 w-4" />
-                Add Server
-              </Link>
-              <Link
-                href={tenantConsole.elasticBulk}
-                className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:bg-gray-50"
-              >
-                <Upload className="h-4 w-4" />
-                Bulk Import
-              </Link>
-            </>
-          )}
-        </div>
+
+        {isAdmin && vms.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-2 rounded-lg border border-gray-100 bg-gray-50/80 px-3 py-2.5">
+            <button
+              type="button"
+              onClick={toggleAll}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700 transition hover:bg-gray-50"
+              title={allSelected ? 'Clear row selection' : 'Select every server in the list'}
+            >
+              {allSelected ? 'Deselect all' : 'Select all'}
+            </button>
+            <button
+              type="button"
+              disabled={selectedIds.size === 0}
+              onClick={() =>
+                setOverrideTarget({
+                  ids: selectedServers.map((vm) => vm._id),
+                  label: `${selectedServers.length} selected server${
+                    selectedServers.length === 1 ? '' : 's'
+                  }`,
+                  currentlyActive: selectedServers.some((vm) =>
+                    Boolean(toAccessSchedule(vm.accessSchedule)?.override)
+                  ),
+                })
+              }
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-800 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Grant or revoke access override for selected servers"
+            >
+              <Shield className="h-3.5 w-3.5" />
+              Override selected{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+            </button>
+            <button
+              type="button"
+              disabled={selectedIds.size === 0 || deleteLoading}
+              onClick={() => setPendingBulkDelete(true)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-100 disabled:cursor-not-allowed disabled:opacity-40"
+              title="Permanently delete selected servers"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Delete selected{selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {error && !loading && <ErrorState message={error} onRetry={refetch} />}
@@ -345,11 +350,11 @@ export default function TenantMyServersPage() {
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[920px] table-fixed text-sm">
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
                     {isAdmin ? (
-                      <th className="sticky left-0 z-10 w-10 bg-gray-50 px-4 py-3">
+                      <th className="sticky left-0 z-20 w-12 bg-gray-50 pl-5 pr-2 py-3">
                         <input
                           type="checkbox"
                           checked={allSelected}
@@ -359,33 +364,34 @@ export default function TenantMyServersPage() {
                           onChange={toggleAll}
                           className="h-4 w-4 cursor-pointer rounded border-gray-300"
                           aria-label="Select all servers"
+                          title="Select all servers"
                         />
                       </th>
                     ) : null}
-                    <th className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th className="w-[11rem] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Name
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th className="w-[9.5rem] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       IP Address
                     </th>
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th className="w-[5.5rem] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                       Protocol
                     </th>
                     {isAdmin ? (
                       <>
-                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <th className="w-[10.5rem] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           Assigned users
                         </th>
-                        <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        <th className="w-[12rem] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           When
                         </th>
                       </>
                     ) : (
-                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                      <th className="w-[12rem] px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                         Access
                       </th>
                     )}
-                    <th className="sticky right-0 z-10 bg-gray-50 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    <th className="sticky right-0 z-20 w-[10.5rem] bg-gray-50 px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 shadow-[-6px_0_10px_-8px_rgba(15,23,42,0.35)]">
                       Actions
                     </th>
                   </tr>
@@ -408,7 +414,7 @@ export default function TenantMyServersPage() {
                       >
                         {isAdmin ? (
                           <td
-                            className={`sticky left-0 z-10 px-4 py-3.5 ${rowBg}`}
+                            className={`sticky left-0 z-10 w-12 pl-5 pr-2 py-3.5 shadow-[6px_0_10px_-8px_rgba(15,23,42,0.25)] ${rowBg}`}
                             onClick={(e) => e.stopPropagation()}
                           >
                             <input
@@ -417,11 +423,12 @@ export default function TenantMyServersPage() {
                               onChange={() => toggleOne(vm._id)}
                               className="h-4 w-4 cursor-pointer rounded border-gray-300"
                               aria-label={`Select ${vm.name}`}
+                              title={`Select ${vm.name}`}
                             />
                           </td>
                         ) : null}
-                        <td className="px-6 py-3.5">
-                          <div className="flex items-center gap-3">
+                        <td className="px-3 py-3.5">
+                          <div className="flex min-w-0 items-center gap-2.5">
                             <span
                               className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg"
                               style={{
@@ -431,33 +438,44 @@ export default function TenantMyServersPage() {
                             >
                               <Server className="h-4 w-4" />
                             </span>
-                            <span className="font-medium text-gray-900">{vm.name}</span>
-                            <p className="text-xs text-gray-400">
-                              {vm.protocol.toUpperCase()} · {vm.username}
-                            </p>
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-gray-900" title={vm.name}>
+                                {vm.name}
+                              </p>
+                              <p
+                                className="truncate text-xs text-gray-500"
+                                title={vm.username || 'Default login user'}
+                              >
+                                {vm.username}
+                              </p>
+                            </div>
                           </div>
                         </td>
-                        <td className="px-4 py-3.5 font-mono text-xs text-gray-600">{vm.ipAddress}</td>
-                        <td className="px-4 py-3.5">
+                        <td className="px-3 py-3.5">
+                          <span className="font-mono text-xs text-gray-600" title={vm.ipAddress}>
+                            {vm.ipAddress}
+                          </span>
+                        </td>
+                        <td className="px-3 py-3.5">
                           <ProtocolBadge protocol={vm.protocol} />
                         </td>
                         {isAdmin ? (
                           <>
-                            <td className="px-4 py-3.5">
+                            <td className="px-3 py-3.5">
                               <div className="space-y-0.5">
                                 {holders.labels.map((label) => (
-                                  <p key={label} className="text-xs text-gray-800">
+                                  <p key={label} className="truncate text-xs text-gray-800" title={label}>
                                     {label}
                                   </p>
                                 ))}
                               </div>
                             </td>
-                            <td className="px-4 py-3.5">
+                            <td className="px-3 py-3.5">
                               <div className="space-y-0.5">
                                 {holders.schedules.map((s, idx) => (
                                   <p
                                     key={`${vm._id}-when-${idx}`}
-                                    className="max-w-[16rem] truncate text-[11px] text-gray-500"
+                                    className="truncate text-[11px] text-gray-500"
                                     title={s}
                                   >
                                     {s}
@@ -467,10 +485,10 @@ export default function TenantMyServersPage() {
                             </td>
                           </>
                         ) : (
-                          <td className="px-4 py-3.5">
+                          <td className="px-3 py-3.5">
                             <AccessScheduleBadge schedule={schedule} />
                             <p
-                              className="mt-1 max-w-[14rem] truncate text-[11px] text-gray-400"
+                              className="mt-1 truncate text-[11px] text-gray-400"
                               title={
                                 vm.myAccess?.schedule
                                   ? formatAssignmentSchedule(vm.myAccess.schedule)
@@ -488,8 +506,10 @@ export default function TenantMyServersPage() {
                             ) : null}
                           </td>
                         )}
-                        <td className={`sticky right-0 z-10 px-4 py-3.5 ${rowBg}`}>
-                          <div className="flex items-center justify-end gap-1.5">
+                        <td
+                          className={`sticky right-0 z-10 w-[10.5rem] px-3 py-3.5 shadow-[-6px_0_10px_-8px_rgba(15,23,42,0.25)] ${rowBg}`}
+                        >
+                          <div className="flex items-center justify-end gap-2">
                             <button
                               onClick={() => handleOpenConsole(vm)}
                               disabled={consoleBlocked}

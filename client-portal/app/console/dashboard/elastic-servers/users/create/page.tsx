@@ -4,19 +4,29 @@ import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { TenantElasticCreateUserPage } from '@/components/tenant/TenantElasticCreateUserPage';
 import { useTenantAuth } from '@/context/TenantAuthContext';
-import { tenantVps } from '@/lib/tenantAdminRoutes';
+import { useTenantRbac } from '@/context/TenantRbacContext';
+import { tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 
 export default function TenantElasticCreateUserRoute() {
   const router = useRouter();
   const { tenantUser } = useTenantAuth();
+  const { isConsoleStaff, hasPermission } = useTenantRbac();
+
+  const canManageUsers =
+    tenantUser?.role === 'tenant_admin' ||
+    (isConsoleStaff && hasPermission('users.manage'));
 
   useEffect(() => {
     if (tenantUser?.role === 'tenant_user') {
       router.replace(tenantVps.vms);
+      return;
     }
-  }, [router, tenantUser?.role]);
+    if (tenantUser && !canManageUsers) {
+      router.replace(tenantConsole.elasticUsers);
+    }
+  }, [router, tenantUser, canManageUsers]);
 
-  if (tenantUser?.role !== 'tenant_admin') return null;
+  if (!canManageUsers) return null;
 
   return <TenantElasticCreateUserPage />;
 }

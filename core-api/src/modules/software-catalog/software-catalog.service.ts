@@ -22,6 +22,7 @@ class SoftwareCatalogService {
       fileUrl:       doc.fileUrl,
       fileName:      doc.fileName,
       zipInstallScript: doc.zipInstallScript,
+      postInstallScript: doc.postInstallScript,
       installArgs:   doc.installArgs,
       uploadedBy:    doc.uploadedBy.toString(),
       createdAt:     doc.createdAt.toISOString(),
@@ -77,10 +78,12 @@ class SoftwareCatalogService {
   /**
    * Returns a presigned GET URL for an internally stored software file.
    * Called by the agent when it fetches software details before installing.
-   * TTL: 10 minutes — enough for the agent to start the download.
+   * TTL: 1 hour — enough for large installer downloads (Anaconda, VS, etc.)
+   * The agent fetches just-in-time (after acquiring the install lock) so the
+   * URL is always fresh when the download starts.
    */
   async getDownloadUrl(storageRef: string): Promise<string> {
-    const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(storageRef, 600);
+    const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(storageRef, 3600);
     return presignedUrl;
   }
 
@@ -144,8 +147,9 @@ class SoftwareCatalogService {
     if (dto.chocoName     !== undefined) doc.chocoName     = dto.chocoName || undefined;
     if (dto.fileUrl       !== undefined) doc.fileUrl       = dto.fileUrl || undefined;
     if (dto.fileName      !== undefined) doc.fileName      = dto.fileName || undefined;
-    if (dto.zipInstallScript !== undefined) doc.zipInstallScript = dto.zipInstallScript || undefined;
-    if (dto.installArgs   !== undefined) doc.installArgs   = dto.installArgs || undefined;
+    if (dto.zipInstallScript    !== undefined) doc.zipInstallScript    = dto.zipInstallScript    || undefined;
+    if (dto.postInstallScript   !== undefined) doc.postInstallScript   = dto.postInstallScript   || undefined;
+    if (dto.installArgs         !== undefined) doc.installArgs         = dto.installArgs         || undefined;
 
     await doc.save();
 

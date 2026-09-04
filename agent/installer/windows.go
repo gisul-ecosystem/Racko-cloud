@@ -690,8 +690,21 @@ func runMSI(pkg SoftwarePackage) (string, error) {
 			log.Printf("[msi] Exit 1638 — another version already installed, treating as success")
 			return out, nil
 		}
+		return out, err
 	}
-	return out, err
+
+	// Run post-install script if provided
+	if pkg.PostInstallScript != "" {
+		log.Printf("[msi] Running post-install script for %s", pkg.Name)
+		scriptOut, scriptErr := runPostInstallScript(pkg.PostInstallScript, path)
+		out += "\n[post-install script]\n" + scriptOut
+		if scriptErr != nil {
+			return out, fmt.Errorf("post-install script failed: %w", scriptErr)
+		}
+		log.Printf("[msi] Post-install script completed for %s", pkg.Name)
+	}
+
+	return out, nil
 }
 
 // runEXE downloads and runs a silent .exe installer in the active user session.
@@ -707,7 +720,49 @@ func runEXE(pkg SoftwarePackage) (string, error) {
 		args = strings.Fields(pkg.InstallArgs)
 	}
 	log.Printf("[exe] Running in active user session: %s %v", path, args)
-	return runAsActiveUser(path, args...)
+	out, err := runAsActiveUser(path, args...)
+	if err != nil {
+		return out, err
+	}
+
+	// Run post-install script if provided
+	if pkg.PostInstallScript != "" {
+		log.Printf("[exe] Running post-install script for %s", pkg.Name)
+		scriptOut, scriptErr := runPostInstallScript(pkg.PostInstallScript, path)
+		out += "\n[post-install script]\n" + scriptOut
+		if scriptErr != nil {
+			return out, fmt.Errorf("post-install script failed: %w", scriptErr)
+		}
+		log.Printf("[exe] Post-install script completed for %s", pkg.Name)
+	}
+
+	return out, nil
+}
+
+// runPostInstallScript executes an admin-provided PowerShell script after an MSI or EXE install.
+// $installerPath is set to the path of the downloaded installer file so the script can
+// reference it (e.g. to locate MySQLInstallerConsole.exe relative to the install dir).
+//
+// Uses -File mode (not -Command) so the script runs exactly as written — backtick line
+// continuations, special characters, and complex syntax all work correctly.
+// This is the same execution mode used by the script install method and the reset script.
+func runPostInstallScript(script, installerPath string) (string, error) {
+	// Prepend $installerPath variable then write the full script to a temp .ps1 file.
+	// -File mode requires a file on disk — it cannot accept inline strings.
+	fullScript := fmt.Sprintf("$installerPath = '%s'\r\n%s", installerPath, script)
+
+	tmpPath := fmt.Sprintf(`C:\Windows\SystemTemp\racko_postinstall_%d.ps1`, os.Getpid())
+	if err := os.WriteFile(tmpPath, []byte(fullScript), 0644); err != nil {
+		return "", fmt.Errorf("failed to write post-install script to temp: %w", err)
+	}
+	defer func() {
+		_ = os.Remove(tmpPath)
+	}()
+
+	return runAsActiveUser("powershell.exe",
+		"-ExecutionPolicy", "Bypass",
+		"-NonInteractive",
+		"-File", tmpPath)
 }
 
 // runZIP downloads and extracts a ZIP archive, then runs the admin-provided

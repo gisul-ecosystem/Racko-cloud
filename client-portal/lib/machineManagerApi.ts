@@ -58,6 +58,7 @@ export interface ISoftwareCatalog {
   fileUrl?: string;
   fileName?: string;
   zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
   uploadedBy: string;
   createdAt: string;
@@ -92,6 +93,7 @@ export interface CreateSoftwareCatalogDto {
   fileUrl?: string;
   fileName?: string;
   zipInstallScript?: string;
+  postInstallScript?: string;
   installArgs?: string;
 }
 
