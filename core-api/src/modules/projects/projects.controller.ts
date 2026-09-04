@@ -261,6 +261,80 @@ async function addServicesForTenantSuperAdmin(
   }
 }
 
+async function updateForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const body = req.body as UpdateProjectInput;
+    const project = await projectsService.updateForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId']),
+      body
+    );
+    success(res, 'Project updated.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function archiveForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const project = await projectsService.archiveForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project archived.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const result = await projectsService.deleteForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project deleted.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function archiveForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const project = await projectsService.archiveForAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project archived.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function deleteForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const result = await projectsService.deleteForAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project deleted.', result);
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function listForTenant(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const projects = await projectsService.listForTenantBySuperAdmin(
@@ -327,20 +401,6 @@ async function updateForAdmin(req: Request, res: Response, next: NextFunction): 
   }
 }
 
-async function updateForTenantSuperAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
-  try {
-    const body = req.body as UpdateProjectInput;
-    const project = await projectsService.updateForTenant(
-      String(req.params['tenantId']),
-      String(req.params['projectId']),
-      body
-    );
-    success(res, 'Project updated.', { project });
-  } catch (err) {
-    next(err);
-  }
-}
-
 async function listClientNames(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = req as AuthenticatedRequest;
@@ -379,6 +439,8 @@ export const projectsController = {
   listEligibleServicesForAdmin,
   createForAdmin,
   updateForAdmin,
+  archiveForAdmin,
+  deleteForAdmin,
   addServicesForAdmin,
   getByIdForAdmin,
   reportByServiceForAdmin,
@@ -387,5 +449,7 @@ export const projectsController = {
   listEligibleServicesForTenant,
   createForTenant,
   updateForTenantSuperAdmin,
+  archiveForTenantSuperAdmin,
+  deleteForTenantSuperAdmin,
   addServicesForTenantSuperAdmin,
 };

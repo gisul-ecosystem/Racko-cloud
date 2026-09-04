@@ -154,6 +154,36 @@ export async function launchAzureVm({
   const vmName = safeName('rvm', catalogVmId);
   const nicName = safeName('rnic', catalogVmId);
   const pipName = safeName('rpip', catalogVmId);
+  const nsgName = safeName('rnsg', catalogVmId);
+
+  const nsg = await network.networkSecurityGroups.beginCreateOrUpdateAndWait(rg, nsgName, {
+    location,
+    securityRules: [
+      {
+        name: 'AllowRdp',
+        protocol: 'Tcp',
+        sourcePortRange: '*',
+        destinationPortRange: '3389',
+        sourceAddressPrefix: process.env.AZURE_REMOTE_ACCESS_SOURCE || '*',
+        destinationAddressPrefix: '*',
+        access: 'Allow',
+        priority: 1000,
+        direction: 'Inbound',
+      },
+      {
+        name: 'AllowSsh',
+        protocol: 'Tcp',
+        sourcePortRange: '*',
+        destinationPortRange: '22',
+        sourceAddressPrefix: process.env.AZURE_REMOTE_ACCESS_SOURCE || '*',
+        destinationAddressPrefix: '*',
+        access: 'Allow',
+        priority: 1010,
+        direction: 'Inbound',
+      },
+    ],
+    tags: { ManagedBy: 'cloud-automation-reseller', CatalogVmId: String(catalogVmId || '') },
+  });
 
   let pip = null;
   if (assignPublicIp) {
@@ -174,6 +204,7 @@ export async function launchAzureVm({
         ...(pip ? { publicIPAddress: { id: pip.id } } : {}),
       },
     ],
+    networkSecurityGroup: { id: nsg.id },
     tags: { ManagedBy: 'cloud-automation-reseller', CatalogVmId: String(catalogVmId || '') },
   };
 
@@ -244,6 +275,7 @@ export async function launchAzureVm({
     protocol: isWindows ? 'rdp' : 'ssh',
     meta: {
       nicName,
+      nsgName,
       pipName: assignPublicIp ? pipName : null,
       vmName,
       resourceGroup: rg,
@@ -296,6 +328,7 @@ export async function terminateAzureVm({
   const diskNames = new Set();
   const nicNames = new Set();
   const pipNames = new Set();
+  const nsgNames = new Set();
 
   try {
     const vm = await compute.virtualMachines.get(rg, name);
@@ -314,12 +347,14 @@ export async function terminateAzureVm({
       nicNames.add(nicName);
       try {
         const nic = await network.networkInterfaces.get(rg, nicName);
+        const nsgName = resourceNameFromId(nic.networkSecurityGroup?.id);
+        if (nsgName) nsgNames.add(nsgName);
         for (const ipConfig of nic.ipConfigurations || []) {
           const pipName = resourceNameFromId(ipConfig.publicIPAddress?.id);
           if (pipName) pipNames.add(pipName);
         }
       } catch {
-        /* best-effort PIP discovery */
+        /* best-effort NIC attachment discovery */
       }
     }
   } catch (err) {
@@ -330,7 +365,7 @@ export async function terminateAzureVm({
         providerInstanceId: `${rg}/${name}`,
         terminated: true,
         alreadyDeleted: true,
-        cleanedUp: { vm: false, disks: [], nics: [], publicIps: [] },
+        cleanedUp: { vm: false, disks: [], nics: [], publicIps: [], nsgs: [] },
       };
     }
     throw err;
@@ -346,6 +381,17 @@ export async function terminateAzureVm({
       })
     ) {
       deletedNics.push(nicName);
+    }
+  }
+
+  const deletedNsgs = [];
+  for (const nsgName of nsgNames) {
+    if (
+      await deleteResourceQuietly(async () => {
+        await network.networkSecurityGroups.beginDeleteAndWait(rg, nsgName);
+      })
+    ) {
+      deletedNsgs.push(nsgName);
     }
   }
 
@@ -380,6 +426,7 @@ export async function terminateAzureVm({
       disks: deletedDisks,
       nics: deletedNics,
       publicIps: deletedPublicIps,
+      nsgs: deletedNsgs,
     },
   };
 }
