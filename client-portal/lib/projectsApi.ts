@@ -191,6 +191,8 @@ export async function createProjectForAdmin(
     clientName: string;
     name?: string;
     description?: string;
+    startDate?: string;
+    endDate?: string;
     enabledServices: AdminServiceKey[];
   }
 ): Promise<OrgProject> {
@@ -271,6 +273,8 @@ export async function createProjectForTenant(
     clientName: string;
     name?: string;
     description?: string;
+    startDate?: string;
+    endDate?: string;
     enabledServices: AdminServiceKey[];
   }
 ): Promise<OrgProject> {
@@ -335,6 +339,90 @@ export async function updateProjectForTenant(
     })
   );
   return data.project;
+}
+
+export async function archiveProjectForTenant(
+  tenantId: string,
+  projectId: string
+): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    apiRequest(`/api/v1/projects/tenants/${tenantId}/${projectId}/archive`, {
+      method: 'POST',
+    })
+  );
+  return data.project;
+}
+
+export async function deleteProjectForTenant(
+  tenantId: string,
+  projectId: string
+): Promise<{
+  projectId: string;
+  deleted: {
+    catalogVms: number;
+    dedicatedServers: number;
+    managedVms: number;
+    externalVms: number;
+    externalAssignments: number;
+  };
+}> {
+  const data = await unwrap<{
+    projectId: string;
+    deleted: {
+      catalogVms: number;
+      dedicatedServers: number;
+      managedVms: number;
+      externalVms: number;
+      externalAssignments: number;
+    };
+  }>(
+    apiRequest(`/api/v1/projects/tenants/${tenantId}/${projectId}`, {
+      method: 'DELETE',
+    })
+  );
+  return data;
+}
+
+export async function archiveProjectForAdmin(
+  adminId: string,
+  projectId: string
+): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    apiRequest(`/api/v1/projects/admins/${adminId}/${projectId}/archive`, {
+      method: 'POST',
+    })
+  );
+  return data.project;
+}
+
+export async function deleteProjectForAdmin(
+  adminId: string,
+  projectId: string
+): Promise<{
+  projectId: string;
+  deleted: {
+    catalogVms: number;
+    dedicatedServers: number;
+    managedVms: number;
+    externalVms: number;
+    externalAssignments: number;
+  };
+}> {
+  const data = await unwrap<{
+    projectId: string;
+    deleted: {
+      catalogVms: number;
+      dedicatedServers: number;
+      managedVms: number;
+      externalVms: number;
+      externalAssignments: number;
+    };
+  }>(
+    apiRequest(`/api/v1/projects/admins/${adminId}/${projectId}`, {
+      method: 'DELETE',
+    })
+  );
+  return data;
 }
 
 export const PROJECT_SERVICE_LABELS: Record<AdminServiceKey, string> = {

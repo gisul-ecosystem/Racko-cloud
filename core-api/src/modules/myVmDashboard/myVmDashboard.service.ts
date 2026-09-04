@@ -275,6 +275,7 @@ class MyVmDashboardService {
         managePath: paths.managePath,
         ...(instanceId ? { instanceId } : {}),
         ...(vm.parentRequestId ? { parentRequestId: vm.parentRequestId } : {}),
+        ...(vm.powerControlMode ? { powerControlMode: vm.powerControlMode } : {}),
         assignments: [],
         accessSchedule: null,
         createdAt: vm.createdAt,

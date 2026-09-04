@@ -1,7 +1,6 @@
 import { DescribeInstanceTypesCommand } from '@aws-sdk/client-ec2';
-import { ComputeManagementClient } from '@azure/arm-compute';
 import { ec2ClientForRegion, awsConfig } from '../config/aws.js';
-import { getAzureCredential, azureConfig } from '../config/azure.js';
+import { getAzureCredential, azureConfig, resolveAzurePricingRegion } from '../config/azure.js';
 import {
   awsSpecMap,
   azureSpecMap,
@@ -46,7 +45,10 @@ const PREFERRED_AWS_FAMILIES = [
 
 /** Region used only to rank candidate SKUs by live on-demand $/hr. */
 const AWS_SKU_PRICE_REGION = 'us-east-1';
-const AZURE_SKU_PRICE_REGION = 'eastus';
+/** Cap live Retail price lookups when building wizard shortlists. */
+const AZURE_SKU_SHORTLIST_PRICE_FANOUT = 36;
+/** Max regions to check per SKU when public-IP mode scans subscription pricing. */
+const AZURE_SKU_SHORTLIST_PUBLIC_REGIONS_PER_SKU = 12;
 
 /** Intel families that support EC2 nested virtualization (Docker/KVM guests). */
 const NESTED_AWS_FAMILIES = [
@@ -66,24 +68,6 @@ const NESTED_AWS_FAMILIES = [
   'c6i',
   'r6i',
 ];
-
-/** Azure series known to support nested virtualization (exclude B-series). */
-const NESTED_AZURE_NAME_RE =
-  /^Standard_(D\d+s?_v3|D\d+as_v4|D\d+ads_v5|E\d+s?_v3|E\d+as_v4|E\d+ads_v5|F\d+s_v2|F\d+)$/i;
-
-/**
- * General-purpose Azure series for normal (non-nested) dynamic picks.
- * Includes x86 D/E/F and ARM Ampere/Cobalt (Dps/Dpls/Eps…).
- */
-const PREFERRED_AZURE_NAME_RE = /^Standard_(D|E|F)\d/i;
-const BURSTABLE_OR_LEGACY_AZURE_RE = /^Standard_(B|A)\d/i;
-
-function azureFamilyRank(name) {
-  const n = String(name || '');
-  if (PREFERRED_AZURE_NAME_RE.test(n)) return 0;
-  if (BURSTABLE_OR_LEGACY_AZURE_RE.test(n)) return 2;
-  return 1;
-}
 
 /**
  * Resolve architecture preference for pricing/SKU selection.
@@ -108,10 +92,6 @@ export function normalizeArchitecture(value, { category, nestedVirtualization } 
   return 'any';
 }
 
-let azureSkuCache = null;
-let azureSkuCacheAt = 0;
-const AZURE_SKU_TTL_MS = 6 * 60 * 60 * 1000;
-
 function awsFamily(instanceType) {
   return String(instanceType).split('.')[0];
 }
@@ -125,10 +105,6 @@ function awsFamilyRank(instanceType, nested = false) {
 
 function isNestedAwsFamily(instanceType) {
   return NESTED_AWS_FAMILIES.includes(awsFamily(instanceType));
-}
-
-function isNestedAzureSize(name) {
-  return NESTED_AZURE_NAME_RE.test(String(name || ''));
 }
 
 function matchesArchitecture(arch, preference) {
@@ -300,6 +276,285 @@ async function listAwsInstanceTypes(client) {
  * Includes ARM (Dps/Dpls/Eps…) when architecture allows, so AWS Graviton vs Azure
  * ARM comparisons are apples-to-apples.
  */
+function compareAzureSkuFit(a, b, needVcpu, needRam) {
+  const ramOverA = a.memoryGb - needRam;
+  const ramOverB = b.memoryGb - needRam;
+  if (ramOverA !== ramOverB) return ramOverA - ramOverB;
+
+  const vcpuOverA = a.vcpu - needVcpu;
+  const vcpuOverB = b.vcpu - needVcpu;
+  if (vcpuOverA !== vcpuOverB) return vcpuOverA - vcpuOverB;
+
+  return a.name.localeCompare(b.name);
+}
+
+function rankAzureSkuCandidates(candidates, needVcpu, needRam) {
+  return [...candidates].sort((a, b) => compareAzureSkuFit(a, b, needVcpu, needRam));
+}
+
+function filterAzureSkusForSpec(skus, {
+  needVcpu,
+  needRam,
+  nested,
+  archPref,
+  gpu = false,
+}) {
+  return skus.filter((s) => {
+    if (s.vcpu < needVcpu || s.memoryGb < needRam) return false;
+    if (gpu ? !s.gpu : s.gpu) return false;
+    if (!matchesArchitecture(s.architecture, archPref)) return false;
+    if (nested && !s.nestedVirtualizationCapable) return false;
+    return true;
+  });
+}
+
+/** SKUs that satisfy vCPU/RAM/GPU/nested/arch filters (best RAM/vCPU fit). */
+export async function shortlistAzureSkusForSpec({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+  category = 'linux',
+  architecture,
+} = {}) {
+  const needVcpu = Math.max(1, Number(vcpu) || 1);
+  const needRam = Math.max(1, Number(ramGb) || 1);
+  const nested = Boolean(nestedVirtualization);
+  const archPref = normalizeArchitecture(architecture, {
+    category,
+    nestedVirtualization: nested,
+  });
+
+  const skus = await listAzureVmSkus();
+  const candidates = filterAzureSkusForSpec(skus, {
+    needVcpu,
+    needRam,
+    nested,
+    archPref,
+    gpu,
+  });
+  if (candidates.length === 0) {
+    return [];
+  }
+
+  const ranked = rankAzureSkuCandidates(candidates, needVcpu, needRam);
+  const best = ranked[0];
+  const bestRamOver = best.memoryGb - needRam;
+  const bestVcpuOver = best.vcpu - needVcpu;
+  const ties = ranked.filter(
+    (s) => s.memoryGb - needRam === bestRamOver && s.vcpu - needVcpu === bestVcpuOver
+  );
+  const seen = new Set();
+  return ties.filter((s) => {
+    const key = String(s.name || '').toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/** Human series label from Azure family / size (e.g. standardNVSv4Family → NVSv4). */
+export function azureSeriesLabelFromSku(sku) {
+  const family = String(sku?.family || '').trim();
+  if (family) {
+    return family.replace(/^standard/i, '').replace(/Family$/i, '') || family;
+  }
+  const name = String(sku?.name || '').replace(/^Standard_/i, '');
+  const m = name.match(/^([A-Za-z]+)/);
+  return m ? m[1] : name || 'Other';
+}
+
+function azureSeriesKeyFromSku(sku) {
+  const family = String(sku?.family || '').trim().toLowerCase();
+  if (family) return family;
+  return `name:${azureSeriesLabelFromSku(sku).toLowerCase()}`;
+}
+
+/**
+ * Best-fit SKU per Azure series/family (Portal-style series coverage).
+ * Keeps Spec vCPU/RAM/GPU filters, but does not collapse to a single family.
+ */
+export async function shortlistAzureSkusAcrossSeries({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+  category = 'linux',
+  architecture,
+  maxSeries = 40,
+} = {}) {
+  const needVcpu = Math.max(1, Number(vcpu) || 1);
+  const needRam = Math.max(1, Number(ramGb) || 1);
+  const nested = Boolean(nestedVirtualization);
+  const archPref = normalizeArchitecture(architecture, {
+    category,
+    nestedVirtualization: nested,
+  });
+  const seriesCap = Math.min(Math.max(Number(maxSeries) || 40, 1), 80);
+
+  const skus = await listAzureVmSkus();
+  const candidates = filterAzureSkusForSpec(skus, {
+    needVcpu,
+    needRam,
+    nested,
+    archPref,
+    gpu,
+  });
+  if (candidates.length === 0) return [];
+
+  const bySeries = new Map();
+  for (const sku of candidates) {
+    const key = azureSeriesKeyFromSku(sku);
+    const prev = bySeries.get(key);
+    if (!prev || compareAzureSkuFit(sku, prev, needVcpu, needRam) < 0) {
+      bySeries.set(key, sku);
+    }
+  }
+
+  const champions = [...bySeries.values()].map((sku) => ({
+    ...sku,
+    series: azureSeriesLabelFromSku(sku),
+  }));
+
+  return rankAzureSkuCandidates(champions, needVcpu, needRam).slice(0, seriesCap);
+}
+
+/**
+ * Ranked Azure VM sizes for a requested spec — wizard step 2.
+ * Private IP: price in AZURE_LOCATION (home / VNet region).
+ * Public IP: lowest compute $/hr across subscription regions where each SKU is offered.
+ */
+export async function listAzureVmSizeCandidatesForSpec({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+  category = 'linux',
+  architecture,
+  limit = 6,
+  pricingRegion,
+  assignPublicIp = false,
+} = {}) {
+  const needVcpu = Math.max(1, Number(vcpu) || 1);
+  const needRam = Math.max(1, Number(ramGb) || 1);
+  const disk = Math.max(8, Number(diskGb) || 50);
+  const nested = Boolean(nestedVirtualization);
+  const assignPublic = Boolean(assignPublicIp);
+  const archPref = normalizeArchitecture(architecture, {
+    category,
+    nestedVirtualization: nested,
+  });
+  const maxRows = Math.min(Math.max(Number(limit) || 6, 1), 24);
+  const homeRegion = resolveAzurePricingRegion(pricingRegion);
+  const windows = /windows/i.test(String(category || ''));
+  const priceFn = windows ? fetchVmWindowsHourlyUsd : fetchVmHourlyUsd;
+
+  const { resolvePlacementRegionsForAzure } = await import(
+    '../provisioners/azure/azureNetwork.js'
+  );
+  const { normalizeAzureRegion } = await import('../provisioners/azure/azureSkuAvailability.js');
+
+  const subscriptionRegions = assignPublic
+    ? (await resolvePlacementRegionsForAzure({ assignPublicIp: true })).regions
+    : [homeRegion];
+
+  const { skus, source } = await listAzureVmSkusForMatching();
+  const candidates = filterAzureSkusForSpec(skus, {
+    needVcpu,
+    needRam,
+    nested,
+    archPref,
+    gpu,
+  });
+  const ranked = rankAzureSkuCandidates(candidates, needVcpu, needRam);
+  const seen = new Set();
+  const uniqueRanked = ranked.filter((s) => {
+    const key = String(s.name || '').toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+
+  const regionAvailable = (sku) =>
+    assignPublic
+      ? subscriptionRegions.some((region) => skuRecordAvailableInRegion(sku, region))
+      : skuRecordAvailableInRegion(sku, homeRegion);
+
+  const available = uniqueRanked.filter(regionAvailable);
+  const toPrice = (available.length > 0 ? available : uniqueRanked).slice(
+    0,
+    AZURE_SKU_SHORTLIST_PRICE_FANOUT
+  );
+
+  const regionsForSku = (sku) => {
+    if (!assignPublic) return [homeRegion];
+    const sub = new Set(subscriptionRegions.map(normalizeAzureRegion));
+    const locs = [
+      ...new Set((sku.locations || []).map(normalizeAzureRegion).filter(Boolean)),
+    ];
+    const pool = locs.filter((loc) => sub.has(loc) && skuRecordAvailableInRegion(sku, loc));
+    if (pool.length === 0) {
+      return locs.filter((loc) => sub.has(loc)).slice(0, AZURE_SKU_SHORTLIST_PUBLIC_REGIONS_PER_SKU);
+    }
+    return pool.slice(0, AZURE_SKU_SHORTLIST_PUBLIC_REGIONS_PER_SKU);
+  };
+
+  const priced = await Promise.all(
+    toPrice.map(async (sku) => {
+      const regions = regionsForSku(sku);
+      let best = { price: null, pricingRegion: regions[0] || homeRegion };
+      for (const region of regions) {
+        try {
+          const price = await priceFn(sku.name, region);
+          if (Number.isFinite(price) && (best.price == null || price < best.price)) {
+            best = { price, pricingRegion: region };
+          }
+        } catch {
+          /* try next region */
+        }
+      }
+      return { sku, price: best.price, pricingRegion: best.pricingRegion };
+    })
+  );
+
+  const pricedMatches = priced.filter((row) => row.price != null);
+  pricedMatches.sort(
+    (a, b) =>
+      a.price - b.price ||
+      compareAzureSkuFit(a.sku, b.sku, needVcpu, needRam)
+  );
+
+  const chosen = pricedMatches.length > 0 ? pricedMatches : priced;
+  const top = chosen.slice(0, maxRows);
+  const sizes = top.map(({ sku: s, price, pricingRegion: rowRegion }) => ({
+    vmSize: s.name,
+    vcpu: s.vcpu,
+    memoryGb: s.memoryGb,
+    architecture: s.architecture,
+    exactSpec: s.vcpu === needVcpu && s.memoryGb === needRam,
+    exactRam: s.memoryGb === needRam,
+    exactVcpu: s.vcpu === needVcpu,
+    vcpuOverage: s.vcpu - needVcpu,
+    ramOverage: s.memoryGb - needRam,
+    estimatedHourlyUsd: price ?? null,
+    pricingRegion: rowRegion ?? null,
+  }));
+
+  return {
+    sizes,
+    total: uniqueRanked.length,
+    pricedCount: pricedMatches.length,
+    pricingScope: assignPublic ? 'subscription' : 'home',
+    pricingRegion: assignPublic ? null : homeRegion,
+    homeRegion,
+    requested: { vcpu: needVcpu, ramGb: needRam, diskGb: disk },
+    source,
+  };
+}
+
 export async function resolveAzureSku({
   vcpu,
   ramGb,
@@ -320,44 +575,44 @@ export async function resolveAzureSku({
   });
 
   if (gpu) {
-    return {
-      vmSize: needVcpu >= 8 ? 'Standard_NC8as_T4_v3' : 'Standard_NC4as_T4_v3',
+    const shortlist = await shortlistAzureSkusForSpec({
+      vcpu: needVcpu,
+      ramGb: needRam,
       diskGb: disk,
+      gpu: true,
+      nestedVirtualization: nested,
+      category,
+      architecture,
+    });
+    if (shortlist.length === 0) return null;
+    return {
+      vmSize: shortlist[0].name,
+      diskGb: disk,
+      architecture: shortlist[0].architecture,
+      architecturePreference: archPref,
       source: 'dynamic',
     };
   }
 
-  const skus = await listAzureVmSkus();
-  let candidates = skus.filter((s) => {
-    if (s.vcpu < needVcpu || s.memoryGb < needRam || s.gpu) return false;
-    if (!matchesArchitecture(s.architecture, archPref)) return false;
-    if (nested) return isNestedAzureSize(s.name);
-    return true;
+  const shortlist = await shortlistAzureSkusForSpec({
+    vcpu: needVcpu,
+    ramGb: needRam,
+    diskGb: disk,
+    gpu,
+    nestedVirtualization: nested,
+    category,
+    architecture,
   });
-  if (!nested) {
-    const preferred = candidates.filter((s) => azureFamilyRank(s.name) === 0);
-    if (preferred.length > 0) {
-      candidates = preferred;
-    } else {
-      const nonBurst = candidates.filter((s) => azureFamilyRank(s.name) < 2);
-      if (nonBurst.length > 0) candidates = nonBurst;
-    }
-  }
-  if (candidates.length === 0) {
+  if (shortlist.length === 0) {
     return null;
   }
 
-  const overage = (s) => s.vcpu - needVcpu + (s.memoryGb - needRam);
-  const minOver = Math.min(...candidates.map(overage));
-  const shortlist = candidates
-    .filter((s) => overage(s) === minOver)
-    .sort((a, b) => a.name.localeCompare(b.name));
-
   const priceFn = windows ? fetchVmWindowsHourlyUsd : fetchVmHourlyUsd;
+  const priceRegion = resolveAzurePricingRegion();
   const priced = await Promise.all(
     shortlist.map(async (candidate) => {
       try {
-        const price = await priceFn(candidate.name, AZURE_SKU_PRICE_REGION);
+        const price = await priceFn(candidate.name, priceRegion);
         return { candidate, price: Number.isFinite(price) ? price : null };
       } catch {
         return { candidate, price: null };
@@ -387,54 +642,14 @@ export async function resolveAzureSku({
   };
 }
 
-function azureArchitectureFromSku(sku, caps) {
-  const archCap = String(
-    caps.CpuArchitectureType || caps.CPUArchitectureType || caps.ArchitectureType || ''
-  ).toLowerCase();
-  if (/arm/.test(archCap)) return 'arm64';
-  if (/x64|x86/.test(archCap)) return 'x86_64';
-  // Ampere/Cobalt series naming: D2ps_v5, D2pls_v6, E2pds_v5, …
-  if (/^Standard_[DEF]\d+[a-z]*p[a-z]*s?_v\d+/i.test(String(sku.name || ''))) {
-    return 'arm64';
-  }
-  return 'x86_64';
-}
+import {
+  listAzureVmSkus as listAzureVmSkusFromCatalog,
+  listAzureVmSkusForMatching,
+} from '../provisioners/azure/azureCatalogLookup.js';
+import { skuRecordAvailableInRegion } from '../provisioners/azure/azureSkuAvailability.js';
 
 async function listAzureVmSkus() {
-  if (azureSkuCache && Date.now() - azureSkuCacheAt < AZURE_SKU_TTL_MS) {
-    return azureSkuCache;
-  }
-  if (!azureConfig.subscriptionId) {
-    throw new Error('AZURE_SUBSCRIPTION_ID not set');
-  }
-
-  const client = new ComputeManagementClient(getAzureCredential(), azureConfig.subscriptionId);
-  const out = [];
-  for await (const sku of client.resourceSkus.list()) {
-    if (sku.resourceType !== 'virtualMachines') continue;
-    if (sku.restrictions?.some((r) => r.reasonCode === 'NotAvailableForSubscription')) continue;
-
-    const caps = Object.fromEntries(
-      (sku.capabilities || []).map((c) => [c.name, c.value])
-    );
-    const vcpu = Number(caps.vCPUs || caps.NumberOfCores || 0);
-    const memoryGb = Number(caps.MemoryGB || 0);
-    const gpu = Number(caps.GPUs || 0) > 0;
-    if (!vcpu || !memoryGb) continue;
-    if (!String(sku.name || '').startsWith('Standard_')) continue;
-
-    out.push({
-      name: sku.name,
-      vcpu,
-      memoryGb,
-      gpu,
-      architecture: azureArchitectureFromSku(sku, caps),
-    });
-  }
-
-  azureSkuCache = out;
-  azureSkuCacheAt = Date.now();
-  return out;
+  return listAzureVmSkusFromCatalog();
 }
 
 /** Azure SKUs come from Resource SKUs API only — no hardcoded size ladder. */

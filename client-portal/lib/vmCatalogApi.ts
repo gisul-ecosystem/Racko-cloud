@@ -1,4 +1,35 @@
 import { apiRequest } from './apiClient';
+import { directGatewayRequest } from './directGatewayRequest';
+
+const SUPER_ADMIN_AZURE_CATALOG_PREFIX = '/api/v1/vm-catalog/super-admin/azure/';
+
+/** Bypass Next.js dev rewrites — slow Azure ARM calls hit socket hang-up otherwise. */
+function shouldBypassNextProxyForAzureCatalog(path: string, method?: string): boolean {
+  if (!path.startsWith(SUPER_ADMIN_AZURE_CATALOG_PREFIX)) return false;
+  const httpMethod = (method || 'GET').toUpperCase();
+  if (path.includes('/placement-options')) return httpMethod === 'POST';
+  if (path.includes('/create')) return httpMethod === 'POST';
+  if (path.includes('/power')) return httpMethod === 'POST';
+  if (path.includes('/marketplace/images')) return httpMethod === 'GET';
+  if (path.includes('/validate-image')) return httpMethod === 'POST';
+  if (path.includes('/custom-images')) return httpMethod === 'GET';
+  return false;
+}
+
+/** Azure start/stop/deallocate can take 30–90s — bypass Next.js dev proxy. */
+async function catalogVmPowerRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (typeof window !== 'undefined') {
+    return directGatewayRequest<T>(path, options);
+  }
+  return apiRequest<T>(path, options);
+}
+
+async function vmCatalogApiRequest<T>(path: string, options: RequestInit = {}): Promise<T> {
+  if (typeof window !== 'undefined' && shouldBypassNextProxyForAzureCatalog(path, options.method)) {
+    return directGatewayRequest<T>(path, options);
+  }
+  return apiRequest<T>(path, options);
+}
 
 export type VmCatalogCategory =
   | 'ubuntu'
@@ -27,7 +58,8 @@ export type VmCatalogStatus =
   | 'failed'
   | 'rejected'
   | 'cancelled'
-  | 'suspended';
+  | 'suspended'
+  | 'terminated';
 
 export interface ICatalogVm {
   _id: string;
@@ -39,7 +71,8 @@ export interface ICatalogVm {
   tenantId?: string;
   tenantUserId?: string;
   adminEmail?: string;
-  provider: 'webyne';
+  powerControlMode?: 'webyne' | 'azure';
+  provider: 'webyne' | 'aws' | 'azure' | 'gcp' | 'oci';
   category: VmCatalogCategory;
   planId: string;
   planName: string;
@@ -73,6 +106,9 @@ export interface ICatalogVm {
   needsOsChange?: boolean;
   osTemplateChanged?: boolean;
   osTemplateChangedAt?: string;
+  region?: string;
+  providerInstanceId?: string;
+  azureResourceGroup?: string;
   attachedAt?: string;
   rejectionReason?: string;
   reviewedBy?: string;
@@ -318,6 +354,407 @@ export async function submitSuperAdminCatalogVmRequest(
   return res.data.request;
 }
 
+export interface RegisterManualAzureCatalogVmDto {
+  resourceGroup: string;
+  vmName: string;
+  region: string;
+  ipAddress: string;
+  hostname?: string;
+  username: string;
+  password: string;
+  protocol: 'rdp' | 'ssh';
+  osCategory: string;
+  catalogTemplate: string;
+  billing?: string;
+  subscriptionId?: string;
+  attachNow?: boolean;
+  ownerType?: 'admin' | 'tenant';
+  ownerId?: string;
+}
+
+export async function registerManualAzureCatalogVm(
+  dto: RegisterManualAzureCatalogVmDto
+): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
+    '/api/v1/vm-catalog/super-admin/azure/manual',
+    {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data.request;
+}
+
+export async function fetchReadyManualAzureCatalogVms(): Promise<ICatalogVm[]> {
+  const res = await apiRequest<ApiResponse<{ vms: ICatalogVm[]; total: number }>>(
+    '/api/v1/vm-catalog/super-admin/azure/ready'
+  );
+  return res.data.vms;
+}
+
+export async function fetchSuperAdminAzureCatalogVms(): Promise<ICatalogVm[]> {
+  const res = await apiRequest<ApiResponse<{ vms: ICatalogVm[]; total: number }>>(
+    '/api/v1/vm-catalog/super-admin/azure/vms'
+  );
+  return res.data.vms;
+}
+
+export async function superAdminAzureCatalogVmPowerAction(
+  id: string,
+  action: CatalogVmPowerAction,
+  instanceId?: string
+): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }> {
+  const res = await catalogVmPowerRequest<
+    ApiResponse<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }>
+  >(`/api/v1/vm-catalog/super-admin/azure/${id}/power`, {
+    method: 'POST',
+    body: JSON.stringify({ action, ...(instanceId ? { instanceId } : {}) }),
+  });
+  return res.data;
+}
+
+export async function attachManualAzureCatalogVm(
+  id: string,
+  dto: { ownerType: 'admin' | 'tenant'; ownerId: string }
+): Promise<ICatalogVm> {
+  const res = await apiRequest<ApiResponse<{ request: ICatalogVm }>>(
+    `/api/v1/vm-catalog/super-admin/azure/${id}/attach`,
+    {
+      method: 'PATCH',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data.request;
+}
+
+export interface AzureProvisionReadyStatus {
+  ready: boolean;
+  message?: string | null;
+  defaultLocation?: string | null;
+  homeLocation?: string | null;
+  catalogBrowseRegion?: string | null;
+  subscriptionId?: string | null;
+  networkResourceGroup?: string | null;
+  vnetName?: string | null;
+  subnetName?: string | null;
+}
+
+export async function fetchAzureProvisionReady(): Promise<AzureProvisionReadyStatus> {
+  const res = await apiRequest<ApiResponse<AzureProvisionReadyStatus>>(
+    '/api/v1/vm-catalog/super-admin/azure/provision-ready'
+  );
+  return res.data;
+}
+
+export interface AzureVmImageOption {
+  publisher: string;
+  offer: string;
+  sku: string;
+  label: string;
+}
+
+export interface AzureLocationOption {
+  name: string;
+  displayName: string;
+  regionalDisplayName: string;
+}
+
+export interface AzureMarketplaceImagePlan {
+  planId?: string;
+  displayName?: string;
+  publisher?: string;
+  offer?: string;
+  sku?: string;
+  summary?: string | null;
+  version?: string | null;
+  versionLabel?: string | null;
+}
+
+export interface AzureMarketplaceImageCard {
+  id: string;
+  displayName: string;
+  publisher?: string;
+  publisherId?: string;
+  offer?: string | null;
+  sku?: string | null;
+  summary?: string;
+  iconUrl?: string | null;
+  operatingSystems?: string[];
+  productType?: string;
+  plans: AzureMarketplaceImagePlan[];
+  source?: string;
+}
+
+export interface AzureMarketplaceSearchResult {
+  rows: AzureMarketplaceImageCard[];
+  total: number;
+  skip: number;
+  take: number;
+  source?: string;
+}
+
+export async function fetchAzureLocations(): Promise<AzureLocationOption[]> {
+  const res = await apiRequest<ApiResponse<{ rows: AzureLocationOption[] }>>(
+    '/api/v1/vm-catalog/super-admin/azure/locations'
+  );
+  return res.data.rows;
+}
+
+export async function searchAzureMarketplaceImages(input: {
+  query?: string;
+  osType?: 'linux' | 'windows' | 'all';
+  skip?: number;
+  take?: number;
+}): Promise<AzureMarketplaceSearchResult> {
+  const qs = new URLSearchParams();
+  if (input.query?.trim()) qs.set('q', input.query.trim());
+  qs.set('osType', input.osType || 'all');
+  if (input.skip != null) qs.set('skip', String(input.skip));
+  if (input.take != null) qs.set('take', String(input.take));
+  const res = await vmCatalogApiRequest<ApiResponse<AzureMarketplaceSearchResult>>(
+    `/api/v1/vm-catalog/super-admin/azure/marketplace/images?${qs.toString()}`
+  );
+  return res.data;
+}
+
+export async function fetchAzureImageSkuPlans(input: {
+  region: string;
+  publisher: string;
+  offer: string;
+  productDisplayName?: string;
+}): Promise<AzureMarketplaceImagePlan[]> {
+  const qs = new URLSearchParams();
+  qs.set('region', input.region.trim());
+  qs.set('publisher', input.publisher.trim());
+  qs.set('offer', input.offer.trim());
+  if (input.productDisplayName?.trim()) {
+    qs.set('productDisplayName', input.productDisplayName.trim());
+  }
+  const res = await apiRequest<ApiResponse<{ rows: AzureMarketplaceImagePlan[] }>>(
+    `/api/v1/vm-catalog/super-admin/azure/marketplace/image-plans?${qs.toString()}`
+  );
+  return res.data.rows;
+}
+
+export interface AzureVmImageValidation {
+  valid: boolean;
+  message?: string;
+  publisher?: string;
+  offer?: string;
+  sku?: string;
+  version?: string;
+  label?: string;
+  region?: string;
+  availableRegions?: string[];
+}
+
+export async function validateAzureVmImage(input: {
+  publisher: string;
+  offer: string;
+  sku: string;
+  region?: string;
+  version?: string;
+}): Promise<AzureVmImageValidation> {
+  const res = await vmCatalogApiRequest<ApiResponse<AzureVmImageValidation>>(
+    '/api/v1/vm-catalog/super-admin/azure/validate-image',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }
+  );
+  return res.data;
+}
+
+export interface AzureCustomImageOption {
+  id: string;
+  name: string;
+  resourceGroup?: string | null;
+  location?: string;
+  osType: string;
+  label: string;
+  source: 'managed' | 'gallery';
+  version?: string;
+}
+
+export interface AzureCustomImageValidation {
+  valid: boolean;
+  message?: string;
+  id?: string;
+  label?: string;
+  osType?: string;
+  location?: string;
+  source?: string;
+}
+
+export async function searchAzureCustomImages(
+  query = '',
+  limit = 50,
+  resourceGroup?: string
+): Promise<AzureCustomImageOption[]> {
+  const qs = new URLSearchParams();
+  if (query.trim()) qs.set('q', query.trim());
+  if (limit) qs.set('limit', String(limit));
+  if (resourceGroup?.trim()) qs.set('resourceGroup', resourceGroup.trim());
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const res = await vmCatalogApiRequest<ApiResponse<{ rows: AzureCustomImageOption[] }>>(
+    `/api/v1/vm-catalog/super-admin/azure/custom-images${suffix}`
+  );
+  return res.data.rows;
+}
+
+export async function validateAzureCustomImage(input: {
+  imageId: string;
+  region?: string;
+}): Promise<AzureCustomImageValidation> {
+  const res = await apiRequest<ApiResponse<AzureCustomImageValidation>>(
+    '/api/v1/vm-catalog/super-admin/azure/validate-custom-image',
+    {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }
+  );
+  return res.data;
+}
+
+export interface AzurePlacementOption {
+  region: string;
+  vmSize: string;
+  vcpu: number;
+  memoryGb: number;
+  family?: string | null;
+  /** Human series label (e.g. NVSv4, Dadsv5) — one champion size per series in placement. */
+  series?: string | null;
+  gpu?: boolean;
+  gpuCount?: number;
+  estimatedHourlyUsd: number;
+  estimatedComputeHourlyUsd?: number;
+  estimatedStorageHourlyUsd?: number;
+  estimatedIpHourlyUsd?: number;
+}
+
+export interface AzurePlacementOptionsResult {
+  options: AzurePlacementOption[];
+  total: number;
+  canonicalSpec: string;
+  message?: string;
+  homeRegion?: string;
+  regionMode?: 'home' | 'auto';
+  assignPublicIp?: boolean;
+  recommended?: AzurePlacementOption | null;
+  /** Distinct Azure series covered by options (Portal-style). */
+  series?: string[];
+}
+
+export interface QuoteAzurePlacementOptionsDto {
+  category: string;
+  vcpu: number;
+  ramGb: number;
+  ssdGb: number;
+  region?: string;
+  nestedVirtualization?: boolean;
+  assignPublicIp?: boolean;
+  imagePublisher?: string;
+  imageOffer?: string;
+  imageSku?: string;
+}
+
+export async function fetchAzurePlacementOptions(
+  dto: QuoteAzurePlacementOptionsDto
+): Promise<AzurePlacementOptionsResult> {
+  const res = await vmCatalogApiRequest<ApiResponse<AzurePlacementOptionsResult>>(
+    '/api/v1/vm-catalog/super-admin/azure/placement-options',
+    {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data;
+}
+
+export interface AzureProvisionQuoteValidation {
+  valid: boolean;
+  message?: string;
+  vmSize?: string;
+  region?: string;
+  canonicalSpec?: string;
+  vcpu?: number;
+  memoryGb?: number;
+  estimatedHourlyUsd?: number | null;
+  quota?: {
+    valid?: boolean;
+    family?: string;
+    limit?: number;
+    current?: number;
+    requiredCores?: number;
+    remaining?: number | null;
+    skipped?: boolean;
+    message?: string;
+  };
+}
+
+export interface ValidateAzureProvisionQuoteDto {
+  vmSize: string;
+  region: string;
+  category?: string;
+  vcpu?: number;
+  ramGb?: number;
+  ssdGb?: number;
+  nestedVirtualization?: boolean;
+  assignPublicIp?: boolean;
+  imagePublisher?: string;
+  imageOffer?: string;
+  imageSku?: string;
+  customImageId?: string;
+}
+
+export async function validateAzureProvisionQuote(
+  dto: ValidateAzureProvisionQuoteDto
+): Promise<AzureProvisionQuoteValidation> {
+  const res = await vmCatalogApiRequest<ApiResponse<AzureProvisionQuoteValidation>>(
+    '/api/v1/vm-catalog/super-admin/azure/validate-provision-quote',
+    {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data;
+}
+
+export interface CreateAzureCatalogVmDto {
+  ownerType: 'admin' | 'tenant';
+  ownerId: string;
+  projectId: string;
+  category: string;
+  catalogTemplate: string;
+  osCategory?: string;
+  canonicalSpec?: string;
+  vcpu?: number;
+  ramGb?: number;
+  ssdGb?: number;
+  nestedVirtualization?: boolean;
+  region?: string;
+  billing?: string;
+  attachNow?: boolean;
+  vmSize?: string;
+  imagePublisher?: string;
+  imageOffer?: string;
+  imageSku?: string;
+  imageVersion?: string;
+  customImageId?: string;
+  assignPublicIp?: boolean;
+}
+
+export async function createAzureCatalogVm(dto: CreateAzureCatalogVmDto): Promise<ICatalogVm> {
+  const res = await vmCatalogApiRequest<ApiResponse<{ request: ICatalogVm }>>(
+    '/api/v1/vm-catalog/super-admin/azure/create',
+    {
+      method: 'POST',
+      body: JSON.stringify(dto),
+    }
+  );
+  return res.data.request;
+}
+
 export async function fetchCatalogVmRequesters(): Promise<CatalogVmRequesterGroup[]> {
   const res = await apiRequest<
     ApiResponse<{ requesters: CatalogVmRequesterGroup[]; total: number }>
@@ -414,14 +851,14 @@ export async function changeCatalogVmTemplateToWindows(
   return res.data.request;
 }
 
-export type CatalogVmPowerAction = 'virtualizor' | 'start' | 'stop' | 'reboot';
+export type CatalogVmPowerAction = 'virtualizor' | 'start' | 'stop' | 'reboot' | 'terminate';
 
 export async function catalogVmPowerAction(
   id: string,
   action: CatalogVmPowerAction,
   instanceId?: string
 ): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }> {
-  const res = await apiRequest<
+  const res = await catalogVmPowerRequest<
     ApiResponse<{ action: CatalogVmPowerAction; panelUrl?: string; request: ICatalogVm }>
   >(`/api/v1/vm-catalog/requests/${id}/power`, {
     method: 'POST',
@@ -435,7 +872,7 @@ export async function ownedCatalogVmPowerAction(
   action: CatalogVmPowerAction,
   instanceId?: string
 ): Promise<{ action: CatalogVmPowerAction; panelUrl?: string; vm: ICatalogVm }> {
-  const res = await apiRequest<
+  const res = await catalogVmPowerRequest<
     ApiResponse<{ action: CatalogVmPowerAction; panelUrl?: string; vm: ICatalogVm }>
   >(`/api/v1/vm-catalog/vms/${id}/power`, {
     method: 'POST',
@@ -470,6 +907,7 @@ export function formatCatalogVmStatus(status: VmCatalogStatus): string {
     rejected: 'Rejected',
     cancelled: 'Cancelled',
     suspended: 'Suspended',
+    terminated: 'Terminated',
   };
   return labels[status] ?? status;
 }
@@ -501,6 +939,7 @@ export function catalogVmStatusTone(
     case 'cancelled':
     case 'suspended':
     case 'failed':
+    case 'terminated':
       return 'red';
     default:
       return 'gray';

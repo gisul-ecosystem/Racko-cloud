@@ -46,6 +46,17 @@ export interface ResellerProvisionInput {
   category: string;
   canonicalSpec: string;
   catalogVmId: string;
+  resourceGroup?: string;
+  assignPublicIp?: boolean;
+  vmSize?: string;
+  imageReference?: {
+    publisher?: string;
+    offer?: string;
+    sku?: string;
+    version?: string;
+    id?: string;
+    osType?: string;
+  };
 }
 
 export interface ResellerProvisionResult {
@@ -53,22 +64,68 @@ export interface ResellerProvisionResult {
   providerInstanceId: string;
   region: string;
   ip: string | null;
+  privateIp?: string | null;
   hostname?: string | null;
   username: string;
   password: string;
   protocol: 'ssh' | 'rdp';
+  meta?: {
+    vmName?: string;
+    resourceGroup?: string;
+    nicName?: string;
+    pipName?: string | null;
+    assignPublicIp?: boolean;
+    vmSize?: string;
+  };
 }
 
 export interface ResellerTerminateInput {
   provider: string;
   region?: string | null;
   providerInstanceId: string;
+  resourceGroup?: string;
+  vmName?: string;
+  subscriptionId?: string;
 }
 
 export type ResellerClientError = Error & { status?: number; code?: string };
 
 function resellerBaseUrl(): string {
   return String(config.RESELLER_SERVICE_URL || 'http://127.0.0.1:3005').replace(/\/$/, '');
+}
+
+function resellerErrorCode(status: number): string {
+  if (status === 400) return 'RESELLER_VALIDATION_ERROR';
+  if (status === 409) return 'RESELLER_CONFLICT';
+  if (status === 503) return 'RESELLER_UNAVAILABLE';
+  if (status >= 500) return 'RESELLER_UNAVAILABLE';
+  return 'RESELLER_ERROR';
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof Error && err.name === 'AbortError') ||
+    (typeof err === 'object' &&
+      err !== null &&
+      'code' in err &&
+      (err as { code?: string }).code === 'ABORT_ERR')
+  );
+}
+
+function rethrowResellerClientError(err: unknown, logLabel: string, timeoutMs: number): never {
+  if (isAbortError(err)) {
+    throw new AppError(
+      `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
+      504,
+      'RESELLER_TIMEOUT'
+    );
+  }
+  const resellerErr = err as ResellerClientError;
+  if (resellerErr instanceof Error && typeof resellerErr.status === 'number') {
+    const status = resellerErr.status;
+    throw new AppError(resellerErr.message, status, resellerErrorCode(status));
+  }
+  throw err;
 }
 
 async function postReseller<T>(
@@ -116,27 +173,10 @@ async function postReseller<T>(
 
     return (data.data ?? data) as T;
   } catch (err) {
-    if (isAbortError(err)) {
-      throw new AppError(
-        `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
-        504,
-        'RESELLER_TIMEOUT'
-      );
-    }
-    throw err;
+    return rethrowResellerClientError(err, logLabel, timeoutMs);
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-function isAbortError(err: unknown): boolean {
-  return (
-    (err instanceof Error && err.name === 'AbortError') ||
-    (typeof err === 'object' &&
-      err !== null &&
-      'code' in err &&
-      (err as { code?: string }).code === 'ABORT_ERR')
-  );
 }
 
 async function getReseller<T>(
@@ -177,14 +217,7 @@ async function getReseller<T>(
 
     return (data.data ?? data) as T;
   } catch (err) {
-    if (isAbortError(err)) {
-      throw new AppError(
-        `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
-        504,
-        'RESELLER_TIMEOUT'
-      );
-    }
-    throw err;
+    return rethrowResellerClientError(err, logLabel, timeoutMs);
   } finally {
     clearTimeout(timer);
   }
@@ -238,11 +271,301 @@ export async function listPricing(params: {
 export async function provisionVm(
   input: ResellerProvisionInput
 ): Promise<ResellerProvisionResult> {
-  return postReseller<ResellerProvisionResult>('/api/provision', input, 'provision', 600_000);
+  // Azure VM create (NIC + disk + OS) can exceed 15 minutes — do not abort client-side.
+  return postReseller<ResellerProvisionResult>('/api/provision', input, 'provision', 0);
 }
 
 export async function terminateVm(
   input: ResellerTerminateInput
 ): Promise<{ terminated: boolean }> {
   return postReseller<{ terminated: boolean }>('/api/terminate', input, 'terminate', 300_000);
+}
+
+export type ResellerPowerAction = 'start' | 'stop' | 'reboot' | 'terminate';
+
+export interface ResellerPowerInput {
+  provider: string;
+  action: ResellerPowerAction;
+  resourceGroup?: string;
+  vmName?: string;
+  providerInstanceId?: string;
+  subscriptionId?: string;
+}
+
+export interface ResellerPowerResult {
+  provider: string;
+  action: string;
+  resourceGroup?: string;
+  vmName?: string;
+  providerInstanceId?: string;
+  terminated?: boolean;
+}
+
+export async function powerVm(input: ResellerPowerInput): Promise<ResellerPowerResult> {
+  return postReseller<ResellerPowerResult>('/api/power', input, 'power', 600_000);
+}
+
+export interface AzureProvisionReadyStatus {
+  ready: boolean;
+  message?: string | null;
+  defaultLocation?: string | null;
+  homeLocation?: string | null;
+  catalogBrowseRegion?: string | null;
+  subscriptionId?: string | null;
+  networkResourceGroup?: string;
+  vnetName?: string | null;
+  subnetName?: string | null;
+}
+
+export async function getAzureProvisionReady(): Promise<AzureProvisionReadyStatus> {
+  return getReseller<AzureProvisionReadyStatus>('/api/azure/provision-ready', 'azure-provision-ready');
+}
+
+export interface AzureLocationRow {
+  name: string;
+  displayName: string;
+  regionalDisplayName: string;
+}
+
+export interface AzureVmImageValidation {
+  valid: boolean;
+  message?: string;
+  publisher?: string;
+  offer?: string;
+  sku?: string;
+  version?: string;
+  label?: string;
+  region?: string;
+  availableRegions?: string[];
+  availableVersions?: string[];
+}
+
+export interface AzureMarketplaceImagePlan {
+  planId?: string;
+  displayName?: string;
+  publisher?: string;
+  offer?: string;
+  sku?: string;
+  summary?: string | null;
+  version?: string | null;
+  versionLabel?: string | null;
+}
+
+export interface AzureMarketplaceImageCard {
+  id: string;
+  displayName: string;
+  publisher?: string;
+  publisherId?: string;
+  offer?: string | null;
+  sku?: string | null;
+  summary?: string;
+  iconUrl?: string | null;
+  operatingSystems?: string[];
+  productType?: string;
+  plans: AzureMarketplaceImagePlan[];
+  source?: string;
+}
+
+export interface AzureMarketplaceSearchResult {
+  rows: AzureMarketplaceImageCard[];
+  total: number;
+  skip: number;
+  take: number;
+  source?: string;
+}
+
+export async function listAzureSubscriptionLocations(): Promise<AzureLocationRow[]> {
+  const data = await getReseller<{ rows: AzureLocationRow[] }>(
+    '/api/azure/locations',
+    'azure-locations'
+  );
+  return data.rows ?? [];
+}
+
+export async function searchAzureMarketplaceImages(input: {
+  query?: string;
+  osType?: 'linux' | 'windows' | 'all';
+  skip?: number;
+  take?: number;
+}): Promise<AzureMarketplaceSearchResult> {
+  const qs = new URLSearchParams();
+  if (input.query?.trim()) qs.set('q', input.query.trim());
+  qs.set('osType', input.osType || 'all');
+  if (input.skip != null) qs.set('skip', String(input.skip));
+  if (input.take != null) qs.set('take', String(input.take));
+  return getReseller<AzureMarketplaceSearchResult>(
+    `/api/azure/marketplace/images?${qs.toString()}`,
+    'azure-marketplace-images',
+    120_000
+  );
+}
+
+export async function listAzureImageSkuPlans(input: {
+  region: string;
+  publisher: string;
+  offer: string;
+  productDisplayName?: string;
+}): Promise<AzureMarketplaceImagePlan[]> {
+  const qs = new URLSearchParams();
+  qs.set('region', input.region.trim());
+  qs.set('publisher', input.publisher.trim());
+  qs.set('offer', input.offer.trim());
+  if (input.productDisplayName?.trim()) {
+    qs.set('productDisplayName', input.productDisplayName.trim());
+  }
+  const data = await getReseller<{ rows: AzureMarketplaceImagePlan[] }>(
+    `/api/azure/marketplace/image-plans?${qs.toString()}`,
+    'azure-marketplace-image-plans'
+  );
+  return data.rows ?? [];
+}
+
+export async function validateAzureVmImage(input: {
+  publisher: string;
+  offer: string;
+  sku: string;
+  region?: string;
+  version?: string;
+}): Promise<AzureVmImageValidation> {
+  return postReseller<AzureVmImageValidation>(
+    '/api/azure/validate-image',
+    input,
+    'azure-validate-image',
+    120_000
+  );
+}
+
+export interface AzureProvisionQuoteValidation {
+  valid: boolean;
+  message?: string;
+  vmSize?: string;
+  region?: string;
+  canonicalSpec?: string;
+  vcpu?: number;
+  memoryGb?: number;
+  estimatedHourlyUsd?: number | null;
+  quota?: {
+    valid?: boolean;
+    family?: string;
+    limit?: number;
+    current?: number;
+    requiredCores?: number;
+    remaining?: number | null;
+    skipped?: boolean;
+    message?: string;
+  };
+}
+
+export async function validateAzureProvisionQuote(input: {
+  vmSize: string;
+  region: string;
+  vcpu?: number;
+  ramGb?: number;
+  ssdGb?: number;
+  category?: string;
+  nestedVirtualization?: boolean;
+  assignPublicIp?: boolean;
+  imagePublisher?: string;
+  imageOffer?: string;
+  imageSku?: string;
+  customImageId?: string;
+}): Promise<AzureProvisionQuoteValidation> {
+  return postReseller<AzureProvisionQuoteValidation>(
+    '/api/azure/validate-provision-quote',
+    input,
+    'azure-validate-provision-quote',
+    120_000
+  );
+}
+
+export interface AzureCustomImageRow {
+  id: string;
+  name: string;
+  resourceGroup?: string | null;
+  location?: string;
+  osType: string;
+  label: string;
+  source: 'managed' | 'gallery';
+  version?: string;
+}
+
+export interface AzureCustomImageValidation {
+  valid: boolean;
+  message?: string;
+  id?: string;
+  label?: string;
+  osType?: string;
+  location?: string;
+  source?: string;
+}
+
+export async function searchAzureCustomImages(
+  query = '',
+  limit = 50,
+  resourceGroup?: string
+): Promise<AzureCustomImageRow[]> {
+  const qs = new URLSearchParams();
+  if (query.trim()) qs.set('q', query.trim());
+  if (limit) qs.set('limit', String(limit));
+  if (resourceGroup?.trim()) qs.set('resourceGroup', resourceGroup.trim());
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  const data = await getReseller<{ rows: AzureCustomImageRow[] }>(
+    `/api/azure/custom-images${suffix}`,
+    'azure-custom-images'
+  );
+  return data.rows ?? [];
+}
+
+export async function validateAzureCustomImage(input: {
+  imageId: string;
+  region?: string;
+}): Promise<AzureCustomImageValidation> {
+  return postReseller<AzureCustomImageValidation>(
+    '/api/azure/validate-custom-image',
+    input,
+    'azure-validate-custom-image',
+    120_000
+  );
+}
+
+export interface AzurePlacementOptionRow {
+  region: string;
+  vmSize: string;
+  vcpu: number;
+  memoryGb: number;
+  estimatedHourlyUsd: number;
+  estimatedComputeHourlyUsd?: number;
+  estimatedStorageHourlyUsd?: number;
+  estimatedIpHourlyUsd?: number;
+}
+
+export interface AzurePlacementOptionsResult {
+  options: AzurePlacementOptionRow[];
+  total: number;
+  canonicalSpec: string;
+  message?: string;
+  homeRegion?: string;
+  regionMode?: 'home' | 'auto';
+  assignPublicIp?: boolean;
+  recommended?: AzurePlacementOptionRow | null;
+}
+
+export async function listAzurePlacementOptions(input: {
+  vcpu: number;
+  ramGb: number;
+  ssdGb: number;
+  region?: string;
+  category?: string;
+  nestedVirtualization?: boolean;
+  assignPublicIp?: boolean;
+  imagePublisher?: string;
+  imageOffer?: string;
+  imageSku?: string;
+}): Promise<AzurePlacementOptionsResult> {
+  return postReseller<AzurePlacementOptionsResult>(
+    '/api/azure/placement-options',
+    input,
+    'azure-placement-options',
+    300_000
+  );
 }

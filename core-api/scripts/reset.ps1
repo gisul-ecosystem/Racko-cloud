@@ -414,8 +414,64 @@ foreach ($regPath in @(
 }
 
 # ============================================================
-# PHASE 2 — Program Files whitelist sweep
+# PHASE 1c — Google Chrome registry cleanup
+# The Chrome MSI leaves behind Google Update registry keys even after
+# a successful uninstall. These orphaned keys cause msiexec to return
+# exit code 1603 (fatal error) on any subsequent Chrome MSI install
+# because it detects a broken/partial prior installation state.
+# This pass removes all Google-owned registry keys to guarantee a
+# clean slate for Chrome reinstall on any future install job.
 # ============================================================
+Write-Host "`n=== PHASE 1c: GOOGLE CHROME REGISTRY CLEANUP ===" -ForegroundColor Cyan
+
+foreach ($regPath in @(
+    'HKLM:\SOFTWARE\Google',
+    'HKLM:\SOFTWARE\WOW6432Node\Google',
+    'HKLM:\SOFTWARE\Policies\Google'
+)) {
+    if (Test-Path $regPath) {
+        Remove-Item $regPath -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  Removed: $regPath" -ForegroundColor DarkGray
+    }
+}
+
+# Remove per-user Google registry keys from all user hives
+if (-not (Get-PSDrive -Name HKU -ErrorAction SilentlyContinue)) {
+    New-PSDrive -PSProvider Registry -Name HKU -Root HKEY_USERS | Out-Null
+}
+# Logged-in users (mounted hives)
+Get-ChildItem 'HKU:\' -ErrorAction SilentlyContinue | Where-Object {
+    $_.PSChildName -match 'S-1-5-21' -and $_.PSChildName -notmatch '_Classes'
+} | ForEach-Object {
+    $googleKey = "HKU:\$($_.PSChildName)\SOFTWARE\Google"
+    if (Test-Path $googleKey) {
+        Remove-Item $googleKey -Recurse -Force -ErrorAction SilentlyContinue
+        Write-Host "  Removed: $googleKey" -ForegroundColor DarkGray
+    }
+}
+# All local user profiles (NTUSER.DAT hive load)
+foreach ($userDir in (Get-UserProfiles)) {
+    $ntuser = Join-Path $userDir.FullName 'NTUSER.DAT'
+    if (-not (Test-Path $ntuser)) { continue }
+    $tempHive = "TempHive1c_$($userDir.Name)"
+    $loadResult = reg load "HKU\$tempHive" "$ntuser" 2>&1
+    if ($LASTEXITCODE -ne 0) { continue }
+    try {
+        $googleKey = "HKU:\$tempHive\SOFTWARE\Google"
+        if (Test-Path $googleKey) {
+            Remove-Item $googleKey -Recurse -Force -ErrorAction SilentlyContinue
+            Write-Host "  Removed Google registry for: $($userDir.Name)" -ForegroundColor DarkGray
+        }
+    } finally {
+        [gc]::Collect()
+        [gc]::WaitForPendingFinalizers()
+        Start-Sleep -Milliseconds 500
+        reg unload "HKU\$tempHive" 2>&1 | Out-Null
+    }
+}
+Write-Host "Google Chrome registry cleanup complete." -ForegroundColor Green
+
+
 Write-Host "`n=== PHASE 2: PROGRAM FILES WHITELIST SWEEP ===" -ForegroundColor Cyan
 
 foreach ($pf in @('C:\Program Files', 'C:\Program Files (x86)')) {
@@ -1098,6 +1154,19 @@ foreach ($userDir in (Get-UserProfiles)) {
             Remove-Item $cacheFile -Recurse -Force -ErrorAction SilentlyContinue
             Write-Host "  Cleared taskbar cache: $cacheFile" -ForegroundColor DarkGray
         }
+    }
+
+    # Clear Start Menu app index database shards ({GUID}.*.ver*.db).
+    # These are stale cache files that cause removed apps (Teams, Outlook, Claude, etc.)
+    # to still appear in "Recently added" after uninstall. Windows rebuilds them
+    # automatically on next user login from what is actually installed on disk.
+    # The cversions.*.db files are NOT touched — they are version tracking files,
+    # not app-list databases, and rebuilding them causes unrelated UI issues.
+    $startMenuCaches = Join-Path $userProfile 'AppData\Local\Microsoft\Windows\Caches'
+    if (Test-Path $startMenuCaches) {
+        Get-ChildItem $startMenuCaches -Filter '{*}.*.ver*.db' -ErrorAction SilentlyContinue |
+            Remove-Item -Force -ErrorAction SilentlyContinue
+        Write-Host "  Cleared Start Menu app index cache for: $($userDir.Name)" -ForegroundColor DarkGray
     }
 }
 

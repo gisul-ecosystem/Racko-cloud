@@ -19,6 +19,7 @@ export interface TenantPortalUser {
 export interface TenantUserProfile {
   id: string;
   email: string;
+  username: string | null;
   role: 'tenant_user';
   tenantId: string;
   isActive: boolean;

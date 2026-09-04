@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import mongoose from 'mongoose';
 import { softwareCatalogService } from './software-catalog.service';
 import type { AuthenticatedRequest } from '../../types';
-import type { CreateSoftwareCatalogInput } from './software-catalog.validation';
+import type { CreateSoftwareCatalogInput, UpdateSoftwareCatalogInput } from './software-catalog.validation';
 
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
   res.status(statusCode).json({ success: true, message, ...(data !== undefined && { data }) });
@@ -53,6 +53,18 @@ export class SoftwareCatalogController {
         uploadedBy
       );
       success(res, 'Software added to catalog.', { software }, 201);
+    } catch (err) { next(err); }
+  }
+
+  /** PATCH /api/v1/software-catalog/:id */
+  async update(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const id = new mongoose.Types.ObjectId(req.params['id'] as string);
+      const software = await softwareCatalogService.updateSoftware(
+        id,
+        req.body as UpdateSoftwareCatalogInput
+      );
+      success(res, 'Software updated.', { software });
     } catch (err) { next(err); }
   }
 
