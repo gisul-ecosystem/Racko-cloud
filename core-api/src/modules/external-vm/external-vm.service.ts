@@ -15,7 +15,7 @@ import type {
 } from './external-vm.types';
 import { encrypt, decrypt } from '../../utils/crypto';
 import { guacamoleClient } from '../../utils/guacamoleClient';
-import { AccessWindowDeniedError, NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
+import { AccessWindowDeniedError, ConflictError, NotFoundError, ForbiddenError, ValidationError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { managedUsersService } from '../managedUsers/managedUsers.service';
 import { tenantUserService } from '../tenantUser/tenantUser.service';
@@ -521,6 +521,9 @@ class ExternalVMService {
     adminId: mongoose.Types.ObjectId
   ): Promise<void> {
     const doc = await this.findOwnedByAdmin(id, adminId);
+    if (doc.inventoryLocked) {
+      throw new ConflictError('VM is locked and cannot be deleted from inventory.');
+    }
     await doc.deleteOne();
 
     logger.info('[ExternalVM] Deleted external VM', {
@@ -893,6 +896,9 @@ class ExternalVMService {
     tenantId: mongoose.Types.ObjectId
   ): Promise<void> {
     const doc = await this.findOwnedByTenant(id, tenantId);
+    if (doc.inventoryLocked) {
+      throw new ConflictError('VM is locked and cannot be deleted from inventory.');
+    }
     await doc.deleteOne();
     await removeAllExternalVmAssignmentsForVms(tenantId, [id]);
 
@@ -913,6 +919,7 @@ class ExternalVMService {
     const result = await ExternalVMModel.deleteMany({
       _id: { $in: ids },
       tenantId,
+      inventoryLocked: { $ne: true },
     });
 
     await removeAllExternalVmAssignmentsForVms(tenantId, ids);

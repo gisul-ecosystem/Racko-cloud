@@ -372,7 +372,7 @@ async function createSuperAdminAzureCatalogVm(
     const superAdminId = new mongoose.Types.ObjectId(authReq.user.userId);
     const body = req.body as CreateSuperAdminAzureCatalogVmInput;
     const request = await vmCatalogService.createSuperAdminAzureCatalogVm(body, superAdminId);
-    success(res, 'Azure VM created in catalog.', { request }, 201);
+    success(res, 'Azure VM provisioning started.', { request }, 201);
   } catch (err) {
     next(err);
   }

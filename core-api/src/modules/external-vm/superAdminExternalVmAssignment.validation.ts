@@ -58,9 +58,63 @@ export const deleteSuperAdminExternalVmAssignmentSchema = z.object({
   params: assignmentIdParams,
 });
 
+export const bulkUpdateSuperAdminExternalVmOverrideSchema = z.object({
+  body: z.object({
+    ids: z
+      .array(mongoObjectId)
+      .min(1, 'Provide at least one id')
+      .max(5000, 'Cannot update more than 5000 VMs at once'),
+    accessOverride: z.boolean(),
+    accessOverrideUntil: z.string().datetime({ offset: true }).nullable().optional(),
+  }),
+});
+
+export const setSuperAdminExternalVmInventoryLockSchema = z.object({
+  params: externalVmIdParam,
+  body: z.object({
+    inventoryLocked: z.boolean(),
+  }),
+});
+
+export const patchSuperAdminExternalVmDetailsSchema = z.object({
+  params: externalVmIdParam,
+  body: z
+    .object({
+      name: z.string().trim().min(1).max(200).optional(),
+      username: z.string().trim().min(1).max(100).optional(),
+      password: z.string().min(1).max(256).optional(),
+    })
+    .refine(
+      (data) =>
+        data.name !== undefined || data.username !== undefined || data.password !== undefined,
+      { message: 'Provide name, username, and/or password' }
+    ),
+});
+
+export const createSuperAdminExternalVmSiblingLoginSchema = z.object({
+  params: externalVmIdParam,
+  body: z.object({
+    name: z.string().trim().min(1).max(200).optional(),
+    username: z.string().trim().min(1).max(100),
+    password: z.string().min(1).max(256),
+  }),
+});
+
 export type CreateSuperAdminExternalVmAssignmentInput = z.infer<
   typeof createSuperAdminExternalVmAssignmentSchema
 >;
 export type PatchSuperAdminExternalVmAssignmentInput = z.infer<
   typeof patchSuperAdminExternalVmAssignmentSchema
+>;
+export type BulkUpdateSuperAdminExternalVmOverrideInput = z.infer<
+  typeof bulkUpdateSuperAdminExternalVmOverrideSchema
+>;
+export type SetSuperAdminExternalVmInventoryLockInput = z.infer<
+  typeof setSuperAdminExternalVmInventoryLockSchema
+>;
+export type PatchSuperAdminExternalVmDetailsInput = z.infer<
+  typeof patchSuperAdminExternalVmDetailsSchema
+>;
+export type CreateSuperAdminExternalVmSiblingLoginInput = z.infer<
+  typeof createSuperAdminExternalVmSiblingLoginSchema
 >;

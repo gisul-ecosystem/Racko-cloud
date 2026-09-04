@@ -3,18 +3,23 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Eye,
+  EyeOff,
   Loader2,
+  Plus,
   Settings2,
   X,
 } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
+  addSuperAdminExternalVmSiblingLogin,
   clientSchedulesOverlap,
   deleteSuperAdminExternalVmAssignment,
   patchSuperAdminExternalVmAssignment,
   type AssignmentScheduleDto,
   type SuperAdminExternalVmAssigneeView,
   type SuperAdminExternalVmOverviewRow,
+  updateSuperAdminExternalVmDetails,
   updateSuperAdminExternalVmProviderMetadata,
 } from '@/lib/superAdminExternalVmApi';
 import {
@@ -220,6 +225,19 @@ interface ProviderEditorState {
   providerEndDate: string;
 }
 
+interface LoginEditorState {
+  key: string;
+  externalVmId?: string;
+  name: string;
+  username: string;
+  password: string;
+  isNew: boolean;
+}
+
+type AssignmentWithVm = SuperAdminExternalVmAssigneeView & { ownerExternalVmId: string };
+
+const MAX_LOGINS_PER_IP = 5;
+
 function providerEditorFromRow(row: SuperAdminExternalVmOverviewRow): ProviderEditorState {
   return {
     providerStartDate: row.providerStartDate ? row.providerStartDate.slice(0, 10) : '',
@@ -227,15 +245,54 @@ function providerEditorFromRow(row: SuperAdminExternalVmOverviewRow): ProviderEd
   };
 }
 
+function loginsFromRows(rows: SuperAdminExternalVmOverviewRow[]): LoginEditorState[] {
+  return [...rows]
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt))
+    .map((item) => ({
+      key: item.externalVmId,
+      externalVmId: item.externalVmId,
+      name: item.name ?? '',
+      username: item.username ?? '',
+      password: item.password ?? '',
+      isNew: false,
+    }));
+}
+
+function emptyLoginEditor(index: number): LoginEditorState {
+  return {
+    key: `new-${index}-${Date.now()}`,
+    name: '',
+    username: '',
+    password: '',
+    isNew: true,
+  };
+}
+
+function assignmentsFromIpRows(rows: SuperAdminExternalVmOverviewRow[]): AssignmentWithVm[] {
+  return rows.flatMap((item) =>
+    item.assignments.map((assignment) => ({
+      ...assignment,
+      ownerExternalVmId: item.externalVmId,
+    }))
+  );
+}
+
 export function ManageExternalVmAssignmentsModal({
   row,
+  ipRows,
   onClose,
   onUpdated,
 }: {
   row: SuperAdminExternalVmOverviewRow;
+  ipRows?: SuperAdminExternalVmOverviewRow[];
   onClose: () => void;
   onUpdated: (row: SuperAdminExternalVmOverviewRow) => void;
 }) {
+  const resolvedIpRows = ipRows && ipRows.length > 0 ? ipRows : [row];
+  const loginSourceKey = resolvedIpRows
+    .map((item) => `${item.externalVmId}:${item.name}:${item.username}:${item.password}`)
+    .join('|');
+
   const [localRow, setLocalRow] = useState(row);
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -243,15 +300,25 @@ export function ManageExternalVmAssignmentsModal({
   const [editSchedule, setEditSchedule] = useState(defaultScheduleEditor);
   const [providerEditor, setProviderEditor] = useState<ProviderEditorState>(() => providerEditorFromRow(row));
   const [savingProvider, setSavingProvider] = useState(false);
-  const [overrideTarget, setOverrideTarget] = useState<SuperAdminExternalVmAssigneeView | null>(null);
+  const [loginEditors, setLoginEditors] = useState<LoginEditorState[]>(() => loginsFromRows(resolvedIpRows));
+  const [savingLoginKey, setSavingLoginKey] = useState<string | null>(null);
+  const [visiblePasswords, setVisiblePasswords] = useState<Record<string, boolean>>({});
+  const [overrideTarget, setOverrideTarget] = useState<AssignmentWithVm | null>(null);
 
   useEffect(() => {
     setLocalRow(row);
     setProviderEditor(providerEditorFromRow(row));
   }, [row]);
 
-  const manageable = localRow.assignments.filter(isManageableAssignment);
-  const legacy = localRow.assignments.filter(isLegacyAssignment);
+  useEffect(() => {
+    setLoginEditors(loginsFromRows(resolvedIpRows));
+    // Re-sync when server logins for this IP change, not on every parent render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loginSourceKey]);
+
+  const ipAssignments = assignmentsFromIpRows(resolvedIpRows);
+  const manageable = ipAssignments.filter(isManageableAssignment);
+  const legacy = ipAssignments.filter(isLegacyAssignment);
 
   const previewSchedules = useMemo(() => {
     const items: Array<{ key: string; label: string; schedule: AssignmentScheduleDto | null }> =
@@ -278,13 +345,69 @@ export function ManageExternalVmAssignmentsModal({
   );
 
   function applyRow(next: SuperAdminExternalVmOverviewRow) {
-    setLocalRow(next);
+    setLocalRow((current) => (current.externalVmId === next.externalVmId ? next : current));
     onUpdated(next);
   }
 
-  function startEdit(a: SuperAdminExternalVmAssigneeView) {
+  function startEdit(a: AssignmentWithVm) {
     setEditingId(a.assignmentId);
     setEditSchedule(scheduleFromDto(a.schedule));
+    setError(null);
+  }
+
+  function updateLoginEditor(key: string, patch: Partial<LoginEditorState>) {
+    setLoginEditors((current) =>
+      current.map((item) => (item.key === key ? { ...item, ...patch } : item))
+    );
+  }
+
+  async function saveLogin(editor: LoginEditorState) {
+    const username = editor.username.trim();
+    const password = editor.password.trim();
+    const name = editor.name.trim();
+    if (!username) {
+      setError('VM username is required.');
+      return;
+    }
+    if (editor.isNew && !password) {
+      setError('Password is required for a new VM login.');
+      return;
+    }
+
+    setSavingLoginKey(editor.key);
+    setError(null);
+    try {
+      const updated = editor.isNew
+        ? await addSuperAdminExternalVmSiblingLogin(localRow.externalVmId, {
+            name: name || undefined,
+            username,
+            password,
+          })
+        : await updateSuperAdminExternalVmDetails(editor.externalVmId!, {
+            name: name || undefined,
+            username,
+            ...(password ? { password } : {}),
+          });
+      applyRow(updated);
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : 'Failed to save VM login.'
+      );
+    } finally {
+      setSavingLoginKey(null);
+    }
+  }
+
+  function addLoginEditor() {
+    if (loginEditors.length >= MAX_LOGINS_PER_IP) {
+      setError(`This IP already has the maximum of ${MAX_LOGINS_PER_IP} VM logins.`);
+      return;
+    }
+    setLoginEditors((current) => [...current, emptyLoginEditor(current.length + 1)]);
     setError(null);
   }
 
@@ -323,18 +446,18 @@ export function ManageExternalVmAssignmentsModal({
     }
   }
 
-  async function saveEdit(assignmentId: string) {
+  async function saveEdit(assignment: AssignmentWithVm) {
     const schedule = toScheduleDto(editSchedule);
     if (editSchedule.useSchedule && !schedule) {
       setError('Complete the schedule fields or use always-on.');
       return;
     }
-    setBusyId(assignmentId);
+    setBusyId(assignment.assignmentId);
     setError(null);
     try {
       const updated = await patchSuperAdminExternalVmAssignment(
-        localRow.externalVmId,
-        assignmentId,
+        assignment.ownerExternalVmId,
+        assignment.assignmentId,
         { schedule }
       );
       applyRow(updated);
@@ -347,15 +470,15 @@ export function ManageExternalVmAssignmentsModal({
   }
 
   async function saveAssignmentOverride(
-    assignmentId: string,
+    assignment: AssignmentWithVm,
     payload: AccessOverridePayload
   ) {
-    setBusyId(assignmentId);
+    setBusyId(assignment.assignmentId);
     setError(null);
     try {
       const updated = await patchSuperAdminExternalVmAssignment(
-        localRow.externalVmId,
-        assignmentId,
+        assignment.ownerExternalVmId,
+        assignment.assignmentId,
         {
           accessOverride: payload.accessOverride,
           accessOverrideUntil: payload.accessOverrideUntil ?? null,
@@ -370,20 +493,20 @@ export function ManageExternalVmAssignmentsModal({
     }
   }
 
-  async function ungrantOverride(assignmentId: string) {
-    await saveAssignmentOverride(assignmentId, { accessOverride: false });
+  async function ungrantOverride(assignment: AssignmentWithVm) {
+    await saveAssignmentOverride(assignment, { accessOverride: false });
   }
 
-  async function remove(assignmentId: string) {
-    setBusyId(assignmentId);
+  async function remove(assignment: AssignmentWithVm) {
+    setBusyId(assignment.assignmentId);
     setError(null);
     try {
       const updated = await deleteSuperAdminExternalVmAssignment(
-        localRow.externalVmId,
-        assignmentId
+        assignment.ownerExternalVmId,
+        assignment.assignmentId
       );
       applyRow(updated);
-      if (editingId === assignmentId) setEditingId(null);
+      if (editingId === assignment.assignmentId) setEditingId(null);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : 'Failed to remove assignment.');
     } finally {
@@ -400,7 +523,7 @@ export function ManageExternalVmAssignmentsModal({
         onClose={() => setOverrideTarget(null)}
         onSave={async (payload) => {
           if (!overrideTarget) return;
-          await saveAssignmentOverride(overrideTarget.assignmentId, payload);
+          await saveAssignmentOverride(overrideTarget, payload);
         }}
       />
       <div className="fixed inset-0 z-40 bg-black/30" onClick={onClose} aria-hidden />
@@ -413,6 +536,9 @@ export function ManageExternalVmAssignmentsModal({
             </div>
             <p className="mt-1 text-sm font-medium text-gray-900">{localRow.name}</p>
             <p className="font-mono text-xs text-gray-500">{localRow.ipAddress}</p>
+            {resolvedIpRows.length > 1 ? (
+              <p className="mt-1 text-xs text-gray-500">{resolvedIpRows.length} logins on this IP</p>
+            ) : null}
           </div>
           <button
             type="button"
@@ -442,6 +568,93 @@ export function ManageExternalVmAssignmentsModal({
           )}
 
           <section className="space-y-3 rounded-lg border border-gray-200 bg-white p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-900">VM logins</h3>
+                <p className="text-xs text-gray-500">
+                  Change username and password for this IP. Add a second login when one IP has two accounts.
+                </p>
+              </div>
+              <button
+                type="button"
+                disabled={loginEditors.length >= MAX_LOGINS_PER_IP}
+                onClick={addLoginEditor}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                Add login
+              </button>
+            </div>
+            {loginEditors.map((editor, index) => {
+              const passwordVisible = Boolean(visiblePasswords[editor.key]);
+              return (
+                <div key={editor.key} className="space-y-3 rounded-lg border border-gray-100 bg-gray-50 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                    Login {index + 1}
+                    {editor.isNew ? ' (new)' : ''}
+                  </p>
+                  <div>
+                    <label className={labelClass}>Display name</label>
+                    <input
+                      className={inputClass}
+                      value={editor.name}
+                      onChange={(e) => updateLoginEditor(editor.key, { name: e.target.value })}
+                      placeholder="Optional VM name"
+                    />
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className={labelClass}>VM username</label>
+                      <input
+                        className={inputClass}
+                        value={editor.username}
+                        onChange={(e) => updateLoginEditor(editor.key, { username: e.target.value })}
+                        placeholder="Administrator"
+                        autoComplete="off"
+                      />
+                    </div>
+                    <div>
+                      <label className={labelClass}>VM password</label>
+                      <div className="relative">
+                        <input
+                          type={passwordVisible ? 'text' : 'password'}
+                          className={`${inputClass} pr-10`}
+                          value={editor.password}
+                          onChange={(e) => updateLoginEditor(editor.key, { password: e.target.value })}
+                          placeholder={editor.isNew ? 'Required' : 'Password'}
+                          autoComplete="new-password"
+                        />
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setVisiblePasswords((current) => ({
+                              ...current,
+                              [editor.key]: !current[editor.key],
+                            }))
+                          }
+                          className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-gray-400 hover:text-gray-700"
+                          aria-label={passwordVisible ? 'Hide password' : 'Show password'}
+                        >
+                          {passwordVisible ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={savingLoginKey === editor.key}
+                    onClick={() => void saveLogin(editor)}
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+                  >
+                    {savingLoginKey === editor.key && <Loader2 className="h-4 w-4 animate-spin" />}
+                    {editor.isNew ? 'Create login' : 'Save VM details'}
+                  </button>
+                </div>
+              );
+            })}
+          </section>
+
+          <section className="mt-6 space-y-3 rounded-lg border border-gray-200 bg-white p-4">
             <div className="flex items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-semibold text-gray-900">Provider details</h3>
@@ -526,7 +739,7 @@ export function ManageExternalVmAssignmentsModal({
                           <button
                             type="button"
                             disabled={busyId === a.assignmentId}
-                            onClick={() => void ungrantOverride(a.assignmentId)}
+                            onClick={() => void ungrantOverride(a)}
                             className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50"
                           >
                             {busyId === a.assignmentId ? (
@@ -549,7 +762,7 @@ export function ManageExternalVmAssignmentsModal({
                       <button
                         type="button"
                         disabled={busyId === a.assignmentId}
-                        onClick={() => void remove(a.assignmentId)}
+                        onClick={() => void remove(a)}
                         className="rounded-md border border-red-200 bg-red-50 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 disabled:opacity-50"
                       >
                         Remove
@@ -578,7 +791,7 @@ export function ManageExternalVmAssignmentsModal({
                       <button
                         type="button"
                         disabled={busyId === a.assignmentId}
-                        onClick={() => void saveEdit(a.assignmentId)}
+                        onClick={() => void saveEdit(a)}
                         className="mt-3 inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
                       >
                         {busyId === a.assignmentId && (

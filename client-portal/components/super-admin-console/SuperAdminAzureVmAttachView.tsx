@@ -817,14 +817,12 @@ export function SuperAdminAzureVmAttachView() {
       addToast(
         'success',
         createAttachNow
-          ? 'Azure VM created and attached to customer.'
-          : 'Azure VM created — assign it from Azure VMs.'
+          ? 'Azure VM provisioning started — it will attach when ready.'
+          : 'Azure VM provisioning started — check Azure VMs for status.'
       );
       clearPlacement();
       setCreateStep(1);
-      if (!createAttachNow) {
-        router.push('/super-admin-console/create-vm/azure/vms');
-      }
+      router.push('/super-admin-console/create-vm/azure/vms');
     } catch (err) {
       addToast('error', err instanceof ApiError ? err.message : 'Failed to create Azure VM.');
     } finally {
