@@ -1,8 +1,8 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { Check, CheckCircle2, ChevronLeft, ChevronRight, Cloud, Loader2, Search } from 'lucide-react';
+import { AlertTriangle, Check, CheckCircle2, ChevronLeft, ChevronRight, Cloud, Loader2, Search, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import {
   createAzureCatalogVm,
@@ -13,9 +13,11 @@ import {
   searchAzureCustomImages,
   validateAzureCustomImage,
   validateAzureVmImage,
+  validateAzureProvisionQuote,
   type AzureCustomImageOption,
   type AzureLocationOption,
   type AzurePlacementOption,
+  type AzureProvisionQuoteValidation,
   type AzureProvisionReadyStatus,
   type AzureVmImageOption,
 } from '@/lib/vmCatalogApi';
@@ -49,6 +51,37 @@ const CREATE_WIZARD_STEPS: Array<{ step: CreateWizardStep; label: string }> = [
 
 function placementRowKey(opt: AzurePlacementOption): string {
   return `${opt.region}|${opt.vmSize}`;
+}
+
+/** Collapse Standard_NV16as_v4 / Standard_NV32as_v4 → same series key for family filtering. */
+function vmSizeSeriesKey(vmSize: string): string {
+  return String(vmSize || '')
+    .replace(/^Standard_/i, '')
+    .replace(/\d+/g, '#')
+    .toLowerCase();
+}
+
+function formatPlacementSpec(opt: AzurePlacementOption): string {
+  const parts = [`${opt.vcpu} vCPU`, `${opt.memoryGb} GB`];
+  const gpuCount = Number(opt.gpuCount) || 0;
+  if (gpuCount > 0 || opt.gpu) {
+    parts.push(gpuCount > 1 ? `${gpuCount} GPU` : 'GPU');
+  } else if (/^Standard_N/i.test(opt.vmSize || '')) {
+    parts.push('GPU');
+  }
+  return parts.join(' · ');
+}
+
+function placementMatchesExcludedFamily(
+  opt: AzurePlacementOption,
+  excludedFamilies: string[],
+  excludedSeriesKeys: string[]
+): boolean {
+  const fam = String(opt.family || '').trim().toLowerCase();
+  if (fam && excludedFamilies.some((f) => f === fam)) return true;
+  const series = vmSizeSeriesKey(opt.vmSize);
+  if (series && excludedSeriesKeys.some((s) => s === series)) return true;
+  return false;
 }
 
 const WIZARD_ACCENT = '#B91C1C';
@@ -234,12 +267,24 @@ export function SuperAdminAzureVmAttachView() {
     assignPublicIp?: boolean;
     recommended?: AzurePlacementOption | null;
     message?: string;
+    series?: string[];
   } | null>(null);
+  const [placementSeriesFilter, setPlacementSeriesFilter] = useState<string>('all');
   const [canonicalSpec, setCanonicalSpec] = useState('');
   const [loadingPlacementOptions, setLoadingPlacementOptions] = useState(false);
   const [placementOptionsError, setPlacementOptionsError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [checkingQuote, setCheckingQuote] = useState(false);
+  const [quoteCheck, setQuoteCheck] = useState<AzureProvisionQuoteValidation | null>(null);
+  const [quoteModalOpen, setQuoteModalOpen] = useState(false);
+  const [excludedQuotaFamilies, setExcludedQuotaFamilies] = useState<string[]>([]);
+  const [excludedVmSeriesKeys, setExcludedVmSeriesKeys] = useState<string[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
+  const placementListRef = useRef<HTMLDivElement | null>(null);
+  const excludedQuotaFamiliesRef = useRef<string[]>([]);
+  const excludedVmSeriesKeysRef = useRef<string[]>([]);
+  excludedQuotaFamiliesRef.current = excludedQuotaFamilies;
+  excludedVmSeriesKeysRef.current = excludedVmSeriesKeys;
 
   const imageBrowseRegion = useMemo(
     () =>
@@ -349,6 +394,23 @@ export function SuperAdminAzureVmAttachView() {
     [placementOptions, selectedPlacementKey]
   );
 
+  const placementSeriesList = useMemo(() => {
+    if (placementMeta?.series?.length) return placementMeta.series;
+    const set = new Set<string>();
+    for (const opt of placementOptions) {
+      const label = String(opt.series || '').trim();
+      if (label) set.add(label);
+    }
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [placementMeta?.series, placementOptions]);
+
+  const filteredPlacementOptions = useMemo(() => {
+    if (placementSeriesFilter === 'all') return placementOptions;
+    return placementOptions.filter(
+      (opt) => String(opt.series || '').trim() === placementSeriesFilter
+    );
+  }, [placementOptions, placementSeriesFilter]);
+
   const refreshData = useCallback(async () => {
     const [targetRows, readyStatus] = await Promise.all([
       fetchSuperAdminExternalVmTargets(),
@@ -447,6 +509,10 @@ export function SuperAdminAzureVmAttachView() {
     setCanonicalSpec('');
     setPlacementOptionsError(null);
     setSpecValidation(null);
+    setQuoteCheck(null);
+    setQuoteModalOpen(false);
+    setExcludedQuotaFamilies([]);
+    setExcludedVmSeriesKeys([]);
   }, []);
 
   const clearImageSelection = useCallback(() => {
@@ -522,6 +588,8 @@ export function SuperAdminAzureVmAttachView() {
       imageSourceMode === 'custom' ? selectedCustomTemplate?.location?.trim() : '';
 
     setLoadingPlacementOptions(true);
+    setQuoteCheck(null);
+    setQuoteModalOpen(false);
 
     let cancelled = false;
     const timer = setTimeout(() => {
@@ -546,36 +614,68 @@ export function SuperAdminAzureVmAttachView() {
           });
           if (cancelled) return;
 
-          setPlacementOptions(result.options);
+          const families = excludedQuotaFamiliesRef.current;
+          const seriesKeys = excludedVmSeriesKeysRef.current;
+          const filteredOptions = result.options.filter(
+            (opt) => !placementMatchesExcludedFamily(opt, families, seriesKeys)
+          );
+          const recommended =
+            filteredOptions.find((opt) =>
+              result.recommended
+                ? placementRowKey(opt) === placementRowKey(result.recommended)
+                : false
+            ) ??
+            filteredOptions[0] ??
+            null;
+
+          setPlacementOptions(filteredOptions);
+          setPlacementSeriesFilter('all');
           setCanonicalSpec(result.canonicalSpec);
+          const seriesFromOptions = [
+            ...new Set(
+              filteredOptions
+                .map((opt) => String(opt.series || '').trim())
+                .filter(Boolean)
+            ),
+          ].sort((a, b) => a.localeCompare(b));
           setPlacementMeta({
             homeRegion: result.homeRegion,
             regionMode: result.regionMode,
             assignPublicIp: result.assignPublicIp,
-            recommended: result.recommended ?? null,
-            message: result.message,
+            recommended,
+            series: result.series?.length ? result.series : seriesFromOptions,
+            message:
+              filteredOptions.length < result.options.length && families.length > 0
+                ? `Hidden ${result.options.length - filteredOptions.length} option(s) from excluded quota families (${families.join(', ')}).`
+                : result.message,
           });
 
-          if (result.options.length > 0) {
-            const recommended = result.recommended ?? result.options[0];
+          if (filteredOptions.length > 0 && recommended) {
             setSelectedPlacementKey(placementRowKey(recommended));
             const regionLabel =
               azureLocations.find((loc) => loc.name === recommended.region)?.displayName ??
               recommended.region;
+            const seriesHint =
+              recommended.series || seriesFromOptions.length > 1
+                ? ` · ${seriesFromOptions.length} series`
+                : '';
             setSpecValidation({
               ok: true,
               message:
                 result.regionMode === 'auto'
-                  ? `Recommended: ${recommended.vmSize} in ${regionLabel} ($${recommended.estimatedHourlyUsd.toFixed(4)}/hr) — cheapest subscription region`
+                  ? `Recommended: ${recommended.vmSize}${recommended.series ? ` (${recommended.series})` : ''} in ${regionLabel} ($${recommended.estimatedHourlyUsd.toFixed(4)}/hr) — cheapest${seriesHint}`
                   : customRegion
-                    ? `${result.options.length} option${result.options.length === 1 ? '' : 's'} in ${regionLabel} (custom image region)`
-                    : `Recommended: ${recommended.vmSize} in ${regionLabel} ($${recommended.estimatedHourlyUsd.toFixed(4)}/hr) — home region (${result.homeRegion || homeLocationLabel})`,
+                    ? `${filteredOptions.length} option${filteredOptions.length === 1 ? '' : 's'} in ${regionLabel} (custom image region)`
+                    : `Recommended: ${recommended.vmSize}${recommended.series ? ` (${recommended.series})` : ''} in ${regionLabel} ($${recommended.estimatedHourlyUsd.toFixed(4)}/hr) — home region (${result.homeRegion || homeLocationLabel})${seriesHint}`,
             });
           } else {
             setSelectedPlacementKey('');
             setSpecValidation({
               ok: false,
-              message: result.message || 'No priced region/VM size combinations for this spec.',
+              message:
+                filteredOptions.length === 0 && result.options.length > 0
+                  ? 'All matching sizes are in excluded quota families. Go back to Spec and change vCPU/RAM (or GPU) to see other families.'
+                  : result.message || 'No priced region/VM size combinations for this spec.',
             });
           }
         } catch (err) {
@@ -665,6 +765,111 @@ export function SuperAdminAzureVmAttachView() {
 
   function canProceedCreateStep4(): boolean {
     return Boolean(selectedPlacementKey && !loadingPlacementOptions);
+  }
+
+  async function handleCheckQuote() {
+    if (!selectedPlacementOption || !selectedVmSize || !createRegion) {
+      addToast('error', 'Select a region and VM size first.');
+      return;
+    }
+    if (!requireSpecInputs()) return;
+
+    const { vcpu, ramGb, ssdGb } = parseSpecInputs();
+    setCheckingQuote(true);
+    setQuoteCheck(null);
+    setQuoteModalOpen(true);
+    try {
+      const result = await validateAzureProvisionQuote({
+        vmSize: selectedVmSize,
+        region: createRegion,
+        category: createCategory,
+        vcpu,
+        ramGb,
+        ssdGb,
+        nestedVirtualization,
+        assignPublicIp,
+        ...(imageSourceMode === 'custom' && selectedCustomTemplate?.id
+          ? { customImageId: selectedCustomTemplate.id }
+          : {}),
+        ...(imageSourceMode === 'marketplace' && selectedMarketplaceImage
+          ? {
+              imagePublisher: selectedMarketplaceImage.publisher,
+              imageOffer: selectedMarketplaceImage.offer,
+              imageSku: selectedMarketplaceImage.sku,
+            }
+          : {}),
+      });
+      setQuoteCheck(result);
+    } catch (err) {
+      const message = err instanceof ApiError ? err.message : 'Could not check quote.';
+      setQuoteCheck({ valid: false, message });
+    } finally {
+      setCheckingQuote(false);
+    }
+  }
+
+  function handleUseAnotherVmSize() {
+    const failedFamily = String(quoteCheck?.quota?.family || selectedPlacementOption?.family || '')
+      .trim()
+      .toLowerCase();
+    const failedSeries = selectedVmSize ? vmSizeSeriesKey(selectedVmSize) : '';
+
+    const nextFamilies = failedFamily
+      ? Array.from(new Set([...excludedQuotaFamilies, failedFamily]))
+      : excludedQuotaFamilies;
+    const nextSeries = failedSeries
+      ? Array.from(new Set([...excludedVmSeriesKeys, failedSeries]))
+      : excludedVmSeriesKeys;
+
+    setExcludedQuotaFamilies(nextFamilies);
+    setExcludedVmSeriesKeys(nextSeries);
+
+    const remaining = placementOptions.filter(
+      (opt) => !placementMatchesExcludedFamily(opt, nextFamilies, nextSeries)
+    );
+
+    setQuoteModalOpen(false);
+    setQuoteCheck(null);
+    setSelectedPlacementKey('');
+    setPlacementOptions(remaining);
+    setPlacementSeriesFilter('all');
+    const remainingSeries = [
+      ...new Set(remaining.map((opt) => String(opt.series || '').trim()).filter(Boolean)),
+    ].sort((a, b) => a.localeCompare(b));
+    const nextRecommended = remaining[0] ?? null;
+    setPlacementMeta((prev) =>
+      prev
+        ? {
+            ...prev,
+            recommended: nextRecommended,
+            series: remainingSeries,
+            message: failedFamily
+              ? `Removed ${failedFamily} options (no quota). Pick a different series — cheapest remaining is selected.`
+              : 'Previous size is unavailable for quota. Pick another VM size or region.',
+          }
+        : prev
+    );
+    if (nextRecommended) {
+      setSelectedPlacementKey(placementRowKey(nextRecommended));
+    }
+    setSpecValidation(
+      remaining.length > 0
+        ? {
+            ok: true,
+            message: nextRecommended
+              ? `Switched to cheapest remaining: ${nextRecommended.vmSize}${nextRecommended.series ? ` (${nextRecommended.series})` : ''} — $${nextRecommended.estimatedHourlyUsd.toFixed(4)}/hr`
+              : 'Pick another VM size or region.',
+          }
+        : {
+            ok: false,
+            message:
+              'No other series left after excluding this family. Go back to Spec and change vCPU/RAM (or GPU).',
+          }
+    );
+
+    window.setTimeout(() => {
+      placementListRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
   }
 
   async function goToCreateStep(next: CreateWizardStep) {
@@ -773,6 +978,11 @@ export function SuperAdminAzureVmAttachView() {
 
     if (!selectedPlacementKey || !selectedPlacementOption) {
       addToast('error', 'Select a region and VM size from the placement table.');
+      return;
+    }
+
+    if (!quoteCheck?.valid) {
+      addToast('error', 'Run Check quote successfully before creating the VM.');
       return;
     }
 
@@ -945,6 +1155,7 @@ export function SuperAdminAzureVmAttachView() {
       </div>
 
       {pageTab === 'create' ? (
+        <>
         <form
           onSubmit={handleCreateVm}
           className="space-y-6 rounded-xl border border-gray-200 bg-white p-6 shadow-sm"
@@ -1232,8 +1443,8 @@ export function SuperAdminAzureVmAttachView() {
                   {imageSourceMode === 'custom'
                     ? 'Region follows your custom image. Choose a VM size priced for that region.'
                     : assignPublicIp
-                      ? 'Public IP: we price every subscription region and recommend the cheapest total (compute + disk + IP).'
-                      : `Private IP: VM deploys in your home network region (${homeLocationLabel}).`}
+                      ? 'Public IP: we price matching Azure series across subscription regions and auto-select the cheapest total (compute + disk + IP).'
+                      : `Private IP: VM deploys in your home network region (${homeLocationLabel}). Matching Azure series are listed; cheapest is recommended.`}
                 </p>
               </div>
 
@@ -1250,8 +1461,10 @@ export function SuperAdminAzureVmAttachView() {
                       setSelectedPlacementKey('');
                       setPlacementOptions([]);
                       setPlacementMeta(null);
+                      setPlacementSeriesFilter('all');
                       setSpecValidation(null);
                       setPlacementOptionsError(null);
+                      setQuoteCheck(null);
                     }}
                   />
                   <span>
@@ -1289,7 +1502,52 @@ export function SuperAdminAzureVmAttachView() {
               ) : null}
 
               {!loadingPlacementOptions && placementOptions.length > 0 ? (
-                <div className="overflow-x-auto rounded-lg border border-gray-200">
+                <div ref={placementListRef} className="space-y-3">
+                  {placementSeriesList.length > 1 ? (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-xs font-semibold uppercase tracking-wide text-gray-500">
+                        Series
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setPlacementSeriesFilter('all')}
+                        className={`rounded border px-2.5 py-1 text-xs font-medium transition ${
+                          placementSeriesFilter === 'all'
+                            ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                            : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                        }`}
+                      >
+                        All ({placementOptions.length})
+                      </button>
+                      {placementSeriesList.map((series) => {
+                        const count = placementOptions.filter(
+                          (opt) => String(opt.series || '').trim() === series
+                        ).length;
+                        const isCheapestSeries =
+                          placementMeta?.recommended?.series === series;
+                        return (
+                          <button
+                            key={series}
+                            type="button"
+                            onClick={() => setPlacementSeriesFilter(series)}
+                            className={`rounded border px-2.5 py-1 text-xs font-medium transition ${
+                              placementSeriesFilter === series
+                                ? 'border-[#B91C1C] bg-red-50 text-[#B91C1C]'
+                                : 'border-gray-200 bg-white text-gray-700 hover:border-gray-300'
+                            }`}
+                          >
+                            {series}
+                            <span className="ml-1 text-gray-400">({count})</span>
+                            {isCheapestSeries ? (
+                              <span className="ml-1 text-green-700">· cheapest</span>
+                            ) : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+
+                  <div className="overflow-x-auto rounded-lg border border-gray-200">
                   <table className="min-w-full divide-y divide-gray-200 text-sm">
                     <thead className="bg-gray-50">
                       <tr>
@@ -1298,6 +1556,9 @@ export function SuperAdminAzureVmAttachView() {
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           Region
+                        </th>
+                        <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
+                          Series
                         </th>
                         <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-gray-500">
                           VM size
@@ -1322,7 +1583,7 @@ export function SuperAdminAzureVmAttachView() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-gray-100 bg-white">
-                      {placementOptions.map((opt) => {
+                      {filteredPlacementOptions.map((opt) => {
                         const key = placementRowKey(opt);
                         const selected = selectedPlacementKey === key;
                         const recommendedKey = placementMeta?.recommended
@@ -1340,9 +1601,10 @@ export function SuperAdminAzureVmAttachView() {
                             }`}
                             onClick={() => {
                               setSelectedPlacementKey(key);
+                              setQuoteCheck(null);
                               setSpecValidation({
                                 ok: true,
-                                message: `${opt.vmSize} in ${regionLabel} — $${opt.estimatedHourlyUsd.toFixed(4)}/hr`,
+                                message: `${opt.vmSize}${opt.series ? ` (${opt.series})` : ''} in ${regionLabel} — $${opt.estimatedHourlyUsd.toFixed(4)}/hr`,
                               });
                             }}
                           >
@@ -1351,7 +1613,10 @@ export function SuperAdminAzureVmAttachView() {
                                 type="radio"
                                 name="placement-option"
                                 checked={selected}
-                                onChange={() => setSelectedPlacementKey(key)}
+                                onChange={() => {
+                                  setSelectedPlacementKey(key);
+                                  setQuoteCheck(null);
+                                }}
                                 className="text-[#B91C1C] focus:ring-[#B91C1C]"
                               />
                             </td>
@@ -1363,11 +1628,12 @@ export function SuperAdminAzureVmAttachView() {
                                 </span>
                               ) : null}
                             </td>
+                            <td className="px-3 py-2.5 text-gray-700">{opt.series || '—'}</td>
                             <td className="px-3 py-2.5 font-mono text-xs text-gray-800">
                               {opt.vmSize}
                             </td>
                             <td className="px-3 py-2.5 text-gray-600">
-                              {opt.vcpu} vCPU · {opt.memoryGb} GB
+                              {formatPlacementSpec(opt)}
                             </td>
                             <td className="px-3 py-2.5 text-right text-gray-700">
                               {typeof opt.estimatedComputeHourlyUsd === 'number'
@@ -1394,6 +1660,12 @@ export function SuperAdminAzureVmAttachView() {
                       })}
                     </tbody>
                   </table>
+                  </div>
+                  {filteredPlacementOptions.length === 0 ? (
+                    <p className="text-sm text-amber-700">
+                      No options in this series. Choose All or another series.
+                    </p>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1419,13 +1691,22 @@ export function SuperAdminAzureVmAttachView() {
                     </p>
                     <p>
                       <span className="font-medium">SKU:</span> {selectedPlacementOption.vmSize}
+                      {selectedPlacementOption.series
+                        ? ` (${selectedPlacementOption.series})`
+                        : ''}
                     </p>
                     <p>
                       <span className="font-medium">Resource group:</span>{' '}
                       {projectVmResourceGroup ?? '—'}
                     </p>
                     <p>
-                      <span className="font-medium">Spec:</span> {canonicalSpec || '—'}
+                      <span className="font-medium">Spec:</span>{' '}
+                      {selectedPlacementOption
+                        ? formatPlacementSpec(selectedPlacementOption)
+                        : canonicalSpec || '—'}
+                      {canonicalSpec ? (
+                        <span className="text-gray-500"> ({canonicalSpec})</span>
+                      ) : null}
                     </p>
                     <p>
                       <span className="font-medium">Image:</span>{' '}
@@ -1468,7 +1749,7 @@ export function SuperAdminAzureVmAttachView() {
                 </label>
               </div>
 
-              <div className="flex items-center justify-between pt-2">
+              <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                 <button
                   type="button"
                   onClick={() => setCreateStep(3)}
@@ -1476,28 +1757,61 @@ export function SuperAdminAzureVmAttachView() {
                 >
                   <ChevronLeft className="h-4 w-4" /> Back
                 </button>
-                <button
-                  type="submit"
-                  disabled={
-                    creating ||
-                    !provisionReady?.ready ||
-                    !canProceedCreateStep4()
-                  }
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:opacity-60"
-                >
-                  {creating ? (
-                    <>
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                      Creating VM…
-                    </>
-                  ) : (
-                    <>
-                      <CheckCircle2 className="h-4 w-4" />
-                      Create Azure VM
-                    </>
-                  )}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleCheckQuote()}
+                    disabled={
+                      checkingQuote ||
+                      creating ||
+                      !provisionReady?.ready ||
+                      !canProceedCreateStep4()
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2.5 text-sm font-semibold text-gray-800 transition hover:bg-gray-50 disabled:opacity-60"
+                  >
+                    {checkingQuote ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Checking quote…
+                      </>
+                    ) : (
+                      'Check quote'
+                    )}
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={
+                      creating ||
+                      checkingQuote ||
+                      !provisionReady?.ready ||
+                      !canProceedCreateStep4() ||
+                      !quoteCheck?.valid
+                    }
+                    className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:opacity-60"
+                  >
+                    {creating ? (
+                      <>
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                        Creating VM…
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle2 className="h-4 w-4" />
+                        Create Azure VM
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
+              {quoteCheck?.valid ? (
+                <p className="rounded-lg border border-green-100 bg-green-50 px-4 py-3 text-center text-sm text-green-800">
+                  Quote verified — you can create the VM.
+                </p>
+              ) : selectedPlacementOption ? (
+                <p className="text-center text-xs text-gray-500">
+                  Run Check quote to verify pricing and Azure quota before Create Azure VM.
+                </p>
+              ) : null}
               {creating ? (
                 <p className="text-center text-xs text-gray-500">
                   Provisioning can take 5–15 minutes. Keep this tab open.
@@ -1506,6 +1820,118 @@ export function SuperAdminAzureVmAttachView() {
             </div>
           ) : null}
         </form>
+
+        {quoteModalOpen ? (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            <div
+              className="absolute inset-0 bg-black/40 backdrop-blur-sm"
+              onClick={() => {
+                if (!checkingQuote) setQuoteModalOpen(false);
+              }}
+              aria-hidden
+            />
+            <div
+              role="dialog"
+              aria-modal="true"
+              aria-labelledby="azure-quote-check-title"
+              className="relative w-full max-w-lg rounded-2xl border border-gray-200 bg-white p-6 shadow-xl"
+            >
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div
+                    className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${
+                      checkingQuote
+                        ? 'bg-gray-100'
+                        : quoteCheck?.valid
+                          ? 'bg-green-50'
+                          : 'bg-red-50'
+                    }`}
+                  >
+                    {checkingQuote ? (
+                      <Loader2 className="h-5 w-5 animate-spin text-gray-600" />
+                    ) : quoteCheck?.valid ? (
+                      <CheckCircle2 className="h-5 w-5 text-green-600" />
+                    ) : (
+                      <AlertTriangle className="h-5 w-5 text-red-500" />
+                    )}
+                  </div>
+                  <div>
+                    <h3 id="azure-quote-check-title" className="text-lg font-semibold text-gray-900">
+                      {checkingQuote
+                        ? 'Checking quote…'
+                        : quoteCheck?.valid
+                          ? 'Quote available'
+                          : 'Quota / quote not available'}
+                    </h3>
+                    <p className="mt-1 text-sm text-gray-500">
+                      {selectedVmSize && createRegionLabel
+                        ? `${selectedVmSize} · ${createRegionLabel}`
+                        : 'Azure provision quote'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  disabled={checkingQuote}
+                  onClick={() => setQuoteModalOpen(false)}
+                  className="rounded-lg p-1.5 text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 disabled:opacity-40"
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div
+                className={`rounded-lg border px-4 py-3 text-sm ${
+                  checkingQuote
+                    ? 'border-gray-100 bg-gray-50 text-gray-600'
+                    : quoteCheck?.valid
+                      ? 'border-green-100 bg-green-50 text-green-800'
+                      : 'border-red-100 bg-red-50 text-red-700'
+                }`}
+              >
+                {checkingQuote
+                  ? 'Validating SKU, image, pricing, and Azure family quota for this region…'
+                  : quoteCheck?.message ||
+                    (quoteCheck?.valid
+                      ? 'Quote and quota look good.'
+                      : 'Quote check failed.')}
+              </div>
+
+              {!checkingQuote && quoteCheck && !quoteCheck.valid ? (
+                <div className="mt-4 flex flex-col gap-2 sm:flex-row sm:justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setQuoteModalOpen(false)}
+                    className="inline-flex items-center justify-center rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleUseAnotherVmSize}
+                    className="inline-flex items-center justify-center rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B]"
+                  >
+                    Use another VM size/family
+                  </button>
+                </div>
+              ) : null}
+
+              {!checkingQuote && quoteCheck?.valid ? (
+                <div className="mt-4 flex justify-end">
+                  <button
+                    type="button"
+                    onClick={() => setQuoteModalOpen(false)}
+                    className="inline-flex items-center justify-center rounded-lg bg-[#B91C1C] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B]"
+                  >
+                    Continue
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+        </>
       ) : null}
 
       {pageTab === 'register' ? (

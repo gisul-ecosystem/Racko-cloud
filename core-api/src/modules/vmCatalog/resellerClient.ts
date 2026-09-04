@@ -384,13 +384,13 @@ export async function listAzureSubscriptionLocations(): Promise<AzureLocationRow
 
 export async function searchAzureMarketplaceImages(input: {
   query?: string;
-  osType?: 'linux' | 'windows';
+  osType?: 'linux' | 'windows' | 'all';
   skip?: number;
   take?: number;
 }): Promise<AzureMarketplaceSearchResult> {
   const qs = new URLSearchParams();
   if (input.query?.trim()) qs.set('q', input.query.trim());
-  if (input.osType) qs.set('osType', input.osType);
+  qs.set('osType', input.osType || 'all');
   if (input.skip != null) qs.set('skip', String(input.skip));
   if (input.take != null) qs.set('take', String(input.take));
   return getReseller<AzureMarketplaceSearchResult>(
@@ -444,6 +444,16 @@ export interface AzureProvisionQuoteValidation {
   vcpu?: number;
   memoryGb?: number;
   estimatedHourlyUsd?: number | null;
+  quota?: {
+    valid?: boolean;
+    family?: string;
+    limit?: number;
+    current?: number;
+    requiredCores?: number;
+    remaining?: number | null;
+    skipped?: boolean;
+    message?: string;
+  };
 }
 
 export async function validateAzureProvisionQuote(input: {
