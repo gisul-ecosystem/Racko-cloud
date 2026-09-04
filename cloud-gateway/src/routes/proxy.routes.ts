@@ -269,6 +269,13 @@ router.post(
   coreApiBulkImportProxy
 );
 router.post(
+  '/api/v1/super-admin/external-vms/bulk-override',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiBulkImportProxy
+);
+router.post(
   '/api/v1/super-admin/external-vms/bulk-delete',
   authMiddleware,
   verifyMiddleware,
@@ -312,6 +319,27 @@ router.patch(
 );
 router.delete(
   '/api/v1/super-admin/external-vms/:id/assignments/:assignmentId',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.patch(
+  '/api/v1/super-admin/external-vms/:id/lock',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.patch(
+  '/api/v1/super-admin/external-vms/:id/details',
+  authMiddleware,
+  verifyMiddleware,
+  requireRole('super_admin', 'staff'),
+  coreApiProxy
+);
+router.post(
+  '/api/v1/super-admin/external-vms/:id/sibling-login',
   authMiddleware,
   verifyMiddleware,
   requireRole('super_admin', 'staff'),

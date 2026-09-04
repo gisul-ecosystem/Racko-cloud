@@ -96,6 +96,8 @@ function statusBadgeClass(status: ICatalogVm['status']): string {
       return 'bg-blue-50 text-blue-800 border-blue-100';
     case 'ready_to_attach':
       return 'bg-amber-50 text-amber-800 border-amber-100';
+    case 'failed':
+      return 'bg-red-50 text-red-800 border-red-100';
     default:
       return 'bg-gray-50 text-gray-700 border-gray-100';
   }
@@ -175,6 +177,19 @@ export function SuperAdminAzureVmListView() {
       cancelled = true;
     };
   }, [addToast, refreshData]);
+
+  useEffect(() => {
+    const hasProvisioning = azureVms.some(
+      (vm) => vm.status === 'provisioning' || vm.status === 'fulfilling'
+    );
+    if (!hasProvisioning) return;
+
+    const timer = window.setInterval(() => {
+      void refreshData().catch(() => undefined);
+    }, 12_000);
+
+    return () => window.clearInterval(timer);
+  }, [azureVms, refreshData]);
 
   async function handleAzurePowerAction(
     id: string,
@@ -340,6 +355,10 @@ export function SuperAdminAzureVmListView() {
                             onTerminated={() => void refreshData()}
                           />
                         </div>
+                      ) : vm.status === 'failed' ? (
+                        <span className="text-xs text-red-600" title={vm.fulfillError || undefined}>
+                          {vm.fulfillError || 'Provisioning failed'}
+                        </span>
                       ) : (
                         <span className="text-xs text-gray-500">
                           {vm.status === 'provisioning' || vm.status === 'fulfilling'

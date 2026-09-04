@@ -94,6 +94,40 @@ function resellerBaseUrl(): string {
   return String(config.RESELLER_SERVICE_URL || 'http://127.0.0.1:3005').replace(/\/$/, '');
 }
 
+function resellerErrorCode(status: number): string {
+  if (status === 400) return 'RESELLER_VALIDATION_ERROR';
+  if (status === 409) return 'RESELLER_CONFLICT';
+  if (status === 503) return 'RESELLER_UNAVAILABLE';
+  if (status >= 500) return 'RESELLER_UNAVAILABLE';
+  return 'RESELLER_ERROR';
+}
+
+function isAbortError(err: unknown): boolean {
+  return (
+    (err instanceof Error && err.name === 'AbortError') ||
+    (typeof err === 'object' &&
+      err !== null &&
+      'code' in err &&
+      (err as { code?: string }).code === 'ABORT_ERR')
+  );
+}
+
+function rethrowResellerClientError(err: unknown, logLabel: string, timeoutMs: number): never {
+  if (isAbortError(err)) {
+    throw new AppError(
+      `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
+      504,
+      'RESELLER_TIMEOUT'
+    );
+  }
+  const resellerErr = err as ResellerClientError;
+  if (resellerErr instanceof Error && typeof resellerErr.status === 'number') {
+    const status = resellerErr.status;
+    throw new AppError(resellerErr.message, status, resellerErrorCode(status));
+  }
+  throw err;
+}
+
 async function postReseller<T>(
   path: string,
   body: unknown,
@@ -139,27 +173,10 @@ async function postReseller<T>(
 
     return (data.data ?? data) as T;
   } catch (err) {
-    if (isAbortError(err)) {
-      throw new AppError(
-        `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
-        504,
-        'RESELLER_TIMEOUT'
-      );
-    }
-    throw err;
+    return rethrowResellerClientError(err, logLabel, timeoutMs);
   } finally {
     if (timer) clearTimeout(timer);
   }
-}
-
-function isAbortError(err: unknown): boolean {
-  return (
-    (err instanceof Error && err.name === 'AbortError') ||
-    (typeof err === 'object' &&
-      err !== null &&
-      'code' in err &&
-      (err as { code?: string }).code === 'ABORT_ERR')
-  );
 }
 
 async function getReseller<T>(
@@ -200,14 +217,7 @@ async function getReseller<T>(
 
     return (data.data ?? data) as T;
   } catch (err) {
-    if (isAbortError(err)) {
-      throw new AppError(
-        `Reseller ${logLabel} timed out after ${Math.round(timeoutMs / 1000)}s.`,
-        504,
-        'RESELLER_TIMEOUT'
-      );
-    }
-    throw err;
+    return rethrowResellerClientError(err, logLabel, timeoutMs);
   } finally {
     clearTimeout(timer);
   }

@@ -27,6 +27,44 @@ function safeName(prefix, id) {
   return raw || `${prefix}${Date.now()}`;
 }
 
+function normalizeAzureProvisionError(err) {
+  if (err?.statusCode && err.statusCode !== 500) {
+    return err;
+  }
+  const status = err?.statusCode ?? err?.response?.status;
+  const code = err?.code || err?.body?.error?.code || err?.details?.error?.code;
+  const message =
+    err?.message ||
+    err?.body?.error?.message ||
+    err?.details?.error?.message ||
+    'Azure VM provisioning failed';
+
+  if (
+    code === 'SkuNotAvailable' ||
+    code === 'AllocationFailed' ||
+    /capacity|not available|quota/i.test(message)
+  ) {
+    return Object.assign(
+      new Error(
+        'Azure has no capacity for this VM size in the selected region. Pick another size or region.'
+      ),
+      { statusCode: 400 }
+    );
+  }
+  if (code === 'PropertyChangeNotAllowed' || /already exists/i.test(message)) {
+    return Object.assign(new Error(message), { statusCode: 409 });
+  }
+  if (/fetch failed|ETIMEDOUT|ECONNRESET|socket hang up|timed out/i.test(message)) {
+    return Object.assign(
+      new Error('Azure API temporarily unreachable. Retry in a moment.'),
+      { statusCode: 503 }
+    );
+  }
+  const mappedStatus =
+    status && status >= 400 && status < 600 ? status : status && status >= 500 ? 502 : 500;
+  return Object.assign(new Error(message), { statusCode: mappedStatus });
+}
+
 /**
  * Launch an Azure VM for reseller catalog.
  * VM + NIC live in `resourceGroup` (project RG). Subnet comes from shared network RG.
@@ -41,6 +79,7 @@ export async function launchAzureVm({
   vmSize: vmSizeOverride,
   imageReference: imageReferenceOverride,
 } = {}) {
+  try {
   validateAzureConfig({ forProvision: true });
 
   const parsed = parseCanonicalSpec(canonicalSpec);
@@ -212,6 +251,9 @@ export async function launchAzureVm({
       vmSize: resolvedVmSize,
     },
   };
+  } catch (err) {
+    throw normalizeAzureProvisionError(err);
+  }
 }
 
 function resourceNameFromId(id) {
