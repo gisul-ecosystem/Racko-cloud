@@ -162,6 +162,19 @@ async function archive(req: Request, res: Response, next: NextFunction): Promise
   }
 }
 
+async function unarchive(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = tenantAuth(req);
+    const project = await projectsService.unarchiveForTenant(
+      authReq.tenantUser.tenantId,
+      String(req.params['id'])
+    );
+    success(res, 'Project restored.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function reportByProject(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = tenantAuth(req);
@@ -199,6 +212,7 @@ export const tenantProjectsController = {
   addServices,
   removeService,
   archive,
+  unarchive,
   reportByProject,
   reportByService,
 };

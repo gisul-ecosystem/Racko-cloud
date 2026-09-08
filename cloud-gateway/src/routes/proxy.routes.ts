@@ -598,6 +598,7 @@ router.patch('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRo
 router.post('/api/v1/projects/:id/services', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.delete('/api/v1/projects/:id/services/:serviceKey', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.post('/api/v1/projects/:id/archive', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.post('/api/v1/projects/:id/unarchive', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 
 // ─── MANAGED USERS ROUTES (admin + super_admin) ──────────────────────────────
 router.post('/api/v1/managed-users/single', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);

@@ -7,6 +7,7 @@ import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ApiError } from '../../../../lib/apiClient';
 import { bulkCreateExternalVMs, parseExternalVmProtocol, type CreateExternalVMDto } from '../../../../lib/externalVmApi';
 import { ProjectSelect } from '../../../../components/console/ProjectSelect';
+import { CreateProjectModal } from '../../../../components/console/CreateProjectModal';
 import { ChevronLeft } from 'lucide-react';
 
 const BULK_EXAMPLE = `[
@@ -37,6 +38,8 @@ export default function BulkImportPage() {
   const { toasts, addToast, dismiss } = useToast();
   const [jsonText, setJsonText] = useState(BULK_EXAMPLE);
   const [projectId, setProjectId] = useState('');
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+  const [cpOpen, setCpOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const handleFile = (file: File) => {
@@ -133,6 +136,8 @@ export default function BulkImportPage() {
             value={projectId}
             onChange={setProjectId}
             disabled={submitting}
+            onCreateProject={() => setCpOpen(true)}
+            refreshKey={projectRefreshKey}
           />
         </div>
 
@@ -155,6 +160,18 @@ export default function BulkImportPage() {
           </button>
         </div>
       </div>
+
+      <CreateProjectModal
+        open={cpOpen}
+        onClose={() => setCpOpen(false)}
+        portal="org"
+        preselectedServices={['elastic-servers']}
+        lockServices
+        onCreated={(project) => {
+          setProjectId(project.id);
+          setProjectRefreshKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 }
