@@ -108,7 +108,7 @@ export class TenantExternalVmController {
 
   async assign(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
-      const { tenantId, tenantUserId } = tenantIds(req);
+      const { tenantId } = tenantIds(req);
       const { userId, externalVmIds, accessSchedule } = req.body as {
         userId: string;
         externalVmIds: string[];
@@ -118,7 +118,7 @@ export class TenantExternalVmController {
         externalVmIds.map((id) => new mongoose.Types.ObjectId(id)),
         new mongoose.Types.ObjectId(userId),
         tenantId,
-        tenantUserId,
+        tenantActor(req),
         accessSchedule
       );
       const skippedNote =
@@ -149,7 +149,7 @@ export class TenantExternalVmController {
           const result = await externalVMService.bulkAssignTenantOneToOne(
             body,
             tenantId,
-            tenantUserId
+            tenantActor(req)
           );
           return {
             assigned: result.assigned,

@@ -131,7 +131,7 @@ export const bulkDeleteMachineSchema = z.object({
     machineIds: z
       .array(mongoObjectId)
       .min(1, 'At least one machine is required')
-      .max(100, 'Cannot delete more than 100 machines at once'),
+      .max(500, 'Cannot delete more than 500 machines at once'),
   }),
 });
 

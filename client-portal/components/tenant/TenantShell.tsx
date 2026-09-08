@@ -20,6 +20,12 @@ function resolveShellTitles(pathname: string): { title: string; subtitle: string
   if (pathname.startsWith('/console/dashboard/notifications')) {
     return { title: 'Notifications', subtitle: 'Alerts and updates' };
   }
+  if (pathname.startsWith('/console/dashboard/support')) {
+    if (pathname.endsWith('/new')) {
+      return { title: 'Support', subtitle: 'Submit a new request' };
+    }
+    return { title: 'Support', subtitle: 'Tickets and help requests' };
+  }
   return { title: 'Tenant Portal', subtitle: 'Services & resources' };
 }
 

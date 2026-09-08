@@ -4,6 +4,7 @@ import {
   Briefcase,
   LayoutDashboard,
   Layers,
+  LifeBuoy,
   Plus,
   Server,
   Shield,
@@ -13,7 +14,7 @@ import {
 import { ServiceNavSidebar, type ServiceNavLink } from '@/components/console/ServiceNavSidebar';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantRbac } from '@/context/TenantRbacContext';
-import { TENANT_CONSOLE, tenantVps } from '@/lib/tenantAdminRoutes';
+import { TENANT_CONSOLE, tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 
 interface TenantVpsAdminSidebarProps {
   sidebarOpen: boolean;
@@ -55,6 +56,12 @@ export function TenantVpsAdminSidebar({
           label: 'My VMs',
           icon: <Server className="h-4 w-4" />,
           exact: true,
+        },
+        {
+          href: tenantConsole.supportTickets,
+          label: 'Support',
+          icon: <LifeBuoy className="h-4 w-4" />,
+          isActive: (p) => p.startsWith(`${TENANT_CONSOLE}/support`),
         },
       ];
 

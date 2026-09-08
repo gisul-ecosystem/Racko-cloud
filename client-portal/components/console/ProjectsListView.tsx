@@ -77,6 +77,8 @@ interface CreateProjectInput {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
+  reminderEmails?: string[];
+  autoArchiveEnabled?: boolean;
 }
 
 interface AssignableServiceOption {
@@ -212,6 +214,7 @@ export function ProjectsListView({
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [reminderEmailsRaw, setReminderEmailsRaw] = useState('');
   const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
@@ -267,6 +270,10 @@ export function ProjectsListView({
   }, []);
 
   const activeProjects = projects.filter((project) => project.status === 'active');
+  const archivedProjects = useMemo(
+    () => projects.filter((project) => project.status === 'archived'),
+    [projects]
+  );
   const totalSpend = costRows.reduce((sum, row) => sum + row.totalDebit, 0);
   const totalResources = projects.reduce(
     (total, project) =>
@@ -316,6 +323,16 @@ export function ProjectsListView({
 
   function openAllView() {
     setShowAll(true);
+    setStatusFilter('all');
+    setQuery('');
+    setPage(1);
+  }
+
+  function openArchivedView() {
+    setShowAll(true);
+    setStatusFilter('archived');
+    setQuery('');
+    setPage(1);
   }
 
   function openDashboardView() {
@@ -334,6 +351,7 @@ export function ProjectsListView({
     setDescription('');
     setStartDate('');
     setEndDate('');
+    setReminderEmailsRaw('');
     setSelectedServices([]);
     try {
       const loadClientNames = async (): Promise<string[]> => {
@@ -397,6 +415,12 @@ export function ProjectsListView({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         enabledServices: selectedServices,
+        reminderEmails: reminderEmailsRaw
+          .split(/[,;\n]+/)
+          .map((part) => part.trim().toLowerCase())
+          .filter(Boolean)
+          .slice(0, 10),
+        autoArchiveEnabled: true,
       });
       let detailed = created;
       try {
@@ -464,11 +488,17 @@ export function ProjectsListView({
             </button>
           )}
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">
-            {showAll ? 'All Projects' : 'My Projects'}
+            {showAll
+              ? statusFilter === 'archived'
+                ? 'Archived Projects'
+                : 'All Projects'
+              : 'My Projects'}
           </h1>
           <p className="mt-1 text-sm text-gray-500">
             {showAll
-              ? 'Manage and organize all your cloud projects in one place.'
+              ? statusFilter === 'archived'
+                ? 'Review archived projects and restore them if needed.'
+                : 'Manage and organize all your cloud projects in one place.'
               : 'Create and manage your infrastructure projects.'}
           </p>
         </div>
@@ -566,9 +596,13 @@ export function ProjectsListView({
               {pageItems.length === 0 ? (
                 <div className="px-6 py-16 text-center">
                   <FolderKanban className="mx-auto h-10 w-10 text-gray-300" />
-                  <p className="mt-3 text-sm font-medium text-gray-900">No projects found</p>
+                  <p className="mt-3 text-sm font-medium text-gray-900">
+                    {statusFilter === 'archived' ? 'No archived projects' : 'No projects found'}
+                  </p>
                   <p className="mt-1 text-sm text-gray-500">
-                    Try a different search, or create a new project.
+                    {statusFilter === 'archived'
+                      ? 'Archived projects will appear here after you archive or auto-archive them.'
+                      : 'Try a different search, or create a new project.'}
                   </p>
                 </div>
               ) : (
@@ -717,13 +751,16 @@ export function ProjectsListView({
                       Open a project to launch services and review its spend.
                     </p>
                   </div>
-                  <Link
-                    href={api.reportsHref}
+                  <button
+                    type="button"
+                    onClick={openArchivedView}
                     className="inline-flex items-center gap-1 text-xs font-semibold hover:underline"
                     style={tenantAccentText(accent)}
                   >
-                    View reports <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
+                    View archived projects
+                    {archivedProjects.length > 0 ? ` (${archivedProjects.length})` : ''}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1150,6 +1187,24 @@ export function ProjectsListView({
                         />
                         <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
                       </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Reminder emails{' '}
+                        <span className="font-normal text-gray-400">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={reminderEmailsRaw}
+                        onChange={(e) => setReminderEmailsRaw(e.target.value)}
+                        placeholder="pm@client.com, billing@client.com"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                        style={accentFocus}
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">
+                        We email these addresses one day before the project end date.
+                      </p>
                     </div>
                   </div>
                 </div>

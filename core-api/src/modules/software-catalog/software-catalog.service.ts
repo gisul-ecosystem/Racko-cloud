@@ -75,6 +75,70 @@ class SoftwareCatalogService {
     return { presignedUrl, storageRef, expiresIn: 3600 };
   }
 
+  // ─── Multipart upload ─────────────────────────────────────────────────────
+
+  /**
+   * Step 1 of multipart upload — initiate and return uploadId + storageRef.
+   * The browser calls this once before uploading any parts.
+   */
+  async initiateMultipartUpload(
+    fileName: string,
+    mimeType: string,
+    uploadedBy: mongoose.Types.ObjectId
+  ): Promise<{ uploadId: string; storageRef: string }> {
+    const safeFileName = fileName.replace(/[^a-zA-Z0-9._\-]/g, '_');
+    const ts = Date.now().toString();
+    const storageRef = `software-catalog/${uploadedBy.toString()}/${ts}_${safeFileName}`;
+
+    const { uploadId } = await seaweedfsService.createMultipartUpload(storageRef, mimeType);
+
+    logger.info('[SoftwareCatalog] Multipart upload initiated', {
+      fileName, storageRef, uploadedBy: uploadedBy.toString(),
+    });
+
+    return { uploadId, storageRef };
+  }
+
+  /**
+   * Step 2 of multipart upload — issue a presigned URL for one part.
+   * The browser calls this once per 10MB chunk, then PUTs the chunk bytes directly to SeaweedFS.
+   * The ETag returned by SeaweedFS from the PUT must be collected and sent to completeMultipart.
+   */
+  async issuePartUploadUrl(
+    storageRef: string,
+    uploadId: string,
+    partNumber: number
+  ): Promise<{ presignedUrl: string }> {
+    return seaweedfsService.generatePresignedPartUrl(storageRef, uploadId, partNumber);
+  }
+
+  /**
+   * Step 3 of multipart upload — assemble all parts and finalise the object in S3.
+   * parts must be ordered by PartNumber ascending with the ETag from each part's PUT response.
+   */
+  async completeMultipartUpload(
+    storageRef: string,
+    uploadId: string,
+    parts: Array<{ PartNumber: number; ETag: string }>
+  ): Promise<{ storageRef: string }> {
+    await seaweedfsService.completeMultipartUpload(storageRef, uploadId, parts);
+
+    logger.info('[SoftwareCatalog] Multipart upload completed', {
+      storageRef, partCount: parts.length,
+    });
+
+    return { storageRef };
+  }
+
+  /**
+   * Abort a multipart upload — called if the browser encounters an unrecoverable error.
+   * Cleans up all partially uploaded parts from SeaweedFS storage.
+   */
+  async abortMultipartUpload(storageRef: string, uploadId: string): Promise<void> {
+    await seaweedfsService.abortMultipartUpload(storageRef, uploadId);
+    logger.info('[SoftwareCatalog] Multipart upload aborted', { storageRef, uploadId });
+  }
+
   /**
    * Returns a presigned GET URL for an internally stored software file.
    * Called by the agent when it fetches software details before installing.

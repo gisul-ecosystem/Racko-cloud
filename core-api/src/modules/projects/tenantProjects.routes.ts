@@ -110,4 +110,13 @@ router.post(
   }
 );
 
+router.post(
+  '/:id/unarchive',
+  requireTenantPermission('projects.manage'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    tenantProjectsController.unarchive(req, res, next);
+  }
+);
+
 export default router;

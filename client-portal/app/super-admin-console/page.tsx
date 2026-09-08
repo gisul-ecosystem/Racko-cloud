@@ -7,6 +7,7 @@ import {
   Calculator,
   Database,
   IndianRupee,
+  LifeBuoy,
   Monitor,
   MonitorCheck,
   Plus,
@@ -155,6 +156,13 @@ const platformTools: ServiceTile[] = [
     description:
       'Individual and organization customers, tenants, wallets, services, and org access requests',
     anyOf: ['admin_users.manage'],
+  },
+  {
+    id: 'support',
+    name: 'Support System',
+    href: '/super-admin-console/support',
+    icon: LifeBuoy,
+    description: 'Manage support tickets, agents, and queue distribution across tenants.',
   },
   {
     id: 'access-control',

@@ -26,6 +26,7 @@ export interface BulkCreateTenantUsersResult {
     email: string;
     password: string;
     status: 'created' | 'failed';
+    userId?: string;
     error?: string;
   }>;
 }
