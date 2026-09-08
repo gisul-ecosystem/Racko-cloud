@@ -11,7 +11,8 @@ function success<T>(res: Response, message: string, data?: T, statusCode = 200):
 const router = Router();
 
 router.use(requireAuth);
-router.use(requirePermission('azure.manage'));
+// Shared owner picker: used by the Azure console and by VM Inventory / Server Assign.
+router.use(requirePermission('azure.manage', 'vm_inventory.read'));
 
 /** GET /api/v1/super-admin/targets */
 router.get('/', async (_req, res, next) => {

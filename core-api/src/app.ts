@@ -17,6 +17,7 @@ import proxmoxRoutes from './modules/proxmox/proxmox.routes';
 import vmRoutes from './modules/vm/vm.routes';
 import externalVmRoutes from './modules/external-vm/external-vm.routes';
 import superAdminTargetsRoutes from './modules/superAdmin/superAdminTargets.routes';
+import vmInventoryRoutes from './modules/vmInventory/vmInventory.routes';
 import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
@@ -178,6 +179,7 @@ app.use('/api/v1/tenant-services', tenantPortalServicesRoutes);
 app.use('/api/v1/tenant-auth', tenantAuthRoutes);
 // More-specific mount before /super-admin so white_labelling.manage does not gate this route.
 app.use('/api/v1/super-admin/targets', superAdminTargetsRoutes);
+app.use('/api/v1/super-admin/vm-inventory', vmInventoryRoutes);
 app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
 app.use('/api/v1/tenant-wallet', walletRoutes);

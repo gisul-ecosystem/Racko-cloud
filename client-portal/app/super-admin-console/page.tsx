@@ -14,6 +14,7 @@ import {
   Server,
   Shield,
   Upload,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { ServiceTileCard } from '@/components/super-admin-console/ServiceTileCard';
@@ -98,6 +99,24 @@ const productServices: ServiceTile[] = [
 
 /** Platform / ops tools — not sold product entitlements (utilities & admin). */
 const platformTools: ServiceTile[] = [
+  {
+    id: 'vm-inventory',
+    name: 'VM Inventory',
+    href: '/super-admin-console/vm-inventory',
+    icon: Database,
+    description:
+      'Unified inventory across VPS, VM Catalog, dedicated and inventory servers, merged by IP',
+    anyOf: ['vm_inventory.read'],
+  },
+  {
+    id: 'server-assign',
+    name: 'Server Assign',
+    href: '/super-admin-console/server-assign',
+    icon: UserPlus,
+    description:
+      'Bulk-assign inventory VM logins to a tenant or admin with a generated user series and access hours',
+    anyOf: ['vm_inventory.write'],
+  },
   {
     id: 'vm-pricing-calculator',
     name: 'VM Pricing Calculator',

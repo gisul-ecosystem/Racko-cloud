@@ -14,6 +14,7 @@ import {
   Server,
   Shield,
   Upload,
+  UserPlus,
   Users,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -91,6 +92,20 @@ const navItems: NavItem[] = [
     icon: Server,
     anyOf: ['aws.manage'],
     section: 'services',
+  },
+  {
+    href: '/super-admin-console/vm-inventory',
+    label: 'VM Inventory',
+    icon: Database,
+    anyOf: ['vm_inventory.read'],
+    section: 'tools',
+  },
+  {
+    href: '/super-admin-console/server-assign',
+    label: 'Server Assign',
+    icon: UserPlus,
+    anyOf: ['vm_inventory.write'],
+    section: 'tools',
   },
   {
     href: '/super-admin-console/white-labelling',
