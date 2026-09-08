@@ -44,6 +44,10 @@ export interface ProjectPublic {
   description: string | null;
   startDate: string | null;
   endDate: string | null;
+  reminderEmails: string[];
+  autoArchiveEnabled: boolean;
+  archivedAt: string | null;
+  archivedReason: 'manual' | 'end_date_reached' | null;
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   createdBy: string;
@@ -66,6 +70,57 @@ export interface ProjectReportByServiceRow {
   transactionCount: number;
 }
 
+function normalizeReminderEmails(emails?: string[] | null): string[] {
+  if (!emails?.length) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of emails) {
+    const email = String(raw || '').trim().toLowerCase();
+    if (!email || seen.has(email)) continue;
+    seen.add(email);
+    out.push(email);
+  }
+  return out.slice(0, 10);
+}
+
+function markProjectArchived(
+  doc: IProject,
+  reason: 'manual' | 'end_date_reached'
+): void {
+  doc.status = 'archived';
+  doc.archivedReason = reason;
+  doc.archivedAt = new Date();
+}
+
+function markProjectUnarchived(doc: IProject): void {
+  doc.status = 'active';
+  doc.archivedAt = undefined;
+  doc.archivedReason = undefined;
+}
+
+function applyProjectUpdateFields(doc: IProject, input: UpdateProjectInput): void {
+  if (input.name !== undefined) doc.name = input.name.trim();
+  if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
+  if (input.description !== undefined) {
+    doc.description = input.description?.trim() || undefined;
+  }
+  if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
+  if (input.endDate !== undefined) {
+    const next = input.endDate ?? undefined;
+    const prevMs = doc.endDate?.getTime();
+    doc.endDate = next;
+    if (next?.getTime() !== prevMs) {
+      doc.expiryWarningSentFor = undefined;
+    }
+  }
+  if (input.reminderEmails !== undefined) {
+    doc.reminderEmails = normalizeReminderEmails(input.reminderEmails);
+  }
+  if (input.autoArchiveEnabled !== undefined) {
+    doc.autoArchiveEnabled = input.autoArchiveEnabled;
+  }
+}
+
 function toPublic(doc: IProject, resourceCounts?: Record<string, number>): ProjectPublic {
   return {
     id: doc._id.toString(),
@@ -80,6 +135,10 @@ function toPublic(doc: IProject, resourceCounts?: Record<string, number>): Proje
     description: doc.description ?? null,
     startDate: doc.startDate ? doc.startDate.toISOString() : null,
     endDate: doc.endDate ? doc.endDate.toISOString() : null,
+    reminderEmails: [...(doc.reminderEmails ?? [])],
+    autoArchiveEnabled: doc.autoArchiveEnabled !== false,
+    archivedAt: doc.archivedAt ? doc.archivedAt.toISOString() : null,
+    archivedReason: doc.archivedReason ?? null,
     enabledServices: [...doc.enabledServices],
     status: doc.status,
     createdBy: doc.createdBy.toString(),
@@ -235,6 +294,8 @@ async function createForOrg(
     description: input.description?.trim() || undefined,
     startDate: input.startDate ?? undefined,
     endDate: input.endDate ?? undefined,
+    reminderEmails: normalizeReminderEmails(input.reminderEmails),
+    autoArchiveEnabled: input.autoArchiveEnabled !== false,
     enabledServices,
     status: 'active',
     createdBy: new mongoose.Types.ObjectId(createdByUserId),
@@ -268,6 +329,8 @@ async function createForTenant(
     description: input.description?.trim() || undefined,
     startDate: input.startDate ?? undefined,
     endDate: input.endDate ?? undefined,
+    reminderEmails: normalizeReminderEmails(input.reminderEmails),
+    autoArchiveEnabled: input.autoArchiveEnabled !== false,
     enabledServices,
     status: 'active',
     createdBy: new mongoose.Types.ObjectId(createdByUserId),
@@ -690,13 +753,7 @@ export class ProjectsService {
     if (doc.status === 'archived') {
       throw new ValidationError('Archived projects cannot be edited.');
     }
-    if (input.name !== undefined) doc.name = input.name.trim();
-    if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
-    if (input.description !== undefined) {
-      doc.description = input.description?.trim() || undefined;
-    }
-    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
-    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
+    applyProjectUpdateFields(doc, input);
     await doc.save();
     return toPublic(doc, await resourceCountsByService(doc));
   }
@@ -763,7 +820,22 @@ export class ProjectsService {
     if (doc.status === 'archived') {
       throw new ValidationError('Project is already archived.');
     }
-    doc.status = 'archived';
+    markProjectArchived(doc, 'manual');
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  async unarchiveForTenant(tenantId: string, projectId: string): Promise<ProjectPublic> {
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      ownerType: 'tenant',
+      tenantId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status !== 'archived') {
+      throw new ValidationError('Project is not archived.');
+    }
+    markProjectUnarchived(doc);
     await doc.save();
     return toPublic(doc, await resourceCountsByService(doc));
   }
@@ -801,7 +873,23 @@ export class ProjectsService {
     if (doc.status === 'archived') {
       throw new ValidationError('Project is already archived.');
     }
-    doc.status = 'archived';
+    markProjectArchived(doc, 'manual');
+    await doc.save();
+    return toPublic(doc, await resourceCountsByService(doc));
+  }
+
+  async unarchiveForAdmin(targetAdminId: string, projectId: string): Promise<ProjectPublic> {
+    const orgId = await resolveTargetOrgOwnerId(targetAdminId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+      $or: [{ ownerType: 'org' }, { ownerType: { $exists: false } }, { ownerType: null }],
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status !== 'archived') {
+      throw new ValidationError('Project is not archived.');
+    }
+    markProjectUnarchived(doc);
     await doc.save();
     return toPublic(doc, await resourceCountsByService(doc));
   }
@@ -956,13 +1044,7 @@ export class ProjectsService {
       throw new ValidationError('Archived projects cannot be edited.');
     }
 
-    if (input.name !== undefined) doc.name = input.name.trim();
-    if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
-    if (input.description !== undefined) {
-      doc.description = input.description?.trim() || undefined;
-    }
-    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
-    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
+    applyProjectUpdateFields(doc, input);
     await doc.save();
     const resourceCounts = await resourceCountsByService(doc);
     return toPublic(doc, resourceCounts);
@@ -1034,7 +1116,23 @@ export class ProjectsService {
       orgId,
     });
     if (!doc) throw new NotFoundError('Project not found.');
-    doc.status = 'archived';
+    markProjectArchived(doc, 'manual');
+    await doc.save();
+    const resourceCounts = await resourceCountsByService(doc);
+    return toPublic(doc, resourceCounts);
+  }
+
+  async unarchive(userId: string, projectId: string): Promise<ProjectPublic> {
+    const { orgId } = await assertOrgOwner(userId);
+    const doc = await ProjectModel.findOne({
+      _id: new mongoose.Types.ObjectId(projectId),
+      orgId,
+    });
+    if (!doc) throw new NotFoundError('Project not found.');
+    if (doc.status !== 'archived') {
+      throw new ValidationError('Project is not archived.');
+    }
+    markProjectUnarchived(doc);
     await doc.save();
     const resourceCounts = await resourceCountsByService(doc);
     return toPublic(doc, resourceCounts);
@@ -1213,13 +1311,7 @@ export class ProjectsService {
     if (doc.status === 'archived') {
       throw new ValidationError('Archived projects cannot be edited.');
     }
-    if (input.name !== undefined) doc.name = input.name.trim();
-    if (input.clientName !== undefined) doc.clientName = input.clientName.trim();
-    if (input.description !== undefined) {
-      doc.description = input.description?.trim() || undefined;
-    }
-    if (input.startDate !== undefined) doc.startDate = input.startDate ?? undefined;
-    if (input.endDate !== undefined) doc.endDate = input.endDate ?? undefined;
+    applyProjectUpdateFields(doc, input);
     await doc.save();
     return toPublic(doc, await resourceCountsByService(doc));
   }

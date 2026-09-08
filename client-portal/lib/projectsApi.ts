@@ -3,6 +3,23 @@ import type { AdminServiceKey } from './adminServicesApi';
 
 export type ProjectStatus = 'active' | 'archived';
 
+export function formatReminderEmailsInput(emails?: string[] | null): string {
+  return (emails ?? []).join(', ');
+}
+
+export function parseReminderEmailsInput(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(/[,;\n]+/)
+        .map((part) => part.trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ].slice(0, 10);
+}
+
+export type ProjectArchivedReason = 'manual' | 'end_date_reached';
+
 export interface OrgProject {
   id: string;
   ownerType?: 'org' | 'tenant';
@@ -16,6 +33,10 @@ export interface OrgProject {
   description: string | null;
   startDate: string | null;
   endDate: string | null;
+  reminderEmails?: string[];
+  autoArchiveEnabled?: boolean;
+  archivedAt?: string | null;
+  archivedReason?: ProjectArchivedReason | null;
   enabledServices: AdminServiceKey[];
   status: ProjectStatus;
   createdBy: string;
@@ -92,6 +113,8 @@ export async function createProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
+  reminderEmails?: string[];
+  autoArchiveEnabled?: boolean;
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     apiRequest('/api/v1/projects', {
@@ -104,7 +127,15 @@ export async function createProject(input: {
 
 export async function updateProject(
   id: string,
-  input: { name?: string; clientName?: string; description?: string | null; startDate?: string | null; endDate?: string | null }
+  input: {
+    name?: string;
+    clientName?: string;
+    description?: string | null;
+    startDate?: string | null;
+    endDate?: string | null;
+    reminderEmails?: string[] | null;
+    autoArchiveEnabled?: boolean;
+  }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     apiRequest(`/api/v1/projects/${id}`, {
@@ -143,6 +174,13 @@ export async function removeProjectService(
 export async function archiveProject(id: string): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     apiRequest(`/api/v1/projects/${id}/archive`, { method: 'POST' })
+  );
+  return data.project;
+}
+
+export async function unarchiveProject(id: string): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    apiRequest(`/api/v1/projects/${id}/unarchive`, { method: 'POST' })
   );
   return data.project;
 }
