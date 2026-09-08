@@ -158,6 +158,13 @@ export default function SuperAdminElasticServersOverviewPage() {
     });
   }, [rows, search, stackFilter]);
 
+  const manageIpRows = useMemo(() => {
+    if (!manageRow) return [];
+    const ip = manageRow.ipAddress.trim().toLowerCase();
+    const matches = rows.filter((item) => item.ipAddress.trim().toLowerCase() === ip);
+    return matches.length > 0 ? matches : [manageRow];
+  }, [manageRow, rows]);
+
   return (
     <div className="mx-auto max-w-7xl">
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
@@ -165,12 +172,19 @@ export default function SuperAdminElasticServersOverviewPage() {
       {manageRow && (
         <ManageExternalVmAssignmentsModal
           row={manageRow}
+          ipRows={manageIpRows}
           onClose={() => setManageRow(null)}
           onUpdated={(updated) => {
-            setRows((prev) =>
-              prev.map((r) => (r.externalVmId === updated.externalVmId ? updated : r))
+            setRows((prev) => {
+              const exists = prev.some((item) => item.externalVmId === updated.externalVmId);
+              if (exists) {
+                return prev.map((item) => (item.externalVmId === updated.externalVmId ? updated : item));
+              }
+              return [...prev, updated];
+            });
+            setManageRow((current) =>
+              current?.externalVmId === updated.externalVmId ? updated : current
             );
-            setManageRow(updated);
           }}
         />
       )}

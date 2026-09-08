@@ -230,6 +230,23 @@ export const listSuperAdminAzurePlacementOptionsSchema = z.object({
   }),
 });
 
+export const validateSuperAdminAzureProvisionQuoteSchema = z.object({
+  body: z.object({
+    vmSize: z.string().min(1).max(100).trim(),
+    region: z.string().min(1).max(100).trim(),
+    category: z.string().min(1).max(32).trim().optional(),
+    vcpu: z.number().int().min(1).max(128).optional(),
+    ramGb: z.number().int().min(1).max(1024).optional(),
+    ssdGb: z.number().int().min(8).max(65536).optional(),
+    nestedVirtualization: z.boolean().optional(),
+    assignPublicIp: z.boolean().optional(),
+    imagePublisher: z.string().min(1).max(200).trim().optional(),
+    imageOffer: z.string().min(1).max(200).trim().optional(),
+    imageSku: z.string().min(1).max(200).trim().optional(),
+    customImageId: z.string().min(1).max(500).trim().optional(),
+  }),
+});
+
 export const createSuperAdminAzureCatalogVmSchema = z.object({
   body: z
     .object({
@@ -282,6 +299,9 @@ export const createSuperAdminAzureCatalogVmSchema = z.object({
 
 export type ListSuperAdminAzurePlacementOptionsInput = z.infer<
   typeof listSuperAdminAzurePlacementOptionsSchema
+>['body'];
+export type ValidateSuperAdminAzureProvisionQuoteInput = z.infer<
+  typeof validateSuperAdminAzureProvisionQuoteSchema
 >['body'];
 export type CreateSuperAdminAzureCatalogVmInput = z.infer<
   typeof createSuperAdminAzureCatalogVmSchema

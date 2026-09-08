@@ -49,6 +49,9 @@ export interface IExternalVM extends Document {
   weeklySchedule?: WeeklyScheduleDay[] | null;
   weeklyScheduleTz: string;
 
+  /** When true, super-admin inventory cannot delete this VM until unlocked. */
+  inventoryLocked: boolean;
+
   // Timestamps
   createdAt: Date;
   updatedAt: Date;
@@ -158,6 +161,7 @@ const externalVMSchema = new Schema<IExternalVM>(
     accessOverrideUntil: { type: Date, default: null },
     weeklySchedule: { type: Schema.Types.Mixed, default: null },
     weeklyScheduleTz: { type: String, default: 'Asia/Kolkata', trim: true },
+    inventoryLocked: { type: Boolean, default: false, index: true },
     createdAt: {
       type: Date,
       default: Date.now,

@@ -65,7 +65,11 @@ export async function listAzureImageSkuPlans({
       offer: off,
       displayName,
       version: latestVersion,
-      versionLabel: formatAzureImageVersionLabel(latestVersion),
+      versionLabel: formatAzureImageVersionLabel(latestVersion, {
+        publisher: pub,
+        offer: off,
+        sku,
+      }),
       summary: buildAzureImagePlanSummary({
         publisher: pub,
         offer: off,
@@ -75,13 +79,7 @@ export async function listAzureImageSkuPlans({
     });
   }
 
-  plans.sort((a, b) => {
-    const versionCmp = String(b.version || '').localeCompare(String(a.version || ''), undefined, {
-      numeric: true,
-    });
-    if (versionCmp !== 0) return versionCmp;
-    return a.displayName.localeCompare(b.displayName);
-  });
+  plans.sort((a, b) => a.displayName.localeCompare(b.displayName));
 
   return plans;
 }

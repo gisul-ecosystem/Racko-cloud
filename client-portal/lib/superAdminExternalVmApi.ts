@@ -152,6 +152,7 @@ export interface SuperAdminExternalVmOverviewRow {
   assignedTo: string | null;
   assignedTenantUserId: string | null;
   assignments: SuperAdminExternalVmAssigneeView[];
+  inventoryLocked: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -323,6 +324,32 @@ export async function updateSuperAdminExternalVmProviderMetadata(body: {
   return data;
 }
 
+export async function updateSuperAdminExternalVmDetails(
+  externalVmId: string,
+  body: { name?: string; username?: string; password?: string }
+): Promise<SuperAdminExternalVmOverviewRow> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ row: SuperAdminExternalVmOverviewRow }>>(
+      `/api/v1/super-admin/external-vms/${encodeURIComponent(externalVmId)}/details`,
+      { method: 'PATCH', body: JSON.stringify(body) }
+    )
+  );
+  return data.row;
+}
+
+export async function addSuperAdminExternalVmSiblingLogin(
+  externalVmId: string,
+  body: { name?: string; username: string; password: string }
+): Promise<SuperAdminExternalVmOverviewRow> {
+  const data = await unwrap(
+    apiRequest<ApiEnvelope<{ row: SuperAdminExternalVmOverviewRow }>>(
+      `/api/v1/super-admin/external-vms/${encodeURIComponent(externalVmId)}/sibling-login`,
+      { method: 'POST', body: JSON.stringify(body) }
+    )
+  );
+  return data.row;
+}
+
 export async function deleteSuperAdminExternalVmAssignment(
   externalVmId: string,
   assignmentId: string
@@ -349,6 +376,21 @@ export interface SuperAdminExternalVmBulkDeleteResult {
     deleted: number;
     failed: number;
   };
+}
+
+export async function setSuperAdminExternalVmInventoryLock(
+  externalVmId: string,
+  inventoryLocked: boolean
+): Promise<{ externalVmId: string; inventoryLocked: boolean }> {
+  return unwrap(
+    apiRequest<ApiEnvelope<{ externalVmId: string; inventoryLocked: boolean }>>(
+      `/api/v1/super-admin/external-vms/${encodeURIComponent(externalVmId)}/lock`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ inventoryLocked }),
+      }
+    )
+  );
 }
 
 export async function deleteSuperAdminExternalVm(
@@ -388,6 +430,48 @@ export async function bulkDeleteSuperAdminExternalVms(
     aggregated.summary.total += res.summary.total;
     aggregated.summary.deleted += res.summary.deleted;
     aggregated.summary.failed += res.summary.failed;
+  }
+
+  return aggregated;
+}
+
+export interface SuperAdminExternalVmBulkOverrideResult {
+  updatedVms: number;
+  updatedAssignments: number;
+  notFound: string[];
+}
+
+const BULK_OVERRIDE_CHUNK_SIZE = 5000;
+
+export async function bulkUpdateSuperAdminExternalVmOverride(
+  ids: string[],
+  body: { accessOverride: boolean; accessOverrideUntil?: string | null }
+): Promise<SuperAdminExternalVmBulkOverrideResult> {
+  const uniqueIds = [...new Set(ids)];
+  const aggregated: SuperAdminExternalVmBulkOverrideResult = {
+    updatedVms: 0,
+    updatedAssignments: 0,
+    notFound: [],
+  };
+
+  for (let i = 0; i < uniqueIds.length; i += BULK_OVERRIDE_CHUNK_SIZE) {
+    const chunk = uniqueIds.slice(i, i + BULK_OVERRIDE_CHUNK_SIZE);
+    const res = await unwrap(
+      apiRequest<ApiEnvelope<SuperAdminExternalVmBulkOverrideResult>>(
+        '/api/v1/super-admin/external-vms/bulk-override',
+        {
+          method: 'POST',
+          body: JSON.stringify({
+            ids: chunk,
+            accessOverride: body.accessOverride,
+            accessOverrideUntil: body.accessOverrideUntil ?? null,
+          }),
+        }
+      )
+    );
+    aggregated.updatedVms += res.updatedVms;
+    aggregated.updatedAssignments += res.updatedAssignments;
+    aggregated.notFound.push(...res.notFound);
   }
 
   return aggregated;

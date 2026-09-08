@@ -78,10 +78,12 @@ class SoftwareCatalogService {
   /**
    * Returns a presigned GET URL for an internally stored software file.
    * Called by the agent when it fetches software details before installing.
-   * TTL: 10 minutes — enough for the agent to start the download.
+   * TTL: 1 hour — enough for large installer downloads (Anaconda, VS, etc.)
+   * The agent fetches just-in-time (after acquiring the install lock) so the
+   * URL is always fresh when the download starts.
    */
   async getDownloadUrl(storageRef: string): Promise<string> {
-    const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(storageRef, 600);
+    const { presignedUrl } = await seaweedfsService.generatePresignedGetUrl(storageRef, 3600);
     return presignedUrl;
   }
 

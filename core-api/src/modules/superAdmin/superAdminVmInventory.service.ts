@@ -168,6 +168,91 @@ function normalizeIpAddress(ipAddress: string): string {
   return normalizeCanonicalIpv4(ipAddress);
 }
 
+function parseProviderImportDate(value?: string | Date | null): Date | undefined {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  }
+
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+
+  if (/^\d+(\.\d+)?$/.test(trimmed)) {
+    const serial = Number(trimmed);
+    const whole = Math.floor(serial);
+    if (Number.isFinite(serial) && whole >= 32874 && whole <= 73415) {
+      const utc = new Date(Math.round((serial - 25569) * 86400 * 1000));
+      if (!Number.isNaN(utc.getTime())) {
+        return new Date(Date.UTC(utc.getUTCFullYear(), utc.getUTCMonth(), utc.getUTCDate()));
+      }
+    }
+  }
+
+  const isoMatch = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})(?:[tT\s](.+))?$/);
+  if (isoMatch) {
+    const year = Number(isoMatch[1]);
+    const month = Number(isoMatch[2]) - 1;
+    const day = Number(isoMatch[3]);
+    const timePart = isoMatch[4]?.trim();
+    if (!timePart || /^00:00:00(\.0+)?(z|[+-]00:00)?$/i.test(timePart)) {
+      const date = new Date(Date.UTC(year, month, day));
+      if (
+        !Number.isNaN(date.getTime()) &&
+        date.getUTCFullYear() === year &&
+        date.getUTCMonth() === month &&
+        date.getUTCDate() === day
+      ) {
+        return date;
+      }
+    } else {
+      const parsedIso = new Date(trimmed);
+      if (!Number.isNaN(parsedIso.getTime())) {
+        const utcHours =
+          parsedIso.getUTCHours() +
+          parsedIso.getUTCMinutes() / 60 +
+          parsedIso.getUTCSeconds() / 3600;
+        if (utcHours >= 0.001) {
+          const shifted = new Date(parsedIso.getTime() + 12 * 60 * 60 * 1000);
+          return new Date(
+            Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), shifted.getUTCDate())
+          );
+        }
+        return new Date(
+          Date.UTC(parsedIso.getUTCFullYear(), parsedIso.getUTCMonth(), parsedIso.getUTCDate())
+        );
+      }
+    }
+  }
+
+  const dmyMatch = trimmed.match(/^(\d{1,2})[/.\\-](\d{1,2})[/.\\-](\d{2,4})$/);
+  if (dmyMatch) {
+    const first = Number(dmyMatch[1]);
+    const second = Number(dmyMatch[2]);
+    const yearRaw = dmyMatch[3];
+    const year =
+      yearRaw.length === 2
+        ? Number(yearRaw) >= 70
+          ? 1900 + Number(yearRaw)
+          : 2000 + Number(yearRaw)
+        : Number(yearRaw);
+    const day = first > 12 ? first : second > 12 ? second : first;
+    const month = first > 12 ? second : second > 12 ? first : second;
+    const date = new Date(Date.UTC(year, month - 1, day));
+    if (
+      !Number.isNaN(date.getTime()) &&
+      date.getUTCFullYear() === year &&
+      date.getUTCMonth() === month - 1 &&
+      date.getUTCDate() === day
+    ) {
+      return date;
+    }
+  }
+
+  const parsed = new Date(trimmed);
+  if (Number.isNaN(parsed.getTime())) return undefined;
+  return new Date(Date.UTC(parsed.getUTCFullYear(), parsed.getUTCMonth(), parsed.getUTCDate()));
+}
+
 function inferExternalVmProtocol(row: VmProviderMetadataImportRow): 'rdp' | 'ssh' | 'vnc' {
   if (row.protocol === 'rdp' || row.protocol === 'ssh' || row.protocol === 'vnc') {
     return row.protocol;
@@ -581,6 +666,44 @@ export class SuperAdminVmInventoryService {
     return { found: true, updated: true };
   }
 
+  /**
+   * Strip the client-assigned display name when returning a VM to the free pool.
+   * External VM `name` is a required label, so it falls back to the IP address.
+   */
+  private async resetResourceDisplayNameForInventoryRow(
+    input: SuperAdminVmInventoryClearAssignmentInput
+  ): Promise<{ found: boolean; updated: boolean }> {
+    const sourceObjectId = toObjectId(input.sourceId);
+    if (!sourceObjectId) {
+      return { found: false, updated: false };
+    }
+
+    if (input.resourceType !== 'external_vm') {
+      return { found: true, updated: false };
+    }
+
+    const externalVm = await ExternalVMModel.findById(sourceObjectId).select('name ipAddress');
+    if (!externalVm) {
+      return { found: false, updated: false };
+    }
+
+    const nextName = externalVm.ipAddress?.trim() || 'Unassigned VM';
+    if (externalVm.name?.trim() === nextName) {
+      return { found: true, updated: false };
+    }
+
+    await ExternalVMModel.updateOne(
+      { _id: sourceObjectId },
+      {
+        $set: {
+          name: nextName,
+          updatedAt: new Date(),
+        },
+      }
+    );
+    return { found: true, updated: true };
+  }
+
   async deleteAssignedUser(
     input: SuperAdminVmInventoryClearAssignmentInput
   ): Promise<SuperAdminVmInventoryDeleteAssignedUserResult> {
@@ -614,8 +737,9 @@ export class SuperAdminVmInventoryService {
     const resolved = await this.resolveAssignedUsersForInventoryRow(input);
     const cleared = await this.clearResourceAssignmentsForInventoryRow(input);
     const ownerCleared = await this.clearResourceOwnerForInventoryRow(input);
+    const nameReset = await this.resetResourceDisplayNameForInventoryRow(input);
 
-    if (!resolved.found && !cleared.found && !ownerCleared.found) {
+    if (!resolved.found && !cleared.found && !ownerCleared.found && !nameReset.found) {
       return {
         updated: false,
         deletedPlatformUsers: 0,
@@ -640,6 +764,7 @@ export class SuperAdminVmInventoryService {
     const updated =
       cleared.updated ||
       ownerCleared.updated ||
+      nameReset.updated ||
       deletedPlatformUsers > 0 ||
       deletedTenantUsers > 0;
 
@@ -1547,8 +1672,10 @@ export class SuperAdminVmInventoryService {
       const username = row.username?.trim();
       if (username) set.providerUsername = username;
       if (row.password) set.providerPassword = encrypt(row.password);
-      if (row.providerStartDate) set.providerStartDate = new Date(row.providerStartDate);
-      if (row.providerEndDate) set.providerEndDate = new Date(row.providerEndDate);
+      const providerStartDate = parseProviderImportDate(row.providerStartDate);
+      if (providerStartDate) set.providerStartDate = providerStartDate;
+      const providerEndDate = parseProviderImportDate(row.providerEndDate);
+      if (providerEndDate) set.providerEndDate = providerEndDate;
 
       await VmProviderMetadataModel.findOneAndUpdate(
         { ipAddress },
@@ -1599,10 +1726,12 @@ export class SuperAdminVmInventoryService {
 
     if (row.planDuration !== undefined) set['planDuration'] = row.planDuration ?? null;
     if (row.providerStartDate !== undefined) {
-      set['providerStartDate'] = row.providerStartDate ? new Date(row.providerStartDate) : null;
+      const parsed = parseProviderImportDate(row.providerStartDate);
+      set['providerStartDate'] = parsed ?? null;
     }
     if (row.providerEndDate !== undefined) {
-      set['providerEndDate'] = row.providerEndDate ? new Date(row.providerEndDate) : null;
+      const parsed = parseProviderImportDate(row.providerEndDate);
+      set['providerEndDate'] = parsed ?? null;
     }
 
     const result = await VmProviderMetadataModel.findOneAndUpdate(

@@ -53,20 +53,25 @@ func (e *Executor) Handle(job poller.Job) {
 	jobFailed := false
 
 	for _, swID := range job.SoftwareIDs {
+		log.Printf("[executor] Job %s waiting for install slot (softwareId=%s)", job.ID, swID)
+		waitStart := time.Now()
+
+		// Acquire install lock FIRST — only one package installs at a time.
+		// fetchSoftware is intentionally called AFTER acquiring the lock so the
+		// presigned S3 URL is resolved just-in-time, never expiring while waiting
+		// in a long queue behind other installs.
+		installMu.Lock()
+		waitElapsed := time.Since(waitStart).Round(time.Millisecond)
+
 		pkg, err := e.fetchSoftware(swID)
 		if err != nil {
+			installMu.Unlock()
 			log.Printf("[executor] Failed to fetch software id=%s: %v", swID, err)
 			combinedLogs += fmt.Sprintf("[error] Could not fetch software %s: %v\n", swID, err)
 			jobFailed = true
 			continue
 		}
 
-		log.Printf("[executor] Job %s waiting for install slot (package=%s)", job.ID, pkg.Name)
-		waitStart := time.Now()
-
-		// Acquire install lock — waits for any other in-progress install to finish.
-		installMu.Lock()
-		waitElapsed := time.Since(waitStart).Round(time.Millisecond)
 		log.Printf("[executor] Job %s acquired install slot after %s (package=%s)", job.ID, waitElapsed, pkg.Name)
 		log.Printf("[executor] Installing %s v%s via %s (job=%s)", pkg.Name, pkg.Version, pkg.InstallMethod, job.ID)
 		installStart := time.Now()
@@ -74,7 +79,7 @@ func (e *Executor) Handle(job poller.Job) {
 		installElapsed := time.Since(installStart).Round(time.Millisecond)
 		installMu.Unlock()
 		log.Printf("[executor] installer.Install returned for %s — elapsed=%s err=%v", pkg.Name, installElapsed, err)
-		combinedLogs += truncateLogs(logs, 50*1024) // cap at 50KB per package
+		combinedLogs += truncateLogs(logs, 50*1024)
 
 		if err != nil {
 			log.Printf("[executor] Install failed for %s: %v", pkg.Name, err)
@@ -143,7 +148,7 @@ func truncateLogs(logs string, maxBytes int) string {
 // Permanent failures (checksum mismatch, package not found, etc.) are not retried.
 func installWithRetry(pkg installer.SoftwarePackage) (string, error) {
 	const maxAttempts = 3
-	delays := []time.Duration{10 * time.Second, 30 * time.Second, 60 * time.Second}
+	delays := []time.Duration{30 * time.Second, 90 * time.Second, 180 * time.Second}
 
 	var lastLogs string
 	var lastErr error

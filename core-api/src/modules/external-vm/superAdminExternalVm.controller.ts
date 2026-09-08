@@ -7,8 +7,12 @@ import { superAdminExternalVmAssignmentService } from './superAdminExternalVmAss
 import { superAdminExternalVmDeleteService } from './superAdminExternalVmDelete.service';
 import type { SuperAdminBulkImportExternalVmInput } from './superAdminBulkImport.validation';
 import type {
+  BulkUpdateSuperAdminExternalVmOverrideInput,
   CreateSuperAdminExternalVmAssignmentInput,
+  CreateSuperAdminExternalVmSiblingLoginInput,
   PatchSuperAdminExternalVmAssignmentInput,
+  PatchSuperAdminExternalVmDetailsInput,
+  SetSuperAdminExternalVmInventoryLockInput,
 } from './superAdminExternalVmAssignment.validation';
 
 function success<T>(res: Response, message: string, data?: T, statusCode = 200): void {
@@ -120,12 +124,64 @@ export class SuperAdminExternalVmController {
     }
   }
 
+  /** PATCH /api/v1/super-admin/external-vms/:id/details */
+  async updateDetails(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const authReq = req as AuthenticatedRequest;
+      const input: PatchSuperAdminExternalVmDetailsInput = {
+        params: { id: req.params.id! },
+        body: req.body,
+      };
+      const row = await superAdminExternalVmAssignmentService.updateDetails(
+        input,
+        authReq.user.userId
+      );
+      success(res, 'VM details updated.', { row });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/super-admin/external-vms/:id/sibling-login */
+  async addSiblingLogin(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const input: CreateSuperAdminExternalVmSiblingLoginInput = {
+        params: { id: req.params.id! },
+        body: req.body,
+      };
+      const row = await superAdminExternalVmAssignmentService.addSiblingLogin(input);
+      success(res, 'Additional VM login created.', { row }, 201);
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** PATCH /api/v1/super-admin/external-vms/:id/lock */
+  async setInventoryLock(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const input: SetSuperAdminExternalVmInventoryLockInput = {
+        params: { id: req.params.id! },
+        body: req.body,
+      };
+      const data = await superAdminExternalVmAssignmentService.setInventoryLock(input);
+      success(
+        res,
+        data.inventoryLocked ? 'VM locked. It cannot be deleted from inventory.' : 'VM unlocked.',
+        data
+      );
+    } catch (err) {
+      next(err);
+    }
+  }
+
   /** DELETE /api/v1/super-admin/external-vms/:id */
   async deleteExternalVm(req: Request, res: Response, next: NextFunction): Promise<void> {
     try {
       const result = await superAdminExternalVmDeleteService.deleteOne(req.params.id!);
       if (!result.success) {
-        res.status(result.error?.includes('not found') ? 404 : 400).json({
+        res.status(
+          result.error?.includes('not found') ? 404 : result.error?.includes('locked') ? 409 : 400
+        ).json({
           success: false,
           message: result.error ?? 'Delete failed.',
           data: { results: [result], summary: { total: 1, deleted: 0, failed: 1 } },
@@ -136,6 +192,28 @@ export class SuperAdminExternalVmController {
         results: [result],
         summary: { total: 1, deleted: 1, failed: 0 },
       });
+    } catch (err) {
+      next(err);
+    }
+  }
+
+  /** POST /api/v1/super-admin/external-vms/bulk-override */
+  async bulkUpdateOverride(req: Request, res: Response, next: NextFunction): Promise<void> {
+    try {
+      const body = req.body as BulkUpdateSuperAdminExternalVmOverrideInput['body'];
+      const data = await superAdminExternalVmAssignmentService.bulkUpdateOverride(body);
+      const statusCode =
+        data.notFound.length === 0 ? 200 : data.updatedVms > 0 ? 207 : 400;
+      success(
+        res,
+        data.updatedVms === 0
+          ? 'No matching VMs found for override.'
+          : body.accessOverride
+            ? `Access override granted for ${data.updatedVms} VM(s).`
+            : `Access override revoked for ${data.updatedVms} VM(s).`,
+        data,
+        statusCode
+      );
     } catch (err) {
       next(err);
     }

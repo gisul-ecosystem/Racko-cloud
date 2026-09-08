@@ -58,6 +58,7 @@ export interface SuperAdminExternalVmOverviewRow {
   assignedTo: string | null;
   assignedTenantUserId: string | null;
   assignments: SuperAdminExternalVmAssigneeView[];
+  inventoryLocked: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -107,6 +108,13 @@ function scheduleView(
 
 function normalizeIpAddress(ipAddress: string): string {
   return normalizeCanonicalIpv4(ipAddress);
+}
+
+function toIsoDateOrNull(value?: Date | string | null): string | null {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
 }
 
 class SuperAdminExternalVmOverviewService {
@@ -300,8 +308,8 @@ class SuperAdminExternalVmOverviewService {
         providerPlanDuration: provider?.planDuration ?? null,
         providerVmSpec: provider?.vmSpec ?? null,
         providerUsername: provider?.providerUsername ?? null,
-        providerStartDate: provider?.providerStartDate ? new Date(provider.providerStartDate).toISOString() : null,
-        providerEndDate: provider?.providerEndDate ? new Date(provider.providerEndDate).toISOString() : null,
+        providerStartDate: toIsoDateOrNull(provider?.providerStartDate),
+        providerEndDate: toIsoDateOrNull(provider?.providerEndDate),
         source: doc.source ?? 'admin_import',
         stack: isFree ? 'free' : isTenant ? 'tenant' : 'platform',
         adminId: doc.adminId?.toString() ?? null,
@@ -315,6 +323,7 @@ class SuperAdminExternalVmOverviewService {
         assignedTo: doc.assignedTo?.toString() ?? null,
         assignedTenantUserId: doc.assignedTenantUserId?.toString() ?? null,
         assignments,
+        inventoryLocked: Boolean(doc.inventoryLocked),
         createdAt: new Date(doc.createdAt).toISOString(),
         updatedAt: new Date(doc.updatedAt).toISOString(),
       };

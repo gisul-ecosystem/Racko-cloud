@@ -354,6 +354,73 @@ export async function shortlistAzureSkusForSpec({
   });
 }
 
+/** Human series label from Azure family / size (e.g. standardNVSv4Family → NVSv4). */
+export function azureSeriesLabelFromSku(sku) {
+  const family = String(sku?.family || '').trim();
+  if (family) {
+    return family.replace(/^standard/i, '').replace(/Family$/i, '') || family;
+  }
+  const name = String(sku?.name || '').replace(/^Standard_/i, '');
+  const m = name.match(/^([A-Za-z]+)/);
+  return m ? m[1] : name || 'Other';
+}
+
+function azureSeriesKeyFromSku(sku) {
+  const family = String(sku?.family || '').trim().toLowerCase();
+  if (family) return family;
+  return `name:${azureSeriesLabelFromSku(sku).toLowerCase()}`;
+}
+
+/**
+ * Best-fit SKU per Azure series/family (Portal-style series coverage).
+ * Keeps Spec vCPU/RAM/GPU filters, but does not collapse to a single family.
+ */
+export async function shortlistAzureSkusAcrossSeries({
+  vcpu,
+  ramGb,
+  diskGb,
+  gpu = false,
+  nestedVirtualization = false,
+  category = 'linux',
+  architecture,
+  maxSeries = 40,
+} = {}) {
+  const needVcpu = Math.max(1, Number(vcpu) || 1);
+  const needRam = Math.max(1, Number(ramGb) || 1);
+  const nested = Boolean(nestedVirtualization);
+  const archPref = normalizeArchitecture(architecture, {
+    category,
+    nestedVirtualization: nested,
+  });
+  const seriesCap = Math.min(Math.max(Number(maxSeries) || 40, 1), 80);
+
+  const skus = await listAzureVmSkus();
+  const candidates = filterAzureSkusForSpec(skus, {
+    needVcpu,
+    needRam,
+    nested,
+    archPref,
+    gpu,
+  });
+  if (candidates.length === 0) return [];
+
+  const bySeries = new Map();
+  for (const sku of candidates) {
+    const key = azureSeriesKeyFromSku(sku);
+    const prev = bySeries.get(key);
+    if (!prev || compareAzureSkuFit(sku, prev, needVcpu, needRam) < 0) {
+      bySeries.set(key, sku);
+    }
+  }
+
+  const champions = [...bySeries.values()].map((sku) => ({
+    ...sku,
+    series: azureSeriesLabelFromSku(sku),
+  }));
+
+  return rankAzureSkuCandidates(champions, needVcpu, needRam).slice(0, seriesCap);
+}
+
 /**
  * Ranked Azure VM sizes for a requested spec — wizard step 2.
  * Private IP: price in AZURE_LOCATION (home / VNet region).

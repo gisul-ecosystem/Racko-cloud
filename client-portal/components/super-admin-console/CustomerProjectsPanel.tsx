@@ -1,13 +1,16 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { FolderKanban, Loader2, Pencil, Plus, X } from 'lucide-react';
+import { Archive, FolderKanban, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
 import type { AdminServiceKey } from '@/lib/adminServicesApi';
 import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import {
   addProjectServicesForAdmin,
+  archiveProjectForAdmin,
   createProjectForAdmin,
+  deleteProjectForAdmin,
   fetchEligibleProjectServicesForAdmin,
   fetchProjectClientNames,
   fetchProjectForAdmin,
@@ -79,6 +82,11 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
   const [editEndDate, setEditEndDate] = useState('');
   const [editSaving, setEditSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<{
+    type: 'archive' | 'delete';
+    project: OrgProject;
+  } | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -270,6 +278,49 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
     }
   }
 
+  async function handleConfirmAction() {
+    if (!confirmAction) return;
+    setConfirmLoading(true);
+    setError(null);
+    try {
+      if (confirmAction.type === 'archive') {
+        const updated = await archiveProjectForAdmin(adminId, confirmAction.project.id);
+        setFlash(`Archived ${updated.name}. It can no longer accept new resources.`);
+      } else {
+        const result = await deleteProjectForAdmin(adminId, confirmAction.project.id);
+        const d = result.deleted;
+        const parts = [
+          d.catalogVms ? `${d.catalogVms} catalog VM(s)` : null,
+          d.externalVms ? `${d.externalVms} elastic server(s)` : null,
+          d.managedVms ? `${d.managedVms} managed VM(s)` : null,
+          d.dedicatedServers ? `${d.dedicatedServers} dedicated server request(s)` : null,
+          d.externalAssignments ? `${d.externalAssignments} assignment(s)` : null,
+        ].filter(Boolean);
+        setFlash(
+          `Deleted ${confirmAction.project.name}${
+            parts.length ? ` and removed ${parts.join(', ')}` : ''
+          }.`
+        );
+        if (detailProject?.id === confirmAction.project.id) setDetailProject(null);
+        if (editProject?.id === confirmAction.project.id) setEditProject(null);
+        if (manageProject?.id === confirmAction.project.id) setManageProject(null);
+      }
+      setConfirmAction(null);
+      await load();
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : confirmAction.type === 'archive'
+            ? 'Failed to archive project.'
+            : 'Failed to delete project.'
+      );
+      setConfirmAction(null);
+    } finally {
+      setConfirmLoading(false);
+    }
+  }
+
   return (
     <section className="space-y-4">
       <div className="overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm">
@@ -356,15 +407,31 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
                   </td>
                   <td className="px-4 py-3 text-gray-500">{formatDate(p.createdAt)}</td>
                   <td className="px-4 py-3 text-right">
-                    {p.status === 'active' ? (
-                      <div className="flex items-center justify-end gap-3">
+                    <div className="inline-flex items-center justify-end gap-3">
+                      <button
+                        type="button"
+                        onClick={() => openEdit(p)}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                      >
+                        <Pencil className="h-3 w-3" /> Edit
+                      </button>
+                      {p.status === 'active' ? (
                         <button
                           type="button"
-                          onClick={() => openEdit(p)}
-                          className="inline-flex items-center gap-1 text-xs font-medium text-gray-500 hover:text-gray-700"
+                          onClick={() => setConfirmAction({ type: 'archive', project: p })}
+                          className="inline-flex items-center gap-1 text-xs font-medium text-amber-700 hover:underline"
                         >
-                          <Pencil className="h-3 w-3" /> Edit
+                          <Archive className="h-3 w-3" /> Archive
                         </button>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => setConfirmAction({ type: 'delete', project: p })}
+                        className="inline-flex items-center gap-1 text-xs font-medium text-red-600 hover:underline"
+                      >
+                        <Trash2 className="h-3 w-3" /> Delete
+                      </button>
+                      {p.status === 'active' ? (
                         <button
                           type="button"
                           onClick={() => void openManage(p)}
@@ -372,10 +439,8 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
                         >
                           Add services
                         </button>
-                      </div>
-                    ) : (
-                      <span className="text-xs text-gray-400">—</span>
-                    )}
+                      ) : null}
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -784,6 +849,27 @@ export function CustomerProjectsPanel({ adminId }: { adminId: string }) {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={Boolean(confirmAction)}
+        title={
+          confirmAction?.type === 'delete'
+            ? 'Delete project permanently?'
+            : 'Archive this project?'
+        }
+        description={
+          confirmAction?.type === 'delete'
+            ? `Delete "${confirmAction.project.name}" and all resources assigned under it (catalog VMs, elastic servers, assignments, etc.). This cannot be undone.`
+            : `Archive "${confirmAction?.project.name ?? ''}"? It will stay visible but cannot accept new resources.`
+        }
+        confirmLabel={confirmAction?.type === 'delete' ? 'Delete project' : 'Archive project'}
+        confirmVariant={confirmAction?.type === 'delete' ? 'danger' : 'warning'}
+        loading={confirmLoading}
+        onConfirm={() => void handleConfirmAction()}
+        onCancel={() => {
+          if (!confirmLoading) setConfirmAction(null);
+        }}
+      />
     </section>
   );
 }

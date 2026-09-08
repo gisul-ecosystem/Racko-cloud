@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
 import { ExternalVmUserAssignmentModel } from '../../models/externalVmUserAssignment.model';
-import { NotFoundError } from '../../utils/errors';
+import { ConflictError, NotFoundError } from '../../utils/errors';
 import { logger } from '../../utils/logger';
 import { guacamoleClient } from '../../utils/guacamoleClient';
 import { cancelExternalAssignmentTimer } from '../vmAccessSchedule/scheduleManager';
@@ -35,7 +35,7 @@ class SuperAdminExternalVmDeleteService {
       return { id, success: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (err instanceof NotFoundError) {
+      if (err instanceof NotFoundError || err instanceof ConflictError) {
         return { id, success: false, error: message };
       }
       logger.error('[SuperAdminExternalVM] delete failed', { id, error: message });
@@ -52,7 +52,7 @@ class SuperAdminExternalVmDeleteService {
 
     const foundVms = validObjectIds.length
       ? await ExternalVMModel.find({ _id: { $in: validObjectIds } })
-          .select('_id tenantId assignedTo assignedTenantUserId')
+          .select('_id tenantId assignedTo assignedTenantUserId inventoryLocked')
           .lean()
       : [];
     const foundIdSet = new Set(foundVms.map((v) => v._id.toString()));
@@ -61,14 +61,23 @@ class SuperAdminExternalVmDeleteService {
       .filter((id) => !foundIdSet.has(id))
       .map((id) => ({ id, success: false, error: 'External VM not found.' }));
 
-    if (foundVms.length === 0) {
+    const lockedVms = foundVms.filter((v) => Boolean(v.inventoryLocked));
+    const unlockedVms = foundVms.filter((v) => !v.inventoryLocked);
+    const lockedResults: SuperAdminExternalVmDeleteItemResult[] = lockedVms.map((v) => ({
+      id: v._id.toString(),
+      success: false,
+      error: 'VM is locked and cannot be deleted from inventory.',
+    }));
+
+    if (unlockedVms.length === 0) {
+      const failedResults = [...lockedResults, ...missingResults];
       return {
-        results: missingResults,
+        results: failedResults,
         summary: { total: uniqueIds.length, deleted: 0, failed: uniqueIds.length },
       };
     }
 
-    const foundOids = foundVms.map((v) => v._id as mongoose.Types.ObjectId);
+    const foundOids = unlockedVms.map((v) => v._id as mongoose.Types.ObjectId);
 
     // Fetch all assignments for this batch in two queries (include user ids for cascade).
     const [platformAssigns, tenantAssigns] = await Promise.all([
@@ -87,7 +96,7 @@ class SuperAdminExternalVmDeleteService {
     // Fire Guac cleanup in parallel — skip if connection never existed (both helpers are no-ops
     // when the connection is not found).
     await Promise.all(
-      foundVms.map(async (vm) => {
+      unlockedVms.map(async (vm) => {
         const connectionName = externalVmConnectionName(vm._id.toString());
         try {
           await guacamoleClient.killActiveSessionsForConnection(connectionName);
@@ -119,14 +128,14 @@ class SuperAdminExternalVmDeleteService {
     const platformUserIds = [
       ...new Set([
         ...platformAssigns.map((a) => a.userId.toString()),
-        ...foundVms.filter((v) => v.assignedTo).map((v) => v.assignedTo!.toString()),
+        ...unlockedVms.filter((v) => v.assignedTo).map((v) => v.assignedTo!.toString()),
       ]),
     ].map((id) => new mongoose.Types.ObjectId(id));
 
     const tenantUserIds = [
       ...new Set([
         ...tenantAssigns.map((a) => a.tenantUserId.toString()),
-        ...foundVms.filter((v) => v.assignedTenantUserId).map((v) => v.assignedTenantUserId!.toString()),
+        ...unlockedVms.filter((v) => v.assignedTenantUserId).map((v) => v.assignedTenantUserId!.toString()),
       ]),
     ].map((id) => new mongoose.Types.ObjectId(id));
 
@@ -134,19 +143,20 @@ class SuperAdminExternalVmDeleteService {
       await this.cascadeDeleteOrphanedUsers(platformUserIds, tenantUserIds);
 
     logger.info('[SuperAdminExternalVM] Bulk-deleted external VMs', {
-      count: foundVms.length,
+      count: unlockedVms.length,
+      skippedLocked: lockedVms.length,
       platformAssignments: platformAssigns.length,
       tenantAssignments: tenantAssigns.length,
       deletedPlatformUsers,
       deletedTenantUsers,
     });
 
-    const successResults: SuperAdminExternalVmDeleteItemResult[] = foundVms.map((v) => ({
+    const successResults: SuperAdminExternalVmDeleteItemResult[] = unlockedVms.map((v) => ({
       id: v._id.toString(),
       success: true,
     }));
 
-    const allResults = [...successResults, ...missingResults];
+    const allResults = [...successResults, ...lockedResults, ...missingResults];
     const deleted = successResults.length;
     return {
       results: allResults,
@@ -162,6 +172,9 @@ class SuperAdminExternalVmDeleteService {
     const externalVmId = new mongoose.Types.ObjectId(id);
     const vm = await ExternalVMModel.findById(externalVmId);
     if (!vm) throw new NotFoundError('External VM not found.');
+    if (vm.inventoryLocked) {
+      throw new ConflictError('VM is locked and cannot be deleted from inventory.');
+    }
 
     const connectionName = externalVmConnectionName(externalVmId.toString());
 

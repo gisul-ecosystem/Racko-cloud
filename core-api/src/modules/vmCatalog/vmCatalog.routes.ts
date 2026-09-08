@@ -20,6 +20,7 @@ import {
   registerManualAzureCatalogVmSchema,
   attachManualAzureCatalogVmSchema,
   listSuperAdminAzurePlacementOptionsSchema,
+  validateSuperAdminAzureProvisionQuoteSchema,
   createSuperAdminAzureCatalogVmSchema,
 } from './vmCatalog.validation';
 import {
@@ -233,6 +234,15 @@ router.post(
   validateRequest(listSuperAdminAzurePlacementOptionsSchema),
   (req, res, next) => {
     vmCatalogController.listSuperAdminAzurePlacementOptions(req, res, next);
+  }
+);
+
+router.post(
+  '/super-admin/azure/validate-provision-quote',
+  requireRole('super_admin'),
+  validateRequest(validateSuperAdminAzureProvisionQuoteSchema),
+  (req, res, next) => {
+    vmCatalogController.validateSuperAdminAzureProvisionQuote(req, res, next);
   }
 );
 

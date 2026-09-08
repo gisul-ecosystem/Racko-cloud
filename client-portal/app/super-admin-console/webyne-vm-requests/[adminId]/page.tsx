@@ -34,6 +34,7 @@ import {
 } from '@/lib/vmCatalogApi';
 import { ErrorState } from '@/components/dashboard/ErrorState';
 import { TableSkeleton } from '@/components/dashboard/LoadingSkeleton';
+import { ReadMoreText } from '@/components/ui/ReadMoreText';
 
 const WINDOWS_ATTACH_DELAY_MS = 12 * 60 * 1000;
 const FETCH_TO_ATTACH_TIMEOUT_MS = 3 * 60 * 1000;
@@ -564,7 +565,9 @@ export default function WebyneVmRequestsByAdminPage() {
                         <td className="px-4 py-3.5">
                           <StatusBadge status={req.status} />
                           {req.fulfillError ? (
-                            <p className="mt-1 max-w-xs text-xs text-red-600">{req.fulfillError}</p>
+                            <div className="mt-1">
+                              <ReadMoreText text={req.fulfillError} previewLength={100} />
+                            </div>
                           ) : null}
                         </td>
                         <td className="px-4 py-3.5 text-gray-500">

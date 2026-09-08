@@ -8,6 +8,10 @@ import {
   createSuperAdminExternalVmAssignmentSchema,
   patchSuperAdminExternalVmAssignmentSchema,
   deleteSuperAdminExternalVmAssignmentSchema,
+  bulkUpdateSuperAdminExternalVmOverrideSchema,
+  setSuperAdminExternalVmInventoryLockSchema,
+  patchSuperAdminExternalVmDetailsSchema,
+  createSuperAdminExternalVmSiblingLoginSchema,
 } from './superAdminExternalVmAssignment.validation';
 import {
   deleteSuperAdminExternalVmSchema,
@@ -43,6 +47,12 @@ router.post(
 );
 
 router.post(
+  '/bulk-override',
+  validateRequest(bulkUpdateSuperAdminExternalVmOverrideSchema),
+  (req, res, next) => superAdminExternalVmController.bulkUpdateOverride(req, res, next)
+);
+
+router.post(
   '/bulk-delete',
   validateRequest(bulkDeleteSuperAdminExternalVmSchema),
   (req, res, next) => superAdminExternalVmController.bulkDeleteExternalVms(req, res, next)
@@ -58,6 +68,24 @@ router.patch(
   '/:id/assignments/:assignmentId',
   validateRequest(patchSuperAdminExternalVmAssignmentSchema),
   (req, res, next) => superAdminExternalVmController.patchAssignment(req, res, next)
+);
+
+router.patch(
+  '/:id/lock',
+  validateRequest(setSuperAdminExternalVmInventoryLockSchema),
+  (req, res, next) => superAdminExternalVmController.setInventoryLock(req, res, next)
+);
+
+router.patch(
+  '/:id/details',
+  validateRequest(patchSuperAdminExternalVmDetailsSchema),
+  (req, res, next) => superAdminExternalVmController.updateDetails(req, res, next)
+);
+
+router.post(
+  '/:id/sibling-login',
+  validateRequest(createSuperAdminExternalVmSiblingLoginSchema),
+  (req, res, next) => superAdminExternalVmController.addSiblingLogin(req, res, next)
 );
 
 router.delete(
