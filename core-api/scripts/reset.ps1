@@ -471,6 +471,88 @@ foreach ($userDir in (Get-UserProfiles)) {
 }
 Write-Host "Google Chrome registry cleanup complete." -ForegroundColor Green
 
+# ============================================================
+# PHASE 1d — MSIX / AppX package removal (all users)
+# Apps installed via MSIX (Claude, some Teams builds, etc.) are NOT
+# registered in the standard Uninstall registry keys — Phase 1 misses them.
+# This phase removes all non-system AppX/MSIX packages for all users.
+# ============================================================
+Write-Host "`n=== PHASE 1d: MSIX/APPX PACKAGE REMOVAL ===" -ForegroundColor Cyan
+
+$msixKeepPrefixes = @(
+    'Microsoft.Windows.',
+    'Microsoft.UI.',
+    'Microsoft.NET.',
+    'Microsoft.VCLibs.',
+    'Microsoft.Desktop.',
+    'Microsoft.Services.',
+    'Microsoft.AAD.',
+    'Microsoft.AccountsControl',
+    'Microsoft.BioEnrollment',
+    'Microsoft.CredDialogHost',
+    'Microsoft.ECApp',
+    'Microsoft.LockApp',
+    'Microsoft.SecHealthUI',
+    'Microsoft.ScreenSketch',
+    'Microsoft.Paint',
+    'Microsoft.WindowsNotepad',
+    'Microsoft.WindowsCalculator',
+    'Microsoft.WindowsStore',
+    'Microsoft.WindowsTerminal',
+    'Microsoft.MicrosoftEdge',
+    'Microsoft.Xbox',
+    'Microsoft.549981C3F5F10',
+    'MicrosoftWindows.',
+    'windows.',
+    'InputApp',
+    'NcsiUwpApp',
+    'Microsoft.GamingApp',
+    'Microsoft.GamingServices',
+    'Microsoft.XboxGameOverlay',
+    'Microsoft.XboxGamingOverlay',
+    'Microsoft.XboxIdentityProvider',
+    'Microsoft.XboxSpeechToTextOverlay',
+    'Clipchamp.',
+    'Microsoft.Photos',
+    'Microsoft.HEVCVideoExtension',
+    'Microsoft.VP9VideoExtensions',
+    'Microsoft.WebMediaExtensions',
+    'Microsoft.WebpImageExtension'
+)
+
+function Test-IsSystemMsixPackage {
+    param([string]$PackageName)
+    foreach ($prefix in $msixKeepPrefixes) {
+        if ($PackageName.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            return $true
+        }
+    }
+    return $false
+}
+
+try {
+    # Remove provisioned packages (system-wide / --all-users installs like Claude)
+    $provisioned = Get-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+    foreach ($pkg in $provisioned) {
+        if (Test-IsSystemMsixPackage $pkg.DisplayName) { continue }
+        Write-Host "Removing provisioned MSIX: $($pkg.DisplayName)" -ForegroundColor Yellow
+        Remove-AppxProvisionedPackage -Online -PackageName $pkg.PackageName -ErrorAction SilentlyContinue | Out-Null
+        Write-Host "Removed provisioned: $($pkg.DisplayName)" -ForegroundColor Green
+    }
+
+    # Remove per-user packages for all users
+    $allPackages = Get-AppxPackage -AllUsers -ErrorAction SilentlyContinue
+    foreach ($pkg in $allPackages) {
+        if (Test-IsSystemMsixPackage $pkg.Name) { continue }
+        Write-Host "Removing MSIX package: $($pkg.Name)" -ForegroundColor Yellow
+        Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction SilentlyContinue
+        Write-Host "Removed: $($pkg.Name)" -ForegroundColor Green
+    }
+} catch {
+    Write-Host "  MSIX cleanup error (non-fatal): $_" -ForegroundColor DarkYellow
+}
+Write-Host "MSIX/AppX package cleanup complete." -ForegroundColor Green
+
 
 Write-Host "`n=== PHASE 2: PROGRAM FILES WHITELIST SWEEP ===" -ForegroundColor Cyan
 
