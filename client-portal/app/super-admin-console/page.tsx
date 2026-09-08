@@ -123,23 +123,6 @@ const platformTools: ServiceTile[] = [
     anyOf: ['machine_manager.manage'],
   },
   {
-    id: 'vm-inventory',
-    name: 'VM Inventory',
-    href: '/super-admin-console/vm-inventory',
-    icon: Database,
-    description: 'Unified inventory across VPS, VM Catalog, and imported servers',
-    anyOf: ['vm_inventory.read'],
-  },
-  {
-    id: 'elastic-servers',
-    name: 'Server Import & Assign',
-    href: '/super-admin-console/elastic-servers',
-    icon: Upload,
-    description:
-      'Bulk import external servers and assign to tenants/users with schedules',
-    anyOf: ['elastic_servers.superadmin'],
-  },
-  {
     id: 'white-labelling',
     name: 'White Labelling Service',
     href: '/super-admin-console/white-labelling',

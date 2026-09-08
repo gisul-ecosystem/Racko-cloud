@@ -51,25 +51,10 @@ const navItems: NavItem[] = [
     section: 'top',
   },
   {
-    href: '/super-admin-console/elastic-servers',
-    label: 'Server Import & Assign',
-    icon: Upload,
-    exact: false,
-    anyOf: ['elastic_servers.superadmin'] as string[],
-    section: 'services',
-  },
-  {
     href: '/super-admin-console/vm-management',
     label: 'VM Management',
     icon: MonitorCheck,
     anyOf: ['vm_management.manage'],
-    section: 'services',
-  },
-  {
-    href: '/super-admin-console/vm-inventory',
-    label: 'VM Inventory',
-    icon: Database,
-    anyOf: ['vm_inventory.read'],
     section: 'services',
   },
   {

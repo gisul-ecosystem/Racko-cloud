@@ -16,13 +16,13 @@ import userRoutes from './modules/user/user.routes';
 import proxmoxRoutes from './modules/proxmox/proxmox.routes';
 import vmRoutes from './modules/vm/vm.routes';
 import externalVmRoutes from './modules/external-vm/external-vm.routes';
-import superAdminExternalVmRoutes from './modules/external-vm/superAdminExternalVm.routes';
+import superAdminTargetsRoutes from './modules/superAdmin/superAdminTargets.routes';
 import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
-import { machineRouter, agentRouter, superAdminMachineRouter } from './modules/machine-manager/machine-manager.routes';
+import { machineRouter, agentRouter } from './modules/machine-manager/machine-manager.routes';
 import { agentSharedFilesRouter, adminSharedFilesRouter } from './modules/shared-files/shared-files.routes';
 import machineGroupsRoutes from './modules/machine-groups/machine-groups.routes';
 import softwareCatalogRoutes from './modules/software-catalog/software-catalog.routes';
@@ -70,7 +70,6 @@ import tenantOverviewRoutes from './modules/tenantOverview/tenantOverview.routes
 import otpRoutes from './modules/otp/otp.routes';
 import myVmDashboardRoutes from './modules/myVmDashboard/myVmDashboard.routes';
 import tenantMyVmDashboardRoutes from './modules/myVmDashboard/tenantMyVmDashboard.routes';
-import superAdminVmInventoryRoutes from './modules/superAdmin/superAdminVmInventory.routes';
 import healthRoutes from './routes/health.routes';
 
 const app = express();
@@ -178,9 +177,7 @@ app.use('/api/v1/tenant-branding', tenantBrandingRoutes);
 app.use('/api/v1/tenant-services', tenantPortalServicesRoutes);
 app.use('/api/v1/tenant-auth', tenantAuthRoutes);
 // More-specific mount before /super-admin so white_labelling.manage does not gate this route.
-app.use('/api/v1/super-admin/external-vms', superAdminExternalVmRoutes);
-app.use('/api/v1/super-admin/vm-inventory', superAdminVmInventoryRoutes);
-app.use('/api/v1/super-admin/machines', superAdminMachineRouter);
+app.use('/api/v1/super-admin/targets', superAdminTargetsRoutes);
 app.use('/api/v1/super-admin', superAdminRoutes);
 app.use('/api/v1/super-admin/orders', superAdminOrderRoutes);
 app.use('/api/v1/tenant-wallet', walletRoutes);
