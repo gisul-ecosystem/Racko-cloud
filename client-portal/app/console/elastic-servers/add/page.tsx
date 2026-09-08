@@ -7,6 +7,7 @@ import { ToastContainer, useToast } from '../../../../components/ui/Toast';
 import { ApiError } from '../../../../lib/apiClient';
 import { createExternalVM, defaultExternalVmUsername, type CreateExternalVMDto, type ExternalVMProtocol } from '../../../../lib/externalVmApi';
 import { ProjectSelect } from '../../../../components/console/ProjectSelect';
+import { CreateProjectModal } from '../../../../components/console/CreateProjectModal';
 import { ChevronLeft, Eye, EyeOff } from 'lucide-react';
 
 const inputClass =
@@ -23,6 +24,8 @@ export default function AddServerPage() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [projectId, setProjectId] = useState('');
+  const [projectRefreshKey, setProjectRefreshKey] = useState(0);
+  const [cpOpen, setCpOpen] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
@@ -137,6 +140,8 @@ export default function AddServerPage() {
             value={projectId}
             onChange={setProjectId}
             disabled={submitting}
+            onCreateProject={() => setCpOpen(true)}
+            refreshKey={projectRefreshKey}
           />
         </div>
 
@@ -159,6 +164,18 @@ export default function AddServerPage() {
           </button>
         </div>
       </div>
+
+      <CreateProjectModal
+        open={cpOpen}
+        onClose={() => setCpOpen(false)}
+        portal="org"
+        preselectedServices={['elastic-servers']}
+        lockServices
+        onCreated={(project) => {
+          setProjectId(project.id);
+          setProjectRefreshKey((k) => k + 1);
+        }}
+      />
     </div>
   );
 }

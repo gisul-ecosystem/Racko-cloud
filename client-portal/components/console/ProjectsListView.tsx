@@ -77,6 +77,8 @@ interface CreateProjectInput {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
+  reminderEmails?: string[];
+  autoArchiveEnabled?: boolean;
 }
 
 interface AssignableServiceOption {
@@ -212,6 +214,7 @@ export function ProjectsListView({
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [reminderEmailsRaw, setReminderEmailsRaw] = useState('');
   const [availableServices, setAvailableServices] = useState<AssignableServiceOption[]>([]);
   const [selectedServices, setSelectedServices] = useState<AdminServiceKey[]>([]);
   const [createdProject, setCreatedProject] = useState<OrgProject | null>(null);
@@ -334,6 +337,7 @@ export function ProjectsListView({
     setDescription('');
     setStartDate('');
     setEndDate('');
+    setReminderEmailsRaw('');
     setSelectedServices([]);
     try {
       const loadClientNames = async (): Promise<string[]> => {
@@ -397,6 +401,12 @@ export function ProjectsListView({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         enabledServices: selectedServices,
+        reminderEmails: reminderEmailsRaw
+          .split(/[,;\n]+/)
+          .map((part) => part.trim().toLowerCase())
+          .filter(Boolean)
+          .slice(0, 10),
+        autoArchiveEnabled: true,
       });
       let detailed = created;
       try {
@@ -1150,6 +1160,24 @@ export function ProjectsListView({
                         />
                         <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
                       </div>
+                    </div>
+
+                    <div className="mt-4">
+                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">
+                        Reminder emails{' '}
+                        <span className="font-normal text-gray-400">(optional)</span>
+                      </label>
+                      <input
+                        type="text"
+                        value={reminderEmailsRaw}
+                        onChange={(e) => setReminderEmailsRaw(e.target.value)}
+                        placeholder="pm@client.com, billing@client.com"
+                        className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none transition focus:ring-2"
+                        style={accentFocus}
+                      />
+                      <p className="mt-1 text-[11px] text-gray-400">
+                        We email these addresses one day before the project end date.
+                      </p>
                     </div>
                   </div>
                 </div>

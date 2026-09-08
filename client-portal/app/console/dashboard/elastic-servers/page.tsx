@@ -354,7 +354,7 @@ export default function TenantMyServersPage() {
                 <thead>
                   <tr className="border-b border-gray-100 bg-gray-50">
                     {isAdmin ? (
-                      <th className="sticky left-0 z-20 w-12 bg-gray-50 pl-5 pr-2 py-3">
+                      <th className="sticky left-0 z-[2] w-12 bg-gray-50 pl-5 pr-2 py-3">
                         <input
                           type="checkbox"
                           checked={allSelected}
@@ -391,7 +391,7 @@ export default function TenantMyServersPage() {
                         Access
                       </th>
                     )}
-                    <th className="sticky right-0 z-20 w-[10.5rem] bg-gray-50 px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 shadow-[-6px_0_10px_-8px_rgba(15,23,42,0.35)]">
+                    <th className="sticky right-0 z-[2] w-[10.5rem] bg-gray-50 px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-gray-500 shadow-[-6px_0_10px_-8px_rgba(15,23,42,0.35)]">
                       Actions
                     </th>
                   </tr>
@@ -414,7 +414,7 @@ export default function TenantMyServersPage() {
                       >
                         {isAdmin ? (
                           <td
-                            className={`sticky left-0 z-10 w-12 pl-5 pr-2 py-3.5 shadow-[6px_0_10px_-8px_rgba(15,23,42,0.25)] ${rowBg}`}
+                            className={`sticky left-0 z-[1] w-12 pl-5 pr-2 py-3.5 shadow-[6px_0_10px_-8px_rgba(15,23,42,0.25)] ${rowBg}`}
                             onClick={(e) => e.stopPropagation()}
                           >
                             <input
@@ -507,7 +507,7 @@ export default function TenantMyServersPage() {
                           </td>
                         )}
                         <td
-                          className={`sticky right-0 z-10 w-[10.5rem] px-3 py-3.5 shadow-[-6px_0_10px_-8px_rgba(15,23,42,0.25)] ${rowBg}`}
+                          className={`sticky right-0 z-[1] w-[10.5rem] px-3 py-3.5 shadow-[-6px_0_10px_-8px_rgba(15,23,42,0.25)] ${rowBg}`}
                         >
                           <div className="flex items-center justify-end gap-2">
                             <button

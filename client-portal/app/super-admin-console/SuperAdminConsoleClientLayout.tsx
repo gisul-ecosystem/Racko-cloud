@@ -95,7 +95,13 @@ export default function SuperAdminConsoleClientLayout({
       return;
     }
     if (!isControlPlaneRole(user.role)) {
-      router.replace(user.role === 'admin' ? '/console' : '/dashboard/user');
+      router.replace(
+        user.role === 'admin'
+          ? '/console'
+          : user.role === 'support_agent'
+            ? '/support-agent'
+            : '/dashboard/user'
+      );
     }
   }, [isLoading, isAuthenticated, user, router, pathname]);
 

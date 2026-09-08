@@ -239,6 +239,10 @@ router.get('/api/v1/notifications/unread-count', authMiddleware, verifyMiddlewar
 router.patch('/api/v1/notifications/read-all', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.patch('/api/v1/notifications/:notificationId/read', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 
+// Support system
+router.use('/api/v1/support', authMiddleware, verifyMiddleware, createMountedCoreApiProxy('/api/v1/support'));
+router.use('/api/v1/tenant/support', requireTenantBearer, createMountedCoreApiProxy('/api/v1/tenant/support'));
+
 // ─── VM AUTOMATION ROUTES (admin + super_admin) ─────────────────────────────
 router.get('/api/v1/vm-automations', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
 router.post('/api/v1/vm-automations', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);
@@ -598,6 +602,7 @@ router.patch('/api/v1/projects/:id', authMiddleware, verifyMiddleware, requireRo
 router.post('/api/v1/projects/:id/services', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.delete('/api/v1/projects/:id/services/:serviceKey', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 router.post('/api/v1/projects/:id/archive', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
+router.post('/api/v1/projects/:id/unarchive', authMiddleware, verifyMiddleware, requireRole('admin'), coreApiProxy);
 
 // ─── MANAGED USERS ROUTES (admin + super_admin) ──────────────────────────────
 router.post('/api/v1/managed-users/single', authMiddleware, verifyMiddleware, requireRole('admin', 'super_admin'), coreApiProxy);

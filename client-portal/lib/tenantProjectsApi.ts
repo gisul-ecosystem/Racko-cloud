@@ -9,6 +9,10 @@ import type {
 
 export type { OrgProject, ProjectNamePreview, ProjectReportByProjectRow, ProjectReportByServiceRow };
 export { PROJECT_SERVICE_LABELS } from './projectsApi';
+export {
+  formatReminderEmailsInput,
+  parseReminderEmailsInput,
+} from './projectsApi';
 
 interface ApiEnvelope<T> {
   success: boolean;
@@ -71,6 +75,8 @@ export async function createTenantProject(input: {
   startDate?: string;
   endDate?: string;
   enabledServices: AdminServiceKey[];
+  reminderEmails?: string[];
+  autoArchiveEnabled?: boolean;
 }): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     tenantPortalRequest(`${BASE}`, {
@@ -83,7 +89,15 @@ export async function createTenantProject(input: {
 
 export async function updateTenantProject(
   id: string,
-  input: { name?: string; clientName?: string; description?: string | null; startDate?: string | null; endDate?: string | null }
+  input: {
+    name?: string;
+    clientName?: string;
+    description?: string | null;
+    startDate?: string | null;
+    endDate?: string | null;
+    reminderEmails?: string[] | null;
+    autoArchiveEnabled?: boolean;
+  }
 ): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     tenantPortalRequest(`${BASE}/${id}`, {
@@ -122,6 +136,13 @@ export async function removeTenantProjectService(
 export async function archiveTenantProject(id: string): Promise<OrgProject> {
   const data = await unwrap<{ project: OrgProject }>(
     tenantPortalRequest(`${BASE}/${id}/archive`, { method: 'POST' })
+  );
+  return data.project;
+}
+
+export async function unarchiveTenantProject(id: string): Promise<OrgProject> {
+  const data = await unwrap<{ project: OrgProject }>(
+    tenantPortalRequest(`${BASE}/${id}/unarchive`, { method: 'POST' })
   );
   return data.project;
 }
