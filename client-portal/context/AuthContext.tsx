@@ -24,7 +24,7 @@ import {
   SUPER_ADMIN_OVERVIEW_PATH,
 } from '../lib/rbacApi';
 
-export type UserRole = 'super_admin' | 'staff' | 'admin' | 'user';
+export type UserRole = 'super_admin' | 'staff' | 'admin' | 'support_agent' | 'user';
 export type AccountType = 'legacy' | 'b2c' | 'b2b';
 export type OnboardingStatus =
   | 'active'
@@ -114,6 +114,7 @@ function getPostLoginRoute(user: AuthUser): string {
   }
 
   if (user.role === 'super_admin' || user.role === 'staff') return '/super-admin-console';
+  if (user.role === 'support_agent') return '/support-agent';
   if (user.role === 'admin') return '/console';
   return '/dashboard/user';
 }
@@ -282,6 +283,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             (decoded.startsWith('/console') ||
               decoded.startsWith('/dashboard') ||
               decoded.startsWith('/super-admin-console') ||
+              decoded.startsWith('/support-agent') ||
               decoded.startsWith('/onboarding') ||
               decoded === '/request' ||
               decoded.startsWith('/status/'))

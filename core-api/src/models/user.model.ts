@@ -80,7 +80,7 @@ const userSchema = new Schema<IUser, IUserModel>(
     },
     role: {
       type: String,
-      enum: ['super_admin', 'staff', 'admin', 'user'],
+      enum: ['super_admin', 'staff', 'admin', 'support_agent', 'user'],
       default: 'admin',
       required: true,
     },
