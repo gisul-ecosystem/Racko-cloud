@@ -25,6 +25,10 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  CreateMultipartUploadCommand,
+  UploadPartCommand,
+  CompleteMultipartUploadCommand,
+  AbortMultipartUploadCommand,
 } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { createHash } from 'crypto';
@@ -249,6 +253,95 @@ class SeaweedFSService {
 
     logger.debug('[SeaweedFS] Generated presigned GET URL', { storageRef, ttlSeconds });
     return { presignedUrl };
+  }
+
+  // ─── Multipart upload ─────────────────────────────────────────────────────
+
+  /**
+   * Initiate an S3 multipart upload.
+   * Returns the uploadId required for all subsequent part operations.
+   * Industry-standard approach for files > 5MB — each part is uploaded
+   * independently so a network failure only retries one part, not the whole file.
+   */
+  async createMultipartUpload(
+    storageRef: string,
+    mimeType: string
+  ): Promise<{ uploadId: string }> {
+    const resp = await getClient().send(new CreateMultipartUploadCommand({
+      Bucket:      this.bucket,
+      Key:         storageRef,
+      ContentType: mimeType,
+    }));
+
+    if (!resp.UploadId) throw new Error('SeaweedFS did not return an UploadId for multipart upload.');
+
+    logger.info('[SeaweedFS] Multipart upload initiated', { storageRef, uploadId: resp.UploadId });
+    return { uploadId: resp.UploadId };
+  }
+
+  /**
+   * Generate a presigned PUT URL for a single multipart part.
+   * The browser uses this URL to upload the part bytes directly to SeaweedFS.
+   * TTL: 1 hour — enough for any single 10 MB chunk even on a slow connection.
+   */
+  async generatePresignedPartUrl(
+    storageRef: string,
+    uploadId: string,
+    partNumber: number,
+    ttlSeconds = 3600
+  ): Promise<{ presignedUrl: string }> {
+    const command = new UploadPartCommand({
+      Bucket:     this.bucket,
+      Key:        storageRef,
+      UploadId:   uploadId,
+      PartNumber: partNumber,
+    });
+
+    const presignedUrl = await getSignedUrl(getClient(), command, {
+      expiresIn: ttlSeconds,
+    });
+
+    logger.debug('[SeaweedFS] Generated presigned part URL', { storageRef, uploadId, partNumber });
+    return { presignedUrl };
+  }
+
+  /**
+   * Complete a multipart upload by assembling all uploaded parts.
+   * parts must be ordered by PartNumber ascending.
+   */
+  async completeMultipartUpload(
+    storageRef: string,
+    uploadId: string,
+    parts: Array<{ PartNumber: number; ETag: string }>
+  ): Promise<void> {
+    await getClient().send(new CompleteMultipartUploadCommand({
+      Bucket:   this.bucket,
+      Key:      storageRef,
+      UploadId: uploadId,
+      MultipartUpload: { Parts: parts },
+    }));
+
+    logger.info('[SeaweedFS] Multipart upload completed', {
+      storageRef, uploadId, partCount: parts.length,
+    });
+  }
+
+  /**
+   * Abort a multipart upload and clean up all uploaded parts.
+   * Called when the upload fails or the user cancels.
+   * Best-effort — logs but does not throw on failure.
+   */
+  async abortMultipartUpload(storageRef: string, uploadId: string): Promise<void> {
+    try {
+      await getClient().send(new AbortMultipartUploadCommand({
+        Bucket:   this.bucket,
+        Key:      storageRef,
+        UploadId: uploadId,
+      }));
+      logger.info('[SeaweedFS] Multipart upload aborted', { storageRef, uploadId });
+    } catch (err) {
+      logger.warn('[SeaweedFS] Abort multipart failed (non-fatal)', { storageRef, uploadId, err });
+    }
   }
 }
 
