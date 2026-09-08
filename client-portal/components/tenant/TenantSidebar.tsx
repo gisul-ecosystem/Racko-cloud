@@ -1,10 +1,11 @@
 'use client';
 
 import { usePathname } from 'next/navigation';
-import { LayoutGrid } from 'lucide-react';
+import { Bell, LayoutGrid, LifeBuoy, Server } from 'lucide-react';
 import { ServiceNavSidebar, type ServiceNavLink } from '@/components/console/ServiceNavSidebar';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
-import { TENANT_CONSOLE } from '@/lib/tenantAdminRoutes';
+import { useTenantRbac } from '@/context/TenantRbacContext';
+import { TENANT_CONSOLE, tenantConsole, tenantVps } from '@/lib/tenantAdminRoutes';
 
 interface TenantSidebarProps {
   sidebarOpen: boolean;
@@ -17,26 +18,64 @@ interface TenantSidebarProps {
  */
 export function TenantSidebar({ sidebarOpen, onCloseSidebar }: TenantSidebarProps) {
   const pathname = usePathname() ?? '';
-  const { accentColor } = useTenantBranding();
+  const { accentColor, portalName } = useTenantBranding();
+  const { isConsoleStaff } = useTenantRbac();
 
-  const links: ServiceNavLink[] = [
-    {
-      href: TENANT_CONSOLE,
-      label: 'All services',
-      icon: <LayoutGrid className="h-4 w-4" />,
-      exact: true,
-    },
-  ];
+  const links: ServiceNavLink[] = isConsoleStaff
+    ? [
+        {
+          href: TENANT_CONSOLE,
+          label: 'All services',
+          icon: <LayoutGrid className="h-4 w-4" />,
+          exact: true,
+        },
+        {
+          href: tenantConsole.supportTickets,
+          label: 'Support',
+          icon: <LifeBuoy className="h-4 w-4" />,
+          isActive: (p) => p.startsWith(`${TENANT_CONSOLE}/support`),
+        },
+        {
+          href: tenantConsole.notifications,
+          label: 'Notifications',
+          icon: <Bell className="h-4 w-4" />,
+          exact: true,
+        },
+      ]
+    : [
+        {
+          href: tenantVps.vms,
+          label: 'My VMs',
+          icon: <Server className="h-4 w-4" />,
+          isActive: (p) =>
+            p === tenantVps.vms ||
+            (p.startsWith(`${tenantVps.vms}/`) &&
+              !p.startsWith(tenantVps.restricted) &&
+              !p.startsWith(tenantVps.createVm)),
+        },
+        {
+          href: tenantConsole.supportTickets,
+          label: 'Support',
+          icon: <LifeBuoy className="h-4 w-4" />,
+          isActive: (p) => p.startsWith(`${TENANT_CONSOLE}/support`),
+        },
+      ];
 
   return (
     <ServiceNavSidebar
       sidebarOpen={sidebarOpen}
       onCloseSidebar={onCloseSidebar}
-      title="Tenant portal"
-      subtitle={pathname.includes('plans') ? 'VM plans' : 'Account'}
+      title={isConsoleStaff ? 'Tenant portal' : portalName || 'My VMs'}
+      subtitle={
+        isConsoleStaff
+          ? pathname.includes('plans')
+            ? 'VM plans'
+            : 'Account'
+          : 'Assigned resources'
+      }
       links={links}
       accentColor={accentColor}
-      footerHref={TENANT_CONSOLE}
+      footerHref={isConsoleStaff ? TENANT_CONSOLE : undefined}
       footerLabel="Back to console"
     />
   );

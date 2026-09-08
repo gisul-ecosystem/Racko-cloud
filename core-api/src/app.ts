@@ -21,6 +21,7 @@ import managedUsersRoutes from './modules/managedUsers/managedUsers.routes';
 import softwareRoutes from './modules/software/software.routes';
 import vmAutomationRoutes from './modules/vmAutomation/vmAutomation.routes';
 import notificationRoutes from './modules/notification/notification.routes';
+import supportRoutes from './modules/support/support.routes';
 import adminVmTemplateRoutes from './modules/adminVmTemplate/adminVmTemplate.routes';
 import { machineRouter, agentRouter, superAdminMachineRouter } from './modules/machine-manager/machine-manager.routes';
 import { agentSharedFilesRouter, adminSharedFilesRouter } from './modules/shared-files/shared-files.routes';
@@ -42,6 +43,7 @@ import { startStorageReconcileSweeper } from './modules/vm/helpers/storageReconc
 import { startVmAutomationScheduler } from './modules/vmAutomation/vmAutomationScheduler';
 import tenantPlanRoutes from './modules/tenantPlan/tenantPlan.routes';
 import tenantNotificationRoutes from './modules/tenantNotification/tenantNotification.routes';
+import tenantSupportRoutes from './modules/support/tenantSupport.routes';
 import tenantUserRoutes from './modules/tenantUser/tenantUser.routes';
 import tenantVmRoutes from './modules/tenantVm/tenantVm.routes';
 import tenantExternalVmRoutes from './modules/tenantExternalVm/tenantExternalVm.routes';
@@ -50,6 +52,7 @@ import tenantDedicatedServerRoutes from './modules/tenantDedicatedServer/tenantD
 import { startPlanExpiryScheduler } from './modules/vm/helpers/planExpiryScheduler';
 import { startPlanExpiryWarningScheduler } from './modules/vm/helpers/planExpiryWarningScheduler';
 import { startCatalogVmExpiryScheduler } from './modules/vmCatalog/catalogVmExpiryScheduler';
+import { startProjectExpiryScheduler } from './modules/projects/projectExpiryScheduler';
 import { rescheduleFromDb } from './modules/vmAccessSchedule/scheduleManager';
 import ipPoolRoutes from './modules/vm/ipPool.routes';
 import proxmoxNodeRoutes from './modules/proxmoxNode/proxmoxNode.routes';
@@ -206,6 +209,8 @@ app.use('/api/v1/managed-users', managedUsersRoutes);
 app.use('/api/v1/software', softwareRoutes);
 app.use('/api/v1/vm-automations', vmAutomationRoutes);
 app.use('/api/v1/notifications', notificationRoutes);
+app.use('/api/v1/support', supportRoutes);
+app.use('/api/v1/tenant/support', tenantSupportRoutes);
 app.use('/api/v1/admin-vm-templates', adminVmTemplateRoutes);
 app.use('/api/v1/machines', machineRouter);
 app.use('/api/v1/agent', agentRouter);
@@ -239,6 +244,7 @@ startVmAutomationScheduler();
 startPlanExpiryScheduler();
 startPlanExpiryWarningScheduler();
 startCatalogVmExpiryScheduler();
+startProjectExpiryScheduler();
 void rescheduleFromDb().catch((err) => {
   logger.error('[accessSchedule] rescheduleFromDb failed', {
     error: err instanceof Error ? err.message : String(err),

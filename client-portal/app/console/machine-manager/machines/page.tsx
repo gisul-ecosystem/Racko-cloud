@@ -703,11 +703,11 @@ export default function MyMachinesPage() {
   };
 
   const toggleSelectAll = () => {
-    const allSelected = machines.every((m) => selectedIds.has(m._id));
+    const allSelected = filteredMachines.every((m) => selectedIds.has(m._id));
     if (allSelected) {
       setSelectedIds(new Set());
     } else {
-      setSelectedIds(new Set(machines.map((m) => m._id)));
+      setSelectedIds(new Set(filteredMachines.map((m) => m._id)));
     }
   };
 
@@ -805,7 +805,7 @@ export default function MyMachinesPage() {
   };
 
   const onlineCount = machines.filter((m) => m.status === 'online').length;
-  const allOnlineSelected = machines.length > 0 && machines.every((m) => selectedIds.has(m._id));
+  const allOnlineSelected = filteredMachines.length > 0 && filteredMachines.every((m) => selectedIds.has(m._id));
 
   return (
     <div className="max-w-screen-xl">

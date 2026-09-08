@@ -12,6 +12,10 @@ import {
   updateSoftwareCatalogEntry,
   deleteSoftwareCatalogEntry,
   issueSoftwareCatalogUploadUrl,
+  startSoftwareCatalogMultipartUpload,
+  getSoftwareCatalogPartUrl,
+  completeSoftwareCatalogMultipartUpload,
+  abortSoftwareCatalogMultipartUpload,
   type ISoftwareCatalog,
   type MachineOS,
   type InstallMethod,
@@ -159,22 +163,61 @@ function EditSoftwareModal({ item, onClose, onSaved }: EditSoftwareModalProps) {
     setUploadingFile(true);
     setNewStorageRef('');
     setNewUploadedName('');
+
+    const PART_SIZE = 10 * 1024 * 1024;
+    const mimeType = file.type || 'application/octet-stream';
+
+    let activeUploadId: string | null = null;
+    let activeStorageRef: string | null = null;
+
     try {
-      const { presignedUrl, storageRef } = await issueSoftwareCatalogUploadUrl(
-        file.name,
-        file.type || 'application/octet-stream'
-      );
-      const uploadRes = await fetch(presignedUrl, {
-        method: 'PUT',
-        body: file,
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-      });
-      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
-      setNewStorageRef(storageRef);
+      const { uploadId, storageRef: ref } = await startSoftwareCatalogMultipartUpload(file.name, mimeType);
+      activeUploadId = uploadId;
+      activeStorageRef = ref;
+
+      const totalParts = Math.ceil(file.size / PART_SIZE);
+      const completedParts: Array<{ PartNumber: number; ETag: string }> = [];
+
+      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+        const start = (partNumber - 1) * PART_SIZE;
+        const end   = Math.min(partNumber * PART_SIZE, file.size);
+        const chunk = file.slice(start, end);
+
+        const { presignedUrl } = await getSoftwareCatalogPartUrl(ref, uploadId, partNumber);
+
+        let lastErr: Error | null = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const putRes = await fetch(presignedUrl, {
+              method: 'PUT',
+              body: chunk,
+              headers: { 'Content-Type': mimeType },
+            });
+            if (!putRes.ok) throw new Error(`Part ${partNumber} upload failed: HTTP ${putRes.status}`);
+            const etag = putRes.headers.get('ETag') ?? putRes.headers.get('etag');
+            if (!etag) throw new Error(`Part ${partNumber}: missing ETag in response`);
+            completedParts.push({ PartNumber: partNumber, ETag: etag });
+            lastErr = null;
+            break;
+          } catch (err) {
+            lastErr = err instanceof Error ? err : new Error(String(err));
+            if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
+          }
+        }
+        if (lastErr) throw lastErr;
+      }
+
+      await completeSoftwareCatalogMultipartUpload(ref, uploadId, completedParts);
+      activeUploadId = null;
+
+      setNewStorageRef(ref);
       setNewUploadedName(file.name);
       if (!fileName) setFileName(file.name);
       setFileMode('replace');
     } catch (err) {
+      if (activeUploadId && activeStorageRef) {
+        void abortSoftwareCatalogMultipartUpload(activeStorageRef, activeUploadId);
+      }
       setError(err instanceof Error ? err.message : 'File upload failed.');
     } finally {
       setUploadingFile(false);
@@ -555,6 +598,8 @@ export default function SuperAdminSoftwareCatalogPage() {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState(''); // display name of uploaded file
   const [storageRef, setStorageRef] = useState(''); // storageRef returned by upload
+  // Multipart upload progress — bytes uploaded / total bytes
+  const [uploadProgress, setUploadProgress] = useState<{ loaded: number; total: number } | null>(null);
 
   const isFileBased = FILE_METHODS.includes(installMethod);
   const isPkgBased  = PKG_METHODS.includes(installMethod);
@@ -578,27 +623,78 @@ export default function SuperAdminSoftwareCatalogPage() {
     setUploadingFile(true);
     setUploadedFileName('');
     setStorageRef('');
+    setUploadProgress({ loaded: 0, total: file.size });
+
+    const PART_SIZE = 10 * 1024 * 1024; // 10 MB per part
+    const mimeType = file.type || 'application/octet-stream';
+
+    let activeUploadId: string | null = null;
+    let activeStorageRef: string | null = null;
+
     try {
-      const { presignedUrl, storageRef: ref } = await issueSoftwareCatalogUploadUrl(
-        file.name,
-        file.type || 'application/octet-stream'
-      );
-      // Upload directly to SeaweedFS — no file bytes through the API
-      const uploadRes = await fetch(presignedUrl, {
-        method: 'PUT',
-        body: file,
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
-      });
-      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+      // Step 1 — initiate multipart upload
+      const { uploadId, storageRef: ref } = await startSoftwareCatalogMultipartUpload(file.name, mimeType);
+      activeUploadId = uploadId;
+      activeStorageRef = ref;
+
+      const totalParts = Math.ceil(file.size / PART_SIZE);
+      const completedParts: Array<{ PartNumber: number; ETag: string }> = [];
+      let loadedBytes = 0;
+
+      for (let partNumber = 1; partNumber <= totalParts; partNumber++) {
+        const start  = (partNumber - 1) * PART_SIZE;
+        const end    = Math.min(partNumber * PART_SIZE, file.size);
+        const chunk  = file.slice(start, end);
+
+        // Step 2 — get presigned URL for this part
+        const { presignedUrl } = await getSoftwareCatalogPartUrl(ref, uploadId, partNumber);
+
+        // Step 3 — PUT the chunk directly to SeaweedFS with up to 3 retries
+        let lastErr: Error | null = null;
+        for (let attempt = 1; attempt <= 3; attempt++) {
+          try {
+            const putRes = await fetch(presignedUrl, {
+              method: 'PUT',
+              body: chunk,
+              headers: { 'Content-Type': mimeType },
+            });
+            if (!putRes.ok) throw new Error(`Part ${partNumber} upload failed: HTTP ${putRes.status}`);
+
+            // ETag is returned in the response header — required for CompleteMultipartUpload
+            const etag = putRes.headers.get('ETag') ?? putRes.headers.get('etag');
+            if (!etag) throw new Error(`Part ${partNumber}: missing ETag in response`);
+
+            completedParts.push({ PartNumber: partNumber, ETag: etag });
+            loadedBytes += chunk.size;
+            setUploadProgress({ loaded: loadedBytes, total: file.size });
+            lastErr = null;
+            break;
+          } catch (err) {
+            lastErr = err instanceof Error ? err : new Error(String(err));
+            if (attempt < 3) await new Promise((r) => setTimeout(r, 1000 * attempt));
+          }
+        }
+        if (lastErr) throw lastErr;
+      }
+
+      // Step 4 — complete the multipart upload
+      await completeSoftwareCatalogMultipartUpload(ref, uploadId, completedParts);
+      activeUploadId = null; // completed — no need to abort on cleanup
+
       setStorageRef(ref);
       setUploadedFileName(file.name);
       if (!fileName) setFileName(file.name);
+      setUploadProgress(null);
       addToast('success', `${file.name} uploaded successfully.`);
     } catch (err) {
+      // Abort the multipart upload so SeaweedFS cleans up partial chunks
+      if (activeUploadId && activeStorageRef) {
+        void abortSoftwareCatalogMultipartUpload(activeStorageRef, activeUploadId);
+      }
+      setUploadProgress(null);
       addToast('error', err instanceof Error ? err.message : 'File upload failed.');
     } finally {
       setUploadingFile(false);
-      // Reset file input so same file can be re-selected
       e.target.value = '';
     }
   };
@@ -801,6 +897,20 @@ export default function SuperAdminSoftwareCatalogPage() {
                         className="hidden"
                       />
                     </label>
+                    {uploadingFile && uploadProgress && (
+                      <div className="w-full">
+                        <div className="flex items-center justify-between mb-1 text-xs text-gray-500">
+                          <span>Uploading… {Math.round((uploadProgress.loaded / uploadProgress.total) * 100)}%</span>
+                          <span>{(uploadProgress.loaded / 1048576).toFixed(1)} MB / {(uploadProgress.total / 1048576).toFixed(1)} MB</span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-gray-200">
+                          <div
+                            className="h-full bg-[#B91C1C] transition-all duration-300"
+                            style={{ width: `${Math.round((uploadProgress.loaded / uploadProgress.total) * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
                     {uploadedFileName && (
                       <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 text-sm text-green-700">
                         <span className="h-2 w-2 rounded-full bg-green-500" />

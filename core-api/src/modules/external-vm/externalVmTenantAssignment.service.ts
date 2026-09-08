@@ -1,6 +1,7 @@
 import mongoose from 'mongoose';
 import { ExternalVMModel } from '../external-vm/external-vm.model';
 import { ExternalVmTenantAssignmentModel } from '../../models/externalVmTenantAssignment.model';
+import { logger } from '../../utils/logger';
 
 const migratedTenants = new Set<string>();
 
@@ -50,8 +51,16 @@ export async function isExternalVmAssignedToTenantUser(input: {
     tenantId: input.tenantId,
     externalVmId: input.externalVmId,
     tenantUserId: input.tenantUserId,
+    ...activeAssignmentStatusFilter,
   });
-  return Boolean(hit);
+  if (hit) return true;
+
+  const legacy = await ExternalVMModel.exists({
+    tenantId: input.tenantId,
+    _id: input.externalVmId,
+    assignedTenantUserId: input.tenantUserId,
+  });
+  return Boolean(legacy);
 }
 
 const activeAssignmentStatusFilter = {
@@ -143,23 +152,55 @@ export async function createExternalVmTenantAssignments(input: {
 }): Promise<number> {
   let created = 0;
   for (const externalVmId of input.externalVmIds) {
-    const result = await ExternalVmTenantAssignmentModel.updateOne(
-      {
-        tenantId: input.tenantId,
-        externalVmId,
-        tenantUserId: input.tenantUserId,
-      },
-      {
-        $setOnInsert: {
-          assignedByTenantUserId: input.assignedByTenantUserId,
-          createdAt: new Date(),
-        },
-      },
-      { upsert: true }
-    );
-    if (result.upsertedCount > 0) created++;
+    const result = await createSingleExternalVmTenantAssignment({
+      tenantId: input.tenantId,
+      externalVmId,
+      tenantUserId: input.tenantUserId,
+      assignedByTenantUserId: input.assignedByTenantUserId,
+    });
+    if (result.ok) created++;
   }
   return created;
+}
+
+export async function createSingleExternalVmTenantAssignment(input: {
+  tenantId: mongoose.Types.ObjectId;
+  externalVmId: mongoose.Types.ObjectId;
+  tenantUserId: mongoose.Types.ObjectId;
+  assignedByTenantUserId: mongoose.Types.ObjectId;
+}): Promise<{ ok: boolean; error?: string }> {
+  const already = await isExternalVmAssignedToTenantUser({
+    tenantId: input.tenantId,
+    externalVmId: input.externalVmId,
+    tenantUserId: input.tenantUserId,
+  });
+  if (already) return { ok: true };
+
+  try {
+    await ExternalVmTenantAssignmentModel.create({
+      tenantId: input.tenantId,
+      externalVmId: input.externalVmId,
+      tenantUserId: input.tenantUserId,
+      assignedByTenantUserId: input.assignedByTenantUserId,
+      assignedBy: input.assignedByTenantUserId,
+      status: 'active',
+      accessOverride: false,
+    });
+    return { ok: true };
+  } catch (err) {
+    const code = (err as { code?: number }).code;
+    if (code === 11000) {
+      return { ok: true };
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    logger.error('[ExternalVmTenantAssignment] create failed', {
+      tenantId: input.tenantId.toString(),
+      externalVmId: input.externalVmId.toString(),
+      tenantUserId: input.tenantUserId.toString(),
+      error: message,
+    });
+    return { ok: false, error: message };
+  }
 }
 
 export async function removeExternalVmTenantAssignment(input: {

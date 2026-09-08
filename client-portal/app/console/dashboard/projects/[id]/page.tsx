@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Loader2, Pencil, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
@@ -10,6 +10,7 @@ import { isServiceHiddenFromUi } from '@/lib/hiddenServices';
 import {
   addTenantProjectServices,
   archiveTenantProject,
+  unarchiveTenantProject,
   fetchTenantEligibleProjectServices,
   fetchTenantProject,
   fetchTenantProjectClientNames,
@@ -18,11 +19,14 @@ import {
   PROJECT_SERVICE_LABELS,
   removeTenantProjectService,
   updateTenantProject,
+  formatReminderEmailsInput,
+  parseReminderEmailsInput,
   type OrgProject,
   type ProjectReportByServiceRow,
 } from '@/lib/tenantProjectsApi';
 import { tenantConsole } from '@/lib/tenantAdminRoutes';
 import { ClientNameCombobox } from '@/components/console/ClientNameCombobox';
+import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import {
   getServiceLaunchHref,
   getServiceTransactionsHref,
@@ -31,6 +35,23 @@ import {
 
 function formatInr(n: number): string {
   return `₹${n.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+}
+
+function daysUntilEndDate(endDateIso: string | null | undefined): number | null {
+  if (!endDateIso) return null;
+  const end = new Date(endDateIso);
+  if (Number.isNaN(end.getTime())) return null;
+  const today = new Date();
+  const todayUtc = Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate());
+  const endUtc = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  return Math.round((endUtc - todayUtc) / 86_400_000);
+}
+
+function formatProjectDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 function ServiceCard({
@@ -147,6 +168,7 @@ function ServiceCard({
 export default function TenantProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const id = String(params?.id || '');
 
   const [project, setProject] = useState<OrgProject | null>(null);
@@ -158,12 +180,15 @@ export default function TenantProjectDetailPage() {
   const [description, setDescription] = useState('');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
+  const [reminderEmailsRaw, setReminderEmailsRaw] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [pendingService, setPendingService] = useState<AdminServiceKey | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
+  const [confirmAction, setConfirmAction] = useState<'archive' | 'restore' | null>(null);
+  const [confirmLoading, setConfirmLoading] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
@@ -182,6 +207,7 @@ export default function TenantProjectDetailPage() {
       setDescription(p.description || '');
       setStartDate(p.startDate ? p.startDate.slice(0, 10) : '');
       setEndDate(p.endDate ? p.endDate.slice(0, 10) : '');
+      setReminderEmailsRaw(formatReminderEmailsInput(p.reminderEmails));
       setAvailable(services.filter((k) => k !== 'docs' && !isServiceHiddenFromUi(k)));
       setCostRows(costs);
       // Always include the current project's clientName so it appears as a selection not create
@@ -197,6 +223,21 @@ export default function TenantProjectDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (loading || !project || project.status === 'archived') return;
+    if (searchParams.get('edit') !== '1') return;
+    openEditModal();
+    router.replace(`/console/dashboard/projects/${id}`, { scroll: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, project, searchParams, id, router]);
+
+  useEffect(() => {
+    if (loading || !project || project.status === 'archived') return;
+    if (searchParams.get('action') !== 'archive') return;
+    setConfirmAction('archive');
+    router.replace(`/console/dashboard/projects/${id}`, { scroll: false });
+  }, [loading, project, searchParams, id, router]);
 
   const addable = useMemo(() => {
     if (!project) return [];
@@ -221,8 +262,10 @@ export default function TenantProjectDetailPage() {
         description: description.trim() || null,
         startDate: startDate || null,
         endDate: endDate || null,
+        reminderEmails: parseReminderEmailsInput(reminderEmailsRaw),
       });
       setProject(updated);
+      setReminderEmailsRaw(formatReminderEmailsInput(updated.reminderEmails));
       setFlash('Project updated.');
       setEditOpen(false);
     } catch (err) {
@@ -230,6 +273,18 @@ export default function TenantProjectDetailPage() {
     } finally {
       setSaving(false);
     }
+  }
+
+  function openEditModal() {
+    if (!project) return;
+    setName(project.name);
+    setClientName(project.clientName);
+    setDescription(project.description || '');
+    setStartDate(project.startDate ? project.startDate.slice(0, 10) : '');
+    setEndDate(project.endDate ? project.endDate.slice(0, 10) : '');
+    setReminderEmailsRaw(formatReminderEmailsInput(project.reminderEmails));
+    setError(null);
+    setEditOpen(true);
   }
 
   async function handleAddService(key: AdminServiceKey) {
@@ -262,19 +317,27 @@ export default function TenantProjectDetailPage() {
     }
   }
 
-  async function handleArchive() {
-    if (!project) return;
-    if (!window.confirm('Archive this project? New resources cannot be added afterward.')) return;
-    setSaving(true);
+  async function handleConfirmAction() {
+    if (!project || !confirmAction) return;
+    setConfirmLoading(true);
     setError(null);
     try {
-      const updated = await archiveTenantProject(project.id);
+      if (confirmAction === 'archive') {
+        const updated = await archiveTenantProject(project.id);
+        setProject(updated);
+        setEditOpen(false);
+        setFlash('Project archived.');
+        setConfirmAction(null);
+        return;
+      }
+      const updated = await unarchiveTenantProject(project.id);
       setProject(updated);
-      setFlash('Project archived.');
+      setFlash('Project restored to active.');
+      setConfirmAction(null);
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : 'Failed to archive project.');
+      setError(err instanceof ApiError ? err.message : 'Action failed.');
     } finally {
-      setSaving(false);
+      setConfirmLoading(false);
     }
   }
 
@@ -302,6 +365,9 @@ export default function TenantProjectDetailPage() {
   }
 
   const archived = project.status === 'archived';
+  const daysRemaining = daysUntilEndDate(project.endDate);
+  const showExpiryBanner =
+    !archived && daysRemaining != null && daysRemaining >= 0 && daysRemaining <= 7;
 
   return (
     <div className="mx-auto max-w-screen-xl space-y-8 pb-10">
@@ -332,15 +398,50 @@ export default function TenantProjectDetailPage() {
             {project.description && (
               <p className="mt-1 text-sm text-gray-500">{project.description}</p>
             )}
+            {(project.startDate || project.endDate) && (
+              <p className="mt-2 text-xs text-gray-500">
+                {formatProjectDate(project.startDate)} → {formatProjectDate(project.endDate)}
+              </p>
+            )}
+            {(project.reminderEmails?.length ?? 0) > 0 && (
+              <p className="mt-2 text-xs text-gray-500">
+                Reminder emails:{' '}
+                <span className="text-gray-700">{project.reminderEmails!.join(', ')}</span>
+              </p>
+            )}
+            {archived && project.archivedReason && (
+              <p className="mt-1 text-xs text-gray-500">
+                Archived{' '}
+                {project.archivedReason === 'end_date_reached'
+                  ? 'automatically when the end date was reached'
+                  : 'manually'}
+                {project.archivedAt ? ` · ${formatProjectDate(project.archivedAt)}` : ''}
+              </p>
+            )}
+            {archived && (
+              <p className="mt-2 text-xs text-gray-400">
+                Permanent delete is available to platform Super Admin only.
+              </p>
+            )}
           </div>
-          {!archived && (
+          {!archived ? (
             <button
               type="button"
-              onClick={() => setEditOpen(true)}
+              onClick={openEditModal}
               className="inline-flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-medium text-gray-700 shadow-sm transition hover:border-gray-300 hover:bg-gray-50"
             >
               <Pencil className="h-4 w-4" />
               Edit
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirmAction('restore')}
+              disabled={saving || confirmLoading}
+              className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-4 py-2 text-sm font-semibold text-white shadow-sm transition hover:bg-[#991B1B] disabled:opacity-50"
+            >
+              {(saving || confirmLoading) ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+              Restore project
             </button>
           )}
         </div>
@@ -354,6 +455,22 @@ export default function TenantProjectDetailPage() {
       {flash && (
         <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700">
           {flash}
+        </div>
+      )}
+
+      {showExpiryBanner && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-medium">
+            {daysRemaining === 0
+              ? 'This project ends today.'
+              : daysRemaining === 1
+                ? 'This project ends tomorrow.'
+                : `This project ends in ${daysRemaining} days.`}
+          </p>
+          <p className="mt-1 text-xs text-amber-800">
+            Extend the end date in Edit if the engagement continues. Reminder emails are sent one
+            day before expiry.
+          </p>
         </div>
       )}
 
@@ -444,7 +561,7 @@ export default function TenantProjectDetailPage() {
       </section>
 
       {/* Edit project modal */}
-      {editOpen && (
+      {editOpen && !archived && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]"
           role="dialog"
@@ -529,13 +646,31 @@ export default function TenantProjectDetailPage() {
                     />
                   </div>
                 </div>
+
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-gray-700">
+                    Reminder emails{' '}
+                    <span className="font-normal text-gray-400">(optional)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={reminderEmailsRaw}
+                    onChange={(e) => setReminderEmailsRaw(e.target.value)}
+                    placeholder="pm@client.com, billing@client.com"
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-[#B91C1C] focus:outline-none focus:ring-1 focus:ring-[#B91C1C]"
+                  />
+                  <p className="mt-1 text-[11px] text-gray-500">
+                    We email these addresses one day before the project end date. Separate multiple
+                    addresses with commas.
+                  </p>
+                </div>
               </div>
 
               <div className="flex items-center justify-between border-t border-gray-100 px-6 py-4">
                 <button
                   type="button"
-                  onClick={() => void handleArchive()}
-                  disabled={saving}
+                  onClick={() => setConfirmAction('archive')}
+                  disabled={saving || confirmLoading}
                   className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:border-red-300 hover:text-red-600 disabled:opacity-50"
                 >
                   Archive project
@@ -563,6 +698,32 @@ export default function TenantProjectDetailPage() {
           </div>
         </div>
       )}
+
+      <ConfirmModal
+        open={confirmAction === 'archive'}
+        title="Archive this project?"
+        description={`Archive "${project?.name ?? ''}"? It will stay visible but cannot accept new resources.`}
+        confirmLabel="Archive project"
+        confirmVariant="warning"
+        loading={confirmLoading}
+        onConfirm={() => void handleConfirmAction()}
+        onCancel={() => {
+          if (!confirmLoading) setConfirmAction(null);
+        }}
+      />
+
+      <ConfirmModal
+        open={confirmAction === 'restore'}
+        title="Restore this project?"
+        description={`Restore "${project?.name ?? ''}" to active? You can assign new resources again.`}
+        confirmLabel="Restore project"
+        confirmVariant="warning"
+        loading={confirmLoading}
+        onConfirm={() => void handleConfirmAction()}
+        onCancel={() => {
+          if (!confirmLoading) setConfirmAction(null);
+        }}
+      />
     </div>
   );
 }

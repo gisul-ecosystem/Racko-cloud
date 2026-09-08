@@ -7,11 +7,9 @@ import { useAuth } from '../../../../../context/AuthContext';
 import { useTemplates, useTemplateDetails } from '../../../../../hooks/useTemplates';
 import { createVM } from '../../../../../lib/vmApi';
 import { ApiError } from '../../../../../lib/apiClient';
-import { createProject, previewProjectName, fetchProjects, fetchProjectClientNames } from '../../../../../lib/projectsApi';
-import type { OrgProject } from '../../../../../lib/projectsApi';
-import { ClientNameCombobox } from '../../../../../components/console/ClientNameCombobox';
 import { ToastContainer, useToast } from '../../../../../components/ui/Toast';
 import { ProjectSelect } from '../../../../../components/console/ProjectSelect';
+import { CreateProjectModal } from '../../../../../components/console/CreateProjectModal';
 import {
   getMyAdminWallet,
   quoteAdminVmCreation,
@@ -82,15 +80,6 @@ export default function CreateVMPage() {
 
   // Create-project modal
   const [cpOpen, setCpOpen] = useState(false);
-  const [cpPreviewName, setCpPreviewName] = useState('');
-  const [cpName, setCpName] = useState('');
-  const [cpClientName, setCpClientName] = useState('');
-  const [cpClientNames, setCpClientNames] = useState<string[]>([]);
-  const [cpDescription, setCpDescription] = useState('');
-  const [cpStartDate, setCpStartDate] = useState('');
-  const [cpEndDate, setCpEndDate] = useState('');
-  const [cpSaving, setCpSaving] = useState(false);
-  const [cpError, setCpError] = useState<string | null>(null);
   const [projectRefreshKey, setProjectRefreshKey] = useState(0);
 
   // Step 3 — Network
@@ -271,53 +260,6 @@ export default function CreateVMPage() {
     selectedTemplateId !== null &&
     !!pricing.templatePricing?.[String(selectedTemplateId)];
 
-  async function openCpModal() {
-    setCpClientName('');
-    setCpDescription('');
-    setCpStartDate('');
-    setCpEndDate('');
-    setCpError(null);
-    setCpPreviewName('');
-    setCpName('');
-    setCpOpen(true);
-    try {
-      const [preview, names] = await Promise.all([
-        previewProjectName(),
-        fetchProjectClientNames().catch(() => []),
-      ]);
-      setCpPreviewName(preview.name);
-      setCpName(preview.name);
-      setCpClientNames(names);
-    } catch {
-      // preview optional
-    }
-  }
-
-  async function handleCreateProject(e: React.FormEvent) {
-    e.preventDefault();
-    if (!cpClientName.trim() || !cpStartDate || !cpEndDate) return;
-    setCpSaving(true);
-    setCpError(null);
-    try {
-      const created = await createProject({
-        clientName: cpClientName.trim(),
-        name: cpName.trim() !== cpPreviewName ? cpName.trim() : undefined,
-        description: cpDescription.trim() || undefined,
-        startDate: cpStartDate,
-        endDate: cpEndDate,
-        enabledServices: ['vm-management'],
-      });
-      setProjectId(created.id);
-      setProjectRefreshKey((k) => k + 1);
-      setCpOpen(false);
-      addToast('success', `Project "${created.name}" created with VPS Hosting.`);
-    } catch (err) {
-      setCpError(err instanceof ApiError ? err.message : 'Failed to create project.');
-    } finally {
-      setCpSaving(false);
-    }
-  }
-
   async function handleSubmit() {
     if (!selectedTemplateId || !templateDetails) return;
 
@@ -394,7 +336,7 @@ export default function CreateVMPage() {
               serviceKey="vm-management"
               value={projectId}
               onChange={setProjectId}
-              onCreateProject={() => void openCpModal()}
+              onCreateProject={() => setCpOpen(true)}
               refreshKey={projectRefreshKey}
             />
           </div>
@@ -868,92 +810,18 @@ export default function CreateVMPage() {
       )}
       </div>
 
-      {/* Create project modal */}
-      {cpOpen && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-[1px]"
-          role="dialog" aria-modal="true"
-          onMouseDown={(e) => { if (e.target === e.currentTarget && !cpSaving) setCpOpen(false); }}
-        >
-          <div className="w-full max-w-2xl overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-start justify-between border-b border-gray-100 px-6 py-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-[#B91C1C]">Create Project</p>
-                <h2 className="mt-1 text-xl font-bold text-gray-900">Create New Project</h2>
-                <p className="mt-1 text-sm text-gray-500">Set up a new project to organize and manage your cloud resources.</p>
-              </div>
-              <button type="button" disabled={cpSaving} onClick={() => setCpOpen(false)}
-                className="rounded-lg p-2 text-gray-400 transition hover:bg-gray-100 disabled:opacity-50">
-                <X className="h-5 w-5" />
-              </button>
-            </div>
-            <form onSubmit={(e) => void handleCreateProject(e)}>
-              <div className="p-5">
-                {cpError && (
-                  <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{cpError}</div>
-                )}
-                <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-                  <h3 className="text-sm font-semibold text-gray-900">Project Information</h3>
-                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">Project Name <span className="text-red-500">*</span></label>
-                      <input className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                        value={cpName} onChange={(e) => setCpName(e.target.value)} required placeholder={cpPreviewName || 'Auto-generated'} />
-                      <p className="mt-1 text-[11px] text-gray-400">A unique name to identify your project.</p>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">Client Name <span className="text-red-500">*</span></label>
-                      <ClientNameCombobox
-                        value={cpClientName}
-                        onChange={setCpClientName}
-                        clientNames={cpClientNames}
-                        required
-                        disabled={cpSaving}
-                        placeholder="e.g. Acme Corp"
-                      />
-                      <p className="mt-1 text-[11px] text-gray-400">The client this project belongs to.</p>
-                    </div>
-                  </div>
-                  <div className="mt-4">
-                    <div className="flex items-center justify-between">
-                      <label className="block text-xs font-semibold text-gray-700">Description <span className="font-normal text-gray-400">(Optional)</span></label>
-                      <span className="text-[11px] text-gray-400">{cpDescription.length} / 500</span>
-                    </div>
-                    <textarea className="mt-1.5 w-full resize-none rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                      rows={3} value={cpDescription} onChange={(e) => setCpDescription(e.target.value.slice(0, 500))}
-                      placeholder="Describe the purpose and workloads for this project." />
-                  </div>
-                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">Start Date <span className="text-red-500">*</span></label>
-                      <input type="date" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                        value={cpStartDate} onChange={(e) => setCpStartDate(e.target.value)} max={cpEndDate || undefined} required />
-                      <p className="mt-1 text-[11px] text-gray-400">When does this project start?</p>
-                    </div>
-                    <div>
-                      <label className="mb-1.5 block text-xs font-semibold text-gray-700">End Date <span className="text-red-500">*</span></label>
-                      <input type="date" className="w-full rounded-lg border border-gray-300 px-3 py-2.5 text-sm outline-none focus:border-[#B91C1C] focus:ring-1 focus:ring-[#B91C1C]"
-                        value={cpEndDate} onChange={(e) => setCpEndDate(e.target.value)} min={cpStartDate || undefined} required />
-                      <p className="mt-1 text-[11px] text-gray-400">When does this project end?</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-              <div className="flex items-center justify-between border-t border-gray-100 px-6 py-3">
-                <button type="button" disabled={cpSaving} onClick={() => setCpOpen(false)}
-                  className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-medium text-gray-600 transition hover:bg-gray-50 disabled:opacity-50">
-                  Cancel
-                </button>
-                <button type="submit" disabled={cpSaving || !cpClientName.trim() || !cpStartDate || !cpEndDate}
-                  className="inline-flex items-center gap-2 rounded-lg bg-[#B91C1C] px-5 py-2.5 text-sm font-semibold text-white transition hover:bg-[#991B1B] disabled:opacity-60">
-                  {cpSaving && <Loader2 className="h-4 w-4 animate-spin" />}
-                  Create Project
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <CreateProjectModal
+        open={cpOpen}
+        onClose={() => setCpOpen(false)}
+        portal="org"
+        preselectedServices={['vm-management']}
+        lockServices
+        onCreated={(project) => {
+          setProjectId(project.id);
+          setProjectRefreshKey((k) => k + 1);
+          addToast('success', `Project "${project.name}" created with VPS Hosting.`);
+        }}
+      />
     </>
   );
 }

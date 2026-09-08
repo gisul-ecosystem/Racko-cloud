@@ -131,6 +131,19 @@ async function archive(req: Request, res: Response, next: NextFunction): Promise
   }
 }
 
+async function unarchive(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const authReq = req as AuthenticatedRequest;
+    const project = await projectsService.unarchive(
+      authReq.user.userId,
+      String(req.params['id'])
+    );
+    success(res, 'Project restored.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function reportByProject(req: Request, res: Response, next: NextFunction): Promise<void> {
   try {
     const authReq = req as AuthenticatedRequest;
@@ -295,6 +308,22 @@ async function archiveForTenantSuperAdmin(
   }
 }
 
+async function unarchiveForTenantSuperAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): Promise<void> {
+  try {
+    const project = await projectsService.unarchiveForTenant(
+      String(req.params['tenantId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project restored.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
 async function deleteForTenantSuperAdmin(
   req: Request,
   res: Response,
@@ -318,6 +347,18 @@ async function archiveForAdmin(req: Request, res: Response, next: NextFunction):
       String(req.params['projectId'])
     );
     success(res, 'Project archived.', { project });
+  } catch (err) {
+    next(err);
+  }
+}
+
+async function unarchiveForAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  try {
+    const project = await projectsService.unarchiveForAdmin(
+      String(req.params['adminId']),
+      String(req.params['projectId'])
+    );
+    success(res, 'Project restored.', { project });
   } catch (err) {
     next(err);
   }
@@ -430,6 +471,7 @@ export const projectsController = {
   addServices,
   removeService,
   archive,
+  unarchive,
   reportByProject,
   reportByService,
   listClientNames,
@@ -440,6 +482,7 @@ export const projectsController = {
   createForAdmin,
   updateForAdmin,
   archiveForAdmin,
+  unarchiveForAdmin,
   deleteForAdmin,
   addServicesForAdmin,
   getByIdForAdmin,
@@ -450,6 +493,7 @@ export const projectsController = {
   createForTenant,
   updateForTenantSuperAdmin,
   archiveForTenantSuperAdmin,
+  unarchiveForTenantSuperAdmin,
   deleteForTenantSuperAdmin,
   addServicesForTenantSuperAdmin,
 };
