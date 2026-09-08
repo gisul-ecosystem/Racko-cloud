@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, ArrowRight, Loader2, Pencil, X } from 'lucide-react';
 import { ApiError } from '@/lib/apiClient';
@@ -179,6 +179,7 @@ function ServiceCard({
 export default function ProjectDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const id = String(params?.id || '');
 
   const [project, setProject] = useState<OrgProject | null>(null);
@@ -239,6 +240,21 @@ export default function ProjectDetailPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (loading || !project || project.status === 'archived') return;
+    if (searchParams.get('edit') !== '1') return;
+    openEditModal();
+    router.replace(`/console/projects/${id}`, { scroll: false });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, project, searchParams, id, router]);
+
+  useEffect(() => {
+    if (loading || !project || project.status === 'archived') return;
+    if (searchParams.get('action') !== 'archive') return;
+    setConfirmAction('archive');
+    router.replace(`/console/projects/${id}`, { scroll: false });
+  }, [loading, project, searchParams, id, router]);
 
   const addable = useMemo(() => {
     if (!project) return [];

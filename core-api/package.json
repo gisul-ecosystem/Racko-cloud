@@ -12,7 +12,8 @@
     "migrate:backfill-my-vms": "ts-node src/scripts/migrateBackfillMyVms.ts",
     "delete:vm-leases": "ts-node src/scripts/deleteVmHostLease.ts",
     "typecheck": "tsc --noEmit",
-    "test": "ts-node --transpile-only src/modules/vm/helpers/hypervGuestOutput.test.ts && ts-node --transpile-only src/modules/vmCatalog/catalogVmSerializer.test.ts"
+    "test": "ts-node --transpile-only src/modules/vm/helpers/hypervGuestOutput.test.ts && ts-node --transpile-only src/modules/vmCatalog/catalogVmSerializer.test.ts",
+    "preview:project-expiry-email": "ts-node -r dotenv/config --transpile-only src/scripts/previewProjectExpiryEmail.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1103.0",

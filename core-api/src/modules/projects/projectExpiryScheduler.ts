@@ -20,10 +20,20 @@ let tickInProgress = false;
 
 function projectManageUrl(doc: IProject): string {
   const base = config.FRONTEND_URL.replace(/\/$/, '');
+  const id = doc._id.toString();
   if (doc.ownerType === 'tenant' && doc.tenantId) {
-    return `${base}/console/dashboard/projects/${doc._id.toString()}`;
+    return `${base}/console/dashboard/projects/${id}?edit=1`;
   }
-  return `${base}/console/projects/${doc._id.toString()}`;
+  return `${base}/console/projects/${id}?edit=1`;
+}
+
+function projectArchiveUrl(doc: IProject): string {
+  const base = config.FRONTEND_URL.replace(/\/$/, '');
+  const id = doc._id.toString();
+  if (doc.ownerType === 'tenant' && doc.tenantId) {
+    return `${base}/console/dashboard/projects/${id}?action=archive`;
+  }
+  return `${base}/console/projects/${id}?action=archive`;
 }
 
 async function resolveOrgOwnerEmail(orgId: string): Promise<string | null> {
@@ -135,6 +145,7 @@ async function sendProjectExpiryEmails(doc: IProject, daysRemaining: number): Pr
 
   const endDateLabel = formatProjectDateLabel(doc.endDate);
   const manageUrl = projectManageUrl(doc);
+  const archiveUrl = projectArchiveUrl(doc);
 
   await Promise.all(
     [...recipients].map((to) =>
@@ -145,6 +156,7 @@ async function sendProjectExpiryEmails(doc: IProject, daysRemaining: number): Pr
         endDateLabel,
         daysRemaining,
         manageUrl,
+        archiveUrl,
         brand,
       }).catch((err: unknown) => {
         logger.warn('[ProjectExpiry] Email send failed', {

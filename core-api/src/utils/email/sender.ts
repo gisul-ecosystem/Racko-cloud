@@ -338,6 +338,7 @@ export async function sendProjectExpiryWarningEmail(input: {
   endDateLabel: string;
   daysRemaining: number;
   manageUrl: string;
+  archiveUrl?: string;
   brand?: EmailBrand;
 }): Promise<void> {
   const template = buildProjectExpiryWarningTemplate({
@@ -346,6 +347,7 @@ export async function sendProjectExpiryWarningEmail(input: {
     endDateLabel: input.endDateLabel,
     daysRemaining: input.daysRemaining,
     manageUrl: input.manageUrl,
+    archiveUrl: input.archiveUrl,
     brand: input.brand,
   });
   await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
