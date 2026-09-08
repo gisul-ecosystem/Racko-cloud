@@ -270,6 +270,10 @@ export function ProjectsListView({
   }, []);
 
   const activeProjects = projects.filter((project) => project.status === 'active');
+  const archivedProjects = useMemo(
+    () => projects.filter((project) => project.status === 'archived'),
+    [projects]
+  );
   const totalSpend = costRows.reduce((sum, row) => sum + row.totalDebit, 0);
   const totalResources = projects.reduce(
     (total, project) =>
@@ -319,6 +323,16 @@ export function ProjectsListView({
 
   function openAllView() {
     setShowAll(true);
+    setStatusFilter('all');
+    setQuery('');
+    setPage(1);
+  }
+
+  function openArchivedView() {
+    setShowAll(true);
+    setStatusFilter('archived');
+    setQuery('');
+    setPage(1);
   }
 
   function openDashboardView() {
@@ -474,11 +488,17 @@ export function ProjectsListView({
             </button>
           )}
           <h1 className="text-2xl font-bold tracking-tight text-gray-900">
-            {showAll ? 'All Projects' : 'My Projects'}
+            {showAll
+              ? statusFilter === 'archived'
+                ? 'Archived Projects'
+                : 'All Projects'
+              : 'My Projects'}
           </h1>
           <p className="mt-1 text-sm text-gray-500">
             {showAll
-              ? 'Manage and organize all your cloud projects in one place.'
+              ? statusFilter === 'archived'
+                ? 'Review archived projects and restore them if needed.'
+                : 'Manage and organize all your cloud projects in one place.'
               : 'Create and manage your infrastructure projects.'}
           </p>
         </div>
@@ -576,9 +596,13 @@ export function ProjectsListView({
               {pageItems.length === 0 ? (
                 <div className="px-6 py-16 text-center">
                   <FolderKanban className="mx-auto h-10 w-10 text-gray-300" />
-                  <p className="mt-3 text-sm font-medium text-gray-900">No projects found</p>
+                  <p className="mt-3 text-sm font-medium text-gray-900">
+                    {statusFilter === 'archived' ? 'No archived projects' : 'No projects found'}
+                  </p>
                   <p className="mt-1 text-sm text-gray-500">
-                    Try a different search, or create a new project.
+                    {statusFilter === 'archived'
+                      ? 'Archived projects will appear here after you archive or auto-archive them.'
+                      : 'Try a different search, or create a new project.'}
                   </p>
                 </div>
               ) : (
@@ -727,13 +751,16 @@ export function ProjectsListView({
                       Open a project to launch services and review its spend.
                     </p>
                   </div>
-                  <Link
-                    href={api.reportsHref}
+                  <button
+                    type="button"
+                    onClick={openArchivedView}
                     className="inline-flex items-center gap-1 text-xs font-semibold hover:underline"
                     style={tenantAccentText(accent)}
                   >
-                    View reports <ArrowRight className="h-3.5 w-3.5" />
-                  </Link>
+                    View archived projects
+                    {archivedProjects.length > 0 ? ` (${archivedProjects.length})` : ''}
+                    <ArrowRight className="h-3.5 w-3.5" />
+                  </button>
                 </div>
 
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
