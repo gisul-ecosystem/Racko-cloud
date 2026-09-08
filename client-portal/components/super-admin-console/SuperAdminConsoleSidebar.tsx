@@ -8,6 +8,7 @@ import {
   Database,
   LayoutDashboard,
   LayoutGrid,
+  LifeBuoy,
   MonitorCheck,
   Palette,
   Plus,
@@ -119,6 +120,12 @@ const navItems: NavItem[] = [
     label: 'Customer Directory',
     icon: Users,
     anyOf: ['admin_users.manage'],
+    section: 'tools',
+  },
+  {
+    href: '/super-admin-console/support',
+    label: 'Support',
+    icon: LifeBuoy,
     section: 'tools',
   },
   {

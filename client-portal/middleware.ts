@@ -97,6 +97,7 @@ function getSafeInternalRedirect(raw: string | null | undefined): string | null 
     !value.startsWith('/console') &&
     !value.startsWith('/dashboard') &&
     !value.startsWith('/super-admin-console') &&
+    !value.startsWith('/support-agent') &&
     !value.startsWith('/onboarding') &&
     value !== '/request' &&
     !value.startsWith('/status/')
@@ -126,6 +127,7 @@ export function middleware(request: NextRequest) {
     (pathname.startsWith('/dashboard') ||
       pathname.startsWith('/console') ||
       pathname.startsWith('/super-admin-console') ||
+      pathname.startsWith('/support-agent') ||
       pathname.startsWith('/onboarding') ||
       pathname === '/request' ||
       pathname.startsWith('/status/')) &&
@@ -160,6 +162,8 @@ export const config = {
     '/console/:path*',
     '/super-admin-console',
     '/super-admin-console/:path*',
+    '/support-agent',
+    '/support-agent/:path*',
     '/tenant',
     '/tenant/:path*',
     '/request',

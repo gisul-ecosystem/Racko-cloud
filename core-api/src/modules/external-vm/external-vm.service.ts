@@ -51,7 +51,7 @@ import {
   type AssignmentSchedule,
 } from './schedule.types';
 
-type PlatformActorRole = 'admin' | 'super_admin' | 'staff' | 'user';
+type PlatformActorRole = 'admin' | 'super_admin' | 'staff' | 'support_agent' | 'user';
 
 interface TenantExternalVmActor {
   id: string;
