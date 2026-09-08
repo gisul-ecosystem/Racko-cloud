@@ -16,6 +16,7 @@ import {
   Wallet,
   FolderKanban,
   BookOpen,
+  LifeBuoy,
 } from 'lucide-react';
 import { useTenantBranding } from '@/context/TenantBrandingContext';
 import { useTenantServices } from '@/context/TenantServicesContext';
@@ -38,7 +39,7 @@ function closeIfMobile(onCloseSidebar: () => void) {
 }
 
 type Shortcut = {
-  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control' | 'docs';
+  serviceKey: TenantServiceKey | 'billing' | 'projects' | 'access-control' | 'docs' | 'support';
   label: string;
   href: string;
   icon: React.ReactNode;
@@ -116,6 +117,13 @@ const SHORTCUTS: Shortcut[] = [
     icon: <Shield className="h-4 w-4 shrink-0" />,
     section: 'tools',
   },
+  {
+    serviceKey: 'support',
+    label: 'Support',
+    href: tenantConsole.supportTickets,
+    icon: <LifeBuoy className="h-4 w-4 shrink-0" />,
+    section: 'tools',
+  },
 ];
 
 export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantConsoleSidebarProps) {
@@ -130,6 +138,7 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
         ? true
         : canAccessTenantHubTile(l.serviceKey, hasPermission, isTenantAdmin);
     }
+    if (l.serviceKey === 'support') return true;
     if (l.serviceKey === 'access-control') {
       return isTenantAdmin || hasPermission('rbac.roles.write', 'rbac.assign');
     }
@@ -151,7 +160,10 @@ export function TenantConsoleSidebar({ sidebarOpen, onCloseSidebar }: TenantCons
     pathname.startsWith(`${tenantConsole.myVmDashboard}/`);
 
   function renderLink(link: Shortcut) {
-    const isActive = pathname === link.href || pathname.startsWith(`${link.href}/`);
+    const isActive =
+      link.serviceKey === 'support'
+        ? pathname.startsWith(`${TENANT_CONSOLE}/support`)
+        : pathname === link.href || pathname.startsWith(`${link.href}/`);
     return (
       <Link
         key={link.serviceKey}

@@ -10,6 +10,7 @@ import { buildPasswordResetTemplate } from './templates/passwordReset';
 import { buildStaffInviteTemplate } from './templates/staffInvite';
 import { buildTenantOperatorInviteTemplate } from './templates/tenantOperatorInvite';
 import { buildOrgAdminInviteTemplate } from './templates/orgAdminInvite';
+import { buildProjectExpiryWarningTemplate } from './templates/projectExpiryWarning';
 import type { EmailBrand } from './templates/brandedLayout';
 import {
   resolveTenantEmailBrand,
@@ -328,4 +329,26 @@ export async function sendTenantVerificationEmail(input: {
     verifyUrl,
   });
   await sendEmail({ to: input.to, ...template, fromName: brand.name });
+}
+
+export async function sendProjectExpiryWarningEmail(input: {
+  to: string;
+  projectName: string;
+  clientName: string;
+  endDateLabel: string;
+  daysRemaining: number;
+  manageUrl: string;
+  archiveUrl?: string;
+  brand?: EmailBrand;
+}): Promise<void> {
+  const template = buildProjectExpiryWarningTemplate({
+    projectName: input.projectName,
+    clientName: input.clientName,
+    endDateLabel: input.endDateLabel,
+    daysRemaining: input.daysRemaining,
+    manageUrl: input.manageUrl,
+    archiveUrl: input.archiveUrl,
+    brand: input.brand,
+  });
+  await sendEmail({ to: input.to, ...template, fromName: input.brand?.name });
 }

@@ -45,7 +45,7 @@ export function ProjectSelect({
   // Tenant: navigate to the standalone create project page.
   const createHref =
     portal === 'tenant'
-      ? '/console/dashboard/projects/create'
+      ? '/console/dashboard/projects?create=1'
       : '/console/projects?create=1';
 
   useEffect(() => {

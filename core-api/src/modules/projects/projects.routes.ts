@@ -108,6 +108,15 @@ router.post(
   }
 );
 
+router.post(
+  '/admins/:adminId/:projectId/unarchive',
+  requirePermission('admin_users.manage'),
+  validateRequest(adminProjectParamSchema),
+  (req, res, next) => {
+    projectsController.unarchiveForAdmin(req, res, next);
+  }
+);
+
 router.delete(
   '/admins/:adminId/:projectId',
   requirePermission('admin_users.manage'),
@@ -187,6 +196,15 @@ router.post(
   validateRequest(tenantProjectParamSchema),
   (req, res, next) => {
     projectsController.archiveForTenantSuperAdmin(req, res, next);
+  }
+);
+
+router.post(
+  '/tenants/:tenantId/:projectId/unarchive',
+  requirePermission('white_labelling.manage'),
+  validateRequest(tenantProjectParamSchema),
+  (req, res, next) => {
+    projectsController.unarchiveForTenantSuperAdmin(req, res, next);
   }
 );
 
@@ -290,6 +308,15 @@ router.post(
   validateRequest(projectIdParamSchema),
   (req, res, next) => {
     projectsController.archive(req, res, next);
+  }
+);
+
+router.post(
+  '/:id/unarchive',
+  requirePlatformPermission('projects.manage'),
+  validateRequest(projectIdParamSchema),
+  (req, res, next) => {
+    projectsController.unarchive(req, res, next);
   }
 );
 

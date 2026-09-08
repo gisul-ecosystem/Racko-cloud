@@ -3,7 +3,9 @@ import mongoose, { Document, Schema } from 'mongoose';
 export type TenantNotificationType =
   | 'vm_plan_expiring_soon'
   | 'catalog_vm_request'
-  | 'dedicated_server_request';
+  | 'dedicated_server_request'
+  | 'project_expiring_soon'
+  | 'project_archived';
 
 export interface ITenantNotification extends Document {
   _id: mongoose.Types.ObjectId;
@@ -36,7 +38,7 @@ const tenantNotificationSchema = new Schema<ITenantNotification>(
     },
     type: {
       type: String,
-      enum: ['vm_plan_expiring_soon', 'catalog_vm_request', 'dedicated_server_request'],
+      enum: ['vm_plan_expiring_soon', 'catalog_vm_request', 'dedicated_server_request', 'project_expiring_soon', 'project_archived'],
       required: true,
     },
     title: { type: String, required: true, trim: true, maxlength: 200 },
